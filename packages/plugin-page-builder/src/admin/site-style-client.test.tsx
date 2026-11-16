@@ -762,11 +762,13 @@ describe("writing one section", () => {
       verdict = await result.current.save("breakpoints", { viewport: [] });
     });
 
+    // Refused for the values themselves: an answer, with nothing stored.
     expect(verdict).toEqual({
       saved: false,
       issues: {
         breakpoints: "breakpoints.viewport[0] is not a breakpoint.",
       },
+      invalid: true,
     });
   });
 
@@ -1382,6 +1384,7 @@ describe("a save held for the author's pause", () => {
     const refused = {
       saved: false,
       issues: { tokens: "That value is refused." },
+      invalid: true,
     };
     expect(await Promise.all(answers)).toEqual([refused, refused]);
     expect(writes).toHaveLength(1);

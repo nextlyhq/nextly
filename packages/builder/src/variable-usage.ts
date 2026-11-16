@@ -255,18 +255,19 @@ const NOT_USED = "Not used anywhere";
 
 /**
  * What Remove does for a variable the site added: go ahead behind the
- * confirm (`free`), refuse while it is used (`in-use`), or wait for the
- * pages to be counted (`not-whole`). `unread` while nothing has been read,
- * when Remove confirms as it always has and the save refuses a use.
+ * confirm (`free`), or refuse while a use is known (`in-use`). `unread` while
+ * nothing has been read, when Remove confirms as well. A zero not counted
+ * across every page is `free` too: the save counts the pages before it
+ * decides, and refuses a use it finds, so the editor never refuses one for
+ * want of a count.
  */
-export type VariableRemoval = "free" | "in-use" | "not-whole" | "unread";
+export type VariableRemoval = "free" | "in-use" | "unread";
 
 export function variableRemoval(
   reach: VariableReach | undefined
 ): VariableRemoval {
   if (reach === undefined) return "unread";
-  if (variablePlaces(reach) > 0) return "in-use";
-  return reach.complete ? "free" : "not-whole";
+  return variablePlaces(reach) > 0 ? "in-use" : "free";
 }
 
 /** The editor's line beside Remove: how widely the variable is used. */
@@ -276,7 +277,8 @@ export function variableStatus(reach: VariableReach | undefined): string {
   if (places > 0) {
     return `Used in ${reach.complete ? "" : "at least "}${placesWords(places)}`;
   }
-  return reach.complete ? NOT_USED : "Counting where it's used…";
+  // Not "counting": nothing may be counting, and the row says the same.
+  return reach.complete ? NOT_USED : "Not counted yet";
 }
 
 /** "It's used in 14 places, and they would lose this colour:". */

@@ -114,11 +114,10 @@ pseudo-node. Document-level concerns live on the envelope instead.
 | `page`      | an entry's blocks-field content                                      |
 | `pattern`   | a copy-on-insert saved subtree, including full-page patterns         |
 | `component` | a linked, reusable definition with exposed props, slots and variants |
-| `region`    | a layout region such as a header or footer                           |
 | `template`  | a collection template                                                |
 
-A layout is a named bundle _referencing_ region documents, so it is not a kind of
-its own.
+A layout's header and footer are components, and the layout is a named bundle
+_referencing_ them, so it is not a kind of its own.
 
 ## A node
 

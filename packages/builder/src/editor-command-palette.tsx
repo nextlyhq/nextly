@@ -110,7 +110,10 @@ export function EditorCommandPalette({
   onOpenChange,
 }: EditorCommandPaletteProps): React.JSX.Element {
   const verbs = useBlockActionsContext();
-  const actions = useSelectionActions(editor);
+  // Whether the palette is open, followed whoever opens it: its verbs ask the
+  // locks only while an author can choose between them.
+  const [shown, setShown] = React.useState(false);
+  const actions = useSelectionActions(editor, open ?? shown);
   // Taken out of `editor` so the list below depends on these two functions
   // rather than on the store object, for the reason given there.
   const { undo, redo } = editor;
@@ -196,7 +199,10 @@ export function EditorCommandPalette({
         </>
       )}
       {...(open === undefined ? {} : { open })}
-      {...(onOpenChange === undefined ? {} : { onOpenChange })}
+      onOpenChange={next => {
+        setShown(next);
+        onOpenChange?.(next);
+      }}
     />
   );
 }

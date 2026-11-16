@@ -237,6 +237,29 @@ describe("siteSheet", () => {
       breakpoints: VIEWPORT_ONLY,
     });
   });
+
+  it("answers the same sheet for the same style, so a draw from it can be kept", () => {
+    // The canvas, its regions and the entry page's miniature each keep their
+    // drawn page while its inputs keep their identity; a new sheet object per
+    // render made every one of them draw again for a selection or a keystroke.
+    const style: SiteStyleData = {
+      tokens: tokens([{ name: "color.primary", light: "#123456" }]),
+      breakpoints: VIEWPORT_ONLY,
+    };
+    expect(siteSheet(style)).toBe(siteSheet(style));
+    expect(siteSheet()).toBe(siteSheet());
+    expect(siteSheet(undefined)).toBe(siteSheet());
+  });
+
+  it("answers a new sheet for a new style", () => {
+    const style: SiteStyleData = { breakpoints: VIEWPORT_ONLY };
+    const changed: SiteStyleData = {
+      ...style,
+      classes: [cls("a", "card", 0)],
+    };
+    expect(siteSheet(changed)).not.toBe(siteSheet(style));
+    expect(siteSheet(changed)).toHaveProperty("classes", changed.classes);
+  });
 });
 
 describe("a spacing model left in a host's options or a stored document", () => {

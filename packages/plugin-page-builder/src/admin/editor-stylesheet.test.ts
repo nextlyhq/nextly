@@ -1,11 +1,13 @@
 /**
- * The admin entry loads the editor's stylesheet itself.
+ * The admin entry brings the editor's stylesheet with the parts it styles.
  *
  * An app reaches `./admin` through the component map `nextly generate:types`
- * writes, wherever the plugin is configured. So the entry importing its own
+ * writes, wherever the plugin is configured. So the plugin loading its own
  * sheet is what makes configuring the plugin enough; without it, every app had
  * to add the import to its admin page by hand, and one that missed the step got
- * an unstyled builder and no error.
+ * an unstyled builder and no error. The entry itself imports no sheet: it
+ * fetches `editor-stylesheet.ts` with the parts that need it, so a screen
+ * drawing none of them downloads none of it (`entry-loads-registration-only`).
  *
  * Asserted over the source and the build's own configuration rather than by
  * rendering: jsdom applies no stylesheet, so a render here would pass whatever
@@ -24,6 +26,7 @@ import config from "../../tsdown.config";
 
 const ADMIN_DIR = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_DIR = resolve(ADMIN_DIR, "../..");
+const SOURCE_DIR = resolve(PACKAGE_DIR, "src");
 const EDITOR_CSS = resolve(PACKAGE_DIR, "src/styles/editor.css");
 
 /** The specifiers a module imports for their side effect alone. */
@@ -33,9 +36,9 @@ function sideEffectImportsIn(source: string): string[] {
   );
 }
 
-/** The specifiers the admin entry imports for their side effect alone. */
-function sideEffectImports(): string[] {
-  return sideEffectImportsIn(readFileSync(join(ADMIN_DIR, "index.ts"), "utf8"));
+/** The specifiers an admin module imports for their side effect alone. */
+function sideEffectImports(file: string): string[] {
+  return sideEffectImportsIn(readFileSync(join(ADMIN_DIR, file), "utf8"));
 }
 
 /** Where the package publishes the editor stylesheet, from its export map. */
@@ -50,23 +53,32 @@ function exportedStylesheet(): string {
   return target;
 }
 
-describe("the admin entry's stylesheet", () => {
-  it("imports the editor stylesheet the package ships", () => {
-    const sheets = sideEffectImports()
+describe("the admin's stylesheet", () => {
+  it("is imported by the stylesheet module, the editor stylesheet the package ships", () => {
+    const sheets = sideEffectImports("editor-stylesheet.ts")
       .filter(specifier => specifier.endsWith(".css"))
       .map(specifier => resolve(ADMIN_DIR, specifier));
 
     expect(sheets).toEqual([EDITOR_CSS]);
   });
 
-  it("reaches the published copy by the same path once built", () => {
-    // The build copies `src/styles` to `dist/styles` and emits this entry as
-    // `dist/admin/index.js`, so the relative import only lands on the shipped
-    // file if the two layouts mirror each other. Read from the export map, so
-    // a move of the published sheet fails here rather than in an app.
-    const fromSource = relative(ADMIN_DIR, EDITOR_CSS);
+  it("is not imported by the entry itself", () => {
+    expect(
+      sideEffectImports("index.ts").filter(specifier =>
+        specifier.endsWith(".css")
+      )
+    ).toEqual([]);
+  });
+
+  it("reaches the published copy once built", () => {
+    // The build emits the stylesheet module as a chunk wherever it places it,
+    // rewriting the relative import from there, and copies `src/styles` to
+    // `dist/styles`. So the import lands on the shipped file only if the
+    // sheet sits under `dist` where it sits under `src`. Read from the export
+    // map, so a move of the published sheet fails here rather than in an app.
+    const fromSource = relative(SOURCE_DIR, EDITOR_CSS);
     const fromBuild = relative(
-      resolve(PACKAGE_DIR, "dist/admin"),
+      resolve(PACKAGE_DIR, "dist"),
       resolve(PACKAGE_DIR, exportedStylesheet())
     );
 

@@ -34,6 +34,7 @@ import {
   DEFAULT_LIMITS,
   type DocumentLimits,
   registerBlocks,
+  registryBlockSource,
   type BlockDocument,
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
@@ -215,27 +216,41 @@ describe("InsertPanel", () => {
     // A locked slot already missing its heading: inserting the heading repairs
     // it, inserting anything else breaks it further. One block's answer is
     // not every block's, whichever comes first in the list. The refused one
-    // stays in view, saying why, and its click inserts nothing.
+    // stays in view, saying why, and its click inserts nothing. Answered from
+    // the slot's lock, without asking the editor to try any insert.
     registerBlocks(
       [
         { ...base, name: "acme/heading", editor: { label: "Heading" } },
         { ...base, name: "acme/text", editor: { label: "Text" } },
+        {
+          ...base,
+          name: "acme/row",
+          editor: { label: "Row" },
+          slots: {
+            items: { defaultBlock: [{ type: "acme/heading" }], lock: "all" },
+          },
+        },
       ] as never,
       { source: "acme" }
     );
+    const lockRefusalFor = vi.fn(() => undefined);
     const editor = {
-      ...editorSpy(documentOf()),
-      lockRefusalFor: (ops: readonly { node?: { type: string } }[]) =>
-        ops[0]?.node?.type === "acme/heading"
-          ? undefined
-          : {
-              code: "locked-slot-altered" as const,
-              holderType: "acme/row",
-              lock: "all" as const,
-            },
+      ...editorSpy(
+        documentOf([
+          {
+            id: "row",
+            type: "acme/row",
+            version: 1,
+            props: {},
+            slots: { items: [] },
+          },
+        ])
+      ),
+      lockDefinitions: registryBlockSource(),
+      lockRefusalFor,
     } as unknown as ReturnType<typeof editorSpy>;
     const apply = vi.fn(() => editor.document);
-    render(<InsertPanel editor={{ ...editor, apply }} />);
+    render(<InsertPanel editor={{ ...editor, apply }} inside="row" />);
 
     const text = tile("Text");
     expect(text.getAttribute("data-refused")).toBe("true");
@@ -247,6 +262,143 @@ describe("InsertPanel", () => {
     expect(tile("Heading").getAttribute("data-refused")).toBeNull();
     fireEvent.click(tile("Heading"));
     expect(apply).toHaveBeenCalledTimes(1);
+    expect(lockRefusalFor).not.toHaveBeenCalled();
+  });
+
+  it("refuses every block where a Layers lock holds the place, without a trial insert", () => {
+    registerBlocks(
+      [
+        { ...base, name: "acme/text", editor: { label: "Text" } },
+        {
+          ...base,
+          name: "acme/box",
+          editor: { label: "Box" },
+          slots: { items: {} },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    const lockRefusalFor = vi.fn(() => undefined);
+    const editor = {
+      ...editorSpy(
+        documentOf([
+          {
+            id: "box",
+            type: "acme/box",
+            version: 1,
+            props: {},
+            locked: true,
+            slots: { items: [] },
+          },
+        ])
+      ),
+      lockDefinitions: registryBlockSource(),
+      lockRefusalFor,
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(<InsertPanel editor={editor} inside="box" />);
+
+    const text = tile("Text");
+    expect(text.getAttribute("data-refused")).toBe("true");
+    expect(describedBy(text)).toContain("is locked");
+    expect(lockRefusalFor).not.toHaveBeenCalled();
+  });
+
+  it("refuses a block inside a container whose region a lock around it holds", () => {
+    // The box declares no lock of its own; the row it sits in locks its
+    // slot, and a lock holds all the way down. Read along the path, so a
+    // check of the box alone would offer the block.
+    const lockedRow = (lock: "all" | false) =>
+      registerBlocks(
+        [
+          { ...base, name: "acme/text", editor: { label: "Text" } },
+          {
+            ...base,
+            name: "acme/box",
+            editor: { label: "Box" },
+            slots: { items: {} },
+          },
+          {
+            ...base,
+            name: "acme/row",
+            editor: { label: "Row" },
+            slots: { items: { defaultBlock: [{ type: "acme/box" }], lock } },
+          },
+        ] as never,
+        { source: "acme" }
+      );
+    const panelInsideBox = () => {
+      const editor = {
+        ...editorSpy(
+          documentOf([
+            {
+              id: "row",
+              type: "acme/row",
+              version: 1,
+              props: {},
+              slots: {
+                items: [
+                  {
+                    id: "box",
+                    type: "acme/box",
+                    version: 1,
+                    props: {},
+                    slots: { items: [] },
+                  },
+                ],
+              },
+            },
+          ])
+        ),
+        lockDefinitions: registryBlockSource(),
+      } as unknown as ReturnType<typeof editorSpy>;
+      return render(<InsertPanel editor={editor} inside="box" />);
+    };
+
+    lockedRow("all");
+    const view = panelInsideBox();
+    expect(tile("Text").getAttribute("data-refused")).toBe("true");
+    expect(describedBy(tile("Text"))).toContain("locked");
+    view.unmount();
+
+    // The control: the same page with the row unlocked offers it.
+    clearBlocks();
+    lockedRow(false);
+    panelInsideBox();
+    expect(tile("Text").getAttribute("data-refused")).toBeNull();
+  });
+
+  it("asks the editor's own lock question inside a placed component", () => {
+    // A component may lock the content a page puts inside it, which only the
+    // composed page shows, so a place inside a placement is asked in full.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const lockRefusalFor = vi.fn(() => ({
+      code: "layers-locked" as const,
+      label: "Card",
+      relation: "component" as const,
+      verb: "change" as const,
+    }));
+    const editor = {
+      ...editorSpy(
+        documentOf([
+          {
+            id: "placed",
+            type: COMPONENT_INSTANCE_TYPE,
+            version: 1,
+            props: { componentId: "card" },
+            slots: { body: [] },
+          },
+        ])
+      ),
+      lockDefinitions: registryBlockSource(),
+      lockRefusalFor,
+    } as unknown as ReturnType<typeof editorSpy>;
+    render(<InsertPanel editor={editor} inside="placed" />);
+
+    expect(lockRefusalFor).toHaveBeenCalled();
+    expect(describedBy(tile("Text"))).toContain("Set by the component Card");
   });
 
   it("offers a row as a drag, carrying the block it names", () => {

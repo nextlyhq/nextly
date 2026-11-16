@@ -213,3 +213,22 @@ describe("FilterRegistry.applyDecision: every verdict is normalised", () => {
     });
   });
 });
+
+describe("the filters registered under a name", () => {
+  it("lists them in order, as a copy the caller can't change the registry through", () => {
+    const reg = new FilterRegistry();
+    const first = (v: unknown) => v;
+    const second = (v: unknown) => v;
+    reg.addFilter("acme.refs", first);
+    reg.addFilter("acme.refs", second);
+
+    const handlers = reg.handlersFor("acme.refs");
+    expect(handlers).toEqual([first, second]);
+    handlers.pop();
+    expect(reg.handlersFor("acme.refs")).toEqual([first, second]);
+  });
+
+  it("lists none for a name nothing registered", () => {
+    expect(new FilterRegistry().handlersFor("acme.none")).toEqual([]);
+  });
+});
