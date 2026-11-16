@@ -5,24 +5,14 @@
  * are drawn into.
  */
 import {
-  act,
   cleanup,
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const can = vi.hoisted(() => ({ update: true }));
 

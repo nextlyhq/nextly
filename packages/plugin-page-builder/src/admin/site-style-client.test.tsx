@@ -56,8 +56,6 @@ const overwrites: unknown[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
-/** Whether the read after a write answers that it failed. */
-let readFails = false;
 /** What a fresh read answers with, and how many were made. */
 let freshAnswer: () => unknown = () => readAnswer.data;
 let freshReads = 0;
@@ -73,7 +71,7 @@ vi.mock("./site-style-read", () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return { isError: readFails };
+      return { isError: false };
     },
     readFresh: async () => {
       freshReads += 1;
@@ -151,7 +149,6 @@ beforeEach(() => {
   overwrites.length = 0;
   routeWrites.length = 0;
   refetches = 0;
-  readFails = false;
   freshAnswer = () => readAnswer.data;
   freshReads = 0;
   writeOptions = undefined;

@@ -2979,6 +2979,9 @@ export const pageBuilder = (
         () => composition,
         () => siteLocalesOf(ctx.config)
       );
+      // The spacing model an earlier release recorded, cleared with the site
+      // style's next save, inside that save's transaction.
+      registerRetiredSpacingOptionCleanup(ctx);
       // What a variable's in-use check reads: the variable index, the block
       // types the pages are rendered with (read per check), and the stored
       // documents. It names no document, since the write's author is not a
@@ -3000,9 +3003,6 @@ export const pageBuilder = (
       // it, so a page cannot commit a first use of what it removes. Read on
       // the write's own transaction, by the walks the remove routes' rescans
       // make.
-      // The spacing model an earlier release recorded, cleared with the site
-      // style's next save, inside that save's transaction.
-      registerRetiredSpacingOptionCleanup(ctx);
       registerSiteStyleRemovalLock(ctx, {
         suppliedVariables: () => suppliedVariableIds(configStyle),
         // The set the code tier refresh keeps current.

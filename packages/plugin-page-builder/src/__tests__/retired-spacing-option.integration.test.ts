@@ -8,6 +8,9 @@
  *   style nor the sheet a page compiles from, so the page compiles with the
  *   engine's default, container gaps; a release still reading the row hands
  *   `classic` on;
+ * - a start of the site, a deploy's included, leaves the row: only a save of
+ *   the site style removes it, so several instances starting at once never
+ *   race to;
  * - one save of the site style removes the row and keeps every other option;
  * - a save that fails after the cleanup ran (seen gone inside the transaction)
  *   leaves the row as it was: removed outside the save's transaction, it
@@ -23,7 +26,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
@@ -32,6 +35,13 @@ import { SCHEMA_PREFIX, siteOptions } from "../schema/tables";
 import { siteSheet } from "../site-style";
 import { loadSiteStyle } from "../site-style-load";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
+
+import { startupSettled } from "./entry-page-claims-harness";
+import {
+  adapterOn,
+  siteDatabase,
+  type SiteDatabase,
+} from "./site-database-harness";
 
 /** The plugin's options table, as the database names it. */
 const OPTIONS_TABLE = `${SCHEMA_PREFIX}__${siteOptions.name}`;
@@ -66,10 +76,14 @@ describe.each(getConfiguredTestDialects())(
   "a spacing model an earlier release recorded (%s)",
   (dialect: TestDialect) => {
     let current: TestNextly | undefined;
+    let database: SiteDatabase | undefined;
 
     afterEach(async () => {
       await current?.destroy();
       current = undefined;
+      await database?.drop();
+      database = undefined;
+      vi.unstubAllEnvs();
       nextSave.fail = false;
       nextSave.sawRowGone = false;
     });
@@ -83,15 +97,32 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         plugins: [pageBuilder(), failingSave],
       });
+      await record(current);
+      return current;
+    }
+
+    /** The site started on `on`, its start-up work over. */
+    async function startOn(on: SiteDatabase): Promise<TestNextly> {
+      await current?.destroy();
+      current = await createTestNextly({
+        adapter: await adapterOn(on),
+        plugins: [pageBuilder(), failingSave],
+      });
+      await startupSettled(current);
+      await current.events.settle();
+      return current;
+    }
+
+    /** Record a `classic` model and one other option, as an earlier release left them. */
+    async function record(t: TestNextly): Promise<void> {
       for (const [id, name, value] of [
         ["spacing-model", RETIRED_SPACING_OPTION, "classic"],
         ["kept-option", "kept-probe", "kept"],
       ]) {
-        await current.adapter.executeQuery(
+        await t.adapter.executeQuery(
           `INSERT INTO ${quote(OPTIONS_TABLE)} (${quote("id")}, ${quote("name")}, ${quote("value")}) VALUES ('${id}', '${name}', '${value}')`
         );
       }
-      return current;
     }
 
     /** The option rows by name, as `<name>=<value>`, sorted. */
@@ -135,6 +166,29 @@ describe.each(getConfiguredTestDialects())(
       // spaces blocks by their container's gap.
       expect(siteSheet(style)).not.toHaveProperty("spacingMode");
     });
+
+    // Not on SQLite: a start of this harness there builds the plugin's tables
+    // afresh, so nothing recorded before it is left to keep, whatever the
+    // plugin does (the start pass's own row comes back under a new id).
+    it.skipIf(dialect === "sqlite")(
+      "keeps it through a start of the site: only a save removes it",
+      async () => {
+        database = await siteDatabase(dialect, "pb_spacing_start");
+        // The release that recorded it, then the upgrade starting on the same
+        // database.
+        await record(await startOn(database));
+        const t = await startOn(database);
+
+        expect(await options(t)).toEqual([
+          "kept-probe=kept",
+          "spacing-mode=classic",
+        ]);
+        // CONTROL: the restarted site removes it at its first save, so the row
+        // above is one it would clear, not one it cannot reach.
+        await saveStyle(t);
+        expect(await options(t)).toEqual(["kept-probe=kept"]);
+      }
+    );
 
     it("removes it with the next save of the site style, keeping every other option", async () => {
       const t = await boot();
