@@ -300,29 +300,18 @@ function placementActions(
   if (offer === undefined || only === undefined) return [];
   const node = findNode(document.nodes, only);
   if (node === undefined || !isComponentInstance(node)) return [];
-  const actions: ToolbarAction[] = [];
-  if (offer.definitions !== undefined) {
-    const detach: ToolbarAction = {
-      id: "detach-component",
-      label: "Detach from component",
-      enabled: true,
-      inMenu: true,
-    };
-    const plan = planned
-      ? planDetach(document, only, offer.definitions, nesting)
-      : undefined;
-    actions.push(
-      plan === undefined
-        ? detach
-        : plan.problem === undefined
-          ? heldByLock(detach, ask, plan.pageOps)
-          : {
-              ...detach,
-              enabled: false,
-              reason: compositionRefusalReason(plan),
-            }
-    );
-  }
+  const actions: ToolbarAction[] =
+    offer.definitions === undefined
+      ? []
+      : [
+          detachAction(
+            document,
+            only,
+            offer.definitions,
+            nesting,
+            planned ? ask : null
+          ),
+        ];
   const duplicate: ToolbarAction = {
     id: "duplicate-component",
     label: "Duplicate component",
@@ -373,6 +362,32 @@ function placementActions(
         }
   );
   return actions;
+}
+
+/**
+ * "Detach from component" for one placement: planned in full against the
+ * definitions the canvas draws, its ops put to the editor's lock question,
+ * where `ask` is not `null`; offered as it stands where it is (the plan is
+ * then made when a menu opens, or when the verb runs).
+ */
+function detachAction(
+  document: BlockDocument,
+  only: string,
+  definitions: DefinitionsById,
+  nesting: NestingSource,
+  ask: LockQuestion | undefined | null
+): ToolbarAction {
+  const detach: ToolbarAction = {
+    id: "detach-component",
+    label: "Detach from component",
+    enabled: true,
+    inMenu: true,
+  };
+  if (ask === null) return detach;
+  const plan = planDetach(document, only, definitions, nesting);
+  return plan.problem === undefined
+    ? heldByLock(detach, ask, plan.pageOps)
+    : { ...detach, enabled: false, reason: compositionRefusalReason(plan) };
 }
 
 /**
