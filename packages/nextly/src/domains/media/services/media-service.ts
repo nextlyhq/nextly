@@ -94,7 +94,9 @@ import {
   type Media as LegacyMedia,
 } from "../../../types/media";
 import {
+  copiesOfMedia,
   copyOfMedia,
+  type CopyDeps,
   mediaCopyStorage,
   mediaIdOfCopySource,
   type MediaCopy,
@@ -654,6 +656,39 @@ export class MediaService {
     width: number,
     context: RequestContext = {}
   ): Promise<MediaCopy | null> {
+    const item = await this.copySourceItem(source, context);
+    if (item === null) return null;
+    return await copyOfMedia(item, width, this.copyDeps());
+  }
+
+  /**
+   * Every resized copy of an image up to `upTo` wide, narrowest first: one per
+   * allowed width no wider than `upTo` or than the original, by the address
+   * each is served at. `[]` where no copy can be had, as `copyOf` answers
+   * `null`. The item is read and judged once for every width, and nothing is
+   * resized here: each copy is made the first time its address is fetched.
+   *
+   * @experimental
+   */
+  async copiesOf(
+    source: MediaCopySource,
+    upTo: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy[]> {
+    const item = await this.copySourceItem(source, context);
+    if (item === null) return [];
+    return await copiesOfMedia(item, upTo, this.copyDeps());
+  }
+
+  /**
+   * The media item a copy is asked of, read once, or `null` where its copies
+   * are not to be offered: an address that is not a media item's, or one whose
+   * item is gone, and any item while a visitor may not read media.
+   */
+  private async copySourceItem(
+    source: MediaCopySource,
+    context: RequestContext
+  ): Promise<MediaFile | null> {
     const id = mediaIdOfCopySource(source);
     if (id === undefined) return null;
     let item: MediaFile;
@@ -676,11 +711,16 @@ export class MediaService {
     ) {
       return null;
     }
-    return await copyOfMedia(item, width, {
+    return item;
+  }
+
+  /** What making and naming copies needs, from this service. */
+  private copyDeps(): CopyDeps {
+    return {
       storage: mediaCopyStorage(),
       processor: this.imageProcessor,
       logger: this.logger,
-    });
+    };
   }
 
   /**

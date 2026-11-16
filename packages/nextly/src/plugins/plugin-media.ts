@@ -49,6 +49,7 @@ export const PLUGIN_MEDIA_READS = [
   "isInUse",
   // A resized copy of an image, for a plugin showing it at a known width.
   "copyOf",
+  "copiesOf",
 ] as const satisfies readonly (keyof MediaService)[];
 
 /**

@@ -143,14 +143,15 @@ describe("a container's HTML tag", () => {
             label?: string;
             options?: string[];
             optionLabels?: Record<string, string>;
-            showOptionValue?: boolean;
+            code?: Record<string, string>;
           }
         >
       ).as;
       expect(as?.label).toBe("HTML tag");
-      expect(as?.showOptionValue).toBe(true);
       for (const tag of as?.options ?? []) {
         expect(as?.optionLabels?.[tag], `${block.name}: ${tag}`).toBeDefined();
+        // What each choice writes, shown beside its words.
+        expect(as?.code?.[tag], `${block.name}: ${tag}`).toBe(tag);
       }
     }
   });

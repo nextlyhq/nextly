@@ -23,10 +23,21 @@
  */
 
 import { CONTENT_WIDTH_CLASS } from "@nextlyhq/blocks-engine";
-import type { ContentModel, TokenRef } from "@nextlyhq/blocks-engine";
+import type {
+  ContentModel,
+  RemotePatternInput,
+  TokenRef,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
-import type { BlockRenderArgs } from "../context";
+import type { BlockRenderArgs, PageContext } from "../context";
+import { childImageContext } from "../image-slot";
+import {
+  backgroundRevision,
+  contentKey,
+  firstBackgroundSource,
+  sizedFirstBackground,
+} from "../image-sources";
 
 import { url } from "./props";
 
@@ -192,19 +203,94 @@ export function linkableContentModel(props: ContainerProps): ContentModel {
  */
 export const LINKABLE_BASE_STYLE = { display: "block" } as const;
 
+/**
+ * The first section's background as copies sized to each device, where the
+ * page sizes it (`image-sources`): one rule per device and one preload per
+ * copy, both hoisted by React into the page's head, so nothing is added among
+ * the container's children. Drawn on a published page only, where the route
+ * offers the site's copies.
+ */
+async function SizedFirstBackground({
+  page,
+  node,
+  className,
+  patterns,
+}: {
+  page: PageContext;
+  node: BlockRenderArgs<ContainerProps>["node"];
+  className: string;
+  patterns: readonly RemotePatternInput[] | undefined;
+}): Promise<ReactElement | null> {
+  const sized = await sizedFirstBackground(page, node, className, patterns);
+  if (sized === undefined) return null;
+  return (
+    <>
+      {sized.preloads.map(copy => (
+        <link
+          key={copy.href}
+          rel="preload"
+          as="image"
+          href={copy.href}
+          fetchPriority="high"
+          {...(copy.media === undefined ? {} : { media: copy.media })}
+        />
+      ))}
+      <style
+        href={`nx-pb-sized-background-${contentKey(sized.css)}`}
+        precedence="default"
+      >
+        {sized.css}
+      </style>
+    </>
+  );
+}
+
+/**
+ * The root's classes, with the one naming its sized background where the page
+ * sizes it: the rules for that background match only while the root wears it.
+ */
+function withRevision(
+  classes: string,
+  { ctx, node }: BlockRenderArgs<ContainerProps>
+): string {
+  const revision = backgroundRevision(ctx, node);
+  return revision === undefined ? classes : `${classes} ${revision}`;
+}
+
+/** The sized first background, or nothing where the page draws it as it is. */
+function firstBackground({
+  ctx,
+  node,
+  className,
+  hostPolicy,
+}: BlockRenderArgs<ContainerProps>): ReactElement | null {
+  if (firstBackgroundSource(ctx, node) === undefined) return null;
+  return (
+    <SizedFirstBackground
+      page={ctx}
+      node={node}
+      className={className}
+      patterns={hostPolicy?.remotePatterns}
+    />
+  );
+}
+
 /** Render a linkable preset: an `<a>` while linked, its tag otherwise. */
 export function renderLinkableContainer(
   args: BlockRenderArgs<ContainerProps>
 ): ReactElement {
   const href = linkOf(args.props);
   if (href === undefined) return renderContainer(args);
-  const classes =
+  const classes = withRevision(
     args.props.contained === true
       ? `${args.className} ${CONTENT_WIDTH_CLASS}`
-      : args.className;
+      : args.className,
+    args
+  );
   return (
     <a className={classes} href={href}>
-      {args.renderSlot("children")}
+      {firstBackground(args)}
+      {args.renderSlot("children", childImageContext(args.ctx, args.node))}
     </a>
   );
 }
@@ -217,20 +303,27 @@ export function renderLinkableContainer(
  * Optimization" program; a single-element contract makes that class of problem
  * unreachable, and it is what lets the compiler target one selector per node.
  */
-export function renderContainer({
-  props,
-  renderSlot,
-  className,
-}: BlockRenderArgs<ContainerProps>): ReactElement {
+export function renderContainer(
+  args: BlockRenderArgs<ContainerProps>
+): ReactElement {
+  const { props, renderSlot, className, ctx, node } = args;
   // Checked rather than trusted. The type says what an author may write; the
   // document says what is actually stored, and validation only asks that props
   // be an object. A stored `as: "img"` would reach React as a void element
   // handed children and throw, taking the page with it, so an unknown tag falls
   // back to the one every container can safely be.
   const Tag = rootTagOf(props, false);
-  const classes =
+  const classes = withRevision(
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`
-      : className;
-  return <Tag className={classes}>{renderSlot("children")}</Tag>;
+      : className,
+    args
+  );
+  // The children's images are sized to the width this container leaves them.
+  return (
+    <Tag className={classes}>
+      {firstBackground(args)}
+      {renderSlot("children", childImageContext(ctx, node))}
+    </Tag>
+  );
 }

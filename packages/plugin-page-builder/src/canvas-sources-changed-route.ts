@@ -30,18 +30,15 @@ import { z } from "nextly/zod";
 
 import {
   CANVAS_SOURCES_CHANGED_ROUTE_PATH,
+  isSourceSlug,
   type CanvasSourcesChangedRequest,
   type CanvasSourcesChangedResponse,
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
 import { readingAsUser } from "./library-route";
 
-/** A collection's or a Single's slug. */
-const SLUG = z
-  .string()
-  .min(1)
-  .max(128)
-  .regex(/^[A-Za-z0-9_-]+$/);
+/** A collection's or a Single's slug, as the editor checks it too. */
+const SLUG = z.string().refine(isSourceSlug, { message: "Not a slug." });
 
 /** A field name a binding follows: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
