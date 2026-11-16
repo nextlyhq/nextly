@@ -99,6 +99,7 @@ type Overrides = {
   fieldGroupsFirst?: {
     creates: readonly { address: string; label: string }[];
     create: () => Promise<string | null>;
+    letGoUnused?: () => void;
   };
 };
 
@@ -636,5 +637,59 @@ describe("field groups not saved yet", () => {
     await waitFor(() =>
       expect(order).toEqual(["create the field groups", "save the host"])
     );
+  });
+
+  it("lets go of the host's unused ones once the save has landed", async () => {
+    const letGoUnused = vi.fn();
+    const confirmation = confirmationStub(preview());
+    const { result, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(letGoUnused).toHaveBeenCalledTimes(1));
+    expect(onApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps them when the save is refused", async () => {
+    const letGoUnused = vi.fn();
+    const confirmation = confirmationStub(preview());
+    const { result } = setup({
+      confirmation,
+      applyFn: vi.fn(async () => ({ success: false, message: "Refused." })),
+      fieldGroupsFirst: {
+        creates: [],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(confirmation.endApply).toHaveBeenCalledTimes(1));
+    expect(letGoUnused).not.toHaveBeenCalled();
+  });
+
+  it("lets go of them when the save has nothing to review", async () => {
+    const letGoUnused = vi.fn();
+    const { result, onNoChanges } = setup({
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      fieldGroupsFirst: {
+        creates: [],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(onNoChanges).toHaveBeenCalledTimes(1);
+    expect(letGoUnused).toHaveBeenCalledTimes(1);
   });
 });

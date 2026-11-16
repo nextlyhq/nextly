@@ -37,7 +37,11 @@ import {
   type UnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
 
-import { useFieldGroupsFirst } from "../useFieldGroupsFirst";
+import type { BuilderPendingChanges } from "../useBuilderEntityState";
+import {
+  useDiscardLetsGoOwned,
+  useFieldGroupsFirst,
+} from "../useFieldGroupsFirst";
 
 const POSTS = { kind: "collection" as const, address: "posts" };
 
@@ -108,11 +112,31 @@ describe("useFieldGroupsFirst", () => {
     expect(unsavedEntity("field-group", "promo")).toBeDefined();
   });
 
-  it("has nothing for the save to do where the fields use none", () => {
-    addUnsavedEntity(group("promo", "Promo", POSTS));
+  it("has nothing for the save to do where no unsaved field group is the host's or used", () => {
+    addUnsavedEntity(group("banner", "Banner"));
     const { result } = renderHook(() => useFieldGroupsFirst(POSTS, []));
     expect(result.current.creates).toEqual([]);
     expect(result.current.fieldGroupsFirst).toBeUndefined();
+  });
+
+  it("hands the save the host's unused ones to let go, with nothing to create", () => {
+    addUnsavedEntity(group("promo", "Promo", POSTS));
+    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, []));
+    expect(result.current.fieldGroupsFirst?.creates).toEqual([]);
+    act(() => result.current.fieldGroupsFirst?.letGoUnused?.());
+    expect(unsavedEntity("field-group", "promo")).toBeUndefined();
+  });
+
+  it("releases the host's ones when it is left, each kept as one of its own", () => {
+    addUnsavedEntity(group("hero", "Hero", POSTS));
+    const { result } = renderHook(() => useFieldGroupsFirst(POSTS, usesHero));
+
+    act(() => result.current.release());
+
+    expect(unsavedEntity("field-group", "hero")).toEqual(
+      expect.objectContaining({ address: "hero", fields: [] })
+    );
+    expect(unsavedEntity("field-group", "hero")?.ownedBy).toBeUndefined();
   });
 
   it("lets go of the host's own unused ones after a save, and only those", () => {
@@ -139,5 +163,25 @@ describe("useFieldGroupsFirst", () => {
     expect(unsavedEntity("field-group", "hero")).toBeUndefined();
     expect(unsavedEntity("field-group", "promo")).toBeUndefined();
     expect(unsavedEntity("field-group", "banner")).toBeDefined();
+  });
+});
+
+describe("useDiscardLetsGoOwned", () => {
+  it("lets go of the host's picker-made groups, then discards its changes", () => {
+    const order: string[] = [];
+    const pending = {
+      discardAll: () => order.push("discard the host's changes"),
+    } as unknown as BuilderPendingChanges;
+    const letGoOwned = () => order.push("let go of its groups");
+    const { result } = renderHook(() =>
+      useDiscardLetsGoOwned(pending, letGoOwned)
+    );
+
+    act(() => result.current.discardAll());
+
+    expect(order).toEqual([
+      "let go of its groups",
+      "discard the host's changes",
+    ]);
   });
 });

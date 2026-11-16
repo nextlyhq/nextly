@@ -7,7 +7,8 @@
  * The ones its fields use are listed in the save's review and created after it
  * is confirmed, before the entity (`useSchemaSave`'s `fieldGroupsFirst`). The
  * ones its own field picker made are let go: those no field uses once the save
- * has landed, and all of them when its changes are discarded or left. Every
+ * has landed, and all of them when its changes are discarded. A confirmed leave
+ * releases them instead, each kept as an unsaved field group of its own. Every
  * editor asks this one hook, so the three kinds cannot differ about which
  * groups a save creates.
  */
@@ -21,11 +22,13 @@ import {
   type FieldNamingGroups,
 } from "@admin/lib/builder/field-groups-first";
 import {
+  releaseUnsavedFieldGroupsOf,
   removeUnsavedEntity,
   useUnsavedEntitiesOf,
 } from "@admin/lib/builder/unsaved-entities";
 
 import { useCreateFieldGroup } from "./queries";
+import type { BuilderPendingChanges } from "./useBuilderEntityState";
 import type { UseSchemaSaveOptions } from "./useSchemaSave";
 
 export interface UseFieldGroupsFirstReturn {
@@ -35,8 +38,14 @@ export interface UseFieldGroupsFirstReturn {
   fieldGroupsFirst: UseSchemaSaveOptions["fieldGroupsFirst"];
   /** After a save has landed: the host's own ones no field uses go. */
   letGoUnused: () => void;
-  /** When the host's changes are discarded or left: every one its picker made goes. */
+  /** When the host's changes are discarded: every one its picker made goes. */
   letGoOwned: () => void;
+  /**
+   * When the host is left with its changes discarded: every one its picker
+   * made stays as an unsaved field group of its own, which its own editor may
+   * open and save.
+   */
+  release: () => void;
 }
 
 const NONE: readonly FieldNamingGroups[] = [];
@@ -67,17 +76,6 @@ export function useFieldGroupsFirst(
     [used]
   );
 
-  const fieldGroupsFirst = useMemo(
-    () =>
-      used.length === 0
-        ? undefined
-        : {
-            creates,
-            create: () => createFieldGroupsFirst(used, createFieldGroup),
-          },
-    [used, creates, createFieldGroup]
-  );
-
   const letGoUnused = useCallback(() => {
     for (const group of unused)
       removeUnsavedEntity("field-group", group.address);
@@ -95,5 +93,42 @@ export function useFieldGroupsFirst(
     }
   }, [held, host]);
 
-  return { creates, fieldGroupsFirst, letGoUnused, letGoOwned };
+  const release = useCallback(() => {
+    if (host) releaseUnsavedFieldGroupsOf(host);
+  }, [host]);
+
+  // Absent when the save has nothing to create and nothing to let go.
+  const fieldGroupsFirst = useMemo(
+    () =>
+      used.length === 0 && unused.length === 0
+        ? undefined
+        : {
+            creates,
+            create: () => createFieldGroupsFirst(used, createFieldGroup),
+            letGoUnused,
+          },
+    [used, unused, creates, createFieldGroup, letGoUnused]
+  );
+
+  return { creates, fieldGroupsFirst, letGoUnused, letGoOwned, release };
+}
+
+/**
+ * `pending`, with its Discard all letting go of every field group the host's
+ * picker made, which only its discarded changes named.
+ */
+export function useDiscardLetsGoOwned(
+  pending: BuilderPendingChanges,
+  letGoOwned: () => void
+): BuilderPendingChanges {
+  return useMemo(
+    () => ({
+      ...pending,
+      discardAll: () => {
+        letGoOwned();
+        pending.discardAll();
+      },
+    }),
+    [pending, letGoOwned]
+  );
 }

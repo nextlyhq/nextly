@@ -150,6 +150,30 @@ export function removeUnsavedEntity(kind: BuilderKind, address: string): void {
   replace(next);
 }
 
+/**
+ * Clears `host` as the owner of the field groups its picker made, so each stays
+ * an unsaved field group of its own, as one made from its create page: its own
+ * editor's first save creates it. For a host left with its changes discarded,
+ * which no longer names them.
+ */
+export function releaseUnsavedFieldGroupsOf(
+  host: NonNullable<UnsavedEntity["ownedBy"]>
+): void {
+  const owned = [...entities].filter(
+    ([, entity]) =>
+      entity.ownedBy?.kind === host.kind &&
+      entity.ownedBy.address === host.address
+  );
+  // Nothing of the host's is held, so readers are not told.
+  if (owned.length === 0) return;
+  const next = new Map(entities);
+  for (const [key, entity] of owned) {
+    const { ownedBy: _released, ...ownerless } = entity;
+    next.set(key, ownerless);
+  }
+  replace(next);
+}
+
 /** The unsaved entity of that kind under the address, if one waits. */
 export function unsavedEntity(
   kind: BuilderKind,
