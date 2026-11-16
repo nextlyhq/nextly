@@ -958,6 +958,50 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 - belongs to a field-type view scoped to a field type the plugin does not
   contribute.
 
+#### Where an entry opens
+
+> **Experimental.** `opensFirst` and a collection's `admin.opensIn` may change
+> before they are marked stable.
+
+Every admin link meant to open an entry (a list row, the row menu's Edit, a
+row's language dots, the dashboard's Continue and Recent entries cards) opens it
+in the same place, chosen by one rule:
+
+1. The collection's `admin.opensIn`, when it declares one: `"form"`, or the
+   path of a document view the collection has.
+2. Otherwise, a field-type view that declares `opensFirst: "mainField"`, when
+   the collection's main field is of that view's type. The main field is the
+   first top-level field (reading into unnamed groups, as the form lays them
+   out) that is not hidden, not the title field and not `slug`.
+3. Otherwise, the form.
+
+```ts
+admin: {
+  documentViews: [
+    { path: "builder", fieldType: "blocks", opensFirst: "mainField",
+      component: "@acme/x/admin#Builder", label: "Builder" },
+  ],
+},
+```
+
+The admin opens the form instead, whatever the rule says, for a reader who may
+not update the entry (they get it read-only) and for an entry opened in a
+language other than the site's default. A view that isn't published, because
+its plugin is switched off, opens the form too. The form's own address,
+`/admin/collections/<slug>/<id>`, always opens the form, so old links and
+bookmarks keep working, and nothing is remembered per person: the same click
+always opens the same place. A view opened this way is addressed on the field it
+edits (`?field=<main field>`). Collections made in the Schema Builder can't
+declare `opensIn`, so they follow steps 2 and 3, as their fields are now.
+
+Startup, and every CLI command, is refused, naming the collection and the view,
+when a collection's `opensIn` names a view it doesn't have, or a field-type
+view whose field type isn't among its top-level fields. Every plugin's views
+count, switched-off ones included, so switching a plugin off never stops a
+start. Startup is also refused when `opensFirst` is declared on a view scoped to
+a collection, takes a value other than `"mainField"`, or is declared by two
+views on one field type.
+
 #### The header's controls in your view
 
 > **Experimental.** These may change before they are marked stable.
