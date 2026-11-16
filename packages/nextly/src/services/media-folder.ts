@@ -297,9 +297,14 @@ function removalThrough(
         record,
         reading.locator
       );
+      // Every file the item can have, then whichever another item refers to
+      // taken out, a copy as much as the original: a copy another item names
+      // as its own file stays.
       filePaths.push(
-        ...paths.filter(filePath => !kept.has(filePath)),
-        ...copiesToRemove(record, reading.keepsCopies, kept)
+        ...[
+          ...paths,
+          ...copiesToRemove(record, reading.keepsCopies, kept),
+        ].filter(filePath => !kept.has(filePath))
       );
       for (const url of unlocated) warnUnlocated(url, record.id);
       for (const url of notHere) warnSizeNotHere(url, record.id);

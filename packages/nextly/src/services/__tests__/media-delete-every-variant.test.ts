@@ -458,6 +458,50 @@ describe("a size recorded by its URL alone on a storage a folder delete is given
   });
 });
 
+// A folder cascade through a storage that keeps resized copies removes an
+// item's copies with it, except one another item names as its own file.
+describe("a copy another item names, on a storage a folder delete is given", () => {
+  it("stays while the rest of the deleted item's copies go", async () => {
+    onLocalDisk();
+    const folders = new MediaFolderService(db.adapter, testLogger);
+    const created = await folders.createFolder({
+      name: `folder-${randomUUID()}`,
+      createdBy: "user-1",
+    });
+    const folder = created.data!.id;
+    const cdn = "https://cdn.example";
+    const onGivenStorage = async (id: string, filename: string) => {
+      await db.db
+        .update(db.schema.media)
+        .set({ filename, url: `${cdn}/${filename}`, thumbnailUrl: null })
+        .where(eq(db.schema.media.id, id));
+    };
+    const inside = "2026/11/inside-copies.png";
+    const named = `${inside}.w640.webp`;
+    await onGivenStorage(await uploadImage(folder), inside);
+    // An item outside the folder whose own file is the inside item's copy.
+    await onGivenStorage(await uploadImage(), named);
+    const given: string[] = [];
+    const storage = {
+      bulkDelete: async (filePaths: string[]) => {
+        given.push(...filePaths);
+        return { successful: filePaths, failed: [] };
+      },
+      getPublicUrl: (filePath: string) => `${cdn}/${filePath}`,
+      getStorageType: () => "s3",
+      keepsCopies: () => true,
+    };
+
+    const result = await folders.deleteFolder(folder, true, storage);
+
+    expect(result.success).toBe(true);
+    // The control: the item's own file and its other copies went.
+    expect(given).toContain(inside);
+    expect(given).toContain(`${inside}.w320.webp`);
+    expect(given).not.toContain(named);
+  });
+});
+
 // Whether another item names a file is asked by its key, compared as the
 // storage tells its files apart: S3 keeps `2026//10/x` and `2026/10/x` as
 // two objects, while a custom adapter promises nothing of the kind.
