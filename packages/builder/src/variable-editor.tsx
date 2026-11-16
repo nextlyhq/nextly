@@ -651,10 +651,15 @@ function ColourValue({
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
   // The swatch follows what is typed, so a value that is not a colour shows
-  // as one at once, rather than as the last colour or as black.
+  // as one at once, rather than as the last colour or as black. A colour the
+  // picker cannot read (`oklch()`, a variable, a named colour) is still one:
+  // the swatch paints it as written, and only text no browser reads as a
+  // colour is marked invalid.
   const typed = text.trim();
-  const hex = shown ?? colourHexOf(typed === "" ? value : typed, undefined);
-  const invalid = hex === undefined && typed !== "";
+  const current = typed === "" ? value : typed;
+  const hex = shown ?? colourHexOf(current, undefined);
+  const readable = hex !== undefined || isCssColour(current);
+  const invalid = !readable && typed !== "";
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
@@ -666,16 +671,16 @@ function ColourValue({
             className="nx-vars__swatch"
             aria-hidden="true"
             data-invalid={invalid ? "" : undefined}
-            style={swatchStyle(hex)}
+            style={swatchStyle(hex ?? (readable ? current : undefined))}
           />
         ) : (
           <button
             type="button"
             className="nx-vars__swatch nx-vars-editor__swatch"
             data-invalid={invalid ? "" : undefined}
-            aria-label={`Pick the ${label.toLowerCase()} colour${invalid ? ", not a colour now" : ""}`}
+            aria-label={`Pick the ${label.toLowerCase()} colour${invalid ? " (not a valid colour)" : ""}`}
             aria-expanded={picking}
-            style={swatchStyle(hex)}
+            style={swatchStyle(hex ?? (readable ? current : undefined))}
             onClick={() => {
               if (picking) {
                 flush();
@@ -690,7 +695,7 @@ function ColourValue({
           className="nx-vars-editor__mono"
           // A value, not words: no list of earlier entries over the field.
           autoComplete="off"
-          aria-invalid={refusedBy === undefined ? undefined : true}
+          aria-invalid={refusedBy === undefined && !invalid ? undefined : true}
           aria-describedby={refusedBy}
           value={text}
           onChange={event => setText(event.currentTarget.value)}
@@ -715,8 +720,9 @@ function ColourValue({
       {picking ? (
         <ColorPicker
           className="nx-vars-editor__picker"
-          // A value that is not a colour starts the picker from no colour
-          // (clear), not from black, which it would claim the value is.
+          // A value the picker cannot read starts it from a neutral grey, not
+          // from black, which it would claim the value is; opaque, so a
+          // colour picked from there is seen.
           color={hex ?? NO_COLOUR}
           showAlpha
           onColorChange={next => {
@@ -729,8 +735,20 @@ function ColourValue({
   );
 }
 
-/** Where the picker starts for a value that is not a colour: clear. */
-const NO_COLOUR = "#00000000";
+/** Where the picker starts for a value it cannot read: a neutral grey. */
+const NO_COLOUR = "#808080";
+
+/**
+ * Whether the browser reads `text` as a CSS colour: any colour a stylesheet
+ * takes, beyond the hex and `rgb()` the picker reads. False where the
+ * browser cannot say.
+ */
+function isCssColour(text: string): boolean {
+  const css = globalThis.CSS as { supports?: unknown } | undefined;
+  return typeof css?.supports === "function"
+    ? CSS.supports("color", text)
+    : false;
+}
 
 /** The dark value: its field, or a line saying it follows light. */
 function DarkValue({

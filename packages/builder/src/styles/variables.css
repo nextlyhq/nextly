@@ -520,11 +520,12 @@
   line-height: 1.5;
 }
 
-/* A row whose usage is read takes a fourth column, its count, of a fixed
-   width: the counts arrive after the rows, and a column sized to them would
-   move every value beside it when they do. */
+/* A row whose usage is read takes a fourth column, its count, held at least
+   as wide as a count of three figures: the counts arrive after the rows, and
+   a column sized only to them would move every value beside it when they do.
+   Words wider than that ("Not counted yet") still get their room. */
 .nx-vars__row[data-counted] {
-  grid-template-columns: 22px minmax(0, 1fr) auto 2rem;
+  grid-template-columns: 22px minmax(0, 1fr) auto minmax(2rem, max-content);
 }
 
 /* The count of places: a bare number, right-aligned in figures of one

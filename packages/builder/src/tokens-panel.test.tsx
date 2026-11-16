@@ -118,28 +118,58 @@ describe("the rows", () => {
   });
 
   it("shows a colour value that is not a colour as invalid, and never as black", async () => {
-    render(<Hosted tokens={SITE} />);
-    const colour = await openEditor(/^Brand/);
-    // The control: a real colour draws its swatch, with no invalid mark.
-    const swatch = () =>
-      within(colour).getByRole("button", { name: /^Pick the light colour/ });
-    expect(swatch().hasAttribute("data-invalid")).toBe(false);
-    fireEvent.change(within(colour).getByLabelText(/^Light/), {
-      target: { value: "#12" },
+    // A stored value no browser reads as a colour, as an import can leave.
+    const odd: SiteTokenSet = {
+      tokens: [
+        ...SITE.tokens,
+        { name: "color.odd", kind: "color", values: { light: "banana" } },
+      ],
+    };
+    render(<Hosted tokens={odd} />);
+    const colour = await openEditor(/^Odd/);
+    const swatch = within(colour).getByRole("button", {
+      name: /^Pick the light colour/,
     });
-    // At once, as typed: marked invalid, and said so.
-    expect(swatch().hasAttribute("data-invalid")).toBe(true);
-    expect(swatch().getAttribute("aria-label")).toBe(
-      "Pick the light colour, not a colour now"
+    expect(swatch.hasAttribute("data-invalid")).toBe(true);
+    expect(swatch.getAttribute("aria-label")).toBe(
+      "Pick the light colour (not a valid colour)"
     );
-    // Opened on it, the picker does not start from black.
-    fireEvent.click(swatch());
+    expect(
+      within(colour).getByLabelText(/^Light/).getAttribute("aria-invalid")
+    ).toBe("true");
+    // Opened on it, the picker starts from a neutral grey, not black.
+    fireEvent.click(swatch);
     const values = within(colour)
       .getAllByRole("textbox")
       .map(field => (field as HTMLInputElement).value.toLowerCase());
     expect(values.length).toBeGreaterThan(1);
     expect(values).not.toContain("000000");
     expect(values).not.toContain("#000000");
+  });
+
+  it("marks a value invalid as it is typed, and not a colour the picker cannot read", async () => {
+    // jsdom computes no CSS and has no CSS.supports, so the browser's own
+    // answer is given here, for this test alone.
+    const css = CSS as unknown as Record<string, unknown>;
+    css.supports = (_property: string, value?: string) =>
+      /^oklch\(/.test(value ?? "");
+    try {
+      render(<Hosted tokens={SITE} />);
+      const colour = await openEditor(/^Brand/);
+      const swatch = () =>
+        within(colour).getByRole("button", { name: /^Pick the light colour/ });
+      // The control: a real colour, unmarked.
+      expect(swatch().hasAttribute("data-invalid")).toBe(false);
+      const light = within(colour).getByLabelText(/^Light/);
+      fireEvent.change(light, { target: { value: "#12" } });
+      expect(swatch().hasAttribute("data-invalid")).toBe(true);
+      // A colour the picker cannot read is still a colour.
+      fireEvent.change(light, { target: { value: "oklch(0.6 0.2 250)" } });
+      expect(swatch().hasAttribute("data-invalid")).toBe(false);
+      expect(light.getAttribute("aria-invalid")).toBeNull();
+    } finally {
+      delete css.supports;
+    }
   });
 
   it("labels the colour columns beside the Colours heading, for sight only", () => {

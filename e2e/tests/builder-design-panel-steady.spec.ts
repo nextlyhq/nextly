@@ -83,16 +83,20 @@ async function openDesign(page: Page): Promise<void> {
 async function firstRowColumns(page: Page) {
   const row = page.locator(".nx-vars__row").first();
   await expect(row).toBeVisible();
+  // Each column found by what it is, so a count arriving after the first
+  // measure is measured as the count rather than taken for the values.
   return row.evaluate(element => {
-    const name = element.querySelector(".nx-vars__name");
-    const last = element.lastElementChild ?? element;
     const at = (box: Element | null) => {
       const rect = box?.getBoundingClientRect();
       return rect === undefined
         ? null
         : { left: Math.round(rect.left), right: Math.round(rect.right) };
     };
-    return { name: at(name), row: at(element), tail: at(last) };
+    return {
+      row: at(element),
+      name: at(element.querySelector(".nx-vars__name")),
+      values: at(element.querySelector(".nx-vars__pair")),
+    };
   });
 }
 
@@ -119,6 +123,14 @@ test("switching Design tabs leaves the rows' columns where they were", async ({
     await openDesign(page);
     // Right after opening, before the usage counts may have arrived.
     const first = await firstRowColumns(page);
+    // The room inside the panel's body, in a tab whose list scrolls and in
+    // one whose list does not: a scrollbar taking room only in the first
+    // narrows every row there.
+    const room = () =>
+      page.locator(".nx-vars__body").evaluate(body => body.clientWidth);
+    const scrolling = await room();
+    await switchTo(page, "Fonts");
+    expect(await room()).toBe(scrolling);
     for (const tab of ["Shared styles", "Variables", "Fonts", "Variables"]) {
       await switchTo(page, tab);
     }
