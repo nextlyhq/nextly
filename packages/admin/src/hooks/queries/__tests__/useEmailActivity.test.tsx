@@ -97,4 +97,43 @@ describe("useEmailActivity", () => {
   it("still reads a settled list again within a minute, for email sent since", async () => {
     expect(await readsAfter("sent", 61_000)).toBeGreaterThan(0);
   });
+
+  it("stops refreshing once more than one page is loaded, so a poll never reads every page again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    listDeliveryActivity.mockResolvedValue({ items: [], meta: EMPTY_META });
+    // The first page has more; the second is the last.
+    listQueuedEmailActivity
+      .mockResolvedValueOnce({
+        items: [queued("waiting")],
+        meta: { ...EMPTY_META, nextBefore: "cursor-1" },
+      })
+      .mockResolvedValue({
+        items: [
+          {
+            ...queued("waiting"),
+            id: "q2",
+            createdAt: "2026-11-16T09:00:00.000Z",
+          },
+        ],
+        meta: EMPTY_META,
+      });
+    const { result } = renderHook(
+      () => useEmailActivity({ outcome: "any", window: "7d" }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.rows).toHaveLength(2));
+    const before =
+      listQueuedEmailActivity.mock.calls.length +
+      listDeliveryActivity.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    expect(
+      listQueuedEmailActivity.mock.calls.length +
+        listDeliveryActivity.mock.calls.length -
+        before
+    ).toBe(0);
+  });
 });

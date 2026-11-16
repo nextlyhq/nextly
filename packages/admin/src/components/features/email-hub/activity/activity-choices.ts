@@ -51,10 +51,13 @@ function unnamedStoredLabel(type: string, id: string): string {
  * The templates to offer: every template slug the loaded rows name, and,
  * when the reader may read the hub's list, every template in it, each named
  * from the list where it is there; the chosen one always. A template deleted
- * since is still named by its rows, by its slug.
+ * since is still named by its rows, by its slug. Layouts and partials are
+ * left out: nothing is sent from one.
  */
 export function templateChoices(
-  list: ReadonlyArray<{ slug: string; name: string }> | undefined,
+  list:
+    | ReadonlyArray<{ slug: string; name: string; kind?: string }>
+    | undefined,
   rows: readonly ActivityRow[],
   chosen: string | undefined
 ): TemplateOption[] {
@@ -63,6 +66,9 @@ export function templateChoices(
     if (row.templateSlug) options.set(row.templateSlug, row.templateSlug);
   }
   for (const template of list ?? []) {
+    // A layout or a partial is part of an email, never sent on its own, so
+    // no delivery is ever sent from one.
+    if (template.kind !== undefined && template.kind !== "template") continue;
     options.set(template.slug, template.name);
   }
   if (chosen && !options.has(chosen)) options.set(chosen, chosen);

@@ -131,6 +131,20 @@ async function readActivityPage(
   };
 }
 
+/**
+ * How often the list is read again: never once more than one page is
+ * loaded, since each read again reads every loaded page; otherwise sooner
+ * while a queued email on it can still change, and every minute if not.
+ */
+function refreshEvery(
+  pages: readonly ActivityPage[] | undefined
+): number | false {
+  if (!pages || pages.length > 1) return false;
+  return pages.some(page => holdsUnsettledQueued(page.queued))
+    ? UNSETTLED_POLL_MS
+    : SETTLED_POLL_MS;
+}
+
 /** The merged list, and the paging the screen drives. */
 export interface EmailActivityResult {
   rows: ActivityRow[];
@@ -183,13 +197,11 @@ export function useEmailActivity(
     enabled: options.enabled ?? true,
     // Read again sooner while a loaded queued email can still change by
     // itself, and every minute otherwise, for email sent or queued since.
-    refetchInterval: current =>
-      (current.state.data?.pages ?? []).some(page =>
-        holdsUnsettledQueued(page.queued)
-      )
-        ? UNSETTLED_POLL_MS
-        : SETTLED_POLL_MS,
-    refetchOnWindowFocus: true,
+    // Only while one page is loaded: a refetch reads every loaded page again,
+    // so a reader who loaded more keeps what they loaded until they reload.
+    refetchInterval: current => refreshEvery(current.state.data?.pages),
+    refetchOnWindowFocus: current =>
+      (current.state.data?.pages.length ?? 0) <= 1,
   });
 
   const pages = query.data?.pages;

@@ -133,7 +133,9 @@ export function ActivityScreen(): JSX.Element {
           </Button>
         )}
       </div>
-      {activity.isError ? (
+      {/* A read that fails with nothing loaded leaves nothing to show; one
+          that fails later (a refresh, Load more) keeps what has loaded. */}
+      {activity.isError && activity.rows.length === 0 ? (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" aria-hidden />
           <AlertTitle>Activity couldn’t be loaded</AlertTitle>
@@ -150,16 +152,35 @@ export function ActivityScreen(): JSX.Element {
           </AlertDescription>
         </Alert>
       ) : (
-        <ActivityList
-          rows={activity.rows}
-          names={names}
-          now={now}
-          isLoading={activity.isLoading}
-          filtered={filtered}
-          hasMore={activity.hasMore}
-          isLoadingMore={activity.isLoadingMore}
-          onLoadMore={activity.loadMore}
-        />
+        <>
+          {activity.isError && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+              <span>Couldn’t refresh, so this shows what loaded before.</span>
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto p-0"
+                onClick={activity.refetch}
+              >
+                Try again
+              </Button>
+            </div>
+          )}
+          <ActivityList
+            rows={activity.rows}
+            names={names}
+            now={now}
+            isLoading={activity.isLoading}
+            filtered={filtered}
+            hasMore={activity.hasMore}
+            isLoadingMore={activity.isLoadingMore}
+            onLoadMore={activity.loadMore}
+          />
+        </>
       )}
     </div>
   );

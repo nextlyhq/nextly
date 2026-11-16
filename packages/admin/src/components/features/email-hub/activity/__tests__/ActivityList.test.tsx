@@ -108,6 +108,16 @@ describe("the Activity list", () => {
     expect(text[2]).toContain("Mailbox does not exist");
   });
 
+  it("keeps provider and recipient in the table below the width that shows their columns", () => {
+    renderList();
+    const firstRow = within(screen.getByRole("table")).getAllByRole("row")[1];
+    // Shown only where the Provider and Recipient columns are hidden.
+    const compact = firstRow.querySelector("[data-compact-details]");
+    expect(compact?.className).toContain("lg:hidden");
+    expect(compact?.textContent).toContain("Resend (main)");
+    expect(compact?.textContent).toContain("Cc");
+  });
+
   it("draws a phone card per row carrying the same", () => {
     renderList();
     const cards = screen.getAllByRole("article");

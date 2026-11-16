@@ -77,6 +77,20 @@ describe("templateChoices", () => {
     ]);
   });
 
+  it("offers emails only, never a layout or a partial, which nothing is sent from", () => {
+    expect(
+      templateChoices(
+        [
+          { slug: "welcome", name: "Welcome", kind: "template" },
+          { slug: "default-layout", name: "Default layout", kind: "layout" },
+          { slug: "footer", name: "Footer", kind: "partial" },
+        ],
+        [],
+        undefined
+      )
+    ).toEqual([{ slug: "welcome", label: "Welcome" }]);
+  });
+
   it("keeps offering the chosen template when no row names it", () => {
     expect(
       templateChoices(undefined, [], "invoice").map(option => option.slug)

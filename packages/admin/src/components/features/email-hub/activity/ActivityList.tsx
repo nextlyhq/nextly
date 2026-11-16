@@ -227,6 +227,16 @@ function ActivityTable({ views }: { views: RowView[] }) {
               </td>
               <td className="px-4 py-3">
                 <EmailCell view={view} />
+                {view.provider !== "—" && (
+                  // Below the width that shows the Provider and Recipient
+                  // columns, carried under the email instead.
+                  <div
+                    data-compact-details
+                    className="mt-1 break-words text-xs text-muted-foreground lg:hidden"
+                  >
+                    {view.provider} · {view.recipient}
+                  </div>
+                )}
               </td>
               <td className="hidden break-words px-4 py-3 lg:table-cell">
                 {view.provider}
