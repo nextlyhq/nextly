@@ -14,12 +14,13 @@ everything in it either produces or reads.
 > **Every export of this package is additionally `@experimental`** and carries no
 > compatibility guarantee even within alpha.
 
-The editor is landing in slices. What
-ships today is the editor SHELL — the rail, the switched left panel, the canvas
-slot, the inspector and the bars around them — the frame geometry that maps
-between the canvas frame and the host page, the op store that every edit is
-expressed in, and the package name constant. The canvas is still to come. See
-[Public surface](#public-surface).
+It ships the whole editor: the shell (the rail, the switched left panel, the
+canvas, the inspector and the bars around them), the canvas itself, which draws
+the page inside a frame at the chosen breakpoint's width, the layers panel, the
+inserters, the block and style inspectors, the frame geometry that maps between
+the canvas frame and the host page, the op store that every edit is expressed
+in, and the package name constant. `@nextlyhq/plugin-page-builder` mounts it in
+the admin. See [Public surface](#public-surface).
 
 The package was created ahead of any of it so its name could be claimed on npm:
 trusted publishing cannot perform a package's first publish, and the bootstrap
@@ -33,11 +34,12 @@ re-implements nothing downstream of the document model. Read-path preparation,
 condition gating and slot pruning are consumed from the engine's own entry
 points, never reproduced here.
 
-That rule is not stylistic. `plugin-page-builder` carries a second renderer of
-its own, and the two disagree about condition gating in opposite directions: one
-fails closed, the other does not evaluate conditions at all. Sharing a predicate
-would not have prevented that, because sharing a predicate does not share the
-decision to call it. Only sharing the entry point does.
+There is one renderer. The canvas draws each region with `PageRenderer` from
+`@nextlyhq/blocks-react` (`src/canvas-regions.tsx`), and the published page
+draws with the same component, so what an author sees and what a visitor gets
+come from one code path. Sharing a predicate would not be enough to keep two
+renderers in step, because sharing a predicate does not share the decision to
+call it. Only sharing the entry point does.
 
 ## The layering contract
 

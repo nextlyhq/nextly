@@ -14,10 +14,11 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
 
 ## What you get
 
-- **22 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
+- **23 blocks out of the box.** Layout (section, box, columns, column, card, accordion,
   accordion item, spacer, divider), content (heading, paragraph, rich text, table of
-  contents, list, quote, image, gallery, icon, button, embed, form), and one that reads
-  from your content ([Collection list](#reading-content-into-a-page)).
+  contents, list, quote, image, gallery, icon, button, embed, form), one that reads
+  from your content ([Collection list](#reading-content-into-a-page)), and Entry content,
+  offered only in a collection's template, where it draws the entry's own blocks.
 - **Icons.** The Icon block draws one icon from the built-in [Lucide](https://lucide.dev)
   set as inline SVG, rendered on the server, so a published page ships no script for it.
   Its **Icon** control (Content tab) opens a search-first picker that offers the icons you
@@ -750,12 +751,10 @@ Three more reads sit beside it in `nextly/runtime`, each `@experimental`:
 The shapes, and the settings when no instance is given, read the process's running instance,
 as `requireNextly` does.
 
-<Callout type="warn">
-  Field bindings inside a loop are stored but not resolved yet. Each repeated
-  item shows the text its blocks were given in the editor, not the entry's own
-  fields. See [Block document
-  format](/docs/api-reference/block-document-format).
-</Callout>
+Field bindings inside a loop are resolved when the page renders: each repeated item shows
+its own entry's fields. A binding with no value shows its fallback, or the text its block
+was given in the editor. See [Block document
+format](/docs/api-reference/block-document-format).
 
 ### A table of contents
 
