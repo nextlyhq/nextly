@@ -99,7 +99,7 @@ async function openFonts(page: Page): Promise<void> {
       .getByRole("button", { name: "Design", exact: true })
       .click();
   }
-  await panel.getByRole("tab", { name: "Fonts" }).click();
+  await panel.getByRole("tab", { name: "Type" }).click();
   await expect(
     panel.getByRole("heading", { name: "On this site" })
   ).toBeVisible();

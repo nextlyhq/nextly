@@ -206,6 +206,24 @@ describe("supports map onto catalog groups", () => {
     ).toEqual(["linkColor", "linkColorHover"]);
   });
 
+  it("opts a block into the outline alone through its own border flag", () => {
+    // A focus ring without border lines or rounding, and border lines that
+    // do not bring an outline with them.
+    expect(
+      stylePropertiesForSupports({ border: { outline: true } }).map(
+        entry => entry.property
+      )
+    ).toEqual(["outline"]);
+    expect(
+      stylePropertiesForSupports({ border: { line: true } }).map(
+        entry => entry.property
+      )
+    ).toEqual(["border"]);
+    expect(
+      stylePropertiesForSupports({ border: true }).map(entry => entry.property)
+    ).toEqual(["border", "borderRadius", "outline"]);
+  });
+
   it("leaves unflagged properties reachable only through the whole group", () => {
     // boxShadow declares no flag, so an object form cannot name it.
     expect(

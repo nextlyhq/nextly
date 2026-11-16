@@ -219,6 +219,80 @@ blocks. To draw a page with a set of your own, pass it as `blocks`
 (`createBlockResolver([...coreBlocks, myBlock])` from `@nextlyhq/blocks-react`); a resolver
 passed there is always the one used.
 
+### Images sized to where they appear
+
+<Callout type="info">
+  The `imageCopies` route option and `pageBuilderImageCopies()` are
+  **experimental**: their names and shape may change before they are marked
+  stable.
+</Callout>
+
+Add `media.copiesOf` to the route's reader and `imageCopies` to the route above, and a
+visitor downloads each image at about the size it is drawn, not at its upload size:
+
+```tsx
+// src/app/(frontend)/[...slug]/page.tsx
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderImageCopies } from "@nextlyhq/plugin-page-builder";
+import { getNextly } from "nextly";
+import type { NextlyContentReader } from "nextly/runtime";
+
+import nextlyConfig from "../../../../nextly.config";
+
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+const instance = () => getNextly({ config: nextlyConfig });
+
+// The reader above, whose media now also answers for an image's copies.
+const reader: NextlyContentReader & {
+  media: Pick<NextlyInstance["media"], "findByID" | "copiesOf">;
+} = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+    copiesOf: async args => (await instance()).media.copiesOf(args),
+  },
+};
+
+const route = createPublicBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  // Your route's other options stay as they are, its `styleContext` among them.
+  imageCopies: pageBuilderImageCopies(reader),
+});
+```
+
+The copies are the resized versions your site's media already keeps, from 96 to 1920
+pixels wide and never wider than the upload. With the option set:
+
+- **An Image block from the media library offers its copies with `srcset` and `sizes`.** How wide it is drawn on
+  each device comes from your breakpoints: the whole width at the top of the page,
+  shared out across a row of Columns, and narrowed by a width or maximum width the block
+  sets for itself on every device. No copy more than twice the widest of those is sent.
+- **The page's first block loads first.** The images in the first top-level block load at
+  once and with high priority. Every other image keeps its lazy loading.
+- **The first section's background image is sized and found early.** Where the first
+  top-level block sets a background image once, for every device and in its resting
+  state, at a size the box sets (`cover`, `contain` or a length), each device draws a
+  copy about twice its width. The page's `<head>` preloads
+  each copy for the viewports it is drawn at, so the browser starts on it before the
+  stylesheet arrives.
+- **Each image's copies are looked up once,** then kept until the image or its copies
+  change.
+
+The original is drawn as it always was when:
+
+- the route has no `imageCopies`;
+- the image is given by its address rather than picked from the media library, so its
+  width and height are not known; or your storage keeps no resized copies;
+- the upload is narrower than the smallest copy, or the lookup fails;
+- for the background, its address is not the media route's (`/api/media/<id>/raw`), so
+  no media item is named by it; it is drawn at the image's own size (no size, or
+  `auto`), which a narrower copy would shrink; or it changes by device or on hover, it
+  is layered with a gradient, or the block has custom CSS.
+
 ### One process, several sites
 
 A page reads everything through the `nextly` it is given: its entry, the lists and Singles it

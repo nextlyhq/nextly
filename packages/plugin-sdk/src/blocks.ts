@@ -86,8 +86,8 @@ export interface BlockSupportKeys {
   color: "text" | "link";
   /** Background colour, image and gradient. */
   background: "color" | "image" | "gradient";
-  /** Border lines and corner rounding. */
-  border: "line" | "radius";
+  /** Border lines, corner rounding and the outline. */
+  border: "line" | "radius" | "outline";
   /** Box and text shadows. */
   shadow: never;
   /** Opacity, filters and transforms. */

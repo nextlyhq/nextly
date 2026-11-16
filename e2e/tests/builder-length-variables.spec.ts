@@ -177,7 +177,12 @@ test("a type size picked for a heading is stored as a reference, and follows the
     );
 
     // Design changes the variable's size; the heading follows, untouched.
+    // A type size is under Type.
     await openDesign(page);
+    await page
+      .getByRole("region", { name: "Design panel" })
+      .getByRole("tab", { name: /^Type/ })
+      .click();
     await page
       .getByRole("button", { name: /^Display/ })
       .first()
