@@ -41,6 +41,7 @@ import type {
 import type { ReactElement } from "react";
 
 import { blocksRouteConfig, perRequestNotFound } from "./next-blocks-route";
+import { inDraftMode } from "./next-draft-mode";
 import { linkLanguageOf } from "./next-entry-paths";
 import type {
   BlocksPageConfig,
@@ -368,6 +369,10 @@ export function buildContentRoute(
     const decision = pages.draft;
     if (decision === undefined || decision === false) return false;
     if (decision === true) return true;
+    // The public route asks its gate only on a draft-mode request, as the
+    // pages route under it does, so an ordinary visit reads no cookie and its
+    // answer stays static and cached.
+    if (isPublic && !(await inDraftMode())) return false;
     for (const collection of pageCollections) {
       const grant = await decision({
         collection,
