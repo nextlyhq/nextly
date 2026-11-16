@@ -5,7 +5,10 @@
  * design metadata, and the sweeps that fill, repair and clean up behind them.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import { SITE_BLOCKS_SERVICE } from "@nextlyhq/blocks-react";
+import {
+  SITE_BLOCKS_SERVICE,
+  SITE_NAMED_QUERIES_SERVICE,
+} from "@nextlyhq/blocks-react";
 import type { PluginContributions } from "@nextlyhq/plugin-sdk";
 
 import { CONTENT_ADDRESS_SERVICE } from "../address-claims/content-addresses";
@@ -47,7 +50,6 @@ import {
 import type { BindingReportParts } from "./bindings";
 import type { BreakpointRemovalParts } from "./breakpoints";
 import type { retiredReader } from "./components";
-import { SITE_NAMED_QUERIES_SERVICE } from "./install-context";
 import { componentStoreOf } from "./options";
 import type { Definition } from "./state";
 
@@ -77,7 +79,7 @@ export function pluginServices(
     [SITE_BLOCKS_SERVICE.service]: () => registryReader(def.blocks),
     // And its named queries, for a route whose copy of the page builder
     // never started (`namedQueriesOf`).
-    [SITE_NAMED_QUERIES_SERVICE]: () => ({
+    [SITE_NAMED_QUERIES_SERVICE.service]: () => ({
       definitionOf: (name: string) =>
         def.state.namedQueries.definitionOf(name),
     }),

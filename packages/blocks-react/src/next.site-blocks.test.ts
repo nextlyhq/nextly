@@ -16,7 +16,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { throughBoundary } from "./__tests__/through-boundary";
 import { createBlocksPage } from "./next";
 import type { PageRendererProps } from "./page-renderer";
-import { createBlockResolver, SITE_BLOCKS_SERVICE } from "./resolver";
+import { siteBoundConfig } from "./next-readers";
+import {
+  createBlockResolver,
+  SITE_BLOCKS_SERVICE,
+  SITE_COPY,
+  SITE_NAMED_QUERIES_SERVICE,
+} from "./resolver";
 
 /** What the process's instance offers its routes, per test. */
 let offered: Record<string, Record<string, unknown>> = {};
@@ -110,5 +116,60 @@ describe("a route given blocks", () => {
     const { blocks } = await rendered({ blocks: own });
     expect(blocks).toBe(own);
     expect(blocks?.get("acme/pricing")).toBeUndefined();
+  });
+});
+
+describe("a route bound to a page builder that did not start in its module copy", () => {
+  // A production build bundles the plugin into each route, and the route's
+  // copy of the page builder never starts: the route reads the started site.
+  const marked = <T extends object>(value: T, started: boolean) =>
+    Object.assign(value, { [SITE_COPY]: { started: () => started } });
+
+  it("reads the started site's blocks for blocks bound to a copy that never started", () => {
+    offer([block("acme/pricing")]);
+    const own = marked(createBlockResolver([]), false);
+    const { blocks } = siteBoundConfig({
+      collections: ["pages"],
+      field: "content",
+      blocks: own,
+    });
+    expect(blocks?.get("acme/pricing")?.name).toBe("acme/pricing");
+  });
+
+  it("reads its own blocks where its page builder started here", () => {
+    offer([block("acme/pricing")]);
+    const own = marked(createBlockResolver([block("acme/banner")]), true);
+    const { blocks } = siteBoundConfig({
+      collections: ["pages"],
+      field: "content",
+      blocks: own,
+    });
+    expect(blocks?.get("acme/banner")?.name).toBe("acme/banner");
+    expect(blocks?.get("acme/pricing")).toBeUndefined();
+  });
+
+  it("reads the started site's named queries, plugins' among them", () => {
+    const declared = { name: "acme.declared" } as never;
+    offered = {
+      [SITE_NAMED_QUERIES_SERVICE.plugin]: {
+        [SITE_NAMED_QUERIES_SERVICE.service]: {
+          definitionOf: (name: string) =>
+            name === "acme.declared" ? declared : undefined,
+        },
+      },
+    };
+    const own = marked({ definitionOf: () => undefined }, false);
+    const { namedQueries } = siteBoundConfig({
+      collections: ["pages"],
+      field: "content",
+      namedQueries: own,
+    });
+    expect(namedQueries?.definitionOf("acme.declared")).toBe(declared);
+  });
+
+  it("leaves a resolver with no mark as given", () => {
+    const own = createBlockResolver([]);
+    const config = { collections: ["pages"], field: "content", blocks: own };
+    expect(siteBoundConfig(config).blocks).toBe(own);
   });
 });

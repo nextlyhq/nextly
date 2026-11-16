@@ -140,6 +140,7 @@ export function createBlockRegistrationService(
 ): BlockRegistrationBackend {
   registry.clear();
   editorVisible.set(registry, new Set<string>());
+  lastStarted = registry;
   return {
     registerSupport: support => registry.registerSupport(support),
     register(definitions, source) {
@@ -355,6 +356,52 @@ const editorVisible = new WeakMap<BlockRegistryReader, Set<string>>();
  */
 export function hasStarted(registry: BlockRegistryReader): boolean {
   return editorVisible.has(registry);
+}
+
+/**
+ * The registry the last boot in this module copy started. What a page
+ * builder that never started here reads instead of its own empty one: a dev
+ * server's config reload evaluates the config again, making new page builder
+ * definitions, but runs no `init`, so their registries stay empty while the
+ * started one holds the site's blocks.
+ */
+let lastStarted: BlockRegistry | undefined;
+
+/**
+ * `own` where it started in this module copy, else the registry the last
+ * boot here started, else `undefined` (none started here).
+ */
+export function runningRegistry(
+  own: BlockRegistryReader
+): BlockRegistryReader | undefined {
+  return hasStarted(own) ? own : lastStarted;
+}
+
+/**
+ * A reader of {@link runningRegistry} for `own`, chosen on each lookup.
+ * Refused, never answered empty, while nothing has started here: an empty
+ * registry silently refuses nothing.
+ */
+export function runningBlocks(own: BlockRegistryReader): BlockRegistryReader {
+  const current = (): BlockRegistryReader => {
+    const running = runningRegistry(own);
+    if (running !== undefined) return running;
+    throw new Error(
+      "[page-builder] this page builder's site has not started, so it has no blocks to read yet."
+    );
+  };
+  return {
+    get: name => current().get(name),
+    has: name => current().has(name),
+    all: () => current().all(),
+    sourceOf: name => current().sourceOf(name),
+    support: key => current().support(key),
+    supports: () => current().supports(),
+    lookup: () => current().lookup(),
+    nestingSource: () => current().nestingSource(),
+    blockSource: () => current().blockSource(),
+    migrationSource: () => current().migrationSource(),
+  };
 }
 
 /**

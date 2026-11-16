@@ -8,39 +8,17 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { createBlockRegistry } from "@nextlyhq/blocks-engine";
-import { SITE_BLOCKS_SERVICE } from "@nextlyhq/blocks-react";
+import { SITE_BLOCKS_SERVICE, siteCopyOf } from "@nextlyhq/blocks-react";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 import { defineNamedQuery } from "@nextlyhq/plugin-sdk/blocks";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { PAGE_BUILDER_PLUGIN } from "./blocks/registration-service";
+import {
+  createBlockRegistrationService,
+  PAGE_BUILDER_PLUGIN,
+} from "./blocks/registration-service";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
 import { blocksOf, namedQueriesOf, pageBuilder } from "./index";
-import { SITE_NAMED_QUERIES_SERVICE } from "./plugin-definition/install-context";
-
-/**
- * What the process's started instance offers, per test; `undefined` is an
- * instance that has not started, which refuses as the real one does.
- */
-let offered: Record<string, Record<string, unknown>> | undefined;
-
-vi.mock("nextly/runtime", async importOriginal => ({
-  ...(await importOriginal<typeof import("nextly/runtime")>()),
-  requireNextly: () => {
-    if (offered === undefined) throw new Error("services not initialized");
-    return { plugins: offered };
-  },
-}));
-
-afterEach(() => {
-  offered = undefined;
-});
-
-/** Once the runtime a page builder's lookups load has arrived. */
-async function runtimeLoaded(): Promise<void> {
-  await import("nextly/runtime");
-  await Promise.resolve();
-}
 
 /** A named query with nothing to read, under `name`. */
 function query(name: string) {
@@ -92,21 +70,23 @@ describe("a server read with no site registry", () => {
     expect(SITE_BLOCKS_SERVICE.plugin).toBe(PAGE_BUILDER_PLUGIN);
   });
 
-  it("refuses blocksOf() while no site has started, rather than answering no blocks", async () => {
-    const builder = pageBuilder();
-    const blocks = blocksOf(builder);
-    await runtimeLoaded();
+  it("refuses blocksOf() while no site has started, rather than answering no blocks", () => {
+    const blocks = blocksOf(pageBuilder());
     expect(() => blocks.all()).toThrow(
-      "[page-builder] blocksOf(): this page builder's site has not started"
+      "[page-builder] this page builder's site has not started"
     );
+    // Marked as not started, so a route reads the started site instead.
+    expect(siteCopyOf(blocks)?.started()).toBe(false);
   });
 });
 
 describe("a page builder that did not start in this module copy", () => {
-  // A production build bundles the plugin into each route, and the route's
-  // copy of the page builder never starts: it reads the started site.
-  it("reads its blocks through the started instance", async () => {
+  // Runs after the refusal above: once a boot here has started a registry,
+  // a page builder that never started reads it, as a dev server's config
+  // reload leaves the running site's blocks with a new, unstarted definition.
+  it("reads the registry the last boot here started", () => {
     const started = createBlockRegistry();
+    createBlockRegistrationService(started);
     started.register([
       {
         name: "acme/pricing",
@@ -116,32 +96,17 @@ describe("a page builder that did not start in this module copy", () => {
         render: () => null,
       },
     ] as never);
-    offered = {
-      [SITE_BLOCKS_SERVICE.plugin]: { [SITE_BLOCKS_SERVICE.service]: started },
-    };
     const blocks = blocksOf(pageBuilder());
-    await runtimeLoaded();
     expect(blocks.has("acme/pricing")).toBe(true);
     expect(blocks.all().map(block => block.name)).toEqual(["acme/pricing"]);
+    expect(siteCopyOf(blocks)?.started()).toBe(true);
   });
 
-  it("reads its named queries through the started instance, the site's own before any start", async () => {
+  it("marks its named queries, answering the site's own until a route reads the started site", () => {
     const own = query("acme.own");
-    const declared = query("acme.declared");
     const queries = namedQueriesOf(pageBuilder({ namedQueries: [own] }));
-    await runtimeLoaded();
     expect(queries.definitionOf("acme.own")?.name).toBe("acme.own");
-    expect(queries.definitionOf("acme.declared")).toBeUndefined();
-
-    offered = {
-      [PAGE_BUILDER_PLUGIN]: {
-        [SITE_NAMED_QUERIES_SERVICE]: {
-          definitionOf: (name: string) =>
-            [own, declared].find(each => each.name === name),
-        },
-      },
-    };
-    expect(queries.definitionOf("acme.declared")?.name).toBe("acme.declared");
+    expect(siteCopyOf(queries)?.started()).toBe(false);
   });
 });
 

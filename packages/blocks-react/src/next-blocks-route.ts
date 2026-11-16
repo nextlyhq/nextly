@@ -68,7 +68,12 @@ import {
   routeReadSources,
   listBatchReads,
 } from "./next-read-sources";
-import { readerFor, dataFor, siteBlocks } from "./next-readers";
+import {
+  readerFor,
+  dataFor,
+  siteBlocks,
+  siteBoundConfig,
+} from "./next-readers";
 import { metadataValuesOf, derivePageSeo } from "./next-seo";
 import {
   effectiveLimits,
@@ -271,17 +276,20 @@ function siteStylesKey(
 }
 
 export function blocksRouteConfig(
-  config: BlocksPageConfig,
+  given: BlocksPageConfig,
   isPublic: boolean,
   /**
    * How long the page's list reads may live: the route's own `revalidate`.
    * Its own argument because a Single's config withholds `revalidate` from
    * the page config it borrows, and its lists must not outlive it either.
    */
-  listWindow: number | false | undefined = config.revalidate,
+  listWindow: number | false | undefined = given.revalidate,
   /** A Single's page reads its entry as a Single, not from a collection. */
   entrySource: EntrySource = "collection"
 ): ContentRouteConfig<ReactElement> {
+  // Site-bound blocks and named queries, read through the started instance
+  // where their page builder did not start in this module copy.
+  const config = siteBoundConfig(given);
   const {
     field,
     blocks,

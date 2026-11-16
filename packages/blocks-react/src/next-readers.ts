@@ -33,9 +33,12 @@ import type {
   BlocksPublicReader,
 } from "./context";
 import type { BlocksPageConfig } from "./next-page-config";
+import type { NamedQueryLookup } from "./context";
 import {
   offeredSiteBlocks,
   SITE_BLOCKS_SERVICE,
+  SITE_NAMED_QUERIES_SERVICE,
+  siteCopyOf,
   type BlockResolver,
 } from "./resolver";
 
@@ -76,6 +79,55 @@ export function readerFor(config: BlocksPageConfig): NextlyContentReader {
  */
 export function siteBlocks(): BlockResolver {
   return { get: type => siteRegistry().get(type) };
+}
+
+/**
+ * The route's config with its site-bound blocks and named queries read
+ * through the started instance wherever the page builder they are bound to
+ * did not start in this module copy, as in a production build, where each
+ * route holds its own copy of the plugin. Anything else is used as given.
+ */
+export function siteBoundConfig<T extends BlocksPageConfig>(config: T): T {
+  const blocksMark = siteCopyOf(config.blocks);
+  const queriesMark = siteCopyOf(config.namedQueries);
+  if (blocksMark === undefined && queriesMark === undefined) return config;
+  const own = config.blocks;
+  const ownQueries = config.namedQueries;
+  return {
+    ...config,
+    ...(blocksMark === undefined || own === undefined
+      ? {}
+      : {
+          blocks: {
+            get: (type: string) =>
+              (blocksMark.started() ? own : siteRegistry()).get(type),
+          },
+        }),
+    ...(queriesMark === undefined || ownQueries === undefined
+      ? {}
+      : {
+          namedQueries: {
+            definitionOf: (name: string) =>
+              (queriesMark.started()
+                ? ownQueries
+                : (siteQueries() ?? ownQueries)
+              ).definitionOf(name),
+          },
+        }),
+  };
+}
+
+/** The started site's named queries, or `undefined` where none is offered. */
+function siteQueries(): NamedQueryLookup | undefined {
+  const offered: unknown =
+    requireNextly().plugins[SITE_NAMED_QUERIES_SERVICE.plugin]?.[
+      SITE_NAMED_QUERIES_SERVICE.service
+    ];
+  return typeof offered === "object" &&
+    offered !== null &&
+    typeof (offered as { definitionOf?: unknown }).definitionOf === "function"
+    ? (offered as NamedQueryLookup)
+    : undefined;
 }
 
 function siteRegistry(): BlockResolver {

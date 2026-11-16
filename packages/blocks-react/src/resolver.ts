@@ -53,6 +53,51 @@ export const SITE_BLOCKS_SERVICE = {
 } as const;
 
 /**
+ * Where a started page builder offers its site's named queries on the
+ * instance, beside {@link SITE_BLOCKS_SERVICE}.
+ *
+ * @experimental Settles with the per-site block registry.
+ */
+export const SITE_NAMED_QUERIES_SERVICE: {
+  readonly plugin: typeof SITE_BLOCKS_SERVICE.plugin;
+  readonly service: "site-named-queries";
+} = {
+  plugin: SITE_BLOCKS_SERVICE.plugin,
+  service: "site-named-queries",
+};
+
+/**
+ * The mark a site's own blocks or named queries carry when they are bound to
+ * one page builder (`blocksOf`, `namedQueriesOf`): whether that page builder
+ * started in this module copy. A production build bundles the plugin into
+ * each route, and a route's copy never starts; a route then reads the started
+ * site's through the instance. Keyed by `Symbol.for`, so a mark made by one
+ * copy of this package is read by another.
+ *
+ * @experimental Settles with the per-site block registry.
+ */
+export const SITE_COPY: unique symbol = Symbol.for(
+  "@nextlyhq/blocks-react/site-copy"
+) as never;
+
+/** What {@link SITE_COPY} marks. */
+export interface SiteCopyMark {
+  /** Whether the page builder it is bound to started in this module copy. */
+  started(): boolean;
+}
+
+/** The {@link SITE_COPY} mark `value` carries, or `undefined`. */
+export function siteCopyOf(value: unknown): SiteCopyMark | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const mark: unknown = (value as Record<symbol, unknown>)[SITE_COPY];
+  return typeof mark === "object" &&
+    mark !== null &&
+    typeof (mark as { started?: unknown }).started === "function"
+    ? (mark as SiteCopyMark)
+    : undefined;
+}
+
+/**
  * The site's blocks as an instance offers them (its `plugins`), or
  * `undefined` when it offers none. The one reading of
  * {@link SITE_BLOCKS_SERVICE}, for the routes and the site style alike.

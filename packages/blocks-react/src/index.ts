@@ -262,8 +262,11 @@ export {
   offeredSiteBlocks,
   registeredBlocks,
   SITE_BLOCKS_SERVICE,
+  SITE_COPY,
+  SITE_NAMED_QUERIES_SERVICE,
+  siteCopyOf,
 } from "./resolver";
-export type { BlockResolver } from "./resolver";
+export type { BlockResolver, SiteCopyMark } from "./resolver";
 // What `offeredSiteBlocks` answers, a site's blocks read-only, and the views
 // it hands out.
 export type {

@@ -22,6 +22,7 @@ import {
 import {
   registerCoreBlocks,
   registerDeclaredBlocks,
+  runningBlocks,
 } from "./blocks/registration-service";
 import { collectionReach } from "./collection-reach";
 import {
@@ -389,7 +390,9 @@ export const pageBuilder = (
         blocksFieldType(
           siteBreakpoints(configStyle),
           () => state.composition,
-          def.blocks
+          // The started site's registry: a dev server's config reload builds
+          // this field type again from a definition whose init never runs.
+          runningBlocks(def.blocks)
         ),
       ],
       // The one read the insert panel makes. A route rather than a collection
