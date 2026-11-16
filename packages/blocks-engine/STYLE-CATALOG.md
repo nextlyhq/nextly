@@ -95,69 +95,90 @@ the wider declaration, which is a migration rather than a check.
 
 ## The properties
 
+**Applies when** says where a property has an effect, as the catalog records it
+(`appliesWhen`): `always` on any box; `flex-container`, `grid-container` or
+`flex-or-grid-container` on a block that lays its children out that way;
+`wrapping-flex-or-grid` on a grid, or a flex container whose children wrap;
+`flex-child`, `grid-child` or `flex-or-grid-child` on a block whose parent is
+that kind of container; `positioned` on a block whose position is not `static`;
+`replaced` on an image, a video or an embed. A property listing several applies
+wherever any one holds, and a composite can answer per field. Ask
+`applies(property, context)` rather than reading the record: it is the one
+place that also treats what it cannot read about a block as applying.
+
+The flex and grid child properties sit in `dimensions`, so every block that has
+a size can take its share of a Row or a Grid without declaring anything more.
+
 ### spacing
 
-| Property  | Flag      | Value                          | Tokens    | Emits                                        |
-| --------- | --------- | ------------------------------ | --------- | -------------------------------------------- |
-| `margin`  | `margin`  | logical box sides of dimension | dimension | `margin-block-start` … `margin-inline-end`   |
-| `padding` | `padding` | logical box sides of dimension | dimension | `padding-block-start` … `padding-inline-end` |
+| Property  | Flag      | Value                          | Tokens    | Emits                                        | Applies when |
+| --------- | --------- | ------------------------------ | --------- | -------------------------------------------- | ------------ |
+| `margin`  | `margin`  | logical box sides of dimension | dimension | `margin-block-start` … `margin-inline-end`   | always       |
+| `padding` | `padding` | logical box sides of dimension | dimension | `padding-block-start` … `padding-inline-end` | always       |
 
 ### layout
 
-| Property              | Flag | Value                                         | Tokens    | Emits                   |
-| --------------------- | ---- | --------------------------------------------- | --------- | ----------------------- |
-| `boxSizing`           |      | keyword (`content-box`/`border-box`)          |           | `box-sizing`            |
-| `display`             |      | keyword                                       |           | `display`               |
-| `flexDirection`       |      | keyword                                       |           | `flex-direction`        |
-| `flexWrap`            |      | keyword                                       |           | `flex-wrap`             |
-| `justifyContent`      |      | keyword (`start`/`end`, never `left`/`right`) |           | `justify-content`       |
-| `alignItems`          |      | keyword                                       |           | `align-items`           |
-| `alignContent`        |      | keyword                                       |           | `align-content`         |
-| `gap`                 |      | dimension                                     | dimension | `gap`                   |
-| `rowGap`              |      | dimension                                     | dimension | `row-gap`               |
-| `columnGap`           |      | dimension                                     | dimension | `column-gap`            |
-| `gridTemplateColumns` |      | css value                                     |           | `grid-template-columns` |
-| `gridTemplateRows`    |      | css value                                     |           | `grid-template-rows`    |
-| `gridAutoFlow`        |      | keyword                                       |           | `grid-auto-flow`        |
+| Property              | Flag | Value                                         | Tokens    | Emits                   | Applies when           |
+| --------------------- | ---- | --------------------------------------------- | --------- | ----------------------- | ---------------------- |
+| `boxSizing`           |      | keyword (`content-box`/`border-box`)          |           | `box-sizing`            | always                 |
+| `display`             |      | keyword                                       |           | `display`               | always                 |
+| `flexDirection`       |      | keyword                                       |           | `flex-direction`        | flex-container         |
+| `flexWrap`            |      | keyword                                       |           | `flex-wrap`             | flex-container         |
+| `justifyContent`      |      | keyword (`start`/`end`, never `left`/`right`) |           | `justify-content`       | flex-or-grid-container |
+| `alignItems`          |      | keyword                                       |           | `align-items`           | flex-or-grid-container |
+| `alignContent`        |      | keyword                                       |           | `align-content`         | wrapping-flex-or-grid  |
+| `gap`                 |      | dimension                                     | dimension | `gap`                   | flex-or-grid-container |
+| `rowGap`              |      | dimension                                     | dimension | `row-gap`               | flex-or-grid-container |
+| `columnGap`           |      | dimension                                     | dimension | `column-gap`            | flex-or-grid-container |
+| `gridTemplateColumns` |      | css value                                     |           | `grid-template-columns` | grid-container         |
+| `gridTemplateRows`    |      | css value                                     |           | `grid-template-rows`    | grid-container         |
+| `gridAutoFlow`        |      | keyword                                       |           | `grid-auto-flow`        | grid-container         |
+| `justifyItems`        |      | keyword                                       |           | `justify-items`         | grid-container         |
 
 ### dimensions
 
-| Property         | Flag | Value     | Tokens    | Emits             |
-| ---------------- | ---- | --------- | --------- | ----------------- |
-| `width`          |      | dimension | dimension | `width`           |
-| `height`         |      | dimension | dimension | `height`          |
-| `minWidth`       |      | dimension | dimension | `min-width`       |
-| `minHeight`      |      | dimension | dimension | `min-height`      |
-| `maxWidth`       |      | dimension | dimension | `max-width`       |
-| `maxHeight`      |      | dimension | dimension | `max-height`      |
-| `aspectRatio`    |      | css value |           | `aspect-ratio`    |
-| `objectFit`      |      | keyword   |           | `object-fit`      |
-| `objectPosition` |      | css value |           | `object-position` |
-| `overflow`       |      | keyword   |           | `overflow`        |
+| Property         | Flag | Value      | Tokens    | Emits             | Applies when       |
+| ---------------- | ---- | ---------- | --------- | ----------------- | ------------------ |
+| `width`          |      | dimension  | dimension | `width`           | always             |
+| `height`         |      | dimension  | dimension | `height`          | always             |
+| `minWidth`       |      | dimension  | dimension | `min-width`       | always             |
+| `minHeight`      |      | dimension  | dimension | `min-height`      | always             |
+| `maxWidth`       |      | dimension  | dimension | `max-width`       | always             |
+| `maxHeight`      |      | dimension  | dimension | `max-height`      | always             |
+| `aspectRatio`    |      | css value  |           | `aspect-ratio`    | always             |
+| `objectFit`      |      | keyword    |           | `object-fit`      | replaced           |
+| `objectPosition` |      | css value  |           | `object-position` | replaced           |
+| `overflow`       |      | keyword    |           | `overflow`        | always             |
+| `flexGrow`       |      | number ≥ 0 | number    | `flex-grow`       | flex-child         |
+| `flexShrink`     |      | number ≥ 0 | number    | `flex-shrink`     | flex-child         |
+| `flexBasis`      |      | dimension  | dimension | `flex-basis`      | flex-child         |
+| `alignSelf`      |      | keyword    |           | `align-self`      | flex-or-grid-child |
+| `justifySelf`    |      | keyword    |           | `justify-self`    | grid-child         |
+| `order`          |      | integer    | number    | `order`           | flex-or-grid-child |
 
 ### typography
 
-| Property         | Flag | Value                                           | Tokens             | Emits             |
-| ---------------- | ---- | ----------------------------------------------- | ------------------ | ----------------- |
-| `fontFamily`     |      | css value                                       | fontFamily         | `font-family`     |
-| `fontSize`       |      | dimension                                       | dimension          | `font-size`       |
-| `fontWeight`     |      | keyword or number 1–1000                        | fontWeight, number | `font-weight`     |
-| `lineHeight`     |      | number or dimension                             | number, dimension  | `line-height`     |
-| `letterSpacing`  |      | dimension                                       | dimension          | `letter-spacing`  |
-| `wordSpacing`    |      | dimension                                       | dimension          | `word-spacing`    |
-| `textAlign`      |      | keyword (`start`/`end`, flips with direction)   |                    | `text-align`      |
-| `textTransform`  |      | keyword                                         |                    | `text-transform`  |
-| `fontStyle`      |      | keyword or css value (`oblique` takes an angle) |                    | `font-style`      |
-| `textDecoration` |      | css value                                       |                    | `text-decoration` |
-| `textShadow`     |      | css value                                       | shadow             | `text-shadow`     |
+| Property         | Flag | Value                                           | Tokens             | Emits             | Applies when |
+| ---------------- | ---- | ----------------------------------------------- | ------------------ | ----------------- | ------------ |
+| `fontFamily`     |      | css value                                       | fontFamily         | `font-family`     | always       |
+| `fontSize`       |      | dimension                                       | dimension          | `font-size`       | always       |
+| `fontWeight`     |      | keyword or number 1–1000                        | fontWeight, number | `font-weight`     | always       |
+| `lineHeight`     |      | number or dimension                             | number, dimension  | `line-height`     | always       |
+| `letterSpacing`  |      | dimension                                       | dimension          | `letter-spacing`  | always       |
+| `wordSpacing`    |      | dimension                                       | dimension          | `word-spacing`    | always       |
+| `textAlign`      |      | keyword (`start`/`end`, flips with direction)   |                    | `text-align`      | always       |
+| `textTransform`  |      | keyword                                         |                    | `text-transform`  | always       |
+| `fontStyle`      |      | keyword or css value (`oblique` takes an angle) |                    | `font-style`      | always       |
+| `textDecoration` |      | css value                                       |                    | `text-decoration` | always       |
+| `textShadow`     |      | css value                                       | shadow             | `text-shadow`     | always       |
 
 ### color
 
-| Property         | Flag   | Value | Tokens | Emits                           |
-| ---------------- | ------ | ----- | ------ | ------------------------------- |
-| `color`          | `text` | color | color  | `color`                         |
-| `linkColor`      | `link` | color | color  | `color` on descendant `a`       |
-| `linkColorHover` | `link` | color | color  | `color` on descendant `a:hover` |
+| Property         | Flag   | Value | Tokens | Emits                           | Applies when |
+| ---------------- | ------ | ----- | ------ | ------------------------------- | ------------ |
+| `color`          | `text` | color | color  | `color`                         | always       |
+| `linkColor`      | `link` | color | color  | `color` on descendant `a`       | always       |
+| `linkColorHover` | `link` | color | color  | `color` on descendant `a:hover` | always       |
 
 Link colors are the one deliberate exception to a block styling only its own
 root element: a link lives inside the text, so its color has to reach a
@@ -166,11 +187,11 @@ compiler, so every case of it is visible and testable.
 
 ### background
 
-| Property             | Flag       | Value                                                                                      | Tokens        | Emits                                                                         |
-| -------------------- | ---------- | ------------------------------------------------------------------------------------------ | ------------- | ----------------------------------------------------------------------------- |
-| `backgroundColor`    | `color`    | color                                                                                      | color         | `background-color`                                                            |
-| `background`         | `image`    | composite: `url`, `position`, `size`, `repeat`, `attachment`, `overlay`, `overlayStrength` | color, number | `background-image` and friends, `--nx-pb-overlay`, `--nx-pb-overlay-strength` |
-| `backgroundGradient` | `gradient` | css value                                                                                  |               | `background-image`                                                            |
+| Property             | Flag       | Value                                                                                      | Tokens        | Emits                                                                         | Applies when |
+| -------------------- | ---------- | ------------------------------------------------------------------------------------------ | ------------- | ----------------------------------------------------------------------------- | ------------ |
+| `backgroundColor`    | `color`    | color                                                                                      | color         | `background-color`                                                            | always       |
+| `background`         | `image`    | composite: `url`, `position`, `size`, `repeat`, `attachment`, `overlay`, `overlayStrength` | color, number | `background-image` and friends, `--nx-pb-overlay`, `--nx-pb-overlay-strength` | always       |
+| `backgroundGradient` | `gradient` | css value                                                                                  |               | `background-image`                                                            | always       |
 
 `background.url` and `backgroundGradient` both emit `background-image`. Setting
 both on one element is ambiguous; which wins is settled by the compiler, not by
@@ -184,41 +205,41 @@ an overlay set at one device covers an image set at another.
 
 ### border
 
-| Property       | Flag     | Value                                                | Tokens           | Emits                                             |
-| -------------- | -------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------- |
-| `border`       | `line`   | composite: `width` (logical sides), `style`, `color` | dimension, color | `border-*-width`, `border-style`, `border-color`  |
-| `borderRadius` | `radius` | one dimension, or logical corners                    | dimension        | `border-radius`, or `border-start-start-radius` … |
+| Property       | Flag     | Value                                                | Tokens           | Emits                                             | Applies when |
+| -------------- | -------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------- | ------------ |
+| `border`       | `line`   | composite: `width` (logical sides), `style`, `color` | dimension, color | `border-*-width`, `border-style`, `border-color`  | always       |
+| `borderRadius` | `radius` | one dimension, or logical corners                    | dimension        | `border-radius`, or `border-start-start-radius` … | always       |
 
 ### shadow
 
-| Property    | Flag | Value     | Tokens | Emits        |
-| ----------- | ---- | --------- | ------ | ------------ |
-| `boxShadow` |      | css value | shadow | `box-shadow` |
+| Property    | Flag | Value     | Tokens | Emits        | Applies when |
+| ----------- | ---- | --------- | ------ | ------------ | ------------ |
+| `boxShadow` |      | css value | shadow | `box-shadow` | always       |
 
 ### effects
 
-| Property       | Flag | Value      | Tokens           | Emits            |
-| -------------- | ---- | ---------- | ---------------- | ---------------- |
-| `opacity`      |      | number 0–1 | number           | `opacity`        |
-| `filter`       |      | css value  |                  | `filter`         |
-| `mixBlendMode` |      | keyword    |                  | `mix-blend-mode` |
-| `transform`    |      | css value  |                  | `transform`      |
-| `transition`   |      | css value  | custom, duration | `transition`     |
+| Property       | Flag | Value      | Tokens           | Emits            | Applies when |
+| -------------- | ---- | ---------- | ---------------- | ---------------- | ------------ |
+| `opacity`      |      | number 0–1 | number           | `opacity`        | always       |
+| `filter`       |      | css value  |                  | `filter`         | always       |
+| `mixBlendMode` |      | keyword    |                  | `mix-blend-mode` | always       |
+| `transform`    |      | css value  |                  | `transform`      | always       |
+| `transition`   |      | css value  | custom, duration | `transition`     | always       |
 
 Nothing is transitioned automatically. A transition happens because an author
 asked for one.
 
 ### position
 
-| Property   | Flag | Value                                                | Tokens            | Emits                                        |
-| ---------- | ---- | ---------------------------------------------------- | ----------------- | -------------------------------------------- |
-| `position` |      | composite: `type`, `inset` (logical sides), `zIndex` | dimension, number | `position`, `inset-block-start` …, `z-index` |
+| Property   | Flag | Value                                                | Tokens            | Emits                                        | Applies when                                                          |
+| ---------- | ---- | ---------------------------------------------------- | ----------------- | -------------------------------------------- | --------------------------------------------------------------------- |
+| `position` |      | composite: `type`, `inset` (logical sides), `zIndex` | dimension, number | `position`, `inset-block-start` …, `z-index` | always; `inset`: positioned; `zIndex`: positioned, flex-or-grid-child |
 
 ### container
 
-| Property        | Flag | Value   | Tokens | Emits            |
-| --------------- | ---- | ------- | ------ | ---------------- |
-| `containerType` |      | keyword |        | `container-type` |
+| Property        | Flag | Value   | Tokens | Emits            | Applies when |
+| --------------- | ---- | ------- | ------ | ---------------- | ------------ |
+| `containerType` |      | keyword |        | `container-type` | always       |
 
 Opting an element in as a query container lets its descendants use
 container-axis breakpoints. Note that establishing containment also affects how
@@ -284,9 +305,9 @@ value, is a document-format migration.
 
 ### list
 
-| Property        | Flag | Value                                            | Tokens | Emits             |
-| --------------- | ---- | ------------------------------------------------ | ------ | ----------------- |
-| `listStyleType` |      | keyword (`revert` restores the element's marker) |        | `list-style-type` |
+| Property        | Flag | Value                                            | Tokens | Emits             | Applies when |
+| --------------- | ---- | ------------------------------------------------ | ------ | ----------------- | ------------ |
+| `listStyleType` |      | keyword (`revert` restores the element's marker) |        | `list-style-type` | always       |
 
 ### disclosure
 
@@ -295,7 +316,7 @@ also writes fixed declarations on the block's own sections, through child
 selectors (`> details > summary`), so one value reaches every section and never
 a section of an accordion nested inside one.
 
-| Property             | Flag | Value                                         | Tokens | Emits                                                                       |
-| -------------------- | ---- | --------------------------------------------- | ------ | --------------------------------------------------------------------------- |
-| `disclosureIcon`     |      | keyword: `chevron`, `plus`, `none`, `browser` |        | `--nx-pb-disclosure-icon`, and each section's title row, icon and open look |
-| `disclosurePosition` |      | keyword: `before`, `after`                    |        | `--nx-pb-disclosure-position`, and the icon's order and start margin        |
+| Property             | Flag | Value                                         | Tokens | Emits                                                                       | Applies when |
+| -------------------- | ---- | --------------------------------------------- | ------ | --------------------------------------------------------------------------- | ------------ |
+| `disclosureIcon`     |      | keyword: `chevron`, `plus`, `none`, `browser` |        | `--nx-pb-disclosure-icon`, and each section's title row, icon and open look | always       |
+| `disclosurePosition` |      | keyword: `before`, `after`                    |        | `--nx-pb-disclosure-position`, and the icon's order and start margin        | always       |

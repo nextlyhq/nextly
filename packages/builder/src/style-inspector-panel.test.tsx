@@ -5798,12 +5798,15 @@ describe("an image's focal point", () => {
     }
   });
 
-  it("waits behind More where the fit stretches the picture, or none is set", () => {
+  it("shows on an image whatever its fit, as anything an image uses does", () => {
+    // Where it shows is the engine's answer, which is about the element: a
+    // replaced one takes an object position. The fit decides only what the
+    // point says it does.
     for (const fit of ["fill", undefined]) {
       mountImage(fit);
       expect(
-        screen.queryByRole("radiogroup", { name: "Focal point" })
-      ).toBeNull();
+        screen.getByRole("radiogroup", { name: "Focal point" })
+      ).toBeDefined();
       cleanup();
       clearBlocks();
     }
@@ -6106,10 +6109,14 @@ describe("a read-only design", () => {
 describe("which elements count as media for the fit controls", () => {
   const fitShown = (renderedTag: string) => {
     register({ dimensions: true });
+    const editor = editorFor(documentOf());
+    // With the page's cascade, as the canvas reads it: before that, what the
+    // block draws is not known and nothing is hidden for it.
     const { unmount } = render(
       <StyleInspectorPanel
-        editor={editorFor(documentOf())}
+        editor={editor}
         renderedTag={renderedTag}
+        cascade={{ nodes: editor.document.nodes, entries: [] } as never}
       />
     );
     const shown =
@@ -6124,6 +6131,14 @@ describe("which elements count as media for the fit controls", () => {
     // A `<picture>` only chooses a source; the image inside it is what fits.
     expect(fitShown("picture")).toBe(false);
     expect(fitShown("div")).toBe(false);
+  });
+
+  it("shows them before the canvas has said what the block draws", () => {
+    register({ dimensions: true });
+    render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    expect(
+      document.querySelector('[data-property="objectFit"]')
+    ).not.toBeNull();
   });
 });
 
