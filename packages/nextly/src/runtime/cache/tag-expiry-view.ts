@@ -240,6 +240,15 @@ interface ViewState {
    */
   own: Map<string, number>;
   /**
+   * Tags this process expired again after a stale `use cache` fill, per tag
+   * and per depth (index 0 is depth 1), on this process's clock: the latest
+   * re-expiry at each depth. Kept apart from `own`, which holds writes, so a
+   * re-expiry can be told from a write when the next fill is judged (see
+   * `expireAgainAfterStaleFill`). Optional: a copy of this module from before
+   * it was kept may have made this state.
+   */
+  again?: Map<string, number[]>;
+  /**
    * The ledger times this process's own records wrote, per tag. A lookup
    * answering one of these is judged by `own` and by the database time the
    * record read, not by the grace other instances are held to (this process
@@ -482,6 +491,7 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
+  sweepAgain(view, horizon);
   for (const [tag, refusal] of view.refusals) {
     if (refusal.at < horizon) view.refusals.delete(tag);
   }
@@ -619,10 +629,28 @@ function recordedExpiry(view: ViewState, tag: string): number {
 
 /** When `tag` last expired as far as this process knows, on the database's clock. */
 function expiryOf(view: ViewState, tag: string): number {
-  const own = view.own.get(tag);
+  const own = Math.max(view.own.get(tag) ?? 0, latestAgain(view, tag));
   return Math.max(
     recordedExpiry(view, tag),
-    own === undefined ? 0 : own + offsetOf(view)
+    own === 0 ? 0 : own + offsetOf(view)
+  );
+}
+
+/** Drops the re-expiries older than `horizon` (this process's clock). */
+function sweepAgain(view: ViewState, horizon: number): void {
+  const again = view.again;
+  if (again === undefined) return;
+  for (const tag of again.keys()) {
+    if (latestAgain(view, tag) < horizon) again.delete(tag);
+  }
+}
+
+/** The latest re-expiry of `tag` at any depth, on this process's clock; 0 when none. */
+function latestAgain(view: ViewState, tag: string): number {
+  // A depth may have no re-expiry yet while a deeper one has: a gap.
+  return (view.again?.get(tag) ?? []).reduce(
+    (latest: number, at: number | undefined) => Math.max(latest, at ?? 0),
+    0
   );
 }
 
@@ -638,19 +666,86 @@ export function isEntryExpired(
 ): boolean {
   if (Date.now() - storedAt > LEDGER_RETENTION_MS) return true;
   const view = state();
-  const storedOnDatabaseClock = storedAt + offsetOf(view);
   for (const tag of tags) {
-    // Another instance's expiry, on the database's clock, has no order with
-    // this process's events: at or after, since an entry begun in the same
-    // millisecond may hold the old value, and regenerating it costs one read.
-    const recorded = recordedExpiry(view, tag);
-    if (recorded > 0 && recorded >= storedOnDatabaseClock) return true;
-    // This process's own expiry is ordered with its entries by `localNow`, so
-    // strictly after: an entry begun once the expiry was made is fresh.
-    const own = view.own.get(tag);
-    if (own !== undefined && own > storedAt) return true;
+    if (expiredSince(view, tag, storedAt)) return true;
   }
   return false;
+}
+
+/** Whether `tag` expired after something begun at `begunAt` (this process's clock). */
+function expiredSince(view: ViewState, tag: string, begunAt: number): boolean {
+  return staleDepth(view, tag, begunAt) !== undefined;
+}
+
+/**
+ * How deep the shallowest expiry of `tag` after `begunAt` is: 0 for a write
+ * (this process's or another instance's), `d` for a re-expiry at depth `d`,
+ * `undefined` when none came after it.
+ */
+function staleDepth(
+  view: ViewState,
+  tag: string,
+  begunAt: number
+): number | undefined {
+  // Another instance's expiry, on the database's clock, has no order with
+  // this process's events: at or after, since an entry begun in the same
+  // millisecond may hold the old value, and regenerating it costs one read.
+  const recorded = recordedExpiry(view, tag);
+  if (recorded > 0 && recorded >= begunAt + offsetOf(view)) return 0;
+  // This process's own expiry is ordered with its entries by `localNow`, so
+  // strictly after: an entry begun once the expiry was made is fresh.
+  const own = view.own.get(tag);
+  if (own !== undefined && own > begunAt) return 0;
+  const depths = view.again?.get(tag) ?? [];
+  const index = depths.findIndex(at => at > begunAt);
+  return index === -1 ? undefined : index + 1;
+}
+
+/**
+ * How many `use cache` fills deep a stale value is followed: a fill that drew
+ * a stale fill, and one that drew that, and so on. Each level is one more
+ * re-expiry; past this depth a stale fill is still refused, but expires
+ * nothing more, so the re-expiries end however steady the traffic.
+ */
+const JOINED_FILL_DEPTH = 3;
+
+/**
+ * Expires again, in this process and now, the tags of a `use cache` fill that
+ * began before one of them expired: the fill holds the value from before the
+ * expiry. Answers whether the fill is stale, and so must not be stored.
+ *
+ * The fill itself is refused when stored, but Next.js shares an in-flight
+ * fill between concurrent requests, so a page whose render began after the
+ * write may have joined it and drawn the old value. That page began after the
+ * expiry, so by its own start it would look fresh and be kept old for its
+ * whole lifetime; expired again as the fill finishes, after the page began, it
+ * is refused and rendered again. Local only: a fill is shared only within the
+ * process that runs it. Asks nothing; `refreshTagExpiries` first.
+ *
+ * A fill begun before a re-expiry may have drawn the stale fill too (an outer
+ * `use cache` function around it), so it is refused and expires its tags one
+ * level deeper. Only up to `JOINED_FILL_DEPTH`: otherwise, with fills of a
+ * shared tag always overlapping, each refused fill's re-expiry would refuse
+ * the next, and nothing carrying the tag would be stored until traffic paused.
+ */
+export function expireAgainAfterStaleFill(
+  tags: Iterable<string>,
+  begunAt: number
+): boolean {
+  const view = state();
+  const now = localNow();
+  let stale = false;
+  for (const tag of new Set(tags)) {
+    const depth = staleDepth(view, tag, begunAt);
+    if (depth === undefined) continue;
+    stale = true;
+    if (depth >= JOINED_FILL_DEPTH) continue;
+    view.again ??= new Map();
+    const depths = view.again.get(tag) ?? [];
+    depths[depth] = now;
+    view.again.set(tag, depths);
+  }
+  return stale;
 }
 
 /** The latest expiry among `tags`, on this process's clock; 0 when none expired. */

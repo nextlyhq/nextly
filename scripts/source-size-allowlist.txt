@@ -33,14 +33,12 @@ packages/blocks-engine/src/style/dtcg.ts 2362
 packages/builder/src/binding-controls.tsx 1632
 
 
-packages/builder/src/canvas-drag.tsx 1698
 
 packages/builder/src/canvas.tsx 2705
 
 packages/builder/src/content-controls.tsx 1591
 
 
-packages/builder/src/geometry-dom.ts 2034
 
 packages/builder/src/insert-panel.tsx 1850
 
@@ -51,7 +49,6 @@ packages/builder/src/inspector-panel.tsx 1805
 packages/builder/src/keyboard-actions.tsx 1518
 
 
-packages/builder/src/shared-styles-panel.tsx 1643
 
 
 
