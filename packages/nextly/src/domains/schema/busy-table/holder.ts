@@ -172,18 +172,19 @@ async function mysqlHolders(
   waiting: number
 ): Promise<HolderReport> {
   try {
+    // Where metadata locks are not reported, a row lock's holder can still be read (below).
     const off = await mysqlLockReportingOff(adapter);
-    if (off !== undefined) {
-      return { kind: "named", sessions: [], unreadable: [off] };
-    }
     // The GRANTED owners of each object the waiting thread has PENDING, other than that thread
     // itself (which may hold a weaker lock on the same table while it waits to upgrade it).
-    const rows = await adapter.queryStatement<{
-      id: unknown;
-      user: unknown;
-      host: unknown;
-    }>(
-      sql`SELECT DISTINCT ${id("holder")}.${id("PROCESSLIST_ID")} AS ${id("id")},
+    const metadataRows =
+      off !== undefined
+        ? []
+        : await adapter.queryStatement<{
+            id: unknown;
+            user: unknown;
+            host: unknown;
+          }>(
+            sql`SELECT DISTINCT ${id("holder")}.${id("PROCESSLIST_ID")} AS ${id("id")},
             ${id("holder")}.${id("PROCESSLIST_USER")} AS ${id("user")},
             ${id("holder")}.${id("PROCESSLIST_HOST")} AS ${id("host")}
           FROM ${id("performance_schema")}.${id("threads")} AS ${id("waiter")}
@@ -201,13 +202,32 @@ async function mysqlHolders(
           WHERE ${id("waiter")}.${id("PROCESSLIST_ID")} = ${waiting}
             AND ${id("holder")}.${id("PROCESSLIST_ID")} IS NOT NULL
           ORDER BY ${id("id")}`
-    );
+          );
+    const unreadable: string[] = [];
+    // A wait for an InnoDB row lock has no pending metadata lock: its holder is read from InnoDB's
+    // own lock waits instead.
+    const rows =
+      metadataRows.length > 0
+        ? metadataRows
+        : await mysqlRowLockHolders(adapter, waiting).catch(
+            (error: unknown) => {
+              unreadable.push(
+                `The sessions holding a row the change waits for: ${
+                  isMysqlPrivilegeRefusal(error)
+                    ? "the database user may not read performance_schema.data_lock_waits"
+                    : failureReason(error)
+                }.`
+              );
+              return [];
+            }
+          );
     const found = rows.map(row => ({
       id: String(row.id),
       user: text(row.user),
       clientAddress: hostWithoutPort(text(row.host)),
     }));
-    const unreadable: string[] = [];
+    // Named by neither: the metadata locks' silence is why, where they were not reported.
+    if (found.length === 0 && off !== undefined) unreadable.push(off);
     const ages = await mysqlTransactionAges(adapter, found).catch(
       (error: unknown) => {
         unreadable.push(
@@ -237,6 +257,26 @@ async function mysqlHolders(
       unreadable: [`The sessions holding the table: ${reason}.`],
     };
   }
+}
+
+/** The sessions whose InnoDB row locks the waiting session's transaction waits for. */
+function mysqlRowLockHolders(
+  adapter: DrizzleAdapter,
+  waiting: number
+): Promise<{ id: unknown; user: unknown; host: unknown }[]> {
+  return adapter.queryStatement<{ id: unknown; user: unknown; host: unknown }>(
+    sql`SELECT DISTINCT ${id("holder")}.${id("PROCESSLIST_ID")} AS ${id("id")},
+          ${id("holder")}.${id("PROCESSLIST_USER")} AS ${id("user")},
+          ${id("holder")}.${id("PROCESSLIST_HOST")} AS ${id("host")}
+        FROM ${id("performance_schema")}.${id("threads")} AS ${id("waiter")}
+        JOIN ${id("performance_schema")}.${id("data_lock_waits")} AS ${id("lock_wait")}
+          ON ${id("lock_wait")}.${id("REQUESTING_THREAD_ID")} = ${id("waiter")}.${id("THREAD_ID")}
+        JOIN ${id("performance_schema")}.${id("threads")} AS ${id("holder")}
+          ON ${id("holder")}.${id("THREAD_ID")} = ${id("lock_wait")}.${id("BLOCKING_THREAD_ID")}
+        WHERE ${id("waiter")}.${id("PROCESSLIST_ID")} = ${waiting}
+          AND ${id("holder")}.${id("PROCESSLIST_ID")} IS NOT NULL
+        ORDER BY ${id("id")}`
+  );
 }
 
 /** How long each session's InnoDB transaction has been open, in whole seconds, by session id. */

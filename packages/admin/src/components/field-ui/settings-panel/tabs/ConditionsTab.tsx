@@ -19,6 +19,8 @@ type Props = {
   field: BuilderField;
   /** The fields beside it, which a condition may read. */
   siblings: readonly BuilderField[];
+  /** The containers above it, outermost first: the path each source is named by. */
+  ancestors?: readonly BuilderField[];
   /** The shared modes; a surface's own editor replaces this tab instead. */
   conditions: Extract<FieldSettingsSurface["conditions"], string>;
   readOnly?: boolean;
@@ -28,6 +30,7 @@ type Props = {
 export function ConditionsTab({
   field,
   siblings,
+  ancestors = [],
   conditions,
   readOnly = false,
   onChange,
@@ -54,6 +57,7 @@ export function ConditionsTab({
         <ConditionBuilder
           condition={condition}
           siblingFields={siblings.filter(f => f.id !== field.id)}
+          ancestors={ancestors}
           readOnly={readOnly}
           onChange={setCondition}
         />

@@ -114,7 +114,6 @@ describe("the builder's empty editor", () => {
         active={{ kind: "none" }}
         onActiveChange={vi.fn()}
         onDuplicateField={vi.fn()}
-        onRowDragEnd={vi.fn()}
         isSaving={false}
         savingLabel=""
       />
