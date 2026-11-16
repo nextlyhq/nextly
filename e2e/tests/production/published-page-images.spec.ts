@@ -115,7 +115,12 @@ async function seed(
               base: {
                 base: {
                   minHeight: "480px",
-                  background: { url: original, size: "cover" },
+                  // The media route's address, which names the item, so the
+                  // site's copies of it can be found.
+                  background: {
+                    url: `/api/media/${mediaId}/raw`,
+                    size: "cover",
+                  },
                 },
               },
             },
@@ -190,22 +195,38 @@ test("a phone and a desktop draw copies, never the upload", async ({
     const visitor = await context.newPage();
     try {
       const fetched = await imagesFetched(visitor, path);
-      const head = await visitor
-        .locator("head link[rel=preload][as=image]")
-        .evaluateAll(links =>
-          links.map(link => ({
-            href: (link as HTMLLinkElement).href,
-            media: link.getAttribute("media") ?? "",
-          }))
-        );
+      // The preloads the server's HTML names in its head, which the browser
+      // finds before any stylesheet or script.
+      const served = await (await visitor.request.get(path)).text();
+      const head = served.slice(0, served.indexOf("</head>"));
+      const preloads = [
+        ...head.matchAll(/<link\b[^>]*rel="preload"[^>]*>/g),
+      ].flatMap(([tag]) => {
+        const attr = (name: string) =>
+          new RegExp(`\\s${name}="([^"]*)"`)
+            .exec(tag)?.[1]
+            ?.replaceAll("&amp;", "&")
+            .replaceAll("&lt;", "<")
+            .replaceAll("&gt;", ">");
+        const href = attr("href");
+        return attr("as") === "image" && href !== undefined
+          ? [
+              {
+                href: new URL(href, visitor.url()).href,
+                media: attr("media") ?? "",
+              },
+            ]
+          : [];
+      });
       const total = fetched.reduce((sum, image) => sum + image.bytes, 0);
       const report = `${device.name}: ${total} bytes in ${fetched.length} images (upload ${originalBytes}): ${fetched.map(image => `${new URL(image.url).pathname} ${image.bytes}`).join(", ")}`;
       console.log(`IMAGE BYTES ${report}`);
       testInfo.annotations.push({ type: "image bytes", description: report });
 
       const urls = fetched.map(image => image.url);
-      // The upload itself is never fetched.
+      // The upload itself is never fetched, by either of its addresses.
       expect(urls).not.toContain(new URL(original, visitor.url()).href);
+      expect(urls.some(url => url.includes("/raw"))).toBe(false);
       // Each image is fetched once: the background copy the head preloads is
       // the one the stylesheet then draws.
       expect(new Set(urls).size).toBe(urls.length);
@@ -214,7 +235,7 @@ test("a phone and a desktop draw copies, never the upload", async ({
           links.filter(
             link => link.media === "" || matchMedia(link.media).matches
           ),
-        head
+        preloads
       );
       expect(preloaded).toHaveLength(1);
       expect(urls).toContain(preloaded[0]?.href);

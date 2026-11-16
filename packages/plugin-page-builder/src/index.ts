@@ -38,7 +38,11 @@ export { namedQueriesOf, pageBuilder } from "./plugin";
  *
  * @experimental
  */
-export { pageBuilderImageCopies } from "./plugin-definition/image-copies";
+export {
+  pageBuilderImageCopies,
+  type ImageCopyRequest,
+  type ImageCopySite,
+} from "./plugin-definition/image-copies";
 export type { PageBuilderOptions } from "./plugin";
 export type {
   FontAddLimits,

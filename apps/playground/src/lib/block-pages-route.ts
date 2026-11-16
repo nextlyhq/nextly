@@ -67,7 +67,7 @@ export const blockPagesRoute: BlocksPageConfig = {
   // own, so a list here never resolves another site's served alongside.
   namedQueries: namedQueriesOf(pageBuilderPlugin),
   // Each image sized to where it sits, from this site's media.
-  imageCopies: pageBuilderImageCopies(pageBuilderPlugin),
+  imageCopies: pageBuilderImageCopies(siteReader),
   // No `data`: a `core/collection-loop` reads through the route's public
   // reader, published entries and public fields only, as any visitor would.
   styleContext: SITE_STYLE_CONTEXT,

@@ -314,8 +314,9 @@ export interface BlocksPageConfig
    */
   namedQueries?: NamedQueryLookup;
   /**
-   * Resized copies of the site's images: `pageBuilderImageCopies(plugin)` from
-   * `@nextlyhq/plugin-page-builder`, which asks the site's media for them.
+   * Resized copies of the site's images: `pageBuilderImageCopies(reader)` from
+   * `@nextlyhq/plugin-page-builder`, which asks the site's media for them
+   * through a reader carrying `media.copyOf`.
    * Given, each Image block offers copies sized to where it sits (`srcset`
    * and `sizes`) and never sends one more than twice its widest drawn width,
    * and the images in the page's first block load first. Absent, or for an

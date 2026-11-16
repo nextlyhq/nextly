@@ -55,7 +55,6 @@ import {
   retiredReader,
   routesForComponents,
 } from "./plugin-definition/components";
-import { holdSiteMedia } from "./plugin-definition/image-copies";
 import {
   declaredFieldGroups,
   installContext,
@@ -236,8 +235,6 @@ export const pageBuilder = (
         ctx.self.collections
       );
       state.installed = installContext(ctx, opts);
-      // The route's `pageBuilderImageCopies` asks this site's media for copies.
-      holdSiteMedia(plugin, ctx.services.media);
       // Read per question from `ctx.config`, the declarations as every
       // plugin's contributions and extensions leave them.
       state.writeReach = collectionReach({

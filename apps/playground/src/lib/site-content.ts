@@ -44,13 +44,13 @@ type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 const instance = () => getNextly({ config: nextlyConfig });
 
 /**
- * Just the media lookup the route helpers probe for.
+ * Just the media reads the route helpers probe for: a file, and its copies.
  *
  * Narrower than the instance's whole `media` namespace on purpose: this reader
  * exists to be READ from, and forwarding `upload`/`update`/`delete` would offer
  * a public page route a write surface it has no reason to hold.
  */
-type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
+type MediaLookup = Pick<NextlyInstance["media"], "findByID" | "copyOf">;
 
 /**
  * The reader every public content route on this site resolves through.
@@ -78,6 +78,9 @@ export const siteReader: NextlyContentReader &
   findSingle: async args => (await instance()).findSingle(args),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
+    // The resized copies a page's images are drawn from, asked of the same
+    // instance (see `pageBuilderImageCopies`).
+    copyOf: async args => (await instance()).media.copyOf(args),
   },
 };
 

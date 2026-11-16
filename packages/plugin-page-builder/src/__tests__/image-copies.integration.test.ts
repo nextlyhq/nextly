@@ -2,9 +2,10 @@
  * A booted site offers its page route copies of an image at the widths its
  * media keeps, through the page builder's `pageBuilderImageCopies`.
  *
- * Booted with the page builder and a real media library, so the copies come
- * from core media the way a published page asks for them: by the image's id,
- * and by its address on the site's media route.
+ * Booted with the page builder and a real media library, and asked through the
+ * site's Direct API as a route's reader asks it, so the copies come from core
+ * media the way a published page asks for them: by the image's id, and by its
+ * address on the site's media route.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -92,7 +93,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("offers every kept width up to the one asked for, by id and by address", async () => {
-      const copies = pageBuilderImageCopies(plugin);
+      const copies = pageBuilderImageCopies(t.nextly);
       const byId = await copies({ id }, 1280);
       expect(byId.map(copy => copy.width)).toEqual([
         96, 160, 240, 320, 640, 960, 1280,
@@ -105,7 +106,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("offers no copy wider than the upload", async () => {
-      const widths = (await pageBuilderImageCopies(plugin)({ id }, 3840)).map(
+      const widths = (await pageBuilderImageCopies(t.nextly)({ id }, 3840)).map(
         copy => copy.width
       );
       expect(widths.at(-1)).toBe(1920);
