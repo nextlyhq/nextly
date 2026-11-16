@@ -228,6 +228,7 @@ describe("readLayoutChoices", () => {
         published: true,
         draftChangesNotLive: true,
         regions: [{ area: "header", componentId: "header" }],
+        isEmpty: false,
       },
       {
         id: "draft",
@@ -235,8 +236,36 @@ describe("readLayoutChoices", () => {
         published: false,
         draftChangesNotLive: false,
         regions: [],
+        // Never published, but its own areas name a header.
+        isEmpty: false,
       },
     ]);
+  });
+
+  it("marks a set empty when the areas it holds name no component, published or not", async () => {
+    const { nextly } = fake({
+      ...store,
+      layouts: [
+        ...store.layouts,
+        { id: "seed", title: "Site layout", status: "published", areas: [] },
+        {
+          id: "blank",
+          title: "Blank",
+          status: "draft",
+          areas: [{ area: "header", component: null }],
+        },
+      ],
+    });
+    const { items } = await readLayoutChoices(context(), nextly, asked());
+    const empty = Object.fromEntries(
+      items.map(item => [item.id, item.isEmpty])
+    );
+    expect(empty).toEqual({
+      main: false,
+      draft: false,
+      seed: true,
+      blank: true,
+    });
   });
 
   it("answers the default, the caller's right to edit, and the region facts", async () => {
