@@ -144,6 +144,15 @@ export interface PluginDatabaseDeps {
     options?: PluginTransactionOptions
   ) => Promise<R>;
   /**
+   * The adapter's `withTransactionBounds`: runs work with every outermost
+   * transaction it opens bounded by the database, where the database bounds
+   * one. Absent, `ctx.db.withTransactionBounds` runs the work as given.
+   */
+  withTransactionBounds?: <R>(
+    bounds: PluginTransactionBounds,
+    work: () => Promise<R>
+  ) => Promise<R>;
+  /**
    * Inside a snapshot transaction: refuse every write through this surface,
    * so the transaction is read-only on every dialect, SQLite included, where
    * the database itself would let one through.
@@ -693,6 +702,28 @@ export interface PluginDatabase {
     options?: PluginTransactionOptions
   ): Promise<R>;
   /**
+   * @experimental Run `work` with every transaction it opens bounded by the
+   * database: `ctx.db.transaction`, and the transactions of the core
+   * services it calls (`ctx.services.collections.withTransaction`, a save).
+   * A statement waiting longer than `lockWaitMs` for a lock another
+   * transaction holds fails, and a transaction left open with no statement
+   * running for longer than `idleMs` is ended by the database, rolled back,
+   * its locks released; its next statement then fails. Both in milliseconds,
+   * each optional; a scope inside another replaces the bounds it names.
+   *
+   * For work a request starts and does not await: a serverless platform
+   * freezes the function once the response is sent, and a transaction such
+   * work had open then would hold its locks, keeping every save and request
+   * that needs them waiting, until the function ran again. Expect the work
+   * to fail now and then, and to be tried again later.
+   *
+   * PostgreSQL applies the bounds. MySQL and SQLite run `work` as given.
+   */
+  withTransactionBounds<R>(
+    bounds: PluginTransactionBounds,
+    work: () => Promise<R>
+  ): Promise<R>;
+  /**
    * Relational queries (`db.query.<table>.findMany({ with })`), keyed by
    * FINAL table name and owner-checked like every other method. The
    * relations config is resolved per access through the same path core
@@ -749,6 +780,17 @@ export interface ContributedColumns<
 }
 
 /**
+ * @experimental The bounds `ctx.db.withTransactionBounds` opens each
+ * transaction with, in milliseconds (see `PluginDatabase.withTransactionBounds`).
+ */
+export interface PluginTransactionBounds {
+  /** How long a statement waits for a lock before it fails. */
+  lockWaitMs?: number;
+  /** How long the transaction may stay open with no statement running. */
+  idleMs?: number;
+}
+
+/**
  * @experimental What `ctx.db.transaction` may be asked for beyond its default.
  */
 export interface PluginTransactionOptions {
@@ -765,7 +807,10 @@ export interface PluginTransactionOptions {
  * surface as `ctx.db`, bound to the transaction's connection, without a
  * nested `transaction`.
  */
-export type PluginTransaction = Omit<PluginDatabase, "transaction">;
+export type PluginTransaction = Omit<
+  PluginDatabase,
+  "transaction" | "withTransactionBounds"
+>;
 
 /** One table's entry in a relations config: its edges, keyed by relation name. */
 type TableRelations = AnyRelations[string];
@@ -1321,6 +1366,9 @@ export function bindPluginDatabase<T>(
       return tx.relationalDb;
     },
     transaction: () => Promise.reject(nestedTransactionError()),
+    // This transaction is open already, with the bounds it was opened with:
+    // a scope asked for inside it bounds nothing more.
+    withTransactionBounds: undefined,
     readOnly: options.readOnly === true,
     track: scope.track,
     // A `contributed` write's expiry waits for the commit with the core
@@ -1604,6 +1652,14 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           readOnly: snapshot,
         })
       );
+    },
+
+    // The adapter's scope, where the supplier has one; the work as given
+    // where it has none, as on a surface no adapter stands behind.
+    withTransactionBounds(bounds, work) {
+      return deps.withTransactionBounds === undefined
+        ? work()
+        : deps.withTransactionBounds(bounds, work);
     },
 
     // Resolved per access, never cached: the registry invalidates its

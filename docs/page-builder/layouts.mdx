@@ -159,19 +159,32 @@ When pages use the Layout, the dialog offers **Move N pages, then delete** (and,
 published Layout, **Move N pages, then unpublish**). It moves every page to the site's
 default Layout, then removes the Layout:
 
-- An unpublished page, and the unsaved edits of a published page, have their choice of
-  Layout cleared, so they use the site default.
-- A published page's live version is not changed, since that would publish its unsaved
-  edits along with it. It switches to the site default's header and footer as soon as the
-  Layout is gone, and the dialog says how many pages this affects before you start. A
-  published page with no unsaved edits keeps naming the removed Layout in its live
-  version until it is next published, which clears the choice so it names the site
-  default. Until then it draws the site default, and nothing on the page breaks.
+- Every page has its choice of Layout cleared, so it uses the site default: an
+  unpublished page, a published page's live version, and the unsaved edits of a published
+  page. A published page's live version and its unsaved edits change together, and the
+  edits stay unsaved edits: nothing an author hasn't published goes live. The dialog says
+  before you start how many published pages switch to the site default's header and
+  footer right away.
+- Each page's **History** records the change as made by you through the Page Builder,
+  with the reason, such as "Layout "Landing" is being deleted, so this page was moved to
+  the site default.". No save of the page runs, so its save hooks don't either.
 
-Pages are moved as you: a page you can't edit is left on the Layout and named, with the
-reason ("You can't edit this page."), and the Layout is not removed while any unpublished
-page or unsaved edit still uses it. Ask someone who can edit it to choose another Layout,
-then choose **Try again**.
+Pages are moved as you, and your own rights decide each one:
+
+- Changing a published page's live version needs permission to publish the page. Where
+  you may edit a page but not publish it, only its unsaved edits (or, for an unpublished
+  page, the page itself) are moved. Its live version keeps naming the Layout and draws the
+  site default once the Layout is gone. When the Layout has been removed, the dialog
+  names those pages, so someone who can publish them knows where to look. A published
+  page's live version that still names a deleted Layout stops naming it the next time the
+  page is published.
+- A page you can't edit at all is left on the Layout and named, with the reason ("You
+  can't edit this page."), and the Layout is not removed while any unpublished page or
+  unsaved edit still uses it. Ask someone who can edit it to choose another Layout, then
+  choose **Try again**.
+- A page that someone keeps saving while it is moved is read again and tried a few times.
+  If it still keeps changing, it is left and named ("This page kept changing while it was
+  being moved. Try again when nobody is editing it.").
 
 The dialog moves the pages a batch at a time, with a progress bar, and needs to stay open.
 **Stop**, or closing the dialog, stops the move: the pages already moved stay on the site
@@ -214,18 +227,22 @@ reason in the message.
 
 A move runs as repeated calls with `"move": true`. The first starts it; each answer's
 `item.move` says where it stands, and while `state` is `moving` the next call sends back
-its `token` and `after`:
+its `token` and `after`, and `refused`, the ids of every page an earlier answer named as not
+moved, so a page whose published version alone names the Layout still keeps it from being
+removed:
 
 ```http
 POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
 Content-Type: application/json
 
-{ "action": "delete", "move": true, "token": "…", "after": "…" }
+{ "action": "delete", "move": true, "token": "…", "after": "…", "refused": ["…"] }
 ```
 
 Each call moves up to 25 pages and reports how many it `moved` and how many are `left`.
 The last answers `done` once the Layout is removed, or `refused` with the `pages` that
-could not be moved and why. Send `"stop": true` with the token to stop; a move whose calls
+could not be moved and why. A `done` answer carries `liveLeft` (`{ pages, unreadable }`)
+when published pages' live versions still name the Layout because the caller may not
+publish them. Send `"stop": true` with the token to stop; a move whose calls
 stop for five minutes is stopped by the background check.
 
 If a Layout is made the default at the very moment it is being deleted, the delete loses:

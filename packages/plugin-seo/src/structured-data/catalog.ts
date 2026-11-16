@@ -161,6 +161,12 @@ export interface StructuredDataType {
    * no longer shows as a rich result.
    */
   readonly richResult: boolean;
+  /**
+   * What a person choosing the type is told beside its name, where there is
+   * something they should know first, such as a result Google no longer
+   * shows.
+   */
+  readonly note?: string;
 }
 
 /** A type's key, as a content type's choice and a page's choice store it. */
@@ -258,9 +264,11 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     page: true,
     needs: ["questions"],
     uses: [],
-    // Google stopped showing these as a rich result in May 2026; other
-    // search and answer engines still read them, so they stay valid markup.
+    // Google stopped showing these as a rich result in May 2026. The kind
+    // stays on offer for a site that chooses it, and is never added to a
+    // page of another kind.
     richResult: false,
+    note: "no longer shown by Google",
   },
   profilePage: {
     label: "Profile page",
@@ -398,4 +406,14 @@ export function structuredDataTypesFor(page: {
   hidden: boolean;
 }): readonly StructuredDataTypeKey[] {
   return page.hidden ? HIDDEN_PAGE_TYPES : STRUCTURED_DATA_TYPE_KEYS;
+}
+
+/**
+ * A type as a chooser lists it: its name, with its note beside it where it
+ * has one, so every chooser of a type says the same. Once chosen, a
+ * chooser names the type alone, so the choice fits its box.
+ */
+export function structuredDataChoiceText(key: StructuredDataTypeKey): string {
+  const { label, note } = STRUCTURED_DATA_TYPES[key];
+  return note === undefined ? label : `${label} · ${note}`;
 }

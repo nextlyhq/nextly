@@ -24,6 +24,8 @@ import {
 import { NextlyError } from "../errors/nextly-error";
 import type { Logger } from "../services/shared";
 
+import { awaitStartInFlight } from "./start-in-flight";
+
 /** The warm-up the last boot started; already settled before any boot. */
 let warmed: Promise<void> = Promise.resolve();
 
@@ -37,11 +39,16 @@ export function startCompanionReadinessWarmUp(deps: {
   registries: StoredRegistries;
   logger: Pick<Logger, "warn">;
 }): void {
-  // Begun once the start has finished its turn, as the post-start tasks are:
-  // on SQLite, whose driver blocks, reads begun now would run on the start's
-  // own time.
-  warmed = new Promise<void>(resolve => setImmediate(resolve)).then(
-    async () => {
+  // Begun once the start in flight, if any, has handed its instance over, and
+  // then after that turn, as the post-start tasks are. Registration calls this
+  // part way through a start, and a turn alone ends at the start's next wait
+  // on the database: begun then, the warm-up's registry listings ran among the
+  // start's own statements and on its time, and whether one was still running
+  // when the start resolved was a matter of timing. On SQLite, whose driver
+  // blocks, reads begun before the turn would run on the start's time as well.
+  warmed = awaitStartInFlight()
+    .then(() => new Promise<void>(resolve => setImmediate(resolve)))
+    .then(async () => {
       let entities: Awaited<ReturnType<typeof storedLocalizableEntities>>;
       try {
         entities = await storedLocalizableEntities(deps.registries);
@@ -62,8 +69,7 @@ export function startCompanionReadinessWarmUp(deps: {
           );
         }
       }
-    }
-  );
+    });
 }
 
 /**

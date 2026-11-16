@@ -20,8 +20,10 @@ import {
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { SearchConsoleRow, whenOf } from "./search-console-row";
+import type { VerificationDraft } from "./settings-draft";
 import { SettingsCard } from "./settings-parts";
-import type { TabProps } from "./tabs";
+import { siteHostOf, type TabProps } from "./tabs";
+import { VerificationCard } from "./verification";
 
 /** A line under a connection: how its last attempt went. */
 function StatusLine({
@@ -40,8 +42,19 @@ function StatusLine({
   );
 }
 
-/** Optional services, each off until switched on. */
-export function ConnectionsTab({ draft, change }: TabProps): JSX.Element {
+/**
+ * Optional services, each off until switched on, and the codes other
+ * services verify the site with; `saved` is the codes as stored.
+ */
+export function ConnectionsTab({
+  draft,
+  change,
+  saved,
+  serverAddresses,
+}: TabProps & {
+  saved: VerificationDraft;
+  serverAddresses: readonly string[];
+}): JSX.Element {
   const connections = usePluginRoute<ConnectionsBody>({
     plugin: SEO_PLUGIN_NAME,
     path: CONNECTIONS_ROUTE_PATH,
@@ -49,33 +62,41 @@ export function ConnectionsTab({ draft, change }: TabProps): JSX.Element {
   });
   const body = connections.data ?? undefined;
   return (
-    <SettingsCard>
-      <SearchConsoleRow
-        state={body?.searchConsole}
-        refresh={() => connections.refetch()}
-      />
-      <SettingsRowGroup
-        label="IndexNow"
-        description="Tells Bing and other search engines the moment a page is published, changed or removed. Google doesn't take part."
-      >
-        <Switch
-          aria-label="IndexNow"
-          checked={draft.indexNow}
-          onCheckedChange={indexNow =>
-            change(current => ({ ...current, indexNow }))
-          }
+    <>
+      <SettingsCard>
+        <SearchConsoleRow
+          state={body?.searchConsole}
+          refresh={() => connections.refetch()}
         />
-        {draft.indexNow ? (
-          <StatusLine
-            line={indexNowLine(
-              body?.indexNow.last,
-              body?.indexNow.last === undefined
-                ? undefined
-                : whenOf(body.indexNow.last)
-            )}
+        <SettingsRowGroup
+          label="IndexNow"
+          description="Tells Bing and other search engines the moment a page is published, changed or removed. Google doesn't take part."
+        >
+          <Switch
+            aria-label="IndexNow"
+            checked={draft.indexNow}
+            onCheckedChange={indexNow =>
+              change(current => ({ ...current, indexNow }))
+            }
           />
-        ) : null}
-      </SettingsRowGroup>
-    </SettingsCard>
+          {draft.indexNow ? (
+            <StatusLine
+              line={indexNowLine(
+                body?.indexNow.last,
+                body?.indexNow.last === undefined
+                  ? undefined
+                  : whenOf(body.indexNow.last)
+              )}
+            />
+          ) : null}
+        </SettingsRowGroup>
+      </SettingsCard>
+      <VerificationCard
+        draft={draft}
+        change={change}
+        saved={saved}
+        host={siteHostOf(draft, serverAddresses)}
+      />
+    </>
   );
 }

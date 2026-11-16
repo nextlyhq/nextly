@@ -48,7 +48,7 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
-import { FormPreview } from "./outline/FormPreview";
+import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
 import type { BuilderFieldsApi } from "./types";
@@ -411,7 +411,7 @@ function FieldListRegion({
           readOnly={locked}
           callbacks={callbacks}
           renderPreview={() => (
-            <FormPreview
+            <LazyFormPreview
               kind={config.kind}
               fields={builder.fields}
               fieldGroups={fieldGroups}

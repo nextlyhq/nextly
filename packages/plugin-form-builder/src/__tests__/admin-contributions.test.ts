@@ -32,12 +32,14 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
     // the old settings-component (a second full builder at /admin/plugins/…),
     // the filter-widget-as-page, and the beforeList injection stay gone. The
     // forms collection's only view entry gives the editor's own pages their
-    // addresses, each drawing that same editor.
+    // addresses, each drawing that same editor, and starts the editor with
+    // the panel folded.
     const admin = formBuilder().plugin.contributes?.admin;
     expect(admin?.settings).toBeUndefined();
     expect(admin?.pages ?? []).toHaveLength(0);
     expect(admin?.views ?? {}).toEqual({
       forms: {
+        foldedPanel: true,
         documentViews: [
           { path: "preview", label: "Preview", component: FORM_EDITOR_VIEW },
           { path: "settings", label: "Settings", component: FORM_EDITOR_VIEW },

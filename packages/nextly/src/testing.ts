@@ -24,6 +24,13 @@ export {
   runWidgetLoad,
   type RunWidgetLoadOptions,
 } from "./plugins/test-widget-load";
+
+/**
+ * A plugin's routes that declare neither a permission, `public`, a
+ * `principal`, nor `siteWide: false`, and so are refused for every caller.
+ * A plugin's own test asserts it is empty.
+ */
+export { undeclaredPluginRoutes } from "./plugins/routes/undeclared-routes";
 // The answer's states, declared beside the card helpers that draw them.
 export type { WidgetLoadResult } from "./plugins/test-widget-card";
 

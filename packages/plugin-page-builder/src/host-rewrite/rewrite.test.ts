@@ -15,7 +15,9 @@ import type { DeletionRun, RunPhase } from "./fence";
 import type { HostState } from "./progress";
 import {
   rewriteHosts,
+  type CopiesResult,
   type HostAccess,
+  type HostCopiesWrite,
   type HostDocument,
   type HostWrite,
   type RewriteDeps,
@@ -639,5 +641,204 @@ describe("the version each host write carries", () => {
     expect(s.writes.map(write => [write.expected.form, write.rev])).toEqual([
       ["draft", "v-a"],
     ]);
+  });
+});
+
+describe("a pending draft rewritten with its live copy", () => {
+  /**
+   * A copies writer over `s`, as core's field rewrite: the version read is
+   * given (`v1`), each stored copy takes the step's answer for its own value,
+   * all or none, and a refusal or a save since the read is answered as the
+   * rewrite answers it. Answers every copies write asked.
+   */
+  function withCopies(
+    s: ReturnType<typeof site>,
+    options: {
+      forbidden?: boolean;
+      refusedByRules?: boolean;
+      changedTimes?: number;
+      rev?: boolean;
+    } = {}
+  ): HostCopiesWrite[] {
+    const asked: HostCopiesWrite[] = [];
+    let changed = options.changedTimes ?? 0;
+    const read = s.deps.read;
+    Object.assign(s.deps, {
+      read: async (host: HostAddress) => ({
+        ...(await read(host)),
+        ...(options.rev === false ? {} : { rev: "v1" }),
+      }),
+      writeCopies: async (write: HostCopiesWrite): Promise<CopiesResult> => {
+        asked.push(write);
+        if (options.forbidden === true) return { kind: "forbidden" };
+        if (options.refusedByRules === true) {
+          return { kind: "refused", detail: "A locked block would go." };
+        }
+        if (changed > 0) {
+          changed -= 1;
+          return { kind: "changed" };
+        }
+        const held = s.stored.get(write.host.id ?? "");
+        if (held === undefined) throw new Error("no such host");
+        const next: Partial<Record<"published" | "draft", Value>> = {};
+        for (const key of ["published", "draft"] as const) {
+          const value = held[key];
+          if (value === null) continue;
+          const outcome = await write.step(value, {
+            host: write.host,
+            form: key === "published" ? write.liveForm : "draft",
+          });
+          if (outcome.kind === "refuse") {
+            return { kind: "step-refused", detail: outcome.reason };
+          }
+          if (outcome.kind === "rewritten") next[key] = outcome.value as Value;
+        }
+        Object.assign(held, next);
+        return { kind: "written" };
+      },
+    });
+    return asked;
+  }
+
+  const both = () =>
+    site({
+      a: {
+        published: { copies: 1 },
+        draft: { copies: 2, edit: "draft" },
+        live: true,
+      },
+    });
+
+  it("rewrites the live copy and the draft in one write, each from its own value", async () => {
+    const s = both();
+    const asked = withCopies(s);
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.finished).toBe(true);
+    expect(report.rewritten.map(host => host.id)).toEqual(["a"]);
+    expect(report.left).toEqual([]);
+    // The live copy no longer holds the component, and the draft is still
+    // the author's draft, converted.
+    expect(s.stored.get("a")).toMatchObject({
+      published: { copies: 0 },
+      draft: { copies: 0, edit: "draft" },
+      live: true,
+    });
+    // One rewrite, from the version read, and no single write.
+    expect(asked[0]).toMatchObject({ rev: "v1", liveForm: "published" });
+    expect(s.writes).toEqual([]);
+  });
+
+  it("converts the draft alone where the person may not make the rewrite, and leaves the live copy", async () => {
+    const s = both();
+    withCopies(s, { forbidden: true });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(s.writes.map(write => [write.mode, write.expected.form])).toEqual([
+      ["save", "draft"],
+    ]);
+    expect(s.stored.get("a")).toMatchObject({
+      published: { copies: 1 },
+      draft: { copies: 0, edit: "draft" },
+    });
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "pending-draft" })
+    );
+  });
+
+  it("converts the draft alone, as before, where a field's rules refuse the rewrite", async () => {
+    const s = both();
+    withCopies(s, { refusedByRules: true });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(s.writes.map(write => [write.mode, write.expected.form])).toEqual([
+      ["save", "draft"],
+    ]);
+    expect(s.stored.get("a")).toMatchObject({
+      published: { copies: 1 },
+      draft: { copies: 0, edit: "draft" },
+    });
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "pending-draft" })
+    );
+  });
+
+  it("reads the host again when it was saved since the read, and rewrites it", async () => {
+    const s = both();
+    const asked = withCopies(s, { changedTimes: 1 });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(asked.length).toBeGreaterThanOrEqual(2);
+    expect(report.left).toEqual([]);
+    expect(s.stored.get("a")?.published).toEqual({ copies: 0 });
+  });
+
+  it("leaves a host that keeps being saved once its retries are spent", async () => {
+    const s = both();
+    const asked = withCopies(s, { changedTimes: 10 });
+
+    const report = await rewriteHosts(s.deps, { ...args, maxAttempts: 2 });
+
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "changed" })
+    );
+    // Each walk tried it twice, the bound, and nothing was written.
+    expect(asked.length % 2).toBe(0);
+    expect(asked.length).toBeGreaterThanOrEqual(2);
+    expect(s.stored.get("a")).toMatchObject({
+      published: { copies: 1 },
+      draft: { copies: 2, edit: "draft" },
+    });
+  });
+
+  it("leaves a host one of whose copies the step refuses when the rewrite asks it", async () => {
+    const s = both();
+    withCopies(s);
+    // A copy the walk did not read: refused only when the rewrite reaches it.
+    s.hooks.afterRead = id => {
+      const held = s.stored.get(id);
+      if (held !== undefined) held.draft = { copies: 1, refuse: true };
+    };
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "refused", detail: "marked" })
+    );
+    expect(s.stored.get("a")?.published).toEqual({ copies: 1 });
+  });
+
+  it("counts it as converted on a dry run, reporting the write it would make", async () => {
+    const s = both();
+    const asked = withCopies(s);
+
+    const report = await rewriteHosts(s.deps, {
+      ...args,
+      dryRun: true,
+      plannedWrites: true,
+    });
+
+    expect(report.rewritten.map(host => host.id)).toEqual(["a"]);
+    expect(report.left).toEqual([]);
+    expect(report.writes).toEqual([
+      expect.objectContaining({ value: { copies: 0, edit: "draft" } }),
+    ]);
+    expect(asked).toEqual([]);
+  });
+
+  it("writes the draft alone, as before, for a read that gave no version", async () => {
+    const s = both();
+    const asked = withCopies(s, { rev: false });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(asked).toEqual([]);
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "pending-draft" })
+    );
   });
 });

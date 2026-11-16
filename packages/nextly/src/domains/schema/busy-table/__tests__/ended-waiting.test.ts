@@ -7,6 +7,7 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
+import { ownWriteLockError } from "../../migrate/migration-transaction";
 import { endedWaiting, ownSessionId, sessionNumberOf } from "../ended-waiting";
 
 /** `error` wrapped `depth` times, as an ORM or adapter wraps a driver's error in its `cause`. */
@@ -105,6 +106,16 @@ describe("endedWaiting on SQLite", () => {
       false
     );
     expect(endedWaiting(pgError("55P03"), "sqlite", true)).toBe(false);
+  });
+
+  it("is false for a stop naming this process as the lock's holder, though it carries the busy answer", () => {
+    const busy = pgError("SQLITE_BUSY");
+    // The busy answer alone, and wrapped as an adapter wraps it, is a wait that ended.
+    expect(endedWaiting(wrapped(busy, 2), "sqlite", false)).toBe(true);
+    // The same answer as the cause of this process's own-lock stop is not, at any depth.
+    const stop = ownWriteLockError("20261114_000001_x.sql", wrapped(busy, 2));
+    expect(endedWaiting(stop, "sqlite", false)).toBe(false);
+    expect(endedWaiting(wrapped(stop, 2), "sqlite", false)).toBe(false);
   });
 });
 

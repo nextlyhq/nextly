@@ -25,6 +25,7 @@ import type {
   DynamicTableLoadResult,
   loadDynamicTables,
 } from "../di/load-dynamic-tables";
+import type { NextlyServiceConfig } from "../di/register";
 import { clearRegistryRowCache } from "../domains/dynamic-collections/services/collection-row-cache";
 import { declaredSlugsOf } from "../domains/dynamic-collections/services/removed-from-code";
 import { consoleLogger } from "../shared/types";
@@ -136,6 +137,8 @@ interface ReloadDeps {
    * configuration, in which case every row registers as before.
    */
   declared?: { collections: Set<string>; singles: Set<string> };
+  /** The running configuration, registered over the rows as the start registers it. */
+  config?: NextlyServiceConfig;
   /** See `ReloadOptions.createMissingCompanions`. */
   createMissingCompanions: boolean;
 }
@@ -205,6 +208,7 @@ async function runReload(label: string, creates: boolean): Promise<boolean> {
      * how the two would come to disagree.
      */
     const components = await registerComponents(deps, label, failures);
+    await registerConfigEntities(deps, label);
     // A field group's registration makes no table, so where this reload may
     // define structure, its missing translation tables are made here, as a
     // collection's and a Single's are by their registration above.
@@ -235,6 +239,37 @@ async function runReload(label: string, creates: boolean): Promise<boolean> {
   }
 }
 
+/** The console logger, each line led by the reload's `label`. */
+function labelledLogger(label: string) {
+  return {
+    debug: (m: string) => consoleLogger.debug(`${label} ${m}`),
+    info: (m: string) => consoleLogger.info(`${label} ${m}`),
+    warn: (m: string) => consoleLogger.warn(`${label} ${m}`),
+    error: (m: string) => consoleLogger.error(`${label} ${m}`),
+  };
+}
+
+/**
+ * The configuration's own collections and Singles, registered over the rows the reload loaded as
+ * the start registers them, through the start's own step (`registerConfigTablesQuietly`): a field
+ * the configuration declares stays its definition after a reload, as it was after the start, where
+ * the registry row predates it. Otherwise a reload served the row's narrower definition, and a
+ * declared field the database was not migrated for went unreported. Never throws.
+ */
+async function registerConfigEntities(
+  deps: ReloadDeps,
+  label: string
+): Promise<void> {
+  if (deps.config === undefined) return;
+  const { registerConfigTablesQuietly } = await import("../di/register");
+  await registerConfigTablesQuietly(
+    deps.registry,
+    deps.config,
+    deps.adapter,
+    labelledLogger(label)
+  );
+}
+
 /**
  * Register every field group's runtime schema, or record why it could not be.
  *
@@ -255,12 +290,7 @@ async function registerComponents(
       adapter: deps.adapter,
       registry: deps.registry,
       dialect: deps.dialect,
-      logger: {
-        debug: (m: string) => consoleLogger.debug(`${label} ${m}`),
-        info: (m: string) => consoleLogger.info(`${label} ${m}`),
-        warn: (m: string) => consoleLogger.warn(`${label} ${m}`),
-        error: (m: string) => consoleLogger.error(`${label} ${m}`),
-      },
+      logger: labelledLogger(label),
     });
   } catch (err) {
     // Recorded rather than thrown: one unregisterable group must not cost the
@@ -329,12 +359,7 @@ async function resolveDeps(
 
   // Read like the two above, and tolerated when absent: the container's `get`
   // throws for a name it does not hold.
-  let config:
-    | {
-        collections?: ReadonlyArray<{ slug?: string }>;
-        singles?: ReadonlyArray<{ slug?: string }>;
-      }
-    | undefined;
+  let config: NextlyServiceConfig | undefined;
   try {
     config = container.get("config");
   } catch {
@@ -348,6 +373,7 @@ async function resolveDeps(
     createMissingCompanions,
     ...(config
       ? {
+          config,
           declared: {
             collections: declaredSlugsOf(config.collections),
             singles: declaredSlugsOf(config.singles),

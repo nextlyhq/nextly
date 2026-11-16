@@ -54,8 +54,9 @@ export async function noteRows(
 
 /**
  * Empty the record and its notes, as on a site the plugin has just been
- * added to, or one whose tables a full uninstall dropped. The note that an
- * earlier record has moved is kept: there is none to move.
+ * added to, or one whose tables a full uninstall dropped. The notes that
+ * an earlier record has moved, and of what it held then, are kept: there is
+ * none to move, and nothing written there since to take in.
  */
 export async function forgetRecord(
   seo: PluginContext = seoContext()
@@ -65,8 +66,9 @@ export async function forgetRecord(
     .where(
       inArray(seo.db.table(addressClaims).kind, ["address", "range", "lock"])
     );
+  const kept = new Set([noteKey("record-moved"), noteKey("record-drained")]);
   for (const row of await noteRows(seo)) {
-    if (row.noteKey !== noteKey("record-moved")) {
+    if (!kept.has(String(row.noteKey))) {
       await forgetNoteKey(seo, String(row.noteKey));
     }
   }

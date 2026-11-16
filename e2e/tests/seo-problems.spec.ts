@@ -44,7 +44,7 @@ function rowOf(page: Page, title: string) {
 test("a long title is listed with its page, and its fix opens the page's SEO tab", async ({
   page,
 }) => {
-  const title = `SEO problems ${run} ${"t".repeat(60)}`;
+  const title = `SEO problems ${run} ${"W".repeat(40)}`;
   const { item } = await ok<{ item: { id: string } }>(
     await page.request.post(`${API}/collections/seo-pages/entries`, {
       data: { title, slug: `seo-problems-${run}` },

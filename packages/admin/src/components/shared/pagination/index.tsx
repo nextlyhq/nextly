@@ -12,7 +12,19 @@ import { PAGINATION } from "@admin/constants/pagination";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 import { cn } from "@admin/lib/utils";
 
-import { PAGER_BUTTON_SIZE, PAGER_CONTROLS, PAGER_FRAME } from "./pager-layout";
+import {
+  PAGER_BUTTON_SIZE,
+  PAGER_CONTROLS,
+  PAGER_COUNT,
+  PAGER_FRAME,
+  PAGER_NAV,
+  PAGER_SIZE,
+  PAGER_SIZE_BOX,
+  PAGER_SIZE_LABEL,
+  PAGER_SIZE_WORDS,
+  PAGER_SUMMARY,
+  pageCountText,
+} from "./pager-layout";
 import type { PaginationProps } from "./types";
 
 /**
@@ -51,10 +63,7 @@ function PaginationSummary({
    */
   if (totalItems === undefined) {
     return (
-      <div
-        className="whitespace-nowrap order-2 @2xl/content:order-1"
-        data-slot="pagination-summary"
-      >
+      <div className={PAGER_SUMMARY} data-slot="pagination-summary">
         Page <span className="font-semibold">{currentPage + 1}</span> of{" "}
         <span className="font-semibold">{totalPages}</span>
       </div>
@@ -73,10 +82,7 @@ function PaginationSummary({
    * question nobody asked.
    */
   return (
-    <div
-      className="whitespace-nowrap order-2 @2xl/content:order-1"
-      data-slot="pagination-summary"
-    >
+    <div className={PAGER_SUMMARY} data-slot="pagination-summary">
       {totalItems === 0 ? (
         <>No {itemLabel}</>
       ) : (
@@ -345,7 +351,7 @@ function PagerButtons({
   const canGoPrevious = currentPage > 0;
   const canGoNext = currentPage < totalPages - 1;
   return (
-    <div className="flex items-center gap-1">
+    <div className={PAGER_NAV}>
       {/* First */}
       <button
         onClick={() => onPageChange(0)}
@@ -405,20 +411,6 @@ function PagerButtons({
 }
 
 /**
- * "Page 3 of 12", or "Page 3" alone when the total is capped and the number
- * of pages is not known.
- */
-function pageCountText(
-  currentPage: number,
-  totalPages: number,
-  totalCapped: boolean
-): string {
-  return totalCapped
-    ? `Page ${currentPage + 1}`
-    : `Page ${currentPage + 1} of ${totalPages}`;
-}
-
-/**
  * The landmark's accessible name: the caller's own as given, or the admin's
  * in the interface language.
  */
@@ -450,12 +442,9 @@ function PageSizeSelect({
 }): React.JSX.Element {
   const labelId = React.useId();
   return (
-    <div className="flex items-center space-x-2">
-      <span
-        id={labelId}
-        className="whitespace-nowrap hidden @md/content:inline-block"
-      >
-        Rows per page
+    <div className={PAGER_SIZE}>
+      <span id={labelId} className={PAGER_SIZE_LABEL}>
+        {PAGER_SIZE_WORDS}
       </span>
       <div className="relative">
         <select
@@ -464,7 +453,10 @@ function PageSizeSelect({
           value={pageSize}
           onChange={e => onChange(Number(e.target.value))}
           disabled={disabled}
-          className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+          className={cn(
+            PAGER_SIZE_BOX,
+            "appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+          )}
         >
           {options.map(size => (
             <option key={size} value={size}>
@@ -650,6 +642,9 @@ export const Pagination: React.ForwardRefExoticComponent<
     return (
       <nav
         ref={ref}
+        // Named for the loading outline's check: the outline draws a pager
+        // under the same name, which must stand where this one lands.
+        data-frame-part="list-pager"
         aria-label={landmarkName(ariaLabel, t)}
         onKeyDown={handleKeyDown}
         className={cn(PAGER_FRAME, className)}
@@ -696,7 +691,7 @@ export const Pagination: React.ForwardRefExoticComponent<
           </PagerButtons>
 
           {/* Page Count (Far Right) */}
-          <div className="whitespace-nowrap hidden @md/content:block">
+          <div className={PAGER_COUNT}>
             {pageCountText(currentPage, totalPages, totalCapped)}
           </div>
         </div>

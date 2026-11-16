@@ -25,6 +25,7 @@ import {
   type PublishedDocumentActionOverride,
   type PublishedPanelSection,
 } from "./document-surfaces";
+import { foldedPanelCollections } from "./folded-panels";
 import {
   headerItemPlace,
   headerSlotOf,
@@ -211,6 +212,12 @@ export interface PluginAdminMeta {
    * the slug it applies to — present only for enabled plugins.
    */
   panelSections?: PublishedPanelSection[];
+  /**
+   * @experimental The collections whose document screens start with the
+   * rail's panel folded away, by the slug the admin routes them under —
+   * present only for enabled plugins.
+   */
+  foldedPanels?: string[];
   /**
    * @experimental Filters for the entry list's toolbar, as they passed the
    * boot check — present only for enabled plugins. Sent only through the
@@ -598,6 +605,10 @@ export function buildPluginAdminMeta(
       if (surfaces.panelSections.length > 0) {
         meta.panelSections = surfaces.panelSections;
       }
+      // The same reading the prebuilt admin page makes, so the frame drawn
+      // before this answer and the screen drawn after it agree.
+      const foldedPanels = foldedPanelCollections([plugin]);
+      if (foldedPanels.length > 0) meta.foldedPanels = foldedPanels;
       const listFilters = listFiltersMeta(plugin, contributors);
       if (listFilters.length > 0) meta.listFilters = listFilters;
     }

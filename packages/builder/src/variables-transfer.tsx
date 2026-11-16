@@ -170,7 +170,11 @@ export function useVariablesTransfer({
       // a file that was saved.
       setReport({
         tone: "done",
-        headline: `Saved ${written.map(file => file.filename).join(" and ")}.`,
+        // Each file named in words beside its file name, so an author knows
+        // which file holds what without opening it.
+        headline: `Saved ${written
+          .map(file => `${file.filename} (${file.label})`)
+          .join(" and ")}.`,
         detail,
       });
     }

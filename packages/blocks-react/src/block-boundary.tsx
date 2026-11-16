@@ -8,7 +8,6 @@ import {
   type BoundValues,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
-  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import {
   Fragment,
@@ -296,11 +295,6 @@ export interface BlockBoundaryProps {
    * own object is never rewritten and no block can supply its own.
    */
   hostPolicy?: BlockHostPolicy;
-  /**
-   * The site's spacing model, for the few blocks whose markup differs by it.
-   * Threaded down the tree beside `hostPolicy`, for the same reason.
-   */
-  spacingMode?: SpacingMode;
   /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
@@ -591,6 +585,8 @@ interface StoredDecoration {
   cssId: string | undefined;
   /** The author's attribute bag, when it is one. */
   attributes: Record<string, unknown> | undefined;
+  /** Whether the node is marked never to be quoted in search snippets. */
+  nosnippet: boolean;
   /** Whether the node contributes anything at all besides editor markers. */
   any: boolean;
 }
@@ -608,7 +604,9 @@ interface StoredDecoration {
  * `any` is derived here rather than recomputed by the caller, so "this node
  * decorates nothing" has one definition.
  */
-function storedDecoration(node: ResolvedBlockNode): StoredDecoration {
+function storedDecoration(
+  node: Pick<BlockNode, "cssId" | "attributes" | "nosnippet">
+): StoredDecoration {
   const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
   const attributes =
     typeof node.attributes === "object" &&
@@ -618,8 +616,15 @@ function storedDecoration(node: ResolvedBlockNode): StoredDecoration {
       : undefined;
   const hasAttributes =
     attributes !== undefined && Object.keys(attributes).length > 0;
+  // Only a stored `true` marks it: anything else a document holds is no mark.
+  const nosnippet = node.nosnippet === true;
 
-  return { cssId, attributes, any: cssId !== undefined || hasAttributes };
+  return {
+    cssId,
+    attributes,
+    nosnippet,
+    any: cssId !== undefined || hasAttributes || nosnippet,
+  };
 }
 
 /**
@@ -758,6 +763,9 @@ function withNodeAttributes(
    * What this rule decides is which of the NODE's two spellings reaches the
    * page, never whether the block may keep an id of its own.
    */
+  // "Never quote this": a boolean attribute, so its value is empty. Google
+  // ignores any value a boolean attribute is given.
+  if (decoration.nosnippet) extra["data-nosnippet"] = "";
   const renderedId = renderedDomId(node);
   if (renderedId !== undefined) extra.id = renderedId;
   // LAST, so every marker wins over a value the document or the block tried to
@@ -869,7 +877,10 @@ function nodeRootReason(
     Object.entries(attributes).some(
       ([name, value]) => isAllowedAttribute(name) && typeof value === "string"
     );
-  if (!hasCssId && !hasAttributes) return null;
+  // The "never quote this" mark, read as the element's attributes are
+  // assembled, so the guard and the render agree on whether there is one.
+  const marked = storedDecoration(node).nosnippet;
+  if (!hasCssId && !hasAttributes && !marked) return null;
   // Rendering NOTHING is a decision, not a failure, and the two must not share
   // an answer. `core/image` with no usable source returns null on purpose —
   // an `<img>` with no `src` re-requests the current page in some browsers —
@@ -904,7 +915,11 @@ function nodeRootReason(
   if (declaresNothing || rendersNothing(output)) return null;
   const noRoot = noHostRootReason(shape);
   if (noRoot === null) return null;
-  const named = hasCssId ? "`cssId`" : "attributes";
+  const named = hasCssId
+    ? "`cssId`"
+    : hasAttributes
+      ? "attributes"
+      : "the `nosnippet` mark";
   // A primitive or a list, on the other hand, is real output with no single
   // element to carry the fields, so it loses them anyway — silently, and with
   // the same broken anchors as a wrapper root. The format says a block renders
@@ -1320,9 +1335,9 @@ function settledOf(pending: PromiseLike<unknown>): Promise<SettledOutput> {
  * selection or a panel opening. Run again, an async block makes a new promise,
  * and its boundary shows the fallback until that settles: an image or a
  * button blinks out. Kept by everything the output is made from: the block,
- * its class, the node as stored and the site's spacing model, so a change to
- * any of them runs the block again, and by the bound values beside the node's
- * props, which the output reads too. Per context, because the output also
+ * its class and the node as stored, so a change to any of them runs the block
+ * again, and by the bound values beside the node's props, which the output
+ * reads too. Per context, because the output also
  * reads the context (the entry, the language, a loop's item), and a block
  * under another context is another output.
  *
@@ -1343,20 +1358,10 @@ function editorOutputKey(
   name: string,
   className: string,
   node: BlockNode,
-  bound: BoundValues | undefined,
-  spacingMode: SpacingMode | undefined
+  bound: BoundValues | undefined
 ): string | undefined {
   try {
-    // The spacing model too: a render argument a block's markup may read, so
-    // an output drawn under one model is not the block as it stands under
-    // the other.
-    return JSON.stringify([
-      name,
-      className,
-      node,
-      bound ?? null,
-      spacingMode ?? null,
-    ]);
+    return JSON.stringify([name, className, node, bound ?? null]);
   } catch {
     // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
     return undefined;
@@ -1405,11 +1410,10 @@ function editorOutputSlot(
   name: string,
   className: string,
   node: BlockNode,
-  bound: BoundValues | undefined,
-  spacingMode: SpacingMode | undefined
+  bound: BoundValues | undefined
 ): EditorOutputSlot {
   if (!editorRender) return UNKEPT;
-  const key = editorOutputKey(name, className, node, bound, spacingMode);
+  const key = editorOutputKey(name, className, node, bound);
   if (key === undefined) return UNKEPT;
   const kept = EDITOR_OUTPUTS.get(context)?.get(key);
   return {
@@ -1506,7 +1510,6 @@ export function BlockBoundary({
   classes,
   fallback,
   hostPolicy,
-  spacingMode,
   nodeAttribute,
   bindings,
   conditions,
@@ -1627,8 +1630,7 @@ export function BlockBoundary({
     definition.name,
     className,
     node,
-    bound,
-    spacingMode
+    bound
   );
 
   let output: unknown;
@@ -1656,7 +1658,6 @@ export function BlockBoundary({
         // The renderer's, not the context's. A block may replace the context its
         // slot children see; it can neither drop nor forge this.
         ...(hostPolicy === undefined ? {} : { hostPolicy }),
-        ...(spacingMode === undefined ? {} : { spacingMode }),
         // The renderer's too, for the same reason: what a bound prop holds comes
         // from the pass that filled it, never from a context a block built.
         ...boundArgument(bound),
@@ -1677,7 +1678,6 @@ export function BlockBoundary({
             classes={classes}
             fallback={fallback}
             {...(hostPolicy === undefined ? {} : { hostPolicy })}
-            {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
             bindings={bindings}
             {...(conditions === undefined ? {} : { conditions })}
@@ -1740,11 +1740,6 @@ export interface BlockListProps {
   fallback?: ReactNode;
   hostPolicy?: BlockHostPolicy;
   /**
-   * The site's spacing model, for the few blocks whose markup differs by it.
-   * Threaded down the tree beside `hostPolicy`, for the same reason.
-   */
-  spacingMode?: SpacingMode;
-  /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
    * OFF by default: a published page should not carry editor concerns, which is
@@ -1777,7 +1772,6 @@ export function BlockList({
   classes,
   fallback,
   hostPolicy,
-  spacingMode,
   nodeAttribute,
   bindings,
   conditions,
@@ -1794,7 +1788,6 @@ export function BlockList({
         classes={classes}
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
-        {...(spacingMode === undefined ? {} : { spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
         {...(bindings === undefined ? {} : { bindings })}
         {...(conditions === undefined ? {} : { conditions })}

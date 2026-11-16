@@ -24,6 +24,16 @@ export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 export const SEO_STATUS_COMPONENT =
   "@nextlyhq/plugin-seo/admin#SeoStatusSection";
 
+/**
+ * The side panel's read-only line saying whether the page's search display
+ * is the site's defaults or its own, as the component map names it.
+ */
+export const SEO_DISPLAY_STATUS_COMPONENT =
+  "@nextlyhq/plugin-seo/admin#SeoDisplaySection";
+
+/** The display line's heading. */
+const DISPLAY_STATUS_LABEL = "Search display";
+
 /** The tab's label. */
 const LABEL = "SEO";
 
@@ -46,6 +56,13 @@ const TAB_FIELDS: Readonly<Record<string, readonly string[]>> = {
   canonicalElsewhere: ["checkbox"],
   noindex: ["checkbox"],
   [STRUCTURED_DATA_FIELD]: ["text"],
+  maxImagePreview: ["text"],
+  maxSnippet: ["number"],
+  nosnippet: ["checkbox"],
+  noimageindex: ["checkbox"],
+  unavailableAfter: ["date"],
+  noarchive: ["checkbox"],
+  nocache: ["checkbox"],
 };
 
 /**
@@ -102,16 +119,27 @@ export function tabEditsGroup(
   );
 }
 
-/** The SEO tab on every page the plugin adds the `seo` group to. */
-export function seoTabContributions({
-  collections,
-  singles,
-}: {
-  collections: readonly string[];
-  singles: readonly string[];
-}): AdminContribution[] {
+/**
+ * The SEO tab, and its side panel line, on every page the plugin adds the
+ * `seo` group to: on the types the site names, or, where SEO is on every
+ * type, wherever core says the start added the plugin's own group
+ * (`extendedWith`), so a type that kept a field of its own named `seo` gets
+ * no tab writing into it.
+ */
+export function seoTabContributions(
+  types:
+    | { collections: readonly string[]; singles: readonly string[] }
+    | "every"
+): AdminContribution[] {
+  const every = types === "every";
+  const onCollections = every
+    ? { extendedWith: [SEO_GROUP] }
+    : { collections: [...types.collections] };
+  const onSingles = every
+    ? { extendedWith: [SEO_GROUP] }
+    : { singles: [...types.singles] };
   const contributions: AdminContribution[] = [];
-  if (collections.length > 0) {
+  if (every || types.collections.length > 0) {
     contributions.push({
       // The ids links open the tab by (`seoTabIdOf`), held in one place.
       id: SEO_TAB_ID,
@@ -119,7 +147,7 @@ export function seoTabContributions({
       place: "collection.edit",
       label: LABEL,
       component: SEO_TAB_COMPONENT,
-      collections: [...collections],
+      ...onCollections,
       fields: [SEO_GROUP],
     });
     contributions.push({
@@ -129,17 +157,27 @@ export function seoTabContributions({
       label: STATUS_LABEL,
       component: SEO_STATUS_COMPONENT,
       after: "details",
-      collections: [...collections],
+      ...onCollections,
+    });
+    // Straight under the line above, as its second line.
+    contributions.push({
+      id: "nextlyhq-plugin-seo.display-status",
+      kind: "sidebarSection",
+      place: "collection.edit",
+      label: DISPLAY_STATUS_LABEL,
+      component: SEO_DISPLAY_STATUS_COMPONENT,
+      after: "nextlyhq-plugin-seo.status",
+      ...onCollections,
     });
   }
-  if (singles.length > 0) {
+  if (every || types.singles.length > 0) {
     contributions.push({
       id: SINGLE_SEO_TAB_ID,
       kind: "tab",
       place: "single.edit",
       label: LABEL,
       component: SEO_TAB_COMPONENT,
-      singles: [...singles],
+      ...onSingles,
       fields: [SEO_GROUP],
     });
     contributions.push({
@@ -149,7 +187,16 @@ export function seoTabContributions({
       label: STATUS_LABEL,
       component: SEO_STATUS_COMPONENT,
       after: "details",
-      singles: [...singles],
+      ...onSingles,
+    });
+    contributions.push({
+      id: "nextlyhq-plugin-seo.single-display-status",
+      kind: "sidebarSection",
+      place: "single.edit",
+      label: DISPLAY_STATUS_LABEL,
+      component: SEO_DISPLAY_STATUS_COMPONENT,
+      after: "nextlyhq-plugin-seo.single-status",
+      ...onSingles,
     });
   }
   return contributions;

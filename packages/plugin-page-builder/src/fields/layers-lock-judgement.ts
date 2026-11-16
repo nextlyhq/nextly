@@ -18,6 +18,7 @@
  */
 import {
   layersLockChanges,
+  type BlockDocument,
   type LayersLockChange,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -34,6 +35,7 @@ import {
 } from "../breakpoint-removal/lock-acceptance";
 
 import { documentOf, type LayersLockUnjudged } from "./blocks-composition";
+import { isForest } from "./blocks-document";
 import { LAYERS_LOCK_CHANGED, pageLockMessage } from "./layers-lock-wording";
 import { readStoredForms } from "./lock-baselines";
 
@@ -54,6 +56,27 @@ export function isTopLevel(path: string): boolean {
  */
 export function judgesLayersLocks(args: PluginFieldValidateArgs): boolean {
   return args.mode === "update" && args.write !== undefined;
+}
+
+/**
+ * Inside a field rewrite the plugin makes, the copy being decided, as the one
+ * stored form its new value replaces: a rewrite changes the live copy and each
+ * draft from its own value, so the live copy is judged against the live value,
+ * not the newer draft beside it. `undefined` anywhere else
+ * (`host-rewrite/rewrite-scope`).
+ */
+async function copyInRewrite(
+  field: string
+): Promise<{ forms: BlockDocument[]; readable: boolean } | undefined> {
+  // Imported at call time: it is server-only, and this module is not.
+  const { rewriteBaseline } = await import("../host-rewrite/rewrite-scope");
+  const baseline = rewriteBaseline(field);
+  if (baseline === undefined) return undefined;
+  const { stored } = baseline;
+  return {
+    forms: isForest(stored) ? [stored as BlockDocument] : [],
+    readable: true,
+  };
 }
 
 /** The issues each broken lock is refused with. */
@@ -102,14 +125,16 @@ export async function layersLockIssues(
     });
     return [];
   }
-  const stored = await readStoredForms(
-    args.write,
-    args.path,
-    // The draft form alone: what an editor's preview reads, the working draft
-    // where one is shown and the live row otherwise, so the newest stored form.
-    [true],
-    (args.field as { localized?: unknown }).localized === true
-  );
+  const stored =
+    (await copyInRewrite(args.path)) ??
+    (await readStoredForms(
+      args.write,
+      args.path,
+      // The draft form alone: what an editor's preview reads, the working draft
+      // where one is shown and the live row otherwise, so the newest stored form.
+      [true],
+      (args.field as { localized?: unknown }).localized === true
+    ));
   if (!stored.readable) {
     onUnjudged?.({
       field: args.path,

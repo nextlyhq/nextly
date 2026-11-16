@@ -862,7 +862,7 @@ describe.each(getConfiguredTestDialects())(
     it("answers someone who may read the Single alone, with its page, and refuses someone who may read neither", async () => {
       await t.nextly.updateSingle({
         slug: "home",
-        data: { title: "t".repeat(70), _overwrite: true },
+        data: { title: "W".repeat(40), _overwrite: true },
       });
       const homeReader = await holding(t, ["read-home"]);
       const pagesOf = async (cookie: string) => {
@@ -906,6 +906,40 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(refused.status).toBe(403);
       expect(refused.body.problems).toBeUndefined();
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "saving the SEO settings before the database is migrated for a setting (%s)",
+  dialect => {
+    let t: TestNextly;
+    let siteSeo: string;
+
+    beforeAll(async () => {
+      t = await boot(dialect, {});
+      siteSeo = await holding(t, ["manage-seo", ...SETTINGS]);
+      // As a site that upgraded and has not run its migration: the settings
+      // table has no column for a setting the release added. Raw SQL, and
+      // only in a test: no API removes a column a Single declares.
+      await t.adapter.executeQuery(
+        "ALTER TABLE single_seo_settings DROP COLUMN llms_txt"
+      );
+    }, 60_000);
+
+    afterAll(async () => {
+      await t?.destroy();
+    });
+
+    it("is refused with the words that say to migrate, not a server error", async () => {
+      const saved = await request(
+        "PATCH",
+        `singles/${SEO_SETTINGS_SLUG}`,
+        siteSeo,
+        { siteName: "Acme", _overwrite: true }
+      );
+      expect(saved.status).toBe(409);
+      expect(JSON.stringify(saved.body)).toContain("Run `nextly migrate`");
     });
   }
 );

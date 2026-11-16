@@ -373,6 +373,24 @@ export function storedProvenance(
 }
 
 /**
+ * The paths among `kept` ({@link storedProvenance}) where the row's own value
+ * stands in place of a different one the caller sent, or of none: the values
+ * a rule kept from the caller, sorted. A path holding what the caller sent
+ * anyway is no change of theirs, and is left out.
+ */
+export function pathsKeptFromCaller(
+  kept: { paths: ReadonlySet<string>; values: ReadonlyMap<string, unknown> },
+  sent: Record<string, unknown>
+): string[] {
+  const refused = [...kept.paths].filter(
+    path =>
+      !pathExists(sent, path) ||
+      !sameStoredValue(valueAt(sent, path), kept.values.get(path))
+  );
+  return [...new Set(refused)].sort();
+}
+
+/**
  * A value recorded as the row's own, for the hook walk to compare the write
  * against: DETACHED, because the same object was assigned into the write's
  * payload. A `beforeChange` hook mutates a whole-number child in place, so a

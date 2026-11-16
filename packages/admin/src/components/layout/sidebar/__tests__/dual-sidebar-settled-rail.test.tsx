@@ -114,9 +114,8 @@ vi.mock("@admin/hooks/useSidebarContentLists", () => ({
   useSidebarCollectionList: () => ({ items: [], data: undefined }),
   useSidebarSingleList: () => ({ items: [], hasArrived: false }),
 }));
-vi.mock("@admin/hooks/queries", () => ({
+vi.mock("@admin/hooks/queries/useCollections", () => ({
   NAV_COLLECTIONS_PARAMS: {},
-  NAV_SINGLES_PARAMS: {},
   useCollections: () => ({
     data: answers.contentLoading
       ? undefined
@@ -124,6 +123,9 @@ vi.mock("@admin/hooks/queries", () => ({
     isLoading: answers.contentLoading,
     isError: false,
   }),
+}));
+vi.mock("@admin/hooks/queries/useSingles", () => ({
+  NAV_SINGLES_PARAMS: {},
   useSingles: () => ({
     data: answers.contentLoading ? undefined : { items: [] },
     isLoading: answers.contentLoading,
