@@ -8,7 +8,14 @@ import {
   type NamedClass,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   afterAll,
   afterEach,
@@ -40,6 +47,16 @@ beforeAll(() => {
         editor: { label: "Box" },
         props: {},
         supports: { effects: true },
+        render: () => null,
+      },
+      {
+        name: "acme/panel",
+        version: 1,
+        description: "A panel with spacing and a border.",
+        example: { props: {} },
+        editor: { label: "Panel" },
+        props: {},
+        supports: { spacing: true, border: true },
         render: () => null,
       },
     ] as never,
@@ -277,5 +294,170 @@ describe("editing a look with no block selected", () => {
   it("says to select a block when the look is no longer on the site", () => {
     mount("look:acme/box:gone");
     expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+  });
+});
+
+/*
+ * A look has no element of its own on the canvas, so its sides are named by
+ * the site's direction, read from the canvas root: the same box a block of
+ * that site shows, mirrored on a right-to-left site.
+ */
+describe("a look's sides, named by the site's direction", () => {
+  const panelLook: NamedClass = {
+    id: "look:acme/panel:plain",
+    slug: "panel-plain",
+    label: "Plain panel",
+    orderIndex: 0,
+    blockType: "acme/panel",
+    isDefault: true,
+    // A radius set per corner, so the corners are drawn and named.
+    styles: {
+      base: {
+        [BASE_BREAKPOINT]: {
+          borderRadius: {
+            startStart: "1px",
+            startEnd: "2px",
+            endStart: "3px",
+            endEnd: "4px",
+          },
+        },
+      },
+    } as NodeStyles,
+  };
+
+  /**
+   * The look editor over a canvas root whose computed direction is the one
+   * given. jsdom computes neither writing mode nor direction, so the canvas
+   * root's are stubbed; every other element reads as jsdom computes it.
+   */
+  function mountOnSite(
+    direction: "ltr" | "rtl" | undefined | (() => "ltr" | "rtl")
+  ): HTMLElement {
+    const canvas = window.document.createElement("div");
+    if (direction !== undefined) {
+      const directionNow =
+        typeof direction === "function" ? direction : () => direction;
+      const real = window.getComputedStyle.bind(window);
+      vi.spyOn(window, "getComputedStyle").mockImplementation(((
+        element: Element,
+        pseudo?: string | null
+      ) =>
+        element === canvas
+          ? ({
+              writingMode: "horizontal-tb",
+              direction: directionNow(),
+              display: "flex",
+              flexDirection: "column",
+            } as CSSStyleDeclaration)
+          : real(element, pseudo)) as typeof window.getComputedStyle);
+    }
+    render(
+      <InspectorPanel
+        editor={editorFor(null)}
+        canvasRoot={canvas}
+        classLibrary={[panelLook]}
+        sharedStyles={{ mayChange: true, writeStyles: async () => undefined }}
+        lookEditing={{
+          look: { id: panelLook.id, blockType: "acme/panel" },
+          onExit: () => {},
+        }}
+      />
+    );
+    return canvas;
+  }
+
+  /** Open the Border section, which is folded while Spacing is open. */
+  function openBorder(): void {
+    const border = screen.getByRole("button", { name: /^Border/ });
+    if (border.getAttribute("aria-expanded") !== "true")
+      fireEvent.click(border);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The visible names of one property's sides or corners, in order. */
+  function labelsOf(property: string): (string | null)[] {
+    return Array.from(
+      window.document.querySelectorAll(
+        `[data-property="${property}"] .nx-style-inspector__field-label-text`
+      )
+    ).map(label => label.textContent);
+  }
+
+  /** The spacing box's field for one side, and which logical side it writes. */
+  function sideOf(name: string): string | null | undefined {
+    const box = window.document.querySelector(".nx-spacing-box");
+    expect(box).not.toBeNull();
+    return within(box as HTMLElement)
+      .getByLabelText(name)
+      .closest("[data-side]")
+      ?.getAttribute("data-side");
+  }
+
+  it("draws the spacing box with Top, Right, Bottom, Left on a left-to-right site", () => {
+    mountOnSite("ltr");
+    expect(sideOf("Padding top")).toBe("blockStart");
+    expect(sideOf("Padding right")).toBe("inlineEnd");
+    expect(sideOf("Margin bottom")).toBe("blockEnd");
+    expect(sideOf("Margin left")).toBe("inlineStart");
+    openBorder();
+    expect(labelsOf("border").slice(0, 4)).toEqual([
+      "Top",
+      "Bottom",
+      "Left",
+      "Right",
+    ]);
+    expect(labelsOf("borderRadius")).toEqual([
+      "Top left",
+      "Top right",
+      "Bottom left",
+      "Bottom right",
+    ]);
+    expect(screen.queryByText("Block start")).toBeNull();
+    expect(screen.queryByText("Inline end")).toBeNull();
+  });
+
+  it("mirrors the box on a right-to-left site, as a block's box does", () => {
+    mountOnSite("rtl");
+    // Inline start is the right edge on a right-to-left site.
+    expect(sideOf("Padding right")).toBe("inlineStart");
+    expect(sideOf("Margin left")).toBe("inlineEnd");
+    expect(sideOf("Padding top")).toBe("blockStart");
+    openBorder();
+    expect(labelsOf("border").slice(0, 4)).toEqual([
+      "Top",
+      "Bottom",
+      "Right",
+      "Left",
+    ]);
+    expect(labelsOf("borderRadius")).toEqual([
+      "Top right",
+      "Top left",
+      "Bottom right",
+      "Bottom left",
+    ]);
+  });
+
+  it("mirrors the box when the site's direction changes while the look is open", async () => {
+    // The canvas is watched, as it is for a block: a page drawn again in the
+    // other direction re-reads the site's direction.
+    let direction: "ltr" | "rtl" = "ltr";
+    const canvas = mountOnSite(() => direction);
+    expect(sideOf("Padding left")).toBe("inlineStart");
+    direction = "rtl";
+    const block = window.document.createElement("div");
+    block.setAttribute("data-nx-node", "a");
+    canvas.append(block);
+    await waitFor(() => expect(sideOf("Padding right")).toBe("inlineStart"));
+  });
+
+  it("names the sides left to right while the canvas can't say", () => {
+    // The canvas root unreadable (jsdom computes no direction): a look takes
+    // the left-to-right site, never the logical rows.
+    mountOnSite(undefined);
+    expect(sideOf("Padding left")).toBe("inlineStart");
+    expect(screen.queryByText("Block start")).toBeNull();
   });
 });
