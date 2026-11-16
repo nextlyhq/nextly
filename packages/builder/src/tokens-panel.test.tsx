@@ -184,6 +184,20 @@ describe("the rows", () => {
     }
   });
 
+  it("clears a colour's refusal once its stored value is typed back", async () => {
+    render(<Hosted tokens={SITE} />);
+    const colour = await openEditor(/^Brand/);
+    const light = within(colour).getByLabelText(/^Light/);
+    fireEvent.change(light, { target: { value: "#12345" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBe("true");
+    // The value it held, put back, is the fix: the refusal goes.
+    fireEvent.change(light, { target: { value: "#1d2b6b" } });
+    fireEvent.keyDown(light, { key: "Enter" });
+    expect(light.getAttribute("aria-invalid")).toBeNull();
+    expect(within(colour).queryByText(/is not a hex colour/)).toBeNull();
+  });
+
   it("lets typing take over from a picker gesture", async () => {
     const onChange = vi.fn();
     render(<Hosted tokens={SITE} onChange={onChange} />);
@@ -1541,5 +1555,52 @@ describe("each half of a type pair's dark value", () => {
     expect(
       within(editor).getByRole("button", { name: "Use light size" })
     ).toBeDefined();
+  });
+});
+
+describe("a new variable's code name follows its name", () => {
+  it("however the name field is left, a click outside included", async () => {
+    // A click outside closed the editor before the name field's blur had
+    // committed, so the code name was made from the placeholder name and
+    // the rename was lost for good.
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name");
+    name.focus();
+    fireEvent.change(name, { target: { value: "Brand accent" } });
+    // Away from the editor, with the name still in its field.
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    const added = saved.tokens.find(token => token.label === "Brand accent");
+    expect(added?.name).toBe("color.brand-accent");
+    expect(
+      document.querySelector('[data-variable-key="color.brand-accent"]')
+    ).not.toBeNull();
+  });
+
+  it("is not what search matches: only the name shown is", () => {
+    const named: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.new-colour",
+          label: "Brand accent",
+          kind: "color",
+          values: { light: "#2563eb" },
+        },
+      ],
+    };
+    render(<Hosted tokens={named} />);
+    const search = screen.getByRole("searchbox", { name: "Search variables" });
+    fireEvent.change(search, { target: { value: "new" } });
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).toBeNull();
+    fireEvent.change(search, { target: { value: "accent" } });
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).not.toBeNull();
   });
 });

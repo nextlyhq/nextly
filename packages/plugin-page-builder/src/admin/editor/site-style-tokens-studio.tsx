@@ -36,7 +36,10 @@ import {
   tokenOverrideOf,
   tokenSaveOutcome,
 } from "../../site-style";
-import { readSiteStyleRecord } from "../../site-style-record";
+import {
+  readSiteStyleRecord,
+  tokensKeptAfterRefusal,
+} from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
 import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
@@ -257,14 +260,25 @@ function useTokenCommits(
      * meanwhile is kept rather than dropped by a copy that never saw it.
      */
     const shownBefore = shownNow() ?? editable;
-    const base =
-      shownBefore === undefined
-        ? undefined
-        : tokenOverrideOf(baseline, shownBefore);
     show(next);
     setIssue(undefined);
     setConflict(undefined);
+    send(next, shownBefore, { hold: true, keepIssue: false });
+  };
+
+  /*
+   * Saves a set shown, and settles its answer. A refusal of the latest edit
+   * takes back only the variables refused: the rest of the edit is shown
+   * and saved again at once, and the reason stays said while it is.
+   */
+  const send = (
+    next: SiteTokenSet,
+    from: SiteTokenSet | undefined,
+    how: { hold: boolean; keepIssue: boolean }
+  ): void => {
     latest.current = next;
+    const base =
+      from === undefined ? undefined : tokenOverrideOf(baseline, from);
     /*
      * Only what DIFFERS from the site's own defaults. `merged` is what the
      * canvas compiles, so saving it whole would copy every config token into
@@ -272,10 +286,44 @@ function useTokenCommits(
      */
     const sent = tokenOverrideOf(baseline, next);
     void save("tokens", sent, {
-      hold: true,
+      hold: how.hold,
       ...(base === undefined ? {} : { base }),
     }).then(result => {
-      settleTokenSave(result, next, { latest, persisted }, show, setIssue);
+      const kept =
+        result.saved || latest.current !== next
+          ? undefined
+          : // Judged against what is known stored: the last set a save
+            // stored, or the set as loaded before any save here.
+            partlyKept(next, persisted.current ?? editable ?? null);
+      if (kept !== undefined) {
+        show(kept);
+        // Said as any refusal of the latest edit is said.
+        const said = tokenSaveOutcome(
+          false,
+          result.issues,
+          next,
+          next,
+          persisted.current
+        ).issue;
+        setIssue(said ?? undefined);
+        send(kept, persisted.current ?? undefined, {
+          hold: false,
+          keepIssue: true,
+        });
+        return;
+      }
+      settleTokenSave(
+        result,
+        next,
+        { latest, persisted },
+        show,
+        // A save of what a refusal kept leaves the refusal's reason said.
+        how.keepIssue
+          ? (issue: string | undefined) => {
+              if (issue !== undefined) setIssue(issue);
+            }
+          : setIssue
+      );
       adoptMergedTokens(
         result,
         sent,
@@ -396,6 +444,18 @@ function useSharedStyleOpening(onShowSharedStyles: (() => void) | undefined): {
   const taken = useCallback(() => setId(undefined), []);
   const toOpen = useMemo(() => ({ id, taken }), [id, taken]);
   return { open, toOpen };
+}
+
+/**
+ * What a refused edit keeps once only its refused variables are taken back,
+ * or nothing when that is everything, and the set stored before stands.
+ */
+function partlyKept(
+  refused: SiteTokenSet,
+  persisted: SiteTokenSet | null
+): SiteTokenSet | undefined {
+  const kept = tokensKeptAfterRefusal(refused, persisted);
+  return kept === null || kept === persisted ? undefined : kept;
 }
 
 /**
