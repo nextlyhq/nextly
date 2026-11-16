@@ -63,6 +63,11 @@ for (const { collection, singular, button } of CASES) {
     await page.waitForURL(entryPath, { timeout: 30_000 });
     await expect(page.getByText("Entry created successfully")).toBeVisible();
     await expect(title(page)).toHaveValue(name, { timeout: 30_000 });
+    // The edit page itself, not the create form under a new address: the
+    // trail ends in the entry's title where the create form says "New ...".
+    const trail = page.getByRole("navigation", { name: "Breadcrumb" });
+    await expect(trail).toContainText(name);
+    await expect(trail).not.toContainText(`New ${singular}`);
     const entryUrl = page.url();
 
     // A refresh opens the same entry: the address is real.
