@@ -95,7 +95,6 @@ vi.mock("../site-style-client", () => {
   });
   return {
     useSaveSiteStyle: () => ({ save, reserve, reread }),
-    useSaveSpacingMode: () => ({ save: async () => ({ saved: true }) }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
       load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),

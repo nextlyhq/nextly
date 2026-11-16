@@ -27,6 +27,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { PNG_1X1 } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { getMediaStorage } from "../../../storage/storage";
+import { copyPathsOf } from "../copies/copy-rules";
 import { storedFilesOf } from "../stored-files";
 
 /** Run once, after the next catalogue read of the media table answers. */
@@ -80,16 +81,23 @@ describeEachDialect("a media delete while sizes is dropped", dialect => {
     });
     const [row] = await t.adapter.select<{
       filename: string;
+      mimeType: string;
       url: string;
       thumbnailUrl: string | null;
     }>("media", {
       where: { and: [{ column: "id", op: "=", value: uploaded.id }] },
     });
     const files = storedFilesOf(row).paths;
-    // The original and the thumbnail an upload stores, both there.
+    // The original and the thumbnail an upload stores, both there. Resized
+    // copies are made when first asked for, so the upload stored none.
     expect(files).toHaveLength(2);
     for (const file of files) {
       expect(await getMediaStorage().exists(file, "media")).toBe(true);
+    }
+    const copies = copyPathsOf(row);
+    expect(copies.length).toBeGreaterThan(0);
+    for (const copy of copies) {
+      expect(await getMediaStorage().exists(copy, "media")).toBe(false);
     }
     race.ran = false;
     race.afterMediaRead = async () => {
