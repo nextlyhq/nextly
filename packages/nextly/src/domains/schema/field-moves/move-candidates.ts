@@ -27,25 +27,31 @@ function nameOf(field: FieldDefinition): string | undefined {
 
 /**
  * Every named field at every depth, with its path; a group with no name is looked through. Walked
- * with a stack, each container once, so a definition that holds itself (possible in code) ends.
+ * with a queue, a container entered again only on another path: a container used under two
+ * parents is seen under both, and one that holds itself (possible in code) ends, since the
+ * containers above a path are never entered again below it.
  */
 function everyField(fields: readonly FieldDefinition[]): NamedAt[] {
   const out: NamedAt[] = [];
-  const seen = new WeakSet<object>();
-  const pending: { list: readonly FieldDefinition[]; above: readonly string[] }[] = [
-    { list: fields, above: [] },
-  ];
+  const pending: {
+    list: readonly FieldDefinition[];
+    above: readonly string[];
+    holders: ReadonlySet<object>;
+  }[] = [{ list: fields, above: [], holders: new Set() }];
   while (pending.length > 0) {
-    const { list, above } = pending.shift() as (typeof pending)[number];
+    const { list, above, holders } = pending.shift() as (typeof pending)[number];
     for (const field of addressableFields(list) as unknown as FieldDefinition[]) {
       const name = nameOf(field);
       if (!name) continue;
       const path = [...above, name];
       out.push({ path, field });
       const { fields: inner } = field as { fields?: unknown };
-      if (Array.isArray(inner) && !seen.has(field)) {
-        seen.add(field);
-        pending.push({ list: inner as FieldDefinition[], above: path });
+      if (Array.isArray(inner) && !holders.has(field)) {
+        pending.push({
+          list: inner as FieldDefinition[],
+          above: path,
+          holders: new Set([...holders, field]),
+        });
       }
     }
   }

@@ -1,6 +1,6 @@
 /**
  * What a move into a group leaves behind. A group keeps its fields' values inside one JSON value,
- * which has no type, comment, character set, collation, index or foreign key of its own; so each
+ * which has no type, NOT NULL, comment, character set, collation, index or foreign key of its own; so each
  * of those the old column had is named, in the preview and in the migration, as not carried, and
  * applied to no other column. The value itself, and the field's settings in the definition, are
  * kept.
@@ -13,6 +13,8 @@
 /** The old column's properties, as the database reports them. */
 export interface MovedColumnFacts {
   type: string;
+  /** False where the column was NOT NULL, a rule no key inside a JSON value is held to. */
+  nullable?: boolean;
   comment?: string | null;
   charset?: string | null;
   collation?: string | null;
@@ -33,6 +35,7 @@ export function notCarried(facts: MovedColumnFacts): NotCarried[] {
     value ? [{ property, value }] : [];
   return [
     ...named("type", facts.type),
+    ...named("constraint", facts.nullable === false ? "NOT NULL" : null),
     ...named("comment", facts.comment),
     ...named("character set", facts.charset),
     ...named("collation", facts.collation),
