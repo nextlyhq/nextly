@@ -45,7 +45,10 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
-import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import {
+  renamedFieldsOf,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
@@ -56,6 +59,7 @@ import type { Resolution } from "../../domains/schema/pipeline/resolution/types"
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
+import { getComponentRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -993,6 +997,13 @@ export const COMPONENTS_METHODS: Record<
                   liveTable: async () =>
                     (await introspectLiveSnapshot(db, dialect, [tableName]))
                       .tables[0],
+                  columnOf: field =>
+                    getComponentRowColumnDescriptor(
+                      field,
+                      dialect,
+                      "fieldGroup"
+                    ),
+                  renames: renamedFieldsOf(renameResolutions ?? []),
                 }),
               afterFile: () =>
                 reconcileBuilderCompanion("component", companion),
