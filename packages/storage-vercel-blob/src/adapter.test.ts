@@ -406,3 +406,13 @@ describe("VercelBlobStorageAdapter — credentials are checked at first use", ()
     expect((outcome as Error).message).toContain("token is required");
   });
 });
+
+describe("VercelBlobStorageAdapter client uploads", () => {
+  it("does not claim client uploads, which it cannot sign bound to a checked type and size", () => {
+    const adapter = new VercelBlobStorageAdapter({
+      token: "vercel_blob_rw_test_dummy_token_for_unit_tests",
+      collections: { media: { clientUploads: true } },
+    });
+    expect(adapter.getInfo().supportsClientUploads).toBe(false);
+  });
+});

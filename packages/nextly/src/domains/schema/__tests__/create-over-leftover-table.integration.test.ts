@@ -8,8 +8,11 @@
  *
  * Each leftover table is made by the creating SQL a Builder create renders, for other fields than
  * the create asks for, so it is the wreckage an interrupted earlier attempt would leave.
+ *
+ * Every create runs as a development server does, where a Builder save applies its migration at
+ * once; anywhere else it writes the migration and applies nothing, so no table is built at all.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -26,6 +29,7 @@ import { applyMigrationStatements } from "../services/apply-migration-statements
 let t: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await t?.destroy();
   t = undefined;
 });
@@ -49,6 +53,8 @@ const REQUESTED = [
 for (const dialect of getConfiguredTestDialects()) {
   describe(`a create over a leftover table — ${dialect}`, () => {
     beforeEach(async () => {
+      // Development, where a Builder create applies its table at once.
+      vi.stubEnv("NODE_ENV", "development");
       t = await createTestNextly({ dialect });
     });
 

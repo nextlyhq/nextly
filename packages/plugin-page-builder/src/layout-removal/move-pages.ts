@@ -5,14 +5,27 @@
  *
  * ## What moves
  *
- * An unpublished page's row and a published page's working draft, each
- * cleared (`layout: null`) by `clearPageReference`, as the person moving them:
- * their own access decides each write, so a page they may not edit is left
- * and reported, never written past their rights. A published page's LIVE row
- * is left as it is, since no write changes a live row without publishing the
- * draft beside it; once the Layout is gone that row draws the site default,
- * which the dialog told the person before they started, and the page's next
- * publish clears the deleted Layout from it (`page-reference-guard.ts`).
+ * Every page naming the Layout, wherever it names it: its live copy and every
+ * draft, cleared (`layout: null`) in one field rewrite (`movePageOffLayout`),
+ * as the person moving them and attributed to the Page Builder, with the
+ * reason in the page's history. Each draft stays a draft and the page's status
+ * is unchanged, so an author's unfinished edit is neither lost nor published.
+ *
+ * Their own access decides each page. Changing a live copy needs the right to
+ * publish the page, so where they may update a page but not publish it, only
+ * its working draft (or its unpublished row) is cleared, as a save of it is,
+ * and its live copy is left. A page they may not edit at all is left and
+ * reported, never written past their rights.
+ *
+ * ## When the Layout goes
+ *
+ * Once nothing off a live copy names the Layout, it is removed as Remove
+ * Layout does it. A live copy left naming it (one the person may not publish)
+ * does not stop the removal: it draws the site default once the Layout is
+ * gone, as the dialog said before they started, and the finished move names
+ * those pages, so someone who may publish them knows where to look. The
+ * page's next publish clears a deleted Layout from it
+ * (`page-reference-guard.ts`).
  *
  * ## Ticks, polled by the dialog
  *
@@ -62,7 +75,10 @@ import {
   scanLayoutReferences,
   type PageReference,
 } from "./layout-references";
-import { clearPageReference } from "./page-reference-guard";
+import {
+  movePageOffLayout,
+  type PageFieldRewrite,
+} from "./page-reference-guard";
 import {
   advanceOrRefuse,
   conflict,
@@ -79,8 +95,11 @@ import type { RemovalAction } from "./store";
 import {
   ALREADY_BEING_REMOVED,
   CANT_EDIT_PAGE,
+  liveCopiesLeftSentence,
   MOVE_STOPPED,
+  movedOffLayoutReason,
   NO_USABLE_DEFAULT,
+  PAGE_KEPT_CHANGING,
   PAGE_NOT_SAVED,
 } from "./words";
 
@@ -109,6 +128,14 @@ export interface MoveRequest {
   readonly after?: string;
   /** Stop the move now, keeping the Layout and every page already moved. */
   readonly stop?: boolean;
+  /**
+   * The pages earlier ticks of this move could not move, as their answers
+   * named them. A page whose live copy alone names the Layout leaves no other
+   * trace of a failed move, so this is how the tick that would finish knows
+   * it still stands in the way. Used only to stop the removal, never to
+   * write: a caller that leaves a page out keeps nothing from being checked.
+   */
+  readonly refused?: readonly string[];
 }
 
 /** A page a move could not move, as the person may see it. */
@@ -117,6 +144,13 @@ export interface UnmovedPage {
   readonly title: string;
   /** Why, when this tick tried it; `null` for one an earlier tick tried. */
   readonly reason: string | null;
+}
+
+/** Pages whose live copy a move left naming the Layout, as the person may see them. */
+export interface LiveCopiesLeft {
+  readonly pages: readonly { readonly id: string; readonly title: string }[];
+  /** How many more of them the person may not read. */
+  readonly unreadable: number;
 }
 
 /** Where a move stands after a tick. */
@@ -133,7 +167,17 @@ export type MoveProgress =
       /** Pages this tick could not move, as the person may see them. */
       readonly refused: readonly UnmovedPage[];
     }
-  | { readonly state: "done"; readonly moved: number }
+  | {
+      readonly state: "done";
+      readonly moved: number;
+      /**
+       * Published pages whose live copy still names the Layout, as the person
+       * may see them: ones they may edit but not publish, whose drafts moved.
+       * They show the site default until someone who may publish them chooses
+       * another Layout. Absent when there are none.
+       */
+      readonly liveLeft?: LiveCopiesLeft;
+    }
   | { readonly state: "stopped"; readonly moved: number }
   | {
       readonly state: "refused";
@@ -172,6 +216,8 @@ function reasonOf(error: unknown): string {
   ) {
     return CANT_EDIT_PAGE;
   }
+  // Saved by someone else on every read the rewrite was made from.
+  if (NextlyError.isCode(error, "STALE_VERSION")) return PAGE_KEPT_CHANGING;
   // A conflict's message is public by contract, and says what is in the way
   // (a colleague editing the page, say).
   if (NextlyError.isCode(error, "CONFLICT") && error instanceof Error) {
@@ -183,9 +229,8 @@ function reasonOf(error: unknown): string {
 /** What one tick's page saves did. */
 interface TickRun {
   readonly tried: PageReference[];
+  /** Pages a write changed; a page tried and not refused is settled either way. */
   readonly moved: number;
-  /** Pages that no longer named the Layout when tried: nothing to do. */
-  readonly unchanged: number;
   readonly refused: Map<string, string>;
 }
 
@@ -194,34 +239,36 @@ interface TickRun {
  * {@link PAGES_PER_TICK} and {@link TICK_BUDGET_MS}.
  */
 async function moveSome(
-  deps: RemoveLayoutDeps,
-  layoutId: string,
+  deps: MoveDeps,
+  layout: { readonly id: string; readonly reason: string },
   ahead: readonly PageReference[],
   startedAt: number
 ): Promise<TickRun> {
+  const layoutId = layout.id;
   const run: TickRun = {
     tried: [],
     moved: 0,
-    unchanged: 0,
     refused: new Map(),
   };
   let moved = 0;
-  let unchanged = 0;
   for (const reference of ahead) {
     if (run.tried.length >= PAGES_PER_TICK) break;
     const spent = deps.now().getTime() - startedAt;
     if (run.tried.length > 0 && spent >= TICK_BUDGET_MS) break;
     run.tried.push(reference);
     try {
-      const cleared = await clearPageReference(
+      const cleared = await movePageOffLayout(
         deps.nextly,
         deps.slugs.pages,
         reference.id,
         layoutId,
-        deps.person.as
+        {
+          rewrite: deps.rewrite,
+          reason: layout.reason,
+          writeAs: deps.person.as,
+        }
       );
       if (cleared) moved += 1;
-      else unchanged += 1;
     } catch (error) {
       run.refused.set(reference.id, reasonOf(error));
       deps.warn("[page-builder] a page could not be moved off a Layout", {
@@ -231,7 +278,7 @@ async function moveSome(
       });
     }
   }
-  return { ...run, moved, unchanged };
+  return { ...run, moved };
 }
 
 /** `references` the person may read, each with why it could not move. */
@@ -261,6 +308,8 @@ async function unmoved(
  */
 export interface MoveDeps extends RemoveLayoutDeps {
   readonly mayRemove: (action: RemovalAction) => Promise<boolean>;
+  /** The field rewrite, made as the person and attributed to the Page Builder. */
+  readonly rewrite: PageFieldRewrite;
 }
 
 /**
@@ -329,7 +378,10 @@ async function start(
   return token;
 }
 
-/** Every page is off the Layout: remove it as Remove Layout does. */
+/**
+ * Nothing off a live copy names the Layout: remove it as Remove Layout does,
+ * and name the published pages whose live copy still names it.
+ */
 async function finish(
   deps: RemoveLayoutDeps,
   request: MoveRequest,
@@ -343,26 +395,73 @@ async function finish(
     to: "checked",
     set: { pagesLeft: 0 },
   });
-  await finishRemoval(
+  const removed = await finishRemoval(
     deps,
     { layoutId: request.layoutId, action: request.action, dryRun: false },
     token,
     true
   );
-  return answer(
-    request,
+  const liveLeft = removed.item.stillUsedBy;
+  const left =
+    liveLeft === undefined ? 0 : liveLeft.pages.length + liveLeft.unreadable;
+  const message =
     request.action === "delete"
       ? "The pages were moved to the site default, and the Layout was deleted."
-      : "The pages were moved to the site default, and the Layout was unpublished.",
-    { state: "done", moved }
+      : "The pages were moved to the site default, and the Layout was unpublished.";
+  return answer(
+    request,
+    left === 0 ? message : `${message} ${liveCopiesLeftSentence(left)}`,
+    {
+      state: "done",
+      moved,
+      ...(liveLeft === undefined || left === 0 ? {} : { liveLeft }),
+    }
   );
+}
+
+/** The pages a tick finds, in the cursor's order, and what it does with them. */
+interface TickPlan {
+  /** Every page naming the Layout, live copies included: each is tried. */
+  readonly all: readonly PageReference[];
+  /** Those after the cursor: the ones this tick tries. */
+  readonly ahead: readonly PageReference[];
+  /** Those earlier ticks of this move could not move. */
+  readonly refusedBefore: ReadonlySet<string>;
+}
+
+/**
+ * The pages that still stop the removal after this tick:
+ *
+ * - every page after the cursor this tick did not reach, live copies included,
+ *   since a live copy the person may publish is moved, and the removal waits
+ *   until each has been tried;
+ * - every page this tick could not move, wherever it names the Layout;
+ * - every page an earlier tick could not move, and this tick did not try;
+ * - every page naming the Layout off a live copy that this tick did not try.
+ *
+ * A page this tick tried and did not refuse is settled, whatever it came to:
+ * moved, already moved, or one whose live copy the person may not publish,
+ * which is left to draw the site default. A live copy an earlier tick tried
+ * and left that way is settled the same way.
+ */
+function stillInTheWay(plan: TickPlan, run: TickRun): PageReference[] {
+  const tried = new Set(run.tried.map(ref => ref.id));
+  const untried = new Set(
+    plan.ahead.filter(ref => !tried.has(ref.id)).map(ref => ref.id)
+  );
+  return plan.all.filter(ref => {
+    if (run.refused.has(ref.id) || untried.has(ref.id)) return true;
+    if (tried.has(ref.id)) return false;
+    return plan.refusedBefore.has(ref.id) || namesItOffTheLiveRow(ref);
+  });
 }
 
 /** One tick of a held move, by the steps in the module docblock. */
 async function tick(
-  deps: RemoveLayoutDeps,
+  deps: MoveDeps,
   request: MoveRequest,
-  token: string
+  token: string,
+  title: string
 ): Promise<RemoveAnswer> {
   const { layoutId } = request;
   const startedAt = deps.now().getTime();
@@ -378,11 +477,24 @@ async function tick(
     ...(deps.budget === undefined ? {} : { budget: deps.budget }),
     onProgress: leaseKeeper(deps, layoutId, token, "moving"),
   });
-  const toMove = scan.references.filter(namesItOffTheLiveRow).sort(byId);
+  const all = [...scan.references].sort(byId);
   const { after } = request;
-  const ahead = toMove.filter(ref => after === undefined || ref.id > after);
-  const run = await moveSome(deps, layoutId, ahead, startedAt);
-  const left = toMove.length - run.moved - run.unchanged;
+  const plan: TickPlan = {
+    all,
+    ahead: all.filter(ref => after === undefined || ref.id > after),
+    refusedBefore: new Set(request.refused ?? []),
+  };
+  const run = await moveSome(
+    deps,
+    {
+      id: layoutId,
+      reason: movedOffLayoutReason(title, request.action),
+    },
+    plan.ahead,
+    startedAt
+  );
+  const inTheWay = stillInTheWay(plan, run);
+  const left = inTheWay.length;
 
   const recorded = await deps.store.advance({
     layoutId,
@@ -401,7 +513,7 @@ async function tick(
     return finish(deps, request, token, run.moved);
   }
   const last = run.tried[run.tried.length - 1];
-  if (run.tried.length < ahead.length && last !== undefined) {
+  if (run.tried.length < plan.ahead.length && last !== undefined) {
     const refused = await unmoved(
       deps,
       run.tried.filter(ref => run.refused.has(ref.id)),
@@ -418,15 +530,15 @@ async function tick(
   }
   return refuseTheRest(deps, request, token, {
     run,
-    toMove,
+    inTheWay,
     complete: scan.complete,
   });
 }
 
 /**
- * Every page after the cursor was tried, and some still name the Layout: the
- * fence comes down, keeping the Layout and every page moved, and the pages
- * left are named, with why where this tick learned it.
+ * Every page after the cursor was tried, and some still name the Layout off a
+ * live copy: the fence comes down, keeping the Layout and every page moved,
+ * and the pages left are named, with why where this tick learned it.
  */
 async function refuseTheRest(
   deps: RemoveLayoutDeps,
@@ -434,20 +546,13 @@ async function refuseTheRest(
   token: string,
   found: {
     readonly run: TickRun;
-    readonly toMove: readonly PageReference[];
+    readonly inTheWay: readonly PageReference[];
     readonly complete: boolean;
   }
 ): Promise<RemoveAnswer> {
   const { run } = found;
   await deps.store.stop(request.layoutId, token);
-  const done = new Set(
-    run.tried.filter(ref => !run.refused.has(ref.id)).map(ref => ref.id)
-  );
-  const left = await unmoved(
-    deps,
-    found.toMove.filter(ref => !done.has(ref.id)),
-    run.refused
-  );
+  const left = await unmoved(deps, found.inTheWay, run.refused);
   return answer(
     request,
     found.complete
@@ -480,7 +585,7 @@ export async function movePages(
   deps: MoveDeps,
   request: MoveRequest
 ): Promise<RemoveAnswer> {
-  await requireRemovable(deps, request);
+  const { title } = await requireRemovable(deps, request);
   if (request.stop === true) return stop(deps, request);
   // A precondition, so it runs before the fence and every page write, on
   // every tick: a person who may not delete or unpublish this Layout would
@@ -496,10 +601,10 @@ export async function movePages(
     });
   }
   if (request.token === undefined) {
-    return tick(deps, request, await start(deps, request));
+    return tick(deps, request, await start(deps, request), title);
   }
   if (!(await stillMoving(deps, request, request.token))) {
     return answer(request, MOVE_STOPPED, { state: "stopped", moved: 0 });
   }
-  return tick(deps, request, request.token);
+  return tick(deps, request, request.token, title);
 }

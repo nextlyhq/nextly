@@ -46,6 +46,7 @@ import {
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
@@ -55,6 +56,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import {
   useStoredEntry,
   useWithStoredReferences,
@@ -181,6 +183,31 @@ export default function EditEntryPage({
 }: EditEntryPageProps): React.ReactElement {
   const slug = params?.slug;
   const id = params?.id;
+  // What the parts plugins add to this page read as they open, started as
+  // the page first renders, beside its own reads rather than after them; the
+  // editor waits a moment for them, so their parts are drawn in place.
+  // The page's own place, and the form inside its editor.
+  const known = slug !== undefined && id !== undefined;
+  const partsStartup = usePlaceStartupReads([
+    {
+      place: "collection.edit",
+      ids: known ? { collection: slug, entryId: id } : null,
+    },
+    {
+      place: "entry.form",
+      ids: known ? { kind: "collection", slug, entryId: id } : null,
+    },
+  ]);
+
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  // Above every return, as a hook, so the loading outline is folded too.
+  useCollectionFoldedPanel(slug);
+
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  // Above every return, as a hook, so the loading outline is folded too.
+  useCollectionFoldedPanel(slug);
 
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
@@ -759,6 +786,8 @@ export default function EditEntryPage({
           )}
           {schedule.dialog}
           <EntryForm
+            revealOutline={<EditEntryPageSkeleton />}
+            revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
              editor's column directly under its header, read before the fields.
              Inside the editor rather than above it: the editor's row pulls up

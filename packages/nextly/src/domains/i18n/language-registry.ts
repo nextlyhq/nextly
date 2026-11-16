@@ -19,6 +19,8 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import { coalesce } from "../../shared/lib/coalesce";
+
 import {
   IMPLICIT_LANGUAGE,
   localizationFromStoredLanguages,
@@ -67,7 +69,13 @@ export class LanguageRegistry {
   private retainedCodes: readonly string[] = [];
   private fingerprintSeen: string | undefined;
   private checkedAt: number | undefined;
-  private inFlight: Promise<void> | undefined;
+  /**
+   * The read under way, shared by every ordinary caller (`coalesce`), under
+   * the number of the reads a forced refresh has begun: a forced refresh
+   * starts a read of its own, which every caller after it joins instead.
+   */
+  private readonly inFlight = new Map<number, Promise<void>>();
+  private forcedReads = 0;
   /** Counts reads started, so a read that a later one overtook leaves what the later one stored. */
   private readsStarted = 0;
 
@@ -146,9 +154,10 @@ export class LanguageRegistry {
     if (!reader) return;
     if (options?.force !== true) {
       if (this.isFresh()) return;
-      if (this.inFlight) return this.inFlight;
+    } else {
+      this.forcedReads += 1;
     }
-    await this.track(this.read(reader));
+    await coalesce(this.inFlight, this.forcedReads, () => this.read(reader));
   }
 
   /**
@@ -165,16 +174,6 @@ export class LanguageRegistry {
     return (
       this.checkedAt !== undefined && this.now() - this.checkedAt < this.ttlMs
     );
-  }
-
-  /** Shares `reading` with refreshes made while it runs. */
-  private async track(reading: Promise<void>): Promise<void> {
-    this.inFlight = reading;
-    try {
-      await reading;
-    } finally {
-      if (this.inFlight === reading) this.inFlight = undefined;
-    }
   }
 
   /**

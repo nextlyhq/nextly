@@ -18,9 +18,14 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { tableConstraintOps } from "./ddl-emitter";
-import type { Operation, TableSpec } from "./diff/types";
+import type {
+  AddCheckOp,
+  DropCheckOp,
+  Operation,
+  TableSpec,
+} from "./diff/types";
 import { foreignKeysBlockingTypeChanges } from "./foreign-key-lift";
-import { generateSQL } from "./sql-templates";
+import { generateSQL, mysqlCheckReplacements } from "./sql-templates";
 
 /** Statements to run before the kit's batch, and after it. */
 export interface KitRouteConstraintStatements {
@@ -54,38 +59,24 @@ export function kitRouteConstraintStatements(
 ): KitRouteConstraintStatements {
   if (dialect === "sqlite") return { before: [], after: [], liftRestores: [] };
 
-  const before: Operation[] = [];
-  const after: Operation[] = [];
-  for (const op of ops) {
-    switch (op.type) {
-      case "drop_check":
-        before.push(op);
-        break;
-      case "drop_foreign_key":
-        // A key a replacement on the same columns supersedes goes after that replacement is added,
-        // so its columns are never left unkeyed (MySQL commits each statement as it runs). A key
-        // ahead of a conversion is the pre-resolution pass's to drop, before the conversion.
-        if (op.afterReplacement === true) after.push(op);
-        else if (op.beforeConversion !== true) before.push(op);
-        break;
-      case "add_check":
-      case "add_foreign_key":
-      case "change_foreign_key_action":
-        after.push(op);
-        break;
-      case "add_table":
-        if (dialect === "postgresql")
-          after.push(...tableConstraintOps(op.table));
-        break;
-      default:
-        break;
-    }
-  }
+  const atomic =
+    dialect === "mysql"
+      ? mysqlCheckReplacements(ops, "push")
+      : {
+          pairedDrops: new Set<DropCheckOp>(),
+          pairedAdds: new Set<AddCheckOp>(),
+          statements: [],
+        };
+
+  const { before, after } = partitionConstraintOps(ops, dialect, atomic);
   const suspended =
     dialect === "mysql" ? foreignKeysBlockingTypeChanges(ops, liveTables) : [];
   before.push(...suspended.map(lift => lift.drop));
   after.push(...suspended.map(lift => lift.restore));
-  const afterStatements = after.map(op => generateSQL(op, dialect));
+  const afterStatements = [
+    ...atomic.statements,
+    ...after.map(op => generateSQL(op, dialect)),
+  ];
   return {
     before: before.map(op => generateSQL(op, dialect)),
     after: afterStatements,
@@ -95,4 +86,57 @@ export function kitRouteConstraintStatements(
       afterStatements.length - suspended.length
     ),
   };
+}
+
+function isPreKitConstraintDrop(
+  op: Operation,
+  pairedDrops: ReadonlySet<DropCheckOp>
+): boolean {
+  if (op.type === "drop_check") return !pairedDrops.has(op);
+  // A key a replacement on the same columns supersedes goes after that replacement is added, so its
+  // columns are never left unkeyed (MySQL commits each statement as it runs). A key ahead of a
+  // conversion is the pre-resolution pass's to drop, before the conversion.
+  return (
+    op.type === "drop_foreign_key" &&
+    op.afterReplacement !== true &&
+    op.beforeConversion !== true
+  );
+}
+
+function postKitConstraintOps(
+  op: Operation,
+  dialect: SupportedDialect,
+  pairedAdds: ReadonlySet<AddCheckOp>
+): Operation[] {
+  switch (op.type) {
+    case "add_check":
+      return pairedAdds.has(op) ? [] : [op];
+    case "add_foreign_key":
+    case "change_foreign_key_action":
+      return [op];
+    case "drop_foreign_key":
+      return op.afterReplacement === true ? [op] : [];
+    case "add_table":
+      return dialect === "postgresql" ? tableConstraintOps(op.table) : [];
+    default:
+      return [];
+  }
+}
+
+/** Splits non-paired constraint operations into pre-kit `before` and post-kit `after`. */
+function partitionConstraintOps(
+  ops: readonly Operation[],
+  dialect: SupportedDialect,
+  paired: { pairedDrops: Set<DropCheckOp>; pairedAdds: Set<AddCheckOp> }
+): { before: Operation[]; after: Operation[] } {
+  const before: Operation[] = [];
+  const after: Operation[] = [];
+  for (const op of ops) {
+    if (isPreKitConstraintDrop(op, paired.pairedDrops)) {
+      before.push(op);
+    } else {
+      after.push(...postKitConstraintOps(op, dialect, paired.pairedAdds));
+    }
+  }
+  return { before, after };
 }

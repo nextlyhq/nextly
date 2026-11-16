@@ -67,6 +67,10 @@ import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import {
+  busyTableBounds,
+  type BusyTableFlags,
+} from "../../domains/schema/busy-table/bounds";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import {
   ACCEPT_DATA_LOSS_ENV,
@@ -181,6 +185,18 @@ export interface DbSyncCommandOptions {
    * lock taken and nothing asked or written.
    */
   dryRun?: boolean;
+
+  /**
+   * `--lock-timeout <seconds>`: how long one try of the sync's schema change waits for a table
+   * another database session is using; handed on as `NEXTLY_LOCK_TIMEOUT`.
+   */
+  lockTimeout?: string;
+
+  /**
+   * `--lock-timeout-total <seconds>`: how long every try together waits; handed on as
+   * `NEXTLY_LOCK_TIMEOUT_TOTAL`.
+   */
+  lockTimeoutTotal?: string;
 }
 
 /**
@@ -514,6 +530,27 @@ export function exportDataLossConsent(
   env[ACCEPT_DATA_LOSS_ENV] = flag === true ? "1" : flag;
 }
 
+/**
+ * Hands `--lock-timeout` and `--lock-timeout-total` to the schema pipeline as
+ * `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL`, the spelling it reads its busy-table
+ * bounds from when its caller passes none, for the rest of the run. Both are checked first, with
+ * the environment's, as the pipeline will read them (`busyTableBounds`), so a value outside its
+ * range is refused before the sync starts. A flag replaces its variable; one not given leaves its
+ * variable as it is.
+ */
+export function exportBusyTableBounds(
+  flags: BusyTableFlags,
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  busyTableBounds({ flags, env });
+  if (flags.lockTimeout !== undefined) {
+    env.NEXTLY_LOCK_TIMEOUT = flags.lockTimeout;
+  }
+  if (flags.lockTimeoutTotal !== undefined) {
+    env.NEXTLY_LOCK_TIMEOUT_TOTAL = flags.lockTimeoutTotal;
+  }
+}
+
 /** The refusal of `db:sync -f/--force`, which had no effect and is retired. */
 function retiredForce(): CliError {
   return new CliError("INPUT_REFUSED", {
@@ -545,8 +582,11 @@ export async function dbSyncAction(
   // Surface the flag as an env var so downstream modules (the
   // schema-change prompt, the auto-sync path) pick it up without
   // needing to thread the option through every function call.
+  // The busy-table bounds likewise, checked here so a value outside its range is refused before
+  // anything is read or changed.
   try {
     exportDataLossConsent(cmdOptions.acceptDataLoss);
+    exportBusyTableBounds(cmdOptions);
   } catch (error) {
     exitWithError(context.logger, error);
   }

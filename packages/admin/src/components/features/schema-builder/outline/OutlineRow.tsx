@@ -21,6 +21,8 @@ import {
   type OutlineNode,
   type VisibleRow,
 } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
+import type { RowMark } from "@admin/lib/builder/pending-changes";
 import { cn } from "@admin/lib/utils";
 
 import type { OutlineActions } from "./outline-types";
@@ -164,6 +166,11 @@ function RowBadges({
       show: node.readOnly,
       text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
     },
+    // What is pending on the row until the save: one mark per kind.
+    ...(node.pending?.marks ?? []).map(pending => ({
+      show: true,
+      text: pendingMarkText(pending, node.pending?.inside),
+    })),
     {
       // A field using field groups, and each field group a field accepting
       // several offers: both are shared, each with its own count when known.
@@ -187,6 +194,22 @@ function RowBadges({
       )}
     </span>
   );
+}
+
+/** A pending mark's words: a deleted container says how many go with it. */
+function pendingMarkText(mark: RowMark, inside: number | undefined): string {
+  switch (mark) {
+    case "new":
+      return "New";
+    case "changed":
+      return "Changed";
+    case "moved":
+      return "Moved";
+    case "deleted":
+      return inside
+        ? `Deleted · ${inside} ${inside === 1 ? "field" : "fields"} inside`
+        : "Deleted";
+  }
 }
 
 /** The chevron that folds a container; nothing for a row that holds none. */
@@ -326,7 +349,10 @@ function OutlineRowView(props: Props): JSX.Element {
     >
       <DragHandle draggable={draggable} sortable={sortable} />
       <RowItem {...props} />
-      <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+      {/* A deleted row offers nothing to do to it until it is back. */}
+      {!isPendingDelete(row.node) && (
+        <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+      )}
     </div>
   );
 }

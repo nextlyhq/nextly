@@ -19,9 +19,9 @@
  *
  * @module auth/handlers/unknown-source
  */
-import { createHmac, hkdfSync } from "node:crypto";
 
 import type { RateLimitStore } from "../../middleware/rate-limit";
+import { keyedDigest } from "../../shared/lib/keyed-digest";
 import { presentedPendingToken } from "../cookies/pending-cookie";
 import { normalizeAccountEmail } from "../credentials/account-email";
 import { authRateLimiter } from "../middleware/rate-limiter";
@@ -82,16 +82,6 @@ function accountKey(email: string | null, secret: string): string {
   const normalized = normalizeAccountEmail(email);
   if (normalized === "") return ACCOUNTLESS_KEY;
   return `auth-unknown:account:${keyedDigest(ACCOUNT_KEY_INFO, normalized, secret)}`;
-}
-
-/**
- * The HMAC every limiter key is made of: under a key derived from the
- * install's secret for the use `info` names alone, so no two uses share a
- * key, and a stored key names nothing without the secret.
- */
-function keyedDigest(info: string, input: string, secret: string): string {
-  const derived = Buffer.from(hkdfSync("sha256", secret, "", info, 32));
-  return createHmac("sha256", derived).update(input).digest("hex");
 }
 
 /** What the strategy-key use of the install's secret is called. */

@@ -163,7 +163,13 @@ export const nextlyHtmlLimitedBots: RegExp = new RegExp(
  * crawler files every site has a place for. A plugin route mounted at the
  * root (`mount: "root"`) answers one of them behind the API handler.
  */
-const ROOT_FILES = ["/robots.txt", "/sitemap.xml", "/llms.txt"] as const;
+const ROOT_FILES = [
+  "/robots.txt",
+  "/sitemap.xml",
+  "/llms.txt",
+  // The whole site in one file, which tools reading llms.txt may ask for too.
+  "/llms-full.txt",
+] as const;
 
 /** Options for {@link withNextly}. */
 export interface WithNextlyOptions {
@@ -172,7 +178,7 @@ export interface WithNextlyOptions {
    * scaffolded `app/admin/api/[[...params]]` route.
    */
   apiRoute?: string;
-  /** More root files, beyond robots.txt, sitemap.xml and llms.txt, that a plugin answers. */
+  /** More root files, beyond robots.txt, sitemap.xml, llms.txt and llms-full.txt, that a plugin answers. */
   rootFiles?: readonly string[];
   /**
    * The app's migrations folder, relative to the project root, as

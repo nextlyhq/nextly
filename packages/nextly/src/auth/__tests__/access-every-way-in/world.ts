@@ -459,6 +459,9 @@ function probePlugin() {
         })),
         {
           method: "GET" as const,
+          // The handler asks the caller's own access, which is what this
+          // world measures.
+          checksAccess: true as const,
           path: "/can/:slug/:action",
           handler: async (_req: Request, ctx: PluginRouteContext) => {
             const may: unknown = await ctx.caller?.can(
@@ -472,6 +475,9 @@ function probePlugin() {
         },
         {
           method: "GET" as const,
+          // The handler asks the caller's own access, which is what this
+          // world measures.
+          checksAccess: true as const,
           path: "/service/:slug/:action",
           handler: (req: Request, ctx: PluginRouteContext) =>
             outcome(() =>

@@ -59,6 +59,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionInFlow } from "@nextlyhq/adapter-drizzle/types";
 
+import { coalesce } from "../../../shared/lib/coalesce";
 import { isWithinLifetime, monotonicNow } from "../../../shared/lib/lifetime";
 import { readExecutorOfView } from "../../../shared/lib/read-transaction-scope";
 import {
@@ -122,6 +123,17 @@ interface CacheState {
    * adapter knows it by (`TransactionInFlow.transaction`): gone with it.
    */
   byTransaction?: WeakMap<object, Map<string, MemoizedRow>>;
+  /**
+   * The reads under way, per database, by key, generation and count
+   * (`sharedRead`): callers missing the same row at once share one read.
+   */
+  inFlight?: WeakMap<
+    object,
+    Map<
+      string,
+      Promise<Record<string, unknown> | Record<string, unknown>[] | null>
+    >
+  >;
 }
 
 // On `globalThis`: a Next.js dev server holds several module registries, and a
@@ -196,7 +208,7 @@ export async function cachedRegistryListing<T>(
   const key = `${table}\u0000\u0000listing`;
   const { hit, seq } = await freshHit(database, key);
   if (hit !== undefined) return view(hit.row as Record<string, unknown>[]);
-  return view(await readAndKeep(database, key, seq, read));
+  return view(await sharedRead(database, key, seq, read));
 }
 
 /**
@@ -242,8 +254,41 @@ async function cachedRead(
   if (hit !== undefined) {
     return structuredClone(hit.row as Record<string, unknown>);
   }
-  // The caller's own: the kept one is a copy.
-  return readAndKeep(database, key, seq, read);
+  const row = await sharedRead(database, key, seq, read);
+  // The caller's own: the kept one and every other caller's are copies.
+  return row === null ? null : structuredClone(row);
+}
+
+/**
+ * {@link readAndKeep}, one read shared by every caller that misses `key` on
+ * `database` while it runs (`coalesce`). The first screen after a start
+ * misses every row at once, its requests each asking for the same few: one
+ * read each answers them all. A read is shared only by callers that began
+ * under the same generation and count it was filed under, so one begun
+ * before a clear or a moved count is never handed to a caller after it. What
+ * the read answers is handed to every caller as it is: each copies what it
+ * hands on.
+ */
+function sharedRead<
+  T extends Record<string, unknown> | Record<string, unknown>[] | null,
+>(
+  database: object,
+  key: string,
+  seq: number | undefined,
+  read: () => Promise<T>
+): Promise<T> {
+  const cache = cacheState();
+  cache.inFlight ??= new WeakMap();
+  let reads = cache.inFlight.get(database);
+  if (reads === undefined) {
+    reads = new Map();
+    cache.inFlight.set(database, reads);
+  }
+  return coalesce(
+    reads,
+    `${key}\u0000${cache.generation}\u0000${seq ?? ""}`,
+    () => readAndKeep(database, key, seq, read)
+  ) as Promise<T>;
 }
 
 /**

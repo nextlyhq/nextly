@@ -120,26 +120,6 @@ const keptKeyOf = (caller: string, language: RuleLanguageOf): string =>
 export const JUDGED_OTHERWISE = "judged-otherwise";
 
 /**
- * The memos whose request or call checked the stored schema version (`servedSchemaVersion`): a
- * Direct API call made inside one keeps the definitions it was checked against. Keyed by the memo
- * itself, which every part of one request shares, so the mark reaches all of it; a memo opened by
- * a route that never checked the version carries none.
- */
-const schemaCheckedMemos = new WeakSet<object>();
-
-/** Marks the memo open now, if any, as one whose request checked the stored schema version. */
-export function markMemoSchemaChecked(): void {
-  const memo = lookups.getStore();
-  if (memo !== undefined) schemaCheckedMemos.add(memo);
-}
-
-/** Whether the memo open now is one whose request or call checked the stored schema version. */
-export function memoSchemaChecked(): boolean {
-  const memo = lookups.getStore();
-  return memo !== undefined && schemaCheckedMemos.has(memo);
-}
-
-/**
  * Runs `operation` with a memo for the request. A memo already open is kept,
  * so a route reached inside another request's handling shares its lookups.
  */

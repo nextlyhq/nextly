@@ -390,22 +390,30 @@ describe("SingleRegistryService", () => {
     });
 
     it("applies search filter across slug and label", async () => {
-      ctx.adapter.select.mockResolvedValue([]);
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "1",
+          slug: "site-settings",
+          label: "Site",
+          createdAt: new Date(1),
+        },
+        {
+          id: "2",
+          slug: "home",
+          label: "Home settings",
+          createdAt: new Date(2),
+        },
+        { id: "3", slug: "footer", label: "Footer", createdAt: new Date(3) },
+      ]);
 
-      await ctx.service.listSingles({ search: "settings" });
+      const result = await ctx.service.listSingles({ search: "SETTINGS" });
 
-      const opts = ctx.adapter.select.mock.calls[0][1] as Record<
-        string,
-        unknown
-      >;
-      const where = opts.where as Record<string, unknown>;
-      const andArr = where.and as Array<Record<string, unknown>>;
-      const orCond = andArr.find(c => "or" in c);
-      expect(orCond).toBeDefined();
-      const ors = orCond!.or as Array<Record<string, unknown>>;
-      const columns = ors.map(c => c.column);
-      expect(columns).toContain("slug");
-      expect(columns).toContain("label");
+      // Matched on the slug or the label, without regard to case.
+      expect(result.data.map(single => single.slug)).toEqual([
+        "site-settings",
+        "home",
+      ]);
+      expect(result.total).toBe(2);
     });
   });
 

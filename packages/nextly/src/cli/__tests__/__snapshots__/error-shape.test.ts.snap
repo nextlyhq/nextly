@@ -628,6 +628,13 @@ exports[`each code, as a command ends with it > CORE_TABLES_NOT_RECONCILED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-reconciled  (CORE_TABLES_NOT_RECONCILED)"
 `;
 
+exports[`each code, as a command ends with it > CREATE_BLOCKED_BY_LEFTOVER_TABLE 1`] = `
+"✗ Creating the Single "home" was refused.
+  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
+  Next: Drop or rename those tables, then retry the create.
+  Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)"
+`;
+
 exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_MALFORMED 1`] = `
 "✗ --accept-data-loss=dc_posts summary is not a list of tables and table.column pairs: "dc_posts summary" is not one.
   Why:  Each target is a table or a \`table.column\` pair, separated by commas. Nothing was changed.
@@ -840,6 +847,13 @@ exports[`each code, as a command ends with it > LOCALIZATION_NOT_PROVISIONED 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/localization-not-provisioned  (LOCALIZATION_NOT_PROVISIONED)"
 `;
 
+exports[`each code, as a command ends with it > LOCK_HELD_BY_THIS_PROCESS 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` stopped: the database is locked by this process, nothing changed.
+  Why:  A write made inside its transaction, on another connection to the same SQLite database, waited for the write lock that transaction holds. The transaction lets the lock go only once that write is done, so no wait could free it: it was not tried again, and the transaction was rolled back.
+  Next: Make that write through the transaction's own handle, or after it commits. A second connection to the same SQLite file in one process, such as a second adapter or an instance booted beside a command run in-process, is what makes this happen.
+  Docs: https://nextlyhq.com/docs/cli/errors/lock-held-by-this-process  (LOCK_HELD_BY_THIS_PROCESS)"
+`;
+
 exports[`each code, as a command ends with it > MEDIA_APPLY_OUTSIDE_PROJECT 1`] = `
 "✗ Nothing was changed: --apply was run from outside /home/you/app.
   Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.
@@ -962,12 +976,25 @@ exports[`each code, as a command ends with it > MISSING_SNAPSHOT 1`] = `
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_CORE_DESTRUCTIVE_REFUSED 1`] = `
-"✗ Core schema reconciliation requires destructive operations.
-  Why:  drops column 'nextly_users.legacy_role'
-        drops table 'nextly_sessions_old'
-        This usually means a Nextly version mismatch.
-  Next: Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).
+"✗ Bringing Nextly's own tables up to date deletes data. Nothing was changed.
+  Why:  column dynamic_collections.access_rules: the collections' stored access rules, no longer enforced since 0.0.2-alpha.66
+        column dynamic_singles.access_rules: the Singles' stored access rules, no longer enforced since 0.0.2-alpha.66
+  Next: To go ahead, give consent: --accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules (or NEXTLY_ACCEPT_DATA_LOSS=dynamic_collections.access_rules,dynamic_singles.access_rules). NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works for Nextly's own tables but is deprecated.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-destructive-refused  (NEXTLY_CORE_DESTRUCTIVE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_CORE_UPGRADE_INCOMPLETE 1`] = `
+"✗ The core upgrade ran, but Nextly's own tables are not up to date.
+  Why:  The core upgrade ran, but Nextly's own tables still lack what this version declares (dynamic_collections: revalidate, webhooks).
+  Next: Run \`npx nextly@0.0.2-alpha.65 migrate\` first, then this version's \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-incomplete  (NEXTLY_CORE_UPGRADE_INCOMPLETE)"
+`;
+
+exports[`each code, as a command ends with it > NEXTLY_CORE_UPGRADE_UNSUPPORTED 1`] = `
+"✗ This version of Nextly cannot bring dynamic_collections, dynamic_singles up to date from this database in one step, so it changed nothing.
+  Why:  drizzle-kit cannot plan this upgrade of Nextly's own tables from the database as it stands.
+  Next: Run \`npx nextly@0.0.2-alpha.65 migrate\` first, then this version's \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-upgrade-unsupported  (NEXTLY_CORE_UPGRADE_UNSUPPORTED)"
 `;
 
 exports[`each code, as a command ends with it > NEXTLY_MIGRATE_LOCK_BUSY 1`] = `
@@ -1127,8 +1154,8 @@ exports[`each code, as a command ends with it > PACKAGE_INSTALL_FAILED 1`] = `
 
 exports[`each code, as a command ends with it > PASSWORD_CLEAR_UNCONFIRMED 1`] = `
 "✗ Nothing was changed: --apply also needs --confirm-default-hasher.
-  Why:  --confirm-default-hasher is your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.
-  Next: If no custom passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
+  Why:  --confirm-default-hasher is your statement that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier. Another hasher's hashes can look like plain text here, and clearing them locks those people out.
+  Next: If no other passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
   Docs: https://nextlyhq.com/docs/cli/errors/password-clear-unconfirmed  (PASSWORD_CLEAR_UNCONFIRMED)"
 `;
 
@@ -1506,6 +1533,13 @@ exports[`each code, as a command ends with it > PLUGIN_SCHEMA_BEHIND 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_PREFIX_CHANGED 1`] = `
+"✗ The plugin "@acme/seo" now has the schema prefix "acme_seo", but its tables were created under "seo" (seo__redirects).
+  Why:  A plugin's prefix is fixed once its tables exist, since the rows cannot move to new names.
+  Next: Declare contributes.schema.prefix: "seo" to keep its tables.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-prefix-changed  (PLUGIN_SCHEMA_PREFIX_CHANGED)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_SCHEMA_UNINSTALLED 1`] = `
 "✗ The plugin "@acme/seo" has been uninstalled but is still listed in your config.
   Why:  Started again, it would run over tables its uninstall removed, and a development push would create them again, so it is refused in every environment.
@@ -1813,6 +1847,14 @@ exports[`each code, as a command ends with it > SYNC_CONFIRMATION_REQUIRED 1`] =
   Why:  No terminal is attached to ask (or \`--non-interactive\` was given, or \`CI\` is set), and \`--yes\` was not given.
   Next: Run \`nextly db:sync --promote posts --yes\` to answer it yes.
   Docs: https://nextlyhq.com/docs/cli/errors/sync-confirmation-required  (SYNC_CONFIRMATION_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > TABLE_BUSY 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` stopped: table busy, nothing changed.
+  Why:  It waited for table "dc_posts" through 7 tries over 90 s, held by session 4242 (user app, from 10.0.0.5, application "worker", transaction open 3 min).
+        Applied before it in this run: \`20261019_090000_add_tags.sql\`.
+  Next: Run it again once the holder ends, end the holding session, or raise \`--lock-timeout\` / \`--lock-timeout-total\` (or \`NEXTLY_LOCK_TIMEOUT\` / \`NEXTLY_LOCK_TIMEOUT_TOTAL\`).
+  Docs: https://nextlyhq.com/docs/cli/errors/table-busy  (TABLE_BUSY)"
 `;
 
 exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `

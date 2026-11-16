@@ -13,9 +13,8 @@ import { resolvePageStylesWithTrace } from "../styles";
 import { coreBlocks } from "./index";
 
 /*
- * The order a block's look stands in, under the Classic spacing mode, which
- * swaps in the frozen block bases: the block's own base, then its look, then a
- * shared style it wears, then its own values. Read off the compiled trace by
+ * The order a block's look stands in: the block's own base, then its look,
+ * then a shared style it wears, then its own values. Read off the compiled trace by
  * the engine's own cascade reader, one tier taken away at a time.
  */
 const resolver: BlockResolver = {
@@ -38,7 +37,7 @@ const cta: NamedClass = {
   styles: colour("#00aa00"),
 };
 
-/** Which tier the button's colour comes from, in Classic spacing. */
+/** Which tier the button's colour comes from. */
 function colourFrom(
   classes: readonly NamedClass[],
   own: NodeStyles | undefined
@@ -62,7 +61,6 @@ function colourFrom(
     undefined,
     {
       breakpoints: BREAKPOINTS,
-      spacingMode: "classic",
       namedClasses: [...classes],
     },
     resolver,
@@ -82,8 +80,8 @@ function colourFrom(
   return origin.kind === "class" ? origin.id : origin.kind;
 }
 
-describe("a look's place in the cascade, in Classic spacing", () => {
-  it("is above the frozen base and below a shared style and the block's own value", () => {
+describe("a look's place in the cascade", () => {
+  it("is above the block's base and below a shared style and the block's own value", () => {
     // The population: the look sets the colour the test follows.
     expect(outline.styles).toMatchObject({ base: { base: { color: {} } } });
     expect(colourFrom([outline, cta], colour("#aa0000"))).toBe("node");

@@ -272,6 +272,29 @@ describe("buildPluginAdminMeta", () => {
     expect(disabled.panelSections).toBeUndefined();
   });
 
+  it("publishes the collections whose screens start folded on their routed slug, for an enabled plugin only", () => {
+    const declaration = {
+      ...base,
+      renameMap: { forms: "site-forms" },
+      contributes: {
+        admin: {
+          views: {
+            forms: { foldedPanel: true },
+            submissions: { foldedPanel: false },
+          },
+        },
+      },
+    };
+    const [enabled] = buildPluginAdminMeta(asPlugins([declaration]), undefined);
+    expect(enabled.foldedPanels).toEqual(["site-forms"]);
+
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([{ ...declaration, enabled: false }]),
+      undefined
+    );
+    expect(disabled.foldedPanels).toBeUndefined();
+  });
+
   it("folds contributes.admin menu/pages/settings for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([
