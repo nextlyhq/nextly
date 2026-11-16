@@ -82,6 +82,9 @@ for (const dialect of getConfiguredTestDialects()) {
           name: "tags",
           type: "relationship",
           relationTo: "tags",
+          // As the Builder's create takes a relationship: its target and
+          // relation type as options too. A list on the row, not a junction.
+          options: { target: "tags", relationType: "manyToOne" },
           hasMany: true,
           unique: true,
         },
