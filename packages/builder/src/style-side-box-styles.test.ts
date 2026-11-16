@@ -257,10 +257,10 @@ describe("a box side in a narrow rail", () => {
     // every side is a labelled row: those two rows were crushed while the
     // other two stretched.
     expect(FLAT).toContain(
-      `@container nx-inspector-fields (max-width: 18rem) { ${BOX} { display: flex;`
+      `@container nx-inspector-fields (width < 16.5rem) { ${BOX} { display: flex;`
     );
     const fallback = FLAT.slice(
-      FLAT.lastIndexOf("@container nx-inspector-fields (max-width: 18rem)")
+      FLAT.lastIndexOf("@container nx-inspector-fields (width < 16.5rem)")
     );
     expect(fallback).toContain(
       `${BOX} > [data-side] { inline-size: auto; justify-self: stretch; }`
