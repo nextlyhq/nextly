@@ -206,8 +206,8 @@ function SectionBody({
 }: Omit<StyleSectionItemProps, "open">): React.JSX.Element {
   const readOnly = readOnlyReason !== undefined;
   /*
-   * What the author brought out from "+ More". Held here, by a section keyed
-   * by node and section, so it lasts while this block stays selected and
+   * What the author brought out from "+ More". Held here, in a body keyed by
+   * node inside its section, so it lasts while this block stays selected and
    * starts empty for the next. Panel state, like the open section: what the
    * author chose to look at, not anything the page stores — and a property
    * holding a value shows whatever this says, so it can hide nothing set.

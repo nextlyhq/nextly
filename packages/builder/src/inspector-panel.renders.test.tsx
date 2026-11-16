@@ -358,3 +358,140 @@ describe("what is typed on the Content tab, while Style shows another block", ()
     ).toBe("second");
   });
 });
+
+describe("what a Style section shows for the next block", () => {
+  it("puts a property brought out from More back behind it for the next block", () => {
+    render(<Host />);
+    act(() => editor().select("first"));
+    openTab("Style");
+    const typography = screen.getByRole("button", { name: /Typography/ });
+    if (typography.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(typography);
+    }
+    revealFromMore("Font style");
+    // The control: brought out, it is no longer offered by More.
+    openMore();
+    expect(screen.queryByRole("menuitem", { name: "Font style" })).toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    act(() => editor().select("second"));
+    // The second block starts from its own section: Font style behind More.
+    openMore();
+    expect(screen.getByRole("menuitem", { name: "Font style" })).toBeTruthy();
+  });
+
+  it("draws a closed section's heading again when its dot goes", () => {
+    const page: BlockDocument = {
+      ...PAGE,
+      nodes: [
+        {
+          ...heading("first", "Intro", "20px"),
+          styles: {
+            base: {
+              [BASE_BREAKPOINT]: { fontSize: "20px", backgroundColor: "red" },
+            },
+          },
+        } as BlockNode,
+        heading("second", "Outro", "32px"),
+      ],
+    } as BlockDocument;
+    render(<Host page={page} />);
+    act(() => editor().select("first"));
+    openTab("Style");
+    const background = () => screen.getByRole("button", { name: /Background/ });
+    // The control: closed, and marked as holding values.
+    expect(background().getAttribute("aria-expanded")).toBe("false");
+    expect(background().textContent).toContain("has values");
+    counted.sections.clear();
+    act(() => editor().select("second"));
+    expect(background().textContent).not.toContain("has values");
+    expect(counted.sections.get("background")).toBe(1);
+  });
+});
+
+/** Opens Typography's "+ More" menu. */
+function openMore(): void {
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "More typography properties" }),
+    { key: "Enter" }
+  );
+}
+
+/** Brings `label` out from Typography's "+ More". */
+function revealFromMore(label: string): void {
+  openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+}
+
+/** A page of a block with one attribute, then a block holding the id `hero`. */
+const ATTRIBUTED: BlockDocument = {
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    {
+      id: "first",
+      type: "acme/text",
+      version: 1,
+      props: { text: "first" },
+      attributes: { "data-x": "1" },
+    },
+    {
+      id: "second",
+      type: "acme/text",
+      version: 1,
+      props: { text: "second" },
+      cssId: "hero",
+    },
+  ],
+} as unknown as BlockDocument;
+
+/** The first block's attributes, as the editor's page holds them. */
+function firstAttributes(): unknown {
+  return (editor().document.nodes[0] as BlockNode & { attributes?: unknown })
+    .attributes;
+}
+
+function openAdvancedSection(): void {
+  const summary = screen.getByText("Advanced", { selector: "summary" });
+  if (!(summary.parentElement as HTMLDetailsElement).open) {
+    fireEvent.click(summary);
+  }
+}
+
+describe("what Advanced writes as it goes away", () => {
+  it("writes nothing more once Style has settled it, so an undo made there holds", async () => {
+    render(<Host page={ATTRIBUTED} />);
+    act(() => editor().select("first"));
+    openAdvancedSection();
+    // An id another block holds, refused and kept in the field with its
+    // reason, so what the panel holds stays apart from what is stored.
+    const id = screen.getByLabelText("CSS id");
+    fireEvent.change(id, { target: { value: "hero" } });
+    fireEvent.blur(id);
+    const value = screen.getByLabelText("Value of attribute 1");
+    act(() => (value as HTMLInputElement).focus());
+    fireEvent.change(value, { target: { value: "2" } });
+    leaveForStyle();
+    // The control: leaving for Style saved the attribute.
+    expect(firstAttributes()).toEqual({ "data-x": "2" });
+    await act(async () => {
+      await editor().undo();
+    });
+    expect(firstAttributes()).toEqual({ "data-x": "1" });
+    act(() => editor().select("second"));
+    openTab("Content");
+    expect(firstAttributes()).toEqual({ "data-x": "1" });
+  });
+
+  it("still writes a draft typed while it shows, when another block is selected straight away", () => {
+    render(<Host page={ATTRIBUTED} />);
+    act(() => editor().select("first"));
+    openAdvancedSection();
+    const value = screen.getByLabelText("Value of attribute 1");
+    act(() => (value as HTMLInputElement).focus());
+    fireEvent.change(value, { target: { value: "2" } });
+    act(() => editor().select("second"));
+    expect(firstAttributes()).toEqual({ "data-x": "2" });
+  });
+});
