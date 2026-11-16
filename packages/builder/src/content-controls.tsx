@@ -357,8 +357,13 @@ function SelectControl({
   // schema's open option keys rather than a declared field, so a block
   // already using `display` for something of its own keeps type-checking;
   // only the value "menu" means anything here.
+  // A menu, too, where the block declares what each choice writes: the menu
+  // is where that code is shown beside the words.
   const segmented =
     prop.schema.display !== "menu" &&
+    !prop.options.some(
+      option => optionCode(prop.schema, option) !== undefined
+    ) &&
     fitsSideBySide(labels, CONTENT_ROW) &&
     (stored === undefined || prop.options.includes(stored));
   if (segmented) {
