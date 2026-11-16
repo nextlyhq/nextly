@@ -38,6 +38,11 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
+import {
+  type SharedPartOf,
+  withWriteParts,
+  writeMovesSharedPart,
+} from "../../../hooks/hook-language";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import {
   inTransactionHandlersFor,
@@ -2217,7 +2222,41 @@ export class SingleMutationService extends BaseService {
     }
   }
 
+  /**
+   * Updates the Single, its hooks told whether the update moves the shared
+   * part (`writeMovesSharedPart`, from the Single's own fields), as they are
+   * told its languages.
+   */
   async update(
+    slug: string,
+    data: Record<string, unknown>,
+    rawOptions: UpdateSingleOptions = {}
+  ): Promise<SingleResult> {
+    const meta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger
+    );
+    const shared =
+      meta === null ||
+      meta === undefined ||
+      writeMovesSharedPart(
+        {
+          fields: (meta.fields ?? []) as unknown as SharedPartOf["fields"],
+          localized: meta.localized === true,
+          publishesPerLanguage: publishesPerLanguage(meta),
+          defaultLocale: this.localization?.defaultLocale,
+        },
+        data,
+        rawOptions.locale
+      );
+    return withWriteParts({ shared }, () =>
+      this.updateInParts(slug, data, rawOptions)
+    );
+  }
+
+  private async updateInParts(
     slug: string,
     data: Record<string, unknown>,
     // Named `rawOptions` because the body must not read it: the wildcard locale

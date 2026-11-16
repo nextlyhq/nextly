@@ -87,6 +87,11 @@ import { getEventBus } from "../../../events/event-bus";
 // marker as changing. Shared with the in-transaction phase, which marks one the
 // same way.
 import {
+  withWriteParts,
+  writeMovesSharedPart,
+  type WriteParts,
+} from "../../../hooks/hook-language";
+import {
   type InTransactionCall,
   inTransactionHandlersFor,
   markedDraft,
@@ -265,6 +270,7 @@ import {
 } from "../../i18n/localization-source";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
+import { publishesPerLanguage } from "../../i18n/per-language-storage";
 import {
   assertClaimsAllowed,
   provenanceClaimsOf,
@@ -2016,6 +2022,67 @@ interface RewriteInTx {
   grants: () => Promise<CallerGrants>;
   actor: RequestActor;
 }
+
+/** What an update of an entry is asked with. */
+type UpdateEntryParams = {
+  collectionName: string;
+  entryId: string;
+  user?: UserContext;
+  /**
+   * Who performed the write, recorded on the outbox event. Set by the
+   * transport; absent for internal writes, which record as `system`.
+   */
+  actor?: RequestActor;
+  overrideAccess?: boolean;
+  /**
+   * Which collections a trusted read may reach as relationships are expanded.
+   * Absent means every populated target inherits the caller's trust. Only ever
+   * narrows. See {@link RelatedRowReadContext.trusted}.
+   */
+  trusted?: TrustBound;
+  /** Write locale (i18n M5): translatable values are updated for this language only. */
+  locale?: string;
+  // Set by the REST dispatcher: route-level authorization already ran, so
+  // the collection re-check is skipped, but the response is still redacted
+  // to what this user may read (this is not a trusted-server read).
+  routeAuthorized?: boolean;
+  context?: Record<string, unknown>;
+  /** The HTTP request behind this operation, when one produced it. */
+  request?: Request;
+  /**
+   * Set when this write restores an earlier version, recording which one on
+   * the version it captures. Lineage cannot be inferred afterwards: a
+   * restore is an ordinary write that happens to reproduce an earlier state.
+   */
+  sourceVersionNo?: number;
+  /**
+   * The fields this write restored, and the version each came from, as
+   * server code states it. A client states it as `_restoredFrom` in the
+   * body, read below when this is absent.
+   *
+   * @experimental
+   */
+  restoredFrom?: FieldSources;
+  /**
+   * Set when this write restores a recorded save of a working draft: its
+   * content was never live, so on a published document it must be held as
+   * the working draft. Where the document can no longer hold one, the
+   * write is refused rather than applied to the live row.
+   */
+  requireHeldDraft?: boolean;
+  // The caller's authenticated scope. For a scoped API-key REST write the
+  // publish/unpublish transition gate judges the key's OWN grants, since the
+  // route only authorized `update` against the key's scope.
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * The batch this write's components and relationships are read in where
+   * it publishes, when a bulk write runs it with others: one read for them
+   * all rather than one per document.
+   *
+   * @internal
+   */
+  goingLiveBatch?: GoingLiveRelationsBatch;
+};
 
 export class CollectionMutationService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
@@ -15745,68 +15812,52 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * Updates an entry, its hooks told whether the update moves the shared part
+   * (`writeMovesSharedPart`, from the collection's own fields), as they are
+   * told its languages.
+   */
   async updateEntry(
+    rawParams: UpdateEntryParams,
+    body: Record<string, unknown>,
+    depth?: number
+  ): Promise<CollectionServiceResult> {
+    const parts = await this.writePartsOf(
+      rawParams.collectionName,
+      body,
+      rawParams.locale
+    );
+    return withWriteParts(parts, () =>
+      this.updateEntryInParts(rawParams, body, depth)
+    );
+  }
+
+  /** Whether an update of `body` in `locale` moves the collection's shared part. */
+  private async writePartsOf(
+    collectionName: string,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): Promise<WriteParts> {
+    const collection = await this.releaseCollection(collectionName);
+    if (collection === null) return { shared: true };
+    return {
+      shared: writeMovesSharedPart(
+        {
+          fields: collectionFields(collection),
+          localized: (collection as { localized?: unknown }).localized === true,
+          publishesPerLanguage: publishesPerLanguage(collection),
+          defaultLocale: this.localization?.defaultLocale,
+        },
+        body,
+        locale
+      ),
+    };
+  }
+
+  private async updateEntryInParts(
     // Named `rawParams` because the body must not read it: the wildcard locale
     // is resolved away into `params` at the top of the method. See there.
-    rawParams: {
-      collectionName: string;
-      entryId: string;
-      user?: UserContext;
-      /**
-       * Who performed the write, recorded on the outbox event. Set by the
-       * transport; absent for internal writes, which record as `system`.
-       */
-      actor?: RequestActor;
-      overrideAccess?: boolean;
-      /**
-       * Which collections a trusted read may reach as relationships are expanded.
-       * Absent means every populated target inherits the caller's trust. Only ever
-       * narrows. See {@link RelatedRowReadContext.trusted}.
-       */
-      trusted?: TrustBound;
-      /** Write locale (i18n M5): translatable values are updated for this language only. */
-      locale?: string;
-      // Set by the REST dispatcher: route-level authorization already ran, so
-      // the collection re-check is skipped, but the response is still redacted
-      // to what this user may read (this is not a trusted-server read).
-      routeAuthorized?: boolean;
-      context?: Record<string, unknown>;
-      /** The HTTP request behind this operation, when one produced it. */
-      request?: Request;
-      /**
-       * Set when this write restores an earlier version, recording which one on
-       * the version it captures. Lineage cannot be inferred afterwards: a
-       * restore is an ordinary write that happens to reproduce an earlier state.
-       */
-      sourceVersionNo?: number;
-      /**
-       * The fields this write restored, and the version each came from, as
-       * server code states it. A client states it as `_restoredFrom` in the
-       * body, read below when this is absent.
-       *
-       * @experimental
-       */
-      restoredFrom?: FieldSources;
-      /**
-       * Set when this write restores a recorded save of a working draft: its
-       * content was never live, so on a published document it must be held as
-       * the working draft. Where the document can no longer hold one, the
-       * write is refused rather than applied to the live row.
-       */
-      requireHeldDraft?: boolean;
-      // The caller's authenticated scope. For a scoped API-key REST write the
-      // publish/unpublish transition gate judges the key's OWN grants, since the
-      // route only authorized `update` against the key's scope.
-      authenticatedScope?: AuthenticatedScope;
-      /**
-       * The batch this write's components and relationships are read in where
-       * it publishes, when a bulk write runs it with others: one read for them
-       * all rather than one per document.
-       *
-       * @internal
-       */
-      goingLiveBatch?: GoingLiveRelationsBatch;
-    },
+    rawParams: UpdateEntryParams,
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {

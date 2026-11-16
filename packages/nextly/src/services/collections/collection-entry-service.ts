@@ -19,6 +19,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { withWriteParts } from "@nextly/hooks/hook-language";
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
 import type {
   RichTextOutputFormat,
@@ -37,7 +38,10 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { assertWellFormedFilter } from "../../domains/collections/query/filter-shape";
-import type { LifecycleParts } from "../../domains/collections/services/all-locales-lifecycle";
+import {
+  type LifecycleParts,
+  movesShared,
+} from "../../domains/collections/services/all-locales-lifecycle";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
@@ -805,9 +809,13 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
+    // A create writes the shared part as well as its language's.
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
-      () => this.mutationService.createEntry(params, body, depth)
+      () =>
+        withWriteParts({ shared: true }, () =>
+          this.mutationService.createEntry(params, body, depth)
+        )
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1064,9 +1072,13 @@ export class CollectionEntryService extends BaseService {
 
   /** The transition of every language (or of `params.parts`), judged by its own rules alone. */
   private async transitionEveryLanguage(params: EveryLanguageLifecycleParams) {
+    // Its hooks are told whether the transition moves the shared part.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
-      () => this.mutationService.publishAllLocales(params)
+      () =>
+        withWriteParts({ shared: movesShared(params.parts) }, () =>
+          this.mutationService.publishAllLocales(params)
+        )
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1227,7 +1239,10 @@ export class CollectionEntryService extends BaseService {
       params.parts === undefined
         ? everyLanguageOf(this.localization)
         : { locales: [...params.parts.locales] },
-      () => this.mutationService.unpublishAllLocales(params)
+      () =>
+        withWriteParts({ shared: movesShared(params.parts) }, () =>
+          this.mutationService.unpublishAllLocales(params)
+        )
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -1259,9 +1274,13 @@ export class CollectionEntryService extends BaseService {
     /** API-key scope; judges the delete gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
   }) {
+    // A delete removes the shared part with every language's.
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
-      () => this.mutationService.deleteEntry(params)
+      () =>
+        withWriteParts({ shared: true }, () =>
+          this.mutationService.deleteEntry(params)
+        )
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
