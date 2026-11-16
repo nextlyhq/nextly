@@ -106,6 +106,7 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
+import { keptWhileHidden } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { NeverQuote } from "./never-quote";
@@ -845,15 +846,14 @@ function SelectionInspector({
         </TabsList>
 
         {/*
-          FORCE-MOUNTED, because Content holds Advanced, and Advanced holds a
-          draft: unmounting it threw away what the author had typed and the
-          reason a refused row was not saved. HIDDEN here rather than left to
-          Radix, which ties mounting and visibility together — `forceMount`
-          alone would draw Content under Style as well — and `hidden` takes it
-          out of the accessibility tree exactly as an unmounted panel was.
+          FORCE-MOUNTED, because Advanced inside holds a draft: unmounting it
+          threw away what the author typed and why a refused row was not
+          saved. HIDDEN here, not by Radix, which ties mounting to showing
+          (`forceMount` alone draws Content under Style), and `hidden` takes
+          it out of the accessibility tree as an unmounted panel was.
         */}
         <TabsContent value="content" forceMount hidden={tab !== "content"}>
-          <HiddenContentTab
+          <ContentTab
             block={block}
             editor={editor}
             onCommit={commit}
@@ -891,27 +891,10 @@ function SelectionInspector({
 }
 
 /**
- * The Content tab, not rendered again while it is hidden.
- *
- * Kept mounted behind the other tabs, so what is typed in it is kept (see the
- * tab's own comment), but built for nothing nobody sees: a selection while
- * Style shows renders none of it. It renders once as it hides, which tells
- * Advanced it left the screen, and again when it shows, for the block then
- * selected. Its fields' handlers keep the block they were drawn for, so a
- * value committed from a hidden field lands on that block.
- */
-const HiddenContentTab: React.NamedExoticComponent<
-  React.ComponentProps<typeof ContentTab>
-> = React.memo(
-  ContentTab,
-  (before, after) => !before.onScreen && !after.onScreen
-);
-
-/**
  * The Content tab: the block's own fields, then its Advanced section with the
- * CSS id and custom attributes.
+ * CSS id and custom attributes. Not drawn again while another tab shows.
  */
-function ContentTab({
+const ContentTab = keptWhileHidden(function ContentTab({
   block,
   editor,
   onCommit: commit,
@@ -1045,7 +1028,7 @@ function ContentTab({
       </details>
     </>
   );
-}
+});
 
 /**
  * Where an edit lands, as the bar's second line says it: the devices the

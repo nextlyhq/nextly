@@ -51,7 +51,6 @@ import type { StyleTarget } from "./style-target";
  */
 export function StyleSections({
   sections,
-  nodeId,
   open,
   onOpen,
   readOnlyReason,
@@ -59,7 +58,6 @@ export function StyleSections({
   fit,
 }: {
   sections: readonly StyleSection[];
-  nodeId: string;
   open: string;
   onOpen: (group: string) => void;
   readOnlyReason: React.ComponentProps<
