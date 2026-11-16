@@ -1,0 +1,36 @@
+---
+title: CREATE_BLOCKED_BY_LEFTOVER_TABLE
+description: "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them."
+---
+
+## Cause
+
+A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.
+
+A create that was interrupted between building its tables and recording them leaves tables that no collection, field group or Single describes. A create never builds over such a leftover, since it would adopt columns it never made. When every table of the leftover is empty, the create drops them and builds its own. When it cannot tell the leftover is safe to drop, it refuses instead, names the tables, and changes nothing:
+
+- **Rows.** The leftover's main table, its translations table or one of its junction tables holds rows. The Why line names each table and how many rows it holds.
+- **Field-group rows.** For a Single, rows in the shared field-group tables still name its table as their parent, whether or not the table itself still stands. The Why line names them apart from the leftover's own tables.
+- **References.** A table that is not one of the create's own junction tables has a foreign key to the leftover.
+- **Taken names.** A table stands where the create would build a junction table but is not keyed as one.
+- **Views.** On PostgreSQL, a view reads one of the leftover's tables.
+
+## Fix
+
+Check the tables the message names. If they hold data you need, back it up first, or create the entity under another slug. Then:
+
+- For a table that holds rows, or one standing where the create would build, drop or rename it.
+- For a leftover other tables reference, drop those tables or their references to it, or rename the leftover table itself. Renaming a referencing table is not enough: under its new name it still references the leftover.
+- For rows in a shared field-group table, delete the rows the leftover left there: those whose `_parent_table` is the leftover table, and every row nested beneath them, which names its parent row instead. Keep the table: it belongs to a field group and holds other entities' rows.
+- For a view, drop it, or redefine it to read other tables. Renaming a view is not enough: under its new name it still reads the same tables.
+
+Then run the create again.
+
+## Example
+
+```text
+✗ Creating the Single "home" was refused.
+  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
+  Next: Drop or rename those tables, then retry the create.
+  Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)
+```

@@ -11,29 +11,7 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { asSentence, contextString, sentences } from "../messages";
-
-/**
- * A create refused over storage nothing registered owns, as its three parts. The refusal reads
- * "Creating the <kind> "<slug>" was refused: <what stands there>. <what to do>.", so the part before
- * the colon is what happened, the rest of that sentence why, and the last sentence what to do.
- */
-function leftoverStorageRefusal(error: NextlyError): CliErrorParts {
-  const parts = sentences(error.publicMessage);
-  const last = parts.length > 1 ? parts[parts.length - 1] : undefined;
-  const body = (last === undefined ? parts : parts.slice(0, -1)).join(" ");
-  const colon = body.indexOf(": ");
-  return {
-    what: colon === -1 ? body : `${body.slice(0, colon)}.`,
-    why:
-      colon === -1
-        ? "Tables, views or field-group rows that nothing registered owns are in its way."
-        : asSentence(body.slice(colon + 2)),
-    next:
-      last ??
-      "Drop or rename the tables the message names, then retry the create.",
-  };
-}
+import { contextString, sentences } from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -103,6 +81,29 @@ function invalidSchemaName(error: NextlyError): CliErrorParts {
     next:
       rule ||
       'Use lower-case letters, digits and underscores, starting with a letter or underscore (max 63 characters), and not beginning with "pg_".',
+  };
+}
+
+/**
+ * A create refused over tables nothing registered owns, as its three parts.
+ *
+ * `clearLeftoverStorage` writes 'Creating the <kind> "<slug>" was refused: <the tables and why
+ * they stay>. <what to drop or rename, then retry>.', so the message is split at its first
+ * `": "` and its last sentence rather than reworded, and the CLI and the server log keep one
+ * wording.
+ */
+function leftoverRefusal(error: NextlyError): CliErrorParts {
+  const message = error.publicMessage;
+  const colon = message.indexOf(": ");
+  const rest = sentences(colon === -1 ? "" : message.slice(colon + 2));
+  const next = rest.length > 1 ? rest[rest.length - 1] : undefined;
+  const why = (next === undefined ? rest : rest.slice(0, -1)).join(" ");
+  return {
+    what: colon === -1 ? message : `${message.slice(0, colon)}.`,
+    why:
+      why ||
+      "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
+    next: next ?? "Drop or rename the tables it names, then retry the create.",
   };
 }
 
@@ -298,6 +299,40 @@ export const SCHEMA_CODES = defineCodes({
       },
     ],
   },
+  // A create never builds over a table nothing registered owns: it drops an empty leftover, and
+  // refuses one that holds rows, is referenced from outside, or stands where it would build a
+  // junction or under a view. Each refusal names its tables and changes nothing.
+  CREATE_BLOCKED_BY_LEFTOVER_TABLE: {
+    cause:
+      "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.",
+    from: [
+      {
+        // A table of the leftover's family holds rows, or rows elsewhere name it as their parent.
+        code: "CONFLICT",
+        reason: "create-table-occupied",
+        describe: leftoverRefusal,
+      },
+      {
+        // A table that is not one of the create's own junctions references the leftover.
+        code: "CONFLICT",
+        reason: "create-table-referenced",
+        describe: leftoverRefusal,
+      },
+      {
+        // A table not keyed as the create's junction stands where it would build one.
+        code: "CONFLICT",
+        reason: "create-objects-taken",
+        describe: leftoverRefusal,
+      },
+      {
+        // A view reads one of the leftover's tables, and dropping or redefining the view is the
+        // remedy, not renaming the tables it reads.
+        code: "CONFLICT",
+        reason: "create-table-viewed",
+        describe: leftoverRefusal,
+      },
+    ],
+  },
   // A Schema Builder save writes a migration, so it asks the history checks
   // `nextly migrate` asks first; its refusal carries that command's own text.
   NEXTLY_MIGRATION_HISTORY_REFUSED: {
@@ -325,36 +360,6 @@ export const SCHEMA_CODES = defineCodes({
           why: "The column's type differs from what its field makes now, and a save converts only the columns its review showed.",
           next: "Review the save in the Schema Builder and confirm the conversion, or pass the column in `acknowledgedConversions`.",
         }),
-      },
-    ],
-  },
-  // A field group's or Single's create checks the storage it would build in first, and refuses
-  // when something nothing registered owns stands there: a table in its place, a leftover table
-  // others reference, one holding rows, or a view reading one. Each refusal names them and what
-  // to do.
-  CREATE_STORAGE_TAKEN: {
-    cause:
-      "A field group or Single would be created over tables, views or field-group rows that nothing registered owns.",
-    from: [
-      {
-        code: "CONFLICT",
-        reason: "create-objects-taken",
-        describe: leftoverStorageRefusal,
-      },
-      {
-        code: "CONFLICT",
-        reason: "create-table-referenced",
-        describe: leftoverStorageRefusal,
-      },
-      {
-        code: "CONFLICT",
-        reason: "create-table-occupied",
-        describe: leftoverStorageRefusal,
-      },
-      {
-        code: "CONFLICT",
-        reason: "create-table-viewed",
-        describe: leftoverStorageRefusal,
       },
     ],
   },

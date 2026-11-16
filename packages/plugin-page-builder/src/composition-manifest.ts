@@ -632,12 +632,14 @@ export function manifestRequestFrom(raw: unknown): ManifestRequest {
 /** The manifest route declaration. */
 export function manifestRoute(setup: ManifestSetup = {}): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: MANIFEST_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // Signed in is all reaching the route asks: each part is read only where
     // the caller may read its collection, and as the caller.
     handler: async (req, ctx) =>

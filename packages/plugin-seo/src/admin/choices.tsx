@@ -62,9 +62,13 @@ export const AI_CHOICES: readonly {
   },
 ];
 
-/** What the AI choices are, said once under them. */
+/**
+ * What the AI choices are, said once under them, and the one crawler no
+ * choice names: OpenAI's ads checker visits only pages the site submitted
+ * as ads, so asking it away would only stop OpenAI checking them.
+ */
 export const AI_CHOICES_NOTE =
-  "These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to use your pages for AI training also limits what Gemini can use from them. Google Search itself is not affected.";
+  "These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to use your pages for AI training also limits what Gemini can use from them. Google Search itself is not affected. No choice asks OpenAI's ads checker, OAI-AdsBot, to stay away: it visits only pages you submitted as ads in ChatGPT.";
 
 /**
  * A group of choice cards, each a radio button with its explanation: a card

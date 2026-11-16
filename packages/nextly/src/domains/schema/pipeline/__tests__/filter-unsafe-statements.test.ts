@@ -8,6 +8,7 @@ import {
   findUnexpectedDestructiveStatements,
   stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
+  stripKitDropsOfKeptColumns,
   stripKitDropsOfLiveUniqueConstraints,
 } from "../filter-unsafe-statements";
 import { liveIndexesStandingInForDeclared } from "../diff/index-util";
@@ -449,5 +450,33 @@ describe("stripKitDropsOfLiveUniqueConstraints", () => {
       kept: statements,
       strippedCount: 0,
     });
+  });
+});
+
+describe("stripKitDropsOfKeptColumns", () => {
+  const kept = [{ table: "dc_posts", name: "stamp" }];
+
+  it("leaves out the kit's drop of a kept column, in each dialect's spelling", () => {
+    const { kept: out, strippedCount } = stripKitDropsOfKeptColumns(
+      [
+        'ALTER TABLE "dc_posts" DROP COLUMN "stamp";',
+        "ALTER TABLE `dc_posts` DROP COLUMN `stamp`;",
+        'ALTER TABLE "dc_posts" ADD COLUMN "x" text;',
+      ],
+      kept
+    );
+    expect(out).toEqual(['ALTER TABLE "dc_posts" ADD COLUMN "x" text;']);
+    expect(strippedCount).toBe(2);
+  });
+
+  it("keeps a drop of another column, of the same name on another table, or in a statement doing more", () => {
+    const statements = [
+      'ALTER TABLE "dc_posts" DROP COLUMN "other";',
+      'ALTER TABLE "dc_notes" DROP COLUMN "stamp";',
+      'ALTER TABLE "dc_posts" DROP COLUMN "stamp", DROP COLUMN "other";',
+    ];
+    expect(stripKitDropsOfKeptColumns(statements, kept).kept).toEqual(
+      statements
+    );
   });
 });

@@ -116,3 +116,9 @@ describe("problemsHref", () => {
     );
   });
 });
+
+describe("a sitemap page robots.txt blocks", () => {
+  it("is an error, since what was set for it doesn't reach search", () => {
+    expect(KIND_SEVERITY.robotsBlocked).toBe("error");
+  });
+});

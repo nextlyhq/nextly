@@ -343,6 +343,7 @@ async function codeLevelOf(
 /** The route the SEO tab reads its levels from. */
 export function seoTabRoute(setup: SeoTabRouteSetup): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
@@ -350,6 +351,7 @@ export function seoTabRoute(setup: SeoTabRouteSetup): {
   return {
     method: "POST",
     path: SEO_RESOLVE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const body = await bodyOf(req);
       // Only the types this plugin adds SEO to have a tab to answer.

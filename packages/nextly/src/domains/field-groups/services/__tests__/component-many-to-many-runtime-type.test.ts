@@ -40,10 +40,11 @@ const LIST_RELATIONS = {
   },
 } as const;
 
+// The creating SQL spells the column as the desired schema does: both read the column descriptor.
 const EXPECTED = {
-  postgresql: { sql: "JSONB", runtime: "PgJsonb", desired: "jsonb" },
-  mysql: { sql: "JSON", runtime: "MySqlJson", desired: "json" },
-  sqlite: { sql: "TEXT", runtime: "SQLiteText", desired: "text" },
+  postgresql: { runtime: "PgJsonb", desired: "jsonb" },
+  mysql: { runtime: "MySqlJson", desired: "json" },
+  sqlite: { runtime: "SQLiteText", desired: "text" },
 } as const;
 
 function runtimeColumn(
@@ -75,13 +76,13 @@ describe.each(Object.keys(EXPECTED) as (keyof typeof EXPECTED)[])(
     const expected = EXPECTED[dialect];
 
     describe.each(Object.entries(LIST_RELATIONS))("%s", (_label, field) => {
-      it(`is ${expected.sql} in the creating SQL`, () => {
+      it(`is ${expected.desired} in the creating SQL`, () => {
         const type = /["`]tags["`]\s+(\S+?),?$/.exec(
           creatingSqlLine(dialect, field)
             .trim()
             .replace(/ NOT NULL/, "")
         )?.[1];
-        expect(type).toBe(expected.sql);
+        expect(type).toBe(expected.desired);
       });
 
       it(`is ${expected.runtime} in the runtime table drizzle-kit creates`, () => {

@@ -18,12 +18,14 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import { type ComponentType, useEffect, useState } from "react";
+import { type ComponentType, useContext, useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 import { useRetryableModule } from "@admin/hooks/useRetryableModule";
 import { retryableModule } from "@admin/lib/retryable-module";
 import type { PageProps } from "@admin/lib/routing";
+
+import { RouteLoadingOutline } from "./route-loading-outline";
 
 export type RouteModule = { default: ComponentType<PageProps> };
 
@@ -37,11 +39,25 @@ const SPINNER_DELAY_MS = 200;
  * page doesn't move when the spinner appears.
  */
 function RouteLoading() {
+  const outline = useContext(RouteLoadingOutline);
   const [slow, setSlow] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setSlow(true), SPINNER_DELAY_MS);
     return () => clearTimeout(timer);
   }, []);
+  // The screen's outline, as the frame drew it, is hidden from assistive
+  // technology; the wait is said beside it, at once, as below. After the
+  // outline and out of the flow, so the frame it draws is unchanged.
+  if (outline !== null) {
+    return (
+      <>
+        {outline}
+        <span role="status" aria-live="polite" className="sr-only">
+          Loading
+        </span>
+      </>
+    );
+  }
   return (
     <div
       role="status"

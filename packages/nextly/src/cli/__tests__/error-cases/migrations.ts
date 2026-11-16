@@ -3,6 +3,7 @@
  *
  * @module cli/__tests__/error-cases/migrations
  */
+import { tableBusyError } from "../../../domains/schema/busy-table/report";
 import { assertNoLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import {
@@ -10,6 +11,7 @@ import {
   resolveDataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
+import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
 import {
   assertNotPartiallyApplied,
   concurrentRunError,
@@ -175,6 +177,38 @@ export const MIGRATION_CASES = {
       },
     });
   },
+  // As `tableBusyError` builds it once a migration's tries for a busy table run out with nothing
+  // of the file left, the holder a PostgreSQL session.
+  TABLE_BUSY: () =>
+    tableBusyError({
+      change: "20261020_120000_add_posts.sql",
+      ended: {
+        table: "dc_posts",
+        holder: {
+          kind: "named",
+          sessions: [
+            {
+              id: "4242",
+              user: "app",
+              clientAddress: "10.0.0.5",
+              applicationName: "worker",
+              transactionOpenSeconds: 180,
+            },
+          ],
+          unreadable: [],
+        },
+      },
+      tries: 7,
+      elapsedMs: 89_600,
+      appliedBefore: ["20261019_090000_add_tags.sql"],
+      outcome: { kind: "nothing-changed" },
+      cause: "table-busy",
+      endedAtLease: false,
+    }),
+  // As `ownWriteLockError` builds it once a migration file's transaction meets a write, made inside
+  // it on another connection, that waited for the transaction's own lock.
+  LOCK_HELD_BY_THIS_PROCESS: () =>
+    ownWriteLockError("20261020_120000_add_posts.sql"),
   DATA_LOSS_CONSENT_REQUIRED: async () =>
     dataLossRefusal(await refusedVerdict(undefined)),
   DATA_LOSS_CONSENT_NOT_COVERED: async () =>

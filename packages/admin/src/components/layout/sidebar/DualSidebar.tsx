@@ -13,10 +13,12 @@ import {
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import {
   NAV_COLLECTIONS_PARAMS,
-  NAV_SINGLES_PARAMS,
   useCollections,
+} from "@admin/hooks/queries/useCollections";
+import {
+  NAV_SINGLES_PARAMS,
   useSingles,
-} from "@admin/hooks/queries";
+} from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";

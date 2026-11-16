@@ -69,6 +69,7 @@ export type {
   StoragePlugin,
   // Client upload types
   ClientUploadData,
+  ClientUploadOptions,
   // Adapter interface
   IStorageAdapter,
   BulkDeleteResult,

@@ -85,8 +85,9 @@ vi.mock("./site-style-read", () => ({
 // No `useSingleDocument` here: the editor must not read the Single, which an
 // author without Design's permission is refused, so a read of it fails.
 // The admin's own sentence for a refusal, as a surface reads it.
-const { apiErrorMessage } =
-  await vi.importActual<typeof import("@nextlyhq/admin")>("@nextlyhq/admin");
+const { apiErrorMessage } = await vi.importActual<
+  typeof import("@nextlyhq/admin/kit")
+>("@nextlyhq/admin/kit");
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   apiErrorMessage,

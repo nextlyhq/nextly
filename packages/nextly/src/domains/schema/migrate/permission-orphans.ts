@@ -82,8 +82,30 @@ function everyPermission(
 export function permissionsDeclaredBy(
   snapshot: SnapshotPart | null
 ): { action: string; resource: string }[] | undefined {
+  return declarationsOf(snapshot)?.declared;
+}
+
+/** What a snapshot declares: every permission, whoever owns it, and the plugins it records. */
+export interface SnapshotDeclarations {
+  /** Every permission it declares, by action and resource. */
+  declared: { action: string; resource: string }[];
+  /** The plugins it records, whose permissions it says. */
+  plugins: ReadonlySet<string>;
+}
+
+/**
+ * What `snapshot` declares, or undefined where it says nothing about
+ * permissions: the point a rollback returns to, read as its source.
+ */
+export function declarationsOf(
+  snapshot: SnapshotPart | null
+): SnapshotDeclarations | undefined {
   const record = declaredBy(snapshot);
-  return record === undefined ? undefined : everyPermission(record);
+  if (record === undefined) return undefined;
+  return {
+    declared: everyPermission(record),
+    plugins: new Set(Object.keys(record.plugins)),
+  };
 }
 
 /** What a record declares for each plugin it records. */

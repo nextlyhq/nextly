@@ -21,14 +21,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import {
-  LINKS_PLUGIN,
+  LINKS_OWNER,
   LINKS_TABLE,
   MARKER_COLUMN,
   MARKER_PLUGIN,
   SETTINGS,
   TAGS,
   TAGS_TABLE,
-  linksPlugin,
+  linksToTags,
   markerPlugin,
   plainTags,
   settings,
@@ -272,16 +272,19 @@ describeEachDialect(
       expect(await migrationFiles()).toEqual(before);
     });
 
-    it("refuses to drop a collection a plugin's declared foreign key points at", async () => {
-      await generate(dialect, "initial", {
+    it("refuses to drop a collection a declared foreign key points at", async () => {
+      // The app's own table holds the key: a plugin's key to a collection's table is refused.
+      const links = { schema: { extend: [linksToTags] } };
+      const initial = await generate(dialect, "initial", {
         collections: [plainTags],
-        plugins: [linksPlugin],
+        db: links,
       });
+      expect(initial).toEqual({ exited: undefined, errors: [] });
       const before = await migrationFiles();
 
       const run = await generate(dialect, "drop_tags", {
         collections: [],
-        plugins: [linksPlugin],
+        db: links,
       });
 
       expect(run.exited).toBe("process.exit(1)");
@@ -290,7 +293,7 @@ describeEachDialect(
         `"${TAGS}" cannot be deleted while other schema depends on it.`
       );
       expect(logged).toContain(
-        `Foreign keys that point at its tables: "fk_${LINKS_TABLE}_tag_id" on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}").`
+        `Foreign keys that point at its tables: "fk_${LINKS_TABLE}_tag_id" on "${LINKS_TABLE}" (${LINKS_OWNER}).`
       );
       expect(await migrationFiles()).toEqual(before);
     });

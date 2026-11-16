@@ -547,6 +547,80 @@ describe.each(getConfiguredTestDialects())(
       expect(later[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
     }, 120_000);
 
+    it("holds the deletion email's record for a report started beside it, however long the report takes to begin", async () => {
+      // The report reads whether a table exists before it erases anything. A
+      // record that arrived while it read must still wait for the report, as
+      // one arriving later does: written beside it on the plugin's connection,
+      // a failing insert there aborts the transaction under the report's next
+      // statement. The read is held here, through whichever of the adapter's
+      // two lookups the report asks, so the record has every chance to go
+      // first, and the test reads the order rather than racing it.
+      const t = await boot(dialect);
+      const gone = await person("acc_report_slow_start");
+      const adapter = t.adapter as typeof t.adapter & {
+        tableExistsThrough(tx: unknown, table: string): Promise<boolean>;
+      };
+      const viaPool = adapter.tableExists.bind(adapter);
+      const viaTx = adapter.tableExistsThrough.bind(adapter);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let probed = false;
+      adapter.tableExists = async (table: string) => {
+        probed = true;
+        await held;
+        return viaPool(table);
+      };
+      adapter.tableExistsThrough = async (tx: unknown, table: string) => {
+        probed = true;
+        await held;
+        return viaTx(tx, table);
+      };
+      const order: string[] = [];
+
+      try {
+        const written = await added(t, async () => {
+          const work = plugin().db.transaction(async tx => {
+            await Promise.all([
+              plugin()
+                .principals!.reportDeleted(gone, { tx })
+                .then(() => order.push("report")),
+              plugin()
+                .services.email.sendWithTemplate(
+                  "accounts-deleted",
+                  SHARED,
+                  {},
+                  { person: gone }
+                )
+                .then(() => order.push("send")),
+            ]);
+          });
+          // Long beside the send's own few round trips: a record that did not
+          // wait for the report is written, and its send resolved, by then.
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          order.push("released");
+          release();
+          await work;
+        });
+
+        // The probe was the one held: the report did read through it.
+        expect(probed).toBe(true);
+        // On PostgreSQL a failed statement aborts the transaction, so the
+        // record waits for the report's statements before it writes. MySQL
+        // keeps a transaction usable after one, and SQLite runs each write
+        // in turn, so there the record need not wait; on every dialect both
+        // commit and the record is erased.
+        if (dialect === "postgresql") expect(order[0]).toBe("released");
+        expect(written).toHaveLength(1);
+        expect(written[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
+      } finally {
+        release();
+        adapter.tableExists = viaPool;
+        adapter.tableExistsThrough = viaTx;
+      }
+    }, 120_000);
+
     it("keeps the deletion when the deletion email's record fails in the reporting transaction", async () => {
       // The provider is removed after the send resolved it and before its
       // record is written, so the first insert breaks the provider reference

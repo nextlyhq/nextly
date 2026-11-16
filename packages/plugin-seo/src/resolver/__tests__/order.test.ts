@@ -104,15 +104,93 @@ describe("who wins, for the description", () => {
 });
 
 describe("the social card", () => {
-  it("takes its own title from the first level that sets one", () => {
+  // The social text's own order: what a person typed for the card, then
+  // what they typed for search, then the route's card, then the design's,
+  // then the search value as the main order works it out. Each row takes
+  // the candidates above it away, so the next one wins.
+  describe.each([
+    ["title", "socialTitle"],
+    ["description", "socialDescription"],
+  ] as const)("for the %s", (key, social) => {
+    const every: Levels = {
+      ...none,
+      page: { [social]: "Typed for sharing", [key]: "Typed for search" },
+      code: { [social]: "The route's card", [key]: "The route's own" },
+      template: { [social]: "The design's card" },
+      site: { [key]: "The site's" },
+    };
+    it.each([
+      ["the card text a person typed", "Typed for sharing", "page", every],
+      [
+        "the search text a person typed",
+        "Typed for search",
+        "page",
+        { ...every, page: { [key]: "Typed for search" } },
+      ],
+      [
+        "the route's card text",
+        "The route's card",
+        "code",
+        { ...every, page: {} },
+      ],
+      [
+        "the design's card text",
+        "The design's card",
+        "template",
+        { ...every, page: {}, code: { [key]: "The route's own" } },
+      ],
+      [
+        "the search text as the order works it out",
+        "The route's own",
+        "code",
+        {
+          ...every,
+          page: {},
+          code: { [key]: "The route's own" },
+          template: {},
+        },
+      ],
+    ] as const)(
+      "%s wins when nothing above has one",
+      (_, value, from, levels) => {
+        expect(resolveOrder(levels)[social]).toEqual({ value, from });
+      }
+    );
+  });
+
+  it("shows a typed title where the route copies its heading into the card", () => {
     const answer = resolveOrder({
       ...none,
-      page: { title: "Typed" },
-      template: { socialTitle: "Card title" },
+      page: { title: "How we price our plans" },
+      code: { title: "Blog", socialTitle: "Blog" },
     });
     expect(answer.socialTitle).toEqual({
-      value: "Card title",
-      from: "template",
+      value: "How we price our plans",
+      from: "page",
+    });
+  });
+
+  it("keeps the route's own card text where nothing is typed for the page", () => {
+    const answer = resolveOrder({
+      ...none,
+      code: { title: "Blog", socialTitle: "Read the Acme blog" },
+      pattern: { title: { value: "Blog | Acme", pattern: "{Title} | X" } },
+    });
+    expect(answer.socialTitle).toEqual({
+      value: "Read the Acme blog",
+      from: "code",
+    });
+  });
+
+  it("passes over blank typed text to the next candidate", () => {
+    const answer = resolveOrder({
+      ...none,
+      page: { socialTitle: "  ", title: " " },
+      code: { socialTitle: "The route's card" },
+    });
+    expect(answer.socialTitle).toEqual({
+      value: "The route's card",
+      from: "code",
     });
   });
 

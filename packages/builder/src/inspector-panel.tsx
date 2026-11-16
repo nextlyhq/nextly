@@ -108,6 +108,7 @@ import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
+import { NeverQuote } from "./never-quote";
 import { useCanvasTokenModeAt } from "./prefers-dark";
 import {
   propGroupsOf,
@@ -970,6 +971,15 @@ function ContentTab({
         editor={editor}
         nodeId={block.nodeId}
         services={services}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
+      {/* Whether search engines may quote the block's text: after Show when,
+          before Advanced, as the design draws the Content tab. Drawn only on
+          a Section or a Box. */}
+      <NeverQuote
+        editor={editor}
+        nodeId={block.nodeId}
         heldBy={designLocked}
         reasonId={reasonId}
       />
