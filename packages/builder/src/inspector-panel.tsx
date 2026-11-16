@@ -853,7 +853,7 @@ function SelectionInspector({
           out of the accessibility tree exactly as an unmounted panel was.
         */}
         <TabsContent value="content" forceMount hidden={tab !== "content"}>
-          <ContentTab
+          <HiddenContentTab
             block={block}
             editor={editor}
             onCommit={commit}
@@ -889,6 +889,21 @@ function SelectionInspector({
     </div>
   );
 }
+
+/**
+ * The Content tab, not rendered again while it is hidden.
+ *
+ * Kept mounted behind the other tabs, so what is typed in it is kept (see the
+ * tab's own comment), but built for nothing nobody sees: a selection while
+ * Style shows renders none of it. It renders once as it hides, which tells
+ * Advanced it left the screen, and again when it shows, for the block then
+ * selected. Its fields' handlers keep the block they were drawn for, so a
+ * value committed from a hidden field lands on that block.
+ */
+const HiddenContentTab = React.memo(
+  ContentTab,
+  (before, after) => !before.onScreen && !after.onScreen
+);
 
 /**
  * The Content tab: the block's own fields, then its Advanced section with the
