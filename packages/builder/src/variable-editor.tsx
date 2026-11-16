@@ -650,7 +650,11 @@ function ColourValue({
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
-  const hex = shown ?? colourHexOf(value, undefined);
+  const { hex, paint, invalid, said } = colourFieldState(
+    text.trim(),
+    value,
+    shown
+  );
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
@@ -661,15 +665,17 @@ function ColourValue({
           <span
             className="nx-vars__swatch"
             aria-hidden="true"
-            style={swatchStyle(hex)}
+            data-invalid={invalid ? "" : undefined}
+            style={swatchStyle(paint)}
           />
         ) : (
           <button
             type="button"
             className="nx-vars__swatch nx-vars-editor__swatch"
-            aria-label={`Pick the ${label.toLowerCase()} colour`}
+            data-invalid={invalid ? "" : undefined}
+            aria-label={`Pick the ${label.toLowerCase()} colour${said}`}
             aria-expanded={picking}
-            style={swatchStyle(hex)}
+            style={swatchStyle(paint)}
             onClick={() => {
               if (picking) {
                 flush();
@@ -684,10 +690,17 @@ function ColourValue({
           className="nx-vars-editor__mono"
           // A value, not words: no list of earlier entries over the field.
           autoComplete="off"
-          aria-invalid={refusedBy === undefined ? undefined : true}
+          aria-invalid={refusedBy === undefined && !invalid ? undefined : true}
           aria-describedby={refusedBy}
           value={text}
-          onChange={event => setText(event.currentTarget.value)}
+          onChange={event => {
+            setText(event.currentTarget.value);
+            // Typing takes over from a picker gesture: its colour is no
+            // longer shown, and closing the picker writes nothing over the
+            // typed text.
+            draft.current = null;
+            setShown(null);
+          }}
           readOnly={readOnly}
           onBlur={event => {
             const next = event.currentTarget.value.trim();
@@ -709,7 +722,10 @@ function ColourValue({
       {picking ? (
         <ColorPicker
           className="nx-vars-editor__picker"
-          color={hex ?? "#000000"}
+          // A value the picker cannot read starts it from white, not from
+          // black, which it would claim the value is; opaque, so a colour
+          // picked from there is seen.
+          color={hex ?? NO_COLOUR}
           showAlpha
           onColorChange={next => {
             draft.current = next;
@@ -719,6 +735,61 @@ function ColourValue({
       ) : null}
     </div>
   );
+}
+
+/** Where the picker starts for a value it cannot read: white. */
+const NO_COLOUR = "#ffffff";
+
+/**
+ * What a colour field shows for the text in it: the colour the picker reads,
+ * what the swatch paints, and whether the text is no colour at all.
+ *
+ * The swatch follows what is typed, so a value that is not a colour shows as
+ * one at once, rather than as the last colour or as black. It is painted only
+ * with a colour resolved here (`colourHexOf`), as every swatch is: `var()`,
+ * `currentcolor` or `inherit` painted in the panel would take the panel's
+ * colours rather than the site's. A colour the browser reads but this package
+ * cannot resolve (`oklch()`, a named colour, a variable) leaves the swatch
+ * empty and unmarked; only text no browser reads as a colour is marked
+ * invalid, and said so in the swatch button's name. While a picker gesture is
+ * under way, the picker's colour is what is shown, and the text is not judged.
+ */
+function colourFieldState(
+  typed: string,
+  value: string,
+  shown: string | null
+): {
+  hex: string | undefined;
+  paint: string | undefined;
+  invalid: boolean;
+  said: string;
+} {
+  const current = typed === "" ? value : typed;
+  const resolved = colourHexOf(current, undefined);
+  const invalid =
+    shown === null &&
+    typed !== "" &&
+    resolved === undefined &&
+    !isCssColour(current);
+  const hex = shown ?? resolved;
+  return {
+    hex,
+    paint: hex,
+    invalid,
+    said: invalid ? " (not a valid colour)" : "",
+  };
+}
+
+/**
+ * Whether the browser reads `text` as a CSS colour: any colour a stylesheet
+ * takes, beyond the hex and `rgb()` the picker reads. False where the
+ * browser cannot say.
+ */
+function isCssColour(text: string): boolean {
+  const css = globalThis.CSS as { supports?: unknown } | undefined;
+  return typeof css?.supports === "function"
+    ? CSS.supports("color", text)
+    : false;
 }
 
 /** The dark value: its field, or a line saying it follows light. */
