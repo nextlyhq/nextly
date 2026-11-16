@@ -2,14 +2,14 @@
  * Whether a Single's or field group's Schema Builder save is one only its dialog's push applies,
  * rather than the migration file the save writes.
  *
- * @module dispatcher/helpers/push-carries-values
+ * @module domains/schema/builder-save/push-carries-values
  */
-import { fieldsLeavingTranslationUnder } from "../../domains/i18n/migration/archive-preflight";
-import { fieldsJoiningTranslation } from "../../domains/i18n/migration/field-joins-translation";
-import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
-import type { TableSpec } from "../../domains/schema/pipeline/diff/types";
-import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
-import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { fieldsLeavingTranslationUnder } from "../../i18n/migration/archive-preflight";
+import { fieldsJoiningTranslation } from "../../i18n/migration/field-joins-translation";
+import type { FieldRename } from "../../i18n/migration/reconcile-companion";
+import type { TableSpec } from "../pipeline/diff/types";
+import { reachesRelationStorage } from "../pipeline/recorded-shapes";
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,

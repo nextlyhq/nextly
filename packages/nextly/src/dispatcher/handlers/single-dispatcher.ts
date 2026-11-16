@@ -54,6 +54,7 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
@@ -129,7 +130,6 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
-import { pushCarriesValues } from "../helpers/push-carries-values";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   offsetPaginationToMeta,
