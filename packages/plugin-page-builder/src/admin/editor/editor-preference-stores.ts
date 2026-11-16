@@ -41,3 +41,17 @@ export function checklistStoreFor(
     ? undefined
     : devicePreferenceStore(`${CHECKLIST_STORAGE_KEY}:${userId}`);
 }
+
+/**
+ * Where the Design panel's folded groups are kept: under the author's own
+ * key, so a group one author folds stays folded for them on this site
+ * across reloads, and another author's panel opens as they left it. With no
+ * author known there is none, and every group opens.
+ */
+export function designFoldsStoreFor(
+  userId: string | null
+): PreferenceStore | undefined {
+  return userId === null
+    ? undefined
+    : devicePreferenceStore(`nx-pb-design-folds:${userId}`);
+}

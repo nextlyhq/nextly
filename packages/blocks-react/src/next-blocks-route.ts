@@ -44,6 +44,7 @@ import { resolveLucideIcon } from "./icons/lucide";
 import {
   hasDefaultColumnGap,
   imageSizingFor,
+  siteSizesBlocks,
   type ImageCopies,
 } from "./image-slot";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
@@ -786,7 +787,10 @@ export function blocksRouteConfig(
             (page.prepared?.presented ?? document).nodes,
             // Columns divide an image's slot only under the gap the bound
             // knows; a site with its own leaves their images the row's width.
-            hasDefaultColumnGap(siteStyles?.tokens)
+            hasDefaultColumnGap(siteStyles?.tokens),
+            // A block's own width bounds its images only where no class or
+            // block default of the site's can draw it wider.
+            siteSizesBlocks(siteStyles)
           ),
         },
         blocks: resolver,

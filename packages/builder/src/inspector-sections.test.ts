@@ -104,6 +104,7 @@ describe("which tier shows without being asked", () => {
     expect([...tiers].sort()).toEqual([
       "common",
       "common-on-media",
+      "focus-state",
       "icon-drawn",
       "more",
       "state",
@@ -164,5 +165,19 @@ describe("which tier shows without being asked", () => {
   it("shows transition in a state", () => {
     expect(tierShows("state", plain)).toBe(false);
     expect(tierShows("state", { ...plain, state: "hover" })).toBe(true);
+  });
+
+  it("puts outline in Border behind More, shown unasked in the Focus state", () => {
+    // A focus ring is what an outline is mostly for, so it is offered where
+    // the focused look is edited and waits behind More everywhere else.
+    const outline = placementOf("outline", "border");
+    expect(outline.section).toBe("border");
+    expect(outline.tier).toBe("focus-state");
+    expect(outline.order).toBeGreaterThan(
+      placementOf("borderRadius", "border").order
+    );
+    expect(tierShows("focus-state", plain)).toBe(false);
+    expect(tierShows("focus-state", { ...plain, state: "hover" })).toBe(false);
+    expect(tierShows("focus-state", { ...plain, state: "focus" })).toBe(true);
   });
 });

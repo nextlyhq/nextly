@@ -1004,6 +1004,40 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     summary:
       "Corner rounding: one radius for all corners, or per logical corner.",
   },
+  {
+    property: "outline",
+    group: "border",
+    appliesWhen: ["always"],
+    flag: "outline",
+    // Drawn outside the border and taking no space, so setting one never
+    // moves the layout: what a focus ring needs. The offset moves it out, or
+    // in over the box's edge when negative.
+    shape: {
+      kind: "object",
+      fields: {
+        width: dimension("outline-width", {
+          keywords: ["thin", "medium", "thick"],
+        }),
+        style: keyword("outline-style", [
+          // The browser's own focus ring, in its colour and shape.
+          "auto",
+          "none",
+          "solid",
+          "dashed",
+          "dotted",
+          "double",
+          "groove",
+          "ridge",
+          "inset",
+          "outset",
+        ]),
+        color: color("outline-color"),
+        offset: dimension("outline-offset", { allowNegative: true }),
+      },
+    },
+    summary:
+      "A line drawn outside the border that takes no space, such as a focus ring.",
+  },
 
   // --- shadow
   {
