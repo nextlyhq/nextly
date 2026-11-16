@@ -9,7 +9,11 @@
  * Registration is where definition rules are enforced — a malformed block fails
  * at boot with a named error rather than producing broken pages later.
  */
-import type { AnyBlockDefinition, BlockSupports } from "./block";
+import {
+  propPlacementRefusal,
+  type AnyBlockDefinition,
+  type BlockSupports,
+} from "./block";
 import {
   COMPONENT_INSTANCE_TYPE,
   CONDITION_HIDDEN_TYPE,
@@ -193,6 +197,11 @@ function assertValidPropRoles(def: AnyBlockDefinition): void {
         `block "${def.name}" prop "${propName}" role must be "content", or left out.`
       );
     }
+    // Where the prop is edited: a tab and section it can be drawn in.
+    const placement = isPlainRecord(schema)
+      ? propPlacementRefusal(def.name, propName, schema)
+      : undefined;
+    if (placement !== undefined) fail("NEXTLY_BLOCK_INVALID", placement);
   }
 }
 
