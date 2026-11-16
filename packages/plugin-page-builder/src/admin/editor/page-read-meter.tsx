@@ -306,10 +306,10 @@ type MakeCount = (signal: AbortSignal) => Promise<PageReadReport>;
  *   answers would otherwise leave it counting for good.
  * - **A count given up on stops the counting.** The meter says the count
  *   could not be made, and no count is made again until Retry, which aborts
- *   the one given up on: one started after each deadline would leave a
- *   stalled count running for every 20 seconds the page stays open. Should
- *   the count given up on answer after all, its answer is told if the page
- *   has not changed since it began.
+ *   the one given up on, as an edit does: one started after each deadline
+ *   would leave a stalled count running for every 20 seconds the page stays
+ *   open. Should the count given up on answer after all, its answer is told
+ *   if the page has not changed since it began.
  * - **A failure is said.** A count that fails is told as one that could not
  *   be made.
  */
@@ -345,7 +345,10 @@ class CountScheduler {
   changed(make: MakeCount): void {
     this.make = make;
     if (this.stopped) {
+      // The count given up on is stopped too: its draw would otherwise go on
+      // while the author works, for an answer the change has made stale.
       this.changedSince = true;
+      this.controller?.abort();
       return;
     }
     if (this.inFlight !== 0) this.stopCount();

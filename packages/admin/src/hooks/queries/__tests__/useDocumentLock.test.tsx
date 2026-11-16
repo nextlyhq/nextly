@@ -125,7 +125,7 @@ describe("useDocumentLock", () => {
     });
   });
 
-  it("renders the editor again on no renewal that changes nothing it shows", async () => {
+  it("does not render the editor again on a renewal that changes nothing it shows", async () => {
     // An open editor renews every beat while its author is idle; a render
     // per beat would redraw the editor around a page nobody is changing.
     let renders = 0;

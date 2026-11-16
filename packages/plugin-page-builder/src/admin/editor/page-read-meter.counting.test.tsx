@@ -296,8 +296,12 @@ describe("an editor that renders more often than the count waits", () => {
         />
       );
       await wait(2000);
-      // Rested, the count is handed to the browser's idle time, not made.
+      // Rested, the count is handed to the browser's idle time, not made,
+      // with a second's limit so a busy page is still counted.
       expect(asked).toHaveBeenCalledTimes(1);
+      expect(asked).toHaveBeenCalledWith(expect.any(Function), {
+        timeout: 1000,
+      });
       expect(countWithStages).not.toHaveBeenCalled();
       act(() => idle[0]?.());
       await settle();
@@ -389,11 +393,11 @@ describe("a page changing all the while its counts are slow", () => {
     );
   });
 
-  it("starts no count after giving up, however the page changes, until Retry aborts the one given up on", async () => {
-    countWithStages.mockImplementation(
-      () => new Promise<PageReadReport>(() => undefined)
-    );
-    const changeFor = changingMeter();
+  /** A count that never answers, its draw begun and held; the draw. */
+  async function givenUpDraw(): Promise<{
+    drawing: Promise<void>;
+    ended: ReturnType<typeof vi.fn>;
+  }> {
     await wait(2000);
     // The count, begun at two seconds, drawing the page: the draw it was
     // handed, begun and held, as one whose block never settles is.
@@ -410,13 +414,19 @@ describe("a page changing all the while its counts are slow", () => {
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
     );
-    // A minute more of changes: still the one count, given up on, and its
-    // draw still held.
-    await changeFor(60_000);
-    expect(countWithStages).toHaveBeenCalledTimes(1);
-    expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+    return { drawing, ended };
+  }
+
+  it("starts no count after giving up until Retry, which aborts the one given up on", async () => {
+    countWithStages.mockImplementation(
+      () => new Promise<PageReadReport>(() => undefined)
     );
+    changingMeter();
+    const { drawing, ended } = await givenUpDraw();
+    // A minute more, the page unchanged: still the one count, its draw held
+    // in case it answers after all.
+    await wait(60_000);
+    expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(draws[0]?.signal?.aborted).toBe(false);
     expect(ended).not.toHaveBeenCalled();
     fireEvent.click(meter());
@@ -425,6 +435,26 @@ describe("a page changing all the while its counts are slow", () => {
     expect(draws[0]?.signal?.aborted).toBe(true);
     await expect(drawing).rejects.toThrow();
     expect(draws[0]?.ended).toBe("aborted");
+    await wait(0);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the draw of a count given up on once the page changes, and counts again only on Retry", async () => {
+    countWithStages.mockImplementation(
+      () => new Promise<PageReadReport>(() => undefined)
+    );
+    const changeFor = changingMeter();
+    const { drawing } = await givenUpDraw();
+    // The author goes on working: the stalled draw is stopped, so it never
+    // finishes under their hands, and no new count is begun.
+    await changeFor(60_000);
+    expect(draws[0]?.signal?.aborted).toBe(true);
+    await expect(drawing).rejects.toThrow();
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    fireEvent.click(meter());
     await wait(0);
     expect(countWithStages).toHaveBeenCalledTimes(2);
   });
@@ -458,6 +488,21 @@ describe("a count given up on that answers after all", () => {
     // It answers at twenty-seven, the page unchanged since it began.
     await wait(5000);
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+  });
+
+  it("goes on counting after its late answer is shown", async () => {
+    lateCount();
+    const fresh = () => ({ ...drawnWith }) as CountedDrawing;
+    const view = render(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    await wait(27_000);
+    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    view.rerender(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    await wait(2000);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
   });
 
   it("is not shown where the page changed since it began", async () => {
@@ -588,5 +633,59 @@ describe("a count stopped by a change that then fails", () => {
     expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
     await wait(1000);
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+  });
+});
+
+describe("a count stopped by an edit that answers anyway", () => {
+  it("is never shown, even once a later count is given up on", async () => {
+    countWithStages
+      // Takes no notice of the abort, and answers 25 seconds on.
+      .mockImplementationOnce(
+        () =>
+          new Promise<PageReadReport>(resolve => {
+            setTimeout(() => resolve(counted), 25_000);
+          })
+      )
+      // Never answers.
+      .mockImplementationOnce(
+        () => new Promise<PageReadReport>(() => undefined)
+      );
+    const fresh = () => ({ ...drawnWith }) as CountedDrawing;
+    const view = render(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    // The first count begins at two seconds; an edit at 2.5 stops it.
+    await wait(2500);
+    view.rerender(
+      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+    );
+    // The second begins at 4.5 and is given up on at 24.5.
+    await wait(22_100);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+    // The first answers at 27, of a page that has changed since: not shown.
+    await wait(3000);
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Couldn't count page reads. Retry"
+    );
+  });
+});
+
+describe("a meter that closes", () => {
+  it("starts no count once it has gone", async () => {
+    countWithStages.mockResolvedValue(counted);
+    const view = render(
+      <PageReadMeter
+        editor={editor}
+        drawnWith={drawnWith}
+        regions={NO_REGIONS}
+      />
+    );
+    await wait(1000);
+    view.unmount();
+    await wait(5000);
+    expect(countWithStages).not.toHaveBeenCalled();
   });
 });
