@@ -157,18 +157,15 @@ describe("the overview's libraries", () => {
     const patterns = screen.getByTestId("overview-library-patterns");
     expect(
       within(patterns)
-        .getByRole("link", { name: "Patterns" })
+        .getByRole("link", { name: "Saved sections" })
         .getAttribute("href")
     ).toBe("/admin/collections/patterns");
     expect(
       within(patterns).getByTestId("overview-library-count").textContent
     ).toBe("12");
-    expect(patterns.textContent).toContain(
-      "Starting points an editor inserts, then changes freely"
-    );
     expect(
       within(patterns)
-        .getByRole("link", { name: "New pattern" })
+        .getByRole("link", { name: "New saved section" })
         .getAttribute("href")
     ).toBe("/admin/collections/patterns/create");
 
@@ -176,7 +173,7 @@ describe("the overview's libraries", () => {
     const templates = screen.getByTestId("overview-library-templates");
     expect(
       within(templates)
-        .getByRole("link", { name: "New template" })
+        .getByRole("link", { name: "New collection template" })
         .getAttribute("href")
     ).toBe("/admin/collections/site-templates/create");
 
@@ -187,6 +184,39 @@ describe("the overview's libraries", () => {
         ).textContent
     );
     expect(counts).toEqual(["12", "8", "3", "5"]);
+  });
+
+  it("names each library once, and says what it is in one line", () => {
+    show({ libraries: LIBRARIES, usedIn: USES }, 0);
+    const said = ["layouts", "patterns", "components", "templates"].map(
+      kind => {
+        const card = screen.getByTestId(`overview-library-${kind}`);
+        // The card's first link is its name, and its one paragraph says
+        // what the library is.
+        return [
+          within(card).getAllByRole("link")[0]?.textContent,
+          card.querySelector("p")?.textContent,
+        ];
+      }
+    );
+    expect(said).toEqual([
+      [
+        "Header & footer",
+        'The header and footer around your pages. A site can have more than one set, for example "Main" and "Landing".',
+      ],
+      [
+        "Saved sections",
+        "Ready-made parts of a page. Insert one, then change it freely. Changes stay on that page.",
+      ],
+      [
+        "Components",
+        "Built once, used on many pages. Edit it once and every page updates.",
+      ],
+      [
+        "Collection templates",
+        "The design every blog post (or other entry) uses. Edit it once for all entries.",
+      ],
+    ]);
   });
 
   it("offers no New where the reader may not create", () => {

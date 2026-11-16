@@ -336,6 +336,8 @@ describe("a save that committed and then partly failed", () => {
 
     await saveAs("Hero");
 
-    expect(reported).toEqual([{ message: "Pattern saved", warnings: [] }]);
+    expect(reported).toEqual([
+      { message: "Saved to Saved sections", warnings: [] },
+    ]);
   });
 });

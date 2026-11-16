@@ -362,7 +362,7 @@ test.describe("the composition exit tests", () => {
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Add", exact: true });
     if ((await add.getAttribute("aria-pressed")) !== "true") await add.click();
-    await page.getByRole("tab", { name: "Sections" }).click();
+    await page.getByRole("tab", { name: "Saved sections" }).click();
     const tile = page.getByRole("option", { name: patternTitle, exact: true });
     await tile.click();
     await tile.click();
