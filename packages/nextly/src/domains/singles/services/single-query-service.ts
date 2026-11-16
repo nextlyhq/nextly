@@ -1263,7 +1263,9 @@ export class SingleQueryService extends BaseService {
             operation: "read",
             user: options.user,
             overrideAccess: options.overrideAccess,
-            routeAuthorized: options.routeAuthorized,
+            // Never attested by the route here: a route admits the read for the
+            // language it asked, and each other language's rule is asked anew.
+            routeAuthorized: false,
             rbacAccessControlService: this.rbacAccessControlService,
             authenticatedScope: options.authenticatedScope,
             visitor: this.fieldRuleVisitor,

@@ -2139,7 +2139,9 @@ export class CollectionQueryService extends BaseService {
           collectionName: params.collectionName,
           user: params.user,
           overrideAccess: params.overrideAccess,
-          routeAuthorized: params.routeAuthorized,
+          // Never attested by the route here: a route admits the read for the
+          // language it asked, and each other language's rule is asked anew.
+          routeAuthorized: false,
           authenticatedScope: params.authenticatedScope,
         })
       );

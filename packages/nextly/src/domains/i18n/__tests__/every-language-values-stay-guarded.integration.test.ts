@@ -297,6 +297,54 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(read.json)).not.toContain("Sitio");
     }, 90_000);
 
+    // A read the route has already admitted, as the dispatcher reads it
+    // (`routeAuthorized`), is admitted for the language it asked only: each
+    // other language's rule is still asked, for a Single and an entry alike.
+    it("asks each language's rule of a read the route admitted", async () => {
+      const t = await boot(dialect);
+      await singleInBoth(t, GATED, { title: "Site" }, { title: "Sitio" });
+      const id = await entryInBoth(
+        t,
+        LANGUAGE_GATED,
+        { title: "Harbour" },
+        { title: "Puerto" }
+      );
+      await userWhoMay(t, "evg-route-reader", "read", [GATED, LANGUAGE_GATED]);
+      const asReader = {
+        locale: "en",
+        translations: "all",
+        overrideAccess: false,
+        routeAuthorized: true,
+        user: { id: "evg-route-reader" },
+      };
+      const singles = t.getService("singleEntryService") as unknown as {
+        get(
+          slug: string,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean; data?: Record<string, unknown> | null }>;
+      };
+      const single = await singles.get(GATED, asReader);
+      expect(single.success, JSON.stringify(single)).toBe(true);
+      expect(single.data?.title).toBe("Site");
+      expect(JSON.stringify(single.data)).not.toContain("Sitio");
+      const entries = t.getService("collectionsHandler") as unknown as {
+        getEntryService(): {
+          getEntry(args: Record<string, unknown>): Promise<{
+            success: boolean;
+            data?: unknown;
+          }>;
+        };
+      };
+      const entry = await entries.getEntryService().getEntry({
+        collectionName: LANGUAGE_GATED,
+        entryId: id,
+        ...asReader,
+      });
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+      expect(JSON.stringify(entry.data)).toContain("Harbour");
+      expect(JSON.stringify(entry.data)).not.toContain("Puerto");
+    }, 90_000);
+
     // No hook, of the collection or of a field, is handed a language's value
     // a field rule withholds, so none can copy it out.
     it("hands no read hook an entry's withheld value in any language", async () => {
