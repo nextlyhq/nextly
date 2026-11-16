@@ -1,24 +1,26 @@
 /**
- * What a canvas of a given width is showing, and which tier an edit lands in.
+ * Widths for the canvas: the width each breakpoint is previewed at, which
+ * tiers a box of a given width shows, and how the frame is fitted and sized.
  *
- * ## The width is the single source of truth
+ * ## The chosen breakpoint comes first, and the width follows from it
  *
- * There is no second piece of state saying which breakpoint the inspector
- * edits. The canvas owns a width in CSS pixels; the edited tier and the live
- * tiers are both DERIVED from it, so they cannot disagree with each other or
- * with what is on screen.
+ * The breakpoint the author is styling is a stored choice, `editingBreakpoint`
+ * in `shell-state.ts`, set only by the device buttons
+ * (`breakpoint-switcher.tsx`). It is never read off the width the canvas
+ * measured: opening a panel or narrowing the window changes the room the
+ * canvas has, and a breakpoint derived from that room moved every edit to a
+ * breakpoint the author never picked.
  *
- * That is not a stylistic preference. The alternative — a stored "current
- * breakpoint" beside a canvas width — is two facts about one thing, and they
- * drift: a selector that changes which values you edit while the canvas still
- * shows desktop leaves the author editing one tier and looking at another.
- * Deriving removes the state that could drift rather than keeping two in step.
+ * So the order is choice, then width. {@link editingBreakpointOf} turns the
+ * stored choice into the breakpoint an edit goes to, and {@link previewWidth}
+ * gives the width the canvas lays that breakpoint out at. Opening and closing
+ * panels changes only the zoom that fits that width into the region
+ * ({@link frameFitScale}), so the author always sees the layout of the
+ * breakpoint they are editing.
  *
- * Gutenberg reached the same answer from the opposite direction: its device
- * dropdown and its resizable canvas were mutually exclusive surfaces until it
- * unified them by treating canvas width as the source of truth, with the device
- * menu demoted to a way of SETTING a width and the viewport derived from it as
- * a range. An intermediate width then needs no preset to exist.
+ * {@link breakpointsAtWidth} still answers "which tiers does a box this wide
+ * show": the style inspector reads it to say which values are live at the
+ * canvas's width.
  *
  * ## Why this reads `maxWidth` and not the emitted query text
  *
