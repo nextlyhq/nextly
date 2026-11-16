@@ -20,8 +20,10 @@ import {
 import { render } from "@admin/__tests__/utils";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 
+/** The field types installed plugins offer for entries. */
+let pluginEntries: Array<{ type: string; label: string; hint: string }> = [];
 vi.mock("@admin/components/field-ui", () => ({
-  usePluginFieldTypeEntries: () => [],
+  usePluginFieldTypeEntries: () => pluginEntries,
 }));
 vi.mock("@admin/services/addressCheckApi", () => ({
   addressCheckApi: {
@@ -74,10 +76,48 @@ const acmeFlawed: SchemaTemplate = {
   ],
 };
 
+/** A pages template whose own field takes the Page Builder field's name. */
+const acmeLanding: SchemaTemplate = {
+  id: "landing",
+  kind: "collection",
+  makes: "pages",
+  category: "Acme",
+  name: "Acme landing",
+  description: "A landing page.",
+  fields: [
+    { name: "blocks", label: "Own blocks", type: "text" },
+    { name: "hero", label: "Hero", type: "text" },
+  ],
+};
+
+/** A template with a group whose own field breaks a rule. */
+const acmeGrouped: SchemaTemplate = {
+  id: "grouped",
+  kind: "collection",
+  category: "Acme",
+  name: "Acme grouped",
+  description: "A group with a bad field.",
+  fields: [
+    { name: "intro", label: "Intro", type: "text" },
+    {
+      name: "meta",
+      label: "Meta",
+      type: "group",
+      fields: [{ name: "Bad Name", label: "Bad", type: "text" }],
+    },
+  ],
+};
+
 let removeAcme: () => void = () => {};
 
 beforeEach(() => {
-  removeAcme = registerSchemaTemplates("Acme", [acmeArticles, acmeFlawed]);
+  pluginEntries = [];
+  removeAcme = registerSchemaTemplates("Acme", [
+    acmeArticles,
+    acmeFlawed,
+    acmeLanding,
+    acmeGrouped,
+  ]);
 });
 
 afterEach(() => {
@@ -213,5 +253,86 @@ describe("templates in the new-entity dialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate.mock.calls.at(-1)?.[1]).toEqual([]);
+  });
+
+  it("keeps entries templates for a starting field that is not the Page Builder's", async () => {
+    pluginEntries = [{ type: "acme-rating", label: "Rating", hint: "Stars." }];
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("radio", { name: /Rating/ }));
+    // Still entries: the quick templates are the entries ones.
+    expect(screen.getByRole("radio", { name: /Authors/ })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Acme landing/ })).toBeNull();
+  });
+
+  it("names a template field that takes the starting field's name, and lets it be left out", async () => {
+    pluginEntries = [
+      {
+        type: "blocks",
+        label: "Blocks",
+        hint: "Lay the page out from blocks.",
+      },
+    ];
+    const { onCreate, user } = renderDialog();
+    await user.click(
+      screen.getByRole("radio", { name: /Pages you design visually/ })
+    );
+    await user.click(screen.getByRole("radio", { name: /Acme landing/ }));
+    await user.type(screen.getByLabelText("Name"), "Landing");
+    const picked = screen.getByRole("group", {
+      name: "Template: Acme landing",
+    });
+    expect(
+      within(picked).getByText(/as the starting field blocks beside it/)
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Leave out the fields this template cannot add, or choose another template."
+      )
+    ).toBeInTheDocument();
+    await user.click(
+      within(picked).getByRole("checkbox", { name: "Leave out Own blocks" })
+    );
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await user.click(createButton());
+    const fields = onCreate.mock.calls.at(-1)?.[1] ?? [];
+    expect(fields.map(field => field.name)).toEqual(["hero"]);
+  });
+
+  it("shows the fields inside a container left out as left out with it", async () => {
+    const { user } = renderDialog();
+    await user.click(
+      screen.getByRole("button", { name: "Browse all templates" })
+    );
+    const gallery = await screen.findByRole("dialog", {
+      name: "All templates",
+    });
+    await user.click(
+      within(gallery).getByRole("button", { name: "Use Acme grouped" })
+    );
+    const picked = await screen.findByRole("group", {
+      name: "Template: Acme grouped",
+    });
+    await user.click(
+      within(picked).getByRole("checkbox", { name: "Leave out Meta" })
+    );
+    // Bad goes with Meta: said so, and not offered back on its own.
+    expect(within(picked).getByText("Left out with Meta")).toBeInTheDocument();
+    expect(
+      within(picked).queryByRole("checkbox", { name: "Leave out Bad" })
+    ).toBeNull();
+  });
+
+  it("lets any field be left out, a valid one too", async () => {
+    const { onCreate, user } = renderDialog();
+    await user.click(screen.getByRole("radio", { name: /Authors/ }));
+    const picked = screen.getByRole("group", { name: "Template: Authors" });
+    await user.click(
+      within(picked).getByRole("checkbox", { name: "Leave out Bio" })
+    );
+    await user.type(screen.getByLabelText("Name"), "Writer");
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await user.click(createButton());
+    const fields = onCreate.mock.calls.at(-1)?.[1] ?? [];
+    expect(fields.map(field => field.name)).toEqual(["photo", "email"]);
   });
 });

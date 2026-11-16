@@ -16,6 +16,10 @@ import {
   type SchemaTemplateKind,
 } from "@admin/lib/builder/schema-templates";
 import {
+  hasPageBuilderField,
+  startingFields,
+} from "@admin/lib/builder/starting-field";
+import {
   checkTemplate,
   type TemplateFailure,
 } from "@admin/lib/builder/template-check";
@@ -58,8 +62,14 @@ export function useTemplatePick(
 ): TemplatePick {
   const all = useSchemaTemplates(TEMPLATE_KIND[config.kind]);
   const pluginEntries = usePluginFieldTypeEntries("entries");
-  // A starting field's type means pages designed visually; none, entries.
-  const makes = values.startingFieldType ? "pages" : "entries";
+  // The fields the entity starts with: the Page Builder's among them means
+  // pages designed visually; any other, or none, entries. Derived as the
+  // created entity is, so the templates offered match what it will be.
+  const starting = useMemo(
+    () => startingFields(values.startingFieldType ?? null),
+    [values.startingFieldType]
+  );
+  const makes = hasPageBuilderField(starting) ? "pages" : "entries";
   const templates = useMemo(
     () => all.filter(each => (each.template.makes ?? "entries") === makes),
     [all, makes]
@@ -84,6 +94,7 @@ export function useTemplatePick(
         installedTypes,
         lifecycleEnabled: values.status === true,
         leftOut,
+        startingFieldNames: starting.map(field => field.name),
       }).failures
     : [];
   return {

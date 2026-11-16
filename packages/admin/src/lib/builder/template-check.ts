@@ -9,7 +9,8 @@
  *   depth, the lifecycle's own names while drafts are on).
  * - Its siblings: no two clash by the server's sibling rule (the same name, in
  *   other letter case, or the same column), and none at the top level takes a
- *   name the entity's built-in fields hold, which the save would drop.
+ *   name the entity's built-in fields hold, which the save would drop, or the
+ *   name of the field the entity starts with, which would sit beside it.
  * - Its type: one the kind's picker offers; a type no built-in field has is a
  *   plugin's, named as such while that plugin is not installed.
  * - Its place: a unique field only where a unique value can be kept, never in
@@ -90,6 +91,11 @@ export interface TemplateCheckContext {
   lifecycleEnabled?: boolean;
   /** The keys of the fields left out. */
   leftOut?: ReadonlySet<string>;
+  /**
+   * The names of the fields the new entity starts with (`startingFields`),
+   * which the template's top-level fields are added beside.
+   */
+  startingFieldNames?: readonly string[];
 }
 
 const CLASH_WORDS: Record<SiblingClashKind, string> = {
@@ -151,10 +157,14 @@ function nameFailure(
   };
 }
 
-/** The clashes among one level's fields, and with the entity's built-in fields at the top. */
+/**
+ * The clashes among one level's fields, and, at the top, with the entity's
+ * built-in fields and the fields it starts with.
+ */
 function clashFailures(
   level: readonly Placed[],
-  topLevel: boolean
+  topLevel: boolean,
+  startingFieldNames: readonly string[]
 ): Map<Placed, TemplateFailure> {
   const found = new Map<Placed, TemplateFailure>();
   const clash = (each: Placed, other: string, kind: SiblingClashKind) => {
@@ -172,6 +182,10 @@ function clashFailures(
       for (const builtIn of SYSTEM_FIELD_NAMES) {
         const kind = siblingNameClash(each.field.name, builtIn);
         if (kind) clash(each, `the built-in field ${builtIn}`, kind);
+      }
+      for (const starting of startingFieldNames) {
+        const kind = siblingNameClash(each.field.name, starting);
+        if (kind) clash(each, `the starting field ${starting}`, kind);
       }
     }
     for (const other of level.slice(at + 1)) {
@@ -303,7 +317,11 @@ export function checkTemplate(
         nested: parent !== null,
       }))
       .filter(each => !leftOut.has(each.key));
-    const clashes = clashFailures(level, parent === null);
+    const clashes = clashFailures(
+      level,
+      parent === null,
+      ctx.startingFieldNames ?? []
+    );
     for (const each of level) {
       const found = [
         nameFailure(each, template.kind, ctx),

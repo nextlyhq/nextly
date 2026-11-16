@@ -3,8 +3,8 @@
 /**
  * The new-entity dialog's template: none, one of a few quick ones, or any from
  * "Browse all templates". A picked template lists the fields it adds; each
- * field it cannot add names the rule it breaks, with a way to leave it out,
- * and a field left out can be put back.
+ * field it cannot add names the rule it breaks; any field may be left out and
+ * put back, and the fields inside one left out go with it.
  *
  * @module components/features/schema-builder/new-entity/TemplateChoice
  */
@@ -59,14 +59,32 @@ function ChoiceRadio({
   );
 }
 
-/** A template's fields, each with its key, as the check keys them. */
+/** A template's field as listed: its key, as the check keys them. */
+interface ListedField {
+  field: SchemaTemplateField;
+  key: string;
+  /** The label of the container left out that takes this field with it, if one. */
+  outWith: string | null;
+}
+
+/**
+ * A template's fields, each with its key, and, inside a container left out,
+ * the label of the outermost such container.
+ */
 function placedFields(
   fields: readonly SchemaTemplateField[],
-  parentKey: string | null = null
-): { field: SchemaTemplateField; key: string }[] {
+  leftOut: ReadonlySet<string>,
+  parentKey: string | null = null,
+  outWith: string | null = null
+): ListedField[] {
   return fields.flatMap((field, at) => {
     const key = templateFieldKey(parentKey, at);
-    return [{ field, key }, ...placedFields(field.fields ?? [], key)];
+    const inner =
+      outWith ?? (leftOut.has(key) ? field.label || field.name : null);
+    return [
+      { field, key, outWith },
+      ...placedFields(field.fields ?? [], leftOut, key, inner),
+    ];
   });
 }
 
@@ -95,43 +113,76 @@ function PickedFields({
         {sourceWords(picked)}: the fields it adds.
       </p>
       <ul className="space-y-1 text-sm">
-        {placedFields(picked.template.fields).map(({ field, key }) => {
-          const label = field.label || field.name;
-          const failures = byKey.get(key) ?? [];
-          const out = pick.leftOut.has(key);
-          // A field is offered to be left out when it breaks a rule, and to be
-          // put back once it is out.
-          const offerToggle = out || failures.length > 0;
-          const checkboxId = `${ids}-leave-out-${key}`;
-          return (
-            <li key={key}>
-              <span className={out ? "text-muted-foreground line-through" : ""}>
-                {label} · {typeLabel(field.type)}
-              </span>
-              {failures.map(failure => (
-                <span
-                  key={failure.rule}
-                  className="block text-xs text-danger-text"
-                >
-                  {failure.message}
-                </span>
-              ))}
-              {offerToggle && (
-                <span className="flex items-center gap-1 text-xs">
-                  <input
-                    type="checkbox"
-                    id={checkboxId}
-                    checked={out}
-                    onChange={() => pick.toggleLeftOut(key)}
-                  />
-                  <label htmlFor={checkboxId}>Leave out {label}</label>
-                </span>
-              )}
-            </li>
-          );
-        })}
+        {placedFields(picked.template.fields, pick.leftOut).map(
+          ({ field, key, outWith }) => (
+            <PickedField
+              key={key}
+              ids={ids}
+              pick={pick}
+              field={field}
+              fieldKey={key}
+              outWith={outWith}
+              failures={byKey.get(key) ?? []}
+              typeLabel={typeLabel}
+            />
+          )
+        )}
       </ul>
     </div>
+  );
+}
+
+/**
+ * One of the picked template's fields: what it breaks, and leave out or put
+ * back. A field inside a container left out goes with it: said so, and not
+ * offered back on its own, since the container's own checkbox brings it back.
+ */
+function PickedField({
+  ids,
+  pick,
+  field,
+  fieldKey,
+  outWith,
+  failures,
+  typeLabel,
+}: {
+  ids: string;
+  pick: TemplatePick;
+  field: SchemaTemplateField;
+  fieldKey: string;
+  outWith: string | null;
+  failures: readonly TemplateFailure[];
+  typeLabel: (type: string) => string;
+}): JSX.Element {
+  const label = field.label || field.name;
+  const out = outWith !== null || pick.leftOut.has(fieldKey);
+  const checkboxId = `${ids}-leave-out-${fieldKey}`;
+  return (
+    <li>
+      <span className={out ? "text-muted-foreground line-through" : ""}>
+        {label} · {typeLabel(field.type)}
+      </span>
+      {failures.map(failure => (
+        <span key={failure.rule} className="block text-xs text-danger-text">
+          {failure.message}
+        </span>
+      ))}
+      {outWith !== null ? (
+        <span className="block text-xs text-muted-foreground">
+          Left out with {outWith}
+        </span>
+      ) : (
+        <span className="flex items-center gap-1 text-xs">
+          <input
+            type="checkbox"
+            id={checkboxId}
+            checked={out}
+            onChange={() => pick.toggleLeftOut(fieldKey)}
+          />
+          <label htmlFor={checkboxId}>Leave out {label}</label>
+        </span>
+      )}
+    </li>
   );
 }
 

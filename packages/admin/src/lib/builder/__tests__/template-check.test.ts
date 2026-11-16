@@ -124,6 +124,14 @@ describe("a template's names", () => {
     ).toEqual([]);
   });
 
+  it("a name the entity's starting field already holds, at the top level", () => {
+    const ctx = { ...offered("collection"), startingFieldNames: ["blocks"] };
+    expect(failures([text("blocks")], ctx)).toEqual(["blocks name-clash"]);
+    expect(
+      failures([{ name: "meta", type: "group", fields: [text("blocks")] }], ctx)
+    ).toEqual([]);
+  });
+
   it("a reserved name, at any depth", () => {
     expect(failures([text("created_at")])).toEqual([
       "created_at reserved-name",
