@@ -23,6 +23,7 @@ import {
 import { EditorCommandPalette } from "./editor-command-palette";
 import type { EditorState } from "./editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
+import { ShellActiveContext } from "./shell-active";
 
 // The command primitives observe their list to size it and scroll the active
 // row into view; jsdom has neither.
@@ -271,5 +272,62 @@ describe("the editor's search", () => {
     expect(within(pages).getByRole("status").textContent).toBe(
       "Searching pages…"
     );
+  });
+});
+
+describe("the palette's lock answers while the shell is narrowed away", () => {
+  /** The palette as the editor mounts it: open state of its own, in a shell. */
+  function Host({
+    editor,
+    shellActive,
+  }: {
+    editor: EditorState;
+    shellActive: boolean;
+  }): React.JSX.Element {
+    return (
+      <ShellActiveContext.Provider value={shellActive}>
+        <ShortcutProvider>
+          <BlockKeyboardActions
+            onSaveAsPattern={() => undefined}
+            editor={editor}
+          >
+            <EditorCommandPalette editor={editor} insert={{}} />
+          </BlockKeyboardActions>
+        </ShortcutProvider>
+      </ShellActiveContext.Provider>
+    );
+  }
+
+  /** An editor on `selectedId` whose lock questions are counted by `asked`. */
+  function editorAsking(
+    selectedId: string,
+    asked: ReturnType<typeof vi.fn>
+  ): EditorState {
+    return { ...editorSpy(page(), selectedId), lockRefusalFor: asked };
+  }
+
+  it("asks no lock for a selection once the shell closed the open palette", () => {
+    register();
+    const asked = vi.fn(() => undefined);
+    const view = render(
+      <Host editor={editorAsking("intro", asked)} shellActive />
+    );
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    // The control: open, the palette asks the locks for a selection.
+    expect(screen.getByRole("combobox")).toBeTruthy();
+    asked.mockClear();
+    view.rerender(<Host editor={editorAsking("hero", asked)} shellActive />);
+    expect(asked).toHaveBeenCalled();
+
+    view.rerender(
+      <Host editor={editorAsking("hero", asked)} shellActive={false} />
+    );
+    expect(screen.queryByRole("combobox")).toBeNull();
+    asked.mockClear();
+    view.rerender(
+      <Host editor={editorAsking("welcome", asked)} shellActive={false} />
+    );
+    expect(asked).not.toHaveBeenCalled();
   });
 });
