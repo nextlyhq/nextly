@@ -8,12 +8,12 @@
 // @module domains/schema/repair-columns/classify
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { isJsonBacked } from "../../../shared/lib/normalize-stored-value";
 import {
   componentRelationshipHoldsReferenceList,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { parseColumnType } from "../value-conversion/column-type";
+import { compareAsFor } from "../value-conversion/compare-as";
 import type { JudgeColumnOptions } from "../value-conversion/judge-column";
 import {
   judgeStoredColumn,
@@ -21,7 +21,6 @@ import {
 } from "../value-conversion/read-values";
 import type {
   ColumnConversion,
-  CompareAs,
   ConversionJudgement,
 } from "../value-conversion/types";
 
@@ -32,21 +31,6 @@ import type { ColumnLocation, ColumnState, RepairEntityKind } from "./types";
 /** Whether `column` is a JSON column. */
 function isJson(column: ColumnState): boolean {
   return parseColumnType(column).family === "json";
-}
-
-/**
- * How a field reads its values: as JSON where its column is JSON or the field's value is stored as
- * JSON (`isJsonBacked`, the one rule for that; on SQLite such a column is text), as a number for a
- * single number, exactly otherwise.
- */
-function compareAsFor(
-  field: FieldDefinition,
-  expected: ColumnState
-): CompareAs {
-  if (isJson(expected)) return "json";
-  if (isJsonBacked(field)) return "json";
-  if (field.type === "number" && field.hasMany !== true) return "number";
-  return "exact";
 }
 
 /** One difference, as the classification needs it. */

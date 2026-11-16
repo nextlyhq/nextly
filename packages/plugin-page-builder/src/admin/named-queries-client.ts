@@ -55,6 +55,8 @@ import {
   type NamedQueriesResponse,
 } from "../named-queries-contract";
 
+import { sessionAnswer } from "./session-answers";
+
 /** One custom source, as the builder's Source menu and Inputs read it. */
 export interface CanvasCustomSource {
   readonly declaration: NamedQueryDeclaration;
@@ -427,8 +429,9 @@ let runsFor: string | null | undefined;
  * so the Source menu, the canvas and the count share one read of the
  * sources and one set of kept runs. A run reads as the person signed in, so
  * the moment another person asks, every earlier person's runs are dropped
- * before anything is answered, as the canvas's list reads are. A failed read
- * of the sources is not kept, so the next asks again.
+ * before anything is answered, as the canvas's list reads are. The sources
+ * are kept for the person's session (`session-answers`): dropped for anyone
+ * else, read again once the schema moves, and never kept when they fail.
  *
  * With `visitor`, the document being edited, each run is made as a visitor
  * of that document makes it, kept apart from the person's own runs.
@@ -454,17 +457,14 @@ export function canvasNamedQueriesIn(
       ? runThrough
       : body => runThrough({ ...body, visitor })
   );
-  let read: Promise<readonly CanvasCustomSource[]> | undefined;
-  const sources = () => {
-    if (read === undefined) {
-      const reading = listCustomSources(locale);
-      read = reading;
-      reading.catch(() => {
-        if (read === reading) read = undefined;
-      });
-    }
-    return read;
-  };
+  // Kept for the person's session, as the collections are, and read again
+  // once the schema moves.
+  const sources = () =>
+    sessionAnswer(
+      userId,
+      JSON.stringify(["custom-sources", locale ?? ""]),
+      () => listCustomSources(locale)
+    );
   // One host per read of the sources, so the canvas's context, which holds
   // it, stays one object until the sources are read again.
   const hosts = new WeakMap<

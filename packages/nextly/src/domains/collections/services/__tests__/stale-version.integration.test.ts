@@ -720,13 +720,14 @@ describe.each(getConfiguredTestDialects())(
         releaseRun: true,
         _releaseRun: true,
       };
-      // In the body,
+      // In the body they are no fields of the collection, so the save is refused before it is
+      // judged at all: nothing that looks like the mark reaches the write,
       const inBody = await update(t, NOTES, id, {
         title: "mine",
         _rev: read,
         ...lookalikes,
       });
-      expect(inBody).toMatchObject({ success: false, code: "STALE_VERSION" });
+      expect(inBody).toMatchObject({ success: false, statusCode: 400 });
       // in the options,
       const inOptions = (await handlerOf(t).updateEntry(
         {
@@ -741,12 +742,20 @@ describe.each(getConfiguredTestDialects())(
         success: false,
         code: "STALE_VERSION",
       });
-      // and through the Direct API.
+      // and through the Direct API: refused in its data, and judged by its version in its options.
       await expect(
         t.nextly.update({
           collection: NOTES as never,
           id,
           data: { title: "mine", _rev: read, ...lookalikes } as never,
+          ...lookalikes,
+        } as never)
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        t.nextly.update({
+          collection: NOTES as never,
+          id,
+          data: { title: "mine", _rev: read } as never,
           ...lookalikes,
         } as never)
       ).rejects.toMatchObject({ code: "STALE_VERSION" });

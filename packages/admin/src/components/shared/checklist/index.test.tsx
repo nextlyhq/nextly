@@ -11,7 +11,12 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { Checklist, ChecklistItem, ChecklistProgress } from "./index";
+import {
+  Checklist,
+  ChecklistItem,
+  ChecklistOutline,
+  ChecklistProgress,
+} from "./index";
 
 function renderSteps() {
   return render(
@@ -74,7 +79,7 @@ describe("Checklist", () => {
     renderSteps();
     const [done, open, skipped] = screen
       .getAllByRole("listitem")
-      .map(item => item.querySelector("p")!);
+      .map(item => item.querySelector("[data-checklist-label]")!);
 
     expect(done).toHaveClass("text-muted-foreground");
     expect(skipped).toHaveClass("text-muted-foreground");
@@ -102,7 +107,7 @@ describe("Checklist", () => {
     const list = screen.getByRole("list", { name: "Set up SEO" });
     const [done] = screen
       .getAllByRole("listitem")
-      .map(item => item.querySelector("p")!);
+      .map(item => item.querySelector("[data-checklist-label]")!);
 
     expect(list.className).not.toMatch(/grid-cols-2/);
     expect(list.className).not.toContain("border-t-0");
@@ -134,7 +139,7 @@ describe("Checklist", () => {
     );
     const [done, open, skipped] = screen
       .getAllByRole("listitem")
-      .map(item => item.querySelector("p")!);
+      .map(item => item.querySelector("[data-checklist-label]")!);
 
     expect(done).toHaveClass("line-through", "text-muted-foreground");
     expect(open).not.toHaveClass("line-through");
@@ -151,6 +156,18 @@ describe("Checklist", () => {
     );
 
     expect(screen.getByText("It failed")).toHaveClass("text-danger-text");
+  });
+});
+
+describe("ChecklistOutline", () => {
+  it("draws its still bars with valid nesting, so React reports no hydration error", () => {
+    // A bar is a block element, and HTML closes a paragraph at one: the
+    // server's markup and the browser's tree then differ, and React says so.
+    const { container } = render(<ChecklistOutline steps={3} />);
+    expect(container.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(
+      6
+    );
+    expect(container.querySelector("p div")).toBeNull();
   });
 });
 

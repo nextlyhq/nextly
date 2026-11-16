@@ -22,21 +22,24 @@ export interface TranslationWorklistParams {
   locale: string | undefined;
   state: WorklistState;
   limit?: number;
+  /** Which page of the list, from 1: the server pages it. */
+  page?: number;
 }
 
 export function useTranslationWorklist({
   locale,
   state,
   limit = 50,
+  page = 1,
 }: TranslationWorklistParams): UseQueryResult<
   TranslationWorklistResponse,
   Error
 > {
   return useQuery<TranslationWorklistResponse, Error>({
-    queryKey: ["translations", "worklist", locale, state, limit],
+    queryKey: ["translations", "worklist", locale, state, limit, page],
     queryFn: () =>
       protectedApi.get<TranslationWorklistResponse>(
-        `/translations?locale=${encodeURIComponent(locale ?? "")}&state=${state}&limit=${limit}`
+        `/translations?locale=${encodeURIComponent(locale ?? "")}&state=${state}&limit=${limit}&page=${page}`
       ),
     // Nothing to ask until a language is chosen. Firing with an empty locale
     // would spend a request to be told it is required.
