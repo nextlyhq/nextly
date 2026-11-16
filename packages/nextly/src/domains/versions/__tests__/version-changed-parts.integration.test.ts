@@ -279,6 +279,7 @@ describe.each(getConfiguredTestDialects())(
     it("names every language and the shared part for a publish of all of them", async () => {
       const entries = await boot(dialect);
       const id = await publishedInBoth(entries);
+      await save(entries, id, "en", { title: "en 2" });
       await save(entries, id, "es", { title: "es 2", views: 60 });
 
       const published = await entries.publishAllLocales({
@@ -291,6 +292,27 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await newestVersionParts(id)).toEqual({
         locales: ["en", "es"],
+        shared: true,
+      });
+    }, 90_000);
+
+    // A version names what changed: a language a publish of every language
+    // had nothing pending in stays as it was, so it is not named.
+    it("leaves out a language a publish of all of them had nothing to put live in", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries);
+      await save(entries, id, "es", { title: "es 2", views: 60 });
+
+      const published = await entries.publishAllLocales({
+        data: { _overwrite: true },
+        collectionName: POSTS,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect(published.success, JSON.stringify(published)).toBe(true);
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: ["es"],
         shared: true,
       });
     }, 90_000);
