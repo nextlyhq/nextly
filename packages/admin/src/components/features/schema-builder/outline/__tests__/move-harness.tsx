@@ -9,6 +9,7 @@ import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { vi } from "vitest";
 
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import {
   judgeMove,
   moveDestinations,
@@ -23,6 +24,7 @@ import {
 } from "@admin/lib/builder/outline/outline-model";
 
 import type { BuilderField } from "../../types";
+import { crumbsByPointer } from "../FocusCrumbs";
 import { Outline } from "../Outline";
 import type { OutlineCallbacks } from "../outline-types";
 
@@ -30,6 +32,10 @@ import type { OutlineCallbacks } from "../outline-types";
 export interface MoveHarnessProbe {
   fields: readonly BuilderField[];
   commits: number;
+  /** The selected field, as the page would keep it. */
+  selectedId: string | null;
+  /** Where each "Add field" asked to add, in order. */
+  addsAt: FieldInsertPosition[];
 }
 
 export function MoveHarness({
@@ -48,7 +54,10 @@ export function MoveHarness({
   probe: MoveHarnessProbe;
 }): JSX.Element {
   const [fields, setFields] = useState(initial);
+  // Selection as the page keeps it: the field whose settings are open.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   probe.fields = fields;
+  probe.selectedId = selectedId;
   const nodes = useMemo(
     () =>
       buildOutline(fields, {
@@ -68,8 +77,10 @@ export function MoveHarness({
     fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
   };
   const callbacks: OutlineCallbacks = {
-    select: vi.fn(),
-    addAt: vi.fn(),
+    select: id => setSelectedId(id),
+    addAt: target => {
+      probe.addsAt.push(target);
+    },
     duplicate: vi.fn(),
     remove: vi.fn(),
     setHidden: vi.fn(),
@@ -83,14 +94,14 @@ export function MoveHarness({
     },
   };
   return (
-    <DndContext>
+    <DndContext collisionDetection={crumbsByPointer}>
       <Outline
         kind="collection"
         nodes={nodes}
         systemFields={[]}
         errors={new Map()}
         foldKey="test:moves"
-        selectedId={null}
+        selectedId={selectedId}
         readOnly={context.entityReadOnly}
         callbacks={callbacks}
         renderPreview={() => null}
@@ -101,7 +112,7 @@ export function MoveHarness({
 
 /** A fresh probe for one test. */
 export function newProbe(): MoveHarnessProbe {
-  return { fields: [], commits: 0 };
+  return { fields: [], commits: 0, selectedId: null, addsAt: [] };
 }
 
 /** A plain field, as the Builder holds one. */

@@ -10,6 +10,7 @@ import type {
   BuilderField,
   FieldCondition,
 } from "@admin/components/features/schema-builder/types";
+import { brokenConditionOf } from "@admin/lib/builder/condition-identity";
 
 import type { FieldSettingsSurface } from "../types";
 
@@ -46,6 +47,9 @@ export function ConditionsTab({
   const setCondition = (condition: FieldCondition | undefined) =>
     onChange({ ...field, admin: { ...field.admin, condition } });
   const condition = field.admin?.condition;
+  // Judged against the same fields offered as its sources, so what this says
+  // is what the outline marks and the save refuses.
+  const broken = brokenConditionOf(field, siblings);
 
   return (
     <div className="space-y-2">
@@ -53,6 +57,7 @@ export function ConditionsTab({
       <p className="text-xs text-muted-foreground">
         Show this field only when a field beside it has a given value.
       </p>
+      {broken && <p className="text-sm text-destructive">{broken.message}</p>}
       {condition !== undefined ? (
         <ConditionBuilder
           condition={condition}

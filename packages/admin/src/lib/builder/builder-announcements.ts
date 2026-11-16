@@ -2,7 +2,8 @@
  * What a drag in the Builder's outline says.
  *
  * A field drags by its own id, so a sentence names the field by its label and
- * places it among the fields of its own container. What a drop on a row did
+ * places it among the fields of its own container; a place that is no field
+ * says what it is called through its drop data. What a drop on a row did
  * is said by the outline, which judges it by the move rule with the sideways
  * offset this context's sentences never see; here only a drop over nothing.
  *
@@ -36,9 +37,13 @@ function fieldSubject(field: BuilderField): string {
 export function builderAnnouncements(
   fields: readonly BuilderField[]
 ): Announcements {
-  const describe = ({ id }: AnnouncedItem): string | undefined => {
+  // A field is named by its label; a place that is no field (a breadcrumb crumb) carries what it
+  // is called aloud in its drop data.
+  const describe = ({ id, data }: AnnouncedItem): string | undefined => {
     const field = findFieldById([...fields], String(id));
-    return field ? fieldSubject(field) : undefined;
+    if (field) return fieldSubject(field);
+    const spoken: unknown = data.current?.spoken;
+    return typeof spoken === "string" ? spoken : undefined;
   };
 
   const place = ({ id }: AnnouncedItem): string | undefined => {
