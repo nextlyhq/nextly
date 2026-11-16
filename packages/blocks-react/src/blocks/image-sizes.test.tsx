@@ -82,7 +82,7 @@ async function render(
             }));
           },
       BREAKPOINTS,
-      nodes[0]?.id
+      nodes
     ),
   };
   const stream = await renderToReadableStream(

@@ -14,6 +14,7 @@ import type { BlocksPageConfig } from "@nextlyhq/blocks-react/next";
 import {
   loadSiteStyle,
   namedQueriesOf,
+  pageBuilderImageCopies,
   SITE_STYLE_SLUG,
 } from "@nextlyhq/plugin-page-builder";
 import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
@@ -65,6 +66,8 @@ export const blockPagesRoute: BlocksPageConfig = {
   // This site's named queries, a list's custom sources: the page builder's
   // own, so a list here never resolves another site's served alongside.
   namedQueries: namedQueriesOf(pageBuilderPlugin),
+  // Each image sized to where it sits, from this site's media.
+  imageCopies: pageBuilderImageCopies(pageBuilderPlugin),
   // No `data`: a `core/collection-loop` reads through the route's public
   // reader, published entries and public fields only, as any visitor would.
   styleContext: SITE_STYLE_CONTEXT,

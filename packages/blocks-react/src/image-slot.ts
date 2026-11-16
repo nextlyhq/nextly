@@ -161,13 +161,14 @@ export function copiesWantedUpTo(slot: ImageSlot): number {
 export function imageSizingFor(
   imageCopies: ImageCopies | undefined,
   breakpoints: BreakpointSet | undefined,
-  firstBlockId: string | undefined
+  nodes: readonly { readonly id?: string }[]
 ): {
   imageCopies?: ImageCopies;
   imageSlot?: ImageSlot;
   firstBlockId?: string;
 } {
   if (imageCopies === undefined) return {};
+  const firstBlockId = nodes[0]?.id;
   return {
     imageCopies,
     imageSlot: rootImageSlot(breakpoints),

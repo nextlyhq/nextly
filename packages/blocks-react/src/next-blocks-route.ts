@@ -743,7 +743,7 @@ export function blocksRouteConfig(
           ...imageSizingFor(
             cachedImageCopies(config, isPublic, listWindow),
             siteBreakpoints,
-            document.nodes[0]?.id
+            document.nodes
           ),
         },
         blocks: resolver,

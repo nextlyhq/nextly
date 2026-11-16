@@ -190,15 +190,8 @@ export async function renderImage({
        * class string put the rule one element above the thing it constrains.
        */
       className={pictureClass(className, caption, link, partClass)}
-      src={sized.src}
-      {...(sized.srcSet === undefined
-        ? {}
-        : { srcSet: sized.srcSet, sizes: sized.sizes })}
+      {...pictureAttributes(sized, props.loading)}
       alt={alt}
-      loading={
-        sized.eager ? "eager" : oneOf(props.loading, IMAGE_LOADING, "lazy")
-      }
-      {...(sized.eager ? { fetchPriority: "high" as const } : {})}
       // Intrinsic dimensions reserve the space before the file arrives, which
       // is what stops the text below it jumping when it loads.
       {...(usable?.width === undefined ? {} : { width: usable.width })}
@@ -301,6 +294,32 @@ interface SizedPicture {
   readonly sizes?: string;
   /** In the page's first block: loaded at once and before other images. */
   readonly eager: boolean;
+}
+
+/**
+ * The `<img>` attributes a sized picture sets: its sources, and how soon it
+ * loads, at once and first in the page's first block, as the author chose
+ * otherwise.
+ */
+function pictureAttributes(
+  sized: SizedPicture,
+  loading: unknown
+): {
+  src: string;
+  srcSet?: string;
+  sizes?: string;
+  loading: "lazy" | "eager";
+  fetchPriority?: "high";
+} {
+  return {
+    src: sized.src,
+    ...(sized.srcSet === undefined
+      ? {}
+      : { srcSet: sized.srcSet, sizes: sized.sizes }),
+    ...(sized.eager
+      ? { loading: "eager", fetchPriority: "high" }
+      : { loading: oneOf(loading, IMAGE_LOADING, "lazy") }),
+  };
 }
 
 /**
