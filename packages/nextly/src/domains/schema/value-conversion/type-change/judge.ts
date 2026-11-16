@@ -30,6 +30,7 @@ import { characterLength, readsAsPostgresJson } from "../value-readings";
 import { documentOfText, isEditorDocument } from "./document";
 import type {
   DateColumn,
+  RelationTarget,
   Family,
   FieldTypeOnDialect,
   NumberFormat,
@@ -84,6 +85,9 @@ export type OutcomeReason =
   | "pair-blocked"
   /** The new column refuses the value's writing outright, so it cannot hold it at all. */
   | "column-refuses";
+
+/** How a relationship keeps its links. */
+type RelationKept = RelationTarget["kept"];
 
 /** The judgement of one value, and, where it is kept or changed, the value the new type reads. */
 export interface ValueVerdict {
@@ -151,13 +155,27 @@ export function pairBlocked(
       from.relation !== undefined &&
       to.relation !== undefined &&
       sameTargets(from, to) &&
-      from.relation.kept !== "join" &&
-      to.relation.kept !== "join"
+      sameKindOfLink(from.relation.kept, to.relation.kept)
       ? null
       : "relationship";
   }
   if (from.family === "json") return null;
   return neverHeld(from, to) ? "never-held" : null;
+}
+
+/**
+ * Whether two ways of keeping links store the same kind of link, so one can become the other by
+ * rule 5: an id alone or a list of ids, or a `{ relationTo, value }` reference alone or a list of
+ * them. A join table, or an id becoming a reference, changes where or how a link is kept.
+ */
+function sameKindOfLink(from: RelationKept, to: RelationKept): boolean {
+  const kind = (kept: RelationKept) =>
+    kept === "one" || kept === "list"
+      ? "id"
+      : kept === "targets" || kept === "targetList"
+        ? "reference"
+        : "join";
+  return kind(from) !== "join" && kind(from) === kind(to);
 }
 
 function sameTargets(
@@ -346,6 +364,10 @@ function judgeIntoList(
       return { outcome: "blocked", reason: "item-not-held" };
     }
     const readsAs = listWriting(item, verdicts);
+    // The whole list is written to its column, which bounds it where the column is text.
+    if (!holdsText(to.textBound, readsAs)) {
+      return { outcome: "blocked", reason: "too-long" };
+    }
     return verdicts.every(v => v.outcome === "kept")
       ? { outcome: "kept", reason: "same-value", readsAs }
       : { outcome: "changed", reason: "new-form", readsAs };
@@ -353,10 +375,14 @@ function judgeIntoList(
   if (value.kind === "document") return { outcome: "lost", reason: "object" };
   const one = judgeAs(item, value, fromJson);
   if (one.outcome === "lost" || one.outcome === "blocked") return one;
+  const writing = listWriting(item, [one]);
+  if (!holdsText(to.textBound, writing)) {
+    return { outcome: "blocked", reason: "too-long" };
+  }
   return {
     outcome: "changed",
     reason: "new-form",
-    readsAs: listWriting(item, [one]),
+    readsAs: writing,
   };
 }
 
@@ -495,6 +521,9 @@ function numberInto(
     };
   }
   if (!number.finite) {
+    // A whole-number field's validator refuses a non-finite number, whatever its column holds.
+    if (format.kind === "integer")
+      return { outcome: "lost", reason: "non-finite" };
     return holdsNonFinite(format, dialect, number.value)
       ? {
           outcome: fits,

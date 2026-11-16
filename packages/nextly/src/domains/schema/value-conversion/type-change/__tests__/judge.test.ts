@@ -151,6 +151,29 @@ const CASES: Case[] = [
     value: text("red"),
     outcome: "kept",
   },
+  // A whole-number field's validator refuses a non-finite number, whatever the column holds.
+  {
+    name: "a text Infinity to a whole number",
+    from: ["text"],
+    to: ["number"],
+    value: text("Infinity"),
+    outcome: "lost",
+  },
+  // A select holding several values keeps them as JSON in its text column, which bounds the list
+  // on MySQL (varchar(255)).
+  {
+    name: "a list whose writing is longer than the select list's column holds",
+    from: ["chips"],
+    to: [
+      "select",
+      {
+        hasMany: true,
+        ...options("x".repeat(253)),
+      } as Partial<FieldDefinition>,
+    ],
+    value: list(text("x".repeat(253))),
+    outcome: { postgresql: "kept", mysql: "blocked", sqlite: "kept" },
+  },
   // A choice with no options declared holds any value, as its validator enforces no membership.
   {
     name: "a text to a choice with no options declared",
@@ -890,6 +913,16 @@ describe("pairs blocked whatever their values hold (rule 3, and the pairs no rul
       judgeValue(one, several, json({ value: "p1", relationTo: "people" }))
         .readsAs
     ).toBe('[{"relationTo":"people","value":"p1"}]');
+  });
+
+  it("blocks a relationship to one collection becoming one that names its collection with each value", () => {
+    const one = typeOf("postgresql", "relationship", {
+      relationTo: "people",
+    } as Partial<FieldDefinition>);
+    const named = typeOf("postgresql", "relationship", {
+      relationTo: ["people"],
+    } as Partial<FieldDefinition>);
+    expect(pairBlocked(one, named)).toBe("relationship");
   });
 
   it("tells two target sets apart that write alike once joined", () => {

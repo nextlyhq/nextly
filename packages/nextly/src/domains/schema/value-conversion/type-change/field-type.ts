@@ -87,7 +87,7 @@ export interface FieldTypeOnDialect {
   dialect: SupportedDialect;
   /** The field's type name, which a refusal names. */
   type: string;
-  /** Text, Email, Choice, Rich text: what the column holds. */
+  /** Text, Email, Choice, Rich text, and a list kept in a text column: what the column holds. */
   textBound?: TextBound;
   /** Choice: the option values. A list of options: its items' values. */
   options?: string[];
@@ -156,6 +156,8 @@ const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
       ? {
           ...baseOf(field, dialect),
           family: "list",
+          // The list is written to the field's own text column, which bounds its writing.
+          ...textColumn(field, dialect, builtBy),
           item: { ...baseOf(field, dialect), family: "text" },
         }
       : bounded("text")(field, dialect, builtBy),
@@ -173,6 +175,8 @@ const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
       ? {
           ...baseOf(field, dialect),
           family: "list",
+          // A select holding several values writes the list to its text column, which bounds it.
+          ...textColumn(field, dialect, builtBy),
           item: {
             ...baseOf(field, dialect),
             family: "choice",
