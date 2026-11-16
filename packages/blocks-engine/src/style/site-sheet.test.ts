@@ -108,10 +108,10 @@ describe("the content-width rule", () => {
       '@property --nx-contain-inset{syntax:"<length-percentage>";inherits:false;initial-value:0px}'
     );
     expect(css).toContain(
-      ".nx-pb-page :where(*){--nx-contain-inset:0px;--nx-sized-width:0;--nx-sized-max-width:0}"
+      ".nx-pb-page :where(*){--nx-contain-inset:0px;--nx-sized-width:0;--nx-sized-max-width:0;--nx-sized-item:0}"
     );
     expect(css).toContain(
-      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2 * (1 - max(var(--nx-sized-width), var(--nx-sized-max-width))));padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset));margin-inline:auto}"
+      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2 * (1 - max(var(--nx-sized-width), var(--nx-sized-max-width), var(--nx-sized-item))));padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset));margin-inline:auto}"
     );
     // The box is never narrowed. Its auto margin is 0 while it fills the box
     // it is laid out in, and centres it only when an author sized it.
@@ -131,7 +131,11 @@ describe("the content-width rule", () => {
     // And the registration comes first, at the sheet's top level.
     expect(css.indexOf("@property --nx-contain-inset")).toBeLessThan(reset);
     // The sizing flags too, as numbers that no element inherits.
-    for (const flag of ["--nx-sized-width", "--nx-sized-max-width"]) {
+    for (const flag of [
+      "--nx-sized-width",
+      "--nx-sized-max-width",
+      "--nx-sized-item",
+    ]) {
       expect(css).toContain(
         `@property ${flag}{syntax:"<number>";inherits:false;initial-value:0}`
       );

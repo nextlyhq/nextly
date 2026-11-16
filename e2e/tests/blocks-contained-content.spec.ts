@@ -120,6 +120,28 @@ const DOCUMENT = {
       [text("29", "Sized box at start")],
       { width: "600px", margin: { inlineStart: "0" } }
     ),
+    container(
+      "30",
+      "core/box",
+      { as: "div", contained: false },
+      [
+        container("31", "core/box", { as: "div", contained: true }, [
+          text("32", "Row item one"),
+        ]),
+        container("33", "core/box", { as: "div", contained: true }, [
+          text("34", "Row item two"),
+        ]),
+      ],
+      { display: "flex" }
+    ),
+    container("35", "core/columns", { as: "div", contained: false }, [
+      container("36", "core/column", { as: "div", contained: true }, [
+        text("37", "Column item one"),
+      ]),
+      container("38", "core/column", { as: "div", contained: true }, [
+        text("39", "Column item two"),
+      ]),
+    ]),
   ],
 };
 
@@ -315,6 +337,31 @@ test("a contained block its author sized is centred at that size, its content wh
   const atStart = await placed(page, "Sized box at start");
   near(atStart.band.left, 0);
   near(atStart.band.width, 600);
+});
+
+test("a contained block laid out in a row or a grid is not inset from the row", async ({
+  page,
+}) => {
+  // A padding's `100%` is the row's width, not the item's own, so an item
+  // inset from it would overflow a wide page. Treated as sized instead: only
+  // the gutter inside its own box.
+  const { pageWidth, gutter } = await open(page, { width: 2400, height: 900 });
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  for (const words of [
+    "Row item one",
+    "Row item two",
+    "Column item one",
+    "Column item two",
+  ]) {
+    const { text, band } = await placed(page, words);
+    expect(band.width).toBeLessThan(pageWidth);
+    near(text.left, band.left + gutter);
+  }
 });
 
 test("the inset follows the writing direction", async ({ page }) => {

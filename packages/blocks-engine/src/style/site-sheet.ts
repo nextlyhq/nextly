@@ -25,6 +25,7 @@ import {
   CONTAIN_INSET_PROPERTY,
   compilePageCss,
   SIZED_FLAG_PROPERTIES,
+  SIZED_ITEM_PROPERTY,
 } from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, tokenCustomProperty } from "./declarations";
@@ -329,20 +330,23 @@ function emitContentWidth(
   // the weight the contract gives an element or block-type default.
   const sizedWidth = SIZED_FLAG_PROPERTIES.width;
   const sizedMax = SIZED_FLAG_PROPERTIES["max-width"];
+  const sizedItem = SIZED_ITEM_PROPERTY;
   return [
     `@property ${inset}{syntax:"<length-percentage>";inherits:false;initial-value:0px}`,
     // The flags the page compile sets beside a block's own width and
     // maximum width: 1 while either sizes the block, 0 otherwise.
     `@property ${sizedWidth}{syntax:"<number>";inherits:false;initial-value:0}`,
     `@property ${sizedMax}{syntax:"<number>";inherits:false;initial-value:0}`,
-    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0}`,
+    // And the flag a parent's flex or grid layout sets on its children.
+    `@property ${sizedItem}{syntax:"<number>";inherits:false;initial-value:0}`,
+    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0;${sizedItem}:0}`,
     // After the reset and at its weight, so a contained element takes this.
     // `100%` resolves where the property is used, in the element's own
     // padding, so it is the width of the box the container is laid out in.
-    // A block an author sized is narrower than that box, so its inset is
-    // multiplied away; `margin-inline: auto` is 0 on a block that fills its
+    // A block an author sized, or a flex or grid item, is narrower than that
+    // box, so its inset is multiplied away; `margin-inline: auto` is 0 on a block that fills its
     // box and centres a sized one, and an author's own margin outweighs it.
-    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
+    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}), var(${sizedItem}))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
   ].join("\n");
 }
 

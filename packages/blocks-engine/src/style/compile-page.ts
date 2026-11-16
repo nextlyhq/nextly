@@ -1417,6 +1417,37 @@ export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The flag a block's layout sets on its children: `1` while it lays them out
+ * as flex or grid items, `0` otherwise.
+ *
+ * A padding's `100%` is the width of the box a block is laid out in, which for
+ * a flex or grid item is the whole row, not the item's own share of it, so a
+ * contained item would be inset from a box far wider than its own. The rule
+ * that sets the parent's `display` also writes this on its children, at the
+ * same breakpoint and state, and the site sheet treats a flagged contained
+ * child as it does a sized block: centred, not inset. `inherit` and the other
+ * CSS-wide keywords leave it to the cascade.
+ */
+export const SIZED_ITEM_PROPERTY = "--nx-sized-item";
+
+/** The layouts whose children are flex or grid items. */
+const ROW_LAYOUTS = new Set(["flex", "inline-flex", "grid", "inline-grid"]);
+
+/** The flag a block's own `display` sets on its children, if it sets one. */
+function itemFlag(declarations: readonly Declaration[]): Declaration[] {
+  const display = declarations.findLast(d => d.property === "display");
+  if (display === undefined) return [];
+  const value = display.value.trim().toLowerCase();
+  if (CSS_WIDE_KEYWORDS.has(value)) return [];
+  return [
+    {
+      property: SIZED_ITEM_PROPERTY,
+      value: ROW_LAYOUTS.has(value) ? "1" : "0",
+    },
+  ];
+}
+
+/**
  * Values of those properties that size nothing. Neither is inherited, so
  * `initial`, `unset` and the reverts resolve to `auto` or `none` as well.
  */
@@ -1577,6 +1608,23 @@ function envelopeRules(
             rule.descendant === ""
           ),
         });
+        // The flag for the block's children, in a rule of its own beside the
+        // one that sets its layout. Not traced: no one set it.
+        const itemFlags =
+          rule.descendant === "" && rule.selector === undefined
+            ? itemFlag(rule.declarations)
+            : [];
+        if (itemFlags.length > 0) {
+          const children = `${selector}${stateSelectors[state]} > *`;
+          rules.push({
+            ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
+            selector:
+              weightlessAnchor === undefined
+                ? children
+                : `${weightlessAnchor} :where(${children})`,
+            declarations: itemFlags,
+          });
+        }
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.

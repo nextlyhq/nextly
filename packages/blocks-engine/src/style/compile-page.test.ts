@@ -2470,6 +2470,46 @@ describe("inline padding and a contained container's inset", () => {
     ).not.toContain("--nx-sized-width");
   });
 
+  it("flags the children of a block that lays them out in a row or a grid", () => {
+    // A padding's `100%` is the row's width, not the item's, so a contained
+    // block laid out as a flex or grid item would be inset from a box far
+    // wider than its own. The rule that makes its parent a row or a grid
+    // flags the parent's children; the site sheet then treats a contained one
+    // as a sized block: centred, not inset.
+    const ITEM = "--nx-sized-item";
+    for (const display of ["flex", "inline-flex", "grid", "inline-grid"]) {
+      const out = css(doc([node("n1", { base: { base: { display } } })]));
+      expect(out).toMatch(
+        new RegExp(`\\.nx-pb-[a-z0-9]+ > \\* \\{ ${ITEM}: 1 \\}`)
+      );
+    }
+    // Any other layout clears it, so an override back to block brings the
+    // inset back to the children it applies to.
+    const block = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "grid" }, mobile: { display: "block" } },
+        }),
+      ])
+    );
+    expect(block).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 1 \\}`));
+    const media = block.indexOf("@media");
+    expect(media).toBeGreaterThan(-1);
+    expect(block.slice(media)).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    // A block-type default flags at a default's weight, like the rest.
+    const byDefault = css(doc([node("n1")]), {
+      ...CTX,
+      blockBases: { "core/box": { base: { base: { display: "flex" } } } },
+    } as unknown as StyleCompileContext);
+    expect(byDefault).toMatch(
+      new RegExp(`:where\\(\\.nx-bt-core--box > \\*\\) \\{ ${ITEM}: 1 \\}`)
+    );
+    // A block that sets no layout flags nothing.
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(ITEM);
+  });
+
   it("records the value as it was set in the trace, not the wrapped one", () => {
     // The inspector names a value and where it came from. The inset is how
     // containment combines with it, not a value anyone set.
