@@ -3,19 +3,18 @@
 /**
  * How often the page is drawn again when the author selects a block, counted
  * through the page builder's own editor rather than timed. The budget is none:
- * a selection changes the marks and the panel, not the page.
+ * a selection changes the marks and the panel, not the page. A hover's count
+ * is held in the builder's own `speed-counters.test`, with the canvas under
+ * the provider that shares the hovered block.
  *
  * The editor is the plugin's real one, its state included; only its
  * surroundings (the admin's hooks, the panels around the canvas) are stood in
  * for, as `BlocksField.styleState.test` stands them in. The canvas is the real
  * one too, and every draw of the page through the renderer is counted.
  *
- * Today the editor hands the canvas a new site stylesheet object on each of
- * its renders, so the canvas's drawn page cannot be kept, and a selection
- * draws the whole page again. The case is a known miss (`expectKnownMiss`):
- * held above its budget, so it turns red the day the page is no longer drawn
- * again, and the fix replaces it with `expect(count).toBe(0)`. A case that throws
- * for any other reason fails, rather than passing as "still slow".
+ * Everything the editor hands the canvas holds its identity while what the
+ * page is drawn from is unchanged, the site stylesheet among them, so the
+ * canvas keeps the page it drew.
  *
  * @module admin/speed-counters.test
  */
@@ -198,13 +197,24 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
   // The header's controls the bar places; drawn by the admin, not here.
-  DocumentSaveIndicator: () => null,
-  DocumentPrimaryAction: () => null,
+  DocumentSaveAndPublish: () => null,
+  useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
-  // No one signed in: the editor keeps no preferences.
-  useCurrentUserId: () => null,
+  // An author signed in, as the editor always has one: the canvas keeps
+  // its list reads for the person, and asks them again for no one else.
+  useCurrentUserId: () => "author-1",
+  // The schema the author's kept answers were read under, which never moves
+  // here.
+  schemaVersion: () => 1,
+  onSchemaChange: () => () => {},
+  // The author's choices kept nowhere: these cases are about drawing.
+  devicePreferenceStore: () => ({
+    read: () => null,
+    write: () => {},
+    remove: () => {},
+  }),
   useDocumentStatus: () => null,
   // The editor registers its restore; nothing here offers one.
   useDocumentRestore: () => undefined,
@@ -267,18 +277,6 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-/**
- * A count the editor still spends beyond its budget today, held there: the
- * day the work is gone this fails, and the fix replaces it with an assertion
- * of the budget, which holds it from then on.
- */
-function expectKnownMiss(count: number, budget = 0): void {
-  expect(
-    count,
-    `now within its budget of ${String(budget)}: replace expectKnownMiss with an assertion of the budget`
-  ).toBeGreaterThan(budget);
-}
-
 describe("the page drawn again per selection, in the page builder's editor", () => {
   it("the counter sees the page drawn: opening the editor draws it", () => {
     render(<Host />);
@@ -287,12 +285,13 @@ describe("the page drawn again per selection, in the page builder's editor", () 
     expect(document.querySelectorAll("[data-nx-node]").length).toBe(12);
   });
 
-  it("a selection draws the page again: budget none (known miss)", () => {
+  it("a selection draws the page again: budget none", () => {
     render(<Host />);
     select("block-1");
     counted.pageDraws = 0;
     select("block-7");
+    // The control: the selection reached the canvas.
     expect(seen.canvas?.selectedId).toBe("block-7");
-    expectKnownMiss(counted.pageDraws);
+    expect(counted.pageDraws).toBe(0);
   });
 });

@@ -279,7 +279,7 @@ describe("removing a breakpoint in Settings", () => {
     // Focus followed the step, rather than falling back to the page.
     expect(stepOf("confirm").parentElement).toBe(document.activeElement);
     // The step has the tab to itself.
-    expect(screen.queryByText("Default Layout")).toBeNull();
+    expect(screen.queryByText("Default header & footer set")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
     // The editor again, Mobile still removed in the draft, nothing saved.
@@ -316,7 +316,7 @@ describe("removing a breakpoint in Settings", () => {
     expect(
       screen.getByRole("button", { name: "Edit breakpoints" })
     ).toBeTruthy();
-    expect(screen.getByText("Default Layout")).toBeTruthy();
+    expect(screen.getByText("Default header & footer set")).toBeTruthy();
   });
 
   it("follows a removal its save did not finish, and says what it left", async () => {

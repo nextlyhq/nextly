@@ -21,11 +21,15 @@ import type {
 } from "../document";
 import type { ValidationIssue } from "../validation";
 
+import { compilePageCss } from "./compile-page";
 import {
+  COLUMN_FLOW_PROPERTY,
   CONTAIN_INSET_PROPERTY,
-  compilePageCss,
+  FILLS_ROW_PROPERTY,
+  OUT_OF_FLOW_PROPERTY,
   SIZED_FLAG_PROPERTIES,
-} from "./compile-page";
+  SIZED_ITEM_PROPERTY,
+} from "./contain-inset";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -194,7 +198,7 @@ function documentUsingEveryType(
  * The inset travels in `--nx-contain-inset`, which this rule sets on a
  * contained element and to `0px` on every other element of the page. The
  * engine writes every inline padding as at least that inset
- * (`withContainInset` in `compile-page`), so the value an author or a block
+ * (`withContainInset` in `contain-inset`), so the value an author or a block
  * default sets replaces the gutter and can widen the inset, but never undoes
  * the containment. The property is registered as not inherited, and the reset
  * says the same for a browser that ignores the registration, so a block inside
@@ -329,20 +333,34 @@ function emitContentWidth(
   // the weight the contract gives an element or block-type default.
   const sizedWidth = SIZED_FLAG_PROPERTIES.width;
   const sizedMax = SIZED_FLAG_PROPERTIES["max-width"];
+  const sizedItem = SIZED_ITEM_PROPERTY;
+  const outOfFlow = OUT_OF_FLOW_PROPERTY;
+  const columnFlow = COLUMN_FLOW_PROPERTY;
+  const fillsRow = FILLS_ROW_PROPERTY;
   return [
     `@property ${inset}{syntax:"<length-percentage>";inherits:false;initial-value:0px}`,
     // The flags the page compile sets beside a block's own width and
     // maximum width: 1 while either sizes the block, 0 otherwise.
     `@property ${sizedWidth}{syntax:"<number>";inherits:false;initial-value:0}`,
     `@property ${sizedMax}{syntax:"<number>";inherits:false;initial-value:0}`,
-    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0}`,
+    // And the flag a parent's flex layout sets on its children.
+    `@property ${sizedItem}{syntax:"<number>";inherits:false;initial-value:0}`,
+    // And the one a block's own position sets: out of the flow, it is no
+    // flex item whatever its parent's layout.
+    `@property ${outOfFlow}{syntax:"<number>";inherits:false;initial-value:0}`,
+    // And the one a parent's flex column sets: its items fill its width.
+    `@property ${columnFlow}{syntax:"<number>";inherits:false;initial-value:0}`,
+    // And the one a block's own `min-width: 100%` sets: it fills the row.
+    `@property ${fillsRow}{syntax:"<number>";inherits:false;initial-value:0}`,
+    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0;${sizedItem}:0;${outOfFlow}:0;${columnFlow}:0;${fillsRow}:0}`,
     // After the reset and at its weight, so a contained element takes this.
     // `100%` resolves where the property is used, in the element's own
     // padding, so it is the width of the box the container is laid out in.
-    // A block an author sized is narrower than that box, so its inset is
-    // multiplied away; `margin-inline: auto` is 0 on a block that fills its
-    // box and centres a sized one, and an author's own margin outweighs it.
-    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
+    // A block an author sized, or a flex item, is narrower than that box, so
+    // its inset is multiplied away; `margin-inline: auto` is 0 on a block that
+    // fills its box and centres a sized one, and an author's own margin
+    // outweighs it.
+    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}), var(${sizedItem}) * (1 - var(${outOfFlow})) * (1 - var(${columnFlow})) * (1 - var(${fillsRow})))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
   ].join("\n");
 }
 

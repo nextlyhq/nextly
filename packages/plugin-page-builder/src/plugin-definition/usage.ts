@@ -32,7 +32,7 @@ import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 import { backfillSurvey } from "../usage-backfill-wiring";
 import { usageBookkeeping } from "../usage-bookkeeping";
 import { listDocumentsUsingEach, type UsageCount } from "../usage-count";
-import { countThePages } from "../usage-count-after-migrate";
+import type { countThePages } from "../usage-count-after-migrate";
 import { usageHealthService } from "../usage-health-service";
 import type { UsageIndex, UsageSubject } from "../usage-index";
 import {
@@ -40,6 +40,7 @@ import {
   usageTableOf,
   usageTableRows,
 } from "../usage-index-tables";
+
 import { type InitContext, liveSingle } from "./install-context";
 import { componentStoreOf } from "./options";
 import type { Definition } from "./state";

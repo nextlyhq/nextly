@@ -9,8 +9,9 @@
  * what fills the shell's slots from them: the top bar (`editor-top-bar`), the
  * inspector (`editor-inspector`, with its services in `editor-services`), the
  * canvas region (`editor-canvas-region`), Settings (`editor-settings`) and the
- * conditions strip and switch (`editor-conditions`), all reading one view
- * (`editor-view`). This module puts them into the shell.
+ * strip above the canvas and "Preview as visitor" (`editor-conditions`),
+ * all reading one view (`editor-view`). This module puts them into the
+ * shell.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
@@ -49,6 +50,7 @@ import { valueAtPath } from "../snapshot-merge";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { useDropKeptReadsOnSave } from "./canvas-source-check";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -244,7 +246,8 @@ function useDrawnCanvasRender(
 
 /**
  * What the editor's search adds from: the Add panel's own sources, and the
- * container whose "+" opened Add, so a search row adds where the panel would.
+ * place a "+" that opened Add chose, so a search row adds where the panel
+ * would.
  */
 function searchInsertSources(
   panels: EditorPanels
@@ -255,6 +258,7 @@ function searchInsertSources(
     ...(panels.insertInside === undefined
       ? {}
       : { inside: panels.insertInside }),
+    ...(panels.insertAfter === undefined ? {} : { after: panels.insertAfter }),
   };
 }
 
@@ -358,6 +362,9 @@ function EditorBody<TFieldValues extends FieldValues>({
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
   const savePoint = useSavePoint(editor);
+  // A store made here drops what the canvas kept at once: the page's own
+  // entry is among what it reads.
+  useDropKeptReadsOnSave();
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(editor, inline, savePoint.savedAt)
@@ -365,7 +372,7 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   const style = useSiteStyleInputs(mount.clientConfig);
   // Whether the canvas's lists read as a visitor: held above the canvas's
-  // inputs, which read them, and set by the conditions switch below.
+  // inputs, which read them, and set by "Preview as visitor" below.
   const listsAsVisitor = useListsAsVisitor();
   const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
   const panels = useEditorPanels(mount, name, {
@@ -485,11 +492,13 @@ function EditorBody<TFieldValues extends FieldValues>({
     // in the tree the canvas composes.
     canvas.canvasRender.definitions
   );
-  // The switch that applies the conditions for the entry a template is
-  // previewed with: the author's own, for this session, never saved.
+  // "Preview as visitor", which applies the conditions for the entry a
+  // template is previewed with, or for the page: the author's own, for this
+  // session, never saved.
   const conditions = useAppliedConditionsSwitch(
     conditioned,
     templatePreview,
+    mount.initialDocument.kind,
     pageConditionsSourceOf(
       templatePreview,
       mount.initialDocument.kind,
@@ -636,14 +645,12 @@ function EditorBody<TFieldValues extends FieldValues>({
             field: place.address,
             location: place.location,
             canvas: canvas.canvasElement,
+            // "Preview as visitor", in Preview's menu.
+            visitor: conditions.visitor,
           })}
-          // Pinned above a template's canvas: the entry it is drawn with.
-          canvasStrip={editorStrip(
-            templatePreview,
-            conditions,
-            mount.initialDocument.kind,
-            page.title
-          )}
+          // Pinned above the canvas: a template's entry it is drawn with, and
+          // the visitor's view while it is on.
+          canvasStrip={editorStrip(templatePreview, conditions)}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page, settingsPlace)}
           // The shell owns the region; this fills it. Rendered unconditionally

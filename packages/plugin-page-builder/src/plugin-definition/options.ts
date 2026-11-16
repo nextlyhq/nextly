@@ -6,7 +6,6 @@
  * the browser is sent as the admin's `clientConfig`.
  */
 import {
-  allBlocks,
   DEFAULT_LIMITS,
   type DocumentLimits,
   type NamedQueryDefinition,
@@ -19,14 +18,14 @@ import type { PreviewViewportsDeclaration } from "nextly/config";
 import { DELETE_COMPONENT_REPLACEMENT_COMPONENT } from "../builder-view";
 import { COMPONENTS_SLUG } from "../collections/components";
 import type { PagesCollectionOptions } from "../collections/pages";
-import { withBlockLooks } from "../core-looks";
+import { withRegisteredLooks } from "../core-looks";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "../library-route";
 import { previewViewportsFromSiteStyle } from "../preview-viewports";
 import type { PublishReadinessSetup } from "../publish-readiness";
 import type { PageBuilderSiteCodeOptions } from "../site-code/route";
-import {
+import type {
+  PageBuilderFontOptions,
   resolveFontOptions,
-  type PageBuilderFontOptions,
 } from "../site-fonts/options";
 import { siteFontRoutes } from "../site-fonts/routes";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
@@ -467,7 +466,8 @@ export interface PageBuilderOptions {
  * The code tier refreshed with every registered block's looks, other
  * plugins' among them, once they have all registered at init. Updated in
  * place: every reader holds this one object and this one set, and none has
- * read them yet.
+ * read them yet. The looks come from the function the canvas and the
+ * published page's site style take theirs from, so the three agree.
  */
 export function refreshCodeTier(
   configStyle: SiteStyleData,
@@ -475,7 +475,7 @@ export function refreshCodeTier(
   siteStyle: SiteStyleData | undefined
 ): void {
   configStyle.classes = resolveSiteStyle(
-    withBlockLooks(siteStyle, allBlocks())
+    withRegisteredLooks(siteStyle)
   ).classes;
   configClassIds.clear();
   for (const entry of configStyle.classes ?? []) configClassIds.add(entry.id);

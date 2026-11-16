@@ -33,23 +33,26 @@ function settingsOf(entity: Entity): BuilderSettingsValues {
   return { singularName: entity.name, slug: "posts", icon: "Database" };
 }
 
-function isDirty(
-  a: BuilderSettingsValues | null,
-  b: BuilderSettingsValues | null
-): boolean {
-  if (!a || !b) return false;
-  return a.singularName !== b.singularName;
-}
-
 /**
  * A stand-in for `useFieldBuilder` that holds its own fields, so the dirty
  * count can be observed against real field state rather than a mock's calls.
  */
 function makeBuilder() {
   let current: BuilderField[] = [];
+  // The settings share the builder's history, so the stand-in holds them too.
+  let settings: BuilderSettingsValues | null = null;
   const api: BuilderFieldsApi = {
     get fields() {
       return current;
+    },
+    get settings() {
+      return settings;
+    },
+    setSettings: vi.fn((next: BuilderSettingsValues) => {
+      settings = next;
+    }),
+    get snapshot() {
+      return { fields: current, settings };
     },
     setFields: vi.fn(next => {
       current = typeof next === "function" ? next(current) : next;
@@ -61,9 +64,13 @@ function makeBuilder() {
     handleFieldUpdate: vi.fn(),
     handleNestedFieldAdd: vi.fn(),
     validateFields: vi.fn(() => ({ valid: true })),
-    resetFields: vi.fn((next: BuilderField[]) => {
-      current = next;
-    }),
+    resetFields: vi.fn(
+      (next: BuilderField[], nextSettings?: BuilderSettingsValues | null) => {
+        current = next;
+        if (nextSettings !== undefined) settings = nextSettings;
+      }
+    ),
+    rewriteSnapshots: vi.fn(),
     clearHistory: vi.fn(),
     historyStep: 0,
     canUndo: false,
@@ -95,7 +102,6 @@ function setup(
         builder: builder.api,
         toFields: (loaded: Entity) => loaded.fields,
         toSettings: settingsOf,
-        isDirty,
         onLoad: () => {
           loadCount += 1;
         },
@@ -195,7 +201,7 @@ describe("useBuilderEntityState", () => {
   // A settings-only edit has to enable Save; counting field changes alone left
   // the button disabled and the edit unreachable.
   it("counts a settings-only edit", () => {
-    const { result } = setup({
+    const { result, rerender } = setup({
       slug: "posts",
       name: "Post",
       fields: [definition("body")],
@@ -205,6 +211,9 @@ describe("useBuilderEntityState", () => {
         ...settingsOf({ slug: "posts", name: "Article", fields: [] }),
       })
     );
+    // The stand-in builder holds the settings outside React, as it does the
+    // fields, so the page is drawn again to read them.
+    rerender({ e: undefined });
     expect(result.current.unsavedCount).toBe(1);
   });
 
@@ -230,13 +239,15 @@ describe("useBuilderEntityState", () => {
   // The baseline moves when the write lands, which is what makes a change and
   // a change-back both read as clean.
   it("goes clean again once the saved settings are pinned", () => {
-    const { result } = setup({
+    const { result, rerender } = setup({
       slug: "posts",
       name: "Post",
       fields: [definition("body")],
     });
     const renamed = settingsOf({ slug: "posts", name: "Article", fields: [] });
     act(() => result.current.setSettings(renamed));
+    // Drawn again to read the stand-in builder's settings, held outside React.
+    rerender({ e: undefined });
     expect(result.current.unsavedCount).toBe(1);
 
     act(() => result.current.pinSettings(renamed));

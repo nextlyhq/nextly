@@ -13,6 +13,7 @@ import { compileStyleValues, safeTokenPrefix } from "./declarations";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   checkTokenKind,
+  tokenKindExample,
   DARK_MODE_ATTRIBUTE,
   defaultSiteTokens,
   resolveSiteTokens,
@@ -261,6 +262,30 @@ describe("a value that cannot be its kind", () => {
     ["fontFamily", "system-ui"],
     ["shadow", "0 1px 2px rgba(0,0,0,.2)"],
     ["custom", "anything at all"],
+    // Every hex length CSS reads.
+    ["color", "#abc"],
+    ["color", "#abcd"],
+    ["color", "#aabbcc"],
+    ["color", "#aabbccdd"],
+    // A hex with an escaped digit: CSS reads it, though the contrast parser
+    // does not.
+    ["color", "#\\66 ff"],
+    // Words a property that takes a length variable accepts in its place, in
+    // any case, as CSS reads keywords.
+    ["dimension", "auto"],
+    ["dimension", "AUTO"],
+    ["dimension", "max-content"],
+    ["dimension", "large"],
+    ["dimension", "thin"],
+    ["dimension", "inherit"],
+    // The same words with an escaped letter, as CSS reads identifiers.
+    ["dimension", "a\\75 to"],
+    ["dimension", "in\\68 erit"],
+    // A function this check does not know still passes: it may be next
+    // year's CSS.
+    ["dimension", "fit-content(20rem)"],
+    ["dimension", "anchor-size(width)"],
+    ["color", "hwb(120 10% 10%)"],
   ] as const)("stays quiet about a valid %s value %s", (kind, value) => {
     // The check is one-sided on purpose. A false positive here would tell an
     // author their perfectly good `oklch()` is wrong, which is worse than the
@@ -311,8 +336,54 @@ describe("a value that cannot be its kind", () => {
     ["duration", "0deg"],
     ["number", "1e3px"],
     ["fontWeight", "2e3"],
+    // Words where a length belongs: no property a length variable is read
+    // by takes them, so the declaration is dropped where it is used.
+    ["dimension", "the spacing"],
+    ["dimension", "big"],
+    ["dimension", "1px wide"],
+    ["dimension", "12pxred"],
+    // A hex colour with a length CSS does not read, or a digit that is not hex.
+    ["color", "#12345"],
+    ["color", "#12"],
+    ["color", "#1234567"],
+    ["color", "#ggg"],
   ] as const)("names what is wrong with %s value %s", (kind, value) => {
     expect(checkTokenKind(kind, value), `${kind}: ${value}`).toBeDefined();
+  });
+
+  it("says what to type instead of a word or a bad hex", () => {
+    expect(checkTokenKind("dimension", "the spacing")).toBe(
+      "is words, not a length"
+    );
+    expect(tokenKindExample("dimension")).toBe(
+      "a number with a unit, such as 16px or 1.5rem"
+    );
+    expect(checkTokenKind("color", "#12345")).toBe(
+      "is not a hex colour, which has 3, 4, 6 or 8 digits from 0-9 and a-f"
+    );
+    expect(tokenKindExample("color")).toBe("a colour, such as #1d4ed8");
+    // A kind that takes any value has nothing to suggest.
+    expect(tokenKindExample("custom")).toBeUndefined();
+  });
+
+  it("reports a mismatch without claiming where the value went", () => {
+    // The same report is a warning while a page renders and a refusal when a
+    // save is checked, so the message holds only what is true in both; what
+    // a render does with the value is the suggestion's to say.
+    const { issues } = emitTokenBlocks(
+      {
+        tokens: [
+          { name: "space.gap", kind: "dimension", values: { light: "big" } },
+        ],
+      },
+      SCOPE
+    );
+    expect(issues[0]?.message).toBe(
+      '"space.gap" is a dimension token, but its light value "big" is words, not a length. Type a number with a unit, such as 16px or 1.5rem.'
+    );
+    expect(issues[0]?.suggestion).toBe(
+      "It was written as given, and will do nothing where the token is used."
+    );
   });
 });
 

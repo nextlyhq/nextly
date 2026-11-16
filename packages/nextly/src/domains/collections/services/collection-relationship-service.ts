@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import {
+  and,
   getColumns,
   inArray,
   sql,
@@ -86,6 +87,7 @@ import {
   populateCompanionFields,
   selectRowsWithCompanion,
 } from "../../i18n/companion-join";
+import { publishedInLanguageCondition } from "../../i18n/read-in-language";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -2076,7 +2078,23 @@ export class CollectionRelationshipService extends BaseService {
           );
         })
       : fetched;
-    const rows = lifecycleRows.filter(row => matching.has(row));
+    // Published in the read's language too, as a direct read of the target in
+    // that language finds it: a target withheld there is withheld here, and
+    // recorded as withheld rather than filled from a fallback language.
+    const inLanguage = statusFilter
+      ? await this.idsPublishedInReadLanguage(
+          targetCollection,
+          schema,
+          lifecycleRows,
+          statusFilter,
+          access,
+          decisions.reveal
+        )
+      : null;
+    const rows = lifecycleRows.filter(
+      row =>
+        matching.has(row) && (inLanguage === null || inLanguage.has(row.id))
+    );
     this.recordWithheld(targetCollection, fetched, rows, access);
 
     // A target whose translatable values live in its companion is read with them, in the language
@@ -2095,6 +2113,59 @@ export class CollectionRelationshipService extends BaseService {
     // row survives the redaction of its own source field.
     await this.redactRelatedRows(targetCollection, rows, access);
     return rows;
+  }
+
+  /**
+   * Of `rows`, the ids published in the language the read asked for, by the
+   * rule a direct read of the target applies (`publishedInLanguageCondition`),
+   * a due release's reveals included. Null where that rule keeps nothing out:
+   * a read with no language, a system entity, a target that publishes no
+   * language on its own, or one whose translations table is not there yet.
+   */
+  private async idsPublishedInReadLanguage(
+    targetCollection: string,
+    schema: Table & { id: Column },
+    rows: Record<string, unknown>[],
+    statusFilter: StatusFilter,
+    access: RelatedRowAccess,
+    revealed: readonly string[]
+  ): Promise<ReadonlySet<unknown> | null> {
+    const localeChain = targetLocaleChain(access);
+    if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
+      return null;
+    }
+    const companion = await this.resolveTargetCompanion(
+      targetCollection,
+      access
+    );
+    if (
+      !companion ||
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) !==
+        "ready"
+    ) {
+      return null;
+    }
+    const condition = publishedInLanguageCondition({
+      companion,
+      statusFilter,
+      revealed,
+      localeChain,
+      mainIdColumn: schema.id,
+    });
+    if (!condition) return null;
+    const found = (await this.db
+      .select({ id: schema.id })
+      .from(schema)
+      .where(
+        and(
+          inArray(
+            schema.id,
+            rows.map(row => row.id)
+          ),
+          condition
+        )
+      )) as { id: unknown }[];
+    return new Set(found.map(row => row.id));
   }
 
   /**

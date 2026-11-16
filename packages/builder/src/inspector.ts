@@ -22,6 +22,7 @@ import {
   isLinkableUrl,
   locateNode,
   nodeLocks,
+  propPlace,
   registryBlockSource,
   type ActiveSlotLock,
   type AnyBlockDefinition,
@@ -40,6 +41,7 @@ import {
 import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
 import { blockLabel, insertionPropSets } from "./inserter";
+import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
@@ -145,6 +147,24 @@ export interface BlockHtml {
 }
 
 /** The selected block, as something to edit. */
+/** One section of a tab's settings: its name and its rows. @experimental */
+export interface InspectionSection {
+  /** What the section is called. */
+  readonly label: string;
+  /** For a Style section, its key, which the Style tab draws it under. */
+  readonly key?: string;
+  /** Its settings, in the order the block declares them. */
+  readonly rows: readonly EditableProp[];
+}
+
+/** A block's settings by the tab each is edited in. @experimental */
+export interface InspectionSections {
+  readonly content: readonly InspectionSection[];
+  readonly advanced: readonly InspectionSection[];
+  /** The block's own props a Style section draws, beside its styles. */
+  readonly styleProps: readonly InspectionSection[];
+}
+
 export interface BlockInspection {
   readonly nodeId: string;
   readonly blockName: string;
@@ -169,6 +189,17 @@ export interface BlockInspection {
    * alphabetical order rearranges a form somebody designed.
    */
   readonly props: readonly EditableProp[];
+  /**
+   * The same props by the tab and section each is edited in, as the block
+   * declares them (`group` and `section` on each prop): Content first in a
+   * section named after the block, Advanced in "HTML", and Style in the Style
+   * tab's section a prop names. Sections and their rows keep declaration
+   * order. A block that declares no places has one Content section holding
+   * every prop.
+   *
+   * @experimental
+   */
+  readonly sections: InspectionSections;
   /**
    * The block's own inspector component (`editor.component`), when it names
    * one, drawn in place of the controls generated from {@link props}.
@@ -438,9 +469,56 @@ export function inspectSelection(
         ? definition.editor.icon
         : undefined,
     props,
+    sections: sectionsOf(props, blockLabel(node.type)),
     inspector: inspectorOf(definition),
     designLock,
     placedWith: insertionPropSets(definition),
+  };
+}
+
+/** What a Style section is called, by its key, as the Style tab names it. */
+function styleSectionLabel(key: string): string {
+  return INSPECTOR_SECTIONS.find(section => section.key === key)?.label ?? key;
+}
+
+/** One section being filled: its rows are added as props are read. */
+interface FillingSection {
+  readonly label: string;
+  readonly key?: string;
+  readonly rows: EditableProp[];
+}
+
+/**
+ * The props by tab and section, in declaration order: a section is placed
+ * where its first prop is declared, and each prop joins its section's rows.
+ */
+function sectionsOf(
+  props: readonly EditableProp[],
+  label: string
+): InspectionSections {
+  const tabs = {
+    content: [] as FillingSection[],
+    advanced: [] as FillingSection[],
+    style: [] as FillingSection[],
+  };
+  for (const prop of props) {
+    const place = propPlace(prop.schema, label);
+    const tab = tabs[place.tab];
+    const named =
+      place.tab === "style"
+        ? { label: styleSectionLabel(place.section), key: place.section }
+        : { label: place.section };
+    let section = tab.find(each => each.label === named.label);
+    if (section === undefined) {
+      section = { ...named, rows: [] };
+      tab.push(section);
+    }
+    section.rows.push(prop);
+  }
+  return {
+    content: tabs.content,
+    advanced: tabs.advanced,
+    styleProps: tabs.style,
   };
 }
 
