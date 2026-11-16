@@ -301,9 +301,9 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
-  /** @experimental A document's history: list, read, compare, name, restore. */
+  /** A document's history: list, read, compare, name, restore. */
   public readonly versions: VersionsNamespace;
-  /** @experimental A subject's content events: a document's or a release's. */
+  /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;

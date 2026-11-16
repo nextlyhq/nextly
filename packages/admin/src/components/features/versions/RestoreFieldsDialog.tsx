@@ -26,7 +26,7 @@ import {
   AlertDialogTitle,
   Checkbox,
 } from "@nextlyhq/ui";
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 
 import type { RestoreRow } from "./restore-plan";
 
@@ -54,6 +54,15 @@ export function RestoreFieldsDialog({
   onConfirm,
 }: RestoreFieldsDialogProps): JSX.Element {
   const [chosen, setChosen] = useState(() => initiallyChosen(rows));
+  // What had focus when the dialog opened: the control that opened it. Read in a layout effect,
+  // before the dialog moves focus into itself. The dialog is opened from state, so it has no
+  // trigger of its own to hand focus back to.
+  const opener = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (open && document.activeElement instanceof HTMLElement) {
+      opener.current = document.activeElement;
+    }
+  }, [open]);
   // Each opening starts from the version's own list, not the last choice.
   useEffect(() => {
     if (open) setChosen(initiallyChosen(rows));
@@ -73,7 +82,18 @@ export function RestoreFieldsDialog({
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
+      <AlertDialogContent
+        // Closed by Escape, Cancel or a restore, focus goes back to the control that opened the
+        // dialog, where the person left off, as long as it is still on the page.
+        onCloseAutoFocus={event => {
+          const back = opener.current;
+          opener.current = null;
+          if (back?.isConnected) {
+            event.preventDefault();
+            back.focus();
+          }
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>Restore from version {versionNo}</AlertDialogTitle>
           <AlertDialogDescription asChild>

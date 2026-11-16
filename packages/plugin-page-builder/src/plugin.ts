@@ -429,6 +429,7 @@ export const pageBuilder = (
         bindings.namedQueries,
         bindings.listEntries,
         bindings.canvasBindings,
+        bindings.canvasSourcesChanged,
         bindings.bindingFields,
         bindings.unbindPlan,
         usage.overview,

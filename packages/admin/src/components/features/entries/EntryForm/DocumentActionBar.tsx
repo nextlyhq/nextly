@@ -268,7 +268,7 @@ export function reasonFor(
 }
 
 /** An action and what it is wired to. */
-type Bound = { action: EditorDocumentAction; binding: ActionBinding };
+export type Bound = { action: EditorDocumentAction; binding: ActionBinding };
 
 /**
  * The actions a host actually wired, paired with their bindings.
@@ -416,7 +416,7 @@ function publishNow(primary: Bound): Bound {
 const PUBLISH_NOW_ACTION_ID = "publish-now";
 
 /** What the arrow beside the primary action is called, and opens. */
-const PUBLISH_OPTIONS_LABEL = "More ways to publish";
+export const PUBLISH_OPTIONS_LABEL = "More ways to publish";
 
 /**
  * The one leading action, and where there are other ways to publish, the
@@ -469,37 +469,70 @@ function PrimaryAction({
   return (
     <div className="flex items-center" data-publish-split="">
       {press}
-      {/* Usable while the press is held: each option carries its own reason,
-        and scheduling or adding to a release writes nothing to the form. */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            size="sm"
-            className="rounded-l-none border-l-primary-foreground/25 px-1.5"
-            aria-label={optionsLabel}
-            title={optionsLabel}
-          >
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          className={cn("min-w-56", menuClassName)}
-        >
-          {options.map(entry => (
-            <OptionRow key={entry.action.id} entry={entry} />
-          ))}
-          {/* A rule only between two populated groups, as in More. */}
-          {options.length > 0 && dangerOptions.length > 0 ? (
-            <DropdownMenuSeparator />
-          ) : null}
-          {dangerOptions.map(entry => (
-            <OptionRow key={entry.action.id} entry={entry} danger />
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <ActionOptionsMenu
+        options={options}
+        dangerOptions={dangerOptions}
+        optionsLabel={optionsLabel}
+        {...(menuClassName === undefined ? {} : { menuClassName })}
+      />
     </div>
+  );
+}
+
+/**
+ * The arrow beside a leading action and the menu it opens: the other ways to
+ * publish, then, below a rule, the destructive rows a surface keeps there.
+ * Usable while the press is held: each row carries its own reason, and
+ * scheduling or adding to a release writes nothing to the form.
+ */
+export function ActionOptionsMenu({
+  options,
+  dangerOptions = [],
+  optionsLabel,
+  menuClassName,
+  triggerClassName,
+}: {
+  options: readonly Bound[];
+  dangerOptions?: readonly Bound[];
+  /** What the arrow is called, for what it holds. */
+  optionsLabel: string;
+  /** Extra classes for the menu, for a surface with its own density. */
+  menuClassName?: string;
+  /** Extra classes for the arrow, for a surface with its own look. */
+  triggerClassName?: string;
+}): JSX.Element {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          className={cn(
+            "rounded-l-none border-l-primary-foreground/25 px-1.5",
+            triggerClassName
+          )}
+          aria-label={optionsLabel}
+          title={optionsLabel}
+        >
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className={cn("min-w-56", menuClassName)}
+      >
+        {options.map(entry => (
+          <OptionRow key={entry.action.id} entry={entry} />
+        ))}
+        {/* A rule only between two populated groups, as in More. */}
+        {options.length > 0 && dangerOptions.length > 0 ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {dangerOptions.map(entry => (
+          <OptionRow key={entry.action.id} entry={entry} danger />
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -547,7 +580,7 @@ function RecoveryRow({ entry: { action, binding } }: { entry: Bound }) {
 }
 
 /** What the arrow is called where something other than Publish leads. */
-const DOCUMENT_OPTIONS_LABEL = "More document actions";
+export const DOCUMENT_OPTIONS_LABEL = "More document actions";
 
 /**
  * The destructive verbs a compact bar keeps on its arrow. Only the one about
@@ -557,6 +590,33 @@ const DOCUMENT_OPTIONS_LABEL = "More document actions";
  * work would be left showing what was just thrown away.
  */
 const COMPACT_DANGER_IDS: ReadonlySet<string> = new Set(["unpublish"]);
+
+/**
+ * What a compact bar draws: the leading action, the rows its arrow holds
+ * (the toolbar's, then the other ways to publish) and, below a rule, the
+ * destructive one it keeps. One answer for every compact drawing, so a
+ * status-carrying pair and the compact bar keep the same rows.
+ */
+export function compactRows(
+  actions: readonly EditorDocumentAction[],
+  bindings: DocumentActionBarProps["bindings"],
+  { withToolbar = true }: { withToolbar?: boolean } = {}
+): { primary: Bound | undefined; options: Bound[]; danger: Bound[] } {
+  const { available, primary } = wiredActions(actions, bindings);
+  return {
+    primary,
+    options: [
+      ...(withToolbar ? bound(actionsAt(available, "toolbar"), bindings) : []),
+      ...bound(actionsAt(available, "publish-menu"), bindings),
+    ],
+    danger: bound(
+      menuGroups(available).danger.filter(action =>
+        COMPACT_DANGER_IDS.has(action.id)
+      ),
+      bindings
+    ),
+  };
+}
 
 /**
  * The document's actions as ONE control, for a surface whose bar has room
@@ -576,17 +636,7 @@ export function CompactDocumentActionBar({
   DocumentActionBarProps,
   "className" | "narrowItems"
 >): JSX.Element | null {
-  const { available, primary } = wiredActions(actions, bindings);
-  const options = [
-    ...bound(actionsAt(available, "toolbar"), bindings),
-    ...bound(actionsAt(available, "publish-menu"), bindings),
-  ];
-  const danger = bound(
-    menuGroups(available).danger.filter(action =>
-      COMPACT_DANGER_IDS.has(action.id)
-    ),
-    bindings
-  );
+  const { primary, options, danger } = compactRows(actions, bindings);
   if (primary === undefined) {
     // Nothing to lead and nothing this bar keeps: no control at all, rather
     // than a menu that opens empty. The entry's page still has its own.
@@ -622,7 +672,7 @@ export function CompactDocumentActionBar({
  * as the bar it opens from. Spelled here rather than read from the builder's
  * tokens, which a menu drawn outside the editor's element can't inherit.
  */
-const COMPACT_MENU_CLASS =
+export const COMPACT_MENU_CLASS =
   "[&_[role=menuitem]]:py-1.5 [&_[role=menuitem]]:text-xs [&_[role=menuitem]]:leading-4";
 
 /**
