@@ -178,6 +178,7 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
   detachedCopy,
@@ -1356,10 +1357,23 @@ export class CollectionQueryService extends BaseService {
       this.adapter,
       companion
     );
+    // Where provenance is recorded (the table is there), each language is
+    // judged by its recorded values, and each one's fields are reported.
+    const provenance = (await translationProvenancePresent(
+      this.adapter,
+      this.logger
+    ))
+      ? {
+          scopeKind: "collection" as const,
+          scopeSlug: collectionName,
+          dialect: this.adapter.dialect,
+        }
+      : undefined;
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
       pendingChangeLocales,
+      provenance,
       readiness,
       localizedFields: companion.localizedFields,
       rows,
@@ -1773,6 +1787,18 @@ export class CollectionQueryService extends BaseService {
           : undefined,
       defaultLocale: this.localization.defaultLocale,
       filter,
+      // Where provenance is recorded, a language is judged by its recorded
+      // values, as the overview judges it. Asked only for the state that reads
+      // it, as the stamp column is.
+      ...(filter.state === "stale" &&
+      (await translationProvenancePresent(this.adapter, this.logger))
+        ? {
+            provenance: {
+              scopeKind: "collection" as const,
+              scopeSlug: collectionName,
+            },
+          }
+        : {}),
     });
   }
 

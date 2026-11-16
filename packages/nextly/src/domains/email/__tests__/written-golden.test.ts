@@ -17,34 +17,10 @@ import {
 } from "../services/render-template";
 import { defaultLayoutTemplate } from "../services/templates";
 import { WRITTEN_BLOCK_TYPES, type WrittenBlock } from "../written/document";
-import { WRITTEN_SAMPLES } from "../written/samples";
-
-const DATASETS: Record<string, Record<string, unknown>> = {
-  typical: {
-    appName: "Shop",
-    year: "2026",
-    name: "Priya",
-    order: { number: "1042" },
-    trackUrl: "https://shop.example/t/1042",
-    orderUrl: "https://shop.example/orders/1042",
-    lines: [
-      { name: "Tea", quantity: 2, total: "$8.00" },
-      { name: "Cake", quantity: 1, total: "$6.00" },
-    ],
-    coupon: "SPRING",
-  },
-  hostile: {
-    appName: "Shop <b>&</b>",
-    year: "2026",
-    name: `<script>alert("x")</script>`,
-    order: { number: "<1042>" },
-    trackUrl: "javascript:alert(1)",
-    orderUrl: `https://x.example/"><img src=x>`,
-    lines: [{ name: "{{ name }}", quantity: "<b>2</b>", total: "{% if %}" }],
-    coupon: "",
-  },
-  empty: { appName: "Shop", year: "2026" },
-};
+import {
+  WRITTEN_SAMPLE_DATASETS as DATASETS,
+  WRITTEN_SAMPLES,
+} from "../written/samples";
 
 const fields = (blocks: WrittenBlock[]): TemplateFields => ({
   subject: "Your order",
