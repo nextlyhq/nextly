@@ -108,7 +108,8 @@ test.describe("history by keyboard alone", () => {
     });
 
     // Next and Previous change: each lands on a changed field and says where.
-    await tabTo(page, "Next change");
+    // They sit in the page above the history panel, so back from the panel.
+    await tabTo(page, "Next change", "back");
     await expectFocusShown(page);
     await page.keyboard.press("Enter");
     await expect(

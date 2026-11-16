@@ -84,7 +84,10 @@ test.describe("restoring a version into the editor", () => {
     await showFirstVersion(page, id);
 
     await restoreTitleAndSummary(page, true);
-    const toast = page.getByText(/^2 fields restored from /);
+    // The toast, not the history's announcer, which says the same words.
+    const toast = page
+      .getByText(/^2 fields restored from /)
+      .and(page.locator(":not(#nextly-history-announcer)"));
     await expect(toast).toBeVisible();
     await expect(summaryBox(page)).toHaveValue("first summary");
     // Said aloud as well as shown, through the history's own announcer.
