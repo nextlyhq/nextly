@@ -607,8 +607,8 @@ export const SHARED_STYLE_DARK_UNREADABLE = "Hard to read in dark mode";
 const KIND_WORDS: Record<SharedStyleKind, readonly [string, string]> = {
   pages: ["page", "pages"],
   components: ["component", "components"],
-  patterns: ["pattern", "patterns"],
-  layouts: ["layout", "layouts"],
+  patterns: ["saved section", "saved sections"],
+  layouts: ["header & footer set", "header & footer sets"],
 };
 
 /** A kind as a document is labelled in a list: "Page", "Component". */

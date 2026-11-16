@@ -5,7 +5,7 @@
  * the inspector's tabs, the Add panel, the Design panel — so a rename is one
  * edit and two surfaces cannot call one place by two names. The words are
  * the author's, not the code's: "Shared styles" rather than classes,
- * "Variables" rather than tokens, "Sections" rather than patterns.
+ * "Variables" rather than tokens, "Saved sections" rather than patterns.
  *
  * The words for what a variable gives the places using it are here too, by
  * kind, for the same reason: "colour" rather than color, "size" rather than
@@ -24,7 +24,7 @@ export const EDITOR_WORDS = {
   variables: "Variables",
   sharedStyles: "Shared styles",
   fonts: "Fonts",
-  sections: "Sections",
+  sections: "Saved sections",
   content: "Content",
   style: "Style",
   settings: "Settings",
@@ -35,6 +35,18 @@ export const EDITOR_WORDS = {
 
 /** One place the editor names, by its key in {@link EDITOR_WORDS}. */
 export type EditorWord = keyof typeof EDITOR_WORDS;
+
+/**
+ * The verb for each conversion between a selection, a saved section and a
+ * component, spelled once. The bar, its ⋯ menu, the right-click menu and the
+ * command palette all name these three with these words, so an author meets
+ * one verb for one act wherever they look for it.
+ */
+export const CONVERSION_WORDS = {
+  saveAsSection: "Save as section…",
+  turnIntoComponent: "Turn into component…",
+  detachFromComponent: "Detach from component",
+} as const;
 
 /**
  * What a place using a variable would lose with it, by the variable's kind:
