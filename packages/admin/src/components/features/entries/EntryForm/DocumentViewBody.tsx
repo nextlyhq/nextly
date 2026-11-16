@@ -54,6 +54,7 @@ import {
   viewFieldRefusal,
   type ViewFieldRefusal,
 } from "./document-view-field-refusal";
+import { useOfferPendingRecovery } from "./DocumentActionsContext";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import {
   DocumentRestoreProvider,
@@ -69,6 +70,7 @@ import {
   useRecoveryOfferHost,
   type HostedRecoveryOffer,
 } from "./RecoveryOfferContext";
+import type { KeepOutcome, PendingRecovery } from "./useDocumentActionBindings";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -167,33 +169,87 @@ function useRestoreRemount(
   restoreInView: () => boolean
 ): {
   recovery: UseAutosaveRecoveryResult;
+  /** The checked restore as Save keeps an offer with it; see `PendingRecovery`. */
+  keep: PendingRecovery["restoreChecked"];
   generation: number;
   /** True for the one commit between the view leaving and the restore. */
   withdrawn: boolean;
 } {
   const [generation, setGeneration] = useState(0);
   const [withdrawn, setWithdrawn] = useState(false);
-  const { take } = recovery;
+  const { take, restoreChecked } = recovery;
+  // Told once a fresh view is drawn over the restored values, so a checked
+  // restore answers only when the restore has reached the view.
+  const redrawn = useRef<(() => void) | null>(null);
+  // Whether this body is still drawn: the editor can leave the view while a
+  // restore is being checked, and nothing here is drawn afresh after that.
+  const drawn = useRef(true);
+  useEffect(() => {
+    drawn.current = true;
+    return () => {
+      drawn.current = false;
+      redrawn.current?.();
+      redrawn.current = null;
+    };
+  }, []);
   useEffect(() => {
     if (!withdrawn) return;
     take();
     setGeneration(count => count + 1);
     setWithdrawn(false);
+    redrawn.current?.();
+    redrawn.current = null;
   }, [withdrawn, take]);
+  // Once the offer is confirmed (see `restore`), the view's own restore
+  // first, as an edit it can undo; drawn afresh only when it has none or
+  // declines, and then `redrawn` (if given) is told once it is. Nothing
+  // changes before then. Both restores below take these steps.
+  const applyHere = useCallback(
+    (redrawnThen?: () => void) => {
+      if (restoreInView()) {
+        redrawnThen?.();
+        return;
+      }
+      redrawn.current = redrawnThen ?? null;
+      setWithdrawn(true);
+    },
+    [restoreInView]
+  );
+  // The checked restore answers once the restore has reached the view. It
+  // writes nothing where `stillWanted` says no (answering `edited`), and
+  // answers `unchecked` where the view went away before it could land.
+  const keep = useCallback(
+    async (stillWanted: () => boolean): Promise<KeepOutcome> => {
+      let reached: Promise<void> = Promise.resolve();
+      // Where the restore went, set by the steps below once it is confirmed.
+      const landing: { at: "here" | "edited" | "gone" } = { at: "here" };
+      const outcome = await restoreChecked(() => {
+        if (!stillWanted()) {
+          landing.at = "edited";
+          return;
+        }
+        if (!drawn.current) {
+          landing.at = "gone";
+          return;
+        }
+        reached = new Promise(resolve => applyHere(resolve));
+      });
+      await reached;
+      if (outcome !== "restored") return outcome;
+      if (landing.at === "edited") return "edited";
+      // Gone before the restore could reach it, or while it was drawn afresh.
+      return landing.at === "gone" || !drawn.current ? "unchecked" : "restored";
+    },
+    [restoreChecked, applyHere]
+  );
   const offered = useMemo(
     () => ({
       ...recovery,
-      // Once the offer is confirmed (see `restore`), the view's own restore
-      // first, as an edit it can undo; drawn afresh only when it has none or
-      // declines. Nothing changes before then.
-      restore: () =>
-        recovery.restore(() => {
-          if (!restoreInView()) setWithdrawn(true);
-        }),
+      restore: () => recovery.restore(() => applyHere()),
     }),
-    [recovery, restoreInView]
+    [recovery, applyHere]
   );
-  return { recovery: offered, generation, withdrawn };
+  return { recovery: offered, keep, generation, withdrawn };
 }
 
 /**
@@ -272,6 +328,18 @@ function valueAtPath(record: Record<string, unknown>, path: string): unknown {
     at = (at as Record<string, unknown>)[part];
   }
   return at;
+}
+
+/** The offer as Save can keep it, while it is `offered`; else null. */
+function useKeepableOffer(
+  keep: PendingRecovery["restoreChecked"],
+  dismiss: () => void,
+  offered: boolean
+): PendingRecovery | null {
+  return useMemo(
+    () => (offered ? { restoreChecked: keep, dismiss } : null),
+    [offered, keep, dismiss]
+  );
 }
 
 /** The offer the save chip may make, as the banner would make it. */
@@ -494,6 +562,17 @@ export function DocumentViewBody({
   // banner below is for a view that draws no chip.
   const recoveryOffer = useRecoveryOfferHost(
     useChipRecoveryOffer(offered.recovery, viewingVersion)
+  );
+  // And to the document's Save, which keeps the changes on offer while the
+  // view draws the save chip that makes the offer (the host applies it only
+  // then). A view that leaves the offer to the banner has its Save wait for
+  // an edit, as the entry page's does.
+  useOfferPendingRecovery(
+    useKeepableOffer(
+      offered.keep,
+      offered.recovery.dismiss,
+      recoveryOffer.value.offer !== null
+    )
   );
 
   const { errors, submitCount } = form.formState;
