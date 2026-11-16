@@ -650,16 +650,11 @@ function ColourValue({
   }, []);
   // A picker still open when the popover closes writes what it showed.
   React.useEffect(() => flush, [flush]);
-  // The swatch follows what is typed, so a value that is not a colour shows
-  // as one at once, rather than as the last colour or as black. A colour the
-  // picker cannot read (`oklch()`, a variable, a named colour) is still one:
-  // the swatch paints it as written, and only text no browser reads as a
-  // colour is marked invalid.
-  const typed = text.trim();
-  const current = typed === "" ? value : typed;
-  const hex = shown ?? colourHexOf(current, undefined);
-  const readable = hex !== undefined || isCssColour(current);
-  const invalid = !readable && typed !== "";
+  const { hex, paint, invalid, said } = colourFieldState(
+    text.trim(),
+    value,
+    shown
+  );
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
@@ -671,16 +666,16 @@ function ColourValue({
             className="nx-vars__swatch"
             aria-hidden="true"
             data-invalid={invalid ? "" : undefined}
-            style={swatchStyle(hex ?? (readable ? current : undefined))}
+            style={swatchStyle(paint)}
           />
         ) : (
           <button
             type="button"
             className="nx-vars__swatch nx-vars-editor__swatch"
             data-invalid={invalid ? "" : undefined}
-            aria-label={`Pick the ${label.toLowerCase()} colour${invalid ? " (not a valid colour)" : ""}`}
+            aria-label={`Pick the ${label.toLowerCase()} colour${said}`}
             aria-expanded={picking}
-            style={swatchStyle(hex ?? (readable ? current : undefined))}
+            style={swatchStyle(paint)}
             onClick={() => {
               if (picking) {
                 flush();
@@ -720,9 +715,9 @@ function ColourValue({
       {picking ? (
         <ColorPicker
           className="nx-vars-editor__picker"
-          // A value the picker cannot read starts it from a neutral grey, not
-          // from black, which it would claim the value is; opaque, so a
-          // colour picked from there is seen.
+          // A value the picker cannot read starts it from white, not from
+          // black, which it would claim the value is; opaque, so a colour
+          // picked from there is seen.
           color={hex ?? NO_COLOUR}
           showAlpha
           onColorChange={next => {
@@ -735,8 +730,40 @@ function ColourValue({
   );
 }
 
-/** Where the picker starts for a value it cannot read: a neutral grey. */
-const NO_COLOUR = "#808080";
+/** Where the picker starts for a value it cannot read: white. */
+const NO_COLOUR = "#ffffff";
+
+/**
+ * What a colour field shows for the text in it: the colour the picker reads,
+ * what the swatch paints, and whether the text is no colour at all.
+ *
+ * The swatch follows what is typed, so a value that is not a colour shows as
+ * one at once, rather than as the last colour or as black. A colour the picker
+ * cannot read (`oklch()`, a variable, a named colour) is still one: the swatch
+ * paints it as written, and only text no browser reads as a colour is marked
+ * invalid, said so in the swatch button's name.
+ */
+function colourFieldState(
+  typed: string,
+  value: string,
+  shown: string | null
+): {
+  hex: string | undefined;
+  paint: string | undefined;
+  invalid: boolean;
+  said: string;
+} {
+  const current = typed === "" ? value : typed;
+  const hex = shown ?? colourHexOf(current, undefined);
+  const readable = hex !== undefined || isCssColour(current);
+  const invalid = !readable && typed !== "";
+  return {
+    hex,
+    paint: hex ?? (readable ? current : undefined),
+    invalid,
+    said: invalid ? " (not a valid colour)" : "",
+  };
+}
 
 /**
  * Whether the browser reads `text` as a CSS colour: any colour a stylesheet
