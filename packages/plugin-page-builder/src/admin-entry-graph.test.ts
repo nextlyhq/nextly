@@ -127,6 +127,8 @@ describe("what the browser entries reach", () => {
   it("CONTROL: the walk sees a call-time import of the root", () => {
     // The package root's plugin reaches the root at call time on purpose; a
     // reader that could not see that form would pass a browser entry that does.
-    expect(namingTheSdkRoot("index.ts")).toContain("plugin.ts");
+    expect(namingTheSdkRoot("index.ts")).toContain(
+      "plugin-definition/install-context.ts"
+    );
   });
 });
