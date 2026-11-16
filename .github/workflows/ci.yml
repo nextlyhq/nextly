@@ -789,8 +789,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm check:doc-samples
 
+      # SOURCE_SIZE_BASE is the commit the Page Builder size check holds its
+      # allowlist to, which may only shrink from there: the checkout's first
+      # parent, which on a pull request's merge commit is the base branch's
+      # tip and on a push the commit before it. The checkout's depth of 2 is
+      # what makes it readable; the check fails rather than skips without it.
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        env:
+          SOURCE_SIZE_BASE: HEAD^1
         run: pnpm lint
 
       - name: Typecheck

@@ -43,6 +43,12 @@ export type NoRetryReason =
    * prepared statement, a cursor): the next try runs on a new session, which does not have it.
    */
   | "session-state"
+  /**
+   * A schema statement on PostgreSQL where the database has a DDL event trigger: it runs code the
+   * system does not know on every CREATE, ALTER or DROP, and what that code did outside the
+   * transaction stays when the try is rolled back.
+   */
+  | "event-trigger"
   /** A statement of a kind no row of the table names. */
   | "unread";
 
@@ -248,9 +254,12 @@ const BUILT_IN_SCHEMA = "PG_CATALOG";
  */
 function calledAt(
   tokens: readonly StatementToken[],
-  at: number
+  at: number,
+  dialect: SupportedDialect
 ): string | undefined {
-  if (tokens[at + 1] !== "(" || namesNotCalls(tokens, at)) return undefined;
+  if (tokens[at + 1] !== "(" || namesNotCalls(tokens, at, dialect)) {
+    return undefined;
+  }
   const word = tokens[at];
   if (typeof word !== "string") return word?.kind === "name" ? "" : undefined;
   return QUALIFIED_WORD.test(word) ? word : undefined;
@@ -258,17 +267,102 @@ function calledAt(
 
 /**
  * Whether the word at `at`, followed by a parenthesis, is no call: a name followed by its column
- * list (`TABLE posts (`, schema-qualified `"public"."users"(` read back past its qualifier), or,
- * in a schema statement, a size or a prefix length (`title(191)`). A row change's `my_fn(1)`
- * stays a call.
+ * list (`TABLE posts (`, schema-qualified `"public"."users"(` read back past its qualifier), or a
+ * MySQL index's prefix length (`KEY k (title(191))`). A type's size needs no exception here: the
+ * type names are known (`PAREN_TYPES`). Any other word with numbers in its parentheses stays a
+ * call, a default's `site_fn(1)` included.
  */
-function namesNotCalls(tokens: readonly StatementToken[], at: number): boolean {
+function namesNotCalls(
+  tokens: readonly StatementToken[],
+  at: number,
+  dialect: SupportedDialect
+): boolean {
   let beforeAt = at - 1;
   while (tokens[beforeAt] === ".") beforeAt -= 2;
   const before = tokens[beforeAt];
   if (typeof before === "string" && NAME_FOLLOWS.has(before)) return true;
-  const schema = tokens[0] === "CREATE" || tokens[0] === "ALTER";
-  return schema && onlyDigitsWithin(tokens, at + 1);
+  if (!onlyDigitsWithin(tokens, at + 1)) return false;
+  if (inTypePosition(tokens, at)) return true;
+  return dialect === "mysql" && inIndexColumnList(tokens, at);
+}
+
+/** Words after which a column's name, then its type, follow (`ADD COLUMN c type`). */
+const COLUMN_DEFINERS = new Set(["(", ",", "COLUMN", "ADD", "MODIFY"]);
+
+/**
+ * Whether the word at `at` is a column's type, sized in a schema statement: it follows the
+ * column's name, which follows `(`, `,`, `COLUMN`, `ADD` or `MODIFY` (`ADD COLUMN embedding
+ * vector(1536)`), or it follows `TYPE` (`ALTER COLUMN c TYPE vector(1536)`). A type the
+ * `PAREN_TYPES` list does not know, such as an extension's, is then still a type and no call. A
+ * default's or a check's `site_fn(1)` follows no column name, and stays a call.
+ */
+function inTypePosition(
+  tokens: readonly StatementToken[],
+  at: number
+): boolean {
+  if (tokens[0] !== "CREATE" && tokens[0] !== "ALTER") return false;
+  if (tokens[at - 1] === "TYPE") return true;
+  return isName(tokens[at - 1]) && isWordIn(tokens[at - 2], COLUMN_DEFINERS);
+}
+
+/** Whether `token` names something: a bare word or a quoted name. */
+function isName(token: StatementToken | undefined): boolean {
+  return typeof token === "string" ? WORD.test(token) : token?.kind === "name";
+}
+
+/** Whether `token` is a bare word of `words`. */
+function isWordIn(
+  token: StatementToken | undefined,
+  words: ReadonlySet<string>
+): boolean {
+  return typeof token === "string" && words.has(token);
+}
+
+/** Words that open an index's column list, directly (`PRIMARY KEY (`) or before its name. */
+const INDEX_LIST_OPENERS = new Set(["KEY", "INDEX", "UNIQUE"]);
+
+/**
+ * Whether the word at `at` is an element of an index's column list: the parenthesis around it
+ * follows `KEY`, `INDEX` or `UNIQUE`, or a name that follows one of them or `ON`
+ * (`KEY k (`, `CREATE INDEX i ON posts (`). A default's or a check's parenthesis is no such list.
+ */
+function inIndexColumnList(
+  tokens: readonly StatementToken[],
+  at: number
+): boolean {
+  const open = enclosingOpen(tokens, at);
+  return open !== undefined && opensIndexList(tokens, open);
+}
+
+/** The position of the parenthesis around the token at `at`; undefined at the top level. */
+function enclosingOpen(
+  tokens: readonly StatementToken[],
+  at: number
+): number | undefined {
+  let depth = 0;
+  for (let open = at - 1; open >= 0; open--) {
+    if (tokens[open] === ")") depth++;
+    if (tokens[open] !== "(") continue;
+    if (depth === 0) return open;
+    depth--;
+  }
+  return undefined;
+}
+
+/**
+ * Whether the parenthesis at `open` opens an index's column list: it follows `KEY`, `INDEX` or
+ * `UNIQUE`, or a name (schema-qualified or not) that follows one of them or `ON`.
+ */
+function opensIndexList(
+  tokens: readonly StatementToken[],
+  open: number
+): boolean {
+  if (isWordIn(tokens[open - 1], INDEX_LIST_OPENERS)) return true;
+  // Back past the name and its schema qualifier (`ON shop.posts (`).
+  let keywordAt = open - 2;
+  while (tokens[keywordAt] === ".") keywordAt -= 2;
+  const keyword = tokens[keywordAt];
+  return keyword === "ON" || isWordIn(keyword, INDEX_LIST_OPENERS);
 }
 
 /** Whether the parentheses opening at `open` hold nothing but digits. */
@@ -323,10 +417,11 @@ function wordVerdict(word: string): StatementJudgement | undefined {
  * value, a type's size or a keyword's list.
  */
 function callsVerdict(
-  tokens: readonly StatementToken[]
+  tokens: readonly StatementToken[],
+  dialect: SupportedDialect
 ): StatementJudgement | undefined {
   for (let at = 0; at + 1 < tokens.length; at++) {
-    const called = calledAt(tokens, at);
+    const called = calledAt(tokens, at, dialect);
     if (called === undefined) continue;
     const verdict = callVerdict(called);
     if (verdict !== undefined) return verdict;
@@ -453,9 +548,10 @@ function startsWith(
 function rowChange(
   tokens: readonly StatementToken[],
   tableAt: number,
+  dialect: SupportedDialect,
   hasTrigger: (table: string) => boolean
 ): StatementJudgement {
-  const calls = callsVerdict(tokens);
+  const calls = callsVerdict(tokens, dialect);
   if (calls !== undefined) return calls;
   const table = tableName(tokens, pastModifiers(tokens, tableAt));
   if (table === undefined) return noRetry("unread");
@@ -464,9 +560,10 @@ function rowChange(
 
 /** A statement that creates, changes or drops a table, column, index, key or check. */
 function schemaStatement(
-  tokens: readonly StatementToken[]
+  tokens: readonly StatementToken[],
+  dialect: SupportedDialect
 ): StatementJudgement {
-  return callsVerdict(tokens) ?? MAY_RUN_AGAIN;
+  return callsVerdict(tokens, dialect) ?? MAY_RUN_AGAIN;
 }
 
 /** `CREATE …`: a table or an index, built without blocking writes or not; anything else unread. */
@@ -482,10 +579,10 @@ function createStatement(
   if (index !== undefined) {
     return dialect === "postgresql" && tokens[index] === "CONCURRENTLY"
       ? noRetry("concurrent-index")
-      : schemaStatement(tokens);
+      : schemaStatement(tokens, dialect);
   }
   return startsWith(tokens, "CREATE", "TABLE")
-    ? schemaStatement(tokens)
+    ? schemaStatement(tokens, dialect)
     : noRetry("unread");
 }
 
@@ -497,18 +594,19 @@ function dropStatement(
   if (startsWith(tokens, "DROP", "INDEX")) {
     return dialect === "postgresql" && tokens[2] === "CONCURRENTLY"
       ? noRetry("concurrent-index")
-      : schemaStatement(tokens);
+      : schemaStatement(tokens, dialect);
   }
   return startsWith(tokens, "DROP", "TABLE")
-    ? schemaStatement(tokens)
+    ? schemaStatement(tokens, dialect)
     : noRetry("unread");
 }
 
 /** `SELECT …`: only taking a sequence's value runs again; `setval` and anything else do not. */
 function selectStatement(
-  tokens: readonly StatementToken[]
+  tokens: readonly StatementToken[],
+  dialect: SupportedDialect
 ): StatementJudgement {
-  const calls = callsVerdict(tokens);
+  const calls = callsVerdict(tokens, dialect);
   if (calls !== undefined) return calls;
   const sequenceOnly =
     tokens.length >= 4 &&
@@ -529,29 +627,30 @@ type FirstWordJudge = (
 const BY_FIRST_WORD: Readonly<Record<string, FirstWordJudge>> = {
   CREATE: (tokens, dialect) => createStatement(tokens, dialect),
   DROP: (tokens, dialect) => dropStatement(tokens, dialect),
-  ALTER: tokens =>
+  ALTER: (tokens, dialect) =>
     startsWith(tokens, "ALTER", "TABLE") || startsWith(tokens, "ALTER", "INDEX")
-      ? schemaStatement(tokens)
+      ? schemaStatement(tokens, dialect)
       : noRetry("unread"),
   RENAME: (tokens, dialect) =>
     dialect === "mysql" && startsWith(tokens, "RENAME", "TABLE")
-      ? schemaStatement(tokens)
+      ? schemaStatement(tokens, dialect)
       : noRetry("unread"),
-  INSERT: (tokens, _, hasTrigger) =>
+  INSERT: (tokens, dialect, hasTrigger) =>
     startsWith(tokens, "INSERT", "INTO")
-      ? rowChange(tokens, 2, hasTrigger)
+      ? rowChange(tokens, 2, dialect, hasTrigger)
       : noRetry("unread"),
-  UPDATE: (tokens, _, hasTrigger) => rowChange(tokens, 1, hasTrigger),
-  DELETE: (tokens, _, hasTrigger) =>
+  UPDATE: (tokens, dialect, hasTrigger) =>
+    rowChange(tokens, 1, dialect, hasTrigger),
+  DELETE: (tokens, dialect, hasTrigger) =>
     startsWith(tokens, "DELETE", "FROM")
-      ? rowChange(tokens, 2, hasTrigger)
+      ? rowChange(tokens, 2, dialect, hasTrigger)
       : noRetry("unread"),
-  SELECT: tokens => selectStatement(tokens),
+  SELECT: (tokens, dialect) => selectStatement(tokens, dialect),
   // A setting of the connection: undone with a transaction, or still in force for the next try.
   SET: (tokens, dialect) =>
     dialect === "sqlite"
       ? noRetry("unread")
-      : (callsVerdict(tokens) ?? MAY_RUN_AGAIN),
+      : (callsVerdict(tokens, dialect) ?? MAY_RUN_AGAIN),
   // On SQLite only `foreign_keys` sets the connection alone; every other pragma is unread.
   PRAGMA: (tokens, dialect) =>
     dialect === "sqlite" && tokens[1] === "FOREIGN_KEYS"
@@ -580,17 +679,42 @@ export function judgeStatement(
     : judge(tokens, dialect, hasTrigger);
 }
 
+/** What else of the database decides a judgement, beyond the statements and their tables. */
+export interface JudgeContext {
+  /**
+   * Whether PostgreSQL has an enabled DDL event trigger that no installed extension owns
+   * (`hasDdlEventTriggers`): every schema statement then runs code the system does not know.
+   */
+  readonly ddlEventTriggers?: boolean;
+  /**
+   * How many of the statements judged come before those a later try sends again: read only to
+   * follow renames and settings, so an event trigger does not stop the run on them. 0 by default.
+   */
+  readonly ddlEventTriggersFrom?: number;
+  /**
+   * The command tags the event triggers are limited to (`WHEN TAG IN (…)`), where every one of
+   * them is; undefined where one fires on every command. A schema statement whose tag is not here
+   * fires none, and may run again.
+   */
+  readonly ddlEventTriggerTags?: ReadonlySet<string>;
+}
+
+/** The first words of the statements a PostgreSQL DDL event trigger fires on. */
+const DDL_FIRST_WORDS = new Set(["CREATE", "ALTER", "DROP"]);
+
 /**
  * The first of `statements`, in order, that a later try may not send again: its position (1 for
  * the first, never its text, which can hold a literal value) and judgement; undefined where every
  * one may run again. `triggerTables` are the tables with a trigger before the first statement. A
  * table keeps its triggers through a rename, so a name an earlier statement gave such a table has
  * one too; a rename this reading cannot follow counts every table as having one, failing closed.
+ * Where PostgreSQL has a DDL event trigger (`context`), every schema statement stops the run.
  */
 export function firstNoRetry(
   statements: readonly string[],
   dialect: SupportedDialect,
-  triggerTables: TriggerTables
+  triggerTables: TriggerTables,
+  context: JudgeContext = {}
 ):
   | {
       readonly statementNumber: number;
@@ -604,8 +728,18 @@ export function firstNoRetry(
   let renameUnread = false;
   const hasTrigger = (table: string) =>
     unseen || renameUnread || triggered.has(table);
+  const eventTriggers =
+    dialect === "postgresql" && context.ddlEventTriggers === true;
   for (const [index, statement] of statements.entries()) {
-    const judgement = judgeStatement(statement, dialect, hasTrigger);
+    const judgement =
+      eventTriggers && index >= (context.ddlEventTriggersFrom ?? 0)
+        ? firesEventTrigger(
+            statement,
+            dialect,
+            hasTrigger,
+            context.ddlEventTriggerTags
+          )
+        : judgeStatement(statement, dialect, hasTrigger);
     if (judgement.kind === "no-retry") {
       // Named for what was not known, so the report does not claim the table has a trigger.
       const reason =
@@ -627,4 +761,54 @@ export function firstNoRetry(
     }
   }
   return undefined;
+}
+
+/**
+ * `judgeStatement`, with a schema statement it would let run again stopped by an event trigger:
+ * one that fires on every command, or on this statement's tag (`tags`).
+ */
+function firesEventTrigger(
+  statement: string,
+  dialect: SupportedDialect,
+  hasTrigger: (table: string) => boolean,
+  tags: ReadonlySet<string> | undefined
+): StatementJudgement {
+  const judgement = judgeStatement(statement, dialect, hasTrigger);
+  if (judgement.kind === "no-retry") return judgement;
+  const tokens = statementTokens(statement, dialect);
+  if (!isWordIn(tokens[0], DDL_FIRST_WORDS)) return judgement;
+  const tag = commandTag(tokens);
+  // A tag this reading cannot name counts as one the trigger fires on, failing closed.
+  return tags !== undefined && tag !== undefined && !tags.has(tag)
+    ? judgement
+    : noRetry("event-trigger");
+}
+
+/** Words between a schema statement's verb and its object, which its command tag leaves out. */
+const TAG_SKIPPED = new Set([
+  "UNIQUE",
+  "TEMP",
+  "TEMPORARY",
+  "UNLOGGED",
+  "GLOBAL",
+  "LOCAL",
+  "OR",
+  "REPLACE",
+]);
+
+/**
+ * PostgreSQL's command tag of a schema statement, as an event trigger's `WHEN TAG IN` names it:
+ * its verb and its object (`CREATE UNIQUE INDEX CONCURRENTLY` is `CREATE INDEX`); undefined where
+ * the object is not a plain word.
+ */
+function commandTag(tokens: readonly StatementToken[]): string | undefined {
+  let at = 1;
+  while (isWordIn(tokens[at], TAG_SKIPPED)) at++;
+  const verb = tokens[0];
+  const object = tokens[at];
+  return typeof verb === "string" &&
+    typeof object === "string" &&
+    WORD.test(object)
+    ? `${verb} ${object}`
+    : undefined;
 }

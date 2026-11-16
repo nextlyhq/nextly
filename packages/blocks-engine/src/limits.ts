@@ -4,6 +4,7 @@
  */
 import type { BlockDocument, BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { keptForestShape } from "./kept-sizes";
 
 /** Maximum nesting depth of nodes (top-level nodes are depth 1). */
 export const MAX_DEPTH = 12;
@@ -253,6 +254,28 @@ export function treeDepth(nodes: BlockNode[]): number {
 }
 
 /**
+ * `countNodes` and `treeDepth` for a forest the op layer treats as an
+ * immutable value, answered from the shapes kept for its plain nodes so only
+ * an edit's path is counted afresh; the walk answers anything else.
+ *
+ * Not the published helpers: they walk every time, so a caller that assembles
+ * a forest by changing it in place still gets its current size. The op layer
+ * never changes a document it was handed, and a caller must not change one
+ * after handing it over (see `applyOp`).
+ */
+export function editorForestShape(nodes: BlockNode[]): {
+  count: number;
+  depth: number;
+} {
+  return (
+    keptForestShape(nodes, MAX_VALUE_PARTS) ?? {
+      count: countNodes(nodes),
+      depth: treeDepth(nodes),
+    }
+  );
+}
+
+/**
  * Serialized size of a document in bytes (UTF-8 of its JSON form — the same
  * bytes that hit storage, so the cap measures what actually gets persisted).
  *
@@ -306,4 +329,13 @@ export function documentBytes(doc: BlockDocument): number {
     return value;
   });
   return new TextEncoder().encode(json).length;
+}
+
+/**
+ * What a document over its byte cap is told, in the editor and on the server
+ * alike: one sentence, so an author refused before a save reads the same reason
+ * a save would have given.
+ */
+export function documentTooLargeMessage(maxBytes: number): string {
+  return `Document exceeds the maximum of ${String(maxBytes)} bytes.`;
 }
