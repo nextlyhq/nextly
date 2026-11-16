@@ -1149,7 +1149,7 @@ function VariableRow({
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
-        <CountTip reach={reach}>
+        <CountTip reach={reach} quiet={open}>
           <PopoverTrigger asChild>
             <button
               type="button"

@@ -267,7 +267,16 @@ test("F2 opens a row's editor to rename it, and Escape closes it back to the row
   await expect(editor).toBeHidden();
   await expect(row).toBeFocused();
   expect(await selection(page)).toEqual(["tabs-text"]);
-  // A second Escape leaves the panel for the canvas, still selected.
+  // Back on the row, its count's tooltip may show again once the counts are
+  // read, and an Escape closes that first. The next leaves the panel for the
+  // canvas, and the block is still selected after every press.
+  const tooltip = page.getByRole("tooltip");
+  if (await tooltip.isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toBeHidden();
+    await expect(row).toBeFocused();
+    expect(await selection(page)).toEqual(["tabs-text"]);
+  }
   await page.keyboard.press("Escape");
   await expect(row).not.toBeFocused();
   expect(await selection(page)).toEqual(["tabs-text"]);
