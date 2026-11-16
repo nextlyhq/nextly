@@ -333,7 +333,11 @@ function FieldListRegion({
   // The same map the save's refusal is read from, so a row marked with an
   // error is a row the save refuses.
   const errors = useMemo(
-    () => builderFieldErrors(builder.fields.filter(field => !field.isSystem)),
+    () =>
+      builderFieldErrors(
+        builder.fields.filter(field => !field.isSystem),
+        builder.fields
+      ),
     [builder.fields]
   );
   const systemFields = useMemo(

@@ -1,0 +1,148 @@
+/**
+ * Whether a field's condition still reads the field it names.
+ *
+ * A condition names its source, and the entry form reads that name beside the
+ * gated field: on its level, through containers that have no name of their
+ * own. A pending change can leave it reading nothing (its source moved to
+ * another level, or deleted), a field a condition cannot compare, or an option
+ * a dropdown no longer has. Such a condition is broken: it stays on its field,
+ * marked, and counts as an error the save refuses, until it names a field it
+ * can read or is removed. Nothing is stored about it: it is judged from the
+ * fields as they stand, so it holds after any change, undo or redo alike.
+ *
+ * @module lib/builder/condition-identity
+ */
+import type {
+  BuilderField,
+  FieldCondition,
+} from "@admin/components/features/schema-builder/types";
+import { operatorTakesValue } from "@admin/components/field-ui/ConditionRow";
+
+import { findFieldPlacement } from "./field-placement";
+
+/** Why a condition is broken. */
+export type ConditionBreak = "no-source" | "not-a-source" | "option-removed";
+
+/** A broken condition: why, and the sentence that tells the person. */
+export interface BrokenCondition {
+  reason: ConditionBreak;
+  message: string;
+}
+
+/**
+ * The field types a condition can compare: boolean, text-style, number, date,
+ * select and radio. A relationship or media field has no scalar the evaluator
+ * can compare, so a condition reading one never matches.
+ */
+const SOURCE_TYPES: ReadonlySet<string> = new Set([
+  "checkbox",
+  "text",
+  "textarea",
+  "richText",
+  "email",
+  "code",
+  "password",
+  // An icon id compares as text: "is set", or "equals lucide:star".
+  "icon",
+  "number",
+  "date",
+  "select",
+  "radio",
+]);
+
+/** The types whose values are a fixed set of options. */
+const CHOICE_TYPES: ReadonlySet<string> = new Set(["select", "radio"]);
+
+/** Whether a field of this type can be a condition's source. */
+export function isConditionSourceType(type: string): boolean {
+  return SOURCE_TYPES.has(type);
+}
+
+/** A condition in one shape: the older `{ field, equals }` read as equality. */
+function normalized(
+  condition: FieldCondition
+): Required<Pick<FieldCondition, "field" | "operator">> &
+  Pick<FieldCondition, "value"> {
+  if (!condition.operator && condition.equals !== undefined) {
+    return {
+      field: condition.field,
+      operator: "equals",
+      value: condition.equals,
+    };
+  }
+  return {
+    field: condition.field,
+    operator: condition.operator ?? "equals",
+    value: condition.value,
+  };
+}
+
+/** A field's name as a sentence calls it. */
+function called(field: BuilderField): string {
+  return field.label || field.name || "This field";
+}
+
+/**
+ * Why `field`'s condition is broken, given the fields on its level (as the
+ * settings panel offers them), or null when it reads its source, or has none
+ * yet: a condition not yet given a source is unfinished, not broken.
+ */
+export function brokenConditionOf(
+  field: BuilderField,
+  siblings: readonly BuilderField[]
+): BrokenCondition | null {
+  const stored = field.admin?.condition;
+  if (!stored?.field) return null;
+  const condition = normalized(stored);
+  const subject = called(field);
+  const source = siblings.find(each => each.name === condition.field);
+  if (!source) {
+    return {
+      reason: "no-source",
+      message: `${subject}'s condition reads ${condition.field}, which is no longer beside it. Choose another field for it, or remove the condition.`,
+    };
+  }
+  if (!isConditionSourceType(source.type)) {
+    return {
+      reason: "not-a-source",
+      message: `${subject}'s condition reads ${called(source)}, which a condition cannot compare. Choose another field for it, or remove the condition.`,
+    };
+  }
+  const value = condition.value;
+  const optionGone =
+    CHOICE_TYPES.has(source.type) &&
+    operatorTakesValue(condition.operator) &&
+    typeof value === "string" &&
+    value !== "" &&
+    !(source.options ?? []).some(option => option.value === value);
+  return optionGone
+    ? {
+        reason: "option-removed",
+        message: `${subject}'s condition compares ${called(source)} with "${value}", which is no longer one of its options. Choose another value, or remove the condition.`,
+      }
+    : null;
+}
+
+/**
+ * Every broken condition in `fields`, by the id of the field it is on, at any
+ * depth. Each is judged against the fields on its own level, the same list the
+ * settings panel offers it as sources, so the panel and this check never
+ * disagree about which fields a condition may read.
+ */
+export function brokenConditions(
+  fields: readonly BuilderField[]
+): Map<string, BrokenCondition> {
+  const broken = new Map<string, BrokenCondition>();
+  const walk = (list: readonly BuilderField[]): void => {
+    for (const each of list) {
+      if (each.admin?.condition) {
+        const siblings = findFieldPlacement(fields, each.id)?.siblings ?? [];
+        const found = brokenConditionOf(each, siblings);
+        if (found) broken.set(each.id, found);
+      }
+      if (each.fields) walk(each.fields);
+    }
+  };
+  walk(fields);
+  return broken;
+}
