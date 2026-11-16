@@ -14,6 +14,12 @@ export {
   // What a select's option is called. Public because the builder names a
   // choice with it as the engine's exposure planner does.
   optionLabel,
+  // Where a block's setting is edited: the tabs, the Style sections a style
+  // setting names, and the one rule placing a prop, which the editor groups
+  // its settings by.
+  PROP_GROUPS,
+  propPlace,
+  STYLE_SECTION_KEYS,
 } from "../block";
 export type {
   AnyBlockDefinition,
@@ -33,9 +39,12 @@ export type {
   BlockVariation,
   ComponentPath,
   InferBlockProps,
+  PropGroup,
+  PropPlace,
   PropSchema,
   SlotLock,
   SlotSpec,
+  StyleSectionKey,
 } from "../block";
 
 export {
