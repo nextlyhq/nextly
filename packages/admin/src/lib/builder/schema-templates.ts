@@ -47,6 +47,12 @@ export interface SchemaTemplateField {
   component?: string;
   /** A group's or repeating rows' own fields. */
   fields?: readonly SchemaTemplateField[];
+  /**
+   * A plugin field type's own settings, under the keys the type declares, as
+   * the Builder stores them for a field of that type. The plugin judges them
+   * when the entity is saved.
+   */
+  pluginOptions?: Readonly<Record<string, unknown>>;
   admin?: {
     description?: string;
     placeholder?: string;

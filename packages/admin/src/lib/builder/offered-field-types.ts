@@ -7,18 +7,25 @@
  *
  * @module lib/builder/offered-field-types
  */
-import { FIELD_TYPE_CATALOG } from "nextly/field-catalog";
+import {
+  describeFieldTypes,
+  FIELD_TYPE_CATALOG,
+  type FieldTypeCatalogEntry,
+} from "nextly/field-catalog";
 
 import {
   pickerExcludedTypes,
   type BuilderConfig,
 } from "@admin/components/features/schema-builder/builder-config";
+import { offeredFieldTypes } from "@admin/components/field-ui/field-type-search";
 
 import { UI_SCHEMA_FIELD_TYPES } from "./ui-schema-mode";
 
-/** The catalog's entries for the types the Builder's save takes. */
-export const BUILDER_FIELD_TYPE_ENTRIES = FIELD_TYPE_CATALOG.filter(entry =>
-  (UI_SCHEMA_FIELD_TYPES as readonly string[]).includes(entry.type)
+/** The types the Builder's save takes, as the field picker describes them. */
+export const BUILDER_FIELD_TYPES = describeFieldTypes<string>(
+  FIELD_TYPE_CATALOG.filter(entry =>
+    (UI_SCHEMA_FIELD_TYPES as readonly string[]).includes(entry.type)
+  )
 );
 
 /** Every built-in field type, whether the Builder offers it or not. */
@@ -27,18 +34,19 @@ export const BUILT_IN_FIELD_TYPES: ReadonlySet<string> = new Set(
 );
 
 /**
- * The types a kind's picker offers: the Builder's own, less the kind's
- * exclusions, and every type an installed plugin contributes.
+ * The types a kind's picker offers, by the picker's own rule
+ * (`offeredFieldTypes`): the Builder's own and the installed plugins' entries
+ * types, less the kind's exclusions, which reach a plugin's types too.
  */
 export function builderOfferedTypes(
   config: BuilderConfig,
-  pluginTypes: readonly string[]
+  pluginRows: readonly FieldTypeCatalogEntry<string>[]
 ): Set<string> {
-  const excluded = new Set<string>(pickerExcludedTypes(config));
-  return new Set([
-    ...BUILDER_FIELD_TYPE_ENTRIES.map(entry => entry.type).filter(
-      type => !excluded.has(type)
-    ),
-    ...pluginTypes,
-  ]);
+  return new Set(
+    offeredFieldTypes(
+      BUILDER_FIELD_TYPES,
+      pluginRows,
+      pickerExcludedTypes(config)
+    ).map(type => type.type)
+  );
 }

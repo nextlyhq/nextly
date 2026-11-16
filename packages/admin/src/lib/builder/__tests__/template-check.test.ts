@@ -6,7 +6,10 @@
  * plugin's type only while the plugin is installed, a unique field only where
  * a unique value can be kept). What a template needs is read from its fields.
  */
+import type { FieldTypeCatalogEntry } from "nextly/field-catalog";
 import { describe, expect, it } from "vitest";
+
+import type { BuilderConfig } from "@admin/components/features/schema-builder/builder-config";
 
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import { FIELD_GROUP_BUILDER_CONFIG } from "@admin/pages/dashboard/field-group/builder/builder-config";
@@ -27,12 +30,25 @@ const CONFIGS = {
   fieldGroup: FIELD_GROUP_BUILDER_CONFIG,
 } as const;
 
+/** A plugin's field type as the admin receives it, for the picker. */
+const pluginRow = (type: string): FieldTypeCatalogEntry<string> => ({
+  type,
+  label: type,
+  category: "Advanced",
+  hint: "",
+  icon: "Star",
+});
+
 /** What the Builder offers a kind, with the plugin types installed. */
 function offered(
   kind: SchemaTemplateKind,
-  pluginTypes: readonly string[] = []
+  pluginTypes: readonly string[] = [],
+  config: BuilderConfig = CONFIGS[kind]
 ): TemplateCheckContext {
-  return { offeredTypes: builderOfferedTypes(CONFIGS[kind], pluginTypes) };
+  return {
+    offeredTypes: builderOfferedTypes(config, pluginTypes.map(pluginRow)),
+    installedTypes: new Set(pluginTypes),
+  };
 }
 
 function template(
@@ -150,6 +166,34 @@ describe("a template's types", () => {
     expect(failures([rating], offered("collection", ["acme-rating"]))).toEqual(
       []
     );
+  });
+
+  it("a plugin's type the kind's picker leaves out, though installed", () => {
+    const config: BuilderConfig = {
+      ...COLLECTION_BUILDER_CONFIG,
+      picker: { excludedTypes: ["acme-rating"] },
+    };
+    expect(
+      failures(
+        [{ name: "rating", type: "acme-rating" }],
+        offered("collection", ["acme-rating"], config)
+      )
+    ).toEqual(["rating type-not-offered"]);
+  });
+
+  it("a field the Builder's save would refuse as unfinished", () => {
+    // The Builder's own preflight, which a field typed into it meets too.
+    expect(
+      failures([
+        { name: "size", type: "select", options: [] },
+        { name: "seo", type: "component" },
+      ])
+    ).toEqual(["size incomplete", "seo incomplete"]);
+    expect(
+      failures([
+        { name: "size", type: "select", options: [{ label: "S", value: "s" }] },
+      ])
+    ).toEqual([]);
   });
 
   it("a unique field inside a group or repeating rows, not at the top level", () => {

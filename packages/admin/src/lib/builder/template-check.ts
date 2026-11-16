@@ -14,6 +14,9 @@
  *   plugin's, named as such while that plugin is not installed.
  * - Its place: a unique field only where a unique value can be kept, never in
  *   a group or repeating rows, whose values are one JSON value.
+ * - Its settings: whatever the Builder's own preflight refuses before a save
+ *   (`builderFieldErrors`: a dropdown with no option, a field-group field with
+ *   no field group), the check a field typed into the Builder meets.
  *
  * Every rule a field breaks is named. A field left out is not judged, nor
  * anything inside it. What a template needs (a collection a link points at, a
@@ -31,6 +34,8 @@ import {
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import { SYSTEM_FIELD_NAMES } from "./constants";
+import { convertToBuilderField } from "./field-transformers";
+import { builderFieldErrors } from "./field-validators";
 import { BUILT_IN_FIELD_TYPES } from "./offered-field-types";
 import type {
   SchemaTemplate,
@@ -45,7 +50,8 @@ export type TemplateRule =
   | "name-clash"
   | "type-not-offered"
   | "plugin-type-missing"
-  | "unique-in-container";
+  | "unique-in-container"
+  | "incomplete";
 
 /** One rule one field breaks, said where the template is shown. */
 export interface TemplateFailure {
@@ -69,6 +75,11 @@ export interface TemplateNeed {
 export interface TemplateCheckContext {
   /** The types the kind's picker offers (`builderOfferedTypes`). */
   offeredTypes: ReadonlySet<string>;
+  /**
+   * The types the installed plugins contribute, offered here or not: what
+   * tells a type the picker leaves out from one whose plugin is missing.
+   */
+  installedTypes?: ReadonlySet<string>;
   /** Whether the new entity's drafts are on; off when absent. */
   lifecycleEnabled?: boolean;
   /** The paths of the fields left out. */
@@ -163,12 +174,13 @@ function typeFailure(
 ): TemplateFailure | null {
   const { type } = each.field;
   if (ctx.offeredTypes.has(type)) return null;
-  const builtIn = BUILT_IN_FIELD_TYPES.has(type);
+  const known =
+    BUILT_IN_FIELD_TYPES.has(type) || (ctx.installedTypes?.has(type) ?? false);
   return {
     path: each.path,
     label: each.label,
-    rule: builtIn ? "type-not-offered" : "plugin-type-missing",
-    message: builtIn
+    rule: known ? "type-not-offered" : "plugin-type-missing",
+    message: known
       ? `${each.label} is a ${type} field, which the Builder does not offer here.`
       : `${each.label} is a ${type} field, from a plugin that is not installed.`,
   };
@@ -182,6 +194,27 @@ function placeFailure(each: Placed): TemplateFailure | null {
     label: each.label,
     rule: "unique-in-container",
     message: `${each.label} is unique, and a group or repeating rows keep their values in one JSON value, which cannot be kept unique.`,
+  };
+}
+
+/**
+ * Why the Builder's own preflight would refuse the field, if it would: judged
+ * on the field alone, its own fields judged in their turn. An empty name is
+ * left to the name rule, which already names it.
+ */
+function preflightFailure(each: Placed): TemplateFailure | null {
+  const { fields: _inside, options, ...rest } = each.field;
+  const builderField = convertToBuilderField(
+    { ...rest, options: options?.map(option => ({ ...option })) },
+    each.path
+  );
+  const error = builderFieldErrors([builderField]).get(builderField.id);
+  if (!error || error.kind === "unnamed") return null;
+  return {
+    path: each.path,
+    label: each.label,
+    rule: "incomplete",
+    message: `${each.label}: ${error.message}.`,
   };
 }
 
@@ -224,6 +257,7 @@ export function checkTemplate(
         clashes.get(each) ?? null,
         typeFailure(each, ctx),
         placeFailure(each),
+        preflightFailure(each),
       ];
       for (const failure of found) if (failure) failures.push(failure);
       const need = needOf(each);

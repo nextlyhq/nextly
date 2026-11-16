@@ -563,6 +563,10 @@ expectTypeOf<adminEntry.SchemaTemplate>().toMatchTypeOf<{
 expectTypeOf<adminEntry.SchemaTemplateField["fields"]>().toEqualTypeOf<
   readonly adminEntry.SchemaTemplateField[] | undefined
 >();
+// A plugin's own field type carries its settings, as the Builder stores them.
+expectTypeOf<adminEntry.SchemaTemplateField["pluginOptions"]>().toEqualTypeOf<
+  Readonly<Record<string, unknown>> | undefined
+>();
 // What a template needs is read from its fields, so a declaration has no
 // separate list of what it needs to keep in agreement with them.
 expectTypeOf<adminEntry.SchemaTemplate>().not.toHaveProperty("needs");
