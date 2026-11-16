@@ -382,6 +382,11 @@ function isObject(value: SettingsValue | undefined): value is SettingsObject {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Whether `value` is an object holding no key. */
+function isEmptyObject(value: SettingsValue | undefined): boolean {
+  return isObject(value) && Object.keys(value).length === 0;
+}
+
 /** Whether two recorded values are the same, key order aside (`canonicalJson`). */
 function sameValue(a: SettingsValue, b: SettingsValue): boolean {
   return a === b || canonicalJson(a) === canonicalJson(b);
@@ -437,13 +442,19 @@ function diffSettings(
       const where = joinPath(path, key);
       // An object set or cleared whole is named by what it holds, so a field
       // gaining its first admin option reads `admin.placeholder`, not `admin`.
+      // An empty one holds no setting, so beside an absent key it is no change:
+      // the Schema Builder writes `admin: {}` into its definition where the
+      // snapshot its save records has no `admin`, and naming that would report
+      // a change after every Builder create.
       if (!(key in after)) {
-        return isObject(before[key]) && Object.keys(before[key]).length > 0
+        if (isEmptyObject(before[key])) return [];
+        return isObject(before[key])
           ? diffSettings(before[key], {}, where)
           : [`${where} (cleared)`];
       }
       if (!(key in before)) {
-        return isObject(after[key]) && Object.keys(after[key]).length > 0
+        if (isEmptyObject(after[key])) return [];
+        return isObject(after[key])
           ? diffSettings({}, after[key], where)
           : [where];
       }

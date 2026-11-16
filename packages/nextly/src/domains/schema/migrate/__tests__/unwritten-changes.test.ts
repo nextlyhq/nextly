@@ -202,6 +202,27 @@ describe("compareWithNewestSnapshot", () => {
     ]);
   });
 
+  it("names no change for an empty settings object beside an absent one, as a Builder create leaves them", () => {
+    // The Builder writes `admin: {}` into its definition; the snapshot its save records has none.
+    const recordedWithout = entitiesOf(collection([TITLE]));
+    const declaredEmpty = entitiesOf(collection([TITLE], { admin: {} }));
+    expect(nothingUnwritten(compare(recordedWithout, declaredEmpty))).toBe(
+      true
+    );
+    expect(nothingUnwritten(compare(declaredEmpty, recordedWithout))).toBe(
+      true
+    );
+    // Holding a setting, it is a change.
+    expect(
+      unwrittenChangeLines(
+        compare(
+          recordedWithout,
+          entitiesOf(collection([TITLE], { admin: { group: "Content" } }))
+        )
+      )
+    ).toEqual(["~ settings posts: admin.group"]);
+  });
+
   it("never names a snapshot's missing settings, and compares with the registry where it has recorded them", () => {
     const before = entitiesOf(collection([TITLE]));
     const after = entitiesOf(collection([TITLE], { description: "New" }));
