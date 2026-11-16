@@ -96,7 +96,8 @@ for (const dialect of getConfiguredTestDialects()) {
         id,
         title: "A post",
         slug: "a-post",
-        tags: IDS,
+        // The list as its JSON column stores it, on every dialect.
+        tags: JSON.stringify(IDS),
         created_at: now,
         updated_at: now,
       });
