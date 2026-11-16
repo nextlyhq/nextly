@@ -313,7 +313,7 @@ async function axe(page: Page): Promise<unknown[]> {
 test.describe("the inspector", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("shows the card, two tabs, and a bar that follows the state and device", async ({
+  test("shows the card, three tabs, and a bar that follows the state and device", async ({
     page,
   }) => {
     const id = await createPage(page.request);
