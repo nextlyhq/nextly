@@ -86,7 +86,13 @@ export function useTemplatePick(
     [pluginEntries]
   );
   // A template picked for the other answer to "what will editors make" is no
-  // longer offered, so it is no longer the one picked.
+  // longer offered, so it is dropped with the fields left out of it: answering
+  // back starts with no template, never the old one brought back. Reset while
+  // rendering, so no render shows the dropped template.
+  if (picked && !templates.includes(picked)) {
+    setPicked(null);
+    setLeftOut(new Set());
+  }
   const current = picked && templates.includes(picked) ? picked : null;
   const failures = current
     ? checkTemplate(current.template, {

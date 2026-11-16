@@ -2,8 +2,8 @@
  * One short dialog that creates a collection, Single or field group.
  *
  * What editors will make comes first, where a plugin such as the Page Builder
- * offers a choice; then the icon beside the name, suggested from the name until
- * one is picked; the plural (for a collection) and the API address, derived
+ * offers a choice; then the icon beside the name, the picked template's or
+ * suggested from the name until one is picked; the plural (for a collection) and the API address, derived
  * from the name and editable; and the further options folded under one control
  * that says which are on. The address is checked by the server's own rule as
  * it is typed, so Create is never offered for an address the create refuses.
@@ -125,7 +125,7 @@ export function NewEntityDialog({
   const [values, setValues] = useState<BuilderSettingsValues>(() =>
     createDefaults(config)
   );
-  // Until the person picks an icon, the name suggests one.
+  // Until the person picks an icon, the template or the name suggests one.
   const [pickedIcon, setPickedIcon] = useState<string | null>(null);
 
   const pluginEntries = usePluginFieldTypeEntries("entries");
@@ -137,7 +137,6 @@ export function NewEntityDialog({
   // Each kind whose settings hold an icon picks it here; a field group's shows
   // in its list and the navigation, as a collection's and a Single's do.
   const hasIcon = config.basicsFields.includes("icon");
-  const icon = pickedIcon ?? suggestIcon(values.singularName);
 
   // Entities created in this tab and not saved yet hold their addresses too,
   // so the server counts them as used. The address is asked about as Create
@@ -147,6 +146,12 @@ export function NewEntityDialog({
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
   const pick = useTemplatePick(config, values);
+  // An icon picked here wins; else the picked template's, which says what the
+  // entity is better than its name may; else the name's suggestion.
+  const icon =
+    pickedIcon ??
+    pick.picked?.template.icon ??
+    suggestIcon(values.singularName);
   const blockedBy = createBlockedBy(values, hasPlural, check, pick.blockedBy);
 
   const set = <K extends keyof BuilderSettingsValues>(

@@ -41,6 +41,8 @@ import {
 } from "@admin/lib/builder/schema-templates";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import type { BuilderSettingsValues } from "../../BuilderSettingsModal";
+
 import { NewEntityDialog } from "../NewEntityDialog";
 
 // Radix opens a dialog's content in a portal and scrolls; jsdom has neither.
@@ -126,7 +128,7 @@ afterEach(() => {
 
 function renderDialog() {
   const onCreate =
-    vi.fn<(values: unknown, fields: FieldDefinition[]) => void>();
+    vi.fn<(values: BuilderSettingsValues, fields: FieldDefinition[]) => void>();
   render(
     <NewEntityDialog
       open
@@ -242,8 +244,46 @@ describe("templates in the new-entity dialog", () => {
     await user.type(screen.getByLabelText("Name"), "Writer");
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
-    const fields = onCreate.mock.calls.at(-1)?.[1] ?? [];
-    expect(fields.map(field => field.name)).toEqual(["photo", "bio", "email"]);
+    // Each field whole, as the template declares it: a converter that kept
+    // only names and types would fail here.
+    expect(onCreate.mock.calls.at(-1)?.[1]).toEqual([
+      { name: "photo", label: "Photo", type: "upload" },
+      { name: "bio", label: "Bio", type: "textarea" },
+      { name: "email", label: "Email", type: "email" },
+    ]);
+  });
+
+  it("gives the entity the picked template's icon, until an icon is picked", async () => {
+    const { onCreate, user } = renderDialog();
+    await user.click(screen.getByRole("radio", { name: /Authors/ }));
+    // A name that suggests no icon of its own.
+    await user.type(screen.getByLabelText("Name"), "Thing");
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    await user.click(createButton());
+    expect(onCreate.mock.calls.at(-1)?.[0].icon).toBe("User");
+  });
+
+  it("drops a template that what editors make no longer offers, so switching back starts with none", async () => {
+    pluginEntries = [
+      {
+        type: "blocks",
+        label: "Blocks",
+        hint: "Lay the page out from blocks.",
+      },
+    ];
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("radio", { name: /Authors/ }));
+    await user.click(
+      screen.getByRole("radio", { name: /Pages you design visually/ })
+    );
+    await user.click(
+      screen.getByRole("radio", { name: /Entries with fields/ })
+    );
+    expect(screen.getByRole("radio", { name: /No template/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Authors/ })).not.toBeChecked();
+    expect(
+      screen.queryByRole("group", { name: "Template: Authors" })
+    ).toBeNull();
   });
 
   it("creates with no template's fields when none is picked", async () => {
