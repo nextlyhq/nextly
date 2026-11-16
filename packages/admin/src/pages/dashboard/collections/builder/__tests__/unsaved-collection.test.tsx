@@ -109,7 +109,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => removeUnsavedEntity("collection", "products"));
+afterEach(() => {
+  removeUnsavedEntity("collection", "products");
+  removeUnsavedEntity("collection", "items");
+});
 
 describe("the collection editor on a collection not saved yet", () => {
   it("opens it from this tab, asking the server nothing, with its create and starting field pending", async () => {
@@ -225,5 +228,63 @@ describe("the collection editor on a collection not saved yet", () => {
     await waitFor(() =>
       expect(unsavedEntity("collection", "products")).toBeUndefined()
     );
+  });
+});
+
+// Before the first save nothing refers to the address, so it can still change.
+// The change moves the collection to its new address at once, outside the
+// undo history: its fields, its pending changes and what can be undone stay.
+describe("an unsaved collection's address", () => {
+  it("moves with its fields, pending changes and undo history when changed in its settings", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "products" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    // An edit to undo: the field's menu, opened from its row, duplicates it.
+    (await screen.findByTestId("field-row-headline")).focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Duplicate" })
+    );
+    expect(screen.getByText("3 unsaved changes")).toBeInTheDocument();
+
+    check.mockImplementation(async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal: null,
+    }));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    const address = within(settings).getByLabelText("Slug");
+    await user.clear(address);
+    await user.type(address, "items");
+    const save = within(settings).getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+
+    expect(navigate).toHaveBeenCalledWith("/admin/builder/collections/items");
+    expect(unsavedEntity("collection", "items")).toBeDefined();
+    expect(unsavedEntity("collection", "products")).toBeUndefined();
+
+    // The route now names the new address.
+    rerender(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "items" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    expect(await screen.findByText("3 unsaved changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /^save/i }));
+    const review = await screen.findByRole("alertdialog");
+    expect(
+      within(review).getByRole("heading", {
+        name: "Create the collection items?",
+      })
+    ).toBeInTheDocument();
   });
 });

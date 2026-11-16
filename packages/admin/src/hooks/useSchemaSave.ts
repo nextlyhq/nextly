@@ -23,6 +23,7 @@ import type { SchemaChangeConfirmation } from "@admin/components/features/schema
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -115,7 +116,11 @@ export interface UseSchemaSaveOptions {
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
   ) => Promise<SchemaApplyOutcome>;
-  /** The preview found nothing to migrate — persist the rest and stop. */
+  /**
+   * The preview found nothing to migrate: persist the settings. Run at once
+   * when no setting changed either, and otherwise once the review of the
+   * settings it changes is confirmed.
+   */
   onNoChanges: (fields: FieldDefinition[]) => void;
   /** The schema landed — re-pin the baselines, persist settings, mirror the file. */
   onApplied: (fields: FieldDefinition[]) => void | Promise<void>;
@@ -125,7 +130,16 @@ export interface UseSchemaSaveOptions {
    * the preview was made with, as for the fields.
    */
   previewedWith?: unknown;
+  /**
+   * The entity's settings changed since the save. A save that changes only
+   * these is reviewed before it is saved, and a confirmation saves them only
+   * as the review showed them.
+   */
+  settingChanges?: readonly SettingChange[];
 }
+
+/** One empty list, so a page passing none keeps one value between renders. */
+const NO_SETTING_CHANGES: readonly SettingChange[] = [];
 
 export interface UseSchemaSaveReturn {
   /** The toolbar's Save. */
@@ -148,6 +162,7 @@ export function useSchemaSave({
   onNoChanges,
   onApplied,
   previewedWith,
+  settingChanges = NO_SETTING_CHANGES,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
   const { startRestart, stopRestart } = useRestart();
   // The fields and settings each preview was made from. The dialog shows that
@@ -181,13 +196,14 @@ export function useSchemaSave({
       try {
         const previewed = await preview(fields);
         if (!mounted.current) return;
-        if (!previewed.hasChanges) {
+        // Nothing to migrate and no setting changed: nothing to review.
+        if (!previewed.hasChanges && settingChanges.length === 0) {
           onNoChanges(fields);
           return;
         }
         previewedFields.current.set(
           previewed,
-          JSON.stringify({ fields, previewedWith })
+          JSON.stringify({ fields, previewedWith, settingChanges })
         );
         confirmation.request(previewed);
       } catch (err) {
@@ -204,6 +220,7 @@ export function useSchemaSave({
     onNoChanges,
     confirmation,
     previewedWith,
+    settingChanges,
   ]);
 
   const confirmApply = useCallback(
@@ -217,12 +234,20 @@ export function useSchemaSave({
       const shown = previewedFields.current.get(previewed);
       if (
         shown !== undefined &&
-        shown !== JSON.stringify({ fields, previewedWith })
+        shown !== JSON.stringify({ fields, previewedWith, settingChanges })
       ) {
         confirmation.settle();
         toast.error(
           "The fields or settings changed after the preview. Save again to review what changes."
         );
+        return;
+      }
+
+      // Only settings changed: the review was of them, and its confirmation
+      // saves them. Nothing is migrated, so nothing restarts.
+      if (!previewed.hasChanges) {
+        confirmation.settle();
+        onNoChanges(fields);
         return;
       }
 
@@ -275,6 +300,8 @@ export function useSchemaSave({
       startRestart,
       stopRestart,
       previewedWith,
+      settingChanges,
+      onNoChanges,
     ]
   );
 

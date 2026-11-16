@@ -46,7 +46,6 @@ import {
 } from "@admin/hooks/useSchemaSave";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
-import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -182,7 +181,6 @@ export default function SingleBuilderEditPage({
     toFields: loaded => loaded.fields ?? [],
     // An unsaved Single opens with what the dialog set.
     toSettings: loaded => unsaved?.settings ?? singleSettings(loaded),
-    isDirty: settingsAreDirty,
     onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
     // A saved Single is known by its slug, which an unsaved one shares; its
     // id tells them apart, so once saved the editor loads the server's afresh.
@@ -385,6 +383,9 @@ export default function SingleBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    // Each changed setting is reviewed with the save, and a save of the
+    // settings alone is reviewed too.
+    settingChanges: pending.settingChanges,
   });
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
@@ -472,6 +473,7 @@ export default function SingleBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
+        settingChanges={pending.settingChanges}
       />
     </BuilderPageLayout>
   );

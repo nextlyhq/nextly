@@ -12,6 +12,7 @@
  */
 import type { JSX } from "react";
 
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -22,6 +23,7 @@ import type { BuilderKind } from "./builder-config";
 import { CreateEntityConfirmDialog } from "./CreateEntityConfirmDialog";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
+import { SettingsChangeConfirmDialog } from "./SettingsChangeConfirmDialog";
 import type { SchemaChangeConfirmation } from "./types";
 
 type Props = {
@@ -44,6 +46,8 @@ type Props = {
    * review says what will be created, rather than judging a change.
    */
   creating?: boolean;
+  /** The entity's settings the save changes, each reviewed with it. */
+  settingChanges?: readonly SettingChange[];
 };
 
 /**
@@ -72,6 +76,7 @@ export function BuilderSchemaChangeDialogs({
   entityName,
   onConfirm,
   creating = false,
+  settingChanges = [],
 }: Props): JSX.Element | null {
   const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
 
@@ -92,6 +97,23 @@ export function BuilderSchemaChangeDialogs({
     );
   }
 
+  // No field changes, only settings: reviewed as such, saved without a
+  // migration or a restart.
+  if (!preview.hasChanges && settingChanges.length > 0) {
+    return (
+      <SettingsChangeConfirmDialog
+        key={previewId}
+        open={isOpen}
+        onOpenChange={setOpen}
+        kind={kind}
+        entityName={entityName}
+        settingChanges={settingChanges}
+        onConfirm={() => onConfirm({}, [])}
+        isApplying={isApplying}
+      />
+    );
+  }
+
   if (isSafeChange(preview)) {
     return (
       <SafeChangeConfirmDialog
@@ -101,6 +123,7 @@ export function BuilderSchemaChangeDialogs({
         kind={kind}
         entityName={entityName}
         changes={preview.changes}
+        settingChanges={settingChanges}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />
@@ -122,6 +145,7 @@ export function BuilderSchemaChangeDialogs({
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}
       joiningTranslation={preview.joiningTranslation}
+      settingChanges={settingChanges}
       onConfirm={onConfirm}
       isApplying={isApplying}
     />

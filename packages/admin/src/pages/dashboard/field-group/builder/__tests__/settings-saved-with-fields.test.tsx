@@ -74,16 +74,21 @@ function json(body: unknown, status: number): Response {
 }
 
 const applied: unknown[] = [];
+/** Whether the server's preview finds fields to migrate. */
+let previewFindsChanges = true;
 
 beforeEach(() => {
   updateFieldGroup.mockClear();
   applied.length = 0;
+  previewFindsChanges = true;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/field-groups/schema/hero/preview")) {
-        return Promise.resolve(json(PREVIEW, 200));
+        return Promise.resolve(
+          json({ ...PREVIEW, hasChanges: previewFindsChanges }, 200)
+        );
       }
       if (url.endsWith("/field-groups/schema/hero/apply")) {
         applied.push(JSON.parse(String(init?.body ?? "{}")));
@@ -163,5 +168,47 @@ describe("a field group's settings saved with a field change", () => {
     );
     // The fields went with the apply; this write carries settings only.
     expect(updates).not.toHaveProperty("fields");
+  });
+});
+
+describe("a field group's settings saved on their own", () => {
+  it("are reviewed first, then saved without a schema apply", async () => {
+    // No field changed, so the server's preview finds nothing to migrate.
+    previewFindsChanges = false;
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <FieldGroupBuilderEditPage params={{ slug: "hero" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-heading");
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    await user.type(within(settings).getByLabelText("Description"), "Top");
+    await user.click(within(settings).getByRole("button", { name: "Save" }));
+
+    await user.click(screen.getByRole("button", { name: /^save/i }));
+    const review = await screen.findByRole("alertdialog");
+    expect(
+      within(review).getByRole("heading", {
+        name: "Save the settings of the field group hero?",
+      })
+    ).toBeInTheDocument();
+    expect(
+      within(within(review).getByRole("list", { name: "Settings" }))
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Description: none → Top"]);
+    // Nothing is written until the review is confirmed.
+    expect(updateFieldGroup).not.toHaveBeenCalled();
+
+    await user.click(within(review).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateFieldGroup).toHaveBeenCalledTimes(1));
+    expect(updateFieldGroup.mock.calls[0][0].updates).toEqual(
+      expect.objectContaining({ description: "Top" })
+    );
+    expect(applied).toHaveLength(0);
   });
 });
