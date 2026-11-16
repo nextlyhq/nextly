@@ -146,4 +146,3 @@ test("creates, saves, and finds the address fixed", async ({ page }) => {
     await removeRuntimeCollection(api, slug);
   }
 });
-
