@@ -249,10 +249,23 @@ async function moveOnce(deps: EmptySeedMoveDeps): Promise<EmptySeedOutcome> {
   if (state.kind === "gone" || state.kind === "filled") return finish(deps, 0);
   // Only its draft holds an area: its pages stay while someone fills it, and
   // the move is not done, since that draft may yet be discarded.
-  if (state.kind === "filling")
+  if (state.kind === "filling") {
     return { kind: "pass", moved: 0, finished: false };
-  const seed = state.id;
+  }
+  const pass = await movePagesOffSeed(deps, state.id);
+  if (!pass.complete)
+    return { kind: "pass", moved: pass.moved, finished: false };
+  return finish(deps, pass.moved);
+}
 
+/**
+ * Every page naming `seed` moved off it, as far as one pass goes, and said
+ * in the log: how many moved, and when the pass did not reach every page.
+ */
+async function movePagesOffSeed(
+  deps: EmptySeedMoveDeps,
+  seed: string
+): Promise<{ moved: number; complete: boolean }> {
   const scan = await scanLayoutReferences({
     nextly: deps.nextly,
     pages: deps.pagesSlug,
@@ -270,13 +283,9 @@ async function moveOnce(deps: EmptySeedMoveDeps): Promise<EmptySeedOutcome> {
     if (outcome === "moved") moved += 1;
     if (outcome === "refused") refused += 1;
   }
-  if (moved > 0) {
-    deps.warn(
-      `[page-builder] moved ${moved} ${moved === 1 ? "page" : "pages"} to the site default, because ${moved === 1 ? "it" : "they"} named the empty seeded header & footer set`,
-      { seededLayout: seed, moved }
-    );
-  }
-  if (!scan.complete || refused > 0) {
+  if (moved > 0) deps.warn(movedLine(moved), { seededLayout: seed, moved });
+  const complete = scan.complete && refused === 0;
+  if (!complete) {
     deps.warn(
       "[page-builder] the move of pages off the empty seeded header & footer set did not finish; the next jobs pass carries on",
       {
@@ -286,9 +295,14 @@ async function moveOnce(deps: EmptySeedMoveDeps): Promise<EmptySeedOutcome> {
         unread: scan.unread.length,
       }
     );
-    return { kind: "pass", moved, finished: false };
   }
-  return finish(deps, moved);
+  return { moved, complete };
+}
+
+/** The log line saying how many pages a pass moved. */
+function movedLine(moved: number): string {
+  const [pages, they] = moved === 1 ? ["page", "it"] : ["pages", "they"];
+  return `[page-builder] moved ${moved} ${pages} to the site default, because ${they} named the empty seeded header & footer set`;
 }
 
 /** Record the move as done, answering the pass that finished it. */
