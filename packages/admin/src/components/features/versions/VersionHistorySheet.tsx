@@ -38,11 +38,11 @@ import {
 } from "@admin/hooks/queries/useVersions";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { navigateTo } from "@admin/lib/navigation";
+import { navigateTo, setSearchParams } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
-import { useHistoryAddress } from "./history-address";
+import { RESTORE_PARAM, useHistoryAddress } from "./history-address";
 import { loadedWindow } from "./history-story";
 import { HistoryStoryList } from "./HistoryStoryList";
 import { restoreIntoEditor } from "./restore-into-editor";
@@ -372,6 +372,22 @@ export function VersionHistorySheet({
    * stored: the person's own save or publish is the only write, and the toast
    * offers to take the restore back.
    */
+  // Handed over by the comparison page's "Restore…": the address names the
+  // version and asks for its restore list, once. The ask is taken out of the
+  // address as it is answered, so going back or reloading does not ask again.
+  const offersRestore =
+    canRestore &&
+    editor !== undefined &&
+    restoresInEditor(viewedAbout?.locale, editor.locale);
+  useEffect(() => {
+    if (!open || selected === null || !detail.data) return;
+    const asked =
+      new URLSearchParams(window.location.search).get(RESTORE_PARAM) === "1";
+    if (!asked) return;
+    setSearchParams({ [RESTORE_PARAM]: null }, { replace: true });
+    if (offersRestore) setConfirmingRestore(true);
+  }, [open, selected, detail.data, offersRestore]);
+
   const restoreChosen = useCallback(
     (names: string[]) => {
       if (!editor || selected === null) return;
@@ -512,10 +528,7 @@ export function VersionHistorySheet({
       // A restore puts values into an editor, so it is offered only where one
       // is there to take them.
       // And only into the editor of the version's own language.
-      canRestore:
-        canRestore &&
-        editor !== undefined &&
-        restoresInEditor(viewedAbout?.locale, editor.locale),
+      canRestore: offersRestore,
       request: requestRestore,
       returnToCurrent,
       // Where the page steps aside, the version is all that is on screen, so
@@ -547,8 +560,7 @@ export function VersionHistorySheet({
     openCurrentComparison,
     roomBeside,
     setRestore,
-    editor,
-    viewedAbout,
+    offersRestore,
   ]);
 
   // When previewing a version whose previous same-locale version has not loaded
