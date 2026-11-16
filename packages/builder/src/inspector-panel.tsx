@@ -106,7 +106,7 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
-import { keptWhileHidden, ownHtmlChanged } from "./kept-while-hidden";
+import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { NeverQuote } from "./never-quote";
@@ -891,9 +891,9 @@ function SelectionInspector({
 
 /**
  * The Content tab: the block's own fields, then Advanced (CSS id, attributes).
- * Hidden, it is drawn again only for its own block's CSS id or attributes.
+ * Hidden, it is drawn again only when its own block changes.
  */
-const ContentTab = keptWhileHidden(DrawnContentTab, ownHtmlChanged);
+const ContentTab = keptWhileHidden(DrawnContentTab, ownBlockChanged);
 function DrawnContentTab({
   block,
   editor,

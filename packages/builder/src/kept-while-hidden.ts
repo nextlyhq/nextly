@@ -5,6 +5,7 @@
  *
  * @module kept-while-hidden
  */
+import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import type { BlockInspection } from "./inspector";
@@ -33,22 +34,29 @@ export function keptWhileHidden<P extends ShownOrNot>(
   );
 }
 
+/** What a Content tab is drawn from: the block, and the editor's page. */
+interface DrawnFor {
+  readonly block: Pick<BlockInspection, "nodeId">;
+  readonly editor: { readonly document: BlockDocument };
+}
+
 /**
- * Whether the block a hidden Content tab was drawn for has a new CSS id or
- * new attributes. Its Advanced panel follows them while hidden, as it did
- * when it was drawn on every render, so an undo made on Style is what it
- * shows when Content comes back. Another block selected is not heard: the
- * tab is drawn for that one when it shows.
+ * Whether the block a hidden Content tab was drawn for has changed: its
+ * props, its CSS id or attributes, anything the page holds for it.
+ *
+ * Heard so what the tab holds stays the block as it is: a block's own
+ * inspector can hold its commit across an await, and a commit copies the
+ * block's props whole, so one built on the block as it hid would put back an
+ * undo made on Style since. Advanced follows its CSS id and attributes the
+ * same way. Another block selected is not heard: the tab is drawn for that
+ * one when it shows.
  */
-export function ownHtmlChanged(
-  before: { readonly block: BlockInspection },
-  after: { readonly block: BlockInspection }
-): boolean {
-  if (before.block.nodeId !== after.block.nodeId) return false;
-  const was = before.block.html;
-  const now = after.block.html;
+export function ownBlockChanged(before: DrawnFor, after: DrawnFor): boolean {
+  const id = before.block.nodeId;
+  if (after.block.nodeId !== id) return false;
+  if (before.editor.document === after.editor.document) return false;
   return (
-    was.cssId !== now.cssId ||
-    JSON.stringify(was.attributes) !== JSON.stringify(now.attributes)
+    findNode(before.editor.document.nodes, id) !==
+    findNode(after.editor.document.nodes, id)
   );
 }

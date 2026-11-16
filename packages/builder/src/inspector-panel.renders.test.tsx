@@ -97,12 +97,27 @@ function DraftingInspector({
   );
 }
 
+const HOLDING = "acme/picture#inspector";
+
+/** The `commit` a block's own inspector last held, as one awaiting a pick. */
+const held = vi.hoisted(() => ({
+  commit: undefined as ((name: string, value: unknown) => void) | undefined,
+}));
+
+/** A block's own inspector that keeps its `commit` for later. */
+function HoldingInspector({ commit }: BlockInspectorProps): React.JSX.Element {
+  held.commit = commit;
+  return <p>Picture controls</p>;
+}
+
 const inspectors: BlockInspectorResolver = path =>
   path === INSPECTOR
     ? HeadingInspector
     : path === DRAFTING
       ? DraftingInspector
-      : undefined;
+      : path === HOLDING
+        ? HoldingInspector
+        : undefined;
 
 beforeAll(() => {
   // Radix measures and scrolls; jsdom provides neither.
@@ -140,6 +155,19 @@ beforeEach(() => {
         example: { props: {} },
         editor: { label: "Text block" },
         props: { text: { type: "text", role: "content" } },
+        render: () => null,
+      },
+      {
+        // An inspector of its own that commits after an await.
+        name: "acme/picture",
+        version: 1,
+        description: "A picture.",
+        example: { props: {} },
+        editor: { label: "Picture", component: HOLDING },
+        props: {
+          alt: { type: "text", role: "content" },
+          src: { type: "text", role: "content" },
+        },
         render: () => null,
       },
       {
@@ -513,5 +541,41 @@ describe("what Advanced writes as it goes away", () => {
     fireEvent.change(value, { target: { value: "2" } });
     act(() => editor().select("second"));
     expect(firstAttributes()).toEqual({ "data-x": "2" });
+  });
+});
+
+describe("a commit a hidden Content tab made after it hid", () => {
+  it("builds on the block as it is now, so an undo made on Style holds", async () => {
+    const page = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "first",
+          type: "acme/picture",
+          version: 1,
+          props: { alt: "old", src: "a.png" },
+        },
+      ],
+    } as BlockDocument;
+    render(<Host page={page} />);
+    act(() => editor().select("first"));
+    act(() => held.commit?.("alt", "new"));
+    // The control: the inspector's own edit landed.
+    expect(editor().document.nodes[0]?.props).toEqual({
+      alt: "new",
+      src: "a.png",
+    });
+    openTab("Style");
+    await act(async () => {
+      await editor().undo();
+    });
+    expect(editor().document.nodes[0]?.props.alt).toBe("old");
+    // The pick the inspector was waiting on arrives, Style still showing.
+    act(() => held.commit?.("src", "b.png"));
+    expect(editor().document.nodes[0]?.props).toEqual({
+      alt: "old",
+      src: "b.png",
+    });
   });
 });

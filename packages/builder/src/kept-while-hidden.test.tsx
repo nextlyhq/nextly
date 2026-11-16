@@ -3,8 +3,9 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { BlockInspection } from "./inspector";
-import { keptWhileHidden, ownHtmlChanged } from "./kept-while-hidden";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
+
+import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 
 afterEach(cleanup);
 
@@ -31,32 +32,42 @@ describe("keptWhileHidden", () => {
   });
 });
 
-describe("ownHtmlChanged", () => {
-  /** A Content tab's props for `nodeId`, holding `cssId` and `attributes`. */
-  const tab = (
-    nodeId: string,
-    cssId: string | undefined,
-    attributes?: Record<string, string>
-  ) => ({ block: { nodeId, html: { cssId, attributes } } as BlockInspection });
+describe("ownBlockChanged", () => {
+  const first = { id: "a", type: "acme/text", version: 1, props: { t: "1" } };
+  const second = { id: "b", type: "acme/text", version: 1, props: { t: "2" } };
+  /** A page of these nodes, as an editor holds it. */
+  const pageOf = (...nodes: unknown[]) =>
+    ({ formatVersion: 1, kind: "page", nodes }) as unknown as BlockDocument;
+  /** A Content tab's props, drawn for `nodeId` on `document`. */
+  const tab = (nodeId: string, document: BlockDocument) => ({
+    block: { nodeId },
+    editor: { document },
+  });
 
-  it("hears its own block's CSS id or attributes change", () => {
-    expect(ownHtmlChanged(tab("a", "intro"), tab("a", undefined))).toBe(true);
+  it("hears its own block change", () => {
+    const changed = { ...first, props: { t: "9" } };
     expect(
-      ownHtmlChanged(
-        tab("a", undefined, { "data-x": "1" }),
-        tab("a", undefined, { "data-x": "2" })
+      ownBlockChanged(
+        tab("a", pageOf(first, second)),
+        tab("a", pageOf(changed, second))
       )
     ).toBe(true);
   });
 
-  it("hears nothing when they are as they were, or another block is selected", () => {
+  it("hears nothing for another block's change, or another block selected", () => {
+    const other = { ...second, props: { t: "9" } };
     expect(
-      ownHtmlChanged(
-        tab("a", "intro", { "data-x": "1" }),
-        tab("a", "intro", { "data-x": "1" })
+      ownBlockChanged(
+        tab("a", pageOf(first, second)),
+        tab("a", pageOf(first, other))
       )
     ).toBe(false);
-    expect(ownHtmlChanged(tab("a", "intro"), tab("b", undefined))).toBe(false);
+    expect(
+      ownBlockChanged(
+        tab("a", pageOf(first, second)),
+        tab("b", pageOf({ ...first, props: { t: "9" } }, second))
+      )
+    ).toBe(false);
   });
 
   it("draws a hidden panel again for what it hears", () => {
