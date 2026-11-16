@@ -167,7 +167,7 @@ function settingsDifferences(
  * earlier version's snapshot, and the tables a real site declares are named
  * as added in any case.
  */
-function permissionDifferences(
+export function permissionDifferences(
   declared: PermissionRecord,
   latest: { data: SnapshotFile } | null,
   recorded: RecordedInDatabase | undefined
@@ -300,6 +300,13 @@ export type UnwrittenChangesArgs = Pick<
   recorded?: (
     entities: DeclaredEntities
   ) => Promise<RecordedInDatabase | undefined>;
+  /**
+   * Whether `config` carries everything a permission is declared from (the
+   * app's own permissions and its workflows, besides the plugins). A caller
+   * handed only the schema's part of the configuration passes false, and no
+   * permission is compared: compared, the app's would all read as removed.
+   */
+  comparePermissions?: boolean;
 };
 
 /**
@@ -330,7 +337,7 @@ export async function unwrittenChangesOf(
     latest === null ||
     latest.data.entities === undefined ||
     latest.data.permissions === undefined;
-  return compareWithNewestSnapshot({
+  const changes = compareWithNewestSnapshot({
     entities,
     appStream: inputs.appStream,
     permissions: declaredPermissionsOf(args.config, {
@@ -343,4 +350,7 @@ export async function unwrittenChangesOf(
       ? { recorded: await args.recorded(entities) }
       : {}),
   });
+  return args.comparePermissions === false
+    ? { ...changes, permissions: [] }
+    : changes;
 }

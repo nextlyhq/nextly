@@ -624,7 +624,7 @@ describe.each(getConfiguredTestDialects())(
         // The release that set the preset grants, recorded in the same commit.
         expect(after.presetRelease).toBe(true);
         expect(said).toContain(
-          "First run on this release: 0 registry rows written from the configuration (0 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+          "First run on this release: the site's current settings and permissions are now recorded in the database (0 registry rows written from the configuration, 0 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
         );
       }, 180_000);
 
@@ -684,7 +684,7 @@ describe.each(getConfiguredTestDialects())(
           );
         });
         expect(said).toContain(
-          "First run on this release: 1 registry row written from the configuration (1 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+          "First run on this release: the site's current settings and permissions are now recorded in the database (1 registry row written from the configuration, 1 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
         );
 
         // With the record, a configuration that differs changes no row until

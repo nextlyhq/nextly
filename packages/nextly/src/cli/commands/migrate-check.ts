@@ -68,6 +68,10 @@ import {
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
+  permissionDifferences,
+  unwrittenChangesError,
+} from "../../domains/schema/migrate/unwritten-changes";
+import {
   marksNoTransaction,
   splitSqlStatements,
   statementRefusals,
@@ -81,6 +85,10 @@ import {
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
 import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  declaredPermissionsOf,
+  type PermissionRecord,
+} from "../../domains/schema/migrate-create/declared-permissions";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -306,6 +314,12 @@ export async function runMigrateCheck(
     // Each entity with its settings, as `migrate:create` records them; the
     // merge sets a Builder entity's (`uiToMinimal`).
     entities: merged,
+    // Every permission the configuration declares, as `migrate:create` records them, so a plugin
+    // release that only adds or removes one is named here as `nextly migrate` names it.
+    permissions: declaredPermissionsOf(configResult.config, {
+      collections: merged.collections,
+      singles: merged.singles,
+    }),
     logger,
   });
 }
@@ -347,6 +361,11 @@ export async function runChecks(args: {
     singles: readonly MinimalConfigEntity[];
     components: readonly MinimalConfigEntity[];
   };
+  /**
+   * The permissions the configuration declares, compared with the newest
+   * snapshot's record of them. Omitted, permissions are not checked.
+   */
+  permissions?: PermissionRecord;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -496,6 +515,26 @@ export async function runChecks(args: {
 
   const settingsDrift = settingsInStep(args.entities, latest?.data.entities);
   if (settingsDrift !== undefined) return exitWithError(logger, settingsDrift);
+
+  // An app's or a plugin's permission added or removed with no migration, judged by the one
+  // comparison `nextly migrate` makes (`permissionDifferences`). This check reads no database,
+  // so a snapshot that predates the record, or none at all, names nothing.
+  const permissionDrift =
+    args.permissions === undefined
+      ? undefined
+      : unwrittenChangesError({
+          tables: [],
+          settings: [],
+          permissions: permissionDifferences(
+            args.permissions,
+            latest,
+            undefined
+          ),
+          noSnapshot: latest === null,
+        });
+  if (permissionDrift !== undefined) {
+    return exitWithError(logger, permissionDrift);
+  }
 
   logger.success(
     `migrate:check OK — ${sqlFiles.length} migration file(s), no drift.`
