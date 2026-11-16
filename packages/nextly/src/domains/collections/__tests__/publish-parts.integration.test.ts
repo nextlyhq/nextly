@@ -1322,7 +1322,7 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
   // What the gate's judgement started is finished on the move's own transaction once the parts are
   // written, and a gate that finds what it judged has changed takes the whole move back.
-  it("settles the gate once a publish has written its parts, and keeps nothing when settling throws", async () => {
+  it("settles the gate once a publish has written its parts", async () => {
     await boot(posts());
     const id = await entry({ es: { title: "Hola" } });
     const seen = judgeOnTheMove([]);
@@ -1336,21 +1336,26 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
     expect(seen.settled).toBe(1);
     expect((await states(id)).es).toBe("published");
+  });
 
-    const other = await entry({ es: { title: "Hola" } });
-    const before = await states(other);
-    judgeOnTheMove([], true);
+  it("keeps nothing of a publish whose gate throws as it settles", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const before = await states(id);
+    const seen = judgeOnTheMove([], true);
+
     const refusal = await refusalOf(
       t!.nextly.publish({
         collection: "posts",
-        id: other,
+        id,
         locales: "all",
         data: { _overwrite: true },
       })
     );
 
+    expect(seen.settled).toBeGreaterThan(0);
     expect(refusal).not.toBe("");
-    expect(await states(other)).toEqual(before);
+    expect(await states(id)).toEqual(before);
   });
 
   // A publish made without review says so, with its reason, from the REST body to the gate: its
