@@ -182,8 +182,12 @@ describe.each(getConfiguredTestDialects())(
         );
       }
       // The rule carries the look's own values, not merely its selector.
-      expect(css).toMatch(/\.nx-l-section-hero[^{]*\{[^}]*text-align:\s*center/);
-      expect(css).toMatch(/\.nx-l-image-circle[^{]*\{[^}]*border-radius:\s*9999px/);
+      expect(css).toMatch(
+        /\.nx-l-section-hero[^{]*\{[^}]*text-align:\s*center/
+      );
+      expect(css).toMatch(
+        /\.nx-l-image-circle[^{]*\{[^}]*border-radius:\s*9999px/
+      );
     });
   }
 );

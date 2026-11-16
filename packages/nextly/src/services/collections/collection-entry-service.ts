@@ -1008,8 +1008,6 @@ export class CollectionEntryService extends BaseService {
       /**
        * The fields this write restored, and the version each came from,
        * recorded per field on the version it captures (see `restored-from`).
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**

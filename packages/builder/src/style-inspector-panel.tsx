@@ -612,7 +612,6 @@ function StyleInspectorBody({
               <NoStyleProperties count={inspected.sections.length} />
               <StyleSections
                 sections={inspected.sections}
-                nodeId={inspected.nodeId}
                 open={open}
                 onOpen={setOpenGroup}
                 readOnlyReason={readOnlyReason}
