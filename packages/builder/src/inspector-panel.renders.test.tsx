@@ -225,8 +225,12 @@ describe("the settings panel's work for a selection", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    fireEvent.click(screen.getByRole("button", { name: /Typography/ }));
+    const typography = screen.getByRole("button", { name: /Typography/ });
+    if (typography.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(typography);
+    }
     // The control: both sections are drawn, Typography open.
+    expect(typography.getAttribute("aria-expanded")).toBe("true");
     expect(counted.sections.get("typography")).toBeGreaterThan(0);
     expect(counted.sections.get("background")).toBeGreaterThan(0);
     counted.sections.clear();
