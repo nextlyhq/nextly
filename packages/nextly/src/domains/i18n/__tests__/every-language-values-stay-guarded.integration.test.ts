@@ -6,7 +6,7 @@
  *
  * @module domains/i18n/__tests__/every-language-values-stay-guarded.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
@@ -14,9 +14,11 @@ import {
   defineSingle,
   group,
   password,
+  relationship,
   text,
 } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { createPublicSingleRoute } from "../../../runtime/routing/single-route";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -403,5 +405,569 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(read.json)).toContain("Llave");
       expect(JSON.stringify(read.json)).not.toContain("restored-pin");
     }, 90_000);
+  }
+);
+
+// ---------------------------------------------------------------------------
+// Every read path, judged per language.
+//
+// One table: each read path that returns a language's values, against each
+// rule a language's values answer to. (c) a public read finds nothing in a
+// language that is not published; (a) each language's values answer to the
+// read rule in that language; (b) each language's values answer to the field
+// rules in that language; (d) a password is cleared from every language after
+// the read hooks; and no read hook is handed a withheld language. The
+// fixture is booted once per dialect and only read: an entry and a Single
+// published in English and Spanish, each with a French draft.
+// ---------------------------------------------------------------------------
+
+const PAGES = "evp_pages";
+const PEOPLE = "evp_people";
+const GATED_PEOPLE = "evp_gated_people";
+const GATED_PAGES = "evp_gated_pages";
+const HOME = "evp_home";
+const HOME_GATED = "evp_home_gated";
+
+const pathsSeen: string[] = [];
+const seeAllLocales = ({ data }: { data?: Record<string, unknown> }) => {
+  pathsSeen.push(JSON.stringify(data?._allLocales ?? null));
+};
+const notSpanish = ({ locale }: { locale?: string }) => locale !== "es";
+
+async function bootPaths(dialect: TestDialect): Promise<TestNextly> {
+  return createTestNextly({
+    dialect,
+    seedPublic: true,
+    collections: [
+      defineCollection({
+        slug: PEOPLE,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [
+          text({ name: "name" }),
+          text({ name: "secret", access: { read: () => false } }),
+        ],
+      }),
+      defineCollection({
+        slug: GATED_PEOPLE,
+        localized: true,
+        status: true,
+        access: { read: notSpanish },
+        fields: [text({ name: "name" })],
+      }),
+      defineCollection({
+        slug: PAGES,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        hooks: { afterRead: [seeAllLocales] },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "brand", localized: false }),
+          text({ name: "memo", access: { read: () => false } }),
+          vault(),
+          relationship({ name: "author", relationTo: PEOPLE }),
+          relationship({ name: "editor", relationTo: PEOPLE }),
+          relationship({ name: "gatedAuthor", relationTo: GATED_PEOPLE }),
+        ],
+      }),
+      defineCollection({
+        slug: GATED_PAGES,
+        localized: true,
+        status: true,
+        access: { read: notSpanish },
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: HOME,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        hooks: { afterRead: [seeAllLocales] },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "brand", localized: false }),
+          text({ name: "memo", access: { read: () => false } }),
+          vault(),
+        ],
+      }),
+      defineSingle({
+        slug: HOME_GATED,
+        localized: true,
+        status: true,
+        access: { read: notSpanish },
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    localization: { locales: ["en", "es", "fr"], defaultLocale: "en" },
+  });
+}
+
+interface Seeded {
+  page: string;
+  gatedPage: string;
+}
+
+/** The Single service, as the dispatcher reaches it. */
+const singleService = (t: TestNextly) =>
+  t.getService("singleEntryService") as unknown as {
+    update(
+      slug: string,
+      data: Record<string, unknown>,
+      options: Record<string, unknown>
+    ): Promise<{ success: boolean }>;
+    get(
+      slug: string,
+      options: Record<string, unknown>
+    ): Promise<{
+      success: boolean;
+      statusCode?: number;
+      data?: Record<string, unknown> | null;
+    }>;
+  };
+
+async function seedPaths(t: TestNextly): Promise<Seeded> {
+  // Published in English only.
+  const ann = String(
+    (
+      await t.nextly.create({
+        collection: PEOPLE,
+        locale: "en",
+        data: { name: "Ann", status: "published" },
+      })
+    ).item.id
+  );
+  const bea = await entryInBoth(
+    t,
+    PEOPLE,
+    { name: "Bea", secret: "s-en" },
+    { name: "Bea-es", secret: "s-es" }
+  );
+  const gil = await entryInBoth(
+    t,
+    GATED_PEOPLE,
+    { name: "Gil" },
+    { name: "Gil-es" }
+  );
+  const page = await entryInBoth(
+    t,
+    PAGES,
+    {
+      title: "Page",
+      brand: "Acme",
+      memo: "m-en",
+      vault: { label: "Key", pin: "pin-en-1234" },
+      author: ann,
+      editor: bea,
+      gatedAuthor: gil,
+    },
+    {
+      title: "Pagina",
+      memo: "m-es",
+      vault: { label: "Llave", pin: "pin-es-1234" },
+    }
+  );
+  // A French draft, never published.
+  await t.nextly.update({
+    collection: PAGES,
+    id: page,
+    locale: "fr",
+    data: {
+      title: "Brouillon",
+      memo: "m-fr",
+      status: "draft",
+      _overwrite: true,
+    },
+  });
+  const gatedPage = await entryInBoth(
+    t,
+    GATED_PAGES,
+    { title: "Harbour" },
+    { title: "Puerto" }
+  );
+  await singleInBoth(
+    t,
+    HOME,
+    {
+      title: "Home",
+      brand: "Acme",
+      memo: "hm-en",
+      vault: { label: "Key", pin: "pin-en-1234" },
+    },
+    {
+      title: "Inicio",
+      memo: "hm-es",
+      vault: { label: "Llave", pin: "pin-es-1234" },
+    }
+  );
+  const draft = await singleService(t).update(
+    HOME,
+    {
+      title: "Accueil brouillon",
+      memo: "hm-fr",
+      status: "draft",
+      _overwrite: true,
+    },
+    { locale: "fr", overrideAccess: true }
+  );
+  expect(draft.success, JSON.stringify(draft)).toBe(true);
+  await singleInBoth(t, HOME_GATED, { title: "Site" }, { title: "Sitio" });
+  return { page, gatedPage };
+}
+
+type PathCheck = (t: TestNextly, seeded: Seeded) => Promise<void>;
+
+/** A visitor's REST read, answered 200, as text. */
+async function visitorReads(path: string[], query: string): Promise<string> {
+  const read = await restGet(path, query);
+  expect(read.status, JSON.stringify(read.json)).toBe(200);
+  return JSON.stringify(read.json);
+}
+
+const pageRead = (s: Seeded, query: string) =>
+  visitorReads(["collections", PAGES, "entries", s.page], query);
+const pagesListed = (query: string) =>
+  visitorReads(["collections", PAGES, "entries"], query);
+const homeRead = (query: string) => visitorReads(["singles", HOME], query);
+
+/** Every withheld value of the page and the Single, in every language. */
+const WITHHELD = ["m-en", "m-es", "m-fr", "hm-", "s-en", "s-es", "pin-"];
+const holdsNoWithheld = (text: string) => {
+  for (const value of WITHHELD) expect(text).not.toContain(value);
+  expect(text).not.toContain("restored-pin");
+};
+
+const PATHS: [string, PathCheck][] = [
+  // The fixture reaches every mechanism below: the French drafts are there
+  // to a trusted reader, and the related documents are expanded in English.
+  [
+    "fixture: the French drafts are there to a trusted read",
+    async (t, s) => {
+      const page = (await t.nextly.findByID({
+        collection: PAGES,
+        id: s.page,
+        locale: "fr",
+        status: "all",
+      })) as Record<string, unknown>;
+      expect(page.title).toBe("Brouillon");
+      const home = await singleService(t).get(HOME, {
+        locale: "fr",
+        status: "all",
+        overrideAccess: true,
+      });
+      expect(home.data?.title, JSON.stringify(home)).toBe("Accueil brouillon");
+      const english = await pageRead(s, "?locale=en&depth=1");
+      expect(english).toContain("Ann");
+      expect(english).toContain("Gil");
+    },
+  ],
+
+  // (c) A public read finds nothing in a language that is not published.
+  [
+    "(c) entry by id",
+    async (_t, s) => {
+      const read = await restGet(
+        ["collections", PAGES, "entries", s.page],
+        "?locale=fr"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(404);
+    },
+  ],
+  [
+    "(c) entry list and count",
+    async t => {
+      expect(await pagesListed("?locale=fr")).not.toContain('"title":"Page"');
+      const counted = await t.nextly.count({
+        collection: PAGES,
+        locale: "fr",
+        status: "published",
+      });
+      expect(counted.total).toBe(0);
+    },
+  ],
+  [
+    "(c) entry with every language beside it",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=en&translations=all");
+      expect(text).toContain("Pagina");
+      expect(text).not.toContain("Brouillon");
+    },
+  ],
+  [
+    "(c) entry list with every language beside it",
+    async () => {
+      const text = await pagesListed("?locale=en&translations=all");
+      expect(text).toContain("Pagina");
+      expect(text).not.toContain("Brouillon");
+    },
+  ],
+  [
+    "(c) entry read in every language (locale=all)",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=all");
+      expect(text).toContain("Pagina");
+      expect(text).not.toContain("Brouillon");
+    },
+  ],
+  [
+    "(c) entry with whole-document fallback",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=fr&fallback=document");
+      expect(text).toContain('"_locale":"en"');
+      expect(text).not.toContain("Brouillon");
+    },
+  ],
+  [
+    "(c) related documents (depth 1)",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=es&depth=1");
+      expect(text).toContain("Pagina");
+      expect(text).toContain("Bea-es");
+      expect(text).not.toContain("Ann");
+    },
+  ],
+  [
+    "(c) entry's translation overview",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=en&translation-status=1");
+      expect(text).toContain("_translations");
+      expect(text).not.toContain('"draft"');
+    },
+  ],
+  [
+    "(c) entry list's language filter",
+    async t => {
+      for (const state of ["draft", "translated", "published"] as const) {
+        const listed = await t.nextly.find({
+          collection: PAGES,
+          locale: "en",
+          status: "published",
+          where: { _translated: { locale: "fr", state } } as never,
+        });
+        expect(listed.items, state).toHaveLength(0);
+      }
+      const missing = await t.nextly.find({
+        collection: PAGES,
+        locale: "en",
+        status: "published",
+        where: { _translated: { locale: "fr", state: "missing" } } as never,
+      });
+      expect(missing.items).toHaveLength(1);
+    },
+  ],
+  [
+    "(c) Single",
+    async () => {
+      const read = await restGet(["singles", HOME], "?locale=fr");
+      expect(read.status, JSON.stringify(read.json)).toBe(404);
+    },
+  ],
+  [
+    "(c) Single read of shared fields",
+    async t => {
+      const read = await singleService(t).get(HOME, {
+        locale: "fr",
+        select: { brand: true },
+        status: "published",
+      });
+      expect(read.statusCode, JSON.stringify(read)).toBe(404);
+    },
+  ],
+  [
+    "(c) Single with every language beside it",
+    async () => {
+      const text = await homeRead("?locale=en&translations=all");
+      expect(text).toContain("Inicio");
+      expect(text).not.toContain("brouillon");
+    },
+  ],
+  [
+    "(c) Single read in every language (locale=all)",
+    async () => {
+      const text = await homeRead("?locale=all");
+      expect(text).toContain("Inicio");
+      expect(text).not.toContain("brouillon");
+    },
+  ],
+  [
+    "(c) Single's translation overview",
+    async () => {
+      const text = await homeRead("?locale=en&translation-status=1");
+      expect(text).toContain("_translations");
+      expect(text).not.toContain('"draft"');
+    },
+  ],
+  [
+    "(c) a public Single route",
+    async t => {
+      const route = createPublicSingleRoute({
+        slug: HOME,
+        locale: "fr",
+        nextly: t.nextly,
+        render: () => null,
+        buildMetadata: document => ({ title: String(document.title) }),
+      });
+      expect(JSON.stringify(await route.generateMetadata())).not.toContain(
+        "brouillon"
+      );
+      const english = createPublicSingleRoute({
+        slug: HOME,
+        locale: "en",
+        nextly: t.nextly,
+        render: () => null,
+        buildMetadata: document => ({ title: String(document.title) }),
+      });
+      expect(await english.generateMetadata()).toEqual({ title: "Home" });
+    },
+  ],
+
+  // (a) Each language's values answer to the read rule in that language.
+  [
+    "(a) entry with every language beside it",
+    async (_t, s) => {
+      const text = await visitorReads(
+        ["collections", GATED_PAGES, "entries", s.gatedPage],
+        "?locale=en&translations=all"
+      );
+      expect(text).toContain("Harbour");
+      expect(text).not.toContain("Puerto");
+    },
+  ],
+  [
+    "(a) entry list with every language beside it",
+    async () => {
+      const text = await visitorReads(
+        ["collections", GATED_PAGES, "entries"],
+        "?locale=en&translations=all"
+      );
+      expect(text).toContain("Harbour");
+      expect(text).not.toContain("Puerto");
+    },
+  ],
+  [
+    "(a) entry read in every language (locale=all)",
+    async (_t, s) => {
+      const read = await restGet(
+        ["collections", GATED_PAGES, "entries", s.gatedPage],
+        "?locale=all"
+      );
+      expect(JSON.stringify(read.json)).not.toContain("Puerto");
+    },
+  ],
+  [
+    "(a) Single with every language beside it",
+    async () => {
+      const text = await visitorReads(
+        ["singles", HOME_GATED],
+        "?locale=en&translations=all"
+      );
+      expect(text).toContain("Site");
+      expect(text).not.toContain("Sitio");
+    },
+  ],
+  [
+    "(a) related documents (depth 1)",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=es&depth=1");
+      expect(text).toContain("Pagina");
+      expect(text).not.toContain("Gil");
+    },
+  ],
+
+  // (b) Each language's values answer to the field rules in that language,
+  // and (d) a password a read hook puts back is cleared in every language.
+  [
+    "(b, d) entry with every language beside it",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=en&translations=all");
+      expect(text).toContain("Llave");
+      holdsNoWithheld(text);
+    },
+  ],
+  [
+    "(b, d) entry list with every language beside it",
+    async () => {
+      const text = await pagesListed("?locale=en&translations=all");
+      expect(text).toContain("Llave");
+      holdsNoWithheld(text);
+    },
+  ],
+  [
+    "(b, d) entry read in every language (locale=all)",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=all");
+      expect(text).toContain("Llave");
+      holdsNoWithheld(text);
+    },
+  ],
+  [
+    "(b, d) entry in one language, and its related documents",
+    async (_t, s) => {
+      const text = await pageRead(s, "?locale=es&depth=1");
+      expect(text).toContain("Llave");
+      holdsNoWithheld(text);
+    },
+  ],
+  [
+    "(b, d) Single with every language beside it",
+    async () => {
+      const text = await homeRead("?locale=en&translations=all");
+      expect(text).toContain("Llave");
+      holdsNoWithheld(text);
+    },
+  ],
+  [
+    "(b, d) Single read in every language (locale=all)",
+    async () => {
+      const text = await homeRead("?locale=all");
+      expect(text).toContain("Llave");
+      holdsNoWithheld(text);
+    },
+  ],
+
+  // No read hook is handed a language's withheld value.
+  [
+    "(hooks) entry and Single read hooks",
+    async (_t, s) => {
+      pathsSeen.length = 0;
+      await pageRead(s, "?locale=en&translations=all");
+      await homeRead("?locale=en&translations=all");
+      // Both hooks ran; the languages beside the read are reattached after
+      // them, so neither is handed one.
+      expect(pathsSeen.length).toBeGreaterThanOrEqual(2);
+      const seen = pathsSeen.join(" ");
+      expect(seen).not.toContain("Pagina");
+      expect(seen).not.toContain("Inicio");
+      for (const value of WITHHELD) expect(seen).not.toContain(value);
+      expect(seen).not.toContain("rouillon");
+    },
+  ],
+];
+
+describe.each(getConfiguredTestDialects())(
+  "every read path, judged per language (integration, %s)",
+  dialect => {
+    let paths: TestNextly | undefined;
+    let seeded: Seeded | undefined;
+    beforeAll(async () => {
+      paths = await bootPaths(dialect);
+      seeded = await seedPaths(paths);
+    }, 180_000);
+    afterAll(async () => {
+      await paths?.destroy();
+      paths = undefined;
+    });
+
+    it.each(PATHS)(
+      "%s",
+      async (_name, check) => {
+        if (!paths || !seeded) throw new Error("the fixture did not boot");
+        await check(paths, seeded);
+      },
+      60_000
+    );
   }
 );
