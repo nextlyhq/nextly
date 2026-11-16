@@ -263,14 +263,33 @@ export default class NextlyIncrementalCacheHandler {
     cacheControl?: unknown;
   } | null> {
     const read = rememberRead(key);
+    const stored = await this.freshEntry(key, ctx);
+    // A miss sets off a render, and so does an entry served past its
+    // revalidate time (Next.js fills it again in the background): either read
+    // holds its start, as the render's. One served within its time started
+    // no render.
+    markAnswer(
+      read,
+      stored === undefined || dueForRevalidation(stored) ? "missed" : "served"
+    );
+    if (stored === undefined) return null;
+    return {
+      lastModified: stored.lastModified,
+      value: stored.value,
+      cacheControl: stored.cacheControl,
+    };
+  }
+
+  /** The entry stored for `key` while none of its tags expired after it began. */
+  private async freshEntry(
+    key: string,
+    ctx: CacheContext | undefined
+  ): Promise<StoredEntry | undefined> {
     // Where a timer may never fire, a read retries what the ledger refused.
     const retrying = retryFailedRecordsAtRead();
     if (retrying !== undefined) await retrying;
     const stored = entries().get(key) ?? (await this.storedFromBuild(key, ctx));
-    if (stored === undefined) {
-      markAnswer(read, "missed");
-      return null;
-    }
+    if (stored === undefined) return undefined;
     const tags = [
       ...stored.tags,
       ...(ctx?.tags ?? []),
@@ -282,18 +301,9 @@ export default class NextlyIncrementalCacheHandler {
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.begunAt)) {
       entries().deleteIf(key, stored);
-      markAnswer(read, "missed");
-      return null;
+      return undefined;
     }
-    // A stored entry past its revalidate time is served while Next.js fills
-    // it again in the background, from this read: that read holds its start
-    // as a miss does. One within its time started no render.
-    markAnswer(read, dueForRevalidation(stored) ? "missed" : "served");
-    return {
-      lastModified: stored.lastModified,
-      value: stored.value,
-      cacheControl: stored.cacheControl,
-    };
+    return stored;
   }
 
   /**

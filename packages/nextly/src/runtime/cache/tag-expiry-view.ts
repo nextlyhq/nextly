@@ -491,9 +491,7 @@ function sweep(view: ViewState, now: number): void {
   for (const [tag, expiredAt] of view.own) {
     if (expiredAt < horizon) view.own.delete(tag);
   }
-  for (const tag of view.again?.keys() ?? []) {
-    if (latestAgain(view, tag) < horizon) view.again?.delete(tag);
-  }
+  sweepAgain(view, horizon);
   for (const [tag, refusal] of view.refusals) {
     if (refusal.at < horizon) view.refusals.delete(tag);
   }
@@ -636,6 +634,15 @@ function expiryOf(view: ViewState, tag: string): number {
     recordedExpiry(view, tag),
     own === 0 ? 0 : own + offsetOf(view)
   );
+}
+
+/** Drops the re-expiries older than `horizon` (this process's clock). */
+function sweepAgain(view: ViewState, horizon: number): void {
+  const again = view.again;
+  if (again === undefined) return;
+  for (const tag of again.keys()) {
+    if (latestAgain(view, tag) < horizon) again.delete(tag);
+  }
 }
 
 /** The latest re-expiry of `tag` at any depth, on this process's clock; 0 when none. */
