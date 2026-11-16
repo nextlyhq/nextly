@@ -184,14 +184,19 @@ const waiting: Array<() => void> = [];
 /** Run `work` once fewer than {@link MAKING_AT_ONCE} copies are being made. */
 async function inTurn<T>(work: () => Promise<T>): Promise<T> {
   if (making >= MAKING_AT_ONCE) {
+    // Woken holding the slot the copy before it gave up, so no ask arriving
+    // in between can take it too.
     await new Promise<void>(resolve => waiting.push(resolve));
+  } else {
+    making += 1;
   }
-  making += 1;
   try {
     return await work();
   } finally {
-    making -= 1;
-    waiting.shift()?.();
+    // The slot passes straight to the next waiting copy, or is freed.
+    const next = waiting.shift();
+    if (next) next();
+    else making -= 1;
   }
 }
 

@@ -142,14 +142,20 @@ describe("LocalStorageAdapter", () => {
       expect(await adapter.read(long)).toEqual(Buffer.from("copy"));
     });
 
-    it("never writes outside the storage folder, whatever the key says", async () => {
-      await adapter.uploadAt("../../outside.webp", Buffer.from("x"), {
-        mimeType: "image/webp",
-      });
+    it("refuses a key it would have to tidy, writing nothing anywhere", async () => {
+      for (const key of [
+        "../../outside.webp",
+        "/leading.webp",
+        "a/../b.webp",
+      ]) {
+        await expect(
+          adapter.uploadAt(key, Buffer.from("x"), { mimeType: "image/webp" })
+        ).rejects.toThrow();
+      }
       await expect(
         fs.access(path.join(testDir, "..", "..", "outside.webp"))
       ).rejects.toThrow();
-      expect(await fs.readdir(testDir)).toContain("outside.webp");
+      expect(await fs.readdir(testDir)).toEqual([]);
     });
   });
 
