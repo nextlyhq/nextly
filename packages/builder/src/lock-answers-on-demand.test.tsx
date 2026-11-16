@@ -99,6 +99,13 @@ beforeAll(() => {
           renderSlot: (name: string) => React.ReactNode;
         }) => React.createElement("div", null, renderSlot("items")),
       },
+      {
+        ...base,
+        name: "acme/open-row",
+        editor: { label: "Open row" },
+        slots: { items: {} },
+        render: () => React.createElement("div", null, "open"),
+      },
     ] as never,
     { source: "lock-answers-on-demand-test" }
   );
@@ -303,17 +310,30 @@ describe("the lock is asked when the author can act on its answer", () => {
  * The editor's keyboard layer sharing its verbs, as a host does, with the
  * Layers row menu drawn outside it from what was shared.
  */
+/**
+ * The held headline beside one in a row no lock holds: the two offer the
+ * same verbs until the locks are asked, so only those tell them apart.
+ */
+const TWIN_PAGE: BlockDocument = {
+  ...PAGE,
+  nodes: [
+    PAGE.nodes[0],
+    {
+      id: "open",
+      type: "acme/open-row",
+      version: 1,
+      props: {},
+      slots: { items: [headline("free")] },
+    },
+  ],
+} as BlockDocument;
+
 function RowMenuHost(): React.JSX.Element {
-  const state = useEditorState({ initialDocument: PAGE });
+  const state = useEditorState({ initialDocument: TWIN_PAGE });
   editorRef = state;
   const [verbs, setVerbs] = React.useState<SharedBlockVerbs | undefined>();
   return (
     <ShortcutProvider>
-      <BlockKeyboardActions
-        onSaveAsPattern={() => undefined}
-        editor={state}
-        onShareVerbs={setVerbs}
-      />
       <LayerRowMenu
         rowOf={target =>
           target instanceof Element
@@ -329,6 +349,11 @@ function RowMenuHost(): React.JSX.Element {
         <div data-row="held">Held headline</div>
         <div data-row="free">Free headline</div>
       </LayerRowMenu>
+      <BlockKeyboardActions
+        onSaveAsPattern={() => undefined}
+        editor={state}
+        onShareVerbs={setVerbs}
+      />
     </ShortcutProvider>
   );
 }
