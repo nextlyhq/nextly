@@ -127,7 +127,7 @@ export default function FieldGroupBuilderEditPage({
     resolver: zodResolver(componentFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -251,7 +251,9 @@ export default function FieldGroupBuilderEditPage({
     missingSlugMessage: "Field group slug is missing",
     label: displayLabel(settings, entitySlug),
     confirmation,
-    getValidatedFields,
+    // Judged against the fields as last saved, so a draft that changes a
+    // saved field's storage level is refused before it can lose values.
+    getValidatedFields: () => getValidatedFields(pending.saved),
     // The i18n flag, as for the other kinds: the preview reports what a field
     // leaving translation moves to the archive, which depends on it.
     preview: fields =>
@@ -308,7 +310,6 @@ export default function FieldGroupBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         /* This page is where the refusal actually happens: a diverged field group loads and
            edits normally, and only the SAVE is refused. An affordance living only on the list
