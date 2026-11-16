@@ -482,10 +482,12 @@ describe("the canvas's binding sources", () => {
         ],
       } as BlockDocument;
       renderHook(() => useCanvasBindings([listing], "fr"));
+      // In the language being edited, as the list's rows are read.
       expect(checked.at(-1)).toEqual({
         source: { kind: "collection", slug: "posts", id: "p1" },
         singles: [],
         lists: ["posts"],
+        locale: "fr",
       });
       // CONTROL: a page that reads nothing is checked for nothing.
       renderHook(() => useCanvasBindings([page()], "fr"));
