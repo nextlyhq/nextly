@@ -220,7 +220,11 @@ describe("runUnitInTries on MySQL in one transaction", () => {
 
     // The ADD committed before the fill; the fill was rolled back with the transaction the
     // checkpoint's wait ended, and is sent again before the NOT NULL is.
-    const ofUnit = sent.filter(s => s !== "START TRANSACTION");
+    // The unit's own statements: not the transaction's reopening, nor the autocommit the ledger
+    // write after its last schema statement runs under.
+    const ofUnit = sent.filter(
+      s => s !== "START TRANSACTION" && !s.includes("autocommit")
+    );
     expect(ofUnit).toEqual([add, fill, fill, require]);
   });
 
