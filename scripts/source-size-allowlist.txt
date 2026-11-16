@@ -43,7 +43,6 @@ packages/builder/src/inserter.ts 1559
 
 packages/builder/src/inspector-panel.tsx 1805
 
-packages/builder/src/keyboard-actions.tsx 1518
 
 
 
