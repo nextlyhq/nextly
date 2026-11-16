@@ -38,7 +38,6 @@ packages/blocks-react/src/block-boundary.tsx 1797
 
 packages/blocks-react/src/rich-text.tsx 1676
 
-packages/blocks-react/src/styles.ts 1639
 
 packages/builder/src/binding-controls.tsx 1632
 
