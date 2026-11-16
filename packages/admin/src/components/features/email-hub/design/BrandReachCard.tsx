@@ -11,13 +11,14 @@ import {
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { plural } from "@admin/lib/count-words";
 import type { BrandReach } from "@admin/services/emailBrandApi";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { groupByOwner } from "../messages/messages-model";
 import { editRouteFor } from "../useTemplateActions";
 
-import { namesLine, plural, unreachedReason } from "./design-model";
+import { namesLine, unreachedReason } from "./design-model";
 
 /** An email's name, a link to it where the reader may open it. */
 function EmailLink({

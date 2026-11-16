@@ -61,9 +61,9 @@ export function useConditionServices(
  * The strip above the canvas: a template's Previewing strip, with the switch
  * that applies its conditions while it holds a block whose conditions read
  * the entry; a page's own strip, with the switch and no entry to name, while
- * it holds a block whose conditions read the page; a component's or a
- * Layout's own strip, with the switch disabled, while it holds a conditioned
- * block; none otherwise.
+ * it holds a block whose conditions read the page; a component's own strip,
+ * with the switch disabled, while it holds a conditioned block; none
+ * otherwise.
  */
 export function editorStrip(
   preview: ReturnType<typeof useTemplatePreviewState>,
@@ -84,15 +84,12 @@ export function editorStrip(
       />
     );
   }
-  if (!conditions.held || (kind !== "component" && kind !== "region")) {
+  // Only a component is placed elsewhere and edited on its own: a Layout's
+  // header and footer are components too, so they get this same strip.
+  if (!conditions.held || kind !== "component") {
     return undefined;
   }
-  return (
-    <PlacedConditionsStrip
-      kind={kind === "component" ? "Component" : "Layout"}
-      name={title ?? (kind === "component" ? "Component" : "Layout")}
-    />
-  );
+  return <PlacedConditionsStrip kind="Component" name={title ?? "Component"} />;
 }
 
 /**

@@ -61,7 +61,11 @@ import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
-import { recordTransitionEvents } from "../../content-events/write-event";
+import {
+  partsMovesRecord,
+  recordTransitionEvents,
+  type StatusMove,
+} from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   readComponentSubtrees,
@@ -104,6 +108,7 @@ import {
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -116,6 +121,7 @@ import {
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
+import { draftSlotParts } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
   type LanguageOutcome,
@@ -1365,6 +1371,19 @@ export class SinglePublishAllService extends BaseService {
       fieldGroupWriteAccessOf(options, this.fieldRuleVisitor)
     );
 
+    // The moves the publish's history event names, decided before its
+    // version is recorded, so the version names the same parts. The event
+    // names status moves only; what the publish put live is those, with each
+    // pending change it promoted, in the part its draft holds.
+    const historyMoves = this.publishMoves(
+      plan,
+      lockedRow.status as string | null,
+      priorCompanionStatuses
+    );
+    const putLive = partsTogether([
+      partsMovesRecord(historyMoves),
+      ...pending.map(change => draftSlotParts(change.locale)),
+    ]);
     let publishVersionNo: number | null = null;
     if (singleMeta.versions?.enabled) {
       publishVersionNo = await this.capturePublishSnapshot(
@@ -1375,7 +1394,8 @@ export class SinglePublishAllService extends BaseService {
         written.publishedRow,
         plan.fieldConfigs,
         options.user,
-        singleMeta.versions.maxPerDoc
+        singleMeta.versions.maxPerDoc,
+        putLive
       );
     }
 
@@ -1401,8 +1421,7 @@ export class SinglePublishAllService extends BaseService {
     );
     await this.recordPublishHistory(tx, plan, {
       user: options.user,
-      mainFrom: lockedRow.status as string | null,
-      priorCompanionStatuses,
+      moves: historyMoves,
       versionNo: publishVersionNo,
     });
 
@@ -2332,7 +2351,9 @@ export class SinglePublishAllService extends BaseService {
     publishedRow: Record<string, unknown>,
     fieldConfigs: FieldConfig[],
     user: UserContext | undefined,
-    maxPerDoc: number | false | undefined
+    maxPerDoc: number | false | undefined,
+    // The parts the publish put live.
+    changedParts: ChangedParts
   ): Promise<number | null> {
     // Match the read shape: keep user field keys (which may contain
     // underscores like `site_title`) exactly, converting only the timestamp
@@ -2374,29 +2395,51 @@ export class SinglePublishAllService extends BaseService {
       },
       createdBy: user?.id ?? null,
       locale: null,
+      changedParts,
       maxPerDoc,
     });
     return versionNo;
   }
 
   /**
-   * One history event for the whole publish, naming the languages it moved
-   * (the app's own; a locale it no longer configures names nothing it
-   * exposes), whatever the Single's webhook settings.
+   * The moves a publish of every language makes, as its one history event
+   * names them: the Single's own status where it keeps one, and each language
+   * the app configures (a locale it no longer configures names nothing it
+   * exposes), from the status each held. Its version records the parts they
+   * name (`partsMovesRecord`).
+   */
+  private publishMoves(
+    plan: PublishPlan,
+    mainFrom: string | null,
+    priorCompanionStatuses: Map<string, string | null>
+  ): StatusMove[] {
+    const configuredLocales = new Set(
+      this.localization?.locales.map(locale => locale.code) ?? []
+    );
+    return [
+      ...(plan.hasMainStatus ? [{ from: mainFrom, to: "published" }] : []),
+      ...[...priorCompanionStatuses]
+        .filter(
+          ([locale]) =>
+            configuredLocales.size === 0 || configuredLocales.has(locale)
+        )
+        .map(([locale, from]) => ({ locale, from, to: "published" })),
+    ];
+  }
+
+  /**
+   * One history event for the whole publish, naming the moves
+   * {@link publishMoves} decided, whatever the Single's webhook settings.
    */
   private async recordPublishHistory(
     tx: TransactionContext,
     plan: PublishPlan,
     publish: {
       user: UserContext | undefined;
-      mainFrom: string | null;
-      priorCompanionStatuses: Map<string, string | null>;
+      moves: readonly StatusMove[];
       versionNo: number | null;
     }
   ): Promise<void> {
-    const configuredLocales = new Set(
-      this.localization?.locales.map(locale => locale.code) ?? []
-    );
     await recordTransitionEvents(
       tx,
       { adapter: this.adapter },
@@ -2406,17 +2449,7 @@ export class SinglePublishAllService extends BaseService {
         personName: publish.user?.name ?? null,
         versionNo: publish.versionNo,
       },
-      [
-        ...(plan.hasMainStatus
-          ? [{ from: publish.mainFrom, to: "published" }]
-          : []),
-        ...[...publish.priorCompanionStatuses]
-          .filter(
-            ([locale]) =>
-              configuredLocales.size === 0 || configuredLocales.has(locale)
-          )
-          .map(([locale, from]) => ({ locale, from, to: "published" })),
-      ]
+      publish.moves
     );
   }
 
