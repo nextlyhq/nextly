@@ -107,7 +107,6 @@ describe("applies, judged by what the block is", () => {
       "flexWrap",
       "justifyContent",
       "alignItems",
-      "alignContent",
       "gap",
       "rowGap",
       "columnGap",
@@ -139,6 +138,49 @@ describe("applies, judged by what the block is", () => {
     expect(applying({ ...BLOCK, display: "flex", flexWrap: "wrap" })).toContain(
       "alignContent"
     );
+  });
+
+  it("gives a block container align content, which places its content in a set height", () => {
+    // A Stack with a set height centres its content with
+    // `align-content: center`: the box is a block container.
+    for (const display of [
+      "block",
+      "flow-root",
+      "inline-block",
+      "list-item",
+      "table-cell",
+      "table-caption",
+      "block flow",
+      "inline flow-root",
+      "block flow-root list-item",
+    ]) {
+      expect(applies("alignContent", { ...BLOCK, display }), display).toBe(
+        true
+      );
+    }
+  });
+
+  it("gives align content nothing to place on a box that is not a block container", () => {
+    // An inline box, a box that draws nothing, a table's own box and a
+    // single flex line have no block content of their own to align.
+    for (const display of [
+      "inline",
+      "inline flow",
+      "inline list-item",
+      "contents",
+      "none",
+      "table",
+      "table-row",
+      "ruby",
+      "block ruby",
+    ]) {
+      expect(applies("alignContent", { ...BLOCK, display }), display).toBe(
+        false
+      );
+    }
+    expect(
+      applies("alignContent", { ...BLOCK, display: "flex", flexWrap: "nowrap" })
+    ).toBe(false);
   });
 
   it("gives a Grid its grid settings and no flex-only ones", () => {

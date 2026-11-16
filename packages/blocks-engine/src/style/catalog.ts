@@ -414,7 +414,9 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   {
     property: "alignContent",
     group: "layout",
-    appliesWhen: ["wrapping-flex-or-grid"],
+    // A block container's content moves too, wherever its height leaves room:
+    // a Stack with a set height centres with `align-content: center`.
+    appliesWhen: ["wrapping-flex-or-grid", "block-container"],
     shape: keyword("align-content", [
       "normal",
       ...BASELINE_POSITIONS,

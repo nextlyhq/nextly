@@ -93,6 +93,8 @@ type Layout = "flex" | "grid" | "flow";
 /** The context, read once: each field `undefined` where it names nothing. */
 interface Reading {
   readonly own: Layout | undefined;
+  /** Whether the block's own box is a block container. */
+  readonly blockContainer: boolean | undefined;
   readonly parent: Layout | undefined;
   readonly wrap: string | undefined;
   readonly position: string | undefined;
@@ -102,6 +104,7 @@ interface Reading {
 function readingOf(context: AppliesContext): Reading {
   return {
     own: layoutOf(context.display),
+    blockContainer: blockContainerOf(context.display),
     parent: layoutOf(context.parentDisplay),
     wrap: readable(context.flexWrap),
     position: readable(context.position),
@@ -128,12 +131,44 @@ const CONDITIONS: Readonly<Record<AppliesWhen, (reading: Reading) => boolean>> =
     // children wrap onto more than one line.
     "wrapping-flex-or-grid": ({ own, wrap }) =>
       either(own, ["grid"]) || (own === "flex" && wrap !== "nowrap"),
+    "block-container": ({ blockContainer }) => blockContainer !== false,
     "flex-child": ({ parent }) => either(parent, ["flex"]),
     "grid-child": ({ parent }) => either(parent, ["grid"]),
     "flex-or-grid-child": ({ parent }) => either(parent, ["flex", "grid"]),
     positioned: ({ position }) => position !== "static",
     replaced: ({ replaced }) => replaced !== false,
   };
+
+/** The one-keyword displays whose box is a block container. */
+const BLOCK_CONTAINERS: ReadonlySet<string> = new Set([
+  "block",
+  "flow-root",
+  "inline-block",
+  "list-item",
+  "table-cell",
+  "table-caption",
+]);
+
+/**
+ * Whether a `display` value makes a block container (a box whose children lay
+ * out in block flow), or `undefined` when unreadable.
+ *
+ * The multi-keyword forms name an outer and an inner display: `flow-root`
+ * inside always makes one, and `flow` inside makes one on a block-level box
+ * (`block flow`, `list-item`) but not on an inline one (`inline flow` is an
+ * inline box, as `inline` is).
+ */
+function blockContainerOf(display: string | undefined): boolean | undefined {
+  const keywords = keywordsOf(display);
+  if (keywords === undefined) return undefined;
+  const [only] = keywords;
+  if (keywords.length === 1) return BLOCK_CONTAINERS.has(only ?? "");
+  if (keywords.includes("flow-root")) return true;
+  const flowInside =
+    keywords.includes("flow") || keywords.includes("list-item");
+  const ruby = keywords.includes("ruby");
+  return flowInside && !ruby && !keywords.includes("inline");
+}
 
 /** How a `display` value lays out children, or `undefined` when unreadable. */
 function layoutOf(display: string | undefined): Layout | undefined {

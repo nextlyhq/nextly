@@ -171,7 +171,8 @@ describe("a container's own rows", () => {
       display: true,
       flexDirection: false,
       gridTemplateColumns: false,
-      alignContent: false,
+      // A Stack is a block container: with a set height its content moves.
+      alignContent: true,
       justifyItems: false,
       gridAutoFlow: false,
     });
@@ -486,6 +487,27 @@ describe("where the parent is read from", () => {
       });
     expect(at("mobile")).toContain("flexGrow");
     expect(at(BASE_BREAKPOINT)).not.toContain("flexGrow");
+  });
+});
+
+describe("align content on a box in flow", () => {
+  const alignContent = (display: string) =>
+    inspectStyle(nested(), "outer", {
+      cascade: read("outer", [own("outer", "display", display)]),
+    })
+      ?.sections.find(entry => entry.key === "layout")
+      ?.properties.find(row => row.property === "alignContent")?.applies;
+
+  it("applies on a Stack, a block container", () => {
+    register();
+    expect(alignContent("block")).toBe(true);
+    expect(alignContent("flow-root")).toBe(true);
+  });
+
+  it("does not apply on an inline box, which holds no block content", () => {
+    register();
+    expect(alignContent("inline")).toBe(false);
+    expect(alignContent("contents")).toBe(false);
   });
 });
 

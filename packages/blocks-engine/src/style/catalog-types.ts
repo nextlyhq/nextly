@@ -285,6 +285,8 @@ export type StyleShape =
  * - `wrapping-flex-or-grid`: on a grid container, or a flex container whose
  *   children wrap onto more than one line (`align-content` has nothing to
  *   distribute on a single flex line).
+ * - `block-container`: on a block whose children lay out in block flow, such
+ *   as `display: block` or `flow-root` (an inline box is not one).
  * - `flex-child`, `grid-child`, `flex-or-grid-child`: on a block whose parent
  *   is that kind of container.
  * - `positioned`: on a block whose `position` is anything but `static`.
@@ -297,6 +299,7 @@ export type AppliesWhen =
   | "grid-container"
   | "flex-or-grid-container"
   | "wrapping-flex-or-grid"
+  | "block-container"
   | "flex-child"
   | "grid-child"
   | "flex-or-grid-child"
@@ -310,6 +313,7 @@ export const APPLIES_WHEN: readonly AppliesWhen[] = [
   "grid-container",
   "flex-or-grid-container",
   "wrapping-flex-or-grid",
+  "block-container",
   "flex-child",
   "grid-child",
   "flex-or-grid-child",

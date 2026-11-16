@@ -99,6 +99,7 @@ the wider declaration, which is a migration rather than a check.
 (`appliesWhen`): `always` on any box; `flex-container`, `grid-container` or
 `flex-or-grid-container` on a block that lays its children out that way;
 `wrapping-flex-or-grid` on a grid, or a flex container whose children wrap;
+`block-container` on a box whose children lay out in block flow;
 `flex-child`, `grid-child` or `flex-or-grid-child` on a block whose parent is
 that kind of container; `positioned` on a block whose position is not `static`;
 `replaced` on an image, a video or an embed. A property listing several applies
@@ -118,22 +119,22 @@ a size can take its share of a Row or a Grid without declaring anything more.
 
 ### layout
 
-| Property              | Flag | Value                                         | Tokens    | Emits                   | Applies when           |
-| --------------------- | ---- | --------------------------------------------- | --------- | ----------------------- | ---------------------- |
-| `boxSizing`           |      | keyword (`content-box`/`border-box`)          |           | `box-sizing`            | always                 |
-| `display`             |      | keyword                                       |           | `display`               | always                 |
-| `flexDirection`       |      | keyword                                       |           | `flex-direction`        | flex-container         |
-| `flexWrap`            |      | keyword                                       |           | `flex-wrap`             | flex-container         |
-| `justifyContent`      |      | keyword (`start`/`end`, never `left`/`right`) |           | `justify-content`       | flex-or-grid-container |
-| `alignItems`          |      | keyword                                       |           | `align-items`           | flex-or-grid-container |
-| `alignContent`        |      | keyword                                       |           | `align-content`         | wrapping-flex-or-grid  |
-| `gap`                 |      | dimension                                     | dimension | `gap`                   | flex-or-grid-container |
-| `rowGap`              |      | dimension                                     | dimension | `row-gap`               | flex-or-grid-container |
-| `columnGap`           |      | dimension                                     | dimension | `column-gap`            | flex-or-grid-container |
-| `gridTemplateColumns` |      | css value                                     |           | `grid-template-columns` | grid-container         |
-| `gridTemplateRows`    |      | css value                                     |           | `grid-template-rows`    | grid-container         |
-| `gridAutoFlow`        |      | keyword                                       |           | `grid-auto-flow`        | grid-container         |
-| `justifyItems`        |      | keyword                                       |           | `justify-items`         | grid-container         |
+| Property              | Flag | Value                                         | Tokens    | Emits                   | Applies when                           |
+| --------------------- | ---- | --------------------------------------------- | --------- | ----------------------- | -------------------------------------- |
+| `boxSizing`           |      | keyword (`content-box`/`border-box`)          |           | `box-sizing`            | always                                 |
+| `display`             |      | keyword                                       |           | `display`               | always                                 |
+| `flexDirection`       |      | keyword                                       |           | `flex-direction`        | flex-container                         |
+| `flexWrap`            |      | keyword                                       |           | `flex-wrap`             | flex-container                         |
+| `justifyContent`      |      | keyword (`start`/`end`, never `left`/`right`) |           | `justify-content`       | flex-or-grid-container                 |
+| `alignItems`          |      | keyword                                       |           | `align-items`           | flex-or-grid-container                 |
+| `alignContent`        |      | keyword                                       |           | `align-content`         | wrapping-flex-or-grid, block-container |
+| `gap`                 |      | dimension                                     | dimension | `gap`                   | flex-or-grid-container                 |
+| `rowGap`              |      | dimension                                     | dimension | `row-gap`               | flex-or-grid-container                 |
+| `columnGap`           |      | dimension                                     | dimension | `column-gap`            | flex-or-grid-container                 |
+| `gridTemplateColumns` |      | css value                                     |           | `grid-template-columns` | grid-container                         |
+| `gridTemplateRows`    |      | css value                                     |           | `grid-template-rows`    | grid-container                         |
+| `gridAutoFlow`        |      | keyword                                       |           | `grid-auto-flow`        | grid-container                         |
+| `justifyItems`        |      | keyword                                       |           | `justify-items`         | grid-container                         |
 
 ### dimensions
 
