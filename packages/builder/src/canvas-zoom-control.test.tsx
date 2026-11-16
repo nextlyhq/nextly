@@ -146,14 +146,15 @@ describe("the canvas zoom control", () => {
      */
     mount({ zoom: FIT_ZOOM, appliedScale: 0.595 });
 
-    expect(trigger().textContent).toBe("60%");
+    expect(trigger().textContent).toBe("Fit · 60%");
   });
 
   it("says whether that number will move on its own", () => {
     /*
      * "60%" alone does not say whether it is about to change when a panel
      * opens, and that is the entire difference between the two states. The
-     * accessible name carries the mode; the visible text stays the number.
+     * visible text names the mode ("Fit · 60%") and so does the accessible
+     * name; a chosen scale shows the number alone.
      */
     mount({ zoom: FIT_ZOOM, appliedScale: 0.6 });
     expect(trigger().getAttribute("aria-label")).toContain("fitting");
@@ -161,6 +162,7 @@ describe("the canvas zoom control", () => {
     cleanup();
     mount({ zoom: { kind: "fixed", scale: 0.6 }, appliedScale: 0.6 });
     expect(trigger().getAttribute("aria-label")).not.toContain("fitting");
+    expect(trigger().textContent).toBe("60%");
   });
 
   it("renders nothing where nothing can act on a choice", () => {
@@ -209,6 +211,23 @@ describe("the canvas zoom control", () => {
     });
 
     expect(onChange).toHaveBeenCalledWith(FIT_ZOOM);
+  });
+});
+
+describe("the open zoom menu and the rest of the editor", () => {
+  it("leaves the editor around it in the accessibility tree", () => {
+    // A modal menu marks everything outside it aria-hidden while those
+    // controls stay focusable, which axe reports as aria-hidden-focus. The
+    // zoom menu is a choice beside the canvas, not a dialog, so nothing
+    // outside it is hidden.
+    mount({ appliedScale: 1 });
+    const button = trigger();
+
+    fireEvent.pointerDown(button, { pointerType: "mouse" });
+    expect(screen.getAllByRole("menuitemradio").length).toBeGreaterThan(0);
+
+    expect(button.closest('[aria-hidden="true"]')).toBeNull();
+    expect(document.querySelector('[aria-hidden="true"] button')).toBeNull();
   });
 });
 

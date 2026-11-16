@@ -42,7 +42,13 @@ import { useReleasesContaining } from "@admin/hooks/queries/useReleases";
 import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseDocumentRef } from "@admin/types/releases";
 
-import { formatScheduledAt } from "./release-schedule";
+import {
+  DocumentReleaseControls,
+  releaseWhen,
+  useDocumentReleaseActions,
+  winnerSentence,
+} from "./DocumentReleaseLines";
+import { useMinuteClock } from "./useMinuteClock";
 
 /** What a membership will do, said as the consequence rather than the verb. */
 const ACTION_SENTENCE: Record<string, string> = {
@@ -50,31 +56,63 @@ const ACTION_SENTENCE: Record<string, string> = {
   unpublish: "comes down",
 };
 
-function ReleaseLine({ release }: { release: Release }) {
+/** The release's own page, linked by its name. */
+function ReleaseLink({ release }: { release: Release }) {
+  return (
+    <Link
+      href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
+      className="underline"
+    >
+      {release.title}
+    </Link>
+  );
+}
+
+function ReleaseLine({
+  release,
+  now,
+  actions,
+}: {
+  release: Release;
+  now: number;
+  actions: ReturnType<typeof useDocumentReleaseActions>["actions"];
+}) {
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-foreground">
+      <span className="min-w-0">
+        <ReleaseSentence release={release} now={now} />
+      </span>
+      <DocumentReleaseControls release={release} actions={actions} />
+    </li>
+  );
+}
+
+function ReleaseSentence({ release, now }: { release: Release; now: number }) {
   // A release that STOPPED still holds this document, and reads completely
   // differently: nothing is coming, and somebody has to act. Reported here
   // rather than by dropping the row, because a row disappearing is exactly what
   // an editor reads as "resolved".
   if (release.state === "blocked") {
     return (
-      <li className="text-sm text-foreground">
-        <Link
-          href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-          className="underline"
-        >
-          {release.title}
-        </Link>{" "}
-        was going to change this document and has{" "}
-        <strong className="font-medium">stopped</strong>. It will not run until
-        somebody fixes it.
-      </li>
+      <>
+        <ReleaseLink release={release} /> was going to change this document and
+        has <strong className="font-medium">stopped</strong>. It will not run
+        until somebody fixes it.
+      </>
     );
   }
-  return <ScheduledLine release={release} />;
+  return <ScheduledSentence release={release} now={now} />;
 }
 
-function ScheduledLine({ release }: { release: Release }) {
-  const at = formatScheduledAt(release);
+function ScheduledSentence({
+  release,
+  now,
+}: {
+  release: Release;
+  now: number;
+}) {
+  // On the reader's clock, with the zone it was scheduled in beside it.
+  const at = releaseWhen(release, now);
   // An action the admin does not recognise is NAMED as unknown rather than
   // guessed at. Defaulting to "goes live" would state the opposite of the truth
   // for an unpublish the engine gained after this shipped.
@@ -83,7 +121,7 @@ function ScheduledLine({ release }: { release: Release }) {
     : undefined;
 
   return (
-    <li className="text-sm text-foreground">
+    <>
       {consequence ? (
         <>
           This document <strong className="font-medium">{consequence}</strong>
@@ -91,15 +129,21 @@ function ScheduledLine({ release }: { release: Release }) {
       ) : (
         <>This document changes</>
       )}
-      {at ? ` ${at}` : " when this release takes effect"}, with{" "}
-      <Link
-        href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-        className="underline"
-      >
-        {release.title}
-      </Link>
+      {at ? ` ${at}` : " when this release takes effect"}
+      {/* A single-document release is this document's own schedule, so it is
+          said as one rather than as a release it was put into. */}
+      {release.kind === "single" ? (
+        <>
+          {" "}
+          on its own, as <ReleaseLink release={release} />
+        </>
+      ) : (
+        <>
+          , with <ReleaseLink release={release} />
+        </>
+      )}
       .
-    </li>
+    </>
   );
 }
 
@@ -171,6 +215,8 @@ export function ScheduledReleaseBanner({
   // request whose only outcome is a 403 under every document they open.
   const canRead = useCan("read-content-releases");
   const { data, isError } = useReleasesContaining(document, canRead);
+  const now = useMinuteClock();
+  const { actions, dialogs } = useDocumentReleaseActions();
 
   // A LOOKUP THAT FAILED IS NOT AN EMPTY SCHEDULE, and collapsing the two hides
   // a pending automatic change at exactly the moment the admin cannot confirm
@@ -227,17 +273,29 @@ export function ScheduledReleaseBanner({
             </Badge>
           )}
         </div>
-        <ul className="flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-1">
           {releases.map(release => (
-            <ReleaseLine key={release.id} release={release} />
+            <ReleaseLine
+              key={release.id}
+              release={release}
+              now={now}
+              actions={actions}
+            />
           ))}
         </ul>
+        {/* Derived from the rows' own order, not sorted again here. */}
+        {winnerSentence(releases, now) ? (
+          <p className="mt-1.5 text-sm text-foreground">
+            {winnerSentence(releases, now)}
+          </p>
+        ) : null}
         {/* The sentence the whole banner exists for. Stated once, below the
             rows, and derived from them so it cannot contradict one. */}
         <p className="mt-1.5 text-sm text-muted-foreground">
           {savedEditsSentence(releases, onDefaultLocale)}
         </p>
       </div>
+      {dialogs}
     </div>
   );
 }

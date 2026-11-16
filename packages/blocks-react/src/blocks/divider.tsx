@@ -13,7 +13,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
-import { CONTENT } from "./categories";
+import { LAYOUT } from "./categories";
 
 export type DividerProps = Record<string, never>;
 
@@ -35,7 +35,9 @@ export function renderDivider({
 const DIVIDER_BASE_STYLES = {
   base: {
     base: {
-      margin: { blockStart: "1.5em", blockEnd: "1.5em" },
+      // No outer margin: the rule is spaced from its neighbours by the gap of
+      // whatever holds it, like every other block.
+      margin: { blockStart: "0", blockEnd: "0" },
       border: {
         width: {
           blockStart: "1px",
@@ -57,15 +59,17 @@ const DIVIDER_BASE_STYLES = {
 export const divider: BlockDefinition<DividerProps, PageContext> = defineBlock({
   name: "core/divider",
   version: 1,
-  description:
-    "A thematic break between sections, announced as a separator rather than drawn as a decorative line.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A thematic break between
+  // sections, announced as a separator rather than drawn as a decorative line.
+  description: "A line between parts of a page.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Divider",
     icon: "divider",
-    category: CONTENT,
+    category: LAYOUT,
     keywords: ["hr", "rule", "separator", "break"],
   },
   props: {},

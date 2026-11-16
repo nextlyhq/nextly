@@ -9,6 +9,10 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Who is looking, known at once: the crash under test is the grid's.
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({ user: { id: "u1" } }),
+}));
 vi.mock("@admin/components/features/dashboard/WelcomeHeader", () => ({
   WelcomeHeader: () => <h1>Welcome, Ada</h1>,
 }));

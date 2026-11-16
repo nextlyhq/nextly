@@ -15,10 +15,12 @@ import type { JSX } from "react";
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
+  readFromParam,
   readVersionParam,
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import type { PageProps } from "@admin/lib/routing";
 
 export default function EntryVersionsPage({
@@ -38,6 +40,9 @@ export default function EntryVersionsPage({
     { kind: "collection", slug, entryId: id },
     locale
   );
+  // The tab names the entry whose history this is, by the same name the
+  // comparison's heading uses.
+  useDocumentTitle(documentTitle);
 
   return (
     <VersionComparePage
@@ -48,7 +53,7 @@ export default function EntryVersionsPage({
       // `update-${slug}`. The entry list needs only the former, so it is where a
       // read-only viewer can actually go back to.
       readOnlyHref={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}
-      from={readVersionParam(searchParams?.from)}
+      from={readFromParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
       locale={locale}
     />

@@ -13,13 +13,8 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
-import { getWidget, widgetSource } from "../../registry";
-import {
-  cardQueryFor,
-  clearDeclaredWidgets,
-  declaredWidget,
-  resetLegacyIdWarnings,
-} from "../declared-widgets";
+import { getWidget, registerWidget, widgetSource } from "../../registry";
+import { clearDeclaredWidgets, declaredWidget } from "../declared-widgets";
 import { dashboard, revenue } from "./plugin/widgets";
 
 function plugin(
@@ -55,7 +50,6 @@ function refusal(run: () => void): string {
 }
 
 beforeEach(() => {
-  resetLegacyIdWarnings();
   vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
     warn: vi.fn(),
     info: vi.fn(),
@@ -70,32 +64,42 @@ describe("startup with plugins that declare widgets", () => {
     expect(declaredWidget("acme/revenue")?.owner).toBe('plugin "@acme/shop"');
     expect(declaredWidget("acme/orders-by-state")).toBeDefined();
     // Published as they are kept: the admin is offered each one, with its data built on the
-    // server from the declaration only core holds, so the definition carries neither.
+    // server from the declaration only core holds, so the definition carries no query and no
+    // data function.
     const published = getWidget("acme/orders-by-state");
-    expect(published).toMatchObject({
-      id: "acme/orders-by-state",
-      serverData: true,
-    });
+    expect(published).toMatchObject({ id: "acme/orders-by-state" });
     expect(published).not.toHaveProperty("query");
     expect(published).not.toHaveProperty("data");
     expect(widgetSource("acme/orders-by-state")).toBe('plugin "@acme/shop"');
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    expect(getWidget("core/continue")).toBeDefined();
   });
 
   it("withdraws what a declaration published when the declarations are cleared, and nothing else", () => {
     resetWidgetRegistries([plugin("@acme/shop", { dashboard })]);
+    // Every core card is a declaration now, so a widget registered as a definition stands in for
+    // what no declaration published.
+    registerWidget({
+      id: "acme/written",
+      title: "Written",
+      description: "A card registered as a definition, not declared.",
+      archetype: "custom",
+      component: "acme#Written",
+      size: { default: { w: 6, h: 4 } },
+    });
     expect(getWidget("acme/orders-by-state")).toBeDefined();
     clearDeclaredWidgets();
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
-    // Core's own cards were never a declaration's, so they stay.
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    // Core's cards are declarations too, so they go with the rest.
+    expect(getWidget("core/continue")).toBeUndefined();
+    // What no declaration published stays.
+    expect(getWidget("acme/written")).toBeDefined();
     // And the same declarations can be made again.
     expect(() =>
       resetWidgetRegistries([plugin("@acme/shop", { dashboard })])
     ).not.toThrow();
   });
 
-  it("builds a card's query under the slug a site renamed the plugin's collection to", () => {
+  it("keeps the slugs a site renamed the plugin's collections to, for its widgets' reads", () => {
     const shop = definePlugin({
       name: "@acme/shop",
       version: "1.0.0",
@@ -106,9 +110,10 @@ describe("startup with plugins that declare widgets", () => {
       },
     });
     resetWidgetRegistries([shop.rename!({ orders: "sales" })]);
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders" })
-    ).toMatchObject({ source: "collection:sales" });
+    // Kept with the widget, so its load function's reads name the slug the site uses.
+    expect(declaredWidget("acme/recent-orders")?.collections).toEqual({
+      orders: "sales",
+    });
   });
 
   it("registers nothing from a disabled plugin", () => {
@@ -129,7 +134,12 @@ describe("startup with plugins that declare widgets", () => {
         plugin("@acme/shop", {
           dashboard: untyped([
             { ...revenue, title: "" },
-            { ...revenue, id: "acme/other", width: "quarter" },
+            {
+              ...revenue,
+              id: "acme/other",
+              // Narrower than the size it starts at.
+              size: { ...revenue.size, max: { w: 7, h: 4 } },
+            },
           ]),
         }),
         plugin("@other/stats", {
@@ -142,7 +152,7 @@ describe("startup with plugins that declare widgets", () => {
       'plugin "@acme/shop", widget "acme/revenue": title must be a non-empty string'
     );
     expect(message).toContain(
-      'plugin "@acme/shop", widget "acme/other": width "quarter" is not one of the widths it allows'
+      'plugin "@acme/shop", widget "acme/other": size.default must not be larger than size.max'
     );
     expect(message).toContain(
       'plugin "@other/stats", widget "other/x": category must be a non-empty string'
@@ -159,28 +169,6 @@ describe("startup with plugins that declare widgets", () => {
     );
     expect(message).toContain(
       'plugin "@acme/shop", widget "(none)": its dashboard widgets must be a list'
-    );
-  });
-
-  it("stops when a declared widget takes an id another plugin uses in today's shape", () => {
-    const message = refusal(() =>
-      resetWidgetRegistries([
-        plugin("@old/stats", {
-          admin: {
-            widgets: [
-              {
-                id: "acme/revenue",
-                title: "Revenue",
-                component: "@old/stats/admin#Revenue",
-              },
-            ],
-          },
-        }),
-        plugin("@acme/shop", { dashboard: { widgets: [revenue] } }),
-      ])
-    );
-    expect(message).toContain(
-      'id "acme/revenue" is already used by plugin "@old/stats", which declares it in the old shape'
     );
   });
 });

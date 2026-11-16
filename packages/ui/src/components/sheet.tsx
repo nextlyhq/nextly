@@ -181,7 +181,110 @@ const sheetVariants: VariantsFn<typeof SHEET_VARIANT_MAP> = cva(
 /** @public */
 export interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>,
-    VariantProps<typeof sheetVariants> {}
+    VariantProps<typeof sheetVariants> {
+  /**
+   * For a bottom sheet: a grab strip at its top that drags the sheet down
+   * and closes it past a quarter of its height or on a quick flick. Escape
+   * and the sheet's own close control still close it, so the strip is a
+   * pointer affordance only and is hidden from assistive technology.
+   */
+  dragHandle?: boolean;
+}
+
+/** How far down, as a share of the sheet's height, a drag must go to close it. */
+const DISMISS_SHARE = 0.25;
+/** A release faster than this, in px per ms, closes it from a shorter drag. */
+const FLICK_SPEED = 0.6;
+/** The shortest drag a flick closes from, so a tap never closes the sheet. */
+const FLICK_MIN_DISTANCE = 24;
+
+/** Where a drag started, and the sheet it moves. */
+interface DragStart {
+  y: number;
+  time: number;
+  height: number;
+  sheet: HTMLElement;
+}
+
+/** Whether a drag released at `distance` after `elapsed` ms closes the sheet. */
+export function dragCloses(
+  distance: number,
+  elapsed: number,
+  height: number
+): boolean {
+  if (distance >= height * DISMISS_SHARE) return true;
+  return (
+    distance >= FLICK_MIN_DISTANCE &&
+    distance / Math.max(elapsed, 1) >= FLICK_SPEED
+  );
+}
+
+/**
+ * The grab strip: the sheet follows the pointer down (never up), and on
+ * release either closes or springs back. It moves the sheet with an inline
+ * transform, so the closing slide continues from where the finger let go.
+ */
+function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
+  const drag = React.useRef<DragStart | null>(null);
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const sheet = event.currentTarget.closest<HTMLElement>(
+      "[data-slot='sheet-content']"
+    );
+    if (!sheet) return;
+    // Captured, so the drag keeps arriving here once the finger leaves the
+    // strip. Absent where pointer capture is not implemented.
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    drag.current = {
+      y: event.clientY,
+      time: performance.now(),
+      height: sheet.getBoundingClientRect().height,
+      sheet,
+    };
+    sheet.style.transition = "none";
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = drag.current;
+    if (!start) return;
+    const distance = Math.max(0, event.clientY - start.y);
+    start.sheet.style.transform = `translateY(${distance}px)`;
+  };
+
+  const release = (
+    event: React.PointerEvent<HTMLDivElement>,
+    cancelled: boolean
+  ) => {
+    const start = drag.current;
+    if (!start) return;
+    drag.current = null;
+    start.sheet.style.transition = "";
+    const distance = Math.max(0, event.clientY - start.y);
+    if (
+      !cancelled &&
+      dragCloses(distance, performance.now() - start.time, start.height)
+    ) {
+      onDismiss();
+      return;
+    }
+    start.sheet.style.transform = "";
+  };
+
+  return (
+    <div
+      aria-hidden="true"
+      data-slot="sheet-drag-handle"
+      className="flex h-6 w-full shrink-0 cursor-grab touch-none items-center justify-center active:cursor-grabbing"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={event => release(event, false)}
+      onPointerCancel={event => release(event, true)}
+    >
+      {/* A pill, outside the radius scale as a switch's track is. */}
+      <span className="h-1 w-10 rounded-full bg-border" />
+    </div>
+  );
+}
 
 /**
  * SheetContent
@@ -203,27 +306,47 @@ const SheetContent: React.ForwardRefExoticComponent<
 > = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => {
-  const portalContainer = usePortalContainer();
-  // Taken from the root rather than from a prop here: the scrim and Radix's
-  // inerting are the same decision, and two places to state it would let a
-  // sheet scrim a page it had left interactive.
-  const modal = React.useContext(SheetModalContext);
+>(
+  (
+    { side = "right", className, children, dragHandle = false, ...props },
+    ref
+  ) => {
+    const portalContainer = usePortalContainer();
+    // Taken from the root rather than from a prop here: the scrim and Radix's
+    // inerting are the same decision, and two places to state it would let a
+    // sheet scrim a page it had left interactive.
+    const modal = React.useContext(SheetModalContext);
+    // The drag closes the sheet through Radix's own Close, so the sheet's
+    // `onOpenChange` hears it exactly as it hears the close button.
+    const close = React.useRef<HTMLButtonElement>(null);
+    const draggable = dragHandle && side === "bottom";
 
-  return (
-    <SheetPortal container={portalContainer}>
-      {modal ? <SheetOverlay /> : null}
-      <DialogPrimitive.Content
-        ref={ref}
-        data-slot="sheet-content"
-        className={cn(sheetVariants({ side }), className)}
-        {...props}
-      >
-        {children}
-      </DialogPrimitive.Content>
-    </SheetPortal>
-  );
-});
+    return (
+      <SheetPortal container={portalContainer}>
+        {modal ? <SheetOverlay /> : null}
+        <DialogPrimitive.Content
+          ref={ref}
+          data-slot="sheet-content"
+          className={cn(sheetVariants({ side }), className)}
+          {...props}
+        >
+          {draggable ? (
+            <>
+              <SheetDragHandle onDismiss={() => close.current?.click()} />
+              <DialogPrimitive.Close
+                ref={close}
+                hidden
+                tabIndex={-1}
+                aria-hidden="true"
+              />
+            </>
+          ) : null}
+          {children}
+        </DialogPrimitive.Content>
+      </SheetPortal>
+    );
+  }
+);
 SheetContent.displayName = DialogPrimitive.Content.displayName;
 
 /** What `SheetHeader` and `SheetFooter` are: a `div` component with a `displayName`. */

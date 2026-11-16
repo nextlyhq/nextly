@@ -12,6 +12,34 @@ import { useApi } from "./useApi";
  */
 export const currentUserKey = ["auth", "me"] as const;
 
+/** The signed-in user as the chrome and the interface language read them. */
+export interface DashboardUser {
+  id: string;
+  name: string;
+  email: string;
+  // API uses `image` for avatar URL in the admin types
+  avatar: string | undefined;
+  /** Their own interface language; null follows the browser, then English. */
+  interfaceLanguage: string | null;
+}
+
+/**
+ * Read the signed-in user from `GET /me`. The one fetch behind
+ * `currentUserKey`, so every reader of that key caches the same shape.
+ */
+export async function fetchDashboardUser(
+  api: ReturnType<typeof useApi>["api"]
+): Promise<DashboardUser> {
+  const userData = await api.protected.get<User>("/me");
+  return {
+    id: userData.id,
+    name: userData.name,
+    email: userData.email,
+    avatar: userData.image ?? undefined,
+    interfaceLanguage: userData.interfaceLanguage ?? null,
+  };
+}
+
 /**
  * The signed-in user, for the dashboard chrome (avatar, name, email).
  *
@@ -31,13 +59,7 @@ export const currentUserKey = ["auth", "me"] as const;
  * ```
  */
 export function useDashboardUser(): {
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    // API uses `image` for avatar URL in the admin types
-    avatar: string | undefined;
-  } | null;
+  user: DashboardUser | null;
   isLoading: boolean;
   error: Error | null;
 } {
@@ -45,16 +67,7 @@ export function useDashboardUser(): {
 
   const { data, isLoading, error } = useQuery({
     queryKey: currentUserKey,
-    queryFn: async () => {
-      const userData = await api.protected.get<User>("/me");
-      return {
-        id: userData.id,
-        name: userData.name,
-        email: userData.email,
-        // API uses `image` for avatar URL in the admin types
-        avatar: userData.image ?? undefined,
-      };
-    },
+    queryFn: () => fetchDashboardUser(api),
   });
 
   return {

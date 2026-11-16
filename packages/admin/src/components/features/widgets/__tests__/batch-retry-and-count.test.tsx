@@ -4,7 +4,6 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { WidgetQuery } from "nextly/config";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +11,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -31,25 +31,23 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-/** A count card core draws, so its outcome is counted for the announcement. */
-function metric(placementId: string, source: string): BatchCard {
-  const query: WidgetQuery = { source, op: "count" };
+/** A declared count card core draws, so its outcome is counted for the announcement. */
+function metric(placementId: string): BatchCard {
   const widget: DashboardWidget = {
     id: `core/${placementId}`,
     title: placementId,
     archetype: "metric",
-    size: "sm",
-    query,
+    size: gridBounds(3),
   };
   return { placementId, widget };
 }
 
-/** The queries one request carried. */
+/** The cards one request asked for, by card id. */
 function asked(call: number): string[] {
   const body = vi.mocked(protectedApi.post).mock.calls[call]?.[1] as {
-    queries: WidgetQuery[];
+    queries: { card: string }[];
   };
-  return body.queries.map(query => query.source);
+  return body.queries.map(query => query.card);
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -60,7 +58,7 @@ describe("Retry", () => {
     vi.mocked(protectedApi.post).mockResolvedValue({
       results: [failed, failed],
     });
-    const cards = [metric("a", "collection:a"), metric("b", "collection:b")];
+    const cards = [metric("a"), metric("b")];
 
     const { result } = renderHook(() => useWidgetBatch(cards), { wrapper });
     await waitFor(() => expect(result.current.slots.a).toBeDefined());
@@ -79,8 +77,8 @@ describe("Retry", () => {
     );
 
     // Each retry asked card a's question alone.
-    expect(asked(1)).toEqual(["collection:a"]);
-    expect(asked(2)).toEqual(["collection:a"]);
+    expect(asked(1)).toEqual(["a"]);
+    expect(asked(2)).toEqual(["a"]);
   });
 
   it("asks only the card pressed, never the cards retried before it, and keeps their answers", async () => {
@@ -88,7 +86,7 @@ describe("Retry", () => {
     vi.mocked(protectedApi.post).mockResolvedValue({
       results: [failed, failed],
     });
-    const cards = [metric("a", "collection:a"), metric("b", "collection:b")];
+    const cards = [metric("a"), metric("b")];
 
     const { result } = renderHook(() => useWidgetBatch(cards), { wrapper });
     await waitFor(() => expect(result.current.slots.a).toBeDefined());
@@ -108,7 +106,7 @@ describe("Retry", () => {
     await waitFor(() => expect(result.current.slots.b?.ok).toBe(true));
 
     expect(vi.mocked(protectedApi.post)).toHaveBeenCalledTimes(3);
-    expect(asked(2)).toEqual(["collection:b"]);
+    expect(asked(2)).toEqual(["b"]);
     expect(result.current.slots.a).toEqual({
       ok: true,
       result: { op: "count", total: 5 },
@@ -123,7 +121,7 @@ describe("Retry", () => {
       vi.mocked(protectedApi.post).mockResolvedValue({
         results: [failed, failed],
       });
-      const cards = [metric("a", "collection:a"), metric("b", "collection:b")];
+      const cards = [metric("a"), metric("b")];
       const { result } = renderHook(() => useWidgetBatch(cards), { wrapper });
       await waitFor(() => expect(result.current.updatedAt).not.toBeNull());
 
@@ -153,7 +151,7 @@ describe("Retry past the per-request cap", () => {
         { length: 31 },
         (_, i) => `c${String(i).padStart(2, "0")}`
       );
-      const cards = ids.map(id => metric(id, `collection:${id}`));
+      const cards = ids.map(id => metric(id));
       vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
         Promise.resolve({
           results: (body as { queries: unknown[] }).queries.map(() => failed),
@@ -202,11 +200,7 @@ describe("the announcement's count", () => {
     });
 
     const { result } = renderHook(
-      () =>
-        useWidgetBatch([
-          metric("a", "collection:a"),
-          metric("b", "collection:b"),
-        ]),
+      () => useWidgetBatch([metric("a"), metric("b")]),
       { wrapper }
     );
     await waitFor(() => expect(result.current.settling).toBe(false));
@@ -216,5 +210,55 @@ describe("the announcement's count", () => {
     // not fail either.
     expect(result.current.counted).toBe(1);
     expect(result.current.failed).toBe(0);
+  });
+
+  it("does not count a card its widget does not show for this person", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 3 } },
+        { ok: false, error: "Not shown for you", code: "not-shown" },
+      ],
+    });
+
+    const { result } = renderHook(
+      () => useWidgetBatch([metric("a"), metric("b")]),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.settling).toBe(false));
+    await waitFor(() => expect(result.current.slots.b).toBeDefined());
+
+    // Off this person's dashboard: neither one of its cards updated nor one that failed.
+    expect(result.current.counted).toBe(1);
+    expect(result.current.failed).toBe(0);
+  });
+
+  it("counts a card whose own component failed to draw a fine answer as failed, not updated", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "data", data: 1 } }],
+    });
+    const cards: BatchCard[] = [
+      {
+        placementId: "d",
+        widget: {
+          id: "acme/revenue",
+          title: "Revenue",
+          archetype: "custom",
+          size: gridBounds(4),
+          component: "@acme/admin#Revenue",
+        },
+      },
+    ];
+    const { result, rerender } = renderHook(
+      ({ drawFailed }: { drawFailed: ReadonlySet<string> }) =>
+        useWidgetBatch(cards, drawFailed),
+      { wrapper, initialProps: { drawFailed: new Set<string>() } }
+    );
+    await waitFor(() => expect(result.current.slots.d).toBeDefined());
+    // The control: drawn, it is one card updated.
+    expect(result.current.counted).toBe(1);
+    expect(result.current.failed).toBe(0);
+    // 🔴 Its answer was fine and its component threw: one card failed.
+    rerender({ drawFailed: new Set(["d"]) });
+    expect(result.current.failed).toBe(1);
   });
 });

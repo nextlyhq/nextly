@@ -265,6 +265,8 @@ describe("ensureFirstRunSetup and foreign keys to code-first tables", () => {
     return ensureFirstRunSetup({
       adapter,
       logger: { info: () => {}, warn, error: () => {} },
+      // A stand-in adapter cannot hold the real schema lock.
+      holdSchemaLock: work => work(),
       extensionSchema,
       deps: {
         freshPushSchema: () => Promise.resolve({ statementsExecuted: [] }),

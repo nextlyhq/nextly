@@ -245,6 +245,60 @@ describe("computeFieldsBeside", () => {
     // and the collection's own field is the whole of what is offered.
     expect(offered(codeFirstFields, "content")).toEqual(["summary"]);
   });
+
+  it("withholds the top-level group holding a field asked for by its path", () => {
+    // The panel draws whole top-level fields, so offering `hero` would draw
+    // `hero.body` — the editor asking — inside its own panel.
+    const grouped = [
+      { name: "title", type: "text" },
+      { name: "heroMode", type: "select" },
+      {
+        name: "hero",
+        type: "group",
+        admin: { condition: { field: "heroMode", equals: "on" } },
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "body", type: "blocks" },
+        ],
+      },
+      { name: "summary", type: "textarea" },
+    ];
+    expect(offered(grouped, "hero.body")).toEqual(["title", "summary"]);
+  });
+
+  it("withholds the repeater holding a row's field, so its rows can't be reordered under the editor", () => {
+    // Asked for by the form path of the row it edits; drawing `sections`
+    // would offer drag handles and Remove for the very row the editor is on.
+    const repeated = [
+      { name: "title", type: "text" },
+      {
+        name: "sections",
+        type: "repeater",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "body", type: "blocks" },
+        ],
+      },
+      { name: "summary", type: "textarea" },
+    ];
+    expect(offered(repeated, "sections.1.body")).toEqual(["title", "summary"]);
+    // At any depth: a repeater inside a group withholds the group.
+    const nested = [
+      { name: "title", type: "text" },
+      {
+        name: "page",
+        type: "group",
+        fields: [
+          {
+            name: "sections",
+            type: "repeater",
+            fields: [{ name: "body", type: "blocks" }],
+          },
+        ],
+      },
+    ];
+    expect(offered(nested, "page.sections.0.body")).toEqual(["title"]);
+  });
 });
 
 describe("fields nested inside a group", () => {

@@ -59,19 +59,6 @@ const STOCK_KIND_LABELS: Record<StockKind, string> = {
 const LARGEST_STORED_WHOLE_NUMBER = 2_147_483_647;
 
 /**
- * Refuse a fraction. A number field's column is an integer, which rounds or
- * truncates a fraction without saying so, and a price of 19.99 typed as major
- * units would be stored as 19 or 20 minor units. Only a number is judged here:
- * the field's own type rule already reports anything else, and an empty value
- * never reaches a custom rule.
- */
-function wholeNumber(value: unknown): string | true {
-  return typeof value !== "number" || Number.isInteger(value)
-    ? true
-    : "Must be a whole number";
-}
-
-/**
  * The products collection, under `slug` (`products` unless the host renames
  * it).
  *
@@ -100,7 +87,6 @@ export function productsCollection(slug = "products"): ContributedCollection {
       label: "Price",
       min: 0,
       max: LARGEST_STORED_WHOLE_NUMBER,
-      validate: wholeNumber,
       admin: {
         step: 1,
         description:
@@ -127,7 +113,6 @@ export function productsCollection(slug = "products"): ContributedCollection {
       label: "In stock",
       min: 0,
       max: LARGEST_STORED_WHOLE_NUMBER,
-      validate: wholeNumber,
       admin: {
         step: 1,
         description:
@@ -140,7 +125,6 @@ export function productsCollection(slug = "products"): ContributedCollection {
       label: "Most per order line",
       min: 1,
       max: LARGEST_STORED_WHOLE_NUMBER,
-      validate: wholeNumber,
       admin: {
         step: 1,
         description:

@@ -25,6 +25,21 @@ export interface StoredLanguage {
   active: boolean;
 }
 
+/**
+ * The site's one language while nothing declares or stores any: English, the language a site
+ * without localization is written in. Settings shows it, a first language change starts from it,
+ * and a site that keeps every translatable field per language stores its values under it.
+ */
+export const IMPLICIT_LANGUAGE: StoredLanguage = {
+  code: "en",
+  label: "English",
+  direction: "ltr",
+  fallback: "[]",
+  position: 0,
+  isDefault: true,
+  active: true,
+};
+
 /** The localization the stored languages describe, or undefined when none are stored. */
 export function localizationFromStoredLanguages(
   rows: readonly StoredLanguage[]

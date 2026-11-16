@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { type LanguageRow, planLanguageChange } from "./language-changes";
+import {
+  type LanguageRow,
+  MAX_ACTIVE_LANGUAGES,
+  planLanguageChange,
+} from "./language-changes";
 
 const lang = (code: string, over: Partial<LanguageRow> = {}): LanguageRow => ({
   code,
@@ -139,6 +143,36 @@ describe("a change to the stored language list", () => {
         planLanguageChange([en, fr], { kind: "remove", code: "en" })
       )
     ).toMatch(/default/);
+  });
+
+  // A reorder names every active language, and a request names at most `MAX_ACTIVE_LANGUAGES`, so a
+  // list longer than that could never be reordered again.
+  it("adds languages up to the most a reorder can name, and refuses the next", () => {
+    const active = (count: number) => [
+      en,
+      ...Array.from({ length: count - 1 }, (_, i) =>
+        lang(`en-${100 + i}`, { position: i + 1 })
+      ),
+    ];
+
+    expect(
+      codesOf(
+        planLanguageChange(active(MAX_ACTIVE_LANGUAGES - 1), {
+          kind: "add",
+          code: "fr",
+          label: "French",
+        })
+      )
+    ).toHaveLength(MAX_ACTIVE_LANGUAGES);
+    expect(
+      refusal(() =>
+        planLanguageChange(active(MAX_ACTIVE_LANGUAGES), {
+          kind: "add",
+          code: "fr",
+          label: "French",
+        })
+      )
+    ).toContain("too_many_languages");
   });
 
   it("reorders the active languages", () => {

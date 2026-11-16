@@ -240,14 +240,12 @@ describe("the write surfaces that do NOT go through the unified service", () => 
   });
 
   it("invalidates a file that arrives while the folder is being deleted", async () => {
-    // `media.folder_id` is ON DELETE SET NULL, so deleting the folder CHANGES
-    // any row that arrived after the delete collected its list — and that row
-    // is in nobody's invalidation set.
-    //
-    // The injected file removal is the seam that makes the race
-    // deterministic: the cascade calls it once the collected rows are gone
-    // and before the folder delete, which is exactly the gap a concurrent
-    // upload lands in.
+    // A file that lands in the folder after the delete's checks, before it
+    // reads what the folder holds: the delete's own transaction locks the
+    // folder before it reads the items, so the late file is among them, is
+    // removed with the contents, and has its tag busted. Nothing can land
+    // later than that read: an insert naming the folder waits for the
+    // folder's lock and then finds the folder gone.
     const { handle, flush } = await bootWithSpy();
     await handle.adapter.insert("users", {
       id: "racer-1",
@@ -272,33 +270,42 @@ describe("the write surfaces that do NOT go through the unified service", () => 
 
     const lateId = "late-arrival-1";
     const folders = new MediaFolderService(handle.adapter, console as never);
-    const racingRemoval = async (): Promise<void> => {
-      // The concurrent upload, landing mid-delete.
-      await handle.adapter.insert("media", {
-        id: lateId,
-        filename: "late.pdf",
-        originalFilename: "late.pdf",
-        mimeType: "application/pdf",
-        size: 1,
-        url: "/uploads/late.pdf",
-        folderId: folder.id,
-        uploadedAt: new Date(),
-        updatedAt: new Date(),
-      });
+    const checks = MediaFolderService.prototype as unknown as {
+      refuseUndeletableFolder: (...args: unknown[]) => Promise<unknown>;
     };
+    const check = checks.refuseUndeletableFolder;
+    let landed = false;
+    vi.spyOn(checks, "refuseUndeletableFolder").mockImplementationOnce(
+      async function (this: unknown, ...args: unknown[]) {
+        const answer = await check.apply(this, args);
+        // The concurrent upload, landing mid-delete.
+        await handle.adapter.insert("media", {
+          id: lateId,
+          filename: "late.pdf",
+          originalFilename: "late.pdf",
+          mimeType: "application/pdf",
+          size: 1,
+          url: "/uploads/late.pdf",
+          folderId: folder.id,
+          uploadedAt: new Date(),
+          updatedAt: new Date(),
+        });
+        landed = true;
+        return answer;
+      }
+    );
 
     flush.mockClear();
-    const result = await folders.deleteFolder(folder.id, true, racingRemoval);
-    expect(result.success).toBe(true);
+    const result = await folders.deleteFolder(folder.id, true);
+    expect(result).toMatchObject({ success: true, deletedMedia: 2 });
 
-    // The control, and it is the whole test: the row really did land inside
-    // the window, and the folder delete really did change it. Without both,
-    // the tag assertion below is about a row that was never contended.
-    const after = (await handle.adapter.select("media", {
+    // The control: the row really did land inside the delete, and the
+    // delete really did remove it.
+    expect(landed).toBe(true);
+    const after = await handle.adapter.select("media", {
       where: { and: [{ column: "id", op: "=", value: lateId }] },
-    })) as Array<{ folderId: string | null }>;
-    expect(after).toHaveLength(1);
-    expect(after[0]?.folderId ?? null).toBeNull();
+    });
+    expect(after).toHaveLength(0);
 
     expect(flushedTags(flush)).toContain(`nextly:media:id:${lateId}`);
   });

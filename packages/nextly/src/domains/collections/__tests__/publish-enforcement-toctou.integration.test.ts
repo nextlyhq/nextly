@@ -25,6 +25,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -39,6 +40,19 @@ const POSTGRES_URL = process.env.TEST_POSTGRES_URL ?? "";
 
 const SLUG = "toctouposts";
 const TABLE = `dc_${SLUG}`;
+// Writer A of each case. One per case, so neither inserts the other's user on
+// this shared database; `drop` removes both.
+const RACE_EDITOR = "toctou-editor-race";
+const VANISH_EDITOR = "toctou-editor-vanish";
+
+/**
+ * Stores writer A. A code rule only narrows the permission, so the editor
+ * holds update on the collection; the rules still refuse the lifecycle move
+ * each case is about.
+ */
+async function seatEditor(t: TestNextly, id: string): Promise<void> {
+  await userWhoMay(t, id, "update", [SLUG]);
+}
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
 type Dialect = "postgresql" | "mysql";
@@ -132,6 +146,11 @@ for (const leg of LEGS) {
       for (const stmt of [
         `DROP TABLE IF EXISTS ${TABLE}`,
         `DELETE FROM dynamic_collections WHERE slug = '${SLUG}'`,
+        // Writer A of each case and its roles; their grants go with them.
+        ...[RACE_EDITOR, VANISH_EDITOR].flatMap(editor => [
+          `DELETE FROM roles WHERE id IN (SELECT role_id FROM user_roles WHERE user_id = '${editor}')`,
+          `DELETE FROM users WHERE id = '${editor}'`,
+        ]),
       ]) {
         try {
           await boot.executeQuery(stmt);
@@ -163,6 +182,7 @@ for (const leg of LEGS) {
             }),
           ],
         });
+        await seatEditor(handle, RACE_EDITOR);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entryService = h.getEntryService() as CollectionEntryService;
 
@@ -187,11 +207,15 @@ for (const leg of LEGS) {
 
         await bLocked.promise;
 
-        // Writer A: a batch update that keeps the row draft. It reads the
+        // Writer A: a batch edit that keeps the row draft. It reads the
         // committed `draft` (B is uncommitted), then blocks taking the row lock.
+        // It names a field: a row naming the status alone is an unpublish,
+        // judged by that gate before any lock, so it would never reach the race.
+        // It overwrites, so its version, which this race is not about, is not
+        // judged.
         const aResultP = entryService.updateEntries(
-          { collectionName: SLUG, user: { id: "editor" } },
-          [{ id, data: { status: "draft" } }]
+          { collectionName: SLUG, user: { id: RACE_EDITOR } },
+          [{ id, data: { title: "t2", status: "draft", _overwrite: true } }]
         );
 
         // Wait until A is observably parked on B's row lock (not a fixed sleep),
@@ -202,9 +226,11 @@ for (const leg of LEGS) {
         await bTx;
 
         const aResult = await aResultP;
-        // The draft-over-published write is an unpublish the editor may not do.
+        // The draft-over-published write is an unpublish the editor may not do,
+        // refused as one rather than for any other reason.
         expect(aResult.successful).toBe(0);
         expect(aResult.failed).toBe(1);
+        expect(aResult.errors[0]?.code).toBe("FORBIDDEN");
 
         // A was refused under the lock, so B's publish stands.
         const [row] = await handle.adapter.select<{ status: string }>(TABLE, {
@@ -239,6 +265,7 @@ for (const leg of LEGS) {
             }),
           ],
         });
+        await seatEditor(handle, VANISH_EDITOR);
         const h = handle.getService<CollectionsHandler>("collectionsHandler");
         const entryService = h.getEntryService() as CollectionEntryService;
 
@@ -265,9 +292,11 @@ for (const leg of LEGS) {
 
         // Writer A: a batch update to `published`. Its plain existence read sees
         // the still-committed row, then it blocks taking the row lock behind B.
+        // It names a field, as above: a row naming the status alone is a
+        // publish judged before any lock. It overwrites, as above.
         const aResultP = entryService.updateEntries(
-          { collectionName: SLUG, user: { id: "editor" } },
-          [{ id, data: { status: "published" } }]
+          { collectionName: SLUG, user: { id: VANISH_EDITOR } },
+          [{ id, data: { title: "t2", status: "published", _overwrite: true } }]
         );
 
         // Release the gate only once A is observably blocked on B's row lock, so

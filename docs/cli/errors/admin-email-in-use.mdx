@@ -1,0 +1,23 @@
+---
+title: ADMIN_EMAIL_IN_USE
+description: "An account already uses the email given for the first administrator."
+---
+
+## Cause
+
+An account already uses the email given for the first administrator.
+
+Giving an existing account the administrator role would keep that account's own password, so the password given here would be ignored without a word. The command creates only a new account, so nothing was created.
+
+## Fix
+
+- Run `nextly users:create-admin` again with another email.
+
+## Example
+
+```text
+✗ An account already uses that email. Nothing was created.
+  Why:  That account would be given the administrator role and keep its own password, so the password given would be ignored.
+  Next: Choose another email.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-email-in-use  (ADMIN_EMAIL_IN_USE)
+```

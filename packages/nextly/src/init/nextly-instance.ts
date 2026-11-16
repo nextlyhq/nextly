@@ -27,6 +27,10 @@ import type {
   AuthResult,
   BulkDeleteArgs,
   BulkDeleteMediaArgs,
+  PublishArgs,
+  PublishResult,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   BulkOperationResult,
   ChangePasswordArgs,
   CollectionSlug,
@@ -66,9 +70,11 @@ import type {
   FindFormBySlugArgs,
   FindFormsArgs,
   FindSingleArgs,
+  FoundSingle,
   FindSinglesArgs,
   FindMediaArgs,
   FindMediaByIDArgs,
+  FindMediaByIDsArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
   FindRoleByIDArgs,
@@ -127,7 +133,9 @@ import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
 } from "../domains/email/services/email-template-service";
+import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import type { NextlyPrincipals } from "../plugins/principals/types";
+import type { PublicSiteSettings } from "../runtime/site-settings-read";
 import type { EmailProviderRecord } from "../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../schemas/user-field-definitions/types";
@@ -219,6 +227,15 @@ export interface Nextly {
   ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
+   */
+  rewriteField: (
+    args: RewriteFieldArgs | RewriteSingleFieldArgs
+  ) => Promise<MutationResult<FieldRewriteResult>>;
+
+  /**
    * Delete a document by ID or by where clause.
    *
    * the by-id path returns `{ message, item: { id } }`;
@@ -236,6 +253,20 @@ export interface Nextly {
   delete: <TSlug extends CollectionSlug = CollectionSlug>(
     args: DeleteArgs<TSlug>
   ) => Promise<MutationResult<{ id: string }> | DeleteResult>;
+
+  /**
+   * Publish the chosen languages of one entry, and its shared part, together.
+   *
+   * @experimental
+   */
+  publish: (args: PublishArgs) => Promise<MutationResult<PublishResult>>;
+
+  /**
+   * Unpublish the chosen languages of one entry, and its shared part, together.
+   *
+   * @experimental
+   */
+  unpublish: (args: PublishArgs) => Promise<MutationResult<PublishResult>>;
 
   /**
    * Count documents matching a query.
@@ -316,9 +347,14 @@ export interface Nextly {
    * });
    * ```
    */
-  findSingle: <TSlug extends SingleSlug>(
-    args: FindSingleArgs<TSlug>
-  ) => Promise<RowFromSingleSlug<TSlug>>;
+  findSingle: <
+    TSlug extends SingleSlug,
+    TCreate extends boolean | undefined = undefined,
+  >(
+    // `createIfMissing: false` reads without creating, and only then does
+    // the answer include `null`; see `FoundSingle`.
+    args: FindSingleArgs<TSlug> & { createIfMissing?: TCreate }
+  ) => Promise<FoundSingle<TSlug, TCreate>>;
 
   /**
    * Update a Single document.
@@ -348,6 +384,19 @@ export interface Nextly {
    * List all registered Single type definitions.
    */
   findSingles: (args?: FindSinglesArgs) => Promise<SingleListResult>;
+
+  /**
+   * The site's general settings a published page may show: its name, its
+   * address, its logo and its time zone, each `null` until the site sets it,
+   * and nothing else the settings hold.
+   *
+   * The block page routes read a page's site settings through the instance
+   * they are given, so a reader of one's own forwards this as it forwards
+   * `find`, or its pages show no site settings.
+   *
+   * @experimental
+   */
+  publicSiteSettings: () => Promise<PublicSiteSettings>;
 
   // ==========================================================================
   // Authentication Methods
@@ -635,6 +684,12 @@ export interface Nextly {
     upload: (args: UploadMediaArgs) => Promise<MediaFile>;
     find: (args?: FindMediaArgs) => Promise<ListResult<MediaFile>>;
     findByID: (args: FindMediaByIDArgs) => Promise<MediaFile | null>;
+    /**
+     * Up to 100 files by id in one read, judged as `findByID` judges one.
+     *
+     * @experimental
+     */
+    findByIDs: (args: FindMediaByIDsArgs) => Promise<MediaFile[]>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
     delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;
@@ -746,7 +801,8 @@ export interface Nextly {
    * const uploadData = await nextly.storage.getClientUploadUrl(
    *   'video.mp4',
    *   'video/mp4',
-   *   'media'
+   *   'media',
+   *   { size: file.size }
    * );
    *
    * // Get signed URL for private file access
@@ -967,6 +1023,21 @@ export interface Nextly {
   principals: NextlyPrincipals;
 
   /**
+   * @experimental In-process access to plugin-contributed services, keyed by
+   * plugin name then service name: the same registry plugins reach as
+   * `ctx.services.plugins`, and the same member the `Nextly` class declares.
+   * Lazily resolved; cast to the service's type, or import it from the
+   * providing plugin.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly({ config });
+   * const service = nextly.plugins["@acme/plugin-x"]?.["reader"];
+   * ```
+   */
+  plugins: Record<string, Record<string, unknown>>;
+
+  /**
    * Content releases — batch documents and put them live at one instant.
    *
    * Every operation authorizes: pass `overrideAccess: false` with the acting
@@ -1021,8 +1092,6 @@ export interface Nextly {
    * const { items } = await nextly.notices.find({ userId, unread: true });
    * await nextly.notices.markRead({ userId, all: true });
    * ```
-   *
-   * @experimental
    */
   notices: NoticesNamespace;
 

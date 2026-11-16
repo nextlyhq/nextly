@@ -1,0 +1,23 @@
+---
+title: PLUGIN_HOOK_HANDLERS_RUNNING
+description: "Event handlers a plugin's install or uninstall hook set off were still running when the command's wait ran out."
+---
+
+## Cause
+
+Event handlers a plugin's install or uninstall hook set off were still running when the command's wait ran out.
+
+A plugin's install or uninstall hook can set off event handlers. The command waits for them before it goes on, since an uninstall's DOWNs would drop tables they may still be reading. They were still running when the wait ran out, so the plugin's state was left as it was, and running the command again finishes it.
+
+## Fix
+
+Run the command again once what the handlers do can finish.
+
+## Example
+
+```text
+✗ Event handlers that @acme/seo's onUninstall set off were still running after 30s, so the command stopped there.
+  Why:  Going on while they run could remove tables they are still reading, so the plugin's state was left as it was.
+  Next: Run it again once what they do can finish.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-handlers-running  (PLUGIN_HOOK_HANDLERS_RUNNING)
+```

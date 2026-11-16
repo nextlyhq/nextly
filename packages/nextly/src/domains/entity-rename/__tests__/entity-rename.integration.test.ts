@@ -45,11 +45,15 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { entityPermissionSpelling } from "../../auth/services/entity-permission-spelling";
-import { PermissionCacheService } from "../../auth/services/permission-cache-service";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { recordContentEvent } from "../../content-events/record";
 import { documentLockKey } from "../../document-lock/lock-key";
-import { documentOfReleaseEvent } from "../../releases/release-events";
+import {
+  documentEventPayload,
+  documentOfReleaseEvent,
+  recordReleaseEvent,
+  SYSTEM_RELEASE_EVENT_ACTOR,
+} from "../../releases/release-events";
 import { releaseMemberKey } from "../../releases/release-member-key";
 import { ReleasesRepository } from "../../releases/releases-repository";
 import {
@@ -70,6 +74,11 @@ import {
   applyStoredRecordingDecisions,
   isWebhookRecordingEnabled,
 } from "../../webhooks/recording-policy";
+import {
+  createReviewState,
+  readReviewState,
+  type ReviewStatesDb,
+} from "../../workflows/review-state-repository";
 import {
   VersionsRepository,
   type VersionRef,
@@ -178,15 +187,10 @@ function camel(column: string): string {
  * stable order, to compare a database before and after a refused rename.
  */
 async function snapshot(): Promise<string> {
-  // The permission cache is left out: every permission write retires it,
-  // committed or not, by design, and a retired answer is recomputed rather
-  // than lost.
   const tables = [
     ...Object.values(REGISTRY),
     "role_permissions",
-    ...renamedSlugColumns()
-      .map(column => column.table)
-      .filter(table => table !== "user_permission_cache"),
+    ...renamedSlugColumns().map(column => column.table),
     ...jsonSlugColumns().map(column => column.table),
   ];
   const out: Record<string, string[]> = {};
@@ -249,7 +253,7 @@ async function writeNote(): Promise<string> {
   const created = await handler.createEntry(as, { title: "v1" });
   const entryId = (created.data as { id: string }).id;
   for (const title of ["v2", "v3"]) {
-    await handler.updateEntry({ ...as, entryId }, { title });
+    await handler.updateEntry({ ...as, entryId }, { title, _overwrite: true });
   }
   return entryId;
 }
@@ -260,7 +264,7 @@ async function writeMasthead(): Promise<string> {
   for (const heading of ["a", "b", "c"]) {
     await singles.update(
       "masthead",
-      { heading },
+      { heading, _overwrite: true },
       { overrideAccess: true, user: ANA }
     );
   }
@@ -360,14 +364,6 @@ async function seedHistory(
     acquiredAt: now,
     expiresAt: new Date(now.getTime() + 60_000),
   });
-  // A kept answer about the entity, written by the cache's own writer.
-  await new PermissionCacheService(adapter, silentLogger).setCachedPermission(
-    ANA.id,
-    "read",
-    slug,
-    true,
-    []
-  );
   await adapter.insert("nextly_preview_links", {
     id: randomUUID().replace(/-/g, ""),
     documentKind: kind === "collection" ? "entry" : "single",
@@ -377,6 +373,49 @@ async function seedHistory(
     createdAt: now,
     expiresAt: new Date(now.getTime() + 60_000),
     generation: 0,
+  });
+  // The document's shared part waiting in review, with an approval, under the workflow.
+  await createReviewState(
+    adapter as unknown as ReviewStatesDb,
+    { ...ref, part: null },
+    {
+      stage: "inReview",
+      enteredAt: now,
+      enteredBy: ANA.id,
+      definitionHash: "h1",
+      approval: { versionNo: 3, digest: "d1", by: ANA.id, at: now },
+    }
+  );
+  // A reader's pin of the document: a Single's names its slug alone.
+  await adapter.insert("nextly_dashboard_pins", {
+    id: randomUUID(),
+    userId: ANA.id,
+    targetType: kind,
+    targetSlug: slug,
+    entryId: kind === "collection" ? entryId : "",
+    pinnedAt: now,
+  });
+  // A use of a media item by the document, recorded against its slug: a
+  // Single's names its slug alone.
+  const mediaId = randomUUID();
+  await adapter.insert("media", {
+    id: mediaId,
+    filename: `${mediaId}.png`,
+    originalFilename: "used.png",
+    mimeType: "image/png",
+    size: 1,
+    url: `/uploads/${mediaId}.png`,
+    uploadedAt: now,
+    updatedAt: now,
+  });
+  await adapter.insert("nextly_media_usage", {
+    id: randomUUID(),
+    mediaId,
+    subjectKind: kind,
+    subjectSlug: slug,
+    documentId: kind === "collection" ? entryId : "",
+    fieldPath: "image",
+    locale: "",
   });
   return { releaseId: release.id };
 }
@@ -416,13 +455,6 @@ async function seedEphemeral(
     expiresAt: new Date(now.getTime() + 60_000),
     generation: 0,
   });
-  await new PermissionCacheService(adapter, silentLogger).setCachedPermission(
-    ANA.id,
-    "read",
-    slug,
-    true,
-    []
-  );
   return { lockId, linkId };
 }
 
@@ -521,6 +553,16 @@ async function expectMoved(
   );
   expect(view?.viewKey).toBe(versionViewKey(marker));
 
+  // The part's review state is read by its key, so it answers only if the key moved too: its stage
+  // and its approval are found under the new name, and nothing under the old one.
+  const reviews = adapter as unknown as ReviewStatesDb;
+  expect(await readReviewState(reviews, { ...ref, part: null })).toMatchObject({
+    stage: "inReview",
+    enteredBy: ANA.id,
+    approval: expect.objectContaining({ versionNo: 3, digest: "d1" }),
+  });
+  expect(await readReviewState(reviews, { ...oldRef, part: null })).toBeNull();
+
   // Content events, and each one's parts, which are keyed by the event.
   const events = (await rowsOf("nextly_content_events")).filter(
     row => row.subjectKind === kind && row.subjectId === entryId
@@ -566,17 +608,43 @@ function failingOn(
   table: string,
   hits: { count: number }
 ): TransactionContext {
+  const fails = (written: unknown) =>
+    written === table ||
+    (is(written, Table) && getTableName(written) === table);
+  const fail = () => {
+    hits.count += 1;
+    throw new Error(`injected: writing ${table} failed`);
+  };
   return new Proxy(tx, {
     get(target, name, receiver) {
       const value: unknown = Reflect.get(target, name, receiver);
       if (typeof value !== "function") return value;
       if (name === "update" || name === "updateCount" || name === "delete") {
         return (written: unknown, ...rest: unknown[]) => {
-          if (written === table) {
-            hits.count += 1;
-            throw new Error(`injected: writing ${table} failed`);
-          }
+          if (fails(written)) fail();
           return Reflect.apply(value, target, [written, ...rest]);
+        };
+      }
+      // A batched write goes through a Drizzle handle the transaction hands
+      // out, so that handle's updates to the table fail too.
+      if (name === "drizzleWithRelations") {
+        return (...args: unknown[]) => {
+          const db: unknown = Reflect.apply(value, target, args);
+          if (typeof db !== "object" || db === null) return db;
+          return new Proxy(db, {
+            get(inner, key, innerReceiver) {
+              const member: unknown = Reflect.get(inner, key, innerReceiver);
+              if (key !== "update" || typeof member !== "function") {
+                return typeof member === "function"
+                  ? member.bind(inner)
+                  : member;
+              }
+              return (written: unknown) => {
+                if (fails(written)) fail();
+                return Reflect.apply(member, inner, [written]);
+              };
+            },
+          });
         };
       }
       return value.bind(target);
@@ -1070,15 +1138,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await mayDo(editor, COLLECTION_ACTIONS, "journal")).toEqual(
         all(COLLECTION_ACTIONS, true)
       );
-      // No kept answer says yes about the old name: the ones the questions
-      // above just kept say no, and any yes could only be the old entity's.
-      expect(
-        (await rowsOf("user_permission_cache")).filter(
-          row =>
-            row.resource === "notes" &&
-            (row.hasPermission === true || row.hasPermission === 1)
-        )
-      ).toEqual([]);
       expect((await filters()).get(endpointId)).toEqual({
         version: 1,
         collections: ["journal"],
@@ -1182,14 +1241,14 @@ describe.each(getConfiguredTestDialects())(
       }
     }, 120_000);
 
-    it("ends locks, preview links and kept answers an earlier entity left under the new name", async () => {
+    it("ends locks and preview links an earlier entity left under the new name", async () => {
       await bootForAccess(dialect);
       for (const [kind, from, to] of [
         ["collection", "notes", "journal"],
         ["single", "masthead", "header"],
       ] as const) {
         // What a deleted entity under the new name leaves behind: a lease on
-        // one of its documents, a preview link to it, a kept "yes".
+        // one of its documents and a preview link to it.
         const earlier = await seedEphemeral(kind, to);
 
         await rename(kind, from, to);
@@ -1202,11 +1261,6 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await rowsOf("nextly_preview_links")).filter(
             row => row.id === earlier.linkId
-          )
-        ).toEqual([]);
-        expect(
-          (await rowsOf("user_permission_cache")).filter(
-            row => row.resource === to
           )
         ).toEqual([]);
       }
@@ -1658,6 +1712,88 @@ describe.each(getConfiguredTestDialects())(
         });
         expect([row.scopeSlug, row.viewKey]).toEqual(["journal", expected]);
       }
+    }, 240_000);
+
+    it("rewrites a release's document history in a bounded number of statements", async () => {
+      await boot(dialect);
+      // More document events than one statement may carry on any dialect: a
+      // long release record of one collection's documents, with an event
+      // about no document beside them.
+      const entries = Array.from({ length: 700 }, () => randomUUID());
+      const release = await new ReleasesRepository(t().adapter).createRelease({
+        title: "Long record",
+      });
+      await t().adapter.transaction(async tx => {
+        for (const entryId of entries) {
+          await recordReleaseEvent(tx, release.id, {
+            kind: "documentAdded",
+            actor: SYSTEM_RELEASE_EVENT_ACTOR,
+            payload: documentEventPayload({
+              scopeKind: "collection",
+              scopeSlug: "notes",
+              entryId,
+              locale: null,
+              action: "publish",
+            }),
+          });
+        }
+        await recordReleaseEvent(tx, release.id, {
+          kind: "renamed",
+          actor: SYSTEM_RELEASE_EVENT_ACTOR,
+          payload: { from: "Long", to: "Long record" },
+        });
+      });
+      const writes = { count: 0 };
+      countWritesTo("nextly_content_events", writes);
+
+      await rename("collection", "notes", "journal");
+
+      vi.restoreAllMocks();
+      expect(writes.count).toBeGreaterThan(0);
+      expect(writes.count).toBeLessThanOrEqual(10);
+      const events = (await rowsOf("nextly_content_events")).filter(
+        row => row.subjectKind === "release" && row.subjectId === release.id
+      );
+      const documents = events
+        .map(row =>
+          documentOfReleaseEvent({
+            kind: String(row.kind),
+            payload: row.payload,
+          })
+        )
+        .filter(document => document !== undefined);
+      expect(documents).toHaveLength(entries.length);
+      expect(new Set(documents.map(document => document?.scopeSlug))).toEqual(
+        new Set(["journal"])
+      );
+      expect(new Set(documents.map(document => document?.entryId))).toEqual(
+        new Set(entries)
+      );
+      // Each stored as a JSON document, not as a JSON string holding one: the
+      // adapter hands a stored document back as a value on every dialect, so
+      // a string read back here is a value written twice-encoded.
+      for (const row of events) {
+        expect([String(row.id), typeof row.payload]).toEqual([
+          String(row.id),
+          "object",
+        ]);
+      }
+      // The events about no document keep their payloads as they were
+      // written: JSON text on SQLite, a value elsewhere.
+      const others = events
+        .filter(
+          row =>
+            documentOfReleaseEvent({
+              kind: String(row.kind),
+              payload: row.payload,
+            }) === undefined
+        )
+        .map(row =>
+          typeof row.payload === "string"
+            ? (JSON.parse(row.payload) as unknown)
+            : row.payload
+        );
+      expect(others).toContainEqual({ from: "Long", to: "Long record" });
     }, 240_000);
 
     it("fails the whole rename when any table's move fails, collection or Single", async () => {

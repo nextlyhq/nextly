@@ -19,7 +19,8 @@
  * @module components/features/entries/usePublishAllLanguages
  */
 
-import { useCan } from "@admin/hooks/useCan";
+import type { PublishAllPreviewSource } from "@admin/hooks/queries/usePublishAllPreview";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
 import { useEntryLocale } from "./EntryLocaleContext";
@@ -31,6 +32,11 @@ export interface PublishAllLanguages {
   pending: boolean;
   /** Publish every language of the current document. */
   publishAll: () => void;
+  /**
+   * Where the server's preview of that publish is read, which the confirm
+   * lists language by language; absent where no document can be published.
+   */
+  preview: PublishAllPreviewSource | undefined;
 }
 
 export function usePublishAllLanguages({
@@ -41,10 +47,14 @@ export function usePublishAllLanguages({
 }): PublishAllLanguages {
   const { enabled, locales } = useLocalization();
   const { collectionLocalized, publishAllLanguages } = useEntryLocale();
-  // Publishing every language is a publish, so it owes the same permission the
-  // header Publish button does. An empty slug matches no permission, which
-  // keeps the hook unconditional when no seam is supplied.
-  const canPublish = useCan(`publish-${publishAllLanguages?.slug ?? ""}`);
+  // Publishing every language is judged as the server judges that request:
+  // the update in every language, then the publish check for each, rather
+  // than as a publish in the language on screen. An empty slug names no
+  // collection, which keeps the hook unconditional when no seam is supplied.
+  const canPublish = useCanRequest(
+    publishAllLanguages?.slug ?? "",
+    "publishEveryLanguage"
+  );
 
   const available =
     enabled &&
@@ -58,5 +68,11 @@ export function usePublishAllLanguages({
     available,
     pending: publishAllLanguages?.pending ?? false,
     publishAll: () => publishAllLanguages?.publish(),
+    preview: publishAllLanguages
+      ? {
+          fetch: publishAllLanguages.preview,
+          key: publishAllLanguages.previewKey,
+        }
+      : undefined,
   };
 }

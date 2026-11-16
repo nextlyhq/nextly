@@ -4,116 +4,20 @@ import { env } from "../shared/lib/env";
 import { getPublicOrigin } from "./get-base-url";
 
 /**
- * Media variant helpers
+ * Media URL helpers
  *
  * Public-facing utilities for working with Media URLs in API responses:
  *
- *   - `getMediaVariant(media, "card")` — pick a sized image variant URL
- *     from a Media record without cracking open the `sizes` JSON.
  *   - `normalizeMediaUrls(row)` — a row's URLs as stored: the local
  *     adapter's own base (`/uploads/...` by default) or a cloud adapter's
- *     absolute URL, with `sizes` parsed whatever the dialect.
+ *     absolute URL, with no `sizes`.
  *   - `toPublicMediaUrl(url)` — an absolute URL for a consumer outside the
  *     app, resolved against a public origin and never a guessed one.
  *
- * Variant selection rules (in order):
- *   1. If `media.sizes[name]` exists, return its URL.
- *   2. If `media.sizes[fallbackName]` exists, return its URL (when caller
- *      passes one).
- *   3. If the asset isn't an image OR no sizes are present, fall back to
- *      `media.url` (the original).
- *
- * The shape of `media` here is intentionally narrow so the helper works
- * for both the full Media row and any subset that callers pass through
- * the API.
+ * An item's image is its `url`, for `next/image` to resize on request, and
+ * its `thumbnailUrl` for a small preview. Fixed image sizes are no longer
+ * made, so nothing here picks one.
  */
-
-export interface MediaLike {
-  url: string;
-  thumbnailUrl?: string | null;
-  mimeType?: string | null;
-  sizes?: Record<
-    string,
-    { url: string; width?: number; height?: number; filesize?: number }
-  > | null;
-}
-
-export interface GetMediaVariantOptions {
-  /**
-   * If the requested `name` isn't present, try this name next. Useful for
-   * progressive fallback: `getMediaVariant(m, "card", { fallback: "thumbnail" })`.
-   */
-  fallback?: string;
-  /**
-   * If true (default), fall through to `media.thumbnailUrl` when neither the
-   * requested variant nor the fallback variant exists. Set false to skip
-   * straight to `media.url`.
-   */
-  preferThumbnail?: boolean;
-}
-
-/**
- * Return the URL for a named image-size variant, or fall back to the
- * thumbnail / original URL.
- *
- * Returns `undefined` only when `media` is null/undefined. Otherwise always
- * returns a string URL.
- */
-export function getMediaVariant(
-  media: MediaLike | null | undefined,
-  name: string,
-  options: GetMediaVariantOptions = {}
-): string | undefined {
-  if (!media) return undefined;
-
-  const { fallback, preferThumbnail = true } = options;
-  const sizes = media.sizes ?? null;
-
-  if (sizes) {
-    const direct = sizes[name];
-    if (direct?.url) return direct.url;
-
-    if (fallback) {
-      const fb = sizes[fallback];
-      if (fb?.url) return fb.url;
-    }
-  }
-
-  if (preferThumbnail && media.thumbnailUrl) return media.thumbnailUrl;
-
-  return media.url;
-}
-
-/**
- * Convenience: pick the smallest available variant URL. Useful for grid
- * thumbnails where bandwidth matters more than which exact name is used.
- *
- * Walks the variants by `width * height` and returns the smallest. Falls
- * back to `thumbnailUrl` then `url`.
- */
-export function getSmallestMediaVariant(
-  media: MediaLike | null | undefined
-): string | undefined {
-  if (!media) return undefined;
-  const sizes = media.sizes ?? null;
-
-  if (sizes) {
-    const entries = Object.values(sizes).filter(
-      v => v?.url && v.width && v.height
-    );
-    if (entries.length > 0) {
-      const smallest = entries.reduce((acc, cur) =>
-        (cur.width ?? 0) * (cur.height ?? 0) <
-        (acc.width ?? 0) * (acc.height ?? 0)
-          ? cur
-          : acc
-      );
-      return smallest.url;
-    }
-  }
-
-  return media.thumbnailUrl ?? media.url;
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // URLs as stored, and a public URL for a consumer outside the app
@@ -180,71 +84,39 @@ export function toPublicMediaUrl<T extends string | null | undefined>(
   return url;
 }
 
-type MediaSizes = Record<
-  string,
-  { url?: string | null; [key: string]: unknown }
-> | null;
-
 /**
- * Coerce whatever shape Drizzle returned for `media.sizes` into an object
- * (or null). PostgreSQL/MySQL store the column as `jsonb`/`json` and
- * return an object; SQLite stores it as TEXT and returns a JSON string —
- * neither `keysToCamelCase` nor the drizzle better-sqlite3 driver parse
- * it. Return null on absent / unparseable input so callers can branch
- * cleanly without re-implementing the dialect check.
+ * A media row without its `sizes`, as every API hands media back. Returns a
+ * new object and does not mutate.
+ *
+ * Image sizes are no longer made or offered, but a row stored before then
+ * still carries the column, in whichever form its dialect returns it, until
+ * its files are removed. Only the code that removes stored files reads it.
  */
-function normalizeSizes(value: unknown): MediaSizes {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as MediaSizes;
-  }
-  if (typeof value === "string") {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as MediaSizes;
-      }
-    } catch {
-      // Unparseable JSON in the DB column — fall through to null.
-    }
-  }
-  return null;
+export function withoutStoredSizes<T extends { sizes?: unknown }>(
+  row: T
+): Omit<T, "sizes"> {
+  const { sizes: _stored, ...rest } = row;
+  return rest;
 }
 
 /**
  * A media row with its URLs as stored: the local adapter's own base followed
- * by the file's path, or a cloud adapter's absolute URL. Returns a new object
- * and does not mutate.
- *
- * Tolerates `sizes` arriving as a JSON-encoded string (SQLite) and normalises
- * it to an object, so API consumers see one shape whatever the dialect.
+ * by the file's path, or a cloud adapter's absolute URL, and without its
+ * `sizes` (`withoutStoredSizes`). Returns a new object and does not mutate.
  */
 export function normalizeMediaUrls<
   T extends {
     url?: string | null;
     thumbnailUrl?: string | null;
-    sizes?: MediaSizes | string;
+    sizes?: unknown;
   },
->(row: T): T {
-  const read: T = { ...row };
+>(row: T): Omit<T, "sizes"> {
+  const read = withoutStoredSizes(row);
   if (typeof row.url === "string") read.url = fromSiteRoot(row.url);
   if (typeof row.thumbnailUrl === "string") {
     read.thumbnailUrl = fromSiteRoot(row.thumbnailUrl);
   }
-  if (!("sizes" in row)) return read;
-  const sizes = normalizeSizes(row.sizes);
-  return {
-    ...read,
-    sizes: sizes
-      ? Object.fromEntries(
-          Object.entries(sizes).map(([name, variant]) => [
-            name,
-            typeof variant?.url === "string"
-              ? { ...variant, url: fromSiteRoot(variant.url) }
-              : variant,
-          ])
-        )
-      : sizes,
-  };
+  return read;
 }
 
 /**

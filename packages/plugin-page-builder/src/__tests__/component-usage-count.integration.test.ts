@@ -11,11 +11,10 @@
  * trip that establishes the database can answer it. Two things are being
  * checked at once and only a real database can separate them: that the grouped
  * read returns a bucket per document rather than per row, and that it is
- * willing to run against this collection at all — the index denies every access
- * rule it declares, so a read that is not trusted sees nothing and answers a
- * confident zero.
+ * willing to run against the index's own table at all, through the reader the
+ * plugin hands out.
  *
- * Per dialect, because grouping is SQL the adapters generate rather than
+ * Per dialect, because the reads are SQL the adapters generate rather than
  * behaviour this package implements.
  *
  * @module __tests__/component-usage-count.integration.test
@@ -28,11 +27,16 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { usageCountReader } from "../class-usage-runtime";
-import { COMPONENT_USAGE_INDEX_SLUG } from "../collections/component-usage-index";
-import { componentUsageCount } from "../component-usage";
-import type { UsageIndexHealth } from "../usage-index-health";
+import { componentUsageCount, componentUsageIndex } from "../component-usage";
 import { pageBuilder } from "../plugin";
+import {
+  USAGE_HEALTH_SERVICE,
+  type UsageHealthService,
+} from "../usage-health-service";
+import type { UsageIndexHealth } from "../usage-index-health";
+
+/** Where the component index's rows live. */
+const COMPONENT_ROWS = "page_builder__component_usage";
 
 /** One stored reference, in the shape the maintenance path writes. */
 const row = (over: {
@@ -41,6 +45,7 @@ const row = (over: {
   locale?: string;
   variant?: string;
 }) => ({
+  id: globalThis.crypto.randomUUID(),
   scope: "collection",
   entity: "pages",
   field: "content",
@@ -76,9 +81,19 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
+    /** A site, and the grouped read the plugin hands out for the component index. */
+    async function boot() {
+      const plugin = pageBuilder();
+      current = await createTestNextly({ dialect, plugins: [plugin] });
+      const service = plugin.contributes?.services?.[
+        USAGE_HEALTH_SERVICE
+      ]?.() as UsageHealthService | undefined;
+      if (service === undefined) throw new Error("no usage health service");
+      return { t: current, read: service.counts(componentUsageIndex) };
+    }
+
     it("counts DOCUMENTS, not the rows a document contributes", async () => {
-      current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
-      const nextly = current.nextly;
+      const { t, read } = await boot();
 
       // Four rows over TWO pages. `page-1` carries three of them — a second
       // language and a pending draft — which is exactly the multiplicity a row
@@ -93,13 +108,7 @@ describe.each(getConfiguredTestDialects())(
         // correct.
         row({ entityKey: "page-9", componentId: "footer" }),
       ];
-      for (const data of rows) {
-        await nextly.create({
-          collection: COMPONENT_USAGE_INDEX_SLUG,
-          data,
-          overrideAccess: true,
-        });
-      }
+      for (const data of rows) await t.adapter.insert(COMPONENT_ROWS, data);
 
       // Through the SHIPPED entry point, not a hand-written grouped read. A
       // probe that composed the query itself would prove the database can
@@ -107,7 +116,7 @@ describe.each(getConfiguredTestDialects())(
       // correctly — the predicate, the group key and the trusted read are
       // exactly what this has to get right.
       const count = await componentUsageCount({
-        read: usageCountReader(nextly, COMPONENT_USAGE_INDEX_SLUG),
+        read,
         componentId: "header",
         health: WHOLE,
       });
@@ -119,17 +128,15 @@ describe.each(getConfiguredTestDialects())(
       // The control for the case above: a grouped read that returned every row
       // regardless of the filter would satisfy it while being unable to tell
       // an unused component from a used one.
-      current = await createTestNextly({ dialect, plugins: [pageBuilder()] });
-      const nextly = current.nextly;
+      const { t, read } = await boot();
 
-      await nextly.create({
-        collection: COMPONENT_USAGE_INDEX_SLUG,
-        data: row({ entityKey: "page-1", componentId: "header" }),
-        overrideAccess: true,
-      });
+      await t.adapter.insert(
+        COMPONENT_ROWS,
+        row({ entityKey: "page-1", componentId: "header" })
+      );
 
       const count = await componentUsageCount({
-        read: usageCountReader(nextly, COMPONENT_USAGE_INDEX_SLUG),
+        read,
         componentId: "never-placed",
         health: WHOLE,
       });

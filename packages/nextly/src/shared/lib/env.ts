@@ -2,35 +2,15 @@ import { z } from "zod";
 
 import { consoleLogger } from "../types";
 
+import { DEFAULT_DIALECT, DIALECTS, dialectFromUrl } from "./stated-dialect";
+
 // Zod v4 schema for environment variables with conditional validation
 // for production and database dialects.
-/** The dialects this package supports. One list; the enum and the type both come from it. */
-const DIALECTS = ["postgresql", "mysql", "sqlite"] as const;
-type Dialect = (typeof DIALECTS)[number];
-
-/**
- * The dialect a connection URL implies, or undefined when it implies nothing.
- *
- * These are the rules the database factory already applied; they live here now
- * so there is one answer rather than two, and so the answer is reached before
- * anything reads it.
- */
-export function dialectFromUrl(url: unknown): Dialect | undefined {
-  if (typeof url !== "string" || url === "") return undefined;
-  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
-    return "postgresql";
-  }
-  if (url.startsWith("mysql://")) return "mysql";
-  if (
-    url.startsWith("file:") ||
-    url.endsWith(".db") ||
-    url.endsWith(".sqlite") ||
-    url.endsWith(".sqlite3")
-  ) {
-    return "sqlite";
-  }
-  return undefined;
-}
+// The dialects, and how a connection URL implies one, live in a module that
+// imports nothing, so code that runs while Next.js loads `next.config` reads
+// the environment's dialect by the same rule; re-exported where callers have
+// always found `dialectFromUrl`.
+export { dialectFromUrl };
 
 /**
  * Fill in the dialect the operator did not state.
@@ -59,6 +39,51 @@ function withResolvedDialect(raw: unknown): unknown {
   return implied ? { ...rest, DB_DIALECT: implied } : rest;
 }
 
+/**
+ * The pool and timeout settings, a schema of their own so the database factory can read them
+ * without validating the rest of the environment: a command that names its database hands the
+ * factory its dialect and URL, and the environment's own database target, absent or not, is then
+ * none of the factory's business. The full schema below spreads these in, so both read the keys
+ * by one definition.
+ */
+const _poolSettingsObject = z.object({
+  // These used to carry zod defaults, but the defaults silently overrode the adapter's
+  // intentional cold-start-friendly defaults (e.g. the Postgres adapter's `min: 0` for Neon
+  // auto-suspend recovery, in packages/adapter-postgres/src/index.ts). They are optional so the
+  // factory's `??` chain falls through to adapter-level defaults when the operator has set
+  // nothing.
+  DB_POOL_MAX: z.coerce.number().int().min(1).optional(),
+  DB_POOL_MIN: z.coerce.number().int().min(0).optional(),
+  DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+  DB_QUERY_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+});
+
+export type PoolSettings = z.infer<typeof _poolSettingsObject>;
+
+/**
+ * Log each problem the environment validation found, naming its key, and refuse to go on. The one
+ * refusal both the full validation and the pool settings' own read give, so they say the same thing.
+ */
+function refuseInvalidEnv(error: z.ZodError): never {
+  consoleLogger.error("Environment validation failed");
+  error.issues.forEach(issue => {
+    consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
+  });
+  throw new Error("Invalid environment configuration");
+}
+
+/**
+ * The pool and timeout settings in `source`, validated alone. A value out of range is refused as
+ * the full validation refuses it, naming the key.
+ */
+export function readPoolSettings(
+  source: Record<string, unknown> = process.env
+): PoolSettings {
+  const parsed = _poolSettingsObject.safeParse(source);
+  if (!parsed.success) refuseInvalidEnv(parsed.error);
+  return parsed.data;
+}
+
 const _envObject = z
   .object({
     // Runtime
@@ -67,22 +92,13 @@ const _envObject = z
       .default("development"),
 
     // Database
-    DB_DIALECT: z.enum(DIALECTS).default("postgresql"),
+    DB_DIALECT: z.enum(DIALECTS).default(DEFAULT_DIALECT),
     // Optional by default to allow sqlite file paths; validated conditionally below
     DATABASE_URL: z.string().optional(),
     // SQLite-specific path (alternative to DATABASE_URL for SQLite)
     SQLITE_PATH: z.string().optional(),
-    // Pooling & timeouts
-    // Phase 1 fix: these used to carry zod defaults, but the defaults silently
-    // overrode the adapter's intentional cold-start-friendly defaults (e.g.
-    // the Postgres adapter's `min: 0` for Neon auto-suspend recovery — see
-    // packages/adapter-postgres/src/index.ts:140-148). Make them optional so
-    // the factory's `??` chain can fall through to adapter-level defaults
-    // when the operator hasn't set anything.
-    DB_POOL_MAX: z.coerce.number().int().min(1).optional(),
-    DB_POOL_MIN: z.coerce.number().int().min(0).optional(),
-    DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().min(1000).optional(),
-    DB_QUERY_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+    // Pooling & timeouts, defined once (`_poolSettingsObject`).
+    ..._poolSettingsObject.shape,
     DB_HEALTHCHECK_INTERVAL_MS: z.coerce
       .number()
       .int()
@@ -269,13 +285,7 @@ export type Env = BaseEnv & {
 
 function validateEnv(): Env {
   const parsed = _envSchema.safeParse(process.env);
-  if (!parsed.success) {
-    consoleLogger.error("Environment validation failed");
-    parsed.error.issues.forEach(issue => {
-      consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
-    });
-    throw new Error("Invalid environment configuration");
-  }
+  if (!parsed.success) refuseInvalidEnv(parsed.error);
 
   const data = parsed.data;
 

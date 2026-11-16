@@ -3,7 +3,12 @@ import { NextlyError } from "../errors/nextly-error";
 import type { PluginDefinition } from "./plugin-context";
 import { z } from "zod";
 
-import { assertPluginManifests, resolvePlugins } from "./resolve";
+import {
+  assertPluginManifests,
+  resolveDeclaredPlugins,
+  resolvePlugins,
+  resolveTransformedPlugins,
+} from "./resolve";
 
 const p = (
   name: string,
@@ -43,6 +48,46 @@ describe("resolvePlugins", () => {
         ?.reason;
     }
     expect(reason).toBe("duplicate-admin-slug");
+  });
+
+  /**
+   * The wiring for the reserved name: `validatePluginNames` has its own suite,
+   * and this asserts the resolver every boot and every command goes through
+   * calls it, for a declared list and for one a `setup` transformer renamed.
+   */
+  it("rejects a plugin named app, declared or renamed by a setup transformer", () => {
+    const reasonOf = (run: () => unknown): string | undefined => {
+      try {
+        run();
+      } catch (error) {
+        return (error as { logContext?: { reason?: string } }).logContext
+          ?.reason;
+      }
+      return undefined;
+    };
+    expect(
+      reasonOf(() => resolvePlugins([p("app")], { coreVersion: "1.0.0" }))
+    ).toBe("plugin-name-reserved");
+    const declared = resolveDeclaredPlugins([p("@acme/seo")], {
+      coreVersion: "1.0.0",
+    });
+    expect(
+      reasonOf(() =>
+        resolveTransformedPlugins(
+          { plugins: [p("app")] },
+          { coreVersion: "1.0.0", declared: declared.preSetup }
+        )
+      )
+    ).toBe("plugin-name-reserved");
+    // The control: the same transformed resolution accepts another name.
+    expect(
+      reasonOf(() =>
+        resolveTransformedPlugins(
+          { plugins: [p("apps")] },
+          { coreVersion: "1.0.0", declared: declared.preSetup }
+        )
+      )
+    ).toBeUndefined();
   });
 
   it("surfaces a version error even when the graph is otherwise orderable", () => {
@@ -285,6 +330,33 @@ describe("a plugin event under a reserved prefix", () => {
     expect(() =>
       assertPluginManifests([declaring("t-cache.cleared")])
     ).not.toThrow();
+  });
+});
+
+describe("a plugin event declared durable", () => {
+  const declaring = (durable: unknown) =>
+    p("@t/cache", {
+      contributes: { events: [{ name: "t-cache.cleared", durable }] },
+    } as never);
+
+  it("accepts durable: true, and an event that says nothing", () => {
+    expect(() => assertPluginManifests([declaring(true)])).not.toThrow();
+    expect(() => assertPluginManifests([declaring(undefined)])).not.toThrow();
+  });
+
+  it("refuses a durable flag that is not true or false, at boot", () => {
+    // A string or a number would read as durable to a truthiness check and
+    // as not durable to a strict one: refused, so no reader has to guess.
+    for (const durable of ["yes", 1, null, {}]) {
+      expect(() => assertPluginManifests([declaring(durable)])).toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            reason: "plugin-event-durable-invalid",
+            event: "t-cache.cleared",
+          }),
+        })
+      );
+    }
   });
 });
 

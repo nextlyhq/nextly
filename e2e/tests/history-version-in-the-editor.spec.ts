@@ -4,8 +4,8 @@
  * Drawn against a document whose fields sit in a group and in an embedded
  * field group, because those are the layouts a version shown "in the editor's
  * own layout" has to keep. Two widths, because the actions move: on a wide
- * screen Back to current and Restore… take Save's and Publish's places in the
- * title bar, and on a phone they sit in a bar at the bottom.
+ * screen Back to current and Restore this version take Save's and Publish's
+ * places in the document bar, and on a phone they sit in a bar at the bottom.
  *
  * The document and its second version are written through the API, so what
  * the test watches is history, not the editor's create flow.
@@ -34,6 +34,7 @@ async function noteWithTwoVersions(page: Page): Promise<string> {
     data: {
       summary: "as it stands now",
       details: { subtitle: "second subtitle", byline: "Ana" },
+      _overwrite: true,
     },
   });
   expect(updated.ok(), await updated.text()).toBe(true);
@@ -83,11 +84,12 @@ test.describe("a past version in the editor", () => {
       page.getByRole("button", { name: /^Show \d+ unchanged fields?$/ })
     ).toBeVisible();
 
-    // Back to current and Restore… stand where Save and Publish do; nothing
-    // that would act on the live document stays in view.
-    const header = page.locator("main");
+    // Back to current and Restore this version stand where Save and Publish
+    // do, in the admin's top bar, where an open document draws its controls;
+    // nothing that would act on the live document stays in view.
+    const header = page.getByRole("banner");
     await expect(
-      header.getByRole("button", { name: "Restore…" })
+      header.getByRole("button", { name: "Restore this version" })
     ).toBeVisible();
     await expect(
       header.getByRole("button", { name: /^save draft$/i })
@@ -145,7 +147,9 @@ test.describe("a past version in the editor", () => {
 
     const bar = page.getByRole("toolbar", { name: "Version actions" });
     await expect(bar).toBeVisible();
-    await expect(bar.getByRole("button", { name: "Restore…" })).toBeVisible();
+    await expect(
+      bar.getByRole("button", { name: "Restore this version" })
+    ).toBeVisible();
     await expect(bar.getByText("1 of 2")).toBeVisible();
     // The way back to the list leads the version, where the panel stepped
     // aside for it.

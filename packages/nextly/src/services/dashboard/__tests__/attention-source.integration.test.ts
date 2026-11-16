@@ -26,7 +26,7 @@ import {
   RELEASES_TABLE,
 } from "../../../domains/releases/release-tables";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
-import { refreshContentSources } from "../../../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../../../domains/widgets/content-sources";
 import type { WidgetQuery } from "../../../domains/widgets/query";
 import { sourceResolver } from "../../../domains/widgets/resolved-sources";
 import { isUnavailableSourceRefusal } from "../../../domains/widgets/sources";
@@ -164,9 +164,12 @@ describe.each(getConfiguredTestDialects())(
       const trusted = new Nextly();
       await trusted.updateSingle({
         slug: HOME,
-        data: { heading: "Live", status: "published" },
+        data: { heading: "Live", status: "published", _overwrite: true },
       });
-      await trusted.updateSingle({ slug: HOME, data: { heading: "Edited" } });
+      await trusted.updateSingle({
+        slug: HOME,
+        data: { heading: "Edited", _overwrite: true },
+      });
       // Every dashboard request rebuilds the content sources before it resolves
       // a card, and boot publishes none; these tests call the resolver
       // directly, so they rebuild them as a request would.

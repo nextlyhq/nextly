@@ -34,7 +34,7 @@ vi.mock("../../auth/handlers/deps-bridge", () => ({
 const config = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
-vi.mock("../../di/register", () => ({ getService: () => config.value }));
+vi.mock("../../di/service-access", () => ({ getService: () => config.value }));
 vi.mock("../../utils/proxy-trust", () => ({
   readProxyTrustSettings: () => ({ trustProxy: false, trustedProxyIps: [] }),
 }));

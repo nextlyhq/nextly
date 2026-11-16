@@ -29,7 +29,7 @@ import {
   assertAddableToExistingRows,
   assertMayAddColumns,
   assertMayOverride,
-  assertOverrideCompatible,
+  resolveColumnOverride,
 } from "../extension-columns";
 
 import { REFUSED_CONSTRUCT_HOOKS } from "./after-drizzle-refused-constructs";
@@ -136,13 +136,18 @@ describe("columns on a generated table", () => {
 describe("override a generated column", () => {
   it("narrows storage within a value family, app only", () => {
     // Narrowing within a family, such as `varchar('city', { length: 10 })`.
-    expect(() =>
-      assertOverrideCompatible("text", "varchar", "dc_posts", "city")
-    ).not.toThrow();
+    expect(
+      resolveColumnOverride(
+        { kind: "text" },
+        col.varchar(10),
+        "dc_posts",
+        "city"
+      )
+    ).toEqual({ kind: "shortText", length: 10 });
     // Crossing families leaves the field's validation describing a column
     // that cannot hold what it accepts.
     expect(() =>
-      assertOverrideCompatible("text", "integer", "dc_posts", "city")
+      resolveColumnOverride({ kind: "text" }, col.integer(), "dc_posts", "city")
     ).toThrow(NextlyError);
     // A plugin doing this would change what every reader of that field gets.
     expect(() =>
@@ -913,22 +918,30 @@ describe("client-supplied id on create", () => {
 });
 
 describe("a Postgres schema other than public", () => {
-  it("is a gap for now: any schema but public is refused, not half-honoured", async () => {
+  it("is supported: the setting resolves as given, and the push reconciles that schema", async () => {
     const {
       resolvePostgresSchema,
-      activePostgresSchema,
+      setActivePostgresSchema,
       clearActivePostgresSchema,
     } = await import("../../services/postgres-schema");
+    const { pushInActiveSchema } = await import(
+      "../../pipeline/pg-active-schema-push"
+    );
+    const { pgTable, text, getTableConfig } = await import(
+      "drizzle-orm/pg-core"
+    );
 
-    // The setting is resolved and refused: the schema push cannot yet create
-    // tables outside `public`, and an installation pointed elsewhere would
-    // boot with none of its core tables.
     try {
-      expect(() => resolvePostgresSchema("cms", "postgresql")).toThrow(
-        expect.objectContaining({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" })
-      );
-      expect(resolvePostgresSchema("public", "postgresql")).toBe("public");
-      expect(activePostgresSchema()).toBe("public");
+      expect(resolvePostgresSchema("cms", "postgresql")).toBe("cms");
+      setActivePostgresSchema("cms");
+      const posts = pgTable("posts", { id: text("id").primaryKey() });
+      const seen: Array<{ schema: string; table: string | undefined }> = [];
+      await pushInActiveSchema({ posts }, schema => {
+        seen.push({ schema, table: getTableConfig(posts).schema });
+        return Promise.resolve({ sqlStatements: [], hints: [] });
+      });
+      // drizzle-kit is asked about `cms`, with the desired table placed there.
+      expect(seen).toEqual([{ schema: "cms", table: "cms" }]);
     } finally {
       clearActivePostgresSchema();
     }

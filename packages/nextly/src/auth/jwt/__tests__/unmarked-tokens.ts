@@ -2,12 +2,12 @@
  * Tokens as this package signed them before a token's header named its
  * purpose: a protected header carrying the algorithm alone, with no `typ`.
  *
- * Nothing in the package mints one any more, but tokens minted that way are
- * still in circulation until they expire, and the verifier accepts an absent
- * header `typ` for them until the allowance ends. Tests that ask how a reader
- * treats one need a faithful copy of the old signer, and it lives here once so
- * every such test presents the same shape: the claims as given, plus the
- * `iat`, `exp` and `jti` the old signer always set.
+ * Nothing in the package mints one any more, and tokens minted that way no
+ * longer verify anywhere: the release that required the header stopped
+ * accepting one. Tests that ask how a reader treats one — every refusal
+ * among them — still need a faithful copy of the old signer, and it lives
+ * here once so every such test presents the same shape: the claims as given,
+ * plus the `iat`, `exp` and `jti` the old signer always set.
  *
  * Everything that decides what those tokens look like is written out here
  * rather than imported from the current code: the algorithm, the key the

@@ -7,7 +7,12 @@
     // would refuse them (TS6059).
     "rootDir": "..",
     "types": ["node"],
-    "target": "ES2020",
+    // A field declared without an initializer is a type, not an assignment.
+    // The bundler reads this, and the Lexical node classes rely on it: they
+    // declare `__buttons` and the like and set them in the constructor after
+    // `super()`, where define semantics would first reset them to `undefined`.
+    // It is what this package has always shipped, set by its old ES2020 target.
+    "useDefineForClassFields": false,
     "emitDeclarationOnly": false,
     "outDir": "dist",
     "paths": {
@@ -37,9 +42,40 @@
       "nextly/reserved-filter-keys": [
         "../nextly/src/domains/collections/query/reserved-filter-keys.ts"
       ],
+      // Same reason: the one deprecation notice, said once per process.
+      "nextly/deprecation-notice": [
+        "../nextly/src/shared/lib/deprecation-notice.ts"
+      ],
       // Same reason: the kinds and keys Needs attention's answer is written in.
+      "nextly/admin-root-exports": [
+        "../nextly/src/plugins/codegen/admin-root-exports.ts"
+      ],
       "nextly/attention-keys": [
         "../nextly/src/domains/widgets/attention-keys.ts"
+      ],
+      // Same reason: a card's body height and the rows it holds, the one
+      // formula the frame draws by and a widget's load counts by.
+      "nextly/card-geometry": [
+        "../nextly/src/domains/widgets/card-geometry.ts"
+      ],
+      // Same reason: the one humaniser of a field's key, which the server's
+      // `describe` read names fields by too. Internal to core and the admin.
+      "nextly/field-label": ["../nextly/src/collections/fields/field-label.ts"],
+      // Same reason: where the admin may send a browser after sign-in, the
+      // rule the server holds a sign-in's destination to as well. Internal
+      // to core and the admin.
+      "nextly/admin-path": [
+        "../nextly/src/auth/redirect/sanitize-admin-path.ts"
+      ],
+      // Same reason: which kind of file a MIME type is, which the server's
+      // library query narrows by too. Internal to core and the admin.
+      "nextly/media-categories": [
+        "../nextly/src/domains/media/media-categories.ts"
+      ],
+      // Same reason: the data each of core's declared cards answers, typed at
+      // both ends. Internal to core and the admin.
+      "nextly/core-widget-data": [
+        "../nextly/src/domains/widgets/core-widgets/data.ts"
       ],
       "@admin/*": ["./src/*"]
     }

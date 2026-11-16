@@ -1,62 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as publicSurface from "./component-registry";
 
 import {
-  autoRegisterPluginComponents,
   clearRegistry,
+  getComponent,
   hasComponent,
   registerComponent,
-  registerKnownPlugin,
-  resetAutoRegistration,
   unregisterComponent,
 } from "./component-registry";
 import { registerCoreComponent } from "./component-registry-internal";
-
-describe("autoRegisterPluginComponents — per-module guard", () => {
-  beforeEach(() => {
-    resetAutoRegistration();
-  });
-
-  it("attempts a NEW module requested after the first call (P5 run-once gap fixed)", async () => {
-    const regA = vi.fn(async () => {});
-    const regB = vi.fn(async () => {});
-    registerKnownPlugin("@acme/a", regA);
-    registerKnownPlugin("@acme/b", regB);
-
-    // First call only references module a.
-    await autoRegisterPluginComponents(["@acme/a/admin#X"]);
-    expect(regA).toHaveBeenCalledTimes(1);
-    expect(regB).toHaveBeenCalledTimes(0);
-
-    // Second call references a (already attempted) + b (new). b must be attempted.
-    await autoRegisterPluginComponents(["@acme/a/admin#X2", "@acme/b/admin#Y"]);
-    expect(regB).toHaveBeenCalledTimes(1);
-    // a is NOT re-attempted (each module at most once → no import churn).
-    expect(regA).toHaveBeenCalledTimes(1);
-  });
-
-  it("resets the per-module set so modules can be attempted again", async () => {
-    const regA = vi.fn(async () => {});
-    registerKnownPlugin("@acme/a", regA);
-
-    await autoRegisterPluginComponents(["@acme/a/admin#X"]);
-    expect(regA).toHaveBeenCalledTimes(1);
-
-    resetAutoRegistration();
-    await autoRegisterPluginComponents(["@acme/a/admin#X"]);
-    expect(regA).toHaveBeenCalledTimes(2);
-  });
-
-  it("ignores paths without a module hash and empty input", async () => {
-    const regA = vi.fn(async () => {});
-    registerKnownPlugin("@acme/a", regA);
-
-    await autoRegisterPluginComponents([]);
-    await autoRegisterPluginComponents(["no-hash-path"]);
-    expect(regA).toHaveBeenCalledTimes(0);
-  });
-});
 
 describe("the `core#` namespace is reserved for core's own cards", () => {
   const Card = () => null;
@@ -167,5 +120,33 @@ describe("bulk clearing cannot take core's components with it", () => {
     clearRegistry();
 
     expect(hasComponent("@acme/p/admin#Card")).toBe(false);
+  });
+});
+
+describe("a path nothing registered", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("is named in a warning in development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(getComponent("@acme/missing/admin#Gone")).toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      '"@acme/missing/admin#Gone"'
+    );
+  });
+
+  it("is not warned about in production, where the caller's fallback is all a visitor sees", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(getComponent("@acme/missing/admin#Gone")).toBeUndefined();
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });

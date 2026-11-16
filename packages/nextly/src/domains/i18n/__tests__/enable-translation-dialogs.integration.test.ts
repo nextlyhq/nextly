@@ -8,6 +8,7 @@
  * moving the values there as well left the enable's own move adding columns the companion already
  * had, with the main columns gone.
  */
+import { getColumns } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
@@ -180,7 +181,7 @@ describeEachDialect(
             current.getService("singleEntryService");
           const written = await singles.update(
             "hero",
-            { heading: "Hello", views: 7 },
+            { heading: "Hello", views: 7, _overwrite: true },
             { overrideAccess: true }
           );
           expect(written.success, JSON.stringify(written)).toBe(true);
@@ -265,6 +266,65 @@ describeEachDialect(
         expect(await localizedIn(registry, slug)).toBe(true);
       }
     );
+
+    // A Draft/Published entity turned translatable publishes each language on its own, so the
+    // per-language table this process registers carries `_status` from the save that turned it on:
+    // registered as the entity was before the save, it would lack it until a restart.
+    it("registers a Draft/Published entity's per-language table with its status when a dialog turns translation on", async () => {
+      const handler = current.getService(
+        "collectionsHandler"
+      ) as unknown as CollectionsHandler;
+      const made = await handler.createCollection({
+        name: "posts",
+        label: "Post",
+        status: true,
+        fields: FIELDS,
+      });
+      expect(made.success, JSON.stringify(made)).toBe(true);
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "hero", label: "Hero", status: true, fields: FIELDS }
+      );
+
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: FIELDS,
+          confirmed: true,
+          localized: true,
+          schemaVersion: await schemaVersionOf("dynamic_collections", "posts"),
+        }
+      );
+      await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields: FIELDS,
+          confirmed: true,
+          localized: true,
+          schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+        }
+      );
+
+      const registry = current.getService("schemaRegistry" as never) as {
+        getTable(name: string): unknown;
+      };
+      for (const table of ["dc_posts_locales", "single_hero_locales"]) {
+        // The table is on disk with the column, so a registration without it is what fails here.
+        expect(await columnsOf(table), table).toContain("_status");
+        const registered = registry.getTable(table);
+        expect(registered, table).toBeDefined();
+        expect(
+          Object.values(getColumns(registered as never)).map(
+            column => (column as { name: string }).name
+          ),
+          table
+        ).toContain("_status");
+      }
+    });
 
     it("finishes, on the next save, an enable a dialog left half-applied", async () => {
       // The state a dialog enable left before this was fixed: the schema apply moved the values to

@@ -68,6 +68,8 @@ async function documentWithRules(dialect: TestDialect) {
     collections: [
       defineCollection({
         slug: "posts",
+        // Kept with working drafts, which a restore writes.
+        status: true,
         versions: true,
         access: { read: () => true, update: () => true, create: () => true },
         fields: [
@@ -86,7 +88,12 @@ async function documentWithRules(dialect: TestDialect) {
   const id = (created.data as { id: string }).id;
   await handler.updateEntry(
     { collectionName: "posts", entryId: id, overrideAccess: true },
-    { title: "T2", guarded: "G-2", banner: { heading: "H2", secret: "S-2" } }
+    {
+      title: "T2",
+      guarded: "G-2",
+      banner: { heading: "H2", secret: "S-2" },
+      _overwrite: true,
+    }
   );
   return id;
 }

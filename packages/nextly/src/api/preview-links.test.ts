@@ -11,7 +11,7 @@ import { NextlyError } from "../errors/nextly-error";
 
 vi.mock("./route-auth", () => ({
   requireRouteCollectionAccess: vi.fn(),
-  requireRoutePermission: vi.fn(),
+  requireRouteAnyPermission: vi.fn(),
 }));
 
 const {
@@ -52,6 +52,12 @@ const localizedSingles = new Set<string>();
  * — which every other Single test would otherwise trip over.
  */
 const statusSingles = new Set<string>();
+
+/**
+ * Each Single's fields where a test names them; otherwise one translatable text field, so a
+ * Single the setting keeps per language has a value to keep.
+ */
+const singleFields = new Map<string, { name: string; type: string }[]>();
 
 vi.mock("../init", () => ({
   // Carries findSingle, because the Single mint path reads the document through
@@ -95,6 +101,7 @@ vi.mock("../di", () => ({
       Promise.resolve({
         localized: localizedSingles.has(slug),
         status: statusSingles.has(slug),
+        fields: singleFields.get(slug) ?? [{ name: "heading", type: "text" }],
       }),
   })),
 }));
@@ -137,10 +144,14 @@ vi.mock("../lib/env", () => ({
 import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
 import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../domains/i18n/per-language-storage";
 
 import {
   requireRouteCollectionAccess,
-  requireRoutePermission,
+  requireRouteAnyPermission,
 } from "./route-auth";
 
 import { mintPreviewLink, revokePreviewLinks } from "./preview-links";
@@ -172,6 +183,7 @@ beforeEach(() => {
   // correct for the singles that genuinely have one document.
   localizedSingles.clear();
   statusSingles.clear();
+  singleFields.clear();
   // The default: the caller can see the entry they named AND may edit it, so
   // the draft the token hands out is one they could already open. Tests about
   // the entry gate override whichever half they are about.
@@ -195,7 +207,7 @@ beforeEach(() => {
     // question than the caller's own read would.
     claims: { tenant: "acme", tier: "restricted" },
   });
-  (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+  (requireRouteAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValue({
     userId: "admin-1",
     permissions: [],
     roles: [],
@@ -401,6 +413,36 @@ describe("mintPreviewLink for a Single", () => {
    * very grant the refusal exists to withhold.
    */
   describe("a localized single with no locale named", () => {
+    // Under `experimental.perLanguageStorage` an untranslated Single keeps its values per
+    // language too, so a token with no locale would cover each of them.
+    it("refuses an untranslated Single the site keeps per language under the setting", async () => {
+      statusSingles.add("homepage");
+      setPerLanguageStorage(true);
+      try {
+        const response = await mintPreviewLink(post({ single: "homepage" }));
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(await json(response))).toContain(
+          "needs a locale"
+        );
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    });
+
+    // The setting keeps TRANSLATABLE values per language: an untranslated Single whose every field
+    // is shared is the same in every language, so a token with no locale covers nothing more.
+    it("mints for an untranslated Single with no translatable field, under the setting", async () => {
+      statusSingles.add("homepage");
+      singleFields.set("homepage", [{ name: "views", type: "number" }]);
+      setPerLanguageStorage(true);
+      try {
+        const response = await mintPreviewLink(post({ single: "homepage" }));
+        expect(response.status).toBeLessThan(300);
+      } finally {
+        _resetPerLanguageStorage();
+      }
+    });
+
     it("refuses rather than minting a token covering every translation", async () => {
       localizedSingles.add("homepage");
 
@@ -1124,6 +1166,9 @@ describe("mintPreviewLink", () => {
     // 403 exactly, not merely >= 400: an unrecognised failure renders as 500,
     // and a range assertion cannot tell a refusal from a crash.
     expect(response.status).toBe(403);
+    expect(await response.clone().json()).toMatchObject({
+      error: { message: "Only a signed-in person can manage preview links." },
+    });
     // Refused BEFORE the authorization probe, so a rejected request performs no
     // reads on the caller's behalf — and before any token exists, since a token
     // that was signed and then discarded is still a token.
@@ -1211,6 +1256,19 @@ describe("mintPreviewLink", () => {
       generation: 5,
     });
     expect(afterRevoke.valid).toBe(false);
+  });
+
+  it("reads the site address it links to from the row, never a kept copy", async () => {
+    // The settings row is followed elsewhere, and a copy may be up to the
+    // read interval old. Where a link sends its holder is part of what the
+    // link grants, so an address saved through another instance a moment ago
+    // has to apply to a link minted now.
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(getSettings).toHaveBeenCalled();
+    for (const call of getSettings.mock.calls) {
+      expect(call).toEqual([{ fresh: true }]);
+    }
   });
 
   it("scopes the token to the entry that was asked for", async () => {
@@ -1394,25 +1452,23 @@ describe("mintPreviewLink", () => {
 });
 
 describe("revokePreviewLinks", () => {
-  it("gates on manage settings, not on a collection", async () => {
+  it("gates on updating settings, not on a collection", async () => {
     // The generation is site-wide, so one editor revoking would otherwise end
     // every other editor's outstanding links.
     await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
     );
 
-    expect(requireRoutePermission).toHaveBeenCalledWith(
-      expect.anything(),
-      "manage",
-      "settings"
-    );
+    expect(requireRouteAnyPermission).toHaveBeenCalledWith(expect.anything(), [
+      { action: "update", resource: "settings" },
+    ]);
     expect(requireRouteCollectionAccess).not.toHaveBeenCalled();
   });
 
   it("does not revoke when the gate refuses", async () => {
-    (requireRoutePermission as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      NextlyError.forbidden()
-    );
+    (
+      requireRouteAnyPermission as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(NextlyError.forbidden());
 
     const response = await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
@@ -1439,7 +1495,7 @@ describe("revokePreviewLinks", () => {
     expect(response.status).toBe(400);
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
-    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(requireRouteAnyPermission).not.toHaveBeenCalled();
   });
 
   it("judges revoking a document's links in every language, whatever language the request names", async () => {
@@ -1459,7 +1515,7 @@ describe("revokePreviewLinks", () => {
     );
   });
 
-  it("revokes one document's links behind the sharer's rule, not manage settings", async () => {
+  it("revokes one document's links behind the sharer's rule, not a settings grant", async () => {
     const response = await revokePreviewLinks(
       post(
         { collection: "pages", entryId: "7" },
@@ -1472,7 +1528,7 @@ describe("revokePreviewLinks", () => {
       "update",
       "pages"
     );
-    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(requireRouteAnyPermission).not.toHaveBeenCalled();
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).toHaveBeenCalledWith(
       { kind: "entry", collection: "pages", entryId: "7" },
@@ -1640,7 +1696,7 @@ describe("the audit trail a preview link leaves", () => {
    * where the key is what is under suspicion.
    */
   it("names the KEY when an api key revokes, not just its owner", async () => {
-    (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (requireRouteAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValue({
       userId: "owner-1",
       permissions: [],
       roles: [],

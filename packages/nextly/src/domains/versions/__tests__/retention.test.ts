@@ -275,6 +275,24 @@ describe("selectVersionsToPrune — named versions and restore lineage", () => {
     expect(selectVersionsToPrune(input, 2)).toEqual(["v3", "v1"]);
   });
 
+  it("keeps every version a save's restored fields came from, but not the save's row itself", () => {
+    // A save carried fields restored from two versions: "Restored from" names
+    // both, so both outlive the cap. The row that records them is not pinned:
+    // its sources are named by the client's save, and pinning every such row
+    // would let a caller keep each new version past the cap by resending them.
+    const input = [
+      version(7),
+      version(6),
+      version(5, { fieldSources: { title: 4, body: 2 } }),
+      version(4),
+      version(3),
+      version(2),
+      version(1),
+    ];
+
+    expect(selectVersionsToPrune(input, 2)).toEqual(["v5", "v3", "v1"]);
+  });
+
   it("ignores a restore source that is no longer in the history", () => {
     const input = [version(3), version(2, { sourceVersionNo: 1 })];
 

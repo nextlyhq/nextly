@@ -14,12 +14,13 @@ everything in it either produces or reads.
 > **Every export of this package is additionally `@experimental`** and carries no
 > compatibility guarantee even within alpha.
 
-The editor is landing in slices. What
-ships today is the editor SHELL — the rail, the switched left panel, the canvas
-slot, the inspector and the bars around them — the frame geometry that maps
-between the canvas frame and the host page, the op store that every edit is
-expressed in, and the package name constant. The canvas is still to come. See
-[Public surface](#public-surface).
+It ships the whole editor: the shell (the rail, the switched left panel, the
+canvas, the inspector and the bars around them), the canvas itself, which draws
+the page inside a frame at the chosen breakpoint's width, the layers panel, the
+inserters, the block and style inspectors, the frame geometry that maps between
+the canvas frame and the host page, the op store that every edit is expressed
+in, and the package name constant. `@nextlyhq/plugin-page-builder` mounts it in
+the admin. See [Public surface](#public-surface).
 
 The package was created ahead of any of it so its name could be claimed on npm:
 trusted publishing cannot perform a package's first publish, and the bootstrap
@@ -33,11 +34,12 @@ re-implements nothing downstream of the document model. Read-path preparation,
 condition gating and slot pruning are consumed from the engine's own entry
 points, never reproduced here.
 
-That rule is not stylistic. `plugin-page-builder` carries a second renderer of
-its own, and the two disagree about condition gating in opposite directions: one
-fails closed, the other does not evaluate conditions at all. Sharing a predicate
-would not have prevented that, because sharing a predicate does not share the
-decision to call it. Only sharing the entry point does.
+There is one renderer. The canvas draws each region with `PageRenderer` from
+`@nextlyhq/blocks-react` (`src/canvas-regions.tsx`), and the published page
+draws with the same component, so what an author sees and what a visitor gets
+come from one code path. Sharing a predicate would not be enough to keep two
+renderers in step, because sharing a predicate does not share the decision to
+call it. Only sharing the entry point does.
 
 ## The layering contract
 
@@ -261,6 +263,29 @@ acceptance suite adapts these rather than restating them: a browser harness
 carrying its own copy certifies its own copy, and would keep passing through
 exactly the correction it exists to catch.
 
+### The frame contract for block code
+
+Block code that measures itself, listens to the window or reads the viewport
+reaches the document and window through the node it renders
+(`ownerDocument`, `defaultView`) or through `useBlockEnvironment()` from
+`@nextlyhq/blocks-react/environment`, never through the globals. `Canvas`
+provides that hook with its root's own document and window, so once the canvas
+renders inside a frame, block code reads the frame's without changing. A block
+reading the globals still renders; only its measurements and listeners target
+the admin page instead.
+
+### Custom inspectors
+
+`InspectorPanel` takes `inspectors`, a `BlockInspectorResolver` the host
+supplies, since this package reaches no component registry. A block whose
+definition names `editor.component` and resolves gets that component in place
+of its generated content controls, given `BlockInspectorProps`
+(`{ node, props, commit, readOnly }`). Its identity fields, the Advanced tab
+and the Style tab stay generated. `commit` is the generated controls' own write
+path, refused while the block is locked, and inside a `contentOnly` area for
+any prop not declared `role: "content"`, whatever the component does. A path the host cannot resolve, or a component
+that throws, leaves the block on its generated controls.
+
 ### The op store
 
 `applyOp(document, op, limits?)` — apply one edit to a `BlockDocument`,
@@ -341,9 +366,11 @@ missing build wearing a different error message.
 `@nextlyhq/ui` declares it as one: an icon set resolved once by the host rather
 than bundled per package.
 
-React 19, matching the renderer it draws with. `@nextlyhq/blocks-react` requires
-`react: ^19.0.0`, and it is a dependency here rather than a peer, so a React 18
-host would hit an unsatisfiable peer one level down.
+React and React DOM in the supported range listed in
+[Requirements](https://nextlyhq.com/docs/getting-started/installation#requirements),
+matching the renderer it draws with. `@nextlyhq/blocks-react` requires the same
+range, and it is a dependency here rather than a peer, so a host on an older
+React would hit an unsatisfiable peer one level down.
 
 ## Install
 

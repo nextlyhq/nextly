@@ -123,4 +123,26 @@ describe("countDirtyFields", () => {
     ];
     expect(countDirtyFields(original, current)).toBe(1);
   });
+
+  // Every setting the settings panel writes must move the count that enables
+  // Save; a setting the signature leaves out stays in the draft unsaved.
+  it("counts a change to the blocks a blocks field accepts", () => {
+    const original = [
+      baseField({ type: "blocks", blocks: { allow: ["core/*"] } }),
+    ];
+    const current = [
+      baseField({ type: "blocks", blocks: { allow: ["core/*", "acme/hero"] } }),
+    ];
+    expect(countDirtyFields(original, current)).toBe(1);
+  });
+
+  it("counts a change to a plugin field type's own options", () => {
+    const original = [
+      baseField({ type: "star-rating", pluginOptions: { max: 5 } }),
+    ];
+    const current = [
+      baseField({ type: "star-rating", pluginOptions: { max: 10 } }),
+    ];
+    expect(countDirtyFields(original, current)).toBe(1);
+  });
 });

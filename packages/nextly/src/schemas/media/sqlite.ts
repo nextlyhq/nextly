@@ -1,7 +1,7 @@
 /**
  * Media tables — SQLite.
  *
- * Tables: media, mediaFolders, imageSizes.
+ * Tables: media, mediaFolders.
  * Moved verbatim from packages/nextly/src/database/schema/sqlite.ts as part of
  * Plan A schemas consolidation. No behavior change.
  *
@@ -14,13 +14,7 @@
  */
 
 import type { BuildColumns } from "drizzle-orm";
-import {
-  sqliteTable,
-  integer,
-  text,
-  index,
-  uniqueIndex,
-} from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
 import { MEDIA_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
 import { sqliteTimestamp } from "../_internal/sqlite-timestamp";
@@ -51,9 +45,6 @@ export function mediaColumns() {
     // Crop point for smart image cropping (percentage from top-left, 0-100)
     focalX: integer("focal_x"),
     focalY: integer("focal_y"),
-
-    // Generated image size variants (stored as JSON text)
-    sizes: text("sizes"),
 
     // Metadata
     altText: text("alt_text"),
@@ -134,35 +125,4 @@ export const mediaFolders = sqliteTable(
     index("media_folders_created_by_idx").on(t.createdBy),
     index("media_folders_created_at_idx").on(t.createdAt),
   ]
-);
-
-/**
- * Image Sizes table for named image size configurations (SQLite).
- * See postgres.ts for detailed documentation.
- */
-export const imageSizes = sqliteTable(
-  "image_sizes",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => crypto.randomUUID()),
-
-    name: text("name").notNull(),
-    width: integer("width"),
-    height: integer("height"),
-    fit: text("fit").notNull().default("inside"),
-    quality: integer("quality").notNull().default(80),
-    format: text("format").notNull().default("auto"),
-    isDefault: integer("is_default", { mode: "boolean" })
-      .notNull()
-      .default(true),
-    sortOrder: integer("sort_order").notNull().default(0),
-    createdAt: integer("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: integer("updated_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );

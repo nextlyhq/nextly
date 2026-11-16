@@ -28,7 +28,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
-import { isLocked } from "./locking";
+import { lockBlockingEdit } from "./locking";
 
 /** A node and the values on it a given surface may edit. */
 export interface InlineProps {
@@ -81,7 +81,10 @@ function editableNode(
   nodeId: string
 ): { node: BlockNode; props: Partial<Record<string, PropSchema>> } | null {
   const node = findNode(document.nodes, nodeId);
-  if (node === undefined || isLocked(node)) return null;
+  // Locked itself or inside a locked block: the lock covers its subtree.
+  if (node === undefined || lockBlockingEdit(document, nodeId) !== undefined) {
+    return null;
+  }
   const definition = getBlock(node.type);
   if (definition === undefined) return null;
   return { node, props: definition.props ?? {} };

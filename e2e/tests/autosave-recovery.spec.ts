@@ -21,6 +21,10 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.siteSettings] });
 
 /** The autosave write, which is a PUT to a named sub-resource of the entry. */
 const AUTOSAVE_WRITE =
@@ -123,8 +127,9 @@ test.describe("autosave recovery", () => {
    * clearing the row on dismiss looks like tidying up -- and it is invisible to
    * any test that does not reload.
    */
-  test("dismissing the offer does not discard the recorded work", async ({
+  test("dismissing the offer puts it off for this tab and does not discard the recorded work", async ({
     page,
+    context,
   }) => {
     await createSavedPost(page, `Dismiss ${Date.now()}`);
 
@@ -145,11 +150,26 @@ test.describe("autosave recovery", () => {
     await page.getByRole("button", { name: /dismiss recovery offer/i }).click();
     await expect(offer).toBeHidden();
 
+    // "Not now" holds for this tab: the same recovery point is not offered on
+    // every load of the editor.
+    // Anchored on the recovery read, so "hidden" is asserted after the editor
+    // knows of the recovery point, not before it has asked.
+    const url = page.url();
+    const read = page.waitForResponse(
+      r => AUTOSAVE_WRITE.test(r.url()) && r.request().method() === "GET",
+      { timeout: 30_000 }
+    );
     await page.reload();
+    expect((await read).status()).toBeLessThan(400);
     await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/unsaved changes from/i)).toBeHidden();
 
+    // A new tab is a new session, and the work is still there to offer.
+    const other = await context.newPage();
+    await other.goto(url);
+    await expect(other.locator("main")).toBeVisible({ timeout: 30_000 });
     await expect(
-      page.getByText(/unsaved changes from/i),
+      other.getByText(/unsaved changes from/i),
       "a dismissal must not delete the stored recovery point"
     ).toBeVisible({ timeout: 15_000 });
   });

@@ -17,7 +17,12 @@
  * @module api/user-fields-detail
  */
 
-import { container } from "../di";
+import { container, getService } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
+import { withSchemaChangeExcluded } from "../domains/schema/services/schema-change-exclusion";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
@@ -54,8 +59,7 @@ async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionServi
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_READ_POLICY.settings.read.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -90,8 +94,7 @@ export const GET = withErrorHandler(
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "update", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.userFields.update.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -115,7 +118,18 @@ export const PATCH = withErrorHandler(
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
     const service = await getUserFieldDefinitionService();
-    const field = await service.updateField(id, updateData);
+    // The service's read of the stored definition and its row write hold the schema lock together,
+    // refused at once while a migration holds it. This route writes the definition row alone, so
+    // it issues no DDL and must not create the lock table on a role without DDL rights.
+    const field = await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `update user field "${id}"`,
+        issuesDdl: false,
+      },
+      () => service.updateField(id, updateData)
+    );
 
     return respondMutation("User field updated.", field);
   }
@@ -140,14 +154,24 @@ export const PATCH = withErrorHandler(
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "delete", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.userFields.delete.anyOf,
     ]);
 
     const { id } = await context.params;
     const service = await getUserFieldDefinitionService();
 
-    await service.deleteField(id);
+    // The service's read of the stored definition and its removal hold the schema lock together,
+    // refused at once while a migration holds it. It issues no DDL, so it must not create the lock
+    // table on a role without DDL rights.
+    await withSchemaChangeExcluded(
+      {
+        adapter: getService("adapter"),
+        logger: getService("logger"),
+        label: `delete user field "${id}"`,
+        issuesDdl: false,
+      },
+      () => service.deleteField(id)
+    );
 
     // Service returns void. Echo the deleted id (named `fieldId` to
     // match the dispatcher route's wire shape) so the admin can prune

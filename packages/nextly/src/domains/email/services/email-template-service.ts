@@ -25,14 +25,15 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, isNull, sql, type Column } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
-import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
-import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
-import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
+import type { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
+import type { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
+import type { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import type {
   EmailTemplateInsert,
   EmailTemplateRecord,
@@ -43,21 +44,29 @@ import { BaseService } from "../../../shared/base-service";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { MetaService } from "../../meta";
+import type { MetaEntry } from "../../meta/services/meta-service";
 import {
   BRAND_BINDING,
   EMAIL_SAFE_FONTS,
   resolveBrand,
+  STARTING_BRAND,
   type BrandOverview,
   type BrandReach,
   type BrandSettings,
   type BrandSettingsUpdate,
 } from "../brand-settings";
+import type { DraftPreview } from "../draft-preview-request";
 import {
   changedTemplateFields,
   recordTemplateActivity,
   type EmailTemplateActivityInput,
 } from "../template-activity";
-import { checkTemplateEnvelope, type SavedCopies } from "../template-envelope";
+import {
+  checkTemplateEnvelope,
+  renderTemplateFrom,
+  usesVariables,
+  type SavedCopies,
+} from "../template-envelope";
 import {
   applyOwnerChoices,
   ownerChanges,
@@ -77,6 +86,7 @@ import {
   ownerOf,
   ownershipFromConfig,
   sameStoredValue,
+  sameDetails,
   sameVersion,
   storedOwner,
   versionDigest,
@@ -87,6 +97,10 @@ import {
   type RegistryInput,
   type TemplateOwnerRegistry,
 } from "../template-ownership";
+import {
+  declarationSubstance,
+  withOwnerPresentation,
+} from "../template-variables";
 import {
   SNAPSHOT_MAX_AGE_MS,
   transactionOpenInFlow,
@@ -108,13 +122,16 @@ import {
   templateReadsVariable,
 } from "./liquid-compat";
 import { parseLiquid, writesOutput } from "./liquid-engine";
+import { displayNameAndMailbox } from "./recipients";
 import {
   DEFAULT_APP_NAME,
   fromBlocks,
   renderTemplate,
+  renderTemplateParts,
   type RenderedTemplate,
   type TemplateFields,
 } from "./render-template";
+import { htmlToText } from "./template-engine";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -135,6 +152,12 @@ import {
  */
 const ENGINE_KEY_PREFIX = "email.templates.liquid.";
 const LIQUID_ADOPTED_KEY = `${ENGINE_KEY_PREFIX}adoptedAt`;
+
+/** The engine marks as one read of the meta table found them: key to stored value, and when. */
+interface EngineMarks {
+  values: Map<string, unknown>;
+  readAt: number;
+}
 
 const keptKey = (id: string) => `${ENGINE_KEY_PREFIX}kept.${id}`;
 /**
@@ -420,6 +443,26 @@ async function chooseLayout(
   return own?.kind === "layout" ? own : defaultLayout();
 }
 
+/**
+ * Brand settings with an unsaved change over them, for one preview: each
+ * setting the change names takes its value, or its starting value where the
+ * change says null. A render that reads no settings stays without them.
+ */
+function withBrandChange(
+  brand: BrandSettings | undefined,
+  change: BrandSettingsUpdate | undefined
+): BrandSettings | undefined {
+  if (!brand || !change) return brand;
+  const changed: BrandSettings = { ...brand };
+  for (const key of Object.keys(change) as Array<keyof BrandSettings>) {
+    const value = change[key];
+    if (value === undefined) continue;
+    (changed as Record<keyof BrandSettings, unknown>)[key] =
+      value === null ? structuredClone(STARTING_BRAND[key]) : value;
+  }
+  return changed;
+}
+
 /** Whether any of a template's own fields reads `brand`. */
 function textReadsBrand(
   template: Pick<
@@ -476,6 +519,22 @@ type EmailTemplatesTable =
   | typeof emailTemplatesMysql
   | typeof emailTemplatesSqlite;
 
+/**
+ * The From line a reader would see, for a preview. One whose address uses a
+ * variable, which a save refuses, comes back as written: the preview shows
+ * the draft, and the save says what is wrong with it. Any other failure is
+ * the preview's, as it would be the send's.
+ */
+function previewFrom(
+  fromOverride: string,
+  data: Record<string, unknown>
+): string {
+  if (usesVariables(displayNameAndMailbox(fromOverride).email)) {
+    return fromOverride;
+  }
+  return renderTemplateFrom(fromOverride, data, "preview");
+}
+
 export class EmailTemplateService extends BaseService {
   private emailTemplates: EmailTemplatesTable;
 
@@ -520,6 +579,15 @@ export class EmailTemplateService extends BaseService {
   private engineGeneration = 0;
   /** The reload of an expired copy in flight, which sends arriving meanwhile join. */
   private engineReload: Promise<void> | null = null;
+  /**
+   * The engine marks, key to value, as one read of the meta table found them
+   * when a boot's reconciliation began, kept current by this instance's own
+   * writes while it runs (`markEngine`, `unmarkEngine`). Every template the
+   * boot settles decides from it, where each used to read whether Liquid is
+   * adopted and then its own mark. Null outside a reconciliation, and where
+   * the meta table cannot be read whole: each decision then reads its key.
+   */
+  private reconcileMarks: EngineMarks | null = null;
   /** The site's brand settings, which every layout reads as `brand`. */
   private readonly brandStore: EmailBrandStore;
 
@@ -541,13 +609,11 @@ export class EmailTemplateService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.emailTemplates = emailTemplatesPg;
-        break;
       case "mysql":
-        this.emailTemplates = emailTemplatesMysql;
-        break;
       case "sqlite":
-        this.emailTemplates = emailTemplatesSqlite;
+        // The loaded dialect's own table, so only that dialect's file is
+        // imported; `createAdapter` loads it.
+        this.emailTemplates = loadedDialect(this.dialect).tables.emailTemplates;
         break;
       default:
         // `this.dialect` is narrowed to `never` after the exhaustive switch;
@@ -575,7 +641,8 @@ export class EmailTemplateService extends BaseService {
       codeTemplates: input.codeTemplates,
       complete: true,
     };
-    const { registry, conflicts, refused } = buildTemplateOwnerRegistry(built);
+    const { registry, conflicts, refused, unread } =
+      buildTemplateOwnerRegistry(built);
     this.registry = registry;
     for (const refusal of refused) {
       this.logger.error(
@@ -584,6 +651,16 @@ export class EmailTemplateService extends BaseService {
           slug: refusal.slug,
           plugin: refusal.plugin,
           engine: String(refusal.engine),
+        }
+      );
+    }
+    for (const declarations of unread) {
+      this.logger.warn(
+        "Read a plugin's email template variables without their type, label and example: they don't parse",
+        {
+          slug: declarations.slug,
+          plugin: declarations.plugin,
+          reason: declarations.reason,
         }
       );
     }
@@ -615,6 +692,15 @@ export class EmailTemplateService extends BaseService {
     const entry = this.registry.owned.get(row.slug);
     return {
       ...columns,
+      // An owned template's declarations carry its owner's current
+      // presentation, overridden or not (see `withOwnerPresentation`).
+      variables:
+        owner.kind === "site"
+          ? columns.variables
+          : withOwnerPresentation(
+              columns.variables ?? null,
+              entry?.defaults.variables
+            ),
       kind: columns.kind ?? "template",
       ...storedFormat(columns),
       description: columns.description ?? null,
@@ -895,6 +981,10 @@ export class EmailTemplateService extends BaseService {
   /** Record an engine-state key, unless it is recorded already. */
   private async markEngine(key: string, value: unknown): Promise<void> {
     await this.meta.insertIfAbsent(key, value);
+    // A mark already recorded keeps its value, as the insert keeps its row.
+    if (this.reconcileMarks?.values.has(key) === false) {
+      this.reconcileMarks.values.set(key, value);
+    }
     this.engineGeneration++;
     this.engineState?.keys.add(key);
     if (key === LIQUID_ADOPTED_KEY && this.engineState) {
@@ -905,6 +995,7 @@ export class EmailTemplateService extends BaseService {
   /** Remove an engine-state key. */
   private async unmarkEngine(key: string): Promise<void> {
     await this.meta.delete(key);
+    this.reconcileMarks?.values.delete(key);
     this.engineGeneration++;
     this.engineState?.keys.delete(key);
   }
@@ -912,23 +1003,80 @@ export class EmailTemplateService extends BaseService {
   /** Read the whole engine state into engineState (at the end of a boot). */
   private async loadEngineState(): Promise<void> {
     const started = this.engineGeneration;
+    const marks = await this.readEngineMarks();
+    if (this.engineGeneration !== started) return;
+    this.useEngineMarks(marks);
+  }
+
+  /**
+   * The engine marks as one read of the meta table finds them, key to value,
+   * or null when there is no meta table, where nothing can be recorded.
+   */
+  private async readEngineMarks(): Promise<EngineMarks | null> {
     const readAt = Date.now();
     let all: Record<string, unknown>;
     try {
       all = await this.meta.getAll();
     } catch (error) {
       if (!isMissingTable(error, this.dialect)) throw error;
-      // Nothing can be recorded without the table, which reads as null.
-      if (this.engineGeneration === started) {
-        this.engineState = { adopted: null, keys: new Set(), readAt };
-      }
+      return null;
+    }
+    const values = new Map(
+      Object.entries(all).filter(([key]) => key.startsWith(ENGINE_KEY_PREFIX))
+    );
+    return { values, readAt };
+  }
+
+  /**
+   * Read the boot's marks again, whole, into the copy it decides from. For a
+   * switch another instance recorded while this boot ran: that instance
+   * wrote the templates it kept before the switch, after this boot read the
+   * marks, so the copy is missing them as well as the switch. Updated in
+   * place, since the same copy becomes the engine state renders answer from.
+   */
+  private async reloadReconcileMarks(): Promise<void> {
+    const held = this.reconcileMarks;
+    if (held === null) return;
+    const fresh = await this.readEngineMarks();
+    if (fresh === null) {
+      // No meta table to read: nothing else can be recorded either.
+      held.values.set(LIQUID_ADOPTED_KEY, true);
       return;
     }
-    const keys = new Set(
-      Object.keys(all).filter(key => key.startsWith(ENGINE_KEY_PREFIX))
-    );
-    if (this.engineGeneration !== started) return;
-    this.engineState = { adopted: keys.has(LIQUID_ADOPTED_KEY), keys, readAt };
+    held.values = fresh.values;
+    held.readAt = fresh.readAt;
+  }
+
+  /**
+   * Take `marks` as the instance's engine state: what renders answer from.
+   * Null, for a database without the meta table, reads as nothing recorded.
+   */
+  private useEngineMarks(marks: EngineMarks | null): void {
+    if (marks === null) {
+      this.engineState = { adopted: null, keys: new Set(), readAt: Date.now() };
+      return;
+    }
+    const keys = new Set(marks.values.keys());
+    this.engineState = {
+      adopted: keys.has(LIQUID_ADOPTED_KEY),
+      keys,
+      readAt: marks.readAt,
+    };
+  }
+
+  /**
+   * An engine mark's stored value, for a decision: from the boot's marks while
+   * it reconciles (`reconcileMarks`), otherwise read from the table.
+   */
+  private async engineMark(key: string): Promise<MetaEntry<string>> {
+    const marks = this.reconcileMarks;
+    if (marks === null) return this.meta.getEntry<string>(key);
+    return marks.values.has(key)
+      ? {
+          present: true,
+          value: (marks.values.get(key) as string | null) ?? null,
+        }
+      : { present: false };
   }
 
   /**
@@ -938,8 +1086,17 @@ export class EmailTemplateService extends BaseService {
   private async liquidAdopted(
     mode: EngineRead = "decide"
   ): Promise<boolean | null> {
+    // A decision made while a boot reconciles reads the boot's marks.
+    if (mode === "decide" && this.reconcileMarks !== null) {
+      return this.reconcileMarks.values.has(LIQUID_ADOPTED_KEY);
+    }
     const state = await this.engineStateFor(mode);
     if (state) return state.adopted;
+    return this.liquidAdoptedInTable();
+  }
+
+  /** Whether the switch to Liquid is recorded in the table itself, or null without one. */
+  private async liquidAdoptedInTable(): Promise<boolean | null> {
     try {
       return (await this.meta.getEntry(LIQUID_ADOPTED_KEY)).present;
     } catch (error) {
@@ -1007,8 +1164,12 @@ export class EmailTemplateService extends BaseService {
     const kept: string[] = [];
     for (const row of rows) {
       // Another instance may have recorded the switch meanwhile and seeded
-      // Liquid templates since; its scan decided, so this one stops.
-      if ((await this.liquidAdopted()) === true) return;
+      // Liquid templates since; its scan decided, so this one stops. Read
+      // from the table, never the boot's marks, which can't show that.
+      if ((await this.liquidAdoptedInTable()) === true) {
+        await this.reloadReconcileMarks();
+        return;
+      }
       if (
         oldEngineReasons(row).length > 0 &&
         !(await this.authoredAsLiquid(row.id))
@@ -1307,7 +1468,9 @@ export class EmailTemplateService extends BaseService {
     };
 
     try {
-      await this.db.insert(this.emailTemplates).values(values);
+      await this.writeTemplateRow(id, db =>
+        db.insert(this.emailTemplates).values(values)
+      );
     } catch (error) {
       // Pattern B: surface unique-violation as DUPLICATE (409) so the admin UI
       // can show a friendly "slug already exists" message; everything else
@@ -1333,6 +1496,54 @@ export class EmailTemplateService extends BaseService {
       actor,
     });
     return created;
+  }
+
+  /**
+   * Whether the media usage table is there to write. An adapter that cannot
+   * say which tables it has (one built by hand around a bare Drizzle handle)
+   * counts as having none, as `transactionOpenInFlow` counts one that cannot
+   * say whether a transaction is open.
+   */
+  private async recordsMediaUsage(): Promise<boolean> {
+    const probe = this.adapter as { tableExists?: unknown };
+    if (typeof probe.tableExists !== "function") return false;
+    // Loaded when a write asks, not with the service.
+    const { mediaUsagePresent } = await import(
+      "../../media/usage/media-usage-store"
+    );
+    return mediaUsagePresent(this.adapter, this.logger);
+  }
+
+  /**
+   * Run a write to one template's row and rewrite the record of which media
+   * items the template uses, on one transaction, so the two commit or roll
+   * back together. Before `nextly migrate` has created the record's table the
+   * write runs alone, as it always did.
+   *
+   * The email services are never handed a caller's transaction, so inside a
+   * flow that has one open the pair opens a transaction of its own, which
+   * joins the caller's on every dialect: the pair then commits or rolls back
+   * with the caller's work, and never leaves the template written and its
+   * record not.
+   */
+  private async writeTemplateRow<T>(
+    templateId: string,
+    write: (db: EmailTemplateService["db"]) => Promise<T>
+  ): Promise<T> {
+    if (!(await this.recordsMediaUsage())) return write(this.db);
+    // Loaded on the first write that records, not with the service.
+    const { recordEmailTemplateUsage } = await import(
+      "../../media/usage/email-template-usage"
+    );
+    return this.adapter.transaction(async tx => {
+      const result = await write(tx.getDrizzle<EmailTemplateService["db"]>());
+      await recordEmailTemplateUsage(
+        tx,
+        templateId,
+        this.adapter.getCapabilities().maxParamsPerQuery
+      );
+      return result;
+    });
   }
 
   /** The stored row by id. */
@@ -1484,12 +1695,14 @@ export class EmailTemplateService extends BaseService {
     }
 
     try {
-      await this.db
-        .update(this.emailTemplates)
-        .set(updateData)
-        // Conditioned on the row as read: an override's base comes from it,
-        // and a save in between must not be overwritten.
-        .where(this.unchanged(existing));
+      await this.writeTemplateRow(id, db =>
+        db
+          .update(this.emailTemplates)
+          .set(updateData)
+          // Conditioned on the row as read: an override's base comes from it,
+          // and a save in between must not be overwritten.
+          .where(this.unchanged(existing))
+      );
     } catch (error) {
       // Default Pattern A: drizzle hands us the raw driver error, so normalise
       // through toDbError(dialect) first to get a DbError; fromDatabaseError
@@ -1553,11 +1766,20 @@ export class EmailTemplateService extends BaseService {
     return (
       converted ||
       rewritten ||
-      [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
-        field =>
-          updateData[field] !== undefined &&
-          !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
-      )
+      [...VERSION_FIELDS, ...DETAIL_FIELDS].some(field => {
+        if (updateData[field] === undefined) return false;
+        // A variable's type, label and example are presentation: changing only
+        // those is not the site saying something different from the owner.
+        return field === "variables"
+          ? !sameStoredValue(
+              declarationSubstance(updateData.variables),
+              declarationSubstance(existing.variables)
+            )
+          : !sameStoredValue(
+              updateData[field] ?? null,
+              existing[field] ?? null
+            );
+      })
     );
   }
 
@@ -1606,9 +1828,9 @@ export class EmailTemplateService extends BaseService {
       });
     }
 
-    await this.db
-      .delete(this.emailTemplates)
-      .where(eq(this.emailTemplates.id, id));
+    await this.writeTemplateRow(id, db =>
+      db.delete(this.emailTemplates).where(eq(this.emailTemplates.id, id))
+    );
     // A deleted template has nothing left to keep on the old engine.
     await this.unmarkEngine(keptKey(id)).catch(() => undefined);
     await this.unmarkEngine(authoredKey(id)).catch(() => undefined);
@@ -2029,16 +2251,18 @@ export class EmailTemplateService extends BaseService {
   ): Promise<void> {
     const format = sitesVersionFormat(blocks, version);
     const afterSave = await this.checkLiquidOnSave(record, version);
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...version,
-        ...format,
-        ...columns,
-        baseDigest,
-        updatedAt: new Date(),
-      })
-      .where(this.unchanged(row));
+    await this.writeTemplateRow(row.id, db =>
+      db
+        .update(this.emailTemplates)
+        .set({
+          ...version,
+          ...format,
+          ...columns,
+          baseDigest,
+          updatedAt: new Date(),
+        })
+        .where(this.unchanged(row))
+    );
     await this.assertWritten(
       row.id,
       version,
@@ -2068,10 +2292,9 @@ export class EmailTemplateService extends BaseService {
     const undoKeep = () =>
       engine.created ? this.unmarkEngine(keptKey(row.id)) : Promise.resolve();
     try {
-      await this.db
-        .update(this.emailTemplates)
-        .set(columns)
-        .where(this.unchanged(row));
+      await this.writeTemplateRow(row.id, db =>
+        db.update(this.emailTemplates).set(columns).where(this.unchanged(row))
+      );
     } catch (error) {
       await undoKeep();
       throw error;
@@ -2108,7 +2331,7 @@ export class EmailTemplateService extends BaseService {
   ): Promise<void> {
     if ((await this.liquidAdopted()) !== true) return;
     const key = keptKey(row.id);
-    const mark = await this.meta.getEntry<string>(key);
+    const mark = await this.engineMark(key);
     if (this.keepsOwnersVersion(entry)) {
       if (!mark.present) await this.markEngine(key, ownersMark(entry));
       return;
@@ -2205,9 +2428,13 @@ export class EmailTemplateService extends BaseService {
    */
   async previewDraft(
     draft: TemplateFields &
-      Pick<EmailTemplateRecord, "layoutId"> & { id?: string },
-    sampleData: Record<string, unknown>
-  ): Promise<RenderedTemplate> {
+      Pick<EmailTemplateRecord, "layoutId"> & {
+        id?: string;
+        fromOverride?: string | null;
+      },
+    sampleData: Record<string, unknown>,
+    brandChange?: BrandSettingsUpdate
+  ): Promise<DraftPreview> {
     const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
     // A draft of a saved template previews with that template's engine unless
     // the caller chose one, so a kept template's draft looks as it would send.
@@ -2216,18 +2443,33 @@ export class EmailTemplateService extends BaseService {
       (draft.id
         ? await this.keptOnOldEngine({ ...draft, id: draft.id }, "render")
         : false);
-    return renderTemplate(
+    const options = {
+      appName: this.appName,
+      brand: withBrandChange(
+        await this.brandFor({ ...draft, legacy }, layout),
+        brandChange
+      ),
+    };
+    const { rendered, preheaderHtml } = renderTemplateParts(
       { ...draft, legacy },
       layout && {
         ...layout,
         legacy: await this.keptOnOldEngine(layout, "render"),
       },
       sampleData,
-      {
-        appName: this.appName,
-        brand: await this.brandFor({ ...draft, legacy }, layout),
-      }
+      options
     );
+    return {
+      ...rendered,
+      // The preview text as an inbox shows it: the hidden line this render
+      // spliced into the HTML, read as text the way an inbox reads it.
+      preheader: preheaderHtml
+        ? htmlToText(preheaderHtml, { linkTargets: false }).trim()
+        : "",
+      from: draft.fromOverride
+        ? previewFrom(draft.fromOverride, sampleData)
+        : null,
+    };
   }
 
   // ============================================================
@@ -2248,24 +2490,64 @@ export class EmailTemplateService extends BaseService {
    * judged against owners nobody has listed.
    */
   async ensureBuiltInTemplates(): Promise<void> {
-    await this.reconcileStoredTemplates();
-    await this.loadEngineState();
+    const marks = await this.reconcileStoredTemplates();
+    // The marks the reconciliation decided from, with its own writes, are
+    // the engine state as this instance now knows it: the one read serves
+    // the boot's renders too. Without them, the state is read whole.
+    if (marks === undefined) await this.loadEngineState();
+    else this.useEngineMarks(marks);
     await this.brandStore.load();
   }
 
-  /** The reconciliation `ensureBuiltInTemplates` runs. */
-  private async reconcileStoredTemplates(): Promise<void> {
-    if (!this.registry.complete) this.configureOwnershipFromConfig();
-    await this.migrateLegacyLayout();
-
-    // The `kind` column is added to existing tables as nullable; rows that
-    // predate it come back null. Backfill them to `template` (the default
-    // layout is already tagged `layout` by the migration above).
+  /**
+   * The `kind` column is added to existing tables as nullable; rows that
+   * predate it come back null. Backfill them to `template` (the default layout
+   * is already tagged `layout` by `migrateLegacyLayout`). Written only when a
+   * row needs it, so a start with nothing to backfill writes nothing.
+   */
+  private async backfillTemplateKinds(): Promise<void> {
+    const untagged = await this.db
+      .select({ id: this.emailTemplates.id })
+      .from(this.emailTemplates)
+      .where(isNull(this.emailTemplates.kind))
+      .limit(1);
+    if (untagged.length === 0) return;
     await this.db
       .update(this.emailTemplates)
       .set({ kind: "template" })
       .where(isNull(this.emailTemplates.kind));
+  }
 
+  /**
+   * The reconciliation `ensureBuiltInTemplates` runs. Answers the engine
+   * marks it decided from, as its own writes left them (null without a meta
+   * table), or undefined when it read none: a registry no owner completed
+   * settles no engine.
+   */
+  private async reconcileStoredTemplates(): Promise<
+    EngineMarks | null | undefined
+  > {
+    if (!this.registry.complete) this.configureOwnershipFromConfig();
+    await this.migrateLegacyLayout();
+
+    await this.backfillTemplateKinds();
+
+    if (!this.registry.complete) {
+      await this.reconcileOwnedTemplates();
+      return undefined;
+    }
+    const marks = await this.readEngineMarks();
+    this.reconcileMarks = marks;
+    try {
+      await this.reconcileOwnedTemplates();
+    } finally {
+      this.reconcileMarks = null;
+    }
+    return marks;
+  }
+
+  /** Seed and reconcile the owned templates, and give every other its owner. */
+  private async reconcileOwnedTemplates(): Promise<void> {
     // Recorded once, at the first boot on Liquid, whether or not anything is
     // seeded, and before anything is: it judges the templates stored before
     // Liquid, and every owner's version written from here on is its current
@@ -2359,26 +2641,28 @@ export class EmailTemplateService extends BaseService {
     // is written and the next boot tries again.
     const { created } = await this.keepIfWrittenForOldEngine(id, entry);
     try {
-      await this.db.insert(this.emailTemplates).values({
-        id,
-        slug: t.slug,
-        name: t.name,
-        useLayout: t.useLayout ?? true,
-        ...this.ownerColumns(entry),
-        layoutId: t.layoutId ?? null,
-        fromOverride: t.fromOverride ?? null,
-        replyTo: t.replyTo ?? null,
-        isActive: t.isActive ?? true,
-        providerId: t.providerId ?? null,
-        attachments: t.attachments ?? null,
-        carriesSecret: entry.carriesSecret,
-        ...storedOwner(entry.owner),
-        overridden: false,
-        baseVersion: null,
-        baseDigest: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      await this.writeTemplateRow(id, db =>
+        db.insert(this.emailTemplates).values({
+          id,
+          slug: t.slug,
+          name: t.name,
+          useLayout: t.useLayout ?? true,
+          ...this.ownerColumns(entry),
+          layoutId: t.layoutId ?? null,
+          fromOverride: t.fromOverride ?? null,
+          replyTo: t.replyTo ?? null,
+          isActive: t.isActive ?? true,
+          providerId: t.providerId ?? null,
+          attachments: t.attachments ?? null,
+          carriesSecret: entry.carriesSecret,
+          ...storedOwner(entry.owner),
+          overridden: false,
+          baseVersion: null,
+          baseDigest: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
       this.logger.info(`Created email template: ${t.slug}`);
     } catch (error) {
       // No row has this id, so no engine choice may name it either: boots
@@ -2461,31 +2745,35 @@ export class EmailTemplateService extends BaseService {
     // an edit saved in between is the site's and stays.
     const where = this.unchanged(row);
     if (keepSitesVersion) {
-      await this.db
+      await this.writeTemplateRow(row.id, db =>
+        db
+          .update(this.emailTemplates)
+          .set({
+            ...owner,
+            ...detailsOf(entry.defaults),
+            overridden: true,
+            baseVersion: {
+              ...(row.baseVersion ?? entry.version),
+              details: detailsOf(entry.defaults),
+            },
+            baseDigest: row.baseDigest ?? entry.digest,
+          })
+          .where(where)
+      );
+      return;
+    }
+    await this.writeTemplateRow(row.id, db =>
+      db
         .update(this.emailTemplates)
         .set({
           ...owner,
-          ...detailsOf(entry.defaults),
-          overridden: true,
-          baseVersion: {
-            ...(row.baseVersion ?? entry.version),
-            details: detailsOf(entry.defaults),
-          },
-          baseDigest: row.baseDigest ?? entry.digest,
+          ...this.ownerColumns(entry),
+          overridden: false,
+          baseVersion: null,
+          baseDigest: null,
         })
-        .where(where);
-      return;
-    }
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...owner,
-        ...this.ownerColumns(entry),
-        overridden: false,
-        baseVersion: null,
-        baseDigest: null,
-      })
-      .where(where);
+        .where(where)
+    );
     // It now follows the owner, so it renders on the engine the owner's
     // version was written for.
     await this.settleIfFollowing(row.slug, entry);
@@ -2503,21 +2791,26 @@ export class EmailTemplateService extends BaseService {
   ): Promise<void> {
     const owners = detailsOf(entry.defaults);
     const kept = row.baseVersion?.details;
+    // Compared presentation aside: the owner's presentation reaches the
+    // site's copy when it is read (see `withOwnerPresentation`), so it alone
+    // neither counts as the site's change nor needs writing.
     // The site changed them: they stay.
-    if (kept && !sameStoredValue(detailsOf(row), kept)) return;
+    if (kept && !sameDetails(detailsOf(row), kept)) return;
     // Already the owner's, and recorded as such.
-    if (kept && sameStoredValue(kept, owners)) return;
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...owners,
-        updatedAt: new Date(),
-        baseVersion: {
-          ...versionOf(row.baseVersion ?? entry.version),
-          details: owners,
-        },
-      })
-      .where(this.unchanged(row));
+    if (kept && sameDetails(kept, owners)) return;
+    await this.writeTemplateRow(row.id, db =>
+      db
+        .update(this.emailTemplates)
+        .set({
+          ...owners,
+          updatedAt: new Date(),
+          baseVersion: {
+            ...versionOf(row.baseVersion ?? entry.version),
+            details: owners,
+          },
+        })
+        .where(this.unchanged(row))
+    );
   }
 
   /**
@@ -2549,7 +2842,21 @@ export class EmailTemplateService extends BaseService {
       ...storedFormat(row),
       ...detailsOf(row),
     };
-    if (sameStoredValue(current, wanted)) {
+    // Compared presentation aside, the rule `followOwnerDetails` states: the
+    // owner's presentation reaches the row on read (withOwnerPresentation),
+    // and a presentation key the site saved alone is never the row's own
+    // version, so the owner's columns must not rewrite it away. When the
+    // owner's version HAS moved, the write is whole, presentation included,
+    // as an owner update is.
+    const followsOwner = (
+      a: typeof current | typeof wanted,
+      b: typeof current | typeof wanted
+    ) =>
+      sameStoredValue(
+        { ...a, variables: declarationSubstance(a.variables) },
+        { ...b, variables: declarationSubstance(b.variables) }
+      );
+    if (followsOwner(current, wanted)) {
       await this.settleOwnersEngine(row, entry, false);
       return;
     }
@@ -2593,7 +2900,7 @@ export class EmailTemplateService extends BaseService {
     }
     if (!this.keepsOwnersVersion(entry)) return { kept: false, created: false };
     const key = keptKey(id);
-    const present = (await this.meta.getEntry(key)).present;
+    const present = (await this.engineMark(key)).present;
     if (!present) await this.markEngine(key, ownersMark(entry));
     return { kept: true, created: !present };
   }

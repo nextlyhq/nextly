@@ -35,6 +35,19 @@ export function appLocalization(): SanitizedLocalizationConfig | undefined {
   return container.get<NextlyServiceConfig>("config").localization;
 }
 
+/**
+ * The site's languages in its own order, as {@link appLocalization} lists them: the
+ * configuration's order where it declares them, Settings' order otherwise. Undefined where the
+ * site has none, or the container cannot answer.
+ */
+export function appLanguageOrder(): string[] | undefined {
+  try {
+    return appLocalization()?.locales.map(locale => locale.code);
+  } catch {
+    return undefined;
+  }
+}
+
 export function configuredLocales(): ReadonlySet<string> | null {
   try {
     const localization = appLocalization();

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
-import { parseSqlSections } from "../../../cli/commands/migrate";
+import { parseSqlSections } from "../../schema/migrate/sql-sections";
 
 import {
   formatLocalizationIntent,
@@ -53,6 +53,41 @@ describe("localization migration intent", () => {
     expect(parsed?.spec.columns).toEqual([{ name: "body", kind: "text" }]);
   });
 
+  // The ranking that chooses the value an entry keeps travels with the file, so `nextly migrate`
+  // judges the Required and Unique settings on the same rows the file's copy keeps.
+  it("round-trips the ranking a field leaving translation keeps its value by", () => {
+    const liveness = {
+      languageOrder: ["en", "fr", "de"],
+      publicStates: ["published"],
+      companionHasStatus: true,
+    };
+    const line = formatLocalizationIntent({
+      kind: "shared",
+      entity: "collection",
+      spec: spec({ liveness }),
+    });
+
+    const parsed = parseLocalizationIntent(fileWith(line), "m.sql");
+
+    expect(parsed?.spec.liveness).toEqual(liveness);
+  });
+
+  it("refuses a ranking in a header of a version that cannot carry one", () => {
+    const line = formatLocalizationIntent({
+      kind: "shared",
+      entity: "collection",
+      spec: spec({
+        liveness: {
+          languageOrder: ["en"],
+          publicStates: ["published"],
+          companionHasStatus: false,
+        },
+      }),
+    }).replace(/"version":\d+/, '"version":2');
+
+    expect(() => parseLocalizationIntent(fileWith(line), "m.sql")).toThrow();
+  });
+
   // Every kind the spec type permits, rather than a chosen one. The generator may write any member
   // of this set into a header, so a parser that accepts a subset aborts a run on a file the same
   // build just produced. Enumerating the set is what makes the next kind added fail here instead of
@@ -84,6 +119,62 @@ describe("localization migration intent", () => {
     expect(versionOf("enable")).toBe(1);
     expect(versionOf("archive")).toBe(2);
     expect(versionOf("shared")).toBe(2);
+  });
+
+  it("records a move's settings at version 6, and only the files that carry them", () => {
+    const settings = {
+      required: [{ field: "body", column: "body" }],
+      unique: [{ field: "code", column: "code" }],
+    };
+    const line = formatLocalizationIntent({
+      kind: "archive",
+      entity: "collection",
+      spec: spec({ settings }),
+    });
+    const payload = JSON.parse(
+      line.slice(LOCALIZATION_INTENT_HEADER.length).trim()
+    );
+
+    // A build before 6 ignores keys it does not know, so it would run the move unchecked; at 6 it
+    // refuses the file instead, as one it does not support.
+    expect(payload.version).toBe(6);
+    expect(
+      parseLocalizationIntent(fileWith(line), "m.sql")?.spec.settings
+    ).toEqual(settings);
+    // The same kind without settings keeps its version, so its files stay readable by older builds.
+    expect(
+      JSON.parse(
+        formatLocalizationIntent({
+          kind: "archive",
+          entity: "collection",
+          spec: spec(),
+        })
+          .slice(LOCALIZATION_INTENT_HEADER.length)
+          .trim()
+      ).version
+    ).toBe(2);
+  });
+
+  it("refuses settings under a version before 6, and settings of the wrong shape", () => {
+    const line = formatLocalizationIntent({
+      kind: "shared",
+      entity: "collection",
+      spec: spec({
+        settings: { required: [{ field: "body", column: "body" }], unique: [] },
+      }),
+    });
+    expect(() =>
+      parseLocalizationIntent(
+        fileWith(line.replace('"version":6', '"version":5')),
+        "m.sql"
+      )
+    ).toThrow();
+    expect(() =>
+      parseLocalizationIntent(
+        fileWith(line.replace('"unique":[]', '"unique":"body"')),
+        "m.sql"
+      )
+    ).toThrow();
   });
 
   it("reads a version-2 kind, and refuses one claimed under version 1", () => {

@@ -82,7 +82,10 @@ export * from "./shared";
 
 export * from "./base-service";
 export * from "./users";
-export * from "./dispatcher";
+// `./dispatcher` is not re-exported here: the dispatcher reaches the route
+// handler and the HTTP layer, and through this barrel every module that wants
+// a service would load them. Import `ServiceDispatcher` from
+// `./dispatcher`, as the root entry does.
 export * from "../domains/dynamic-collections";
 export * from "./collection-file-manager";
 export * from "./collections-handler";
@@ -423,19 +426,7 @@ export class ServiceContainer {
     return this.tables;
   }
 
-  /**
-   * Execute a function within a database transaction with fresh service instances.
-   * Creates new service instances with transaction context for use within the transaction.
-   *
-   * @param fn Function to execute within transaction, receives fresh service container with tx context
-   * @returns Promise resolving to the function's return value
-   */
-  async withTransaction<T>(
-    fn: (txServices: ServiceContainer) => Promise<T>
-  ): Promise<T> {
-    return this.adapter.transaction(async () => {
-      const txServices = new ServiceContainer(this.adapter);
-      return fn(txServices);
-    });
-  }
+  // No `withTransaction` here: services built from the container run on the
+  // pooled adapter, so a transaction opened around them holds nothing they
+  // do. A transaction is the adapter's own `transaction()`.
 }

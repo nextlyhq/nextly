@@ -1,357 +1,283 @@
 /**
- * What the add panel lists, decided once from what the layout read says.
+ * What the add panel lists, worked out from the server's gallery read and the reader's draft.
  *
- * The rows, their groups, what each row's button does, and which rows a search
- * keeps are all worked out here, from three inputs: the reader's draft (what is
- * placed, and what was removed), the server's offer (which widgets may be
- * added now) and each widget's facts (its group, sub-group, description,
- * category, widths and rank, all core's). Nothing here decides a group or an
- * order of its own: the panel lists what core assigns, in the order core ranks.
+ * The server decides what is offered, as the reader (`GET /api/dashboard/gallery`): which
+ * widgets have a row, in what order, and the collections the reader may read. This module only
+ * searches that answer, and says what each row's control does against the draft, since a card
+ * added or removed a moment ago is in the draft and not yet in the server's answer.
  *
  * @module components/features/widgets/edit/add-panel-model
  */
 
+import type { PublishedContentSource, WidgetSizeBounds } from "nextly/config";
+
+import type { PluginMetadata } from "@admin/types/branding";
 import type {
-  AddPanelGroup,
   DashboardWidget,
   WidgetPlacement,
-  WidgetWidthFacts,
 } from "@admin/types/dashboard/widgets";
 
-import { WIDTH_NAMES } from "../sizes";
-
-/** A group the panel shows: core's four, and the reader's own removed cards first. */
-export type AddPanelSection = "removed" | AddPanelGroup;
-
-/** The panel's groups in order, each with its heading and, for some, a line under it. */
-export const ADD_PANEL_SECTIONS: ReadonlyArray<{
-  id: AddPanelSection;
-  label: string;
-  note?: string;
-}> = [
-  { id: "removed", label: "Removed from your dashboard" },
-  { id: "overview", label: "Overview" },
-  {
-    id: "content",
-    label: "Content",
-    note: "By collection. Each card starts on the collection you add it from.",
-  },
-  { id: "team", label: "Team" },
-  { id: "plugins", label: "Plugins", note: "By plugin." },
-];
+import { askableWith, USERS_SOURCE } from "../widget-as-asked";
 
 /**
- * Whether the Content group is shown. On: core groups only widgets offered per collection there,
- * so the group lists Count for each collection the reader may read, and each further content
- * widget joins it as core offers it.
+ * One widget, as the gallery read sends it: the parts of the server's `GalleryTileItem` this
+ * admin reads. What is placed is read from the draft instead, which a card added or removed a
+ * moment ago has changed and the read has not.
  */
-export const SHOW_CONTENT_GROUP = true;
-
-/** What a row's control does, or that there is nothing to do. */
-export type AddPanelAction =
-  | { kind: "add"; widgetId: string; settings?: Record<string, unknown> }
-  | {
-      kind: "add-another";
-      widgetId: string;
-      settings?: Record<string, unknown>;
-    }
-  | { kind: "add-back"; placementId: string }
-  | { kind: "on-dashboard" };
-
-export interface AddPanelRow {
-  /** Stable across renders: a removed card's placement, or the widget's id. */
-  key: string;
-  section: AddPanelSection;
-  /** The plugin a Plugins row comes from, or the collection a Content row reads. */
-  subgroup?: string;
+export interface GalleryTile {
+  id: string;
   name: string;
-  /** The line under the name, which search reads too. */
   description?: string;
-  /** The declaration's category: searched, and shown as a label. */
-  category?: string;
-  /** Which sketch draws the row. */
-  sketch?: string;
-  /** "⅓ to Full wide", or the one width's name. Absent for a removed card. */
-  widths?: string;
-  /** How many of this widget's cards are on the dashboard now. */
-  placed: number;
-  action: AddPanelAction;
-  /**
-   * Text search reads and the panel does not draw. A removed card's row is the only way back to
-   * a one-card widget, so it carries what that widget's own row would be found by (its
-   * description, category, group and plugin) while showing the put-back line.
-   */
-  searchAlso?: readonly string[];
+  /** The plugin that declared it, by its name; absent for core's and the site's. */
+  plugin?: string;
+  /** The widths its cards may take, and the size a new one starts at. */
+  size: WidgetSizeBounds;
+  allowsSeveral: boolean;
+  /** Its Collection setting's name, which a new card stores the collection under. */
+  collectionSetting?: string;
 }
 
-/** What the widths a widget allows read as: its one width's name, or the range. */
-function widthsLabel(facts: WidgetWidthFacts | undefined): string | undefined {
-  const allowed = facts?.allowedWidths ?? [];
-  if (allowed.length === 0) return undefined;
-  if (allowed.length === 1) return WIDTH_NAMES[allowed[0]].name;
-  const first = WIDTH_NAMES[allowed[0]].fraction;
-  const last = WIDTH_NAMES[allowed[allowed.length - 1]].fraction;
-  return `${first} to ${last} wide`;
+/** A collection the reader may read, as the gallery read sends it. */
+export interface GalleryCollection {
+  slug: string;
+  label: string;
+  lifecycle: boolean;
 }
 
-/** The line a removed card's row says. Search reads it too, beside the widget's own facts. */
-export const REMOVED_ROW_DESCRIPTION =
-  "Comes back where it was, with its width and settings.";
+/** The gallery read (`GET /api/dashboard/gallery`). */
+export interface GalleryRead {
+  tiles: GalleryTile[];
+  collections: GalleryCollection[];
+}
+
+/** What a row's control does, against the draft. */
+export type RowAction =
+  | { kind: "add" }
+  /** A one-card widget whose card was removed this session: Add puts that card back. */
+  | { kind: "add-back"; placementId: string }
+  /** A one-card widget the draft already holds. */
+  | { kind: "on-dashboard" }
+  /** It reads a collection, and the reader may read none it can ask anything of. */
+  | { kind: "needs-collection" };
+
+/** One row of the list: the widget, what its control does, and the plugin it comes from. */
+export interface GalleryRow {
+  tile: GalleryTile;
+  action: RowAction;
+  /** The plugin's name as the admin shows it, for a plugin's widget. */
+  pluginName?: string;
+}
 
 /**
- * A widget row's button, or none.
- *
- * - One card only, and it is placed: shown as on the dashboard, not addable.
- * - One card only, and it was removed: no row here. Its card is listed under Removed, where Add
- *   back restores it; a second row would offer the same card twice, and a fresh Add would be a
- *   second card the server refuses.
- * - Offered now: Add, or Add another once one is placed.
- * - Otherwise the server does not offer it here, and it has no row.
+ * What a plugin is called beside its widget's name: the label the plugin gives itself in the
+ * admin, else the name the plugin catalogue knows it by ("SEO"), else its package name without
+ * its scope and a `plugin-` prefix, so "@acme/plugin-reviews" reads "reviews".
  */
-function widgetAction(
+export function pluginShownName(
+  plugin: string,
+  meta: Pick<PluginMetadata, "appearance"> | undefined,
+  catalogue: ReadonlyArray<{ id: string; name: string }>
+): string {
+  const label = meta?.appearance?.label;
+  if (label) return label;
+  const known = catalogue.find(entry => entry.id === plugin)?.name;
+  if (known !== undefined) return known;
+  return plugin.replace(/^@[^/]+\//, "").replace(/^plugin-/, "");
+}
+
+/** Whether a card of this widget set to this collection can be asked anything. */
+export type CanAsk = (widgetId: string, collection: string) => boolean;
+
+/**
+ * Whether a card of a widget, set to a collection, can be asked anything, by the rule the
+ * dashboard draws such a card by (`askableWith`): a Breakdown, say, asks nothing of a collection
+ * with nothing to group its entries by. A widget this admin cannot draw, or one with no Collection
+ * setting, can be set to none.
+ */
+export function collectionAsker(
+  byId: ReadonlyMap<string, DashboardWidget>,
+  sources: readonly PublishedContentSource[] | undefined
+): CanAsk {
+  return (widgetId, collection) => {
+    const widget = byId.get(widgetId);
+    const setting = widget?.settings?.find(s => s.type === "collection")?.name;
+    if (widget === undefined || setting === undefined) return false;
+    return askableWith(widget, { [setting]: collection }, sources);
+  };
+}
+
+/** Whether a widget's Collection setting offers Users beside its collections. */
+export type OffersUsers = (widgetId: string) => boolean;
+
+/**
+ * Whether each widget's Collection setting offers Users, as the server told this reader the
+ * setting: it sends the offer only to a reader who may read users.
+ */
+export function usersOffer(
+  byId: ReadonlyMap<string, DashboardWidget>
+): OffersUsers {
+  return widgetId =>
+    byId
+      .get(widgetId)
+      ?.settings?.some(
+        setting => setting.type === "collection" && setting.users === true
+      ) === true;
+}
+
+/** Users, as a collection a widget whose setting offers them may start on. */
+const USERS_COLLECTION: GalleryCollection = {
+  slug: USERS_SOURCE,
+  label: "Users",
+  lifecycle: false,
+};
+
+/**
+ * The collections a widget may be set to: those it can ask anything of, in the read's order; or,
+ * where there is none and its setting offers Users (`offersUsers`), Users, so a Count added by a
+ * reader who may read no collection but may read users counts the people.
+ */
+export function collectionsFor(
   widgetId: string,
-  facts: WidgetWidthFacts,
-  placed: number,
-  removedPlacement: WidgetPlacement | undefined,
-  offered: ReadonlySet<string>
-): AddPanelAction | undefined {
-  if (!facts.allowsSeveral && placed > 0) return { kind: "on-dashboard" };
-  if (!facts.allowsSeveral && removedPlacement !== undefined) return undefined;
-  if (!offered.has(widgetId)) return undefined;
-  return placed > 0
-    ? { kind: "add-another", widgetId }
-    : { kind: "add", widgetId };
+  collections: readonly GalleryCollection[],
+  canAsk: CanAsk,
+  offersUsers: OffersUsers = () => false
+): GalleryCollection[] {
+  const asked = collections.filter(collection =>
+    canAsk(widgetId, collection.slug)
+  );
+  return asked.length === 0 && offersUsers(widgetId)
+    ? [USERS_COLLECTION]
+    : asked;
+}
+
+/** Whether a row's Add is offered: not a placed one-card widget, nor one with no collection. */
+export function canAdd(row: GalleryRow): boolean {
+  return row.action.kind === "add" || row.action.kind === "add-back";
 }
 
 /**
- * What a widget's own row is found by, beyond its name: the facts core states for it, and its
- * group's heading. Empty for a widget core says nothing about.
- */
-function searchableFacts(facts: WidgetWidthFacts | undefined): string[] {
-  if (facts === undefined) return [];
-  return [
-    facts.description,
-    facts.category,
-    facts.group === undefined ? undefined : sectionLabel(facts.group),
-    facts.subgroup,
-  ].filter((text): text is string => text !== undefined);
-}
-
-/**
- * Every row the panel could show, before any search: the reader's removed cards first, then each
- * widget core groups, in core's rank.
+ * A row for each widget the server sent that this admin can draw, named as this admin names the
+ * widget, in the read's order, with what its control does in the draft as it stands. A widget it
+ * holds no definition for has no row: a card of it would be added, saved and never drawn, with no
+ * controls to remove it.
  *
- * Only widgets this admin can draw are listed (a declaration is needed for its title): a row for
- * one it cannot draw would add a card the grid then skips.
+ * - one card only, and the draft holds it: "On dashboard", nothing to add;
+ * - one card only, and it was removed this session: Add puts that card back, with its settings,
+ *   rather than adding a second;
+ * - it reads a collection, and none the reader may read is one it can ask anything of
+ *   (`canAsk`), nor does it offer Users to a reader who may read them (`offersUsers`): listed,
+ *   saying so, with nothing to add, so no card lands that could only ever be drawn as not
+ *   available;
+ * - otherwise Add.
  */
-export function addPanelRows(input: {
-  placements: readonly WidgetPlacement[];
-  offered: readonly string[];
-  widgets: Readonly<Record<string, WidgetWidthFacts>>;
-  byId: ReadonlyMap<string, DashboardWidget>;
-  /**
-   * The collections the reader may read, as the server published them: a widget offered per
-   * collection gets one row for each.
-   */
-  collections?: readonly { collection: string; label: string }[];
-  /** Whether the Content group is shown; absent, `SHOW_CONTENT_GROUP` decides. */
-  showContent?: boolean;
-}): AddPanelRow[] {
-  const { placements, widgets, byId } = input;
-  const showContent = input.showContent ?? SHOW_CONTENT_GROUP;
-  const offered = new Set(input.offered);
-
-  const removed: AddPanelRow[] = placements.flatMap(placement => {
-    const widget = byId.get(placement.widgetId);
-    if (!placement.removed || widget === undefined) return [];
+export function galleryRows(
+  read: GalleryRead,
+  placements: readonly WidgetPlacement[],
+  byId: ReadonlyMap<string, DashboardWidget>,
+  canAsk: CanAsk,
+  pluginName: (plugin: string) => string = plugin => plugin,
+  offersUsers: OffersUsers = () => false
+): GalleryRow[] {
+  return read.tiles.flatMap((sent): GalleryRow[] => {
+    const widget = byId.get(sent.id);
+    if (widget === undefined) return [];
+    // The title the dashboard draws the card with, whichever channel declared it.
+    const tile = { ...sent, name: widget.title };
+    const named =
+      tile.plugin === undefined ? {} : { pluginName: pluginName(tile.plugin) };
     return [
       {
-        key: `removed:${placement.id}`,
-        section: "removed" as const,
-        name: widget.title,
-        description: REMOVED_ROW_DESCRIPTION,
-        placed: 0,
-        action: { kind: "add-back" as const, placementId: placement.id },
-        searchAlso: searchableFacts(widgets[placement.widgetId]),
+        tile,
+        action: actionOf(tile, placements, read, canAsk, offersUsers),
+        ...named,
       },
     ];
   });
-
-  const grouped = Object.entries(widgets)
-    .filter(
-      ([widgetId, facts]) =>
-        facts.group !== undefined &&
-        (showContent || facts.group !== "content") &&
-        byId.has(widgetId)
-    )
-    .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0));
-
-  const rows = grouped.flatMap(([widgetId, facts]) => {
-    if (facts.perCollection === true) {
-      return perCollectionRows(
-        widgetId,
-        facts,
-        byId.get(widgetId),
-        placements,
-        input.collections ?? [],
-        offered
-      );
-    }
-    const mine = placements.filter(p => p.widgetId === widgetId);
-    const placed = mine.filter(p => !p.removed).length;
-    const action = widgetAction(
-      widgetId,
-      facts,
-      placed,
-      mine.find(p => p.removed),
-      offered
-    );
-    if (action === undefined) return [];
-    return [widgetRowOf(widgetId, facts, byId.get(widgetId), placed, action)];
-  });
-
-  return [...removed, ...rows];
 }
 
-/**
- * What a widget's row says about the widget, whichever row it is: its name, and the description,
- * category, sketch and widths core states for it, each shown and searched alike on every row.
- */
-function rowFacts(
-  widgetId: string,
-  facts: WidgetWidthFacts,
-  widget: DashboardWidget | undefined
-): Pick<
-  AddPanelRow,
-  "name" | "description" | "category" | "sketch" | "widths"
-> {
-  const widths = widthsLabel(facts);
-  return {
-    name: widget?.title ?? widgetId,
-    ...(facts.description === undefined
-      ? {}
-      : { description: facts.description }),
-    ...(facts.category === undefined ? {} : { category: facts.category }),
-    ...(facts.sketch === undefined ? {} : { sketch: facts.sketch }),
-    ...(widths === undefined ? {} : { widths }),
-  };
-}
-
-/** One widget's row in its add-panel group, carrying only the facts it states. */
-function widgetRowOf(
-  widgetId: string,
-  facts: WidgetWidthFacts,
-  widget: DashboardWidget | undefined,
-  placed: number,
-  action: AddPanelAction
-): AddPanelRow {
-  return {
-    key: widgetId,
-    section: facts.group as AddPanelGroup,
-    ...(facts.subgroup === undefined ? {} : { subgroup: facts.subgroup }),
-    ...rowFacts(widgetId, facts, widget),
-    placed,
-    action,
-  };
-}
-
-/**
- * A widget offered per collection, as one row for each collection the reader may read: each
- * adds a card set to that collection, and counts that collection's cards already placed.
- */
-function perCollectionRows(
-  widgetId: string,
-  facts: WidgetWidthFacts,
-  widget: DashboardWidget | undefined,
+/** What a row's control does against the draft (`galleryRows`). */
+function actionOf(
+  tile: GalleryTile,
   placements: readonly WidgetPlacement[],
-  collections: readonly { collection: string; label: string }[],
-  offered: ReadonlySet<string>
-): AddPanelRow[] {
-  const setting = widget?.settings?.find(s => s.type === "collection")?.name;
-  if (setting === undefined || !offered.has(widgetId)) return [];
-  return collections.map(({ collection, label }) => {
-    const placed = placements.filter(
-      p =>
-        p.widgetId === widgetId &&
-        !p.removed &&
-        p.config?.[setting] === collection
-    ).length;
-    const settings = { [setting]: collection };
-    return {
-      key: `${widgetId}:${collection}`,
-      section: "content" as const,
-      subgroup: label,
-      ...rowFacts(widgetId, facts, widget),
-      placed,
-      action:
-        placed > 0
-          ? { kind: "add-another" as const, widgetId, settings }
-          : { kind: "add" as const, widgetId, settings },
-    };
-  });
-}
-
-/** A section's heading, which search reads too. */
-function sectionLabel(section: AddPanelSection): string {
-  return ADD_PANEL_SECTIONS.find(entry => entry.id === section)?.label ?? "";
+  read: GalleryRead,
+  canAsk: CanAsk,
+  offersUsers: OffersUsers
+): RowAction {
+  const mine = placements.filter(p => p.widgetId === tile.id);
+  if (!tile.allowsSeveral) {
+    if (mine.some(p => !p.removed)) return { kind: "on-dashboard" };
+    const removed = mine.find(p => p.removed);
+    if (removed !== undefined) {
+      return { kind: "add-back", placementId: removed.id };
+    }
+  }
+  if (
+    tile.collectionSetting !== undefined &&
+    collectionsFor(tile.id, read.collections, canAsk, offersUsers).length === 0
+  ) {
+    return { kind: "needs-collection" };
+  }
+  return { kind: "add" };
 }
 
 /**
- * The rows a search keeps: those whose name, description, category, group or sub-group contains
- * the query, ignoring case, or whose `searchAlso` does. An empty query keeps them all.
+ * The rows a query keeps, ignoring case: each whose name, description or plugin's name contains
+ * it. An empty query keeps every row.
  */
-export function searchAddPanel(
-  rows: readonly AddPanelRow[],
+export function searchRows(
+  rows: readonly GalleryRow[],
   query: string
-): AddPanelRow[] {
+): GalleryRow[] {
   const needle = query.trim().toLowerCase();
   if (needle === "") return [...rows];
   return rows.filter(row =>
-    [
-      row.name,
-      row.description,
-      row.category,
-      sectionLabel(row.section),
-      row.subgroup,
-      ...(row.searchAlso ?? []),
-    ].some(text => text?.toLowerCase().includes(needle))
+    [row.tile.name, row.tile.description, row.pluginName].some(text =>
+      text?.toLowerCase().includes(needle)
+    )
   );
 }
 
-/** What the count line says, and what is announced when it changes. */
-export function addPanelCount(found: number, query: string): string {
-  const trimmed = query.trim();
-  const noun = found === 1 ? "widget" : "widgets";
-  if (trimmed === "") return `${found} ${noun}`;
-  return `${found} ${found === 1 ? "result" : "results"} for “${trimmed}”`;
+/** What the count line under the search says, and what is announced when a search changes it. */
+export function rowsCount(count: number): string {
+  return `${count} ${count === 1 ? "widget" : "widgets"}`;
 }
 
-/** One group as drawn: its rows outside any sub-group, then each sub-group's. */
-export interface AddPanelGroupView {
-  section: (typeof ADD_PANEL_SECTIONS)[number];
-  rows: AddPanelRow[];
-  subgroups: Array<{ name: string; rows: AddPanelRow[] }>;
+/**
+ * The collection a new card of a widget starts on, of those it may be set to (`collections`):
+ * the first that no card of the widget on the dashboard reads yet, so a second Count counts
+ * another collection. A card's collection is the one it reads (`collectionOf`), its declared
+ * default where it stores none. `taken` when every one has such a card already, and the first is
+ * given: the new card then matches one the reader has, and its settings are opened to tell them
+ * apart. `undefined` when there is none to start on.
+ */
+export function startingCollection(
+  tile: GalleryTile,
+  collections: readonly GalleryCollection[],
+  placements: readonly WidgetPlacement[],
+  collectionOf: (placement: WidgetPlacement, setting: string) => unknown = (
+    placement,
+    setting
+  ) => placement.config?.[setting]
+): { slug: string; taken: boolean } | undefined {
+  const setting = tile.collectionSetting;
+  if (setting === undefined) return undefined;
+  const used = new Set(
+    placements
+      .filter(p => p.widgetId === tile.id && !p.removed)
+      .map(p => collectionOf(p, setting))
+  );
+  const free = collections.find(collection => !used.has(collection.slug));
+  if (free !== undefined) return { slug: free.slug, taken: false };
+  const [first] = collections;
+  return first === undefined ? undefined : { slug: first.slug, taken: true };
 }
 
-/** The rows a search kept, as the panel draws them: by group, in order, and by sub-group. */
-export function addPanelGroups(
-  rows: readonly AddPanelRow[]
-): AddPanelGroupView[] {
-  return ADD_PANEL_SECTIONS.flatMap(section => {
-    const inGroup = rows.filter(row => row.section === section.id);
-    if (inGroup.length === 0) return [];
-    const names = [
-      ...new Set(inGroup.flatMap(row => (row.subgroup ? [row.subgroup] : []))),
-    ];
-    return [
-      {
-        section,
-        rows: inGroup.filter(row => row.subgroup === undefined),
-        subgroups: names.map(name => ({
-          name,
-          rows: inGroup.filter(row => row.subgroup === name),
-        })),
-      },
-    ];
-  });
+/** The settings a new card starts with: the collection it starts on, where it reads one. */
+export function newCardSettings(
+  tile: GalleryTile,
+  collection: string | undefined
+): Record<string, unknown> | undefined {
+  return tile.collectionSetting === undefined || collection === undefined
+    ? undefined
+    : { [tile.collectionSetting]: collection };
 }

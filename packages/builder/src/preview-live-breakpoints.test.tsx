@@ -71,6 +71,7 @@ const editor = {
   selectedId: null,
   apply: () => null,
   undoDepth: 0,
+  lockRefusalFor: () => undefined,
 } as unknown as EditorState;
 
 describe("what the inspector asks the window", () => {

@@ -28,11 +28,20 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { parseColumnType } from "../../value-conversion/column-type";
+import {
+  judgeStoredColumn,
+  keyedByOf,
+  type KeyedBy,
+} from "../../value-conversion/read-values";
+import type { ConversionJudgement } from "../../value-conversion/types";
 import { countLongerThan } from "../classifier/count-helpers";
 import { narrowingRefusal } from "../classifier/narrowing-refusal";
 import { stringNarrowingLimit } from "../classifier/type-widening";
+import { introspectLiveColumns } from "../diff/introspect-live";
 import {
   isPreResolutionOp,
+  isReferenceConversion,
   isReferenceListConversion,
   type ChangeColumnTypeOp,
   type Operation,
@@ -43,13 +52,8 @@ import {
 // templates. Eliminates the byte-identical-SQL drift risk.
 import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
+import { assertSchemaLockHeld, markedForSchemaLock } from "../schema-lock";
 import { generateSQL } from "../sql-templates/index";
-
-import {
-  columnHoldsOnlyJson,
-  columnReadsAsReferenceList,
-  isJsonTarget,
-} from "./json-convertibility";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;
@@ -75,7 +79,13 @@ export async function executePreResolutionOps(
    * retyping a column they name. Run after the refusals below, so a refused
    * apply has changed nothing even on MySQL, where DDL commits as it runs.
    */
-  leadingStatements: readonly string[] = []
+  leadingStatements: readonly string[] = [],
+  /**
+   * Told after each leading statement and each op finishes, as it finishes. On MySQL and SQLite
+   * each commits as it runs, so a run stopped part-way knows how many stay applied; the count this
+   * returns is told only once every one has finished.
+   */
+  onFinished: () => void = () => undefined
 ): Promise<number> {
   const preOps = ops.filter(
     op => isPreResolutionOp(op) || isMysqlStringNarrowing(op, dialect)
@@ -95,10 +105,12 @@ export async function executePreResolutionOps(
 
   for (const statement of leadingStatements) {
     await runRaw(txOrDb, statement, dialect);
+    onFinished();
   }
 
   for (const op of ordered) {
     await runOrderedOp(txOrDb, op, dialect);
+    onFinished();
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the
@@ -206,14 +218,17 @@ async function assertConversionsAreSafe(
     // Only a conversion INTO json is a question this probe can answer. Any change of type at all
     // produces `change_column_type`, so gating on its mere presence would run a JSON check against a
     // column becoming `varchar(255)` or `bigint` and refuse an ordinary rename as unconvertible.
-    const converts = conversions.some(
-      c => c.type === "change_column_type" && isJsonTarget(c.toType)
+    const converts = conversions.find(
+      (c): c is ChangeColumnTypeOp =>
+        c.type === "change_column_type" &&
+        parseColumnType({ type: c.toType, nullable: true }).family === "json"
     );
-    if (!converts) continue;
+    if (converts === undefined) continue;
 
-    // The probe reads rows that are NOT NULL, because a NULL cannot make a cast fail. It can make a
-    // NOT NULL fail, so a conversion carrying a nullability change would be guarded by a question
-    // asked over the wrong rows — and would still look guarded.
+    // The probe is asked about the type change with the nullability left as it is, so it weighs no
+    // NULL, which cannot make a cast fail. A NULL can make a NOT NULL fail, so a conversion carrying
+    // a nullability change would be guarded by a question that leaves it out — and would still look
+    // guarded.
     //
     // Stated as what the probe DOES cover, so that an op kind added to `conversionForRename` later
     // is refused until someone decides it is covered. A list of what to reject would instead be a
@@ -231,9 +246,9 @@ async function assertConversionsAreSafe(
           // Named so the obvious response is to widen the probe. A refusal that only says no gets
           // resolved under deadline by deleting the check.
           remedy:
-            `The probe reads only rows that are NOT NULL, so it cannot speak for "${unguarded.type}". ` +
-            `Widen columnHoldsOnlyJson to cover it and add it to COVERED_CONVERSIONS before this ` +
-            `op runs on this path.`,
+            `The probe judges the type change alone, so it cannot speak for "${unguarded.type}". ` +
+            `Pass that change to the value-conversion judgement and add it to COVERED_CONVERSIONS ` +
+            `before this op runs on this path.`,
         },
       });
     }
@@ -241,30 +256,62 @@ async function assertConversionsAreSafe(
     // Both names as the database currently has them: nothing has run yet, so neither the table's
     // new name nor the column's exists.
     const liveTable = currentTableName.get(op.tableName) ?? op.tableName;
-    const safe = await columnHoldsOnlyJson(
+    // The shared judgement every path that changes a saved column uses; any value it would clear
+    // or change refuses the rename here, before anything has run.
+    const judgement = await judgeStoredColumn(
       txOrDb,
-      liveTable,
-      op.fromColumn,
-      dialect
+      {
+        dialect,
+        from: { type: converts.fromType, nullable: true },
+        to: { type: converts.toType, nullable: true },
+        compareAs: "json",
+      },
+      {
+        table: liveTable,
+        column: op.fromColumn,
+        keyedBy: await liveKeyOf(txOrDb, dialect, liveTable),
+      }
     );
-    if (safe) continue;
+    if (judgement.class === "safe") continue;
 
     throw NextlyError.validation({
       errors: [
         {
           path: `${liveTable}.${op.fromColumn}`,
           code: "COLUMN_NOT_CONVERTIBLE",
-          message:
-            `Column "${op.fromColumn}" on "${liveTable}" holds values that are not valid JSON, ` +
-            `so renaming it to "${op.toColumn}" as a JSON column would lose them. Nothing has been ` +
-            `changed. Remove the field and add it again if the existing values are not needed, or ` +
-            `correct the stored values first.`,
+          message: hasNoConversion(judgement)
+            ? `Column "${op.fromColumn}" on "${liveTable}" is ${converts.fromType}, which Nextly ` +
+              `has no conversion to ${converts.toType} for, so renaming it to "${op.toColumn}" ` +
+              `as a JSON column is refused. Nothing has been changed.`
+            : `Column "${op.fromColumn}" on "${liveTable}" holds values that are not valid JSON, ` +
+              `so renaming it to "${op.toColumn}" as a JSON column would lose them. Nothing has ` +
+              `been changed. Remove the field and add it again if the existing values are not ` +
+              `needed, or correct the stored values first.`,
         },
       ],
     });
   }
 
   await assertReferenceListsConvert(txOrDb, ordered, currentTableName, dialect);
+}
+
+/** Whether a judgement refused the pair of types itself, whatever the rows hold. */
+function hasNoConversion(judgement: ConversionJudgement): boolean {
+  return judgement.reasons.some(reason => reason.kind === "no-conversion");
+}
+
+/**
+ * How a live table's rows are keyed, from its primary key as the database reports it: a rename
+ * can reach any table the diff manages, a translation table keyed by its parent and locale
+ * included, so no one key is assumed.
+ */
+async function liveKeyOf(
+  txOrDb: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<KeyedBy> {
+  const snapshot = await introspectLiveColumns(txOrDb, dialect, [table]);
+  return keyedByOf(snapshot.tables[0]?.columns ?? []);
 }
 
 /**
@@ -281,24 +328,35 @@ async function assertReferenceListsConvert(
   for (const op of ordered) {
     if (!isReferenceListConversion(op)) continue;
     const liveTable = currentTableName.get(op.tableName) ?? op.tableName;
-    const readable = await columnReadsAsReferenceList(
+    const judgement = await judgeStoredColumn(
       txOrDb,
-      liveTable,
-      op.columnName,
-      dialect
+      {
+        dialect,
+        from: { type: op.fromType, nullable: true },
+        to: { type: op.toType, nullable: true },
+        compareAs: "json",
+        referenceList: true,
+      },
+      {
+        table: liveTable,
+        column: op.columnName,
+        keyedBy: await liveKeyOf(txOrDb, dialect, liveTable),
+      }
     );
-    if (readable) continue;
+    if (judgement.class === "safe") continue;
 
     throw NextlyError.validation({
       errors: [
         {
           path: `${liveTable}.${op.columnName}`,
           code: "COLUMN_NOT_CONVERTIBLE",
-          message:
-            `Column "${op.columnName}" on "${liveTable}" holds a value that is neither a single id, ` +
-            `an array of ids nor a JSON list, so it cannot become a list of references. Nothing has ` +
-            `been changed. Find the row whose value starts with "{" or "[" but does not parse, and ` +
-            `correct or clear it first.`,
+          message: hasNoConversion(judgement)
+            ? `Column "${op.columnName}" on "${liveTable}" is ${op.fromType}, which Nextly has no ` +
+              `conversion to a list of references for. Nothing has been changed.`
+            : `Column "${op.columnName}" on "${liveTable}" holds a value that is neither a single ` +
+              `id, an array of ids nor a JSON list, so it cannot become a list of references. ` +
+              `Nothing has been changed. Find the row whose value starts with "{" or "[" but does ` +
+              `not parse, and correct or clear it first.`,
         },
       ],
     });
@@ -314,17 +372,21 @@ function orderForExecution(ops: Operation[]): Operation[] {
   const dropColumns: Operation[] = [];
   const dropTables: Operation[] = [];
   const referenceListConversions: Operation[] = [];
+  const keyDrops: Operation[] = [];
   for (const op of ops) {
-    if (op.type === "rename_table") renameTables.push(op);
+    if (op.type === "drop_foreign_key") keyDrops.push(op);
+    else if (op.type === "rename_table") renameTables.push(op);
     else if (op.type === "rename_column") renameColumns.push(op);
     else if (op.type === "drop_index") dropIndexes.push(op);
     else if (op.type === "drop_column") dropColumns.push(op);
     else if (op.type === "drop_table") dropTables.push(op);
-    else if (isReferenceListConversion(op)) referenceListConversions.push(op);
+    else if (isReferenceConversion(op)) referenceListConversions.push(op);
   }
   // Conversions last: they name a column by the name it has once every rename has run, on a table
   // no drop removes, and they must run before the route's own DDL, which this whole pass precedes.
   return [
+    // A key on a column converted below, first: dropping a constraint changes no name or row.
+    ...keyDrops,
     ...renameTables,
     ...renameColumns,
     ...dropIndexes,
@@ -334,7 +396,7 @@ function orderForExecution(ops: Operation[]): Operation[] {
     // Last, like the conversions and for the same reason: a MySQL string narrowing
     // (`isMysqlStringNarrowing`) names its column as every rename has left it.
     ...ops.filter(
-      op => op.type === "change_column_type" && !isReferenceListConversion(op)
+      op => op.type === "change_column_type" && !isReferenceConversion(op)
     ),
   ];
 }
@@ -496,7 +558,7 @@ async function runInStrictMysqlSession(
 // A reference-list conversion is asked for its statement LIST: on MySQL it is three statements, and
 // the driver runs one per call, so the joined form a migration file carries would be refused.
 function statementsForOp(op: Operation, dialect: SupportedDialect): string[] {
-  if (isReferenceListConversion(op)) {
+  if (isReferenceConversion(op)) {
     return referenceConversionStatements(op, dialect);
   }
   return [generateSQL(op, dialect)];
@@ -513,6 +575,8 @@ export async function runRaw(
   sqlString: string,
   dialect: SupportedDialect
 ): Promise<void> {
+  // A run that lost the schema lock starts no further statement (`assertSchemaLockHeld`).
+  await assertSchemaLockHeld();
   if (dialect === "sqlite") {
     // better-sqlite3 / drizzle-orm/better-sqlite3 uses synchronous .run()
     // (and tx wrappers also expose .run()). The F3 pipeline runs SQLite
@@ -524,5 +588,6 @@ export async function runRaw(
   }
   // PG and MySQL use async .execute()
   const handle = txOrDb as AsyncExecuteHandle;
-  await handle.execute(sql.raw(sqlString));
+  // Carries the run's claim, so a run taking the lock over can find and stop it.
+  await handle.execute(sql.raw(markedForSchemaLock(sqlString)));
 }

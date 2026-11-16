@@ -8,7 +8,7 @@
  *   - logout           -> respondAction("Logged out.")
  *   - refresh          -> respondData({ user, accessToken, refreshToken, expiresAt })
  *   - register         -> respondAction(message, ...)  [silent vs reveal paths]
- *   - setup-status     -> respondData({ isSetup, requiresInitialUser })
+ *   - setup-status     -> respondData({ isSetup, requiresInitialUser, ... })
  *   - setup            -> respondAction("Setup complete.", { user, ... }, status 201)
  *   - forgot-password  -> respondAction("If an account exists ...")  [no email leak]
  *   - reset-password   -> respondAction("Password reset.")
@@ -706,7 +706,6 @@ describe("refresh handler: respondData shape", () => {
         expiresAt: new Date(Date.now() + 60_000),
       }),
       deleteRefreshToken: vi.fn().mockResolvedValue(undefined),
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       findUserById: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -762,7 +761,6 @@ describe("refresh handler: respondData shape", () => {
         expiresAt: new Date(Date.now() + 60_000),
       }),
       deleteRefreshToken,
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       withSessionRowTransaction: rows.withSessionRowTransaction,
       findUserById: vi.fn().mockRejectedValue(new Error("connection lost")),
       fetchSessionRoles: vi
@@ -854,6 +852,7 @@ describe("setup-status handler: respondData shape", () => {
     const deps = {
       hasAdministrator: vi.fn().mockResolvedValue(false),
       setupToken: OPEN_SETUP,
+      allowRegistration: false,
     };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
@@ -865,6 +864,8 @@ describe("setup-status handler: respondData shape", () => {
       isSetup: false,
       requiresInitialUser: true,
       requiresSetupToken: false,
+      allowRegistration: false,
+      passwordRule: { minLength: 8, maxBytes: 72 },
     });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("isSetupComplete");
@@ -874,6 +875,8 @@ describe("setup-status handler: respondData shape", () => {
     const deps = {
       hasAdministrator: vi.fn().mockResolvedValue(true),
       setupToken: OPEN_SETUP,
+      // On, so a field read from anything but the flag shows as a mismatch.
+      allowRegistration: true,
     };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
@@ -885,6 +888,8 @@ describe("setup-status handler: respondData shape", () => {
       isSetup: true,
       requiresInitialUser: false,
       requiresSetupToken: false,
+      allowRegistration: true,
+      passwordRule: { minLength: 8, maxBytes: 72 },
     });
   });
 
@@ -895,6 +900,7 @@ describe("setup-status handler: respondData shape", () => {
     const deps = {
       hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
       setupToken: OPEN_SETUP,
+      allowRegistration: false,
     };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"

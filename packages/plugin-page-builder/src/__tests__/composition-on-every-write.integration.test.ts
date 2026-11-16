@@ -116,6 +116,7 @@ interface TranslatedEntries {
     collectionName: string;
     entryId: string;
     overrideAccess?: boolean;
+    data?: Readonly<Record<string, unknown>>;
   }): Promise<{ success: boolean }>;
 }
 
@@ -222,7 +223,10 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id: a,
-            data: { content: document("component", [placing("n2", b)]) },
+            data: {
+              content: document("component", [placing("n2", b)]),
+              _overwrite: true,
+            },
           },
         ],
         { skipHooks: true }
@@ -246,11 +250,17 @@ describe.each(getConfiguredTestDialects())(
         [
           {
             id: a,
-            data: { content: document("component", [placing("n1", b)]) },
+            data: {
+              content: document("component", [placing("n1", b)]),
+              _overwrite: true,
+            },
           },
           {
             id: b,
-            data: { content: document("component", [placing("n2", a)]) },
+            data: {
+              content: document("component", [placing("n2", a)]),
+              _overwrite: true,
+            },
           },
         ],
         { skipHooks: true }
@@ -271,13 +281,16 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: a,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: a,
-        data: { content: document("component", [placing("n1", b)]) },
+        data: {
+          content: document("component", [placing("n1", b)]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       await plant(t, dialect, b, [placing("n2", a)]);
@@ -286,7 +299,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: COMPONENTS_SLUG,
           id: a,
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
           overrideAccess: true,
         })
       );
@@ -343,7 +356,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: deep,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       // Placed three deep and two deep inside: exactly the limit of four.
@@ -362,6 +375,7 @@ describe.each(getConfiguredTestDialects())(
             content: document("component", [
               box("d1", [box("d2", [text("d3")])]),
             ]),
+            _overwrite: true,
           },
           overrideAccess: true,
         })
@@ -386,14 +400,17 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       // No status named: stored as the working draft, the live row untouched.
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id,
-        data: { content: document("component", [text("d1")]) },
+        data: {
+          content: document("component", [text("d1")]),
+          _overwrite: true,
+        },
         overrideAccess: true,
       });
       return id;
@@ -403,7 +420,7 @@ describe.each(getConfiguredTestDialects())(
       return t.nextly.update({
         collection: "pages",
         id,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
     }
@@ -438,7 +455,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id,
-        data: { status: "draft" },
+        data: { status: "draft", _overwrite: true },
         overrideAccess: true,
       });
       // Deepened while unpublished, which a draft is judged on the draft forms for.
@@ -449,6 +466,7 @@ describe.each(getConfiguredTestDialects())(
           content: document("page", [
             box("p1", [box("p2", [placing("i1", split)])]),
           ]),
+          _overwrite: true,
         },
         overrideAccess: true,
       });
@@ -489,6 +507,7 @@ describe.each(getConfiguredTestDialects())(
             box("p1", [box("p2", [placing("i1", split)])]),
           ]),
           status: "draft",
+          _overwrite: true,
         }
       );
       expect(german.success, JSON.stringify(german)).toBe(true);
@@ -497,6 +516,7 @@ describe.each(getConfiguredTestDialects())(
         collectionName: "articles",
         entryId: id,
         overrideAccess: true,
+        data: { _overwrite: true },
       });
 
       // This path reports a refusal in its result rather than by throwing.
@@ -540,7 +560,7 @@ describe.each(getConfiguredTestDialects())(
         t.nextly.update({
           collection: "notes",
           id: String(note.item.id),
-          data: { status: "published" },
+          data: { status: "published", _overwrite: true },
           overrideAccess: true,
         })
       );
@@ -557,7 +577,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: COMPONENTS_SLUG,
         id: shallow,
-        data: { status: "published" },
+        data: { status: "published", _overwrite: true },
         overrideAccess: true,
       });
       const created = await entries.createEntry(
@@ -576,7 +596,12 @@ describe.each(getConfiguredTestDialects())(
           locale: "de",
           overrideAccess: true,
         },
-        { title: "Start", content: deepGerman, status: "published" }
+        {
+          title: "Start",
+          content: deepGerman,
+          status: "published",
+          _overwrite: true,
+        }
       );
       expect(live.success, JSON.stringify(live)).toBe(true);
       // The component deepens in storage, as an older writer could have left
@@ -590,7 +615,7 @@ describe.each(getConfiguredTestDialects())(
           locale: "de",
           overrideAccess: true,
         },
-        { status: "published" }
+        { status: "published", _overwrite: true }
       );
 
       // Nothing goes live that was not live already, so nothing is judged.

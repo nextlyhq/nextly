@@ -1,11 +1,12 @@
 /**
- * Reaching the database from inside a save hook.
+ * Reading the documents the usage indexes describe.
  *
  * `class-usage-write` decides WHICH subjects a save owes an update to and
- * `class-usage-maintenance` reconciles one of them. Both take their database
- * access as an interface so they can be tested against values. This is the one
+ * `class-usage-maintenance` reconciles one of them. Both take their document
+ * reads as an interface so they can be tested against values. This is the one
  * place that turns those interfaces into real calls, through the Direct API a
- * hook is handed on `ctx.req.nextly`.
+ * hook is handed on `ctx.req.nextly`. The index rows themselves live in the
+ * plugin's own tables (`usage-index-tables`).
  *
  * Kept separate from both so the decisions stay testable without a database,
  * and so everything that knows how this runtime addresses a locale or a variant
@@ -14,11 +15,9 @@
  * @module class-usage-runtime
  */
 import type { ClassUsageDocumentStore } from "./class-usage-index-rebuild";
-import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
-import type { BackfillStateStore } from "./usage-backfill";
-import type { GroupedUsageReader } from "./usage-index";
+import type { UsageScope } from "./usage-index";
 
 /**
  * The part of the Direct API this needs.
@@ -35,7 +34,8 @@ export interface ClassUsageDirectApi {
     where?: Record<string, unknown>;
     limit?: number;
     page?: number;
-    sort?: string;
+    /** One key or several in order, as the Direct API takes it. */
+    sort?: string | string[];
     locale?: string;
     fallbackLocale?: false | string;
     status?: "published" | "draft" | "all";
@@ -102,72 +102,35 @@ export interface ClassUsageDirectApi {
     id: string;
     overrideAccess?: boolean;
   }): Promise<unknown>;
+  /**
+   * A Single's one document, read without creating it: `createIfMissing:
+   * false` answers `null` for a Single nobody has saved, where any other read
+   * writes its default document as a side effect. With `whenAbsent:
+   * "default"` it answers, for such a Single, the default document that first
+   * read will store, still without storing it.
+   */
+  findSingle(args: {
+    slug: string;
+    createIfMissing: false;
+    whenAbsent?: "default";
+    draft?: boolean;
+    status?: "all";
+    locale?: string;
+    fallbackLocale?: false;
+    depth?: number;
+    overrideAccess?: boolean;
+  }): Promise<unknown>;
 }
 
 /**
- * The index table is written on the system's behalf, never a user's.
- *
- * Its access rules deny everything, which is what keeps these rows private —
- * `internal` only sets `admin.hidden`, so the rules are the single layer and
- * not a second one behind a first. A maintenance write that respected the
- * acting user would therefore fail for every user, and the index would simply
- * never be maintained.
+ * Documents are read on the system's behalf, never a user's: a document the
+ * acting user cannot see still renders what it places, and an index built
+ * from what one user may read would answer "used nowhere" for the rest.
  */
 const AS_THE_SYSTEM = { overrideAccess: true } as const;
 
-/**
- * The index store, backed by the Direct API.
- *
- * The paging shape is translated here rather than at the call site: the Direct
- * API answers `{ docs, hasNextPage }` and the reconciler asks for
- * `{ items, meta: { hasNext } }`. A missing `docs` becomes an EMPTY page rather
- * than an error, because the reconciler reads a page of no rows as "this
- * subject has no rows recorded" — which is the correct reading of a collection
- * that has never been written to.
- */
-export function classUsageIndexStore(
-  nextly: ClassUsageDirectApi,
-  /**
-   * The index collection's RESOLVED slug.
-   *
-   * Passed in rather than read from the module constant, because an integrator
-   * may rename a plugin's collections and the schema then creates only the
-   * renamed one. A store holding the declared name would issue every write
-   * against a collection that does not exist, and each save would report a
-   * maintenance failure on an installation that is otherwise correct.
-   */
-  indexCollection: string
-): ClassUsageIndexStore {
-  return {
-    // Passed through, not translated. The Direct API already answers
-    // `{ items, meta: { hasNext } }` — the same envelope the reconciler asks
-    // for. An adapter here would be a second statement of one shape, and the
-    // one it stated was the SERVICE's inner `{ docs, hasNextPage }`, which this
-    // never sees: every page came back empty, so no stored row was ever found,
-    // nothing was removed, and every save re-inserted rows it already had.
-    find: args =>
-      nextly.find({
-        collection: indexCollection,
-        where: args.where,
-        limit: args.limit,
-        page: args.page,
-        sort: args.sort,
-        ...AS_THE_SYSTEM,
-      }),
-    create: args =>
-      nextly.create({
-        collection: indexCollection,
-        data: args.data,
-        ...AS_THE_SYSTEM,
-      }),
-    delete: args =>
-      nextly.delete({
-        collection: indexCollection,
-        id: args.id,
-        ...AS_THE_SYSTEM,
-      }),
-  };
-}
+/** The two reads a stored document is resolved through, by id or by slug. */
+type DocumentReadApi = Pick<ClassUsageDirectApi, "findByID" | "findSingle">;
 
 /**
  * Resolve a subject to the document behind it.
@@ -204,10 +167,12 @@ export function classUsageDocumentReader(
  * is not part of addressing a row. Separating them is what lets both callers
  * share one variant rule.
  */
-export interface UsageDocumentAddress {
-  /** The collection holding it. */
+interface UsageDocumentAddress {
+  /** Whether `entity` is a collection or a Single; a collection when absent. */
+  scope?: UsageScope;
+  /** The collection holding it, or the Single. */
   entity: string;
-  /** The document's id. */
+  /** The document's id; empty for a Single. */
   entityKey: string;
   /** The locale to resolve, or the empty string for a shared field. */
   locale: string;
@@ -226,17 +191,17 @@ export interface UsageDocumentAddress {
  * re-decide draft-versus-published for itself, or index the published row
  * under the draft subject the first time the two disagreed.
  */
-export function classUsageDocumentRowReader(
-  nextly: ClassUsageDirectApi
+function classUsageDocumentRowReader(
+  nextly: DocumentReadApi
 ): (address: UsageDocumentAddress) => Promise<unknown> {
   return async address => {
     // `field` is not part of the address and no read below consults it; the
     // empty string is what the shared subject shape requires, never a claim
     // that some field is named that.
     const subject: ClassUsageSubject = {
-      scope: "collection",
       field: "",
       ...address,
+      scope: address.scope ?? "collection",
     };
     return subject.variant === "draft"
       ? readDraft(nextly, subject)
@@ -261,7 +226,7 @@ export function classUsageDocumentRowReader(
  * where the never-published case is answered.
  */
 async function readDraft(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject
 ): Promise<unknown> {
   const record = await readById(nextly, subject, { draft: true });
@@ -299,7 +264,7 @@ async function readDraft(
  * class a live document still renders, and only one of those is recoverable.
  */
 async function readPublished(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject
 ): Promise<unknown> {
   return readById(nextly, subject, {});
@@ -313,10 +278,11 @@ async function readPublished(
  * draft.
  */
 async function readById(
-  nextly: ClassUsageDirectApi,
+  nextly: DocumentReadApi,
   subject: ClassUsageSubject,
   options: { draft?: boolean }
 ): Promise<Record<string, unknown> | undefined> {
+  if (subject.scope === "single") return readSingle(nextly, subject, options);
   const row = await nextly.findByID({
     collection: subject.entity,
     id: subject.entityKey,
@@ -332,6 +298,39 @@ async function readById(
     ...AS_THE_SYSTEM,
   });
   return recordOf(row, subject);
+}
+
+/**
+ * A Single's one document, as the system and without creating it.
+ *
+ * `status: "all"` reads the stored row in whatever state it is in, for the
+ * reason `readPublished` gives about collection entries; the draft read opts
+ * into the working draft the same way. No identity check: a Single is read by
+ * its slug, and the answer carries no key the subject could be compared with.
+ *
+ * A Single nobody has saved answers its default document, built by core as
+ * the first read will store it, and not stored. Its first ordinary read stores
+ * that document without a save hook, so indexing it as empty would leave the
+ * index at an exact zero while the Single renders what its defaults place.
+ */
+async function readSingle(
+  nextly: DocumentReadApi,
+  subject: ClassUsageSubject,
+  options: { draft?: boolean }
+): Promise<Record<string, unknown> | undefined> {
+  const row = await nextly.findSingle({
+    slug: subject.entity,
+    createIfMissing: false,
+    whenAbsent: "default",
+    status: "all",
+    ...options,
+    ...localeOptions(subject),
+    depth: 0,
+    ...AS_THE_SYSTEM,
+  });
+  return typeof row === "object" && row !== null
+    ? (row as Record<string, unknown>)
+    : undefined;
 }
 
 /**
@@ -404,6 +403,40 @@ function localeOptions(subject: ClassUsageSubject): {
   return { locale: subject.locale, fallbackLocale: false };
 }
 
+/** One form a document may be stored in: a language, or none, and a variant. */
+export interface StoredDocumentForm {
+  /** The language to read, fallback off, or the empty string for none. */
+  readonly locale: string;
+  readonly variant: ClassUsageSubject["variant"];
+}
+
+/**
+ * Each of the named forms of one document, read as the system through the
+ * same per-subject read the index is maintained by, so a check reading every
+ * form agrees with the index about what each one is: a language with its
+ * fallback off, and the working draft only where one is surfaced. A form the
+ * document does not have is left out. A read that fails throws, so a caller
+ * can refuse rather than take an unread form for one holding nothing.
+ */
+export function storedFormsReader(
+  nextly: DocumentReadApi
+): (
+  document: Pick<UsageDocumentAddress, "scope" | "entity" | "entityKey">,
+  forms: readonly StoredDocumentForm[]
+) => Promise<Record<string, unknown>[]> {
+  const readRow = classUsageDocumentRowReader(nextly);
+  return async (document, forms) => {
+    const found: Record<string, unknown>[] = [];
+    for (const form of forms) {
+      const row = await readRow({ ...document, ...form });
+      if (typeof row === "object" && row !== null) {
+        found.push(row as Record<string, unknown>);
+      }
+    }
+    return found;
+  };
+}
+
 /**
  * The block document a row carries for one subject.
  *
@@ -415,209 +448,6 @@ function localeOptions(subject: ClassUsageSubject): {
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
   return (row as Record<string, unknown>)[subject.field];
-}
-
-/**
- * A grouped reader over one usage index, backed by the Direct API.
- *
- * Reads AS THE SYSTEM for the reason every other read of these tables does:
- * the index denies every access rule it declares, so an untrusted read answers
- * an empty set — and an empty set is indistinguishable from a thing nothing
- * uses, which is the answer that makes deleting it look safe.
- *
- * The bucket cap is left to the server rather than named here. Asking for a
- * specific one would be a second opinion about a bound this package does not
- * own, and the answer carries `truncated` either way — so the count reports the
- * limit it actually met rather than the one it hoped for.
- */
-export function usageCountReader(
-  nextly: ClassUsageDirectApi,
-  /** The index collection's RESOLVED slug, since an integrator may rename it. */
-  indexCollection: string
-): GroupedUsageReader {
-  return async args => {
-    const grouped = await nextly.group({
-      collection: indexCollection,
-      groupBy: args.groupBy,
-      where: args.where,
-      ...AS_THE_SYSTEM,
-    });
-    // The bucket KEYS, not the row counts inside them. Each bucket is one
-    // distinct value; the counts inside would put per-row multiplicity back.
-    return {
-      buckets: grouped.buckets.map(bucket => bucket.value),
-      truncated: grouped.truncated,
-    };
-  };
-}
-
-/**
- * How many recorded scopes one page of the progress read returns.
- *
- * The population is small by construction — one row per (collection, field,
- * locale, variant), so tens on a large site rather than thousands — but it is
- * PAGED anyway, because "small" is a property of today's configuration and a
- * single unpaged read that silently returns the server's default page would
- * report the scopes past it as outstanding. A backfill would then walk them
- * again on every tick, for ever, never reporting complete.
- */
-const PROGRESS_PAGE_SIZE = 200;
-
-/**
- * The backfill's progress record, backed by the Direct API.
- *
- * Read as the system for the reason every access to these tables is: the
- * collection denies every rule it declares, so a read respecting the acting
- * user answers an empty set — which reads as "no scope has been walked" and
- * sends the backfill round again from the start.
- */
-/**
- * Sort one page of progress rows into what counts and what must go.
- *
- * Its own function because classifying a row is a different job from paging a
- * collection, and it is the job carrying every branch: which generation a row
- * belongs to, whether its key is usable, whether it can be addressed for
- * deletion.
- *
- * Writes into the caller's collections rather than returning new ones, because
- * the caller is accumulating across pages and merging per page would allocate
- * two objects for every page of a walk that exists to be cheap.
- */
-/**
- * The id a stale progress row can be discarded by — or a refusal.
- *
- * REFUSED rather than skipped when the id is not a string. A stale row that
- * cannot be addressed cannot be deleted, so it outlives the discard, and the
- * next time a host's bounds return to its generation it is read as completed
- * progress over an index that another generation has since rebuilt. That is
- * the exact defect the discard exists to prevent, and the delete-failure path
- * below already refuses for the same reason; an unaddressable row is the same
- * outcome arriving one step earlier.
- */
-function staleRowId(row: { id?: unknown }): string {
-  if (typeof row.id === "string" && row.id.length > 0) return row.id;
-  throw new Error(
-    "[page-builder] the usage backfill found a progress row from another derivation with no readable id, so it cannot be discarded and would survive to be reused"
-  );
-}
-
-function sortProgressRows(
-  items: readonly unknown[],
-  generation: string,
-  keys: Set<string>,
-  stale: string[]
-): void {
-  for (const item of items) {
-    const row = item as {
-      scopeKey?: unknown;
-      generation?: unknown;
-      id?: unknown;
-    };
-    if (row.generation !== generation) {
-      // Another generation's progress, which cannot be reused and must not be
-      // left to be reused later. Collected rather than deleted here, so the
-      // paging is not walking a collection it is mutating.
-      stale.push(staleRowId(row));
-      continue;
-    }
-    const key = row.scopeKey;
-    // A row whose key is not a string records nothing this can act on. Skipped
-    // rather than refused: the scope it meant to name is then simply
-    // outstanding, which costs a repeat walk and is the safe direction —
-    // treating it as a completed scope of unknown identity is what would leave
-    // a real scope permanently unwalked.
-    if (typeof key === "string" && key.length > 0) keys.add(key);
-  }
-}
-
-export function usageBackfillStateStore(
-  nextly: Pick<ClassUsageDirectApi, "find" | "create" | "delete">,
-  /** The progress collection's RESOLVED slug, since an integrator may rename it. */
-  stateCollection: string,
-  /**
-   * The derivation the current index is being built under.
-   *
-   * Rows from any other generation are DISCARDED, not merely ignored, and the
-   * first version of this got that wrong for a reason worth writing down: it
-   * kept them so that moving the bounds back would not cost a re-walk, on the
-   * grounds that progress recorded under the bounds a host returned to is still
-   * true.
-   *
-   * It is not. Progress is a claim about the INDEX, and the intervening
-   * generation mutated it — lowering `maxNodes` removes references beyond the
-   * new bound, so returning to the old one finds the old progress rows intact
-   * over an index those references are missing from, and reports an undercount
-   * as exact. Reusing them is only sound if the index snapshot is restored with
-   * them, which nothing does.
-   *
-   * So a generation transition costs a re-walk, in both directions. That is the
-   * price of the answer meaning anything.
-   */
-  generation: string
-): BackfillStateStore {
-  return {
-    completed: async () => {
-      const keys = new Set<string>();
-      const stale: string[] = [];
-      for (let page = 1; ; page += 1) {
-        const result = await nextly.find({
-          collection: stateCollection,
-          // EVERY row, not only this generation's. The rows belonging to other
-          // generations are the ones that have to be removed, and a filtered
-          // read cannot see them — so it would leave them to be reused the next
-          // time a host moved the bounds back.
-          limit: PROGRESS_PAGE_SIZE,
-          page,
-          // Sorted so the pages partition the rows. An unsorted paged read has
-          // no defined order between pages, so a row can appear twice or not at
-          // all — and a key missed here is a scope walked again on every tick.
-          sort: "id",
-          depth: 0,
-          ...AS_THE_SYSTEM,
-        });
-        sortProgressRows(result.items, generation, keys, stale);
-        if (!result.meta.hasNext) break;
-      }
-
-      // AFTER the walk, for the reason the rebuild sweeps after its own: a
-      // delete during an offset-paged read shifts the rows behind it and the
-      // next page skips one.
-      //
-      // A failure PROPAGATES. The first version swallowed it, reasoning that a
-      // surviving stale row costs one repeat of this cleanup on the next pass —
-      // true only if the cleanup runs again BEFORE the bounds return to that
-      // row's generation, and nothing guarantees that ordering. A row that
-      // outlives the discard is then accepted as progress over an index the
-      // intervening generation changed, which is exactly the defect the discard
-      // exists to prevent.
-      //
-      // Failing the pass is cheap by comparison: the sweep is re-queued and the
-      // queue is durable, so refusing costs a tick and claims nothing.
-      for (const id of stale) {
-        try {
-          await nextly.delete({
-            collection: stateCollection,
-            id,
-            ...AS_THE_SYSTEM,
-          });
-        } catch (failure) {
-          throw new Error(
-            `[page-builder] the usage backfill could not discard stale progress row "${id}", so progress from another derivation would survive to be reused`,
-            { cause: failure }
-          );
-        }
-      }
-
-      return keys;
-    },
-    record: async key => {
-      await nextly.create({
-        collection: stateCollection,
-        data: { scopeKey: key, generation },
-        ...AS_THE_SYSTEM,
-      });
-    },
-  };
 }
 
 /**
@@ -673,7 +503,9 @@ export function usageRebuildDocumentStore(
       // Resuming after the last id seen removes the shift entirely: a deletion
       // behind the cursor cannot move anything across it, because position is
       // no longer what decides the next page.
-      if (args.page === 1) after = undefined;
+      // A new walk starts at its resume point, which is the cursor an earlier
+      // tick recorded, or the beginning.
+      if (args.page === 1) after = args.after;
       // The cursor is an id, so a walk ordered by anything else would resume at
       // a point in a different sequence. Refused rather than quietly falling
       // back to offsets, which is the behaviour this exists to remove.
@@ -762,5 +594,80 @@ export function usageRebuildDocumentStore(
       });
       return document !== undefined;
     },
+  };
+}
+
+/**
+ * The document store a rebuild walks for one Single: its one document, or
+ * none when nobody has saved it.
+ *
+ * The same variant-scoped read the write path makes, so a backfill and a save
+ * file a Single's rows alike. A walk resuming after a cursor has already
+ * repaired the document, so it answers nothing more; `exists` answers whether
+ * the document is there now, which is what lets the sweep remove the rows of
+ * a draft that was discarded or published.
+ */
+export function singleRebuildDocumentStore(
+  nextly: ClassUsageDirectApi
+): ClassUsageDocumentStore {
+  const readRow = classUsageDocumentRowReader(nextly);
+  const read = (args: {
+    collection: string;
+    locale: string;
+    variant: ClassUsageSubject["variant"];
+  }) =>
+    readRow({
+      scope: "single",
+      entity: args.collection,
+      entityKey: "",
+      locale: args.locale,
+      variant: args.variant,
+    });
+  return {
+    find: async args => {
+      if (args.page !== 1 || args.after !== undefined) {
+        return { items: [], meta: { hasNext: false } };
+      }
+      const document = await read(args);
+      if (document === undefined)
+        return { items: [], meta: { hasNext: false } };
+      // The rebuild files the rows by the Single's slug and records the
+      // document's id as the walk's cursor. Refused without one, as a listed
+      // entry without one is: skipped, the scope would be recorded walked
+      // with the Single's rows never repaired.
+      if (typeof (document as { id?: unknown }).id !== "string") {
+        throw new Error(
+          `[page-builder] the usage backfill read the Single "${args.collection}" without a usable id, so it cannot be recorded`
+        );
+      }
+      return { items: [document], meta: { hasNext: false } };
+    },
+    exists: async args => (await read(args)) !== undefined,
+  };
+}
+
+/**
+ * One stored form of a host's blocks field, as the system reads it: a Single
+ * by its slug, without creating it, and a collection entry by its id.
+ * `undefined` where the document has no such form.
+ */
+export function hostFieldReader(
+  nextly: ClassUsageDirectApi
+): (
+  host: { slug: string; id: string; field: string; single?: boolean },
+  form: ClassUsageSubject["variant"]
+) => Promise<unknown> {
+  const readRow = classUsageDocumentRowReader(nextly);
+  return async (host, form) => {
+    const row = await readRow({
+      scope: host.single === true ? "single" : "collection",
+      entity: host.slug,
+      entityKey: host.id,
+      locale: "",
+      variant: form,
+    });
+    return row !== null && typeof row === "object"
+      ? (row as Record<string, unknown>)[host.field]
+      : undefined;
   };
 }

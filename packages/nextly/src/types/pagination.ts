@@ -61,6 +61,13 @@ export interface PaginatedResponse<T> {
 
   /** Next page number, or null if on the last page */
   nextPage: number | null;
+
+  /**
+   * True when the read counted no further than a cap and more entries match:
+   * `totalDocs` is then the cap, a lower bound, and the paging fields come
+   * from the rows counted. Absent when the total is exact.
+   */
+  totalCapped?: true;
 }
 
 /**
@@ -75,6 +82,14 @@ export interface BuildPaginatedResponseOptions {
 
   /** Number of documents per page */
   limit: number;
+
+  /**
+   * Where the read started, when it named an offset rather than a page. The
+   * paging fields then follow the offset: the first row's position, and
+   * whether rows lie before it or after the rows returned. `page` is the page
+   * the first row falls on.
+   */
+  offset?: number;
 }
 
 /**
@@ -119,7 +134,28 @@ export function buildPaginatedResponse<T>(
   docs: T[],
   options: BuildPaginatedResponseOptions
 ): PaginatedResponse<T> {
-  const { total, page, limit } = options;
+  const { total, page, limit, offset } = options;
+
+  if (offset !== undefined) {
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const startPage = Math.floor(offset / limit) + 1;
+    const hasPrevPage = offset > 0;
+    // From the window read, not from the rows returned: an afterRead hook may
+    // hand back fewer or more than the database read.
+    const hasNextPage = offset + limit < total;
+    return {
+      docs,
+      totalDocs: total,
+      limit,
+      totalPages,
+      page: startPage,
+      pagingCounter: offset + 1,
+      hasPrevPage,
+      hasNextPage,
+      prevPage: hasPrevPage ? Math.max(1, startPage - 1) : null,
+      nextPage: hasNextPage ? startPage + 1 : null,
+    };
+  }
 
   // Calculate total pages (minimum 1 to avoid division issues)
   const totalPages = Math.max(1, Math.ceil(total / limit));

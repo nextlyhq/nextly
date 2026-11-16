@@ -7,7 +7,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
@@ -15,21 +23,31 @@ import type { AdminBranding } from "@admin/types/branding";
 import type {
   DashboardLayoutResponse,
   WidgetPlacement,
-  WidgetWidthFacts,
+  WidgetLayoutFacts,
 } from "@admin/types/dashboard/widgets";
 
+import {
+  TopBarPlacesProvider,
+  TopBarPlaceTarget,
+} from "@admin/components/layout/header/TopBarPlaces";
+
+import { GreetingActionProvider } from "../../../dashboard/GreetingAction";
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
+import { preloadWidgetSettingsSheet } from "../settings-sheet-code";
 import {
   stubDashboardWidth,
   unstubDashboardWidth,
 } from "../../__tests__/dashboard-width";
+
+import { galleryFromLayout, isGalleryPath } from "./gallery-read";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -91,6 +109,13 @@ registerCoreComponent("core#LinkedBody", LinkedBody);
 registerCoreComponent("core#LinkedSection", LinkedSection);
 registerCoreComponent("core#NotesBody", NotesBody);
 
+/** Full width three rows high by default, and resizable from 3 by 2 up to 12 by 6. */
+const RESIZABLE = {
+  default: { w: 12, h: 3 },
+  min: { w: 3, h: 2 },
+  max: { w: 12, h: 6 },
+};
+
 /**
  * Four widgets: a framed card, an unframed section, a card with a setting, and
  * one the reader has not placed.
@@ -102,22 +127,21 @@ function branding(): AdminBranding {
         id: "core/a",
         title: "Posts",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#LinkedBody",
       },
       {
         id: "core/b",
         title: "Home page",
         archetype: "custom",
-        defaultSize: "full",
-        chrome: "none",
+        size: RESIZABLE,
         component: "core#LinkedSection",
       },
       {
         id: "core/c",
         title: "Notes",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#NotesBody",
         settings: [{ name: "heading", type: "text", label: "Heading" }],
       },
@@ -125,27 +149,22 @@ function branding(): AdminBranding {
         id: "core/d",
         title: "Team",
         archetype: "custom",
-        defaultSize: "full",
+        size: RESIZABLE,
         component: "core#LinkedBody",
       },
     ],
   } as unknown as AdminBranding;
 }
 
-/** Every width, one card, listed in the add panel's Overview group as core lists it. */
-function facts(): WidgetWidthFacts {
-  return {
-    allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-    defaultWidth: "full",
-    allowsSeveral: false,
-    group: "overview",
-  };
+/** One card, which a dashboard holds once. */
+function facts(): WidgetLayoutFacts {
+  return { allowsSeveral: false };
 }
 
 const OPENED: WidgetPlacement[] = [
-  { id: "p1", widgetId: "core/a", width: "full", removed: false },
-  { id: "p2", widgetId: "core/b", width: "full", removed: false },
-  { id: "p3", widgetId: "core/c", width: "full", removed: false },
+  { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
+  { id: "p2", widgetId: "core/b", w: 12, h: 3, removed: false },
+  { id: "p3", widgetId: "core/c", w: 12, h: 3, removed: false },
 ];
 
 function layout(
@@ -161,11 +180,13 @@ function layout(
     },
     available: ["core/d"],
     defaultPlacements: [
-      { id: "core/c", widgetId: "core/c", width: "half", removed: false },
-      { id: "core/a", widgetId: "core/a", width: "half", removed: false },
+      { id: "core/c", widgetId: "core/c", w: 6, h: 3, removed: false },
+      { id: "core/a", widgetId: "core/a", w: 6, h: 3, removed: false },
     ],
     version: 3,
     source: "own",
+    // A row of dismissals at most: the reader still follows the default.
+    arranged: false,
     scope: "tok",
     audience: "aud",
     ...patch,
@@ -177,7 +198,19 @@ const DASHBOARD = "/admin";
 const CAME_FROM = "/admin/collections/posts";
 const ELSEWHERE = "/admin/media";
 
-function renderDashboard() {
+/**
+ * The dashboard as the page composes it. `inBar` draws it under the admin's
+ * top bar, whose two places the page fills; without it there is no bar, and
+ * the controls are drawn where they stand.
+ */
+function renderDashboard({
+  inBar = false,
+  greeting = true,
+}: {
+  inBar?: boolean;
+  /** False for a page whose greeting a plugin replaced, which draws no row. */
+  greeting?: boolean;
+} = {}) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false, retryDelay: 0, gcTime: 0 },
@@ -188,14 +221,37 @@ function renderDashboard() {
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   // The page's heading beside the grid, so the outline is the page's.
-  return render(
+  const page = (
     <>
-      <WelcomeHeader />
+      {greeting ? <WelcomeHeader /> : <h1>A plugin&apos;s welcome</h1>}
       <WidgetGrid />
-    </>,
+    </>
+  );
+  return render(
+    inBar ? (
+      <TopBarPlacesProvider>
+        <header data-testid="top-bar">
+          <TopBarPlaceTarget name="start" />
+          <TopBarPlaceTarget name="end" />
+        </header>
+        <main>
+          <GreetingActionProvider>{page}</GreetingActionProvider>
+        </main>
+      </TopBarPlacesProvider>
+    ) : (
+      page
+    ),
     { wrapper: Wrapper }
   );
 }
+
+// The settings sheet's code loads apart from the dashboard's, ahead of its opening, as a pointer
+// over the card's menu fetches it. Fetched once here, so a test opening the sheet waits on the
+// sheet rather than on the first transform of the editor's field renderer behind it.
+beforeAll(async () => {
+  preloadWidgetSettingsSheet();
+  await import("../CellSettings");
+});
 
 beforeEach(() => {
   // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
@@ -203,9 +259,25 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
-  api.get.mockImplementation(() => Promise.resolve(layoutResponse));
+  api.get.mockImplementation((path: string) =>
+    // The gallery read the layout fixture implies, read when the add panel opens.
+    Promise.resolve(
+      isGalleryPath(path) && layoutResponse !== undefined
+        ? galleryFromLayout(layoutResponse, mockBranding?.widgets ?? [])
+        : layoutResponse
+    )
+  );
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
+  // Every card is asked for by its id; each is answered, so its component draws.
+  api.post.mockImplementation((_path: string, body: unknown) =>
+    Promise.resolve({
+      results: (body as { queries: unknown[] }).queries.map(() => ({
+        ok: true,
+        result: { op: "data", data: null },
+      })),
+    })
+  );
   // A history the reader can go Back through: they came to the dashboard
   // from another admin page.
   window.history.pushState(null, "", CAME_FROM);
@@ -228,7 +300,22 @@ async function beginEditing(): Promise<User> {
 }
 
 function bar(): HTMLElement {
-  return screen.getByRole("group", { name: "Customize your dashboard" });
+  return screen.getByRole("group", { name: "Customize dashboard" });
+}
+
+/**
+ * Leaves customise mode from the bar's Cancel, agreeing to discard when the
+ * mode asks first (it asks only while there are unsaved changes).
+ */
+async function cancelEditing(user: User): Promise<void> {
+  await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+  const ask = screen.queryByTestId("dashboard-leave-ask");
+  if (ask !== null) {
+    await user.click(
+      within(ask).getByRole("button", { name: "Discard changes" })
+    );
+  }
+  await screen.findByTestId("dashboard-edit-begin");
 }
 
 function drawnOrder(): string[] {
@@ -238,9 +325,9 @@ function drawnOrder(): string[] {
     .filter((id): id is string => id !== undefined);
 }
 
-function widthLabels(): string[] {
+function sizeLabels(): string[] {
   return screen
-    .queryAllByTestId("card-width-label")
+    .queryAllByTestId("card-size-label")
     .map(label => label.textContent ?? "");
 }
 
@@ -248,11 +335,14 @@ function live(): HTMLElement {
   return screen.getByTestId("widget-grid-live");
 }
 
-/** Every write the dashboard can make. */
+/**
+ * Every write the dashboard can make. The cards' batch is a POST that only reads, so it is not
+ * one: every card asks it, and customising asks again with the settings each is drawn with.
+ */
 function writes(): number {
   return (
     api.put.mock.calls.length +
-    api.post.mock.calls.length +
+    api.post.mock.calls.filter(([path]) => path !== "/dashboard/query").length +
     api.delete.mock.calls.length
   );
 }
@@ -278,26 +368,28 @@ function saveButton(): HTMLElement {
   return within(bar()).getByRole("button", { name: "Save" });
 }
 
+/** Opens a card's settings drawer from its menu, once its form has loaded. */
+async function openDrawer(user: User, title: string): Promise<HTMLElement> {
+  await choose(user, title, "Settings…");
+  // The drawer opens at once and says it is loading until its code arrives, so wait for its
+  // Width before reading it.
+  await screen.findByRole("radiogroup", { name: "Width" });
+  return screen.getByRole("dialog", { name: title });
+}
+
 /** One change of each kind customise mode can make. */
 const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a move", user => choose(user, "Posts", "Move later")],
   [
-    "a width",
+    "a resize",
     async user => {
+      // The drawer's Width, staged with the rest on its Save.
+      const drawer = await openDrawer(user, "Posts");
       await user.click(
-        screen.getByRole("button", { name: "Card actions for Posts" })
+        within(drawer).getByRole("radio", { name: "50% width" })
       );
-      const menu = await screen.findByRole("menu");
-      await user.click(within(menu).getByRole("menuitem", { name: /Width/ }));
-      const widths = await waitFor(() => {
-        const menus = screen.getAllByRole("menu");
-        expect(menus.length).toBe(2);
-        return menus[1];
-      });
-      // By keyboard: jsdom has no geometry, so a pointer crossing into the
-      // submenu reads as leaving it.
-      within(widths).getByRole("menuitemradio", { name: "Half width" }).focus();
-      await user.keyboard("{Enter}");
+      await user.click(within(drawer).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],
   ["a removal", user => choose(user, "Posts", "Remove")],
@@ -317,10 +409,9 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   [
     "a setting",
     async user => {
-      await choose(user, "Notes", "Settings");
-      const sheet = await screen.findByRole("dialog");
+      const sheet = await openDrawer(user, "Notes");
       await user.type(within(sheet).getByLabelText(/Heading/), "Mine");
-      await user.click(within(sheet).getByRole("button", { name: "Done" }));
+      await user.click(within(sheet).getByRole("button", { name: "Save" }));
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     },
   ],
@@ -332,12 +423,16 @@ describe("customise mode writes nothing before Save", () => {
     async (_kind, change) => {
       renderDashboard();
       const user = await beginEditing();
-      const reads = api.get.mock.calls.length;
+      // The layout's reads: opening the add panel reads the gallery, which is no re-read.
+      const layoutReads = () =>
+        api.get.mock.calls.filter(([path]) => !isGalleryPath(String(path)))
+          .length;
+      const reads = layoutReads();
 
       await change(user);
 
       expect(writes()).toBe(0);
-      expect(api.get.mock.calls.length).toBe(reads);
+      expect(layoutReads()).toBe(reads);
       await user.click(saveButton());
       await waitFor(() => expect(writes()).toBe(1));
     }
@@ -349,72 +444,166 @@ describe("customise mode writes nothing before Save", () => {
       renderDashboard();
       const user = await beginEditing();
       const order = drawnOrder();
-      const widths = widthLabels();
+      const sizes = sizeLabels();
 
       await change(user);
-      await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+      await cancelEditing(user);
 
       expect(drawnOrder()).toEqual(order);
       expect(writes()).toBe(0);
-      // Back in customise mode, the widths are the ones it opened with.
+      // Back in customise mode, the sizes are the ones it opened with.
       await beginEditing();
-      expect(widthLabels()).toEqual(widths);
+      expect(sizeLabels()).toEqual(sizes);
     }
   );
 });
 
+describe("the card menu and the settings drawer while customising", () => {
+  it("lists Settings…, Refresh, Move earlier, Move later and Remove, and no size", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await user.click(
+      screen.getByRole("button", { name: "Card actions for Notes" })
+    );
+    const menu = await screen.findByRole("menu");
+    const names = within(menu)
+      .getAllByRole("menuitem")
+      .map(item => item.textContent?.trim() ?? "");
+    // Refresh is offered where the card has data to ask again for.
+    expect(names.filter(name => name !== "Refresh")).toEqual([
+      "Settings…",
+      "Move earlier",
+      "Move later",
+      "Remove",
+    ]);
+    expect(within(menu).queryByText(/Width|Height/)).toBeNull();
+  });
+
+  it("leaves the card as it was until the drawer's Save, then stages it until the bar's Save", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const before = sizeLabels();
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    // The preview follows at once; the card itself does not.
+    expect(
+      within(drawer).getByTestId("settings-preview-width")
+    ).toHaveTextContent("At 50% of the dashboard");
+    expect(sizeLabels()).toEqual(before);
+
+    await user.click(within(drawer).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Staged in the draft, drawn at once, and nothing written until the bar's Save.
+    expect(sizeLabels()).toContain("50%50% wide");
+    expect(writes()).toBe(0);
+    await user.click(saveButton());
+    await waitFor(() => expect(writes()).toBe(1));
+  });
+
+  it("discards the drawer's change on Cancel and on Escape, the card untouched", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const before = sizeLabels();
+    for (const close of ["Cancel", "{Escape}"]) {
+      const drawer = await openDrawer(user, "Notes");
+      await user.click(
+        within(drawer).getByRole("radio", { name: "50% width" })
+      );
+      await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+      if (close === "Cancel") {
+        await user.click(
+          within(drawer).getByRole("button", { name: "Cancel" })
+        );
+      } else {
+        await user.keyboard(close);
+      }
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(sizeLabels()).toEqual(before);
+    }
+    // Opened again, it holds what is stored, not what was discarded.
+    const drawer = await openDrawer(user, "Notes");
+    expect(within(drawer).getByLabelText(/Heading/)).toHaveValue("");
+    expect(
+      within(drawer).getByRole("radio", { name: "100% width" })
+    ).toHaveAttribute("aria-checked", "true");
+    expect(writes()).toBe(0);
+  });
+});
+
 describe("the bar", () => {
-  it("is a labelled group with a title, a hint, and Add widget, Reset, Cancel and Save", async () => {
+  it("is a labelled group of Reset, Add widget, Cancel and Save, in place of the cog", async () => {
     renderDashboard();
     await beginEditing();
 
-    expect(bar()).toHaveTextContent("Customizing your dashboard");
-    const status = within(bar()).getByTestId("dashboard-edit-status");
-    expect(status).toHaveTextContent("Only you see this layout.");
-    // The handle is named only where it is drawn: from the dashboard's one-column width up.
-    expect(
-      within(status).getByText("Drag a card by its handle, or use its menu.")
-    ).toHaveClass("hidden", "@min-[640px]/dashboard:inline");
-    expect(
-      within(status).getByText(
-        "Use a card's menu to move, resize or remove it."
-      )
-    ).toHaveClass("@min-[640px]/dashboard:hidden");
     expect(
       within(bar())
         .getAllByRole("button")
         .map(button => button.textContent)
-    ).toEqual(["Add widget", "Reset", "Cancel", "Save"]);
+    ).toEqual(["Reset", "Add widget", "Cancel", "Save"]);
     expect(
       within(bar()).getByRole("button", { name: "Reset to default" })
     ).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    // No way to the widget previews page, in development as anywhere.
+    expect(screen.queryByText("Preview widgets")).toBeNull();
   });
 
-  it("stays at the top of the dashboard area while customising", async () => {
-    // jsdom lays nothing out; the cause is asserted, on the element it is on.
+  it("on a phone's bar, hides Reset and draws Add widget as its icon, keeping its name", async () => {
+    // jsdom lays nothing out; the bar's own width decides, through its container query.
     renderDashboard();
     await beginEditing();
-    expect(bar()).toHaveClass("sticky", "top-0");
+    expect(within(bar()).getByTestId("dashboard-edit-reset")).toHaveClass(
+      "@max-[37.5rem]/topbar:hidden"
+    );
+    const add = within(bar()).getByRole("button", { name: "Add widget" });
+    expect(add).toHaveClass("@max-[37.5rem]/topbar:size-[34px]");
+    expect(within(add).getByText("Add widget")).toHaveClass(
+      "@max-[37.5rem]/topbar:sr-only"
+    );
+    for (const name of ["Cancel", "Save"]) {
+      expect(
+        within(bar()).getByRole("button", { name }).className
+      ).not.toContain("@max-[37.5rem]/topbar:");
+    }
   });
 
-  it("keeps exactly one level-one heading, the page's own", async () => {
+  it("draws rows as tall as their cards at rest and while customising, no cell spanning rows or clipping its card", async () => {
+    // 🔴 Fails with fixed rows while customising, where a card is drawn at its stored rows rather
+    // than its content's height, and so at another height than at rest.
+    const drawnAsTallAsTheirCards = () => {
+      const grid = screen.getByLabelText("Dashboard widgets");
+      expect(grid).toHaveClass("auto-rows-auto");
+      expect(grid).not.toHaveClass("auto-rows-[72px]");
+      const cell = screen.getByTestId("widget-cell-core/a");
+      expect(cell.style.gridRow).toBe("");
+      expect(cell).not.toHaveClass("overflow-hidden");
+      expect(cell).not.toHaveClass("contain-size");
+    };
+    renderDashboard();
+    await screen.findByTestId("widget-cell-core/a");
+    drawnAsTallAsTheirCards();
+    await beginEditing();
+    drawnAsTallAsTheirCards();
+  });
+
+  it("keeps exactly one level-one heading, the greeting", async () => {
     renderDashboard();
     await beginEditing();
     const mains = screen.getAllByRole("heading", { level: 1 });
     expect(mains).toHaveLength(1);
-    expect(mains[0]).toHaveTextContent("Welcome, Dev");
+    expect(mains[0]).toHaveAttribute("id", "dashboard-heading");
   });
 
-  it("marks unsaved changes only while there are some", async () => {
+  it("offers Save only while there are unsaved changes", async () => {
     renderDashboard();
     const user = await beginEditing();
-    expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
+    expect(saveButton()).toBeDisabled();
 
     await choose(user, "Posts", "Move later");
-    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
 
     await choose(user, "Posts", "Move earlier");
-    expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
+    expect(saveButton()).toBeDisabled();
   });
 
   it("Add widget opens the add panel, with focus in its search", async () => {
@@ -431,7 +620,7 @@ describe("the bar", () => {
     );
   });
 
-  it("shows a failed save inside the bar, with Try again", async () => {
+  it("shows a failed save above the cards, with Try again", async () => {
     api.put.mockRejectedValueOnce(new Error("network"));
     renderDashboard();
     const user = await beginEditing();
@@ -439,12 +628,16 @@ describe("the bar", () => {
     await user.click(saveButton());
 
     const error = await screen.findByTestId("dashboard-edit-error");
-    expect(bar()).toContainElement(error);
+    expect(
+      error.compareDocumentPosition(
+        screen.getByLabelText("Dashboard widgets")
+      ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     await user.click(within(error).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(2));
   });
 
-  it("shows a refused save inside the bar, with Reload", async () => {
+  it("shows a refused save above the cards, with Reload", async () => {
     api.put.mockRejectedValue(
       Object.assign(new Error("changed"), { status: 409 })
     );
@@ -454,10 +647,192 @@ describe("the bar", () => {
     await user.click(saveButton());
 
     const conflict = await screen.findByTestId("dashboard-edit-conflict");
-    expect(bar()).toContainElement(conflict);
     expect(
       within(conflict).getByRole("button", { name: "Reload" })
     ).toBeInTheDocument();
+  });
+});
+
+describe("in the admin's top bar", () => {
+  function topBar(): HTMLElement {
+    return screen.getByTestId("top-bar");
+  }
+
+  it("holds the breadcrumb at rest, and the cog at the greeting row's end rather than in the bar", async () => {
+    renderDashboard({ inBar: true });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    const row = screen.getByTestId("dashboard-greeting-row");
+    expect(row).toContainElement(cog);
+    // After the greeting, so it reads and tabs after the heading it sits beside.
+    expect(row.lastElementChild).toContainElement(cog);
+    expect(topBar()).not.toContainElement(cog);
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent(/^Dashboard$/);
+  });
+
+  it("puts the cog at the bar's right end on a page whose greeting a plugin replaced", async () => {
+    renderDashboard({ inBar: true, greeting: false });
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(topBar()).toContainElement(cog);
+    expect(screen.queryByTestId("dashboard-greeting-row")).toBeNull();
+  });
+
+  it("the cog is named and tooltipped Customize dashboard", async () => {
+    renderDashboard({ inBar: true });
+    const user = userEvent.setup();
+    const cog = await screen.findByTestId("dashboard-edit-begin");
+    expect(cog).toHaveAccessibleName("Customize dashboard");
+    await user.hover(cog);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Customize dashboard"
+    );
+  });
+
+  it.each(["{Enter}", " "])(
+    "the cog is reached by Tab and opens customise mode on %s",
+    async key => {
+      renderDashboard({ inBar: true });
+      const user = userEvent.setup();
+      const cog = await screen.findByTestId("dashboard-edit-begin");
+      while (document.activeElement !== cog) {
+        await user.tab();
+        expect(document.activeElement).not.toBe(document.body);
+      }
+      await user.keyboard(key);
+      await waitFor(() => expect(bar()).toHaveFocus());
+      expect(topBar()).toContainElement(bar());
+    }
+  );
+
+  it("puts the mode's controls in the bar, the cog leaves the greeting row, and the breadcrumb says Customizing", async () => {
+    renderDashboard({ inBar: true });
+    await beginEditing();
+    expect(topBar()).toContainElement(bar());
+    expect(screen.queryByTestId("dashboard-edit-begin")).toBeNull();
+    expect(screen.getByTestId("dashboard-greeting-row")).not.toContainElement(
+      bar()
+    );
+    const crumb = within(topBar()).getByRole("navigation", {
+      name: "Breadcrumb",
+    });
+    expect(crumb).toHaveTextContent("Dashboard");
+    expect(crumb).toHaveTextContent("Customizing");
+  });
+
+  it("the breadcrumb's Dashboard leaves at once with nothing changed", async () => {
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
+    );
+  });
+
+  it("the breadcrumb's Dashboard asks first with unsaved changes, as Cancel does", async () => {
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    const order = drawnOrder();
+    await choose(user, "Posts", "Move later");
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    const ask = await screen.findByTestId("dashboard-leave-ask");
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(bar()).toBeInTheDocument();
+
+    await user.click(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    );
+    await user.click(
+      within(await screen.findByTestId("dashboard-leave-ask")).getByRole(
+        "button",
+        { name: "Discard changes" }
+      )
+    );
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(drawnOrder()).toEqual(order);
+    expect(writes()).toBe(0);
+  });
+
+  it("offers no way out through the breadcrumb while a save is on its way, as Cancel offers none", async () => {
+    let land: (value: unknown) => void = () => undefined;
+    api.put.mockReturnValue(
+      new Promise(resolve => {
+        land = resolve;
+      })
+    );
+    renderDashboard({ inBar: true });
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    expect(
+      within(topBar()).getByRole("button", { name: "Dashboard" })
+    ).toBeInTheDocument();
+    await user.click(saveButton());
+
+    await waitFor(() =>
+      expect(
+        within(bar()).getByRole("button", { name: "Cancel" })
+      ).toBeDisabled()
+    );
+    expect(
+      within(topBar()).queryByRole("button", { name: "Dashboard" })
+    ).toBeNull();
+    expect(
+      within(topBar()).getByRole("navigation", { name: "Breadcrumb" })
+    ).toHaveTextContent("Customizing");
+
+    // The save then lands, and with it the mode ends as a save does.
+    land({ message: "ok", item: {} });
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+  });
+});
+
+describe("leaving customise mode", () => {
+  it("Cancel with nothing changed leaves at once", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(await screen.findByTestId("dashboard-edit-begin")).toBeVisible();
+  });
+
+  it("Cancel with unsaved changes asks first; Keep editing stays, with the changes", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    const order = drawnOrder();
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+
+    const ask = await screen.findByTestId("dashboard-leave-ask");
+    expect(ask).toHaveTextContent("Discard your changes?");
+    await user.click(within(ask).getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByTestId("dashboard-leave-ask")).toBeNull();
+    expect(bar()).toBeInTheDocument();
+    expect(drawnOrder()).toEqual(order);
+    expect(saveButton()).toBeEnabled();
+  });
+
+  it("Cancel with unsaved changes discards them once the reader agrees", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const order = drawnOrder();
+    await choose(user, "Posts", "Move later");
+    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(await screen.findByTestId("dashboard-leave-ask")).getByRole(
+        "button",
+        { name: "Discard changes" }
+      )
+    );
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(drawnOrder()).toEqual(order);
+    expect(writes()).toBe(0);
   });
 });
 
@@ -468,83 +843,76 @@ describe("focus", () => {
     await waitFor(() => expect(bar()).toHaveFocus());
   });
 
-  it("returns to Customize after Cancel", async () => {
+  it("moves to the greeting after Cancel", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-edit-begin")).toHaveFocus()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
     );
   });
 
-  it("returns to Customize once a save has landed", async () => {
+  it("moves to the greeting after discarding changes, not back to the question's Cancel", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await choose(user, "Posts", "Move later");
+    await cancelEditing(user);
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
+    );
+  });
+
+  it("moves to the greeting once a save has landed", async () => {
     renderDashboard();
     const user = await beginEditing();
     await choose(user, "Posts", "Move later");
     await user.click(saveButton());
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-edit-begin")).toHaveFocus()
+      expect(screen.getByRole("heading", { level: 1 })).toHaveFocus()
     );
-  });
-
-  it("keeps a card's controls clear of the sticky bar when they take focus", async () => {
-    // Scrolling a focused control into view honours its scroll margin, which
-    // is what keeps it out from under a bar stuck to the top.
-    renderDashboard();
-    await beginEditing();
-    for (const control of [
-      ...screen.getAllByTestId("widget-drag-handle"),
-      ...screen.getAllByRole("button", { name: /^Card actions for / }),
-    ]) {
-      expect(control.closest("[data-testid^='widget-cell-']")).toHaveClass(
-        "[&_button]:scroll-mt-40"
-      );
-    }
   });
 });
 
 describe("the cards' own content while customising", () => {
-  // How each kind dims: a framed card keeps its title and border, so the dim
-  // reaches its body and footer through the card's slots; an unframed
-  // section has no frame, so all of it dims.
-  for (const [kind, title, link, dims] of [
-    [
-      "a framed card",
-      "Posts",
-      "View posts",
-      "[&_[data-slot=card-content]]:opacity-60",
-    ],
-    ["an unframed section", "Home page", "Open the home page", "opacity-60"],
+  // Every card is framed: it keeps its title and border, and dims its body
+  // and footer, which are out of reach.
+  for (const [kind, title, link] of [
+    ["a framed card", "Posts", "View posts"],
   ] as const) {
     it(`puts ${kind}'s own links and controls out of reach, and dims them`, async () => {
       renderDashboard();
       await beginEditing();
 
       const content = screen.getByRole("link", { name: link, hidden: true });
-      const fence = content.closest("[inert]");
-      expect(fence).not.toBeNull();
-      expect(fence).toHaveClass(dims);
-      // And what the framed dim reaches for is there to reach.
-      if (kind === "a framed card") {
-        expect(
-          fence?.querySelector("[data-slot=card-content]")
-        ).toContainElement(content);
-      }
+      expect(content.closest("[inert]")).not.toBeNull();
+      // The card's own body dims, once: the fence adds no dim of its own.
+      const body = content.closest("[data-slot=card-content]");
+      expect(body).toHaveClass("opacity-55");
+      expect(body?.closest(".opacity-60")).toBeNull();
       // The edit controls are NOT fenced: they are what customising is for.
       expect(
         screen
           .getByRole("button", { name: `Card actions for ${title}` })
           .closest("[inert]")
       ).toBeNull();
+      // The handle, a pointer's alone, is drawn over the card rather than inside its fence.
+      const cell = screen
+        .getByRole("button", { name: `Card actions for ${title}` })
+        .closest<HTMLElement>("[data-placement-id]");
       expect(
-        screen.getByRole("button", { name: `Move ${title}` }).closest("[inert]")
+        cell
+          ?.querySelector('[data-testid="widget-drag-handle"]')
+          ?.closest("[inert]")
       ).toBeNull();
+      expect(
+        cell?.querySelector('[data-testid="widget-drag-handle"]')
+      ).not.toBeNull();
     });
 
     it(`gives ${kind}'s content back once customising ends`, async () => {
       renderDashboard();
       const user = await beginEditing();
-      await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+      await cancelEditing(user);
       expect(
         screen.getByRole("link", { name: link }).closest("[inert]")
       ).toBeNull();
@@ -565,7 +933,7 @@ describe("what customise mode says, through the grid's one live region", () => {
     renderDashboard();
     const user = await beginEditing();
     await choose(user, "Posts", "Move later");
-    await user.click(within(bar()).getByRole("button", { name: "Cancel" }));
+    await cancelEditing(user);
     expect(live()).toHaveTextContent("Changes discarded.");
   });
 
@@ -606,6 +974,18 @@ describe("what customise mode says, through the grid's one live region", () => {
   });
 
   it("says a staged reset, and that it is not saved yet", async () => {
+    // The dashboard's first batch answers; a batch after it, for the reset's cards, stays on its
+    // way, so the region holds only what the reset said, never that batch's news beside it.
+    api.post.mockImplementation((_path: string, body: unknown) =>
+      api.post.mock.calls.length > 1
+        ? new Promise(() => undefined)
+        : Promise.resolve({
+            results: (body as { queries: unknown[] }).queries.map(() => ({
+              ok: true,
+              result: { op: "data", data: null },
+            })),
+          })
+    );
     renderDashboard();
     const user = await beginEditing();
     await confirmReset(user);
@@ -659,6 +1039,201 @@ describe("leaving with unsaved changes", () => {
         .map(button => button.textContent)
     ).toEqual(["Discard Changes", "Keep Editing", "Save Changes"]);
     expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  /** Opens Notes' settings drawer while customising and changes its Heading, keeping it open. */
+  async function panelChanged(user: User): Promise<void> {
+    const panel = await openDrawer(user, "Notes");
+    await user.type(within(panel).getByLabelText(/Heading/), "Mine");
+  }
+
+  it("asks once, in the dashboard's own prompt, for a settings panel holding a change", async () => {
+    // Nothing else changed: the panel's change alone is what the prompt is for.
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+
+    await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  it("asks once when the dashboard and a settings panel both hold changes, and Save leaves", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    // The dashboard's prompt, whose Save keeps the arrangement and leaves. A panel asking for
+    // itself first would stage its change on Save and leave the dashboard's prompt to ask again.
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  /** The placements the last layout write sent. */
+  function sentPlacements(): Array<{
+    widgetId: string;
+    config?: Record<string, unknown>;
+  }> {
+    const body = api.put.mock.calls.at(-1)?.[1] as
+      | {
+          placements?: Array<{
+            widgetId: string;
+            config?: Record<string, unknown>;
+          }>;
+        }
+      | undefined;
+    return body?.placements ?? [];
+  }
+
+  it("Save in the prompt keeps a settings panel's change in the arrangement it saves", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+        ?.config
+    ).toEqual({ heading: "Mine" });
+  });
+
+  it("Save in the prompt stops, saying why in the panel, when the panel's change is refused", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: "Notes" });
+    const title = within(panel).getByLabelText("Title");
+    await user.click(title);
+    await user.paste("x".repeat(81));
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    // Nothing written, still here, and the panel says what to fix, with focus on it.
+    expect(
+      await within(panel).findByText("A title can be at most 80 characters.")
+    ).toBeTruthy();
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(api.put).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  it("the bar's Save keeps a settings panel's change too, as the prompt's does", async () => {
+    // One Save: the bar and the prompt treat a panel holding a change alike.
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+        ?.config
+    ).toEqual({ heading: "Mine" });
+  });
+
+  it("the bar's Save keeps an open drawer's width too, with its settings", async () => {
+    // A width chosen in the drawer, left open, and the dashboard saved from the bar.
+    renderDashboard();
+    const user = await beginEditing();
+    const drawer = await openDrawer(user, "Notes");
+    await user.click(within(drawer).getByRole("radio", { name: "50% width" }));
+    await user.type(within(drawer).getByLabelText(/Heading/), "Mine");
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+    ).toMatchObject({ w: 6, config: { heading: "Mine" } });
+  });
+
+  it("the bar's Save stops, with the panel saying why, when the panel's change is refused", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: "Notes" });
+    const title = within(panel).getByLabelText("Title");
+    await user.click(title);
+    await user.paste("x".repeat(81));
+    await user.click(saveButton());
+    expect(
+      await within(panel).findByText("A title can be at most 80 characters.")
+    ).toBeTruthy();
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("Discard in the prompt drops the dashboard's changes and the panel's alike", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Discard Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("freezes a settings panel while the dashboard's Save is on its way, so nothing is changed after it was staged", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: "Notes" });
+    // The write is held, so the save is on its way while the panel is checked.
+    api.put.mockReturnValue(new Promise(() => {}));
+    await user.click(saveButton());
+    await waitFor(() =>
+      expect(within(panel).getByLabelText(/Heading/)).toBeDisabled()
+    );
+    // Save says the save is on its way, as it does for the drawer's own.
+    expect(
+      within(panel).getByRole("button", { name: "Saving…" })
+    ).toBeDisabled();
+  });
+
+  it("the bar's Cancel discards a settings panel's change too: it closes, and nothing is left to keep", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    await cancelEditing(user);
+    // "Changes discarded" is true of the drawer too: it is closed, with no Save to press.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Notes" })).toBeNull()
+    );
+    expect(writes()).toBe(0);
+    // Opened again, it holds what is stored, not the discarded Heading.
+    await user.click(await screen.findByTestId("dashboard-edit-begin"));
+    await screen.findAllByTestId("card-actions");
+    const panel = await openDrawer(user, "Notes");
+    expect(within(panel).getByLabelText(/Heading/)).toHaveValue("");
+    expect(writes()).toBe(0);
+  });
+
+  it("hands focus to the card's menu at rest when a panel opened while customising closes after the mode ended", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    const panel = await openDrawer(user, "Notes");
+    await user.type(within(panel).getByLabelText(/Heading/), "Mine");
+    // Saved, the drawer's change with it: customise mode ends, and the menu the drawer was
+    // opened from goes with it, while the drawer stays open.
+    await user.click(saveButton());
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByRole("dialog", { name: "Notes" })).toBe(panel);
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Card menu for Notes" })
+      ).toHaveFocus()
+    );
   });
 
   it("lets the reader leave without asking when nothing changed", async () => {
@@ -794,7 +1369,7 @@ describe("leaving with unsaved changes", () => {
     expect(await screen.findByTestId("dashboard-edit-error")).toBeVisible();
     expect(window.location.pathname).toBe(DASHBOARD);
     expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"]);
-    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
   });
 
   it("Save Changes during a save already on its way waits for it, and writes once", async () => {

@@ -69,6 +69,7 @@ export type {
   StoragePlugin,
   // Client upload types
   ClientUploadData,
+  ClientUploadOptions,
   // Adapter interface
   IStorageAdapter,
   BulkDeleteResult,
@@ -111,17 +112,6 @@ export {
 export { localStorage } from "./adapters/local-plugin";
 export { LocalStorageAdapter } from "./adapters/local-adapter";
 export type { LocalStorageConfig } from "./adapters/local-types";
-
-// ============================================================
-// Image Size Generation
-// ============================================================
-
-export { generateImageSizes, deleteImageSizes } from "./image-sizes";
-export type {
-  ImageSizeConfig,
-  GenerateImageSizesOptions,
-  UploadFn,
-} from "./image-sizes";
 
 // ============================================================
 // Retry Utilities

@@ -16,7 +16,15 @@
  * - Helpers: generateTableName, ensureTableNamePrefix, deserializeRecord
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import { NextlyError } from "../../../errors";
 import { SingleRegistryService } from "../services/single-registry-service";
@@ -382,22 +390,30 @@ describe("SingleRegistryService", () => {
     });
 
     it("applies search filter across slug and label", async () => {
-      ctx.adapter.select.mockResolvedValue([]);
+      ctx.adapter.select.mockResolvedValue([
+        {
+          id: "1",
+          slug: "site-settings",
+          label: "Site",
+          createdAt: new Date(1),
+        },
+        {
+          id: "2",
+          slug: "home",
+          label: "Home settings",
+          createdAt: new Date(2),
+        },
+        { id: "3", slug: "footer", label: "Footer", createdAt: new Date(3) },
+      ]);
 
-      await ctx.service.listSingles({ search: "settings" });
+      const result = await ctx.service.listSingles({ search: "SETTINGS" });
 
-      const opts = ctx.adapter.select.mock.calls[0][1] as Record<
-        string,
-        unknown
-      >;
-      const where = opts.where as Record<string, unknown>;
-      const andArr = where.and as Array<Record<string, unknown>>;
-      const orCond = andArr.find(c => "or" in c);
-      expect(orCond).toBeDefined();
-      const ors = orCond!.or as Array<Record<string, unknown>>;
-      const columns = ors.map(c => c.column);
-      expect(columns).toContain("slug");
-      expect(columns).toContain("label");
+      // Matched on the slug or the label, without regard to case.
+      expect(result.data.map(single => single.slug)).toEqual([
+        "site-settings",
+        "home",
+      ]);
+      expect(result.total).toBe(2);
     });
   });
 
@@ -452,7 +468,12 @@ describe("SingleRegistryService", () => {
           { label: "New" },
           { source: "ui" }
         )
-      ).rejects.toThrow(NextlyError);
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Why, in words: the Single is defined in code.
+        publicMessage:
+          "This Single is defined in code, so it can't be changed here.",
+      });
     });
 
     it("allows update when locked and source is 'code'", async () => {
@@ -498,9 +519,13 @@ describe("SingleRegistryService", () => {
     it("throws FORBIDDEN when force is not set", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
 
-      await expect(ctx.service.deleteSingle("site-settings")).rejects.toThrow(
-        NextlyError
-      );
+      await expect(
+        ctx.service.deleteSingle("site-settings")
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        // Told why, in words: a Single is not deleted from here.
+        publicMessage: "A Single can't be deleted from here.",
+      });
     });
 
     it("force-deletes and removes associated permissions", async () => {
@@ -675,6 +700,12 @@ describe("SingleRegistryService", () => {
         }
         return null;
       });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
+      });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 
       const result = await ctx.service.syncCodeFirstSingles([
@@ -741,6 +772,12 @@ describe("SingleRegistryService", () => {
           admin: JSON.stringify({ preview: { label: "Preview" } }),
         });
       });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
+      });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 
       const result = await ctx.service.syncCodeFirstSingles([
@@ -793,6 +830,12 @@ describe("SingleRegistryService", () => {
           admin: JSON.stringify({ preview: { label: "Landing preview" } }),
           description: "An older description",
         });
+      });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
       });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 

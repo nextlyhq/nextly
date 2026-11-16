@@ -14,8 +14,6 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { randomUUID } from "node:crypto";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchEmailTemplates } from "../../../dispatcher/handlers/email-dispatcher";
@@ -33,6 +31,8 @@ import { defineEmailProvider } from "../provider-definition";
 import type { EmailTemplateService } from "../services/email-template-service";
 import { interpolateTemplate } from "../services/template-engine";
 import { SNAPSHOT_MAX_AGE_MS } from "../transaction-flow";
+
+import { storeAsBefore } from "./stored-before-liquid";
 
 const sent: Array<{ to: string; subject: string; html: string }> = [];
 let current: TestNextly | undefined;
@@ -102,51 +102,6 @@ async function seedPluginTemplates(
     plugins: [{ name: "promo-plugin", templates: contributed }],
   });
   await templates(t).ensureBuiltInTemplates();
-}
-
-/**
- * Store a template as an install before Liquid did, straight into the
- * table: some of what these hold no longer passes the save-time check.
- */
-async function storeAsBefore(
-  t: TestNextly,
-  dialect: TestDialect,
-  slug: string,
-  htmlContent: string,
-  kind: "template" | "layout" = "template"
-): Promise<string> {
-  const id = randomUUID();
-  const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
-  const p = (i: number) => (dialect === "postgresql" ? `$${i}` : "?");
-  const columns = [
-    "id",
-    "name",
-    "slug",
-    "subject",
-    "html_content",
-    "kind",
-    "use_layout",
-    "is_active",
-    "created_at",
-    "updated_at",
-  ];
-  const now = new Date();
-  await t.adapter.executeQuery(
-    `INSERT INTO ${q("email_templates")} (${columns.map(q).join(", ")}) VALUES (${columns.map((_, i) => p(i + 1)).join(", ")})`,
-    [
-      id,
-      slug,
-      slug,
-      "Hello {{name}}",
-      htmlContent,
-      kind,
-      dialect === "postgresql" ? false : 0,
-      dialect === "postgresql" ? true : 1,
-      now,
-      now,
-    ]
-  );
-  return id;
 }
 
 const LITERAL_IF = "<p>Members: {% if vip %}VIP{% endif %} {{name}}</p>";
@@ -365,8 +320,10 @@ for (const dialect of getConfiguredTestDialects()) {
     it("leaves no engine choice behind when a plugin row can't be written", async () => {
       const t = await boot(dialect);
       await templates(t).ensureBuiltInTemplates();
+      // Every write to a template's row goes through `writeTemplateRow`, which
+      // writes it beside the record of the media it uses.
       const service = templates(t) as unknown as {
-        db: { insert: () => unknown };
+        writeTemplateRow: () => Promise<unknown>;
         meta: { getAll(): Promise<Record<string, unknown>> };
       };
       const keptKeys = async () =>
@@ -374,9 +331,9 @@ for (const dialect of getConfiguredTestDialects()) {
           key.startsWith("email.templates.liquid.kept.")
         );
       const before = await keptKeys();
-      const spy = vi.spyOn(service.db, "insert").mockImplementationOnce(() => {
-        throw new Error("value too long for column");
-      });
+      const spy = vi
+        .spyOn(service, "writeTemplateRow")
+        .mockRejectedValueOnce(new Error("value too long for column"));
       await seedPluginTemplates(t, [
         {
           name: "Promo",
@@ -895,7 +852,8 @@ for (const dialect of getConfiguredTestDialects()) {
       const id = row!.id;
       const service = templates(t) as unknown as {
         keepIfWrittenForOldEngine(...args: unknown[]): Promise<unknown>;
-        db: { update: () => unknown };
+        // The one way a template's row is written (see the test above).
+        writeTemplateRow: () => Promise<unknown>;
       };
       const original = service.keepIfWrittenForOldEngine.bind(service);
       const between = (act: () => Promise<unknown> | void) =>
@@ -910,9 +868,9 @@ for (const dialect of getConfiguredTestDialects()) {
       // The write fails: the mark recorded for it goes too.
       let failing: { mockRestore(): void } | undefined;
       const failed = between(() => {
-        failing = vi.spyOn(service.db, "update").mockImplementationOnce(() => {
-          throw new Error("connection reset");
-        });
+        failing = vi
+          .spyOn(service, "writeTemplateRow")
+          .mockRejectedValueOnce(new Error("connection reset"));
       });
       await expect(shipping(UNREADABLE)).rejects.toThrow("connection reset");
       failed.mockRestore();

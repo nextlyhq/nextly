@@ -4,10 +4,14 @@
  * Main entry form component that orchestrates all form parts:
  * - useEntryForm hook for state management
  * - EntryFormProvider for form context
- * - EntrySystemHeader for title input + actions + dropdown + rail toggle
- * - EntryMetaStrip for slug + status pill (when rail collapsed)
+ * - DocumentTrail for the editor's place in the admin's top bar
+ * - DocumentBar for the status, save state, actions, menu and rail toggle
+ * - DocumentBanners for the document's banners under the bar, in one order
+ * - DocumentTitleBlock for the title and, on an entry, the slug under it
+ * - EntryMetaStrip for the document id where the panel is not on screen
  * - EntryFormContent for field rendering (Builder-defined fields only)
- * - EntryFormSidebar for system metadata (Document panel only)
+ * - EntryFormSidebar for the document panel's sections, framed docked,
+ *   floating or as a sheet by DocumentSidePanel
  *
  * Supports both standalone (page) and embedded (modal) modes.
  *
@@ -15,15 +19,21 @@
  * @since 1.0.0
  */
 
-import type { JSX } from "react";
-import { useCallback, useMemo, useState } from "react";
+import type { JSX, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
+import {
+  autosaveEnabledFor,
+  autosaveIntervalFrom,
+} from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { useEditorRestoreSurface } from "@admin/components/features/versions/useEditorRestoreSurface";
+import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
+import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
   mayRecordRecovery,
   useViewedVersion,
@@ -32,69 +42,107 @@ import {
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { toast } from "@admin/components/ui";
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
+import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
+import { useCan } from "@admin/hooks/useCan";
+import { useCanRequest } from "@admin/hooks/useCanRequest";
 import {
   autosaveScopeFor,
+  documentRecordingKey,
   useDocumentAutosave,
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
+import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
+import { versionForLanguage } from "@admin/lib/document-version";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { cn } from "@admin/lib/utils";
+import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
-import { LanguagePanel } from "../LanguagePanel";
+import { DocumentLanguagePanel } from "../LanguagePanel";
 import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
+import { isRemovedFromCode } from "../removed-from-code-notice";
+import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
-import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
+import { pluginDocumentLock } from "./document-lock-affordances";
+import {
+  topLevelFieldNames,
+  useContentFields,
+  useWithoutWithheldFields,
+  useDocumentPanelParts,
+  useDocumentPlace,
+} from "./document-place";
+import { DocumentFormSource } from "./document-values";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
   DocumentSaveShortcuts,
+  SaveWithoutPublishingBridge,
   SaveActionFormProvider,
 } from "./DocumentActionsContext";
+import { DocumentBanners } from "./DocumentBanners";
+import { DocumentBar } from "./DocumentBar";
+import {
+  DOCUMENT_COLUMN_INSET,
+  DocumentEditorLayout,
+} from "./DocumentEditorLayout";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import { DocumentPlaceTabs } from "./DocumentPlaceTabs";
+import { DocumentSidePanel } from "./DocumentSidePanel";
+import { DocumentTitleBlock } from "./DocumentTitleBlock";
+import { DocumentTrail } from "./DocumentTrail";
 import { DocumentViewBody, type DocumentViewMount } from "./DocumentViewBody";
 import {
+  editedLanguageUntranslated,
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
-import { fieldsBesidePanel } from "./EntryFieldsPanel";
+import {
+  fieldsBesidePanel,
+  type EntryFieldsPresentation,
+} from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
   EntryFormContextProvider,
   hasPendingWorkingDraft,
 } from "./EntryFormContext";
+import { EntryFormPlace } from "./EntryFormPlace";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
-import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { PanelSectionsAboveForm } from "./panels";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
+import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
+import type { RecoveryPointState } from "./SaveStateIndicator";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import {
   storingHandlers,
+  type DocumentActionBindings,
   type DocumentActionBindingsInput,
 } from "./useDocumentActionBindings";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
-import { useDocumentPanelCollapsed } from "./useDocumentPanelCollapsed";
+import { useDocumentPanel } from "./useDocumentPanel";
 import {
   useEntryForm,
   getCollectionFields,
@@ -102,6 +150,16 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import { useLockWithHeldChange } from "./useHeldDocumentChange";
+import { usePluginDocumentSurfaces } from "./usePluginDocumentSurfaces";
+import {
+  heldLocaleChange,
+  heldWhileRecovering,
+  offerHeldWhileRecovering,
+  quickEditSave,
+} from "./useRefusedForm";
+import { useResetOnReload } from "./useResetOnReload";
+import { VersionConflictDialog } from "./VersionConflictDialog";
 
 // ============================================================================
 // Types
@@ -131,6 +189,13 @@ export interface EntryFormProps {
    * collection); an embedded editor reading the live row passes `false`.
    */
   readDraft?: boolean;
+  /**
+   * When the entry on screen was read, and how to read it again, from the
+   * reads that hand it over. Given, an entry this editor gains after a
+   * colleague held it stays read-only until the latest version is on screen;
+   * absent, it unlocks as it stands.
+   */
+  latest?: DocumentLatest;
   /** Called when the user switches the active content language. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
@@ -150,6 +215,17 @@ export interface EntryFormProps {
    * - Layout is single column
    */
   embedded?: boolean;
+  /**
+   * The page's outline of this editor, drawn in its place a moment longer
+   * while what finishes the editor is on its way (`useEditorRevealHold`): the claim
+   * on the document, and `revealWaiting`. Absent, the editor is drawn at once.
+   */
+  revealOutline?: ReactNode;
+  /**
+   * Whether reads the page started for the editor's parts are still on their
+   * way (`usePlaceStartupReads`): the editor holds its outline for them too.
+   */
+  revealWaiting?: boolean;
   /**
    * Opens this entry's API response.
    *
@@ -174,6 +250,14 @@ export interface EntryFormProps {
    * which an author cannot tell from a feature that does not exist.
    */
   documentActions?: readonly ContributedAction[];
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn
+   * first among the banners directly under the document bar. Given here rather
+   * than placed above the form by the page: the editor's frame pulls itself up
+   * over the page's top inset, so anything placed before it slides under the
+   * sticky bar.
+   */
+  documentBanner?: ReactNode;
   /**
    * @experimental A plugin's document view to draw in place of the form body,
    * when the route names one. Standalone only: an embedded editor has no
@@ -288,15 +372,19 @@ export function EntryForm({
   onCancel,
   locale,
   readDraft,
+  latest,
   onLocaleChange,
   seedFromLocale,
   onSeedHandled,
   sourceValues,
   translation,
   embedded = false,
+  revealOutline,
+  revealWaiting = false,
   className,
   onViewApi,
   documentActions,
+  documentBanner,
   documentView,
 }: EntryFormProps): JSX.Element {
   /*
@@ -307,6 +395,14 @@ export function EntryForm({
    * have to be threaded back down through props that exist for nothing else.
    */
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  /*
+   * Where the past version's comparison bar is drawn: a place among the
+   * document's banners under the bar, which the version body draws into.
+   * State rather than a ref, so the body re-renders once the place exists.
+   */
+  const [versionBannerSlot, setVersionBannerSlot] =
+    useState<HTMLDivElement | null>(null);
 
   /*
    * How many times THIS form has saved, which the preview revision folds in.
@@ -323,20 +419,50 @@ export function EntryForm({
    */
   const [savedCount, setSavedCount] = useState(0);
 
+  // Whether this document's writes are held, as decided below once the lock
+  // and the version on screen are known. Read by the form when a refused
+  // publish's recovery runs, which writes like the handlers below do.
+  const writesHeldNow = useRef(false);
+  // Read when a plugin asks whether it may write, which can be long after the
+  // render that drew it: a dialog stays open while the document changes hands.
+  const pluginWritesHeldNow = useRef(false);
+  // The entry's Save that never publishes, handed up from inside its
+  // document's actions, where the Save lives.
+  const saveWithoutPublishing = useRef<
+    DocumentActionBindings["saveWithoutPublishing"] | undefined
+  >(undefined);
+
   const {
     form,
+    formRestore,
+    defaultValues,
     handleSubmit: submitEntry,
+    writeStatus,
     handleDelete: deleteEntry,
     handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
-    isSubmitting,
+    isSubmitting: savePending,
+    recovering,
     isDirty,
+    versionConflict,
+    saveAnyway,
+    loadCurrentVersion,
+    versionStartedFrom,
+    adoptRecoveredVersion,
+    holdForVersionChange,
+    releaseVersionHold,
+    stopAwaitingCurrentVersion,
+    expectOwnChange,
   } = useEntryForm({
     collection,
     entry,
     mode,
     locale,
     readDraft,
+    writesHeld: () => writesHeldNow.current,
+    // The quick-edit modal renders no document actions, so nothing hands its
+    // Save up: a recovery there refuses and points to the document.
+    saveWithoutPublishing: embedded ? quickEditSave : saveWithoutPublishing,
     onSuccess: data => {
       // Before the caller's handler, which may navigate away: this is the only
       // point that knows a write landed, and a revision that misses one leaves
@@ -344,11 +470,33 @@ export function EntryForm({
       setSavedCount(n => n + 1);
       onSuccess?.(data);
     },
+    // The take rewrote the pending change after its Save had stored it, so it
+    // counts as a save too: the preview pane moves past the values it
+    // replaced, and a recovery point from before it is withdrawn.
+    onRecovered: () => setSavedCount(n => n + 1),
     onError,
     onDelete,
     onCancel,
   });
+  // Busy while a save is in flight, and while a refused publish's recovery
+  // runs through to its reloaded entry: every surface that holds for a save
+  // holds for it too. Only the fields' own `disabled` follows the save alone;
+  // the recovery holds them read-only through the lock, so a field keeps focus.
+  const isSubmitting = savePending || recovering;
+  // Whether a change told over unsaved edits waits for the editor's answer,
+  // as the lock below last said: the edits it is about are this language's.
+  const [changeAwaiting, setChangeAwaiting] = useState(false);
+  // Every switch to another language goes through here, held while a
+  // refused publish's recovery runs, so its Save and take stay on the
+  // language they are for, and while a told change waits for an answer.
+  const switchLocale = heldLocaleChange(
+    onLocaleChange,
+    recovering || changeAwaiting
+  );
 
+  // Whether this editor reads the held draft rather than the live entry: as
+  // the caller read it, or as the collection says (`readsHeldDraft`).
+  const readsDraft = readDraft ?? readsHeldDraft(collection);
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
   // field can tell whether it is translatable), and whether the active language differs from
@@ -365,7 +513,22 @@ export function EntryForm({
   // offered, so a create form supplies none and nothing renders.
   const publishAllEntryLocales = usePublishAllLocales({
     collectionSlug: collection.slug ?? collection.name,
+    // The copy on screen, read as the editor reads it, so a publish of every
+    // language is refused when that language changed since it opened.
+    shown: () => ({
+      version: versionStartedFrom(),
+      locale,
+      draft: readsDraft,
+    }),
   });
+  // Publishing every language waits for the entry's recordings in flight.
+  const { run: runAfterRecordings, pending: publishAllPending } =
+    useAfterRecordings(
+      documentRecordingKey(
+        autosaveScopeFor("collection", collection.name, entry?.id)
+      ),
+      publishAllEntryLocales.isPending
+    );
 
   // Publish-every-language rides the same kind of seam `fetchSourceValues`
   // does, and its ABSENCE is what keeps the action off a create form: there is
@@ -375,10 +538,30 @@ export function EntryForm({
     if (!entryId) return undefined;
     return {
       slug: collection.slug ?? collection.name,
-      publish: () => publishAllEntryLocales.mutate(entryId),
-      pending: publishAllEntryLocales.isPending,
+      // After this entry's recordings in flight land, as a save waits.
+      publish: () =>
+        runAfterRecordings(() => publishAllEntryLocales.mutate(entryId)),
+      pending: publishAllPending,
+      preview: () =>
+        entryApi.previewPublishAllLocales(
+          collection.slug ?? collection.name,
+          entryId
+        ),
+      previewKey: [
+        "publish-all-preview",
+        "collection",
+        collection.slug ?? collection.name,
+        entryId,
+      ],
     };
-  }, [entry?.id, collection.slug, collection.name, publishAllEntryLocales]);
+  }, [
+    entry?.id,
+    collection.slug,
+    collection.name,
+    publishAllEntryLocales,
+    runAfterRecordings,
+    publishAllPending,
+  ]);
 
   const translationMode = useTranslationSource({
     fields: getCollectionFields(collection),
@@ -403,7 +586,7 @@ export function EntryForm({
     fields: getCollectionFields(collection),
     sourceValues,
     inTranslationMode: translationMode.active,
-    onLocaleChange,
+    onLocaleChange: switchLocale,
     seedFromLocale,
     onSeedHandled,
     onEnterTranslationMode: translationMode.onEnter,
@@ -423,7 +606,16 @@ export function EntryForm({
   // no user-defined fields may use `admin.position: 'sidebar'`, and any
   // legacy `seoField` name match is dropped — components (including ones
   // named "seo") render inline like every other field.
-  const allFields = getCollectionFields(collection);
+  // Less any field a plugin's switch keeps off this collection, which is
+  // then drawn nowhere and never decides the takeover layout.
+  const declaredFields = useMemo(
+    () => getCollectionFields(collection),
+    [collection]
+  );
+  const allFields = useWithoutWithheldFields(
+    { collection: collectionSlug },
+    declaredFields
+  ) as ReturnType<typeof getCollectionFields>;
   const slugField = allFields.find(f => f.name === "slug");
   const titleField = allFields.find(f => f.name === "title");
 
@@ -462,17 +654,60 @@ export function EntryForm({
   // when a field-level revalidation runs after that first attempt.
   const { errors, submitCount } = form.formState;
 
-  // Rail collapse state. Toggle lives in EntrySystemHeader; the rail itself
-  // reads `railCollapsed` to decide whether to render. Persisted in
-  // localStorage so the choice survives reloads.
-  // Out of the way when the author collapsed it, and while history is open,
-  // which takes its place.
-  const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed(historyEnabledFrom(collection) !== false);
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
-  const viewedVersionHost = useViewedVersion(allFields, takeoverTypes);
+  // The entry's version in a language, for a restore from its history: the
+  // version this copy started from in its own language, else read.
+  const versionFor = useCallback(
+    (wanted: string | null) =>
+      versionForLanguage({
+        wanted,
+        shown: locale ?? defaultLocale ?? null,
+        startedFrom: versionStartedFrom(),
+        readIn: inLocale =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale: inLocale,
+          }),
+        readShown: () =>
+          entryApi.findByID(collection.name, String(entry?.id ?? ""), {
+            locale,
+            draft: readsDraft,
+          }),
+      }),
+    [
+      locale,
+      defaultLocale,
+      versionStartedFrom,
+      collection.name,
+      entry?.id,
+      readsDraft,
+    ]
+  );
+  // What a restore puts values back into: this form. The document's lock is
+  // decided further down, so a restore reads it when it asks.
+  const restoreReadOnly = useRef(false);
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? defaultLocale;
+  const editingLanguage = getLocale(editingLocale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
+    form,
+    fields: allFields,
+    readOnly: () => restoreReadOnly.current,
+    localized: collection.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
+  });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
+  const viewedVersionHost = useViewedVersion(
+    allFields,
+    takeoverTypes,
+    versionFor,
+    editorRestore,
+    declaredFields
+  );
   const {
     viewingVersion,
     documentHistory,
@@ -481,15 +716,14 @@ export function EntryForm({
   } = viewedVersionHost;
 
   // Whether this collection has Draft/Published status enabled at the meta
-  // level. When true, the system header splits into Save Draft + Publish/Update
-  // and the Document panel + meta strip surface the status pill. When false,
-  // the system header collapses to a single Save/Create button and the pill
-  // is hidden.
+  // level. When true, the document bar splits into Save Draft + Publish/Update
+  // and shows the status pill. When false, the bar collapses to a single
+  // Save/Create button and the pill is hidden.
   const hasStatus = collection.status === true;
 
   // Auto-fill slug from title while the slug looks auto-generated. Why a
-  // form-level hook: the title input lives in EntrySystemHeader as a plain
-  // <input> bound via form.register, not through TextInput, so the per-field
+  // form-level hook: the title input lives in DocumentTitleBlock as a plain
+  // <input> bound to the form, not through TextInput, so the per-field
   // slug-gen logic that used to live in TextInput never fired for the
   // configured title. Mounting the hook here closes that gap and follows the
   // configured title field name (not a hardcoded "title"/"name").
@@ -535,27 +769,6 @@ export function EntryForm({
     [conditionNames, watchedConditions]
   );
 
-  /*
-   * Delegated whole, including the decision to answer NULL when there is
-   * nothing to draw — which is what withholds the panel rather than opening an
-   * empty one. Kept out of this callback so the rule is reachable by a test
-   * without standing up the entire form.
-   *
-   * Declared here rather than beside the other field derivations because it
-   * needs `hasPublicAddress`: a surface offering the slug has to carry the same
-   * warning the meta strip it covers would have shown.
-   */
-  const renderEntryFields = useCallback(
-    (excludePath: string) =>
-      fieldsBesidePanel(allFields, excludePath, {
-        disabled: isSubmitting,
-        mode,
-        values: conditionValues,
-        hasPublicAddress,
-      }),
-    [allFields, isSubmitting, mode, conditionValues, hasPublicAddress]
-  );
-
   useAutoSlug({
     form,
     titleFieldName: titleField?.name ?? "title",
@@ -589,18 +802,185 @@ export function EntryForm({
    * looked read-only. The autosave is still held off while a version is on
    * screen, which is a different question: what it would RECORD.
    */
-  const lock = useDocumentLockSurface({
+  // A user who may read this entry but not change it gets the same page,
+  // read-only, with no claim made on the document.
+  const updateAnswer = useUpdateAnswer(collectionSlug);
+  // A collection removed from code refuses every write to its entries, for
+  // everyone: the page opens as it does for a reader, through the same gates.
+  const removedFromCode = isRemovedFromCode(collection);
+  const readOnlyForReader =
+    (updateAnswer === "refused" || removedFromCode) && mode === "edit";
+  // What the user's access allows, apart from the removal: previewing and
+  // sharing a preview follow it alone, since the server keeps preview links
+  // working for a removed collection and opening one writes no entry.
+  const accessAllowsEdits = mode === "create" || editsOffered(updateAnswer);
+  // While a language switch's answer is on its way, nothing that saves is
+  // offered and a submit is held, though the page is not read-only.
+  const mayEdit = accessAllowsEdits && !removedFromCode;
+  const previewHeld = !accessAllowsEdits;
+  // What changing the entry needs is held with it: a recovery point and a
+  // version's restore, for a reader, for a removed collection and while a
+  // language switch's answer is on its way.
+  const updatesHeld = !mayEdit;
+  // While a refused publish's recovery runs, every field it reaches is
+  // read-only, as it is while someone else holds the entry.
+  const lockSurface = useDocumentLockSurface({
     scopeKind: "collection",
     slug: collectionSlug,
     entryId: entry?.id,
     enabled: mode === "edit",
+    readOnlyForReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
+    latest,
+    // Every claim and beat names the copy's version, so the holder is told
+    // when someone else changes the entry. Only where the editor can load the
+    // latest copy: one that cannot would say it shows what it does not.
+    version: latest ? versionStartedFrom : undefined,
   });
+  // Drawn whole: the outline stays until the claim says who holds the entry
+  // and the parts' started reads are in, briefly at most, so a colleague's
+  // banner or a plugin's section does not push the fields down as it lands.
+  const holdReveal = useEditorRevealHold(
+    revealOutline !== undefined,
+    { claim: lockSurface.settling, reads: revealWaiting },
+    // Each document waits for its own claim and reads: the same editor moved
+    // straight to the next one begins its hold again.
+    `collection:${collectionSlug}/${entry?.id ?? ""}`
+  );
+  // A gained entry's latest version starts the whole form again, whatever
+  // its `updatedAt` says, and the lock holds until it has; the document views
+  // key on the count it carries. Someone else's change is said over it.
+  const lock = useLockWithHeldChange(
+    heldWhileRecovering(
+      useResetOnReload(form, lockSurface, defaultValues),
+      recovering
+    ),
+    {
+      surface: lockSurface,
+      hold: holdForVersionChange,
+      latest,
+      release: releaseVersionHold,
+    }
+  );
+  useEffect(() => {
+    restoreReadOnly.current = lock.readOnly;
+  }, [lock.readOnly]);
+  useEffect(() => {
+    setChangeAwaiting(lock.changeAwaitingAnswer);
+  }, [lock.changeAwaitingAnswer]);
+
+  /*
+   * Delegated whole, including the decision to answer NULL when there is
+   * nothing to draw — which is what withholds the panel rather than opening an
+   * empty one. Kept out of this callback so the rule is reachable by a test
+   * without standing up the entire form.
+   *
+   * Declared here rather than beside the other field derivations because it
+   * needs `hasPublicAddress`: a surface offering the slug has to carry the same
+   * warning the meta strip it covers would have shown. And after the lock,
+   * whose read-only answer it shares with every other field.
+   */
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    {
+      kind: "collection",
+      collection: collectionSlug,
+      entryId: entry?.id ?? null,
+    },
+    entry ?? undefined
+  );
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  // The fields a surface draws beside a takeover field leave out those a
+  // plugin's tab takes over, by the same rule as the page's own content:
+  // they are drawn, and edited, in their tab.
+  const besideFields = useContentFields(documentPlace, fieldNames, allFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this type now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace.context,
+    historicalFields
+  );
+  const renderEntryFields = useCallback(
+    (excludePath: string, presentation?: EntryFieldsPresentation) =>
+      fieldsBesidePanel(besideFields, excludePath, {
+        disabled: savePending,
+        readOnly: lock.readOnly,
+        mode,
+        values: conditionValues,
+        hasPublicAddress,
+        ...(presentation === undefined ? {} : { presentation }),
+      }),
+    [
+      besideFields,
+      savePending,
+      lock.readOnly,
+      mode,
+      conditionValues,
+      hasPublicAddress,
+    ]
+  );
   // One answer for every surface offering a write: the header reads the same
   // through the document-actions model, the rail, the language panel and the
   // submission handlers from here. Derived from the HOST's state, not the
   // context — this body renders ABOVE the provider this component creates, so
   // a context read here would report no version on screen even while one is.
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
+  // Changing the content is held for a reader as well. Deleting is not: it
+  // follows its own permission, and is offered only with it.
+  const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // collection removed from code, whose publish the server refuses as it
+  // refuses a save.
+  const statusWriteHold = writesHeld || removedFromCode;
+  // Publishing every language changes only each language's status, so a
+  // reader whose document nothing else holds is still offered it.
+  const publishAllHeld = statusWritesHeld({
+    editsHeld,
+    refused: readOnlyForReader,
+    writesHeld: statusWriteHold,
+  });
+  // A colleague's claim or a reader's page, without the version on screen:
+  // what holds the actions a version's own surfaces offer, Restore among them.
+  // A refused publish's recovery holds them too, until its reloaded entry is
+  // on screen.
+  const versionWritesHeld = lock.actionsDisabled || updatesHeld || recovering;
+  // And the language panel's copies into the form, as it holds the fields.
+  const contentHeld = editsHeld || recovering;
+  // And moving to another language, so its Save and take stay on this one.
+  const navigationHeld = writesHeld || recovering;
+  // Delete is offered only to a caller who may delete in this collection.
+  // The quick-edit and quick-create modals save only with the update or
+  // create permission their mode needs: those modals open from a related
+  // field, not through the route guard the full editor sits behind.
+  // A collection whose entries are deleted through an action of their own
+  // (`admin.disableDelete`) is offered no Delete of its own here, unless a
+  // plugin replaces that Delete with its action (below): the server refuses
+  // the plain delete.
+  const mayDelete = useCan(`delete-${collectionSlug}`);
+  const canDelete = mayDelete && collection.admin?.disableDelete !== true;
+  // The modals send no language, so the server writes the default one: a
+  // create is answered so already, and an update by its own cell.
+  const canCreate = useCan(`create-${collectionSlug}`);
+  const canUpdateUnnamed = useCanRequest(
+    collectionSlug,
+    "updateInDefaultLanguage"
+  );
+  const canSave =
+    !removedFromCode && (mode === "create" ? canCreate : canUpdateUnnamed);
+  // A refused publish's recovery changes the content, so it is held exactly
+  // as the content's own saves are.
+  writesHeldNow.current = editsHeld;
+  // What holds the document for what a plugin draws here, a section, a
+  // replaced action or a tab, at this instant (`pluginDocumentLock`): its
+  // own writes as the built-in Delete is, never for a reader's page alone.
+  const pluginLock = pluginDocumentLock({
+    contentHeld,
+    writesHeld,
+    recovering,
+    removedFromCode,
+  });
+  pluginWritesHeldNow.current = pluginLock.actionsDisabled;
 
   /*
    * The one gate every write passes through.
@@ -621,26 +1001,52 @@ export function EntryForm({
     // default lets the browser submit the form natively — reloading the page
     // and dropping the reader's history state.
     event?.preventDefault();
-    return writesHeld
+    if (!editsHeld) return submitEntry(event, intent);
+    // A reader's publish and unpublish still go, as the status alone, which
+    // their own permissions judge; everything else stays held.
+    const status = readerStatusWrite(intent, {
+      refused: readOnlyForReader,
+      writesHeld: statusWriteHold,
+    });
+    return status === undefined
       ? Promise.resolve(submitHeld)
-      : submitEntry(event, intent);
+      : writeStatus(status);
   };
   const handleDelete = () =>
     writesHeld ? Promise.resolve(deleteHeld) : deleteEntry();
   const handleDiscardWorkingDraft = () =>
-    writesHeld ? Promise.resolve() : discardWorkingDraft();
+    editsHeld ? Promise.resolve() : discardWorkingDraft();
 
   const autosaveScope = useMemo(
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
+  /*
+   * Whether this entry keeps recovery points: a saved entry of a collection
+   * with autosave on. The server refuses a recording anywhere else, so where
+   * this is false the editor records nothing, offers nothing back and shows no
+   * recording status. One answer for every recorder in the editor, the page
+   * builder's included, and for keeping a refused save's edits.
+   */
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
   // The other half of recording: offer the work back when the editor opens, and
   // write it into this form when the author accepts.
-  const recovery = useAutosaveRecovery({
-    scope: autosaveScope,
-    form,
-    savedCount,
-  });
+  const recovery = offerHeldWhileRecovering(
+    useAutosaveRecovery({
+      // A reader is offered no recovery point: restoring one would make the
+      // read-only form dirty with work it cannot save.
+      scope: readOnlyForReader || !keepsRecoveryPoints ? null : autosaveScope,
+      form,
+      // The language the form shows: a point recorded in another is never
+      // taken for the document.
+      locale: locale ?? null,
+      savedCount,
+      // A save of restored edits is judged by the version they began from.
+      onRestored: adoptRecoveredVersion,
+    }),
+    recovering
+  );
 
   /*
    * Work a FIELD holds that the form's values do not contain. The page builder
@@ -650,6 +1056,9 @@ export function EntryForm({
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
+  // The page builder's own store included, which the form's values do not
+  // hold: what someone else's change is judged against.
+  lock.now.hasUnsavedWork = hasUnsavedWork;
 
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
@@ -663,9 +1072,17 @@ export function EntryForm({
      * the reading describes work against a document nobody is tending. The
      * shared predicate states the rule once for both editors.
      */
-    enabled: mayRecordRecovery(isSubmitting, viewingVersion),
+    // Nor is a reader's form recorded, which cannot change the document, nor
+    // one whose language's answer is on its way, which may not yet. Nor an
+    // entry that keeps no recovery points at all.
+    enabled:
+      keepsRecoveryPoints &&
+      !updatesHeld &&
+      mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
+    // Each point records the version its edits began from.
+    version: versionStartedFrom,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
@@ -680,8 +1097,10 @@ export function EntryForm({
   // the entry is saved, which is when it has an id to name, and while the
   // language is unknown: a link minted without a resolvable locale is either
   // refused or a grant over every translation.
+  // Withheld from a reader too, so the share popover cannot stay mounted
+  // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    savedEntryId === "" || linkLocale.kind === "unresolved"
+    previewHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -735,7 +1154,10 @@ export function EntryForm({
    */
   const previewRevision = previewRevisionOf(entry, savedCount);
 
+  // Previewing, and sharing a preview, are offered only to a user who may
+  // change the entry: minting a link needs that on the server.
   const canPreview =
+    !previewHeld &&
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
     linkLocale.kind !== "unresolved";
@@ -746,22 +1168,85 @@ export function EntryForm({
   // and a guessed "draft" would be a claim nobody made. Derived once for both
   // layouts below, so a field or a document view reads the same answer in a
   // modal as on the full page.
+  // The language being edited's status, once, for the document bar's pill and
+  // for the context below, so the two cannot disagree.
+  const editedStatus = {
+    status: effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft",
+    hasWorkingDraft: hasPendingWorkingDraft(entry),
+    untranslated: editedLanguageUntranslated(entry, locale, defaultLocale),
+  };
   const contextDocumentStatus =
-    mode === "create"
-      ? {}
-      : {
-          documentStatus: {
-            status:
-              effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft",
-            hasWorkingDraft: hasPendingWorkingDraft(entry),
-          },
-        };
+    mode === "create" ? {} : { documentStatus: editedStatus };
+
+  /*
+   * Whether the preview pane is actually on screen: withheld while
+   * translation mode is on, beside a document view, and for a reader, as the
+   * pane itself reads below. A removed collection keeps it: the preview
+   * follows access alone, as previewing writes nothing.
+   */
+  const previewOnScreen =
+    previewOpen &&
+    translationMode.source === undefined &&
+    !documentView &&
+    !previewHeld;
+
+  // The document panel: on screen or not, and how it sits at the editor's
+  // width. The preview folds it and showing it closes the preview; history
+  // takes its place. Its toggle lives in the DocumentBar.
+  const panel = useDocumentPanel({
+    historyAvailable: historyEnabledFrom(collection) !== false,
+    previewOpen: previewOnScreen,
+    closePreview: () => setPreviewOpen(false),
+  });
+  // Nothing to show before the entry exists.
+  const panelOnScreen = mode === "edit" && panel.shown;
+  // Where the docked column is on screen, it carries the id and the language
+  // panel, so the field column's own copies of them step aside.
+  const panelDocked = mode === "edit" && panel.docked;
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
 
   /*
    * What deciding this document's actions reads. Every write handler goes
    * through the gate above, and the storing ones hand back their outcome so an
    * action run from outside the header can say what it came to.
    */
+  /*
+   * The recovery point, once, for every place the save state is drawn: the
+   * header's chip, and a document view's own through the host.
+   */
+  const recoveryPoint: RecoveryPointState = {
+    enabled: keepsRecoveryPoints,
+    storedAt: autosave.lastSavedAt,
+    // A recovery point newer than the stored document, still on offer: its
+    // edits are not stored, whatever the form says.
+    pendingOfferAt: recovery.offer?.savedAt ?? null,
+  };
+
+  // What plugins change on this collection's document screen: the actions
+  // they hide or replace, and the sections they add to the panel. A section
+  // is told what holds the document as the fields and the writes are held.
+  const pluginSurfaces = usePluginDocumentSurfaces({
+    collectionSlug: collection.name,
+    entryId: savedEntryId,
+    // The same hold `mayWrite` reads, so the two cannot disagree.
+    documentLock: pluginLock,
+    mayWrite: () => !pluginWritesHeldNow.current,
+    onDeleted: onDelete,
+    onOwnChange: expectOwnChange,
+    locale,
+  });
+  // The side panel's sections in the order the server placed them, with the
+  // sections plugins declared at this page's place among them, and what each
+  // is handed: the place's context and entry, with the document's handles.
+  const { panelOrder, sectionsAboveForm, placedSectionProps } =
+    useDocumentPanelParts(
+      documentPlace,
+      panel.mode === "sheet",
+      pluginSurfaces.sectionProps
+    );
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -773,14 +1258,61 @@ export function EntryForm({
     entry,
     collectionSlug: collection.name,
     locale,
-    documentLocked: lock.readOnly,
+    // A colleague's claim, which withholds every write: a reader's read-only
+    // page withholds only the edits, through `canEdit`.
+    documentLocked: lock.actionsDisabled,
+    canEdit: mayEdit,
+    writesRefused: removedFromCode,
     contributedActions: documentActions,
+    actionOverrides: pluginSurfaces.actionOverrides,
+    // Read when a contribution is chosen: the page above holds only the
+    // saved entry, and a schedule says when edits are not saved yet.
+    currentValues: () => form.getValues(),
+    currentDirty: () => form.formState.isDirty,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
     onCancel: handleCancel,
-    onDelete: handleDelete,
+    // No handler, no Delete: the action bar draws no action it cannot run.
+    // A plugin's replacement keeps the row (and its permission and holds),
+    // so it needs the built-in Delete to replace.
+    ...(canDelete ||
+    (mayDelete && pluginSurfaces.actionOverrides.delete?.kind === "replaced")
+      ? { onDelete: handleDelete }
+      : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
   };
+
+  // A save refused because the entry changed since: who changed it and when,
+  // and the author's choices, over the edits it keeps. The comparison is of
+  // the change that made the save stale, where the entry keeps history.
+  const staleHistory = versionConflict?.stale.historyVersion;
+  lock.now.keepsEdits = keepsRecoveryPoints;
+  // Load the current version, keeping the edits as a recovery point where the
+  // document keeps them and offering it then; elsewhere the edits are
+  // discarded, as the conflict said they would be. One way, for a refused
+  // save's dialog and for someone else's change alike.
+  lock.now.keepEditsAndLoad = async () => {
+    await loadCurrentVersion(keepsRecoveryPoints);
+    if (keepsRecoveryPoints) recovery.recheck();
+  };
+  lock.now.stopLoadingCurrent = stopAwaitingCurrentVersion;
+  const conflictDialog = (
+    <VersionConflictDialog
+      conflict={versionConflict}
+      keepsRecoveryPoints={keepsRecoveryPoints}
+      compareHref={
+        staleHistory && autosaveScope
+          ? versionsHref(
+              autosaveScope,
+              { from: PREVIOUS_VERSION, to: staleHistory.version },
+              staleHistory.locale
+            )
+          : null
+      }
+      onLoadCurrent={() => lock.now.keepEditsAndLoad()}
+      onSaveAnyway={saveAnyway}
+    />
+  );
 
   // Embedded mode: simplified single-column layout for modals
   // Note: Preview is typically not shown in embedded mode (modals)
@@ -792,64 +1324,102 @@ export function EntryForm({
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
+        // The fields, so a field inside a repeater's row has an address.
+        fields={allFields}
+        // So a field recording its own state stays quiet where this does.
+        keepsRecoveryPoints={keepsRecoveryPoints}
       >
-        <EntryFormProvider
-          form={form}
-          // The quick-edit form submits natively and reports through its own
-          // toasts, so what the save came to is not read here.
-          onSubmit={async event => {
-            await handleSubmit(event);
-          }}
-          className={className}
-        >
-          <div className="space-y-6">
-            {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
+        <DocumentFormSource form={form} contentHeld={contentHeld}>
+          <EntryFormProvider
+            form={form}
+            recovering={recovering}
+            // The quick-edit form submits natively and reports through its own
+            // toasts, so what the save came to is not read here. A caller who
+            // may not save sends nothing: Enter in a field submits even with
+            // no Save on screen.
+            onSubmit={async event => {
+              if (!canSave) {
+                event?.preventDefault();
+                return;
+              }
+              await handleSubmit(event);
+            }}
+            className={className}
+          >
+            <div className="space-y-6">
+              {/* 🔴 Here too, not only in the standalone layout. Quick-edit from a
                 relationship picker claims the related entry exactly as the full
                 editor does, so without this a colleague's claim renders every
                 field in the modal uneditable with nothing saying why and no way
                 to take it over — a locked form that reads as a broken one. */}
-            <DocumentLockBanner
-              notice={lock.notice}
-              onTakeOver={lock.takeOver}
-              onRequestAccess={lock.requestAccess}
-            />
-            {/* Error summary at top of form */}
-            <FormErrorSummary errors={errors} submitCount={submitCount} />
-            {/* This branch renders every collection field, the editable slug among them, but not
+              <DocumentLockBanner
+                notice={lock.notice}
+                onTakeOver={lock.takeOver}
+                onRequestAccess={lock.requestAccess}
+                onRetry={lock.retryLoad}
+                onChoose={lock.answerChange}
+              />
+              {/* No page around a modal to carry the removed-from-code notice in
+                a document banner, so the modal says it itself. */}
+              {removedFromCode && (
+                <RemovedFromCodeNotice
+                  entity={{
+                    kind: "collection",
+                    label:
+                      collection.labels?.plural ||
+                      collection.label ||
+                      collection.name,
+                    slug: collection.name,
+                  }}
+                  state={collection.removedFromCodeState}
+                />
+              )}
+              {/* Error summary at top of form */}
+              <FormErrorSummary errors={errors} submitCount={submitCount} />
+              {/* This branch renders every collection field, the editable slug among them, but not
                 the meta strip that carries the notice in the standalone layout. Quick-edit from a
                 relationship picker lands here on existing entries, so without this the one place
                 the warning is skipped is also a place a live URL can be rewritten and saved. */}
-            {slugField && (
-              <PublicUrlChangeNotice
-                slugName={slugField.name ?? "slug"}
-                active={hasPublicAddress}
-                className="block"
-              />
-            )}
-            {/* Forward the form mode so write-only password fields render
+              {slugField && (
+                <PublicUrlChangeNotice
+                  slugName={slugField.name ?? "slug"}
+                  active={hasPublicAddress}
+                  className="block"
+                />
+              )}
+              {/* Forward the form mode so write-only password fields render
                 their edit-mode affordance: on edit a blank password input
                 means "keep the current password" (the stored hash never
                 round-trips), so it is not treated as a required-field miss. */}
-            <EntryFormContent
-              fields={getCollectionFields(collection)}
-              disabled={isSubmitting}
-              readOnly={lock.readOnly}
-              mode={mode}
-            />
-            <EntryFormActions
-              mode={mode}
-              isSubmitting={isSubmitting}
-              onCancel={handleCancel}
-            />
-          </div>
-        </EntryFormProvider>
+              <EntryFormContent
+                fields={allFields}
+                disabled={savePending}
+                // Without the permission to save, the entry is shown as it is
+                // rather than as a form whose changes go nowhere.
+                readOnly={lock.readOnly || !canSave}
+                mode={mode}
+              />
+              <EntryFormActions
+                mode={mode}
+                isSubmitting={isSubmitting}
+                onCancel={handleCancel}
+                canSave={canSave}
+              />
+            </div>
+            {conflictDialog}
+            {pluginSurfaces.replacement}
+          </EntryFormProvider>
+        </DocumentFormSource>
       </EntryFormContextProvider>
     );
   }
 
-  // Standalone mode: compact layout — system header, meta strip, fields,
-  // and (optional) right rail. No breadcrumbs, no DocumentTabs, no separate
-  // page title h1; the title input lives inside EntrySystemHeader.
+  if (holdReveal) return <>{revealOutline}</>;
+
+  // Standalone mode: the trail in the admin's top bar, then the document bar,
+  // the banners under it, the title and slug, the fields, and the (optional)
+  // right rail. No DocumentTabs and no separate page title h1: the title
+  // input is the editor's first element.
   return (
     // Standalone only. An embedded editor lives in a modal, where leaving is
     // closing the dialog rather than a history move — and a modal opened FROM
@@ -857,8 +1427,10 @@ export function EntryForm({
     // dialogs would answer one navigation.
     <UnsavedChangesGuard
       isDirty={hasUnsavedWork}
-      disabled={isSubmitting}
-      fields={getCollectionFields(collection)}
+      // A save alone: during a recovery, work that reaches the form after its
+      // one read is still unsaved, so leaving still asks.
+      disabled={savePending}
+      fields={allFields}
       // A refused switch takes its seed with it. The request to fill the target
       // from this language was made ALONGSIDE a navigation; if the navigation
       // does not happen, the request did not either — and a seed left behind
@@ -867,6 +1439,26 @@ export function EntryForm({
       onCancel={onSeedHandled}
     >
       <UnsavedWorkProvider report={unsavedWork.report}>
+        {/* The editor's place in the admin's top bar: Content, this
+            collection's list, then this entry. Standalone only — a modal has
+            no page of its own to place. */}
+        <DocumentTrail
+          kind="entry"
+          collectionSlug={collection.name}
+          pluralLabel={
+            collection.labels?.plural || collection.label || collection.name
+          }
+          singularLabel={
+            collection.labels?.singular || collection.label || collection.name
+          }
+          mode={mode}
+          control={form.control}
+          titleName={
+            titleField && "name" in titleField
+              ? (titleField.name as string)
+              : "title"
+          }
+        />
         <EntryLocaleProvider value={localeCtx}>
           <DocumentHistoryContext.Provider value={documentHistory}>
             {/* Renders its child alone when there is no source — see the module. */}
@@ -880,11 +1472,12 @@ export function EntryForm({
                */
               // Nor beside a document view, which takes the window alone; the
               // flag survives a move from the edit screen into the view.
-              open={
-                previewOpen &&
-                translationMode.source === undefined &&
-                !documentView
-              }
+              // Nor for a reader, who is offered no preview: an open pane
+              // closes once the user may no longer change the entry.
+              open={previewOnScreen}
+              // A document view is a full-height screen: the closed split
+              // hands it the content area's height to fill.
+              fill={documentView !== undefined}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,
@@ -906,313 +1499,410 @@ export function EntryForm({
                   collectionSlug={collection.name}
                   isCreateMode={mode === "create"}
                   {...contextDocumentStatus}
+                  // The fields, so a field inside a repeater's row has an
+                  // address the Page Builder and other views open it by.
+                  fields={allFields}
+                  // So a field recording its own state, the Page Builder's
+                  // canvas, stays quiet where the editor's recording does.
+                  keepsRecoveryPoints={keepsRecoveryPoints}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
                   renderEntryFields={renderEntryFields}
+                  // The header's own Preview handler, on the header's own
+                  // terms, so a field offering the preview opens the same page
+                  // and only where the header would.
+                  {...(canPreview
+                    ? { openPreview: entryPreview.openPreview }
+                    : {})}
                 >
                   {/* A document view replaces the form body and nothing around
                       it: every provider above, the guard, the claim, the
                       recovery, the shortcut and the document's actions are
                       this editor's own either way. */}
-                  <DocumentActionsHost input={documentActionsInput}>
-                    {/* Standalone only: an embedded editor in a modal takes no
+                  {/* The document's live values for every component a plugin
+                      draws here: the form body, a document view and a
+                      replaced action alike (\`useDocumentValues\`). */}
+                  <DocumentFormSource form={form} contentHeld={contentHeld}>
+                    <DocumentActionsHost
+                      input={documentActionsInput}
+                      recovery={recoveryPoint}
+                    >
+                      <SaveWithoutPublishingBridge
+                        into={saveWithoutPublishing}
+                      />
+                      {/* Standalone only: an embedded editor in a modal takes no
                       shortcuts. Mod+S runs the Save action, so the shortcut
                       and the button cannot save by different rules. A
                       document view owns Escape — it clears its own selections
                       — so the cancel binding is withheld there; the save
                       chords stay. */}
-                    <DocumentSaveShortcuts
-                      onCancel={documentView ? undefined : handleCancel}
-                      hasUnsavedWork={hasUnsavedWork}
-                      isSubmitting={isSubmitting}
-                    />
-                    {documentView ? (
-                      <DocumentViewBody
-                        view={documentView}
-                        target={{ collectionSlug, entryId: savedEntryId }}
-                        form={form}
-                        lock={lock}
-                        recovery={recovery}
-                        viewingVersion={viewingVersion}
-                        fields={getCollectionFields(collection)}
+                      <DocumentSaveShortcuts
+                        onCancel={documentView ? undefined : handleCancel}
+                        hasUnsavedWork={hasUnsavedWork}
+                        isSubmitting={isSubmitting}
                       />
-                    ) : (
-                      <div className={cn("space-y-0", className)}>
-                        {/* Its native submit — Enter in a field, or a
+                      {/* A plugin's replacement for a document action, drawn
+                      inside the document's providers so it reads the
+                      language being edited and the document's actions as
+                      any surface of the editor does. */}
+                      {pluginSurfaces.replacement}
+                      {documentView ? (
+                        <DocumentViewBody
+                          view={documentView}
+                          target={{ collectionSlug, entryId: savedEntryId }}
+                          form={form}
+                          lock={lock}
+                          recovery={recovery}
+                          viewingVersion={viewingVersion}
+                          recovering={recovering}
+                          fields={allFields}
+                          // A document view has no header, so the banner goes
+                          // in among its own: an author working in the view
+                          // still sees the document is in a scheduled release.
+                          banner={documentBanner}
+                        />
+                      ) : (
+                        <div className={cn("space-y-0", className)}>
+                          {/* Its native submit — Enter in a field, or a
                             submit-typed Save — runs the Save action, so it
                             stores what Mod+S does and waits for what Save
                             waits for. */}
-                        <SaveActionFormProvider form={form}>
-                          <CopyFromLanguageScope>
-                            <FormErrorSummary
-                              errors={errors}
-                              submitCount={submitCount}
-                              className="mx-6 mt-3"
-                            />
-
-                            {/* Vertical only, not both axes. The vertical half still cancels
-                          `PageContainer`'s `py-8` so the editor's two columns
-                          reach the top and bottom of the panel. The horizontal
-                          half cancelled its `px-8`, and there is none left to
-                          cancel: a page that asks for a measure spends its inset
-                          as GRID COLUMNS, so the same negative margin now pulls
-                          the editor 32px past the content column on each side
-                          rather than back to the panel edge. Measured at a
-                          1600px viewport: 960px of editor in an 896px column.
-                          The two modal callers never had that padding either. */}
-                            <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
-                              {/* Main column */}
-                              <div
-                                className="flex-1 min-w-0 flex flex-col mx-auto w-full"
-                                // The measure lives on the FIELD column, not on
-                                // the page: the rail is a fixed-width sibling,
-                                // so a page-level cap would bound the two
-                                // together and spend the rail's width out of
-                                // the author's. `mx-auto` centres what is left
-                                // once the rail has taken its share.
-                                style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-                              >
-                                {/* No horizontal negative inset here. These bands fill the Main column,
-                    which is already as wide as the content column allows;
-                    pulling them wider pushed both ~32px past the page edges
-                    and clipped the title's first character on the left and
-                    the rail toggle on the right. */}
-                                <EntrySystemHeader
-                                  mode={mode}
-                                  documentLocked={lock.readOnly}
-                                  titleField={titleField}
-                                  isSubmitting={isSubmitting}
-                                  // The whole unsaved-work state, so the restore
-                                  // confirmation covers builder-held work too.
-                                  hasUnsavedWork={hasUnsavedWork}
-                                  autosaveEnabled={autosaveScope !== null}
-                                  // A recovery point newer than the stored document, still on offer:
-                                  // its edits are not stored, whatever the form says.
-                                  pendingRecoveryAt={
-                                    recovery.offer?.savedAt ?? null
-                                  }
-                                  autosaveLastSavedAt={autosave.lastSavedAt}
-                                  entry={entry}
-                                  collectionSlug={collection.name}
-                                  // Back to this collection's list, named as the
-                                  // navigation names it.
-                                  backLink={{
-                                    href: buildRoute(
-                                      ROUTES.COLLECTION_ENTRIES,
-                                      {
-                                        slug: collection.name,
-                                      }
-                                    ),
-                                    label:
-                                      collection.labels?.plural ||
-                                      collection.label ||
-                                      collection.name,
-                                  }}
-                                  historyFields={getCollectionFields(
-                                    collection
-                                  )}
-                                  historyEnabled={historyEnabledFrom(
-                                    collection
-                                  )}
-                                  historyRetention={historyRetentionFrom(
-                                    collection
-                                  )}
-                                  historyLifecycle={hasStatus}
-                                  localized={collection.localized === true}
-                                  isPreviewAvailable={canPreview}
-                                  {...(entryPreview.declaredLabel === undefined
-                                    ? {}
-                                    : {
-                                        previewLabel:
-                                          entryPreview.declaredLabel,
-                                      })}
-                                  {...(canPreview &&
-                                  translationMode.source === undefined
-                                    ? {
-                                        onTogglePreviewPane: () =>
-                                          setPreviewOpen(open => !open),
-                                        previewPaneOpen: previewOpen,
-                                      }
-                                    : {})}
-                                  {...(canPreview
-                                    ? { onPreview: entryPreview.openPreview }
-                                    : {})}
-                                  // Withheld while the language is unknown as well as while
-                                  // the entry is unsaved: a link minted without a resolvable
-                                  // locale is either refused by the mint route or, if the claim
-                                  // were dropped to avoid that, a grant over every translation.
-                                  isLinkAvailable={
-                                    savedEntryId !== "" &&
-                                    linkLocale.kind !== "unresolved"
-                                  }
-                                  {...(shareDocument === undefined
-                                    ? {}
-                                    : { shareDocument })}
-                                  toolbarSlot={versionAwareToolbarSlots(
-                                    viewedVersionHost,
-                                    lock.actionsDisabled,
-                                    "collection",
-                                    controllerNames[0]
-                                  )}
-                                  isRailCollapsed={railCollapsed}
-                                  onToggleRail={
-                                    mode === "edit" ? toggleRail : undefined
-                                  }
-                                />
-                                {/* First of the strips: a document somebody else is in
-                      changes what every affordance below it means, so it is read
-                      before the offer to restore work into it. */}
-                                <DocumentLockBanner
-                                  notice={lock.notice}
-                                  onTakeOver={lock.takeOver}
-                                  onRequestAccess={lock.requestAccess}
-                                />
-                                {/* Above the fields and below the header: the reader sees
-                      the document it refers to without the offer covering it. */}
-                                <LiveDocumentRecoveryOffer
-                                  recovery={recovery}
-                                  viewingVersion={viewingVersion}
-                                />
-                                <EntryMetaStrip
-                                  slugField={slugField}
-                                  hasStatus={hasStatus}
-                                  // The slug is a write, and the same claim withholds it.
-                                  lockSlug={lock.readOnly}
-                                  // The pill reports the language being edited, matching the header's submit
-                                  // affordances. Reading the main row instead would show "Published" beside a
-                                  // Publish button whenever a translation lags its default language.
-                                  status={
-                                    effectiveEntryStatus(
-                                      entry,
-                                      locale,
-                                      defaultLocale
-                                    ) ?? "draft"
-                                  }
-                                  hasWorkingDraft={hasPendingWorkingDraft(
-                                    entry
-                                  )}
-                                  isRailCollapsed={railCollapsed}
-                                  hasPublicAddress={hasPublicAddress}
-                                />
-
-                                {/* The language panel, inline. Its rail mount is
-                        `hidden @4xl/content:flex`, so this is the exact
-                        complement: shown only where the rail is not. When the
-                        rail cannot carry it at all — create mode, or the author
-                        collapsed it — the panel renders unconditionally instead,
-                        because "the actions live in the rail" is precisely the
-                        failure this stage removes. */}
-                                {localizationEnabled && (
-                                  <div
-                                    className={cn(
-                                      "px-6 pt-4",
-                                      mode === "edit" &&
-                                        !railCollapsed &&
-                                        "@4xl/content:hidden"
+                          <SaveActionFormProvider
+                            form={form}
+                            recovering={recovering}
+                          >
+                            <CopyFromLanguageScope>
+                              {/* The bar, the banners under it and the row of
+                              field column and panel, in one frame shared with
+                              the Single editor. The bar and banners span the
+                              row, so they sit above it rather than inside the
+                              measured field column. */}
+                              <DocumentEditorLayout
+                                place={documentPlace}
+                                frameRef={panel.measure}
+                                panelMode={panel.mode}
+                                bar={
+                                  <DocumentBar
+                                    mode={mode}
+                                    panelMode={panel.mode}
+                                    documentLocked={lock.readOnly}
+                                    writesRefused={removedFromCode}
+                                    isSubmitting={isSubmitting}
+                                    // The whole unsaved-work state, so the restore
+                                    // confirmation covers builder-held work too.
+                                    hasUnsavedWork={hasUnsavedWork}
+                                    autosaveEnabled={recoveryPoint.enabled}
+                                    pendingRecoveryAt={
+                                      recoveryPoint.pendingOfferAt
+                                    }
+                                    autosaveLastSavedAt={recoveryPoint.storedAt}
+                                    entry={entry}
+                                    collectionSlug={collection.name}
+                                    hasStatus={hasStatus}
+                                    // The pill reports the language being edited, matching the
+                                    // bar's submit affordances. Reading the main row instead would
+                                    // show "Published" beside a Publish button whenever a
+                                    // translation lags its default language.
+                                    documentStatus={editedStatus}
+                                    historyFields={getCollectionFields(
+                                      collection
                                     )}
+                                    historyEnabled={historyEnabledFrom(
+                                      collection
+                                    )}
+                                    historyRetention={historyRetentionFrom(
+                                      collection
+                                    )}
+                                    historyLifecycle={hasStatus}
+                                    localized={collection.localized === true}
+                                    isPreviewAvailable={canPreview}
+                                    {...(entryPreview.declaredLabel ===
+                                    undefined
+                                      ? {}
+                                      : {
+                                          previewLabel:
+                                            entryPreview.declaredLabel,
+                                        })}
+                                    {...(canPreview &&
+                                    translationMode.source === undefined
+                                      ? {
+                                          onTogglePreviewPane: () =>
+                                            setPreviewOpen(open => !open),
+                                          previewPaneOpen: previewOpen,
+                                        }
+                                      : {})}
+                                    {...(canPreview
+                                      ? { onPreview: entryPreview.openPreview }
+                                      : {})}
+                                    // Withheld while the language is unknown as well as while
+                                    // the entry is unsaved: a link minted without a resolvable
+                                    // locale is either refused by the mint route or, if the claim
+                                    // were dropped to avoid that, a grant over every translation.
+                                    isLinkAvailable={
+                                      !previewHeld &&
+                                      savedEntryId !== "" &&
+                                      linkLocale.kind !== "unresolved"
+                                    }
+                                    {...(shareDocument === undefined
+                                      ? {}
+                                      : { shareDocument })}
+                                    toolbarSlot={versionAwareToolbarSlots(
+                                      viewedVersionHost,
+                                      // A reader's page holds the slot's writes too.
+                                      versionWritesHeld,
+                                      "collection",
+                                      controllerNames[0]
+                                    )}
+                                    isRailCollapsed={!panelOnScreen}
+                                    onToggleRail={
+                                      mode === "edit" ? panel.toggle : undefined
+                                    }
+                                  />
+                                }
+                                banners={
+                                  <DocumentBanners
+                                    documentBanner={documentBanner}
+                                    lock={lock}
+                                    recovery={recovery}
+                                    viewingVersion={viewingVersion}
+                                    versionBannerRef={setVersionBannerSlot}
+                                  />
+                                }
+                                notices={
+                                  <FormErrorSummary
+                                    errors={errors}
+                                    submitCount={submitCount}
+                                    className="mx-6 mt-3"
+                                  />
+                                }
+                              >
+                                {/* Main column */}
+                                <div
+                                  className="flex-1 min-w-0 flex flex-col mx-auto w-full"
+                                  // The measure lives on the FIELD column, not on
+                                  // the page: the rail is a fixed-width sibling,
+                                  // so a page-level cap would bound the two
+                                  // together and spend the rail's width out of
+                                  // the author's. `mx-auto` centres what is left
+                                  // once the rail has taken its share.
+                                  style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+                                >
+                                  <DocumentPlaceTabs
+                                    place={documentPlace}
+                                    // A plugin's tab writes through the same
+                                    // form, so the bar's Save stores it, and is
+                                    // held as a panel section is.
+                                    form={form}
+                                    documentLock={pluginLock}
+                                    fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
-                                    <LanguagePanel
-                                      {...(entry?._translations === undefined
-                                        ? {}
-                                        : {
-                                            translations:
-                                              entry._translations as Record<
-                                                string,
-                                                {
-                                                  translated: boolean;
-                                                  status?: string;
-                                                }
-                                              >,
-                                          })}
-                                      {...(locale === undefined
-                                        ? {}
-                                        : { activeLocale: locale })}
-                                      {...(onLocaleChange === undefined
-                                        ? {}
-                                        : { onSelect: onLocaleChange })}
-                                      hasStatus={hasStatus}
-                                      actionsDisabled={writesHeld}
+                                    {/* The title first and largest, then the slug
+                                  on the line under it. The slug is a write,
+                                  and the same claim withholds it. */}
+                                    <DocumentTitleBlock
+                                      mode={mode}
+                                      titleField={titleField}
+                                      documentLocked={lock.readOnly}
+                                      // A save alone: the title's own `disabled`
+                                      // follows it, and a recovery holds the title
+                                      // read-only through the lock instead.
+                                      isSubmitting={savePending}
+                                      slug={
+                                        slugField
+                                          ? {
+                                              field: slugField,
+                                              locked: lock.readOnly,
+                                              hasPublicAddress,
+                                            }
+                                          : undefined
+                                      }
                                     />
-                                  </div>
-                                )}
+                                    <EntryMetaStrip
+                                      panelCarriesId={panelDocked}
+                                      documentId={entry?.id}
+                                    />
+                                    {/* A plugin's section that asks to be met
+                                    first, above the fields on a phone rather
+                                    than in the sheet. */}
+                                    {mode === "edit" ? (
+                                      <PanelSectionsAboveForm
+                                        sections={sectionsAboveForm}
+                                        className={DOCUMENT_COLUMN_INSET}
+                                        {...(placedSectionProps === undefined
+                                          ? {}
+                                          : { placedSectionProps })}
+                                      />
+                                    ) : null}
 
-                                {/* Reading a past version replaces the document rather than
+                                    {/* The language panel, inline: the exact
+                        complement of the docked panel, shown wherever that
+                        column is not on screen — create mode, a folded panel,
+                        and every width the panel floats or is a sheet at,
+                        where it opens only when asked for. */}
+                                    {localizationEnabled && (
+                                      <div
+                                        className={cn(
+                                          // In line with the title and the
+                                          // fields, not indented past them.
+                                          "pt-4",
+                                          DOCUMENT_COLUMN_INSET,
+                                          panelDocked && "hidden"
+                                        )}
+                                      >
+                                        <DocumentLanguagePanel
+                                          translations={
+                                            entry?._translations as
+                                              | Record<
+                                                  string,
+                                                  {
+                                                    translated: boolean;
+                                                    status?: string;
+                                                  }
+                                                >
+                                              | undefined
+                                          }
+                                          locale={locale}
+                                          onLocaleChange={switchLocale}
+                                          hasStatus={hasStatus}
+                                          sharedChangesPending={
+                                            entry?._sharedChangesPending ===
+                                            true
+                                          }
+                                          actionsDisabled={contentHeld}
+                                          // Publishing every language is a write
+                                          // too, so a recovery holds it as well.
+                                          publishAllDisabled={
+                                            publishAllHeld || recovering
+                                          }
+                                          // A reader may still open the other languages.
+                                          navigationDisabled={navigationHeld}
+                                        />
+                                      </div>
+                                    )}
+
+                                    {/* Reading a past version replaces the document rather than
                       opening beside it: the question an editor is asking is how
                       this page read then, and that is answered by the page. The
                       live form stays mounted underneath — the historical values
                       are rendered against a form of their own, so nothing typed
                       here is disturbed and nothing historical can reach a save.
                       The swap itself is the shared host's, so the Single editor
-                      answers a published version through the same surface. */}
-                                <ViewedVersionBody
-                                  fields={historicalFields ?? mainFields}
-                                  values={historicalValues ?? undefined}
-                                  // A submit in flight withholds restore too: a
-                                  // restore racing the ordinary save would let
-                                  // completion order decide which contents
-                                  // survive.
-                                  actionsDisabled={
-                                    lock.actionsDisabled || isSubmitting
-                                  }
-                                >
-                                  {mainFields.length > 0 && (
-                                    <div className="@4xl/content:p-8 pt-6">
-                                      {/* Forward the form mode: in edit mode a blank password
+                      answers a published version through the same surface. Its
+                      comparison bar is drawn among the banners under the bar. */}
+                                    <ViewedVersionBody
+                                      fields={
+                                        shownHistoricalFields ?? contentFields
+                                      }
+                                      values={historicalValues ?? undefined}
+                                      // A submit in flight withholds restore too: a
+                                      // restore racing the ordinary save would let
+                                      // completion order decide which contents
+                                      // survive.
+                                      // A reader's page holds restoring as well.
+                                      actionsDisabled={
+                                        versionWritesHeld || isSubmitting
+                                      }
+                                      bannerSlot={versionBannerSlot}
+                                    >
+                                      <EntryFormPlace
+                                        kind="collection"
+                                        slug={collectionSlug}
+                                        entryId={entry?.id ?? null}
+                                        {...(entry ? { entry } : {})}
+                                      >
+                                        {contentFields.length > 0 && (
+                                          <div className="@4xl/content:p-8 pt-6">
+                                            {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
-                                      <EntryFormContent
-                                        fields={mainFields}
-                                        disabled={isSubmitting}
-                                        readOnly={lock.readOnly}
-                                        withCard
-                                        mode={mode}
-                                      />
-                                    </div>
-                                  )}
-                                </ViewedVersionBody>
-                              </div>
+                                            <EntryFormContent
+                                              fields={contentFields}
+                                              disabled={savePending}
+                                              readOnly={lock.readOnly}
+                                              withCard
+                                              mode={mode}
+                                            />
+                                          </div>
+                                        )}
+                                      </EntryFormPlace>
+                                    </ViewedVersionBody>
+                                  </DocumentPlaceTabs>
+                                </div>
 
-                              {/* Rail (collapsible). Width 320px. Hidden until the content panel
-                  is wide enough (@4xl) to fit it beside the main column, until a
-                  future mobile sheet ships.
-
-                  The mode === "edit" gate: in create mode the entry does not
-                  exist yet, so DocumentPanel returns null and the rail has
-                  nothing to show. Rendering it anyway left an empty 320px
-                  strip down the right side of the page, which reads as a
-                  failed load rather than as an absence. */}
-                              {mode === "edit" && !railCollapsed && (
-                                <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                                  <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                                {/* The document panel, framed for the editor's
+                                width: docked beside the fields, floating
+                                over them, or a sheet on a phone. Not in
+                                create mode: the entry does not exist yet, and
+                                an empty column reads as a failed load. */}
+                                {mode === "edit" ? (
+                                  <DocumentSidePanel
+                                    mode={panel.mode}
+                                    shown={panelOnScreen}
+                                    onClose={panel.hide}
+                                  >
                                     <EntryFormSidebar
                                       mode={mode}
                                       entry={entry}
                                       hasStatus={hasStatus}
+                                      // The pill's status, read from the
+                                      // language being edited.
+                                      documentStatus={editedStatus}
+                                      {...(savedEntryId === ""
+                                        ? {}
+                                        : {
+                                            releaseDocument: {
+                                              scopeKind: "collection" as const,
+                                              scopeSlug: collection.name,
+                                              entryId: savedEntryId,
+                                            },
+                                          })}
                                       {...(locale === undefined
                                         ? {}
                                         : { locale })}
-                                      {...(onLocaleChange === undefined
+                                      {...(switchLocale === undefined
                                         ? {}
-                                        : { onLocaleChange })}
-                                      actionsDisabled={writesHeld}
-                                      isDirty={isDirty}
+                                        : { onLocaleChange: switchLocale })}
+                                      actionsDisabled={contentHeld}
+                                      // Publishing every language is a write
+                                      // too, so a recovery holds it as well.
+                                      publishAllDisabled={
+                                        publishAllHeld || recovering
+                                      }
+                                      // A reader may still open the other languages.
+                                      navigationDisabled={navigationHeld}
+                                      pluginSections={pluginSurfaces.sections}
+                                      {...(panelOrder === undefined
+                                        ? {}
+                                        : { panelOrder })}
+                                      {...(pluginSurfaces.sectionProps ===
+                                      undefined
+                                        ? {}
+                                        : {
+                                            pluginSectionProps:
+                                              pluginSurfaces.sectionProps,
+                                          })}
+                                      {...(placedSectionProps === undefined
+                                        ? {}
+                                        : { placedSectionProps })}
                                     />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </CopyFromLanguageScope>
-                        </SaveActionFormProvider>
-                      </div>
-                    )}
-                  </DocumentActionsHost>
+                                  </DocumentSidePanel>
+                                ) : null}
+                              </DocumentEditorLayout>
+                            </CopyFromLanguageScope>
+                          </SaveActionFormProvider>
+                        </div>
+                      )}
+                    </DocumentActionsHost>
+                  </DocumentFormSource>
                 </EntryFormContextProvider>
               </TranslationPanes>
             </PreviewPanes>
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
+        {conflictDialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

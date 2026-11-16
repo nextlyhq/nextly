@@ -28,7 +28,7 @@ export function RoleBasicInfo({
           <FieldShell
             label={
               <>
-                Name <span className="text-destructive-500">*</span>
+                Name <span className="text-danger-text">*</span>
               </>
             }
             error={fieldState.error?.message}
@@ -79,7 +79,8 @@ export function RoleBasicInfo({
             <Textarea
               placeholder="Describe the role's permissions..."
               {...field}
-              disabled={isLoading}
+              // A built-in role saves its permissions alone.
+              disabled={isLoading || isSystemRole}
               className="min-h-[100px] resize-none"
             />
           </FieldShell>

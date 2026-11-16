@@ -9,6 +9,40 @@
 export { FieldTypePicker } from "./FieldTypePicker";
 export type { FieldTypePickerProps } from "./FieldTypePicker";
 
+// The one field picker every surface opens to add a field: search first, a
+// most-used group then categories, keyboard alone, and a label-only add step.
+// A surface configures it (its types, plugin surface, name rule, field groups)
+// and owns where the field goes; the picker writes nothing.
+export { FieldPicker } from "./FieldPicker";
+// A field type as the picker describes it (name, description, category, icon
+// and search words), made by the one function core and plugin rows share.
+export { describeFieldTypes } from "nextly/field-catalog";
+export type { FieldTypeDescription } from "nextly/field-catalog";
+export type {
+  FieldGroupOption,
+  FieldPickerChoice,
+  FieldPickerConfig,
+  FieldPickerProps,
+} from "./FieldPicker";
+
+// The one settings panel every surface uses to add and edit a field: five
+// tabs, the type's defining settings first, every change reported at once with
+// no Apply. A surface configures it (its plugin types, how a label becomes a
+// name, what it fixes and why, its own settings, its conditions) and stores
+// each change itself; the panel writes nothing.
+export { FieldSettingsPanel } from "./settings-panel";
+export type {
+  FieldSettingsControlProps,
+  FieldSettingsField,
+  FieldSettingsPanelProps,
+  FieldSettingsSurface,
+  FieldSettingsConditionsProps,
+  FieldSettingsSurfaceControlProps,
+  FieldSettingsTab,
+  FieldTypeSettings,
+  FixedFieldSetting,
+} from "./settings-panel";
+
 export { FieldDefaultValueInput } from "./FieldDefaultValueInput";
 export type {
   FieldDefaultOption,

@@ -1,0 +1,24 @@
+---
+title: CORE_SCHEMA_APPLY_FAILED
+description: "The database refused a change to Nextly's own tables."
+---
+
+## Cause
+
+The database refused a change to Nextly's own tables.
+
+Before the app's migrations, `nextly migrate` brings Nextly's own tables up to date. The database refused one of those statements, for the reason the Why line gives.
+
+## Fix
+
+- Fix what the Why line names, such as rows that do not fit a new constraint.
+- Run the command again; `--verbose` shows where it failed.
+
+## Example
+
+```text
+✗ Core schema apply failed.
+  Why:  column "role" of relation "nextly_users" contains null values
+  Next: Fix the cause the Why line names, then run the command again; `--verbose` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-schema-apply-failed  (CORE_SCHEMA_APPLY_FAILED)
+```

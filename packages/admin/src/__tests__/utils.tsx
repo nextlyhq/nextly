@@ -1,7 +1,11 @@
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, RenderOptions, RenderResult } from "@testing-library/react";
-import { ReactElement, ReactNode } from "react";
+import {
+  render,
+  type RenderOptions,
+  type RenderResult,
+} from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 
 /**
  * Creates a fresh QueryClient for testing

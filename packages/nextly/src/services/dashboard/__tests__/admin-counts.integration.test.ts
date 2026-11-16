@@ -315,6 +315,53 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["permissions", "roles"]);
     });
 
+    it("gives a key each list's count exactly when that list opens to it", async () => {
+      // Each count reads its list's own gate, checked as the list checks it. Held here
+      // against the lists' real answers for two keys: `read-roles`, which opens the
+      // permissions list as well as the roles list, and `read-users`, which opens one list.
+      const { key: usersKey } = await apiKeys().createApiKey(admin.id, {
+        name: "users reader",
+        tokenType: "role-based",
+        roleId: await role("users-reader-key", ["read-users"]),
+        expiresIn: "never",
+      });
+      // Field groups are left out: `/api/field-groups` here is the builder palette's
+      // metadata read, open to any signed-in caller, and the count follows the
+      // settings-gated field-group list, whose gate the readers test holds it to.
+      const LISTS = [
+        ["users", "users"],
+        ["roles", "roles"],
+        ["permissions", "permissions"],
+      ] as const;
+      const opened: string[] = [];
+      for (const key of [rolesKey, usersKey]) {
+        const headers = { authorization: `Bearer ${key}` };
+        const counted = carried(await stats(headers));
+        for (const [count, path] of LISTS) {
+          const res = await createDynamicHandlers().GET(
+            new Request(`http://localhost/api/${path}`, { headers }),
+            { params: Promise.resolve({ params: [path] }) }
+          );
+          // Admitted or refused, nothing else: an error here would agree with no count.
+          expect([200, 403], `${path} answered ${res.status}`).toContain(
+            res.status
+          );
+          const opens = res.status === 200;
+          if (opens)
+            opened.push(
+              `${count} for ${key === rolesKey ? "read-roles" : "read-users"}`
+            );
+          expect(counted.includes(count), `${count}`).toBe(opens);
+        }
+      }
+      // The control: a key some list opens, so agreement is not two empty answers.
+      expect(opened).toEqual([
+        "roles for read-roles",
+        "permissions for read-roles",
+        "users for read-users",
+      ]);
+    });
+
     it("counts for a key administrator every key their list shows", async () => {
       // 🔴 The API-key list shows anyone who may read keys every key, whoever owns it, and
       // the count follows the list. The plausible slip is a count narrowed to the caller's

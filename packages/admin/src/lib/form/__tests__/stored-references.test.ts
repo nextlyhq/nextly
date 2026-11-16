@@ -597,3 +597,76 @@ describe("inside field groups", () => {
     ).toBe(true);
   });
 });
+
+describe("a stored link held as the object it names", () => {
+  // A depth-0 read gives an upload inside a group or a repeater as stored, and
+  // older saves stored the media object there rather than its id. The object
+  // names its link by its `id`, as a bare id would.
+  const fields = [
+    f({
+      name: "about",
+      type: "group",
+      fields: [f({ name: "image", type: "upload", relationTo: "media" })],
+    }),
+    f({
+      name: "slides",
+      type: "repeater",
+      fields: [
+        f({
+          name: "gallery",
+          type: "upload",
+          relationTo: "media",
+          hasMany: true,
+        }),
+      ],
+    }),
+  ];
+  const media1 = { id: "m1", url: "/m1.png", filename: "m1.png" };
+  const media2 = { id: "m2", url: "/m2.png", filename: "m2.png" };
+  const storedObject = (media: { id: string }) => ({
+    id: media.id,
+    url: "/stale.png",
+  });
+
+  it("reads both reads as one version", () => {
+    expect(
+      populatedAmongStored(
+        fields,
+        { about: { image: media1 }, slides: [{ gallery: [media1, media2] }] },
+        {
+          about: { image: storedObject(media1) },
+          slides: [{ gallery: [storedObject(media1), "m2"] }],
+        }
+      )
+    ).toBe(true);
+  });
+
+  it("still tells a row the stored read lacks for another version", () => {
+    expect(
+      populatedAmongStored(
+        fields,
+        { about: { image: media2 } },
+        { about: { image: storedObject(media1) } }
+      )
+    ).toBe(false);
+  });
+
+  it("keeps the populated row, or a placeholder written back as the bare id", () => {
+    const merged = withStoredReferences(
+      fields,
+      { about: { image: media1 }, slides: [{ gallery: [media2] }] },
+      {
+        about: { image: storedObject(media1) },
+        slides: [{ gallery: [storedObject(media1), storedObject(media2)] }],
+      }
+    );
+    expect(merged).toEqual({
+      about: { image: media1 },
+      slides: [{ gallery: [placeholder("m1"), media2] }],
+    });
+    expect(withoutPlaceholders(fields, merged)).toEqual({
+      about: { image: media1 },
+      slides: [{ gallery: ["m1", media2] }],
+    });
+  });
+});

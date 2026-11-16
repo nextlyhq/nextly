@@ -196,6 +196,26 @@ describe("the component read", () => {
     ]);
   });
 
+  it("names each component by its title, from the same rows, and names nothing before they arrive", () => {
+    // What Layers, the bottom bar, the search and the section list name a
+    // placement by. Read off the same response as the list, so a title and a
+    // tile cannot disagree.
+    pending();
+    const before = renderHook(() => useComponentLibrary());
+    expect(before.result.current.titleOf("header")).toBeUndefined();
+
+    answering([
+      { id: "header", title: "Site header", document: header },
+      { id: "empty", title: "Empty", document: null },
+    ]);
+    const { result } = renderHook(() => useComponentLibrary());
+
+    expect(result.current.titleOf("header")).toBe("Site header");
+    // A row saved without content still has a title a placement can show.
+    expect(result.current.titleOf("empty")).toBe("Empty");
+    expect(result.current.titleOf("gone")).toBeUndefined();
+  });
+
   it("hands the panel the rows AS RECEIVED, so a field the wire carries reaches a tile", () => {
     // The wire shape extends the panel's own, so nothing is translated on the
     // way — and a translation was where a field went missing: the route could

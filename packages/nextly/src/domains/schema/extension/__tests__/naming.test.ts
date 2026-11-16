@@ -150,6 +150,14 @@ describe("assertUsableAppTableName", () => {
     ).toMatch(/"sessions" is a retired auth table/);
   });
 
+  it("refuses the retired `user_permission_cache` table by name", () => {
+    expect(
+      refusal(() =>
+        assertUsableAppTableName("user_permission_cache", ["users"], [])
+      )
+    ).toMatch(/"user_permission_cache" is a retired auth table/);
+  });
+
   // MySQL with lower_case_table_names resolves `Accounts` to the same table
   // as `accounts`, so a different casing must be refused too.
   it("refuses a retired name in another casing", () => {

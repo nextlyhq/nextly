@@ -5,10 +5,10 @@
  * of one name, and nothing checks that they agree: a definition naming an
  * unregistered source is a legal definition, refused only at query time and only
  * for the reader unlucky enough to hold the card. Renaming a source with the
- * literal repeated in `core-widgets.ts` therefore leaves both cards querying an
+ * literal repeated in `core-widgets/` therefore leaves both cards querying an
  * id nothing serves while the source and every one of its own tests still pass.
  *
- * Its own module rather than an export of each source, because `core-widgets.ts`
+ * Its own module rather than an export of each source, because `core-widgets/`
  * would otherwise import the registration modules for their constants alone --
  * pulling a domain's service wiring into the definition list, and making the
  * widget domain depend on every domain that publishes a source.
@@ -28,11 +28,29 @@ export const ACTIVITY_SOURCE_ID = "system:activity";
 /** What is waiting for someone: pending changes, releases due soon and overdue. */
 export const ATTENTION_SOURCE_ID = "system:attention";
 
-/** The Team card's figures: the number of people, and of roles for a reader who may see them. */
+/**
+ * The team's figures, for a reader the Team card is offered to: the number of
+ * people, and of roles for a reader who may see them.
+ */
 export const TEAM_SOURCE_ID = "system:team";
+
+/**
+ * The Team card's people: name, email, role and last active, most recently
+ * active first, optionally only those holding one role.
+ */
+export const TEAM_PEOPLE_SOURCE_ID = "system:team-people";
 
 /** The Content card's collections, each with its entries and how many are drafts. */
 export const CONTENT_SOURCE_ID = "system:content";
 
-/** The documents most recently saved, one row each: the saves this caller may see. */
-export const RECENT_EDITS_SOURCE_ID = "system:recent-edits";
+/**
+ * Continue where you left off: the reader's pins and their own latest saves,
+ * or other people's latest saves, one row per document this caller may read.
+ */
+export const CONTINUE_SOURCE_ID = "system:continue";
+
+/**
+ * How many people have an account, and when they joined, for a reader who may
+ * read users: what a Count card set to Users reads.
+ */
+export const USERS_SOURCE_ID = "system:users";

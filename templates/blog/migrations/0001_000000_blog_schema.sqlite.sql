@@ -19,17 +19,21 @@ CREATE TABLE IF NOT EXISTS "dc_posts" (
   "excerpt" TEXT,
   "featured_image" TEXT,
   "author" TEXT,
+  "byline" TEXT,
   "categories" TEXT,
   "tags" TEXT,
   "published_at" INTEGER,
-  "status" TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  "status" TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
   "featured" INTEGER DEFAULT 0,
   "seo" TEXT,
   "reading_time" INTEGER,
   "word_count" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  "created_by" TEXT
+  "created_by" TEXT,
+  -- A post whose author profile is deleted keeps no dangling credit.
+  CONSTRAINT "fk_posts_byline" FOREIGN KEY ("byline") REFERENCES "dc_authors"("id") ON DELETE SET NULL
 );
 
 -- Categories collection
@@ -40,7 +44,8 @@ CREATE TABLE IF NOT EXISTS "dc_categories" (
   "slug" TEXT NOT NULL UNIQUE,
   "icon" TEXT,
   "description" TEXT,
-  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "created_by" TEXT
@@ -53,10 +58,32 @@ CREATE TABLE IF NOT EXISTS "dc_tags" (
   "name" TEXT NOT NULL,
   "slug" TEXT NOT NULL UNIQUE,
   "description" TEXT,
-  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
   "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
   "created_by" TEXT
+);
+
+-- Authors collection: the public profiles a post's byline credits. A post's
+-- "author" is the account that owns it; its "byline" is one of these.
+CREATE TABLE IF NOT EXISTS "dc_authors" (
+  "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+  "title" TEXT NOT NULL,
+  "name" TEXT NOT NULL,
+  "slug" TEXT NOT NULL UNIQUE,
+  "bio" TEXT,
+  "avatar" TEXT,
+  "account" TEXT,
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
+  "created_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "updated_at" INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  "created_by" TEXT,
+  -- Inline, as SQLite adds a key only when its table is made (text keys:
+  -- media.id and users.id are text in the core schema).
+  CONSTRAINT "fk_authors_avatar" FOREIGN KEY ("avatar") REFERENCES "media"("id") ON DELETE SET NULL,
+  CONSTRAINT "fk_authors_account" FOREIGN KEY ("account") REFERENCES "users"("id") ON DELETE SET NULL
 );
 
 -- ============ USER EXTENSION TABLE ============
@@ -112,11 +139,12 @@ CREATE TABLE IF NOT EXISTS "dc_posts_tags" (
 -- and use snake_case column names for all fields (e.g., hero_title not heroTitle).
 
 -- Site Settings single
-CREATE TABLE IF NOT EXISTS "single_site_settings" (
+CREATE TABLE "single_site_settings" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Site Settings',
   "slug" TEXT NOT NULL DEFAULT 'site-settings',
-  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
   "site_name" TEXT NOT NULL DEFAULT 'My Blog',
   "tagline" TEXT DEFAULT 'Thoughts on web development',
   "site_description" TEXT,
@@ -128,11 +156,12 @@ CREATE TABLE IF NOT EXISTS "single_site_settings" (
 );
 
 -- Navigation single
-CREATE TABLE IF NOT EXISTS "single_navigation" (
+CREATE TABLE "single_navigation" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Navigation',
   "slug" TEXT NOT NULL DEFAULT 'navigation',
-  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
   "header_links" TEXT,
   "footer_read_links" TEXT,
   "show_theme_toggle" INTEGER DEFAULT 1,
@@ -143,11 +172,12 @@ CREATE TABLE IF NOT EXISTS "single_navigation" (
 );
 
 -- Homepage single
-CREATE TABLE IF NOT EXISTS "single_homepage" (
+CREATE TABLE "single_homepage" (
   "id" TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   "title" TEXT NOT NULL DEFAULT 'Homepage',
   "slug" TEXT NOT NULL DEFAULT 'homepage',
-  "status" TEXT DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "status" TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('draft', 'published')),
+  "first_published_at" INTEGER,
   "hero_title" TEXT NOT NULL DEFAULT 'Ideas on building, shipping, and surviving software.',
   "hero_subtitle" TEXT DEFAULT 'Essays and notes from our engineering team.',
   "show_featured_post" INTEGER DEFAULT 1,
@@ -172,12 +202,18 @@ CREATE INDEX IF NOT EXISTS "idx_posts_status" ON "dc_posts"("status");
 CREATE INDEX IF NOT EXISTS "idx_posts_published" ON "dc_posts"("published_at" DESC);
 CREATE INDEX IF NOT EXISTS "idx_posts_featured" ON "dc_posts"("featured") WHERE "featured" = 1;
 CREATE INDEX IF NOT EXISTS "idx_posts_author" ON "dc_posts"("author");
+CREATE INDEX IF NOT EXISTS "idx_posts_byline" ON "dc_posts"("byline");
 
 -- Categories indexes
 CREATE INDEX IF NOT EXISTS "idx_categories_slug" ON "dc_categories"("slug");
 
 -- Tags indexes
 CREATE INDEX IF NOT EXISTS "idx_tags_slug" ON "dc_tags"("slug");
+
+-- Authors indexes
+CREATE INDEX IF NOT EXISTS "idx_authors_slug" ON "dc_authors"("slug");
+-- One profile per account: a new post is credited to its writer's profile.
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_authors_account" ON "dc_authors"("account");
 
 -- Junction table indexes (FK columns not covered by composite PK)
 CREATE INDEX IF NOT EXISTS "idx_posts_categories_category" ON "dc_posts_categories"("category_id");
@@ -205,6 +241,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_single_homepage_slug" ON "single_homepage"
 -- The core schema handles FK creation automatically
 
 -- ============ SINGLES DATA DEFAULTS ============
+-- The tables above are created without IF NOT EXISTS: this file made them, so the
+-- rows written here reach no table that was already there, and `nextly migrate`
+-- does not have to ask for consent before writing them.
 -- Insert default documents for each single so they're accessible immediately
 -- SQLite uses INSERT OR IGNORE instead of ON CONFLICT DO NOTHING
 INSERT OR IGNORE INTO "single_site_settings" ("id", "title", "slug", "status", "site_name", "tagline", "created_at", "updated_at")
@@ -232,5 +271,6 @@ DROP TABLE IF EXISTS "single_homepage";
 DROP TABLE IF EXISTS "single_navigation";
 DROP TABLE IF EXISTS "single_site_settings";
 DROP TABLE IF EXISTS "dc_tags";
+DROP TABLE IF EXISTS "dc_authors";
 DROP TABLE IF EXISTS "dc_categories";
 DROP TABLE IF EXISTS "dc_posts";

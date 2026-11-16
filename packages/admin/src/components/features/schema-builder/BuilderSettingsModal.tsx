@@ -25,9 +25,18 @@ import {
 import type { JSX } from "react";
 import { useState } from "react";
 
-import type { BasicsField, BuilderConfig } from "./builder-config";
+import type { StoredHookConfig } from "@admin/types/collection";
+
+// The title and description name the kind through the shared table, so the
+// modal spells each kind as every other builder message does.
+import {
+  BUILDER_KIND_NOUN,
+  type BasicsField,
+  type BuilderConfig,
+} from "./builder-config";
 import { AdvancedTab } from "./builder-settings-modal/AdvancedTab";
 import { BasicsTab } from "./builder-settings-modal/BasicsTab";
+import { StoredHooksView } from "./HooksEditor/StoredHooksView";
 
 /**
  * Form-state shape shared by both modes. Optional fields are present so the
@@ -101,14 +110,14 @@ type Props = {
   /** Code-first entities open this dialog to inspect config; every control
    *  is disabled and the footer collapses to a single Close button. */
   readOnly?: boolean;
+  /**
+   * A collection's stored hooks, shown read-only in a tab of their own when
+   * there are any. Nothing in the dialog edits them, and its submit never
+   * carries them, so a settings save leaves them as they are stored.
+   */
+  storedHooks?: readonly StoredHookConfig[];
   onCancel: () => void;
   onSubmit: (values: BuilderSettingsValues) => void;
-};
-
-const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
-  collection: "collection",
-  single: "single",
-  "field-group": "field group",
 };
 
 /**
@@ -133,7 +142,9 @@ const KIND_TITLE: Record<BuilderConfig["kind"], string> = {
  * What the MANIFEST does with an empty description is the manifest's own
  * question, answered where its entity is built.
  */
-function normalized(values: BuilderSettingsValues): BuilderSettingsValues {
+export function normalizedSettings(
+  values: BuilderSettingsValues
+): BuilderSettingsValues {
   return { ...values, description: values.description?.trim() };
 }
 
@@ -150,15 +161,47 @@ const EMPTY_VALUES: BuilderSettingsValues = {
 // doesn't have to flip the switch every time. We key off advancedFields
 // instead of `kind` so this stays correct if a future kind opts in or
 // out of the status flag. Edit mode preserves whatever value was loaded.
+export function createDefaults(config: BuilderConfig): BuilderSettingsValues {
+  return {
+    ...EMPTY_VALUES,
+    ...(config.advancedFields.includes("status") ? { status: true } : {}),
+  };
+}
+
 function computeInitialValues(
   mode: "create" | "edit",
   config: BuilderConfig,
   initialValues: BuilderSettingsValues | null
 ): BuilderSettingsValues {
   if (mode === "edit" && initialValues) return initialValues;
+  return createDefaults(config);
+}
+
+/**
+ * What the dialog says in each mode: creating names the kind, editing names the
+ * entity by its singular name, and a code-first entity is said to be read-only.
+ */
+function dialogWording(
+  mode: "create" | "edit",
+  readOnly: boolean,
+  kindLabel: string,
+  singularName: string | undefined
+): { title: string; description: string; primaryLabel: string } {
+  if (mode === "create") {
+    return {
+      title: `New ${kindLabel}`,
+      description: readOnly
+        ? `This ${kindLabel} is defined in code and shown read-only.`
+        : `Set up a new ${kindLabel}`,
+      primaryLabel: "Continue",
+    };
+  }
   return {
-    ...EMPTY_VALUES,
-    ...(config.advancedFields.includes("status") ? { status: true } : {}),
+    title: `${singularName || "Untitled"} settings`,
+    description: readOnly
+      ? `This ${kindLabel} is defined in code and shown read-only.`
+      : `Update settings for this ${kindLabel}`,
+    primaryLabel: "Save",
   };
 }
 
@@ -168,25 +211,22 @@ export function BuilderSettingsModal({
   config,
   initialValues,
   readOnly = false,
+  storedHooks,
   onCancel,
   onSubmit,
 }: Props): JSX.Element {
   const [values, setValues] = useState<BuilderSettingsValues>(() =>
     computeInitialValues(mode, config, initialValues)
   );
-  const [tab, setTab] = useState<"basics" | "advanced">("basics");
+  const [tab, setTab] = useState<"basics" | "advanced" | "hooks">("basics");
+  const hookCount = storedHooks?.length ?? 0;
 
-  const kindLabel = KIND_TITLE[config.kind];
-  const title =
-    mode === "create"
-      ? `New ${kindLabel}`
-      : `${values.singularName || "Untitled"} settings`;
-  const description = readOnly
-    ? `This ${kindLabel} is defined in code and shown read-only.`
-    : mode === "create"
-      ? `Set up a new ${kindLabel}`
-      : `Update settings for this ${kindLabel}`;
-  const primaryLabel = mode === "create" ? "Continue" : "Save";
+  const { title, description, primaryLabel } = dialogWording(
+    mode,
+    readOnly,
+    BUILDER_KIND_NOUN[config.kind],
+    values.singularName
+  );
 
   return (
     <Dialog open={open} onOpenChange={next => !next && onCancel()}>
@@ -200,6 +240,9 @@ export function BuilderSettingsModal({
           <TabsList>
             <TabsTrigger value="basics">Basics</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
+            {hookCount > 0 && (
+              <TabsTrigger value="hooks">Hooks ({hookCount})</TabsTrigger>
+            )}
           </TabsList>
           <TabsContent value="basics">
             {/* A disabled fieldset natively disables every descendant control
@@ -226,11 +269,17 @@ export function BuilderSettingsModal({
             <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0">
               <AdvancedTab
                 fields={config.advancedFields}
+                kind={config.kind}
                 values={values}
                 onChange={setValues}
               />
             </fieldset>
           </TabsContent>
+          {hookCount > 0 && (
+            <TabsContent value="hooks">
+              <StoredHooksView hooks={storedHooks} />
+            </TabsContent>
+          )}
         </Tabs>
 
         <DialogFooter>
@@ -243,7 +292,7 @@ export function BuilderSettingsModal({
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button onClick={() => onSubmit(normalized(values))}>
+              <Button onClick={() => onSubmit(normalizedSettings(values))}>
                 {primaryLabel}
               </Button>
             </>

@@ -3,6 +3,7 @@
 // the legitimate first-admin form. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction, respondData } from "../../api/response-shapes";
+import { appPasswordRule } from "../../di/password-digester";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
@@ -11,6 +12,7 @@ import { sessionCookies } from "../cookies/session-cookies";
 import { validatePasswordStrength } from "../credentials/password-strength";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
+import { clientPasswordRule } from "../password/policy";
 import type { SessionRoles } from "../session/session-roles";
 import type { TokenVerdict } from "../setup-token/setup-token";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
@@ -23,6 +25,7 @@ import {
   jsonResponse,
 } from "./handler-utils";
 import { storeNewRefreshToken } from "./issue-session";
+import type { RegisterHandlerDeps } from "./register";
 
 /**
  * The strategy the first administrator's session is recorded under.
@@ -101,9 +104,15 @@ function setupCompleteResponse(): Response {
   });
 }
 
+/**
+ * GET /auth/setup-status: what the admin's signed-out screens need to know
+ * before anyone signs in. Read once per page by the route guards, the setup
+ * form and the sign-in and register screens alike.
+ */
 export async function handleSetupStatus(
   request: Request,
-  deps: Pick<SetupHandlerDeps, "hasAdministrator" | "setupToken">
+  deps: Pick<SetupHandlerDeps, "hasAdministrator" | "setupToken"> &
+    Pick<RegisterHandlerDeps, "allowRegistration">
 ): Promise<Response> {
   try {
     const isSetup = await deps.hasAdministrator();
@@ -115,10 +124,20 @@ export async function handleSetupStatus(
     // respondData payload" rule.
     // `requiresSetupToken` tells the admin's setup form to ask for the token,
     // and where it is found; it says nothing about the token itself.
+    // `allowRegistration` is the flag the register route is refused by, so
+    // the sign-in page offers "Sign up", and the register page its form, only
+    // where a registration would be taken. It tells nobody more than a
+    // registration attempt's own refusal does.
+    // `passwordRule` is what the admin's password forms check before they
+    // submit: the minimum length, and the byte limit of the app's hasher
+    // where it has one. Every sign-up, reset and invite page shows these rules
+    // anyway, and the server judges each write in full.
     return respondData({
       isSetup,
       requiresInitialUser: !isSetup,
       requiresSetupToken: !isSetup && deps.setupToken.required,
+      allowRegistration: deps.allowRegistration,
+      passwordRule: clientPasswordRule(appPasswordRule().hasher),
     });
   } catch (err) {
     // Surface a 503 rather than synthesising a default `isSetup` -- the
@@ -345,7 +364,8 @@ function setupInputRefusal(
     });
   }
 
-  const strengthResult = validatePasswordStrength(password);
+  // Judged by the app's hasher, which hashes the first account.
+  const strengthResult = validatePasswordStrength(password, appPasswordRule());
   if (strengthResult.ok) return null;
   // The rules a password failed are the only part of this a person can act
   // on, so they travel on `data.errors` -- the key the canonical envelope

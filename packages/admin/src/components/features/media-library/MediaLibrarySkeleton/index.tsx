@@ -90,13 +90,14 @@ export function MediaLibrarySkeleton({
       {Array.from({ length: count }).map((_, index) => (
         <div key={index} className="space-y-3">
           {/* Card image skeleton */}
-          <Skeleton className="aspect-square w-full rounded-md" />
+          {/* Still, as every loading outline in the admin is: nothing pulses. */}
+          <Skeleton still className="aspect-square w-full rounded-md" />
 
           {/* Card filename skeleton */}
-          <Skeleton className="h-4 w-3/4" />
+          <Skeleton still className="h-4 w-3/4" />
 
           {/* Card metadata skeleton */}
-          <Skeleton className="h-3 w-1/2" />
+          <Skeleton still className="h-3 w-1/2" />
         </div>
       ))}
     </div>

@@ -37,6 +37,7 @@ import {
   type Control,
   type FieldValues,
 } from "react-hook-form";
+import { ShortcutProvider, TooltipProvider } from "@nextlyhq/ui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlocksFieldConfig } from "../../fields/blocks-options";
@@ -49,6 +50,18 @@ let edit: ((next: BlockDocument) => void) | undefined;
 
 /** The form's values as last rendered, which is what a save would send. */
 let values: FieldValues | undefined;
+
+/** The saved copy the open editor last judged locks against. */
+let lastStored: BlockDocument | undefined;
+
+/** Resets the host's form, as a save does to what the server stored. */
+let resetForm: ((next: FieldValues) => void) | undefined;
+
+// The editor asks the session's grants for shared styles; this file is not
+// about them, so the author holds the right to change the site's design.
+vi.mock("@nextlyhq/plugin-sdk/client", () => ({
+  useCan: (permission: string) => permission === "update-site-style",
+}));
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -69,18 +82,30 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       onExit,
       children,
+      canvasStrip,
     }: {
       onExit?: () => void;
       children?: React.ReactNode;
+      canvasStrip?: React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        <header aria-label="Editor actions">
-          <button type="button" onClick={onExit}>
-            Leave editor
-          </button>
-        </header>
-        {children}
-      </div>
+      // The providers the real shell gives what it draws: its shortcut
+      // manager and its tooltips.
+      <ShortcutProvider>
+        <TooltipProvider>
+          <div>
+            <header aria-label="Editor actions">
+              <button type="button" onClick={onExit}>
+                Leave editor
+              </button>
+            </header>
+            {/* The real shell's strip slot, above the canvas. */}
+            {canvasStrip === undefined ? null : (
+              <div data-testid="canvas-strip">{canvasStrip}</div>
+            )}
+            {children}
+          </div>
+        </TooltipProvider>
+      </ShortcutProvider>
     ),
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,
@@ -92,6 +117,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
+    RepairNotice: nothing,
     LayersPanel: nothing,
     TokensPanel: nothing,
     OnboardingChecklist: nothing,
@@ -115,9 +141,12 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
      */
     useEditorState: ({
       initialDocument,
+      stored,
     }: {
       initialDocument: BlockDocument;
+      stored?: BlockDocument;
     }) => {
+      lastStored = stored;
       const [document, setDocument] = React.useState(() => {
         seeded.push(initialDocument);
         return initialDocument;
@@ -152,8 +181,41 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+/** Asking the stored style again, as the editor does after a save. */
+const refetchStoredStyle = async () => ({ isError: false });
+// The stored site style arrives through the editor's one read, the plugin's
+// route; that read's request is asserted in `site-style-read.test`.
+vi.mock("../site-style-read", () => ({
+  useStoredSiteStyle: () => ({
+    data: undefined,
+    isPending: false,
+    error: null,
+    refetch: refetchStoredStyle,
+  }),
+}));
+
+vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The canvas's media read, answering nothing: these cases draw no image.
+  // One function for every call, as the admin's own hook keeps it.
+  useMediaResolver: (
+    read => () =>
+      read
+  )(() => Promise.resolve(null)),
+  // The Fallback picker's library search, finding nothing: no case here
+  // opens it. One function for every call, as the admin's own hook keeps it.
+  useMediaSearcher: (
+    search => () =>
+      search
+  )(() => Promise.resolve([])),
+  // The host's font table, which the real entry re-exports from core.
+  WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
+  // The media library, drawn as nothing: these cases never open it.
+  MediaPickerDialog: () => null,
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
+  // No preview here: the surrounding editor offers none.
+  useDocumentPreview: () => null,
+  // No one signed in: the editor keeps no preferences.
+  useCurrentUserId: () => null,
   usePluginClientConfig: () => undefined,
   // A saved page around the view, as the admin draws it at that page's own
   // address.
@@ -189,20 +251,70 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  // The form's storing gate, which site style writes are tracked with.
+  useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The header's controls the bar places; drawn by the admin, not here.
+  DocumentSaveIndicator: () => null,
+  DocumentPrimaryAction: () => null,
   useDocumentActions: () => null,
   useDocumentStatus: () => null,
+  // The admin's words for a document's state, which a template's strip
+  // draws the previewed entry's status in.
+  PILL_LABEL: {
+    draft: "Draft",
+    modified: "Modified",
+    changed: "Changed",
+    published: "Published",
+  },
+  // The editor registers its restore; nothing here offers one.
+  useDocumentRestore: () => undefined,
   // Nothing stored, read successfully: the site's style is ready, so the
   // read-only page is drawn rather than held back for a sheet still coming.
-  useSingleDocument: () => ({
-    data: undefined,
-    isPending: false,
-    error: null,
-  }),
   useUpdateSingleDocument: () => ({
     mutateAsync: async () => ({ success: true }),
     isPending: false,
   }),
+}));
+
+// A template's preview reads: two posts, the newest a draft, and the right
+// to create one.
+vi.mock("../template-preview-client", () => ({
+  listPreviewEntries: vi.fn(async () => ({
+    items: [
+      {
+        id: "p2",
+        title: "Release notes: September",
+        status: "draft",
+        updatedAt: "2026-11-07T08:00:00.000Z",
+      },
+      {
+        id: "p1",
+        title: "Building a content model that lasts",
+        status: "published",
+        updatedAt: "2026-11-06T08:00:00.000Z",
+      },
+    ],
+    meta: {
+      total: 2,
+      page: 1,
+      limit: 20,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+      mayCreate: true,
+      labels: { singular: "Post", plural: "Posts" },
+      blocksFields: [{ name: "body", label: "Body" }],
+    },
+  })),
+  readPreviewEntry: vi.fn(async ({ id }: { id: string }) => ({
+    id,
+    title: id === "p2" ? "Release notes: September" : "Building a model",
+    status: id === "p2" ? "draft" : "published",
+    editorValues: { id },
+    publicValues: null,
+    fields: [],
+  })),
 }));
 
 // Imported after the mocks, which is what makes them take effect.
@@ -269,6 +381,7 @@ function Values({
  */
 function Host({
   field = CONTENT_FIELD,
+  fieldPath,
   readOnly = false,
   stored = {
     body: pageSaying(BODY_TEXT),
@@ -276,15 +389,18 @@ function Host({
   },
 }: {
   field?: DocumentViewProps["field"];
+  fieldPath?: string;
   readOnly?: boolean;
   stored?: FieldValues;
 }): React.JSX.Element {
-  const { control } = useForm<FieldValues>({ defaultValues: stored });
+  const { control, reset } = useForm<FieldValues>({ defaultValues: stored });
+  resetForm = reset;
   return (
     <>
       <PageBuilderView
         control={control}
         field={field}
+        {...(fieldPath === undefined ? {} : { fieldPath })}
         readOnly={readOnly}
         exit={exit}
       />
@@ -302,6 +418,8 @@ beforeEach(() => {
   seeded.length = 0;
   edit = undefined;
   values = undefined;
+  lastStored = undefined;
+  resetForm = undefined;
   exit.mockClear();
 });
 
@@ -317,6 +435,17 @@ describe("the field the view edits", () => {
     // field holds a well-formed page too, so an editor bound to it would be
     // seeded with a plausible document and fail here only on its words.
     expect(seeded).toEqual([pageSaying(CONTENT_TEXT)]);
+  });
+
+  it("holds locks against the named field's saved copy, and follows it when a save resets the form", () => {
+    render(<Host />);
+    expect(lastStored).toEqual(pageSaying(CONTENT_TEXT));
+
+    // A save resets the form to what the server stored. The editor then
+    // judges the next edit against that page, not the one it opened with.
+    act(() => resetForm?.({ body: pageSaying(BODY_TEXT), content: EDITED }));
+
+    expect(lastStored).toEqual(EDITED);
   });
 
   it("commits an edit into the named field on leaving, and leaves the other alone", () => {
@@ -339,6 +468,39 @@ describe("the field the view edits", () => {
     expect(seeded).toEqual([pageSaying(BODY_TEXT)]);
     expect(values?.body).toEqual(EDITED);
     expect(values?.content).toEqual(pageSaying(CONTENT_TEXT));
+  });
+});
+
+describe("a field inside a named group", () => {
+  const HERO_TEXT = "The words in the hero's own page";
+  // The group's field shares its name with a top-level one, so a view that
+  // bound by the declaration's own name would reach a well-formed page and
+  // fail only on its words.
+  const nested = {
+    field: declaration({ name: "body", type: "blocks" }),
+    fieldPath: "hero.body",
+    stored: {
+      body: pageSaying(BODY_TEXT),
+      hero: { body: pageSaying(HERO_TEXT) },
+    },
+  };
+
+  it("edits the field at its path, and leaves the top-level field of that name alone", () => {
+    render(<Host {...nested} />);
+    expect(seeded).toEqual([pageSaying(HERO_TEXT)]);
+
+    act(() => edit?.(EDITED));
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+
+    expect(values?.hero).toEqual({ body: EDITED });
+    expect(values?.body).toEqual(pageSaying(BODY_TEXT));
+  });
+
+  it("draws the page at its path while read-only", () => {
+    const { container } = render(<Host {...nested} readOnly />);
+
+    expect(container.textContent).toContain(HERO_TEXT);
+    expect(container.textContent).not.toContain(BODY_TEXT);
   });
 });
 
@@ -434,5 +596,42 @@ describe("an empty field", () => {
     render(<Host stored={{ body: undefined, content: undefined }} />);
 
     expect(seeded.map(document => document.kind)).toEqual(["page"]);
+  });
+});
+
+describe("the Previewing strip", () => {
+  /** A template's design, in the field templates keep it in. */
+  const templateDocument = {
+    ...pageSaying("Post title"),
+    kind: "template",
+  } as unknown as BlockDocument;
+  const TEMPLATE_FIELD = declaration({
+    name: "content",
+    type: "blocks",
+    blocks: { kinds: ["template"] },
+  });
+
+  it("is drawn above a template's canvas, previewing the newest entry", async () => {
+    render(
+      <Host
+        field={TEMPLATE_FIELD}
+        stored={{ collection: "posts", content: templateDocument }}
+      />
+    );
+    const strip = await screen.findByTestId("canvas-strip");
+    expect(strip.textContent).toContain("Previewing");
+    // The newest entry the author may read, named in full, its status beside.
+    expect(
+      await screen.findByRole("button", {
+        name: "Previewing Release notes: September, draft",
+      })
+    ).toBeTruthy();
+  });
+
+  it("is not drawn for a page (the control)", () => {
+    render(<Host />);
+    expect(screen.getByRole("banner", { name: "Editor actions" })).toBeTruthy();
+    expect(screen.queryByTestId("canvas-strip")).toBeNull();
+    expect(screen.queryByText("Previewing")).toBeNull();
   });
 });

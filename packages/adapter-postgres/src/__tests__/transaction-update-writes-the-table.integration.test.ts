@@ -138,7 +138,7 @@ describe.skipIf(!TEST_DB_URL)(
       });
     });
 
-    it("binds a declared date, JSON document and boolean as the query builder would, and an undeclared date as the insert does", async () => {
+    it("binds a declared date, JSON document and boolean as the query builder would, and an undeclared date as the same instant", async () => {
       const document = { a: 1, b: [true, null] };
       await adapter.transaction(async ctx => {
         await ctx.update(
@@ -159,12 +159,28 @@ describe.skipIf(!TEST_DB_URL)(
       // a JSON string containing one.
       expect(row?.meta).toEqual(document);
       expect(row?.published).toBe(true);
-      // The undeclared column is bound as the transactional insert binds a
-      // column the model does not know: natively, by the driver. On a UTC
-      // runner that is the same wall clock; the adapter cannot encode a
-      // column it cannot see, and this pins that it stores SOMETHING for it
-      // rather than which zone the driver chose.
-      expect(row?.published_at).not.toBeNull();
+      // The undeclared column stores the same UTC wall clock as the declared
+      // one. Handed the `Date` itself, node-postgres would spell it in the
+      // runner's zone, and a `timestamp` column drops the offset: ten o'clock
+      // UTC would be stored as three in the afternoon under this suite's zone.
+      expect(row?.published_at).toBe(WALL_CLOCK);
+    });
+
+    it("inserts an undeclared date inside a transaction as the same instant", async () => {
+      // The transactional insert binds a key the model does not declare
+      // through the same rule as the update above, so a row written either
+      // way holds the same value.
+      await adapter.transaction(async ctx => {
+        await ctx.insert(TABLE, {
+          id: "b",
+          slug: "second",
+          updated_at: AT,
+          published_at: AT,
+        });
+      });
+      const row = await stored("b");
+      expect(row?.updated_at).toBe(WALL_CLOCK);
+      expect(row?.published_at).toBe(WALL_CLOCK);
     });
 
     it("leaves a column alone for undefined and clears it for null", async () => {

@@ -17,17 +17,36 @@
 import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
 import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import {
   getMigrationLockDdl,
   getMigrationLockUpgradeDdl,
 } from "../../../domains/field-groups/migration/session";
-import { nextlyFieldGroupLock as myLock } from "../mysql";
-import { nextlyFieldGroupLock as pgLock } from "../postgres";
-import { nextlyFieldGroupLock as slLock } from "../sqlite";
+import { getSchemaLockDdl } from "../../../domains/schema/pipeline/schema-lock";
+import {
+  nextlyFieldGroupLock as myLock,
+  nextlySchemaLock as mySchemaLock,
+} from "../mysql";
+import {
+  nextlyFieldGroupLock as pgLock,
+  nextlySchemaLock as pgSchemaLock,
+} from "../postgres";
+import {
+  nextlyFieldGroupLock as slLock,
+  nextlySchemaLock as slSchemaLock,
+} from "../sqlite";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(d => loadDialectTables(d))
+  );
+});
 
 /** Each dialect's declared columns, read through the dialect's own config reader. */
 const DECLARED_COLUMNS: Record<
@@ -139,5 +158,40 @@ describe("the bootstrap DDL and the declared table agree", () => {
     const [statement] = getMigrationLockDdl("postgresql");
     expect(columnsInDdl(statement as string)).toContain("owner");
     expect(statement).toContain("nextly_field_group_lock");
+  });
+});
+
+/** The schema lock's declared columns, read through each dialect's own config reader. */
+const SCHEMA_LOCK_COLUMNS: Record<
+  SupportedDialect,
+  () => { name: string; getSQLType: () => string }[]
+> = {
+  postgresql: () => pgTableConfig(pgSchemaLock).columns,
+  mysql: () => mysqlTableConfig(mySchemaLock).columns,
+  sqlite: () => sqliteTableConfig(slSchemaLock).columns,
+};
+
+describe("the schema lock's bootstrap DDL and its declared table agree", () => {
+  it.each(DIALECTS)("gives every column its declared type on %s", dialect => {
+    const statements = getSchemaLockDdl(dialect);
+    // One statement, so a second one appearing later cannot slip past unread.
+    expect(statements).toHaveLength(1);
+    const inDdl = typesInDdl(statements[0] as string);
+
+    // A positive control on the parser, as above: a body that parsed to nothing would make every
+    // comparison below vacuous.
+    const declared = SCHEMA_LOCK_COLUMNS[dialect]();
+    expect(declared.map(c => c.name).sort()).toEqual([
+      "acquired_at",
+      "command",
+      "expires_at",
+      "id",
+      "owner",
+    ]);
+    expect([...inDdl.keys()].sort()).toEqual(declared.map(c => c.name).sort());
+    for (const column of declared) {
+      expect(inDdl.get(column.name)).toBe(column.getSQLType());
+    }
+    expect(statements[0]).toContain("nextly_schema_lock");
   });
 });

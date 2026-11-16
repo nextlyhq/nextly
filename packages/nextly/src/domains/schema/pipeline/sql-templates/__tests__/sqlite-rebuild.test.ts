@@ -307,6 +307,23 @@ describe("SQLite check and foreign-key changes rebuild the table", () => {
     ).toEqual([{ name: "fx__orders_touch" }]);
   });
 
+  it("refuses, dropping nothing, when a view reads the table", async () => {
+    // Without the guard SQLite refuses the rename instead ("error in view"),
+    // which rolls back too but names neither the cause nor what to do.
+    db = await databaseWith([orders(["open"])]);
+    db.prepare(`INSERT INTO ${ORDERS} VALUES ('1', 'open', NULL)`).run();
+    db.exec(`CREATE VIEW fx__open_orders AS SELECT id FROM FX__ORDERS`);
+
+    await expect(
+      migrate([orders(["open"])], [orders(["open", "paid"])])
+    ).rejects.toThrow(
+      /rebuilding fx__orders would break the views that read it: drop each view that reads fx__orders, migrate, then create the view again/
+    );
+    expect(db.prepare(`SELECT * FROM fx__open_orders`).all()).toEqual([
+      { id: "1" },
+    ]);
+  });
+
   it("a new foreign key the existing rows violate is refused before COMMIT", async () => {
     const withoutKey: TableSpec = { ...lines("no action"), foreignKeys: [] };
     db = await databaseWith([orders(["open"]), withoutKey]);
@@ -487,16 +504,26 @@ describe("SQLite check and foreign-key changes rebuild the table", () => {
     ).toHaveLength(1);
   });
 
-  it("PostgreSQL and MySQL render the operations one by one, as generateSQL does", async () => {
+  it("PostgreSQL renders the operations one by one, as generateSQL does", async () => {
     const ops = diffSnapshots(
       { tables: [orders(["open"])] },
       { tables: [orders(["open", "paid"])] }
     );
-    for (const dialect of ["postgresql", "mysql"] as const) {
-      expect(generateStatements(ops, dialect, [])).toEqual(
-        ops.map(op => generateSQL(op, dialect))
-      );
-    }
+    expect(generateStatements(ops, "postgresql", [])).toEqual(
+      ops.map(op => generateSQL(op, "postgresql"))
+    );
+  });
+
+  it("MySQL replaces the check in one statement, whose failure leaves the old check", async () => {
+    // MySQL commits each schema statement on its own, so the drop and the add
+    // run together (`mysql-check-replacement.ts`).
+    const ops = diffSnapshots(
+      { tables: [orders(["open"])] },
+      { tables: [orders(["open", "paid"])] }
+    );
+    const statements = generateStatements(ops, "mysql", []);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/DROP CHECK .*, ADD CONSTRAINT .* CHECK/);
   });
 });
 

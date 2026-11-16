@@ -25,7 +25,7 @@ export type ClassifyResult =
   | { verdict: "refuse"; reasons: string[] };
 
 /** True for operations the gate refuses (production-strict) / skips (dev-additive). */
-function isDestructive(op: Operation): boolean {
+export function isDestructive(op: Operation): boolean {
   switch (op.type) {
     case "drop_table":
     case "drop_column":
@@ -46,7 +46,8 @@ function isDestructive(op: Operation): boolean {
   }
 }
 
-function reasonFor(op: Operation): string {
+/** Why `op` is destructive, as the gate names it. */
+export function reasonFor(op: Operation): string {
   switch (op.type) {
     case "drop_table":
       return `drops table '${op.tableName}'`;

@@ -8,7 +8,7 @@
  * (`bg-warning-100 text-warning-700`) rather than only the base `--nx-*` tokens.
  */
 import { toClampedRgb, type Rgb } from "./color";
-import { type TokenMap } from "./parse-theme";
+import type { TokenMap } from "./parse-theme";
 
 /** The two lookup tables for one mode: base tokens and `@theme` utility colors. */
 export interface ResolveContext {

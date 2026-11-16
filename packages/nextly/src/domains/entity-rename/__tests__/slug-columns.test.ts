@@ -9,19 +9,30 @@
  * part; all three spellings occur (`scope_slug`, `activity_log.collection`,
  * `permissions.resource`).
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getCoreSchema } from "../../../schemas";
 import { entityPermissionSpelling } from "../../auth/services/entity-permission-spelling";
+import { reviewStateKey } from "../../workflows/review-state-repository";
 import {
   SLUG_COLUMNS,
+  STORED_FIELD_CONFIGURATIONS,
+  storedFieldConfigurationTables,
   renamedSlugColumns,
   type FollowingSlugColumn,
   type RenamedSlugColumn,
   type SlugColumn,
 } from "../slug-columns";
+import { loadDialectTables } from "../../../database/dialect-tables";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const DIALECTS: SupportedDialect[] = ["postgresql", "mysql", "sqlite"];
 
@@ -115,6 +126,7 @@ describe.each(DIALECTS)("slug-keyed core tables (%s)", dialect => {
         "nextly_versions.scope_slug",
         "nextly_content_events.subject_slug",
         "nextly_release_members.scope_slug",
+        "nextly_review_states.scope_slug",
         "permissions.resource",
       ])
     );
@@ -212,5 +224,64 @@ describe("what a rename writes again from the new slug", () => {
     const other = { resource: { kind: "entry", collection: "posts" } };
     expect(renamed(other)).toBe(other);
     expect(renamed("{not json")).toBe("{not json");
+  });
+
+  it("keys a part's review state again under the new slug", () => {
+    const derive = following("nextly_review_states").derived?.derive;
+    for (const [kind, part] of [
+      ["collection", "en"],
+      ["single", null],
+    ] as const) {
+      const row = { id: "r1", scope_kind: kind, entry_id: "e1", part };
+      expect(derive?.(row, "articles", "blog-posts")).toEqual({
+        part_key: reviewStateKey({
+          scopeKind: kind,
+          scopeSlug: "articles",
+          entryId: "e1",
+          part,
+        }),
+      });
+    }
+  });
+});
+
+describe("stored field configurations", () => {
+  /** Every core table with a `fields` column: each stores field configurations a rename reads. */
+  function fieldsTablesInSchema(dialect: SupportedDialect): string[] {
+    return getCoreSchema(dialect)
+      .tables.filter(table =>
+        table.columns.some(column => column.name === "fields")
+      )
+      .map(table => table.name)
+      .sort();
+  }
+
+  it.each(DIALECTS)(
+    "declares every %s table with a fields column, so a rename moves the relationship targets it stores",
+    dialect => {
+      expect(fieldsTablesInSchema(dialect)).toEqual(
+        STORED_FIELD_CONFIGURATIONS.map(registry => registry.table).sort()
+      );
+    }
+  );
+
+  // The field-group storage migration renames the registry, and the registry's own resolver reads
+  // it under either name: a rename reads both, or a migrated site's field groups are skipped.
+  it("reads the field-group registry under the name its storage migration gives it too", () => {
+    expect(storedFieldConfigurationTables()).toContain(
+      MIGRATION_TARGET.registryTable
+    );
+  });
+
+  it.each(DIALECTS)("names %s columns each declared registry has", dialect => {
+    const tables = getCoreSchema(dialect).tables;
+    for (const registry of STORED_FIELD_CONFIGURATIONS) {
+      const columns = tables
+        .find(table => table.name === registry.table)
+        ?.columns.map(column => column.name);
+      expect(columns).toEqual(
+        expect.arrayContaining([registry.fieldsColumn, registry.sourceColumn])
+      );
+    }
   });
 });

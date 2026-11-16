@@ -29,6 +29,7 @@ function state(over: Partial<DocumentActionState> = {}): DocumentActionState {
     status: "draft",
     hasWorkingDraft: false,
     readingHistory: false,
+    canEdit: true,
     canPublish: true,
     canUnpublish: true,
     canDelete: true,
@@ -386,5 +387,86 @@ describe("actions a host contributes", () => {
 
   it("changes nothing when there is nothing to contribute", () => {
     expect(withContributedActions(built, [])).toEqual(built);
+  });
+});
+
+describe("a user who may read the document but not change it", () => {
+  const ids = (over: Partial<DocumentActionState>) =>
+    documentActions(state(over)).map(action => action.id);
+
+  /** The leading action offered a reader of `over`'s document, if any. */
+  const leading = (over: Partial<DocumentActionState>) =>
+    documentActions(state({ canEdit: false, ...over })).find(
+      action => action.placement === "primary"
+    );
+
+  it("leads with Publish on a draft, where they may publish", () => {
+    // Publishing changes only the status, which the publish permission
+    // judges alone, so a reader who holds it may publish the draft.
+    expect(leading({ status: "draft" })).toMatchObject({
+      id: "publish",
+      label: "Publish",
+    });
+  });
+
+  it("leads with Publish changes on a published document holding a draft", () => {
+    expect(
+      leading({ status: "published", hasWorkingDraft: true })
+    ).toMatchObject({ id: "publish", label: "Publish changes" });
+  });
+
+  it("leads with nothing where there is nothing to publish, or no publish", () => {
+    expect(leading({ status: "published", hasWorkingDraft: false })).toBe(
+      undefined
+    );
+    expect(leading({ status: "draft", canPublish: false })).toBe(undefined);
+    expect(leading({ status: "draft", hasStatus: false })).toBe(undefined);
+    expect(leading({ status: "draft", mode: "create" })).toBe(undefined);
+  });
+
+  it("is offered nothing that changes the content, and no leading action without publish", () => {
+    const offered = documentActions(
+      state({
+        canEdit: false,
+        canPublish: false,
+        status: "published",
+        hasWorkingDraft: true,
+        isDirty: true,
+      })
+    );
+    expect(offered.find(a => a.placement === "primary")).toBeUndefined();
+    for (const edit of [
+      "save",
+      "duplicate",
+      "discard-draft",
+      "discard-changes",
+    ]) {
+      expect(offered.map(a => a.id)).not.toContain(edit);
+    }
+  });
+
+  it("keeps unpublishing, deleting and reading the API, which follow their own permissions", () => {
+    expect(
+      ids({
+        canEdit: false,
+        canPublish: false,
+        status: "published",
+        hasWorkingDraft: true,
+      })
+    ).toEqual(["view-api", "unpublish", "delete"]);
+    // POPULATION CONTROL: the same document for a user who may change it
+    // offers each edit, so their absence above is the permission.
+    expect(
+      ids({ canEdit: true, status: "published", hasWorkingDraft: true })
+    ).toEqual(
+      expect.arrayContaining([
+        "publish",
+        "save",
+        "duplicate",
+        "discard-draft",
+        "unpublish",
+        "delete",
+      ])
+    );
   });
 });

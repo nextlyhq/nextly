@@ -88,11 +88,14 @@ export interface NodeLock {
  *
  * Walked with the lock each slot passes down, asked of `slotLockOf`, the rule
  * validation applies, so the locks read here are the locks a save enforces.
- * Bounded by the document cap.
+ * Bounded by the document cap: the default one, or the host's when a caller
+ * judging a document under raised limits passes it, so a node the host's gate
+ * accepts is never missing from the answer.
  */
 export function nodeLocks(
   nodes: unknown,
-  definitions: SlotDefaultSource
+  definitions: SlotDefaultSource,
+  maxNodes: number = MAX_NODES
 ): ReadonlyMap<string, NodeLock> {
   const inside = new Map<string, NodeLock>();
   if (!Array.isArray(nodes)) return inside;
@@ -101,7 +104,7 @@ export function nodeLocks(
     lock: undefined,
     area: undefined,
   }));
-  for (let head = 0; head < queue.length && head < MAX_NODES; head += 1) {
+  for (let head = 0; head < queue.length && head < maxNodes; head += 1) {
     const { node, lock, area } = queue[head];
     if (!isPlainRecord(node) || typeof node.type !== "string") continue;
     if (typeof node.id === "string") {

@@ -10,7 +10,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { Operation } from "../diff/types";
+import type { ChangeColumnTypeOp, Operation } from "../diff/types";
 import type {
   Classifier,
   ClassificationLevel,
@@ -19,11 +19,43 @@ import {
   formatEventId,
   type ClassificationResult,
   type ClassifierEvent,
+  type DestructiveDropEvent,
+  type ResolutionKind,
 } from "../resolution/types";
 
 import { narrowingRefusal } from "./narrowing-refusal";
 import { buildPerDialectWarning } from "./type-warnings";
 import { isWideningChange, stringNarrowingLimit } from "./type-widening";
+
+/**
+ * A column drop with how many of its rows hold a value: what the data-loss
+ * listing shows beside the column, since a drop of a column nobody filled in
+ * loses nothing and one of a full column loses every row's value.
+ */
+interface CountedDropEvent extends DestructiveDropEvent {
+  nonEmptyValues: number;
+}
+
+/**
+ * The count of values a drop event carries, when the classifier counted
+ * them. A dispatcher reads it through this, so an event built elsewhere
+ * without one is listed without a count rather than refused.
+ */
+export function nonEmptyValuesOf(event: ClassifierEvent): number | undefined {
+  return "nonEmptyValues" in event && typeof event.nonEmptyValues === "number"
+    ? event.nonEmptyValues
+    : undefined;
+}
+
+/**
+ * Whether a column-type change asks to be confirmed. A widening is provably safe. A column
+ * becoming a relation's list of references keeps every value, each id as a one-item list
+ * (`referenceList`), so there is nothing to confirm either. The way back to one reference still
+ * asks: a row holding several is refused, and the switch is the author's to confirm.
+ */
+function typeChangeAsks(op: ChangeColumnTypeOp, widening: boolean): boolean {
+  return !widening && op.conversion !== "referenceList";
+}
 
 export class RealClassifier implements Classifier {
   async classify(args: {
@@ -35,9 +67,21 @@ export class RealClassifier implements Classifier {
       column: string,
       length: number
     ) => Promise<number>;
+    /** Whether a column is unique in the schema being applied (`uniqueColumnLookup`). */
+    isUnique?: (table: string, column: string) => boolean;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult> {
     const events: ClassifierEvent[] = [];
+    // One value written to every row it fills repeats in a unique column, or collides with a value
+    // a row already holds, so "fill with one value" is never offered for one.
+    const offered = (
+      table: string,
+      column: string,
+      answers: ResolutionKind[]
+    ): ResolutionKind[] =>
+      args.isUnique?.(table, column) === true
+        ? answers.filter(answer => answer !== "provide_default")
+        : answers;
 
     for (const op of args.operations) {
       if (
@@ -61,12 +105,12 @@ export class RealClassifier implements Classifier {
             columnName: op.columnName,
             nullCount,
             tableRowCount,
-            applicableResolutions: [
+            applicableResolutions: offered(op.tableName, op.columnName, [
               "provide_default",
               "make_optional",
               "delete_nonconforming",
               "abort",
-            ],
+            ]),
           });
         }
       } else if (op.type === "change_column_type") {
@@ -100,7 +144,7 @@ export class RealClassifier implements Classifier {
             longer,
           });
         }
-        if (!widening) {
+        if (typeChangeAsks(op, widening)) {
           events.push({
             id: formatEventId("type_change", op.tableName, op.columnName),
             kind: "type_change",
@@ -133,11 +177,11 @@ export class RealClassifier implements Classifier {
             tableName: op.tableName,
             columnName: op.column.name,
             tableRowCount,
-            applicableResolutions: [
+            applicableResolutions: offered(op.tableName, op.column.name, [
               "provide_default",
               "make_optional",
               "abort",
-            ],
+            ]),
           });
         }
       } else if (op.type === "drop_column") {
@@ -152,7 +196,7 @@ export class RealClassifier implements Classifier {
         // Either way, prompt to confirm before destroying data. Row
         // count gives the user the magnitude of the loss.
         const tableRowCount = await args.countRows(op.tableName);
-        events.push({
+        const drop: DestructiveDropEvent = {
           id: formatEventId("destructive_drop", op.tableName, op.columnName),
           kind: "destructive_drop",
           tableName: op.tableName,
@@ -160,7 +204,19 @@ export class RealClassifier implements Classifier {
           columnType: op.columnType,
           tableRowCount,
           applicableResolutions: ["confirm_drop", "abort"],
-        });
+        };
+        // The rows that hold a value, which is what the drop loses, shown in
+        // the data-loss listing. Only shown: a column the counter cannot read
+        // (a name outside the identifiers it quotes) is still dropped as
+        // consented, listed without its count, rather than failing the push.
+        const nulls: unknown = await Promise.resolve()
+          .then(() => args.countNulls(op.tableName, op.columnName))
+          .catch(() => undefined);
+        const counted: CountedDropEvent | DestructiveDropEvent =
+          typeof nulls !== "number"
+            ? drop
+            : { ...drop, nonEmptyValues: tableRowCount - nulls };
+        events.push(counted);
       }
     }
 

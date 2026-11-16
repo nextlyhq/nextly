@@ -1,12 +1,13 @@
 /**
  * The widget registry: the single place that knows which widgets exist in a
- * running app, and the gate every definition passes through.
+ * running app, each the data core published from a `defineWidget` declaration
+ * (`toDefinition`), and the gate every one passes through.
  *
  * `globalThis`-pinned and cleared per boot (clear-and-rebuild), so a dev-server
  * hot reload re-registering the same widgets never collides with itself, while
  * a genuine duplicate id inside one boot still fails loudly.
  *
- * Core built-ins live in the SAME store as plugin contributions. Two stores
+ * Core's own widgets live in the SAME store as a plugin's and the site's. Two stores
  * would mean two resolution paths, two sizing implementations and two ordering
  * rules -- and a user could not reorder a core widget alongside a plugin one,
  * which is the whole point of having a registry.
@@ -18,24 +19,7 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import { validateWidgetDefinition, type WidgetDefinition } from "./definition";
 import { detachedSnapshot } from "./detached-snapshot";
-
-/** The fields a plugin may patch on someone else's widget. */
-export type WidgetPatch = Partial<
-  Pick<
-    WidgetDefinition,
-    | "title"
-    | "description"
-    | "icon"
-    | "category"
-    | "defaultSize"
-    | "minSize"
-    | "maxSize"
-    | "defaultHeight"
-    | "requiredPermission"
-    | "query"
-    | "link"
-  >
->;
+import { retiredWidgetReplacement } from "./retired-widget-namespaces";
 
 interface RegistryEntry {
   definition: WidgetDefinition;
@@ -54,12 +38,10 @@ function store(): Map<string, RegistryEntry> {
 /**
  * The value the store actually holds: a detached, frozen copy.
  *
- * Keeping the caller's object by reference makes every gate in this module
- * optional. `validateWidgetDefinition` ran at registration and a plugin that
- * still holds the object can edit it afterwards; `extendWidget`'s patch
- * allowlist and the deliberate `overrideWidget` path are then both routes
- * nobody has to take. The archetype, the `component` path, or the `query` the
- * host is about to execute all change with nothing revalidating them.
+ * Keeping the caller's object by reference would make the validation optional:
+ * `validateWidgetDefinition` ran at registration, and anything still holding
+ * the object could edit its archetype or `component` path afterwards with
+ * nothing revalidating them.
  *
  * Shares `detachedSnapshot` with the SOURCE store rather than repeating its
  * clone-and-freeze: both stores answer the same question about the same kind of
@@ -79,149 +61,38 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
 }
 
 /**
- * The public doors' refusal of `serverData`.
+ * Register a widget as core published it from its declaration, under its
+ * owner. Throws if the id is taken or the definition is malformed.
  *
- * Only core may say a card's data is built on the server, because only core
- * holds the declaration that builds it: a definition claiming it through a
- * public door has no declaration behind it, so its card could never be
- * answered. Checked on the value, not the type, since a JavaScript caller or a
- * spread of a published definition can carry it.
+ * The one door into the registry: every widget is declared, and startup
+ * publishes each declaration through it (`registerDashboardWidgets`), so
+ * nothing else writes here but a test.
  */
-function refuseServerData(def: WidgetDefinition, door: string): void {
-  const stated: unknown = (def as { serverData?: unknown }).serverData;
-  if (stated === undefined) return;
-  throw NextlyError.invalidInput({
-    message:
-      `Widget "${def.id}" cannot be given to ${door}() with serverData: core sets it ` +
-      `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
-  });
-}
-
-/** Register a widget. Throws if the id is taken or the definition is malformed. */
 export function registerWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
-  refuseServerData(def, "registerWidget");
-  addToStore(def, opts.source ?? "unknown");
-}
-
-/**
- * Register a declared widget, as core publishes it: a definition whose data
- * core builds on the server (`serverData: true`), from a declaration only core
- * holds. The one door that admits `serverData`, and it admits nothing else.
- */
-export function registerDeclaredDefinition(
-  def: WidgetDefinition,
-  owner: string
-): void {
-  // Core's own fault if it happens, never an author's, so it is an internal
-  // error: the detail is for the log, not for whoever is asking.
-  if (def.serverData !== true) {
-    throw NextlyError.internal({
-      logContext: {
-        widgetId: def.id,
-        owner,
-        reason: "a declared widget was published without serverData",
-      },
+  const source = opts.source ?? "unknown";
+  validateWidgetDefinition(def);
+  // 🔴 A retired namespace is refused here, where every registration passes,
+  // so the registry and the layout doors give one answer: a card registered
+  // there would be offered, then refused by every write and dropped by every
+  // read. Thrown at startup, where an app registers, with what replaced it.
+  const replacement = retiredWidgetReplacement(def.id);
+  if (replacement !== undefined) {
+    throw NextlyError.invalidInput({
+      message: `Widget "${def.id}" cannot be registered: "${def.id}" ${replacement}`,
     });
   }
-  addToStore(def, owner);
-}
-
-/** Validates and stores a new widget, refusing an id already taken. */
-function addToStore(def: WidgetDefinition, source: string): void {
-  validateWidgetDefinition(def);
   const existing = store().get(def.id);
   if (existing) {
     throw NextlyError.conflict({
       message:
         `Widget id "${def.id}" is already registered by "${existing.source}"; ` +
-        `"${source}" cannot claim it. Use overrideWidget() to replace it deliberately.`,
+        `"${source}" cannot claim it.`,
     });
   }
   store().set(def.id, { definition: snapshot(def), source });
-}
-
-/**
- * Replace a registered widget wholesale.
- *
- * Separate from `registerWidget` so replacing someone else's widget is always
- * a deliberate act that reads as one at the call site.
- *
- * The replacement must AGREE with the key it is replacing. The store is keyed
- * by id and the definition carries its own, so a mismatch stores an object
- * under "core/a" that announces itself as "core/b": `getWidget("core/a")`
- * answers with the wrong identity, anything keying off `definition.id` -- a
- * picker, a saved layout, a diagnostic naming the offender -- disagrees with
- * the registry, and "core/b" is still free for a second widget to claim
- * alongside it. Refusing here keeps the key and the identity one fact.
- */
-export function overrideWidget(
-  id: string,
-  def: WidgetDefinition,
-  opts: { source?: string } = {}
-): void {
-  refuseServerData(def, "overrideWidget");
-  validateWidgetDefinition(def);
-  if (def.id !== id) {
-    throw NextlyError.invalidInput({
-      message:
-        `Cannot override widget "${id}" with a definition whose id is ` +
-        `"${def.id}". The replacement must carry the id it replaces.`,
-    });
-  }
-  const existing = store().get(id);
-  if (!existing) {
-    throw NextlyError.notFound({
-      message: `Cannot override widget "${id}": it is not registered.`,
-    });
-  }
-  // A declared widget's card is answered from its declaration. Replacing its
-  // definition here would leave that declaration answering a card nothing
-  // describes any more, so the declaration is where it changes.
-  if (existing.definition.serverData === true) {
-    throw NextlyError.invalidInput({
-      message:
-        `Cannot override widget "${id}": "${existing.source}" declares it, and a declared ` +
-        `widget is changed in its declaration.`,
-    });
-  }
-  store().set(id, {
-    definition: snapshot(def),
-    source: opts.source ?? "unknown",
-  });
-}
-
-/**
- * Patch named fields of a registered widget.
- *
- * Deliberately a narrow patch rather than arbitrary mutation: it may retitle,
- * resize, re-permission or re-query a widget, but it cannot change the
- * archetype or inject behaviour. That keeps "customize a core widget"
- * expressible without making core widgets unversionable.
- *
- * Re-validates the MERGED result, not the patch alone: two individually valid
- * values -- a widget's existing `maxSize` and a patch's `minSize` -- can
- * compose into an invalid definition, and that is only visible after merging.
- */
-export function extendWidget(
-  id: string,
-  patch: WidgetPatch,
-  opts: { source?: string } = {}
-): void {
-  const existing = store().get(id);
-  if (!existing) {
-    throw NextlyError.notFound({
-      message: `Cannot extend widget "${id}": it is not registered.`,
-    });
-  }
-  const merged = { ...existing.definition, ...patch };
-  validateWidgetDefinition(merged);
-  store().set(id, {
-    definition: snapshot(merged),
-    source: opts.source ?? existing.source,
-  });
 }
 
 /** Remove a widget. Returns whether anything was removed. */

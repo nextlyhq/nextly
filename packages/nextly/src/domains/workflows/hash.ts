@@ -19,7 +19,10 @@ import type { Workflow } from "./types";
  * or a step never reads as a change of workflow; so are the collections and
  * Singles it is attached to, so attaching it to one more never withdraws an
  * approval elsewhere. A step's `from` and the exempt fields are sorted: their
- * order means nothing.
+ * order means nothing. A stage's `renamedFrom` is left out too: it moves no
+ * part from one stage to another, only records the name a stage had, so
+ * adding it, or dropping it once the deploy has moved the parts, is no change
+ * of workflow.
  */
 function structureOf(workflow: Workflow): unknown {
   return {
@@ -58,4 +61,57 @@ export function workflowDefinitionHash(workflow: Workflow): string {
   return createHash("sha256")
     .update(canonicalJson(structureOf(workflow)) ?? "")
     .digest("hex");
+}
+
+/**
+ * The workflow as it stood before its stages were renamed: each stage that
+ * records a `renamedFrom` named by it again, wherever the definition names
+ * that stage. The definition's own value when nothing is renamed.
+ */
+function beforeRenames(workflow: Workflow): Workflow {
+  const earlier = new Map(
+    workflow.stages.flatMap(stage =>
+      stage.renamedFrom === undefined
+        ? []
+        : [[stage.name, stage.renamedFrom] as const]
+    )
+  );
+  if (earlier.size === 0) return workflow;
+  const named = (stage: string): string => earlier.get(stage) ?? stage;
+  return {
+    ...workflow,
+    stages: workflow.stages.map(stage => ({
+      name: named(stage.name),
+      label: stage.label,
+      allowsPublish: stage.allowsPublish,
+    })),
+    steps: workflow.steps.map(step => ({
+      ...step,
+      from: step.from.map(named),
+      to: named(step.to),
+    })),
+    firstStage: named(workflow.firstStage),
+    onEdit: { ...workflow.onEdit, to: named(workflow.onEdit.to) },
+    afterPublish: named(workflow.afterPublish),
+    approvalsWithdrawnTo: named(workflow.approvalsWithdrawnTo),
+    removedStages: Object.fromEntries(
+      Object.entries(workflow.removedStages).map(([removed, to]) => [
+        removed,
+        named(to),
+      ])
+    ),
+  };
+}
+
+/**
+ * The hash the workflow had before its stages were renamed: what a review
+ * state written under the definition it was renamed from carries. A deploy
+ * whose only change is a rename finds those states by it, and keeps their
+ * approvals, since a rename moves no part from one stage to another. The
+ * workflow's own hash when nothing is renamed.
+ *
+ * @experimental
+ */
+export function definitionHashBeforeRenames(workflow: Workflow): string {
+  return workflowDefinitionHash(beforeRenames(workflow));
 }

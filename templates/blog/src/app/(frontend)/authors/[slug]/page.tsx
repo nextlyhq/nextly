@@ -24,14 +24,15 @@ import {
   getPostsByAuthor,
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
+import { detailStaticParams, isBuildPlaceholder } from "@/lib/static-params";
 
 // Pre-render known author pages at build time. Freshness afterward is
 // tag-based: the query helpers tag their reads (src/lib/queries), so an
 // author or post change busts the tag and this page regenerates on the next
 // request — no time-based `revalidate`. New authors render on demand.
+// Never empty: see detailStaticParams.
 export async function generateStaticParams() {
-  const slugs = await getAllAuthorSlugs();
-  return slugs.map(slug => ({ slug }));
+  return detailStaticParams(await getAllAuthorSlugs());
 }
 
 export async function generateMetadata({
@@ -40,6 +41,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  // The build-time placeholder has no metadata of its own.
+  if (isBuildPlaceholder(slug)) return {};
   const author = await getAuthorBySlug(slug);
   if (!author) return { title: "Author Not Found" };
 
@@ -67,6 +70,8 @@ export default async function AuthorPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
+  // The placeholder stops here, before any database read.
+  if (isBuildPlaceholder(slug)) notFound();
   const author = await getAuthorBySlug(slug);
   if (!author) notFound();
 

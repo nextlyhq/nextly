@@ -34,7 +34,7 @@ import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
  * Table Categories:
  * - System: exampleUsers
  * - Authentication: users, accounts, sessions, verificationTokens, passwordResetTokens, emailVerificationTokens, refreshTokens
- * - RBAC: roles, permissions, rolePermissions, userRoles, roleInherits, userPermissionCache
+ * - RBAC: roles, permissions, rolePermissions, userRoles, roleInherits
  * - CMS: dynamicCollections, media, mediaFolders
  */
 export const nextlyTables: TableDefinition[] = [
@@ -103,6 +103,11 @@ export const nextlyTables: TableDefinition[] = [
       },
       {
         name: "image",
+        type: "text",
+      },
+      {
+        // Nullable: unset means the person follows the site's language.
+        name: "interface_language",
         type: "text",
       },
       {
@@ -805,6 +810,10 @@ export const nextlyTables: TableDefinition[] = [
         columns: ["user_id"],
       },
       {
+        name: "user_roles_role_id_idx",
+        columns: ["role_id"],
+      },
+      {
         name: "user_roles_expires_at_idx",
         columns: ["expires_at"],
       },
@@ -855,74 +864,6 @@ export const nextlyTables: TableDefinition[] = [
       {
         name: "role_inherits_parent_idx",
         columns: ["parent_role_id"],
-      },
-    ],
-  },
-
-  {
-    name: "user_permission_cache",
-    comment:
-      "Denormalized permission cache for performance optimization (target: 90%+ cache hit rate)",
-    columns: [
-      {
-        name: "id",
-        type: "text",
-        primaryKey: true,
-      },
-      {
-        name: "user_id",
-        type: "text",
-        nullable: false,
-        references: {
-          table: "users",
-          column: "id",
-          onDelete: "cascade",
-        },
-      },
-      {
-        name: "action",
-        type: "varchar(50)",
-        nullable: false,
-      },
-      {
-        name: "resource",
-        type: "varchar(100)",
-        nullable: false,
-      },
-      {
-        name: "has_permission",
-        type: "boolean",
-        nullable: false,
-      },
-      {
-        name: "role_ids",
-        type: "jsonb",
-        nullable: false,
-      },
-      {
-        name: "expires_at",
-        type: "timestamp",
-        nullable: false,
-      },
-      {
-        name: "created_at",
-        type: "timestamp",
-        nullable: false,
-        default: { sql: "CURRENT_TIMESTAMP" },
-      },
-    ],
-    indexes: [
-      {
-        name: "upc_user_id_idx",
-        columns: ["user_id"],
-      },
-      {
-        name: "upc_expires_at_idx",
-        columns: ["expires_at"],
-      },
-      {
-        name: "upc_user_action_resource_idx",
-        columns: ["user_id", "action", "resource"],
       },
     ],
   },
@@ -1146,12 +1087,6 @@ export const nextlyTables: TableDefinition[] = [
       },
       { name: "focal_x", type: "integer" },
       { name: "focal_y", type: "integer" },
-      // `jsonb` is the fixture's ABSTRACT json type, which the generator emits
-      // as JSONB on Postgres, JSON on MySQL and TEXT on SQLite — matching the
-      // three production media schemas exactly. Declaring `text` was right only
-      // for SQLite and gave the other two a materially different column, so a
-      // test using a JSON operator ran against the wrong type.
-      { name: "sizes", type: "jsonb" },
     ],
     indexes: [
       {

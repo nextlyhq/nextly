@@ -1,0 +1,27 @@
+---
+title: NO_TRANSACTION_NEEDS_BLANK
+description: "`--no-transaction` was given to `nextly migrate:create` without `--blank` or `--plugin`."
+---
+
+## Cause
+
+`--no-transaction` was given to `nextly migrate:create` without `--blank` or `--plugin`.
+
+`--no-transaction` marks a migration to run outside a transaction. It applies to a blank migration you write yourself, or to a plugin module. A migration generated from the configuration is not marked, because marking it would change the contents its snapshot was taken over.
+
+## Fix
+
+Put the statements that must run outside a transaction in a migration of their own:
+
+```bash
+nextly migrate:create --blank --no-transaction
+```
+
+## Example
+
+```text
+✗ --no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin).
+  Why:  A generated migration file is not marked: marking it changes the contents its snapshot was taken over.
+  Next: Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.
+  Docs: https://nextlyhq.com/docs/cli/errors/no-transaction-needs-blank  (NO_TRANSACTION_NEEDS_BLANK)
+```

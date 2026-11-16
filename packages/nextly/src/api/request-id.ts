@@ -12,6 +12,7 @@
  * Works in both Node and Edge runtimes (uses Web Crypto's
  * `crypto.getRandomValues`).
  */
+import { carryDatesFormatted } from "../shared/lib/dates-formatted";
 
 const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -40,18 +41,28 @@ export function generateRequestId(): string {
   return "req_" + base32(bytes).slice(0, 16);
 }
 
+/** The id each request was given, so it is given one id however often asked. */
+const settled = new WeakMap<Request, string>();
+
 /**
  * Read an upstream-set request id, falling back to a freshly generated one.
  * Header precedence (most-specific first): `x-request-id` (our convention) >
  * `x-vercel-id` (Vercel) > `cf-ray` (Cloudflare).
+ *
+ * The same request always reads the same id. A request that brought none is
+ * given one the first time it is asked, and every later read returns it, so
+ * its response and each log line written while serving it carry one id.
  */
 export function readOrGenerateRequestId(req: Request): string {
-  return (
+  const known = settled.get(req);
+  if (known !== undefined) return known;
+  const id =
     req.headers.get("x-request-id") ??
     req.headers.get("x-vercel-id") ??
     req.headers.get("cf-ray") ??
-    generateRequestId()
-  );
+    generateRequestId();
+  settled.set(req, id);
+  return id;
 }
 
 /**
@@ -73,9 +84,13 @@ export function withRequestIdHeader(
   if (response.headers.has("x-request-id")) return response;
   const headers = new Headers(response.headers);
   headers.set("x-request-id", requestId);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  // A copy of the response: whether its dates are formatted goes with it.
+  return carryDatesFormatted(
+    response,
+    new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  );
 }

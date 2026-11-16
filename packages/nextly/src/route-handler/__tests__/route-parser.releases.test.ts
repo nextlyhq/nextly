@@ -173,6 +173,49 @@ describe("releases routes", () => {
     ).not.toBe("removeReleaseMember");
   });
 
+  it("adds several members at its own word, never as a member id", () => {
+    expect(
+      parseRestRoute(["releases", "r1", "members", "batch"], "POST")
+    ).toMatchObject({
+      service: "releases",
+      method: "addReleaseMembers",
+      routeParams: { releaseId: "r1" },
+    });
+    // The word names the route, so it is not handed on as a member id.
+    expect(
+      parseRestRoute(["releases", "r1", "members", "batch"], "POST").routeParams
+    ).not.toHaveProperty("memberId");
+    // A member id in its place still names one member, by its own verbs.
+    expect(
+      parseRestRoute(["releases", "r1", "members", "m1"], "POST").method
+    ).not.toBe("addReleaseMembers");
+    expect(
+      parseRestRoute(["releases", "r1", "members", "m1"], "DELETE")
+    ).toMatchObject({
+      method: "removeReleaseMember",
+      routeParams: { memberId: "m1" },
+    });
+    expect(
+      parseRestRoute(["releases", "r1", "members", "batch"], "GET").method
+    ).not.toBe("addReleaseMembers");
+  });
+
+  it("schedules a document at its own word, not as a release id", () => {
+    const route = parseRestRoute(["releases", "schedule-document"], "POST");
+    expect(route).toMatchObject({
+      service: "releases",
+      method: "scheduleDocument",
+    });
+    expect(route.routeParams).not.toHaveProperty("releaseId");
+    // Only a POST: the word is not a release to read.
+    expect(
+      parseRestRoute(["releases", "schedule-document"], "GET").method
+    ).not.toBe("scheduleDocument");
+    expect(
+      parseRestRoute(["releases", "schedule-document", "x"], "POST").method
+    ).not.toBe("scheduleDocument");
+  });
+
   it("does not claim a collection named releases", () => {
     // The reason the permission resource is `content-releases` and not
     // `releases`: "press releases" is a collection real sites have. A site's own

@@ -113,7 +113,7 @@ export async function keyHolding(
 /** One REST call to `/api/<path>` with the key, as status and JSON body. */
 export async function rest(
   key: string,
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   path: string[],
   body?: unknown,
   /** A query string, without its `?`. */

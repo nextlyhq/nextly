@@ -19,6 +19,10 @@ import {
 import type { Role } from "@admin/types/entities";
 import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
+import {
+  invalidateCurrentUserAccess,
+  withAccessRefresh,
+} from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 
 /**
@@ -333,6 +337,12 @@ export function useUpdateRole(): UseMutationResult<
         queryClient.setQueryData(["roles", roleId], context.previousRole);
       }
     },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: () => {
+      invalidateCurrentUserAccess(queryClient);
+    },
     onSettled: (_, __, { roleId }) => {
       // Always refetch after mutation (success or error) to ensure cache is up-to-date
       void queryClient.invalidateQueries({ queryKey: ["roles"] });
@@ -406,6 +416,7 @@ export function useDeleteRole(): UseMutationResult<
     onSuccess: () => {
       // Invalidate all roles queries to refetch data
       void queryClient.invalidateQueries({ queryKey: ["roles"] });
+      invalidateCurrentUserAccess(queryClient);
     },
   });
 }
@@ -511,16 +522,19 @@ export function useBulkDeleteRoles(): UseBulkMutationReturn<
 > {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, void>({
-    mutationFn: async (roleId: string) => {
-      await deleteRole(roleId);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, void>({
+      mutationFn: async (roleId: string) => {
+        await deleteRole(roleId);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        },
+      },
+    }),
+    queryClient
+  );
 }
 
 /**
@@ -653,14 +667,17 @@ export function useBulkUpdateRoles(): UseBulkMutationReturn<
 > {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, Partial<Role>>({
-    mutationFn: async (roleId: string, updates: Partial<Role>) => {
-      await updateRole(roleId, updates);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: ["roles"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, Partial<Role>>({
+      mutationFn: async (roleId: string, updates: Partial<Role>) => {
+        await updateRole(roleId, updates);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          void queryClient.invalidateQueries({ queryKey: ["roles"] });
+        },
+      },
+    }),
+    queryClient
+  );
 }

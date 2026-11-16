@@ -6,15 +6,41 @@
  * created, inspected, and transformed from any JavaScript environment.
  */
 export { deriveSeoFromDocument } from "./derive-seo";
+// A document's own metadata, its bound segments filled by the page's binding
+// pass: what a collection template gives each entry's page.
+export { resolveDocumentSeo } from "./document-seo";
+export type { ResolvedDocumentSeo } from "./document-seo";
+// Which Layout a page is drawn inside: the one rule the render, the editor
+// and the tests share.
+export { resolvePageLayout } from "./resolve-layout";
+export type {
+  LayoutResolution,
+  LayoutSite,
+  PageLayoutChoice,
+} from "./resolve-layout";
+// The regions a Layout fills around a page, and the document each is drawn
+// from: one reading of a stored Layout, shared by the route, the editor and
+// the plugin.
+export {
+  layoutRelationId,
+  regionDocument,
+  regionsOf,
+  REGION_AREAS,
+} from "./layout-regions";
+export type { LayoutRegion, RegionArea } from "./layout-regions";
 export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_SEO_SEGMENTS,
+  MAX_SEO_TEXT_LENGTH,
+  SEO_TEXT_FIELDS,
   BINDING_SOURCES,
   BINDING_FORMAT_TYPES,
   DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
+  CONDITION_HIDDEN_TYPE,
   // The component-definition contract, published so the stores and the admin
   // DERIVE the vocabulary rather than restating it. A schema branch or a
   // picker that listed these values itself would agree on the day it was
@@ -39,6 +65,8 @@ export {
   // Reading further reports a reference the page does not render.
   MAX_CLASSES_PER_NODE,
   isTokenRef,
+  tokenRef,
+  tokenRefText,
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,
@@ -74,7 +102,11 @@ export type {
   DocumentFormatVersion,
   DocumentKind,
   BlockOrigin,
+  DocumentSeo,
   DocumentSettings,
+  SeoBinding,
+  SeoTextSegment,
+  SeoTextField,
   LocaleOverlay,
   LocaleOverlayValue,
   NodeStyles,
@@ -276,7 +308,7 @@ export type {
   SelectionStop,
 } from "./select-nodes";
 
-export { measureBytes, surveyDocument } from "./measure-bytes";
+export { documentWork, measureBytes, surveyDocument } from "./measure-bytes";
 // Resolving linked components. Here rather than beside the renderer because
 // four surfaces need a resolved tree and only one of them renders: the
 // same-document canvas, the class-usage index and SEO derivation all read one
@@ -343,6 +375,9 @@ export {
   // own value. Two implementations of that order agree until a variant rule
   // changes in one of them.
   instanceExposure,
+  // A component's own tree as one of its variants draws it, ids kept, for
+  // the editor's canvas to preview the variant open in the component's view.
+  variantPreview,
   // What a supplied definition has to be before the resolver inlines it.
   // Published because the editor's inspector draws from the same lookup the
   // canvas resolves against, and must refuse exactly what the canvas refuses.
@@ -365,6 +400,7 @@ export type {
   InstanceExposure,
   OverriddenBy,
   ResolveComponentOptions,
+  PropExposure,
   ResolvedBlockNode,
   ResolvedComposition,
   ResolvedDocument,
@@ -385,8 +421,71 @@ export type {
 // noticed: a module the entry does not name is absent from `dist` however
 // thoroughly it is tested.
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
+// The one reading of an allow-list of block names (an exact name, or "ns/*"
+// for a namespace), stable public API: a blocks field's accepted blocks, a
+// slot's, and any reader listing what one accepts all match by it, so the
+// three cannot come to admit different blocks.
+export { slotAdmits } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
+// The one placement rule over the nesting rule above: declared slots, the
+// HTML content model a block's settings give it, and component placements'
+// exposed slots. Every placement path asks it, editor and server alike, and
+// one wording says its refusals in both.
+export {
+  CONTENT_KINDS,
+  UNDECLARED_CONTENT_MODEL,
+  contentModelKey,
+  resolveContentModel,
+} from "./content-model";
+export type {
+  ContentKind,
+  ContentModel,
+  ResolvedContentModel,
+} from "./content-model";
+export {
+  canPlace,
+  canPlaceIn,
+  contentModelKeyOf,
+  declaredSlotNames,
+  placementSiteIn,
+  placementTracker,
+} from "./placement";
+export type {
+  ContentRefuser,
+  PlacedNode,
+  PlacementPosition,
+  PlacementRefusal,
+  PlacementRefused,
+  PlacementSite,
+  PlacementSources,
+  PlacementTracker,
+  PlacementVerdict,
+  TrackedPlacement,
+} from "./placement";
+export { placementBreaksIn, placementRefusal } from "./placement-breaks";
+// What a write may store as a placement's own values: ids its component
+// exposes, with values of the type each field takes. Judged by the write path
+// against the definitions it composes with, and by the inspector before a
+// commit.
+export {
+  exposedValueFits,
+  neededFor,
+  placementValueIssues,
+} from "./placement-values";
+export type {
+  PlacementValueIssue,
+  PlacementValueProblem,
+} from "./placement-values";
+export type { LocatedPlacementBreak } from "./placement-breaks";
+export {
+  asPermittedList,
+  blockLabelFrom,
+  permittedLabel,
+  placementRefusalMessage,
+  placementRefusalWording,
+} from "./placement-wording";
+export type { PlacementWording, WordingContext } from "./placement-wording";
 // What a composed document breaks that no stored document breaks alone: the
 // nesting rule across a placement, and depth counted from the document's own
 // root. Exported for the write path, which has to refuse what the renderer
@@ -403,6 +502,60 @@ export type {
 // designer meets the lock where the exposure is made, not on every page.
 export { contentOnlyExposures, nodeLocks } from "./content-only-exposures";
 export type { LockedExposure, NodeLock } from "./content-only-exposures";
+// Editing an existing component's exposed fields, for its own view: expose,
+// rename, point elsewhere, remove. And the one rule for taking a removed
+// field's values out of every document that places the component. Both
+// `@experimental` until the component editor that consumes them ships.
+export {
+  exposureTypeForProp,
+  planExposeProperty,
+  planRemoveExposedSlot,
+  planRemoveExposure,
+  planRenameExposure,
+  planRetargetExposure,
+  VISIBILITY_PROP_PATH,
+} from "./exposure-planners";
+export type {
+  ExposeRequest,
+  ExposureEdit,
+  ExposureEditProblem,
+  ExposureEditRefusal,
+  ExposureEditResult,
+  ExposureSources,
+  ExposureTarget,
+  PrunedVariant,
+} from "./exposure-planners";
+// Defining, renaming and deleting a component's variants, and the values each
+// presets, as the designer does in the component's own view. A variant's key
+// is its stable id; its name is unique per component. `@experimental` until the
+// component editor that uses them ships.
+export {
+  planAddVariant,
+  planDeleteVariant,
+  planRenameVariant,
+  planResetVariantValue,
+  planSetVariantValue,
+  variantOptions,
+} from "./variant-planners";
+export type {
+  NewVariantSources,
+  VariantEdit,
+  VariantEditProblem,
+  VariantEditRefusal,
+  VariantEditResult,
+  VariantOption,
+} from "./variant-planners";
+export { variantLabelKey } from "./variant-labels";
+// A placement's variant key, judged against its component on every write: a
+// key the write newly sets must name one of the component's variants.
+export { placementVariantIssues } from "./placement-variants";
+export type { PlacementVariantIssue } from "./placement-variants";
+export { stripRetiredExposures } from "./retired-exposures";
+export type {
+  RetiredByComponent,
+  RetiredExposures,
+  StrippedDocument,
+} from "./retired-exposures";
 // The lock judgement as the editor asks it before an action: every break a
 // document holds, located, and the one an edit would add, by the rules a save
 // applies. And the one repair planner, run as a list of rules so a later rule
@@ -410,7 +563,22 @@ export type { LockedExposure, NodeLock } from "./content-only-exposures";
 // the editor that consumes them ships.
 export { lockBreaksIn, lockRefusal } from "./lock-breaks";
 export type { LocatedLockBreak, LockSources } from "./lock-breaks";
+// Turning every copy of a component in one document into plain blocks, and
+// asking whether a document still references it, for deleting a component that
+// is in use. `@experimental` until the delete that consumes them ships.
+export { inlineComponentInstances, stillReferences } from "./component-inline";
+export type {
+  InlinedDocument,
+  InlineProblem,
+  InlineRefusal,
+  InlineResult,
+  ReferenceAnswer,
+} from "./component-inline";
 export { lockRepairRule, planRepair } from "./repair-plan";
+// The placement rule's repair, appended after the lock rule when planning, so
+// a page holding blocks where the placement rule refuses them is offered a
+// move to the nearest place it allows.
+export { placementRepairRule } from "./placement-repair";
 export type {
   RepairContext,
   RepairPlan,
@@ -430,6 +598,7 @@ export type { ActiveSlotLock } from "./slot-lock";
 export type { ByteMeasurement } from "./measure-bytes";
 export {
   componentEnvelopeIssues,
+  isErrorIssue,
   validate,
   validateDocument,
   ISSUE_CODES,
@@ -452,6 +621,10 @@ export { isNodeType, isNodeVersion } from "./validation";
  * gets a different answer for exactly the values that survive JSON badly.
  */
 export { isPlainRecord } from "./plain-record";
+// One style envelope laid over another, property by property: what Detach
+// leaves on a block, and a block type's base with the site's edits over it.
+// `@experimental` with the own-look helpers above.
+export { overlaidStyles } from "./style/overlaid-styles";
 /**
  * Exported because the renderer and every plain-text projection of a document
  * must agree on what counts as authored text. They did not: a stored number was
@@ -460,7 +633,27 @@ export { isPlainRecord } from "./plain-record";
  * split, so the decision is published rather than restated.
  */
 export { authoredText, isAuthoredText } from "./authored-text";
-export { declaresNoMarkup, isConditionGated } from "./visibility";
+export {
+  declaresNoMarkup,
+  isConditionGated,
+  placementGatesOf,
+  storedVisibilityOf,
+} from "./visibility";
+// Per-device visibility as an author works with it: each device's resolved
+// state, a hide that stays on one device, and the stored values carried across
+// a change of the site's breakpoints. Public because the editor writes the eye
+// and the breakpoint flows rewrite documents, and both must resolve devices as
+// the compiler does.
+export {
+  carryDeviceVisibility,
+  carryDocumentDeviceVisibility,
+  deviceVisibility,
+  hiddenOnDevice,
+  revealConditioned,
+  revealDeviceHidden,
+  setDeviceVisibility,
+} from "./device-visibility";
+export type { CarriedVisibility, DeviceVisibility } from "./device-visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
   BlockTypeLookup,
@@ -474,15 +667,27 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { BLOCK_ICONS, defineBlock } from "./block";
+export {
+  // The prop an image kept by its address goes to, as a block declares it;
+  // public for the editor's unbind and the image renderer alike.
+  addressPropOf,
+  BLOCK_ICONS,
+  defineBlock,
+  ITEM_SCHEMA_MAX_DEPTH,
+  // What a select's option is called. Public because the builder names a
+  // choice with it as the engine's exposure planner does.
+  optionLabel,
+} from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
   BlockEditorMeta,
   BlockIcon,
+  BlockInspectorProps,
   BlockIsland,
   BlockExample,
   BlockSeoContribution,
+  BlockSeoRead,
   BlockSeoImage,
   BlockRenderArgs,
   BlockRenderResult,
@@ -533,6 +738,7 @@ export type {
   ColorLeaf,
   CssValueLeaf,
   DimensionLeaf,
+  KeywordExpansion,
   KeywordLeaf,
   LogicalCornersShape,
   LogicalSidesShape,
@@ -552,6 +758,10 @@ export {
   checkCssValue,
   checkDimensionValue,
   checkUrlValue,
+  // Whether a word is one of the keywords legal on every property, which
+  // stands only alone: a shorthand's editor needs it to refuse `underline
+  // inherit`, a value the browser discards whole.
+  isCssWideKeyword,
   // How CSS reads an identifier that carries escapes. Public for the same
   // reason as the namespacing rule: anything deciding what a name IS has to
   // decode it the same way, or `font\2d family` reads as a different property
@@ -582,6 +792,7 @@ export type { CssValueRejection, MayFetchUrl } from "./style/css-value";
 export type { StyleValueOptions } from "./style/validate-style-value";
 export {
   validateStyleValues,
+  leafAcceptsValue,
   newStyleIssueBudget,
   MAX_STYLE_ISSUES,
   MAX_STYLE_ISSUE_PATH_BYTES,
@@ -650,6 +861,11 @@ export {
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   MAX_TOKEN_PREFIX_LENGTH,
+  // A variable's plain name: the optional label, its check, and the label
+  // derived from the code name when none is stored.
+  MAX_TOKEN_LABEL_LENGTH,
+  tokenDisplayLabel,
+  tokenLabelIssue,
   // Both halves of token identity, public for the same reason the types are:
   // an editor that offers rename has to pin the identity the way this package
   // pins it, and one that cannot reach these has no way to do that except to
@@ -668,12 +884,30 @@ export type {
   SiteTokenSet,
   TokenMode,
 } from "./style/site-tokens";
+// Light and dark across files: the DTCG theme (resolver) file, and one file
+// per mode as Figma imports and exports variables.
+export {
+  RESOLVER_VERSION,
+  modeFilesToTokens,
+  resolverToTokens,
+  tokensToFigma,
+  tokensToResolver,
+} from "./style/dtcg-modes";
+export type { ModeFile } from "./style/dtcg-modes";
+// Whether two tokens say the same thing: one answer for a stored override and
+// for an editor's Reset.
+export { sameJsonValue, sameSiteToken } from "./style/same-token";
+// A colour written as a value rather than through a variable, which the
+// inspector marks as not adapted to dark mode.
+export { isRawColour } from "./style/raw-colour";
 // Interop and judgement, both pure: the format other design-token tools read,
 // and the contrast a person needs while a colour picker is open.
 export {
+  GENERIC_FONT_FAMILIES,
   NEXTLY_EXTENSION,
   dtcgToTokens,
   isKind,
+  resolveAliases,
   tokensToDtcg,
   familyPartKind,
   readFamilyList,
@@ -733,12 +967,21 @@ export {
   // one and a literal in the other would be one contract with two spellings,
   // and the half that drifted would simply stop matching rather than fail.
   CONTENT_WIDTH_CLASS,
+  // The marker a container spacing its children wears: the compiler keys the
+  // gap's rules on it, a block repeating its slot puts it on each wrapper, and
+  // an editor takes it off to ask whether a margin is the gap.
+  CHILD_GAP_CLASS,
+  // What an Accordion section marks as its icon and its title, for the
+  // Accordion's icon choices to reach.
+  DISCLOSURE_ICON_CLASS,
+  DISCLOSURE_TITLE_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./style/node-class";
 export {
   compileStyleValues,
+  scaledTokenText,
   tokenCustomProperty,
   DEFAULT_TOKEN_PREFIX,
   // The prefix tokens are actually written under, which is not the one that was
@@ -746,8 +989,22 @@ export {
   // Exported so a reader keyed on the emitted custom-property names asks this
   // rather than the setting, which changes without the output changing.
   safeTokenPrefix,
+  paintsBackgroundImage,
 } from "./style/declarations";
 export type { CompiledDeclarations, Declaration } from "./style/declarations";
+/**
+ * A background overlay's two custom properties, for an editor drawing their
+ * controls.
+ *
+ * @experimental
+ */
+export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./style/overlay";
+export {
+  DISCLOSURE_ICON_PROPERTY,
+  DISCLOSURE_ICONS,
+  DISCLOSURE_POSITION_PROPERTY,
+  DISCLOSURE_POSITIONS,
+} from "./style/disclosure";
 export { serializeRules } from "./style/serialize";
 export type { CssRule } from "./style/serialize";
 export {
@@ -777,7 +1034,16 @@ export type {
 // Named classes: reusable style presets a node applies by id.
 export type { NamedClass } from "./style/named-class";
 export {
+  // A block type's own look, and the edits to its base a site's library holds.
+  // `@experimental` (with `blockOwnLooks` and `overlaidStyles`) until the
+  // editor that changes an own look ships.
+  blockDefaultsOf,
+  classNameOf,
+  isDefaultLook,
+  isLook,
   isUsableNamedClass,
+  ownLooksRead,
+  LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
   // How long a class id or slug may be before the compiler discards the class.
@@ -793,9 +1059,16 @@ export {
   // the later entry, which is four separate rules to get right by hand.
   usableNamedClasses,
   usableNamedClassPositions,
+  // The part of a library the compiler reads, before those rules run.
+  namedClassesRead,
   NAMED_CLASS_PREFIX,
   NAMED_CLASS_SLUG_RE,
 } from "./style/named-class";
+/**
+ * @experimental A block type's looks (its named variants: a button's Outline), as the shared
+ * styles a site receives, bound to the block type and written before every other shared style.
+ */
+export { blockLooks, blockOwnLooks, lookClassId } from "./style/block-looks";
 export type { BreakpointAxis } from "./style/breakpoint-axes";
 
 // Where each emitted declaration came from, for an editor that has to tell an author which of
@@ -821,6 +1094,15 @@ export type { StyleQuery, StyleSubject } from "./style/style-origin";
 // The stylesheet every page of a site shares, compiled once and addressed by its content.
 export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet, compileSiteTokenSheet } from "./style/site-sheet";
+// A site's spacing model: whether blocks space themselves with their own
+// margins (classic) or take the gap of the container holding them.
+export type { SpacingMode } from "./style/spacing-mode";
+export {
+  DEFAULT_SPACING_MODE,
+  isSpacingMode,
+  SPACING_MODES,
+  spacingModeOf,
+} from "./style/spacing-mode";
 // `outranksEntry` is published beside `styleOrigin` because that function
 // cannot answer every form of the question it answers: it is asked once per
 // STATE, so comparing two states' winners falls to the caller. Published, that
@@ -881,6 +1163,7 @@ export {
 // a script or an agent has the same right to it, and each would otherwise grow
 // its own vocabulary that agrees with this one only until one of them changed.
 export {
+  addressesNoNode,
   applyOp,
   applyOps,
   // Published for the planners: an insert whose subtree arrives locked is
@@ -903,11 +1186,47 @@ export {
   sameStyleValue,
   type AppliedOp,
   type AppliedOps,
+  type ApplyOptions,
   type BuilderOp,
+  type EnvelopeField,
+  type EnvelopePatch,
   type NodePatch,
   type OpPosition,
   type SlotAddress,
 } from "./ops";
+
+// The Layers lock's rule, stated once: for one op, which the apply asks of
+// every edit and an editing surface asks before offering one; and for a whole
+// write, judged against the document it would replace, which a save asks
+// because a write through the API carries no ops to judge.
+export {
+  layersLockBreak,
+  lockedAncestorOf,
+  type LayersLockBreak,
+} from "./layers-lock";
+export {
+  layersLockChanges,
+  type LayersLockChange,
+  type LayersLockChangeKind,
+} from "./layers-lock-stored";
+export {
+  variantLockChanges,
+  type VariantDrawing,
+  type VariantLockChange,
+} from "./layers-lock-variants";
+export {
+  componentLayersLocks,
+  heldBaselines,
+  keptForSameComponents,
+  placedLockChanges,
+  placementsAsComponentsHoldThem,
+  type ComponentLayersLock,
+  type ComposedHeldBaseline,
+  type HeldBaseline,
+  type PlacedLockChange,
+} from "./component-layers-locks";
+// How every copy into a document keeps the Layers locks it carries.
+export { insertKeepingLocks, type Placed } from "./locked-insert";
 
 /**
  * The stored shape of rich text.
@@ -939,3 +1258,276 @@ export {
   previewContainerName,
   type BreakpointContextOptions,
 } from "./style/compile-page";
+// Last, so the bundle reaches the style compiler's parser before the URL
+// policy's matcher, as the format entry's boundary test expects of the root.
+//
+// Bindings: the rules each one is checked against, the formatting of a bound
+// value, and the pass that fills bound props before blocks render. One set of
+// answers, shared by the renderer, the validator and the editor.
+export { BINDING_ISSUE_CODES } from "./binding-issues";
+export {
+  BINDABLE_KINDS,
+  bindablePropTypeOf,
+  bindingKindOf,
+  canBindFieldToProp,
+  FIELD_TYPE_BINDING_KIND,
+  STORAGE_PRIMITIVE_AS_FIELD_TYPE,
+} from "./binding-vocabulary";
+export type {
+  BindablePropType,
+  BindingEndpoint,
+  BindingFieldType,
+  BindingValueKind,
+  FieldStoragePrimitive,
+  StorageFieldType,
+} from "./binding-vocabulary";
+export type { BindingIssue, BindingIssueCode } from "./binding-issues";
+export {
+  bindablePropKind,
+  checkBinding,
+  fieldFitsProp,
+  imageValueOf,
+  isBindPath,
+  isEmptyBoundValue,
+  isValidPropValue,
+} from "./binding-rules";
+export type {
+  BindablePropKind,
+  BindingCheck,
+  BindingCheckInput,
+  BindingFieldShape,
+  BindingRefs,
+  BindingSchemaRef,
+  BindingSchemaSource,
+  CheckedBinding,
+  CrossedRelation,
+  ImageValue,
+} from "./binding-rules";
+// A document's bindings judged against the schema of what they read, as a
+// save judges them: one rule with the renderer, a held break a warning.
+export { bindingSchemaIssues, ENTRY_LINK_PROPS } from "./binding-schema-issues";
+export type {
+  BindingDocument,
+  BindingSchemaJudgement,
+} from "./binding-schema-issues";
+export {
+  checkFormat,
+  createBindingFormatter,
+  machineDate,
+  safeTimeZone,
+  supportedLocale,
+} from "./binding-format";
+export type {
+  BindingFormatter,
+  CheckedFormat,
+  FormatCheck,
+  FormatEnv,
+  FormatResult,
+  FormattedValue,
+} from "./binding-format";
+export {
+  bindDocument,
+  bindingDemand,
+  bindingFormatEnv,
+  bindingRefsFor,
+  createBindingRun,
+  DEFAULT_BINDING_LOCALE,
+  hasItemBindings,
+  resolveNodeBindings,
+  runDrawsImageField,
+} from "./resolve-bindings";
+export type {
+  BindingDemand,
+  BindingRun,
+  BindingRunInput,
+  BindingScope,
+  BindingSources,
+  BlockPropsLookup,
+  BoundDocument,
+  BoundValue,
+  BoundValues,
+  NodeBindingResult,
+  SourceDemand,
+} from "./resolve-bindings";
+// The bound props a visitor will not see: the page's own binding check, asked
+// with the field shapes a visitor may read, for an editor to say so.
+export { visitorUnreadableBindings } from "./visitor-unreadable-bindings";
+export {
+  SITE_SETTING_FIELD_SHAPES,
+  SITE_SETTING_FIELD_TYPES,
+  SITE_SETTING_LABELS,
+  type SiteSettingName,
+} from "./site-setting-fields";
+export type {
+  VisitorUnreadableBinding,
+  VisitorUnreadableInput,
+} from "./visitor-unreadable-bindings";
+
+// The Entry content block: where a collection's template draws the entry's
+// own blocks content. Its rules, shared by the validator, the editor and the
+// page builder's save, and the one composition of an entry's content into a
+// template for drawing, shared by the published page and the editor's canvas.
+export {
+  composeEntryContent,
+  entryBlocksDocumentOf,
+  ENTRY_CONTENT_FIELD_PROP,
+  ENTRY_CONTENT_ISSUE_CODES,
+  ENTRY_CONTENT_SLOT,
+  ENTRY_CONTENT_TYPE,
+  entryContentFieldOf,
+  entryContentIssues,
+  entryContentPlacements,
+  holdsEntryContent,
+} from "./entry-content";
+export type {
+  EntryContentIssue,
+  EntryContentIssueCode,
+  EntryContentJudgement,
+  EntryContentPlacement,
+  EntryContentSource,
+} from "./entry-content";
+
+// A collection list's stored query: the one reading of it, shared by the
+// validator, the renderer and the editor, and its save-time judgement.
+export {
+  COLLECTION_LIST_TYPE,
+  isListDay,
+  isListFilterOp,
+  LIST_ENTRY_SLOT,
+  listDayAfter,
+  LIST_FIELD_CODES,
+  LIST_FILTER_OPS,
+  LIST_ISSUE_CODES,
+  LIST_LIMIT_MAX,
+  LIST_LIMIT_MIN,
+  LIST_FIELD_KINDS,
+  LIST_KIND_OPS,
+  LIST_MAX_FILTERS,
+  LIST_MAX_SORT_KEYS,
+  LIST_MAX_SORT_LENGTH,
+  LIST_MAX_VALUES,
+  isListFieldKind,
+  listFieldKind,
+  listItemRef,
+  listKindSortable,
+  listPageCount,
+  listQueryIssues,
+  namesListSource,
+  listRelationTarget,
+  listSortText,
+  mayPaginateList,
+  namedQueryHiddenReads,
+  outerListOf,
+  paginatedList,
+  readListQuery,
+} from "./list-query";
+// The day an instant falls on in a zone, `YYYY-MM-DD`: a page's "today", as
+// a published page and the editor's canvas each read it for a named query.
+export { calendarDayIn } from "./calendar-day";
+// Named queries: a collection list's custom source, declared by a developer
+// in code. The declaration's types and checks, the process registry the page
+// builder fills at boot, and every message about one, shared by the
+// validator, the renderer, the editor and the plugin SDK.
+export {
+  createNamedQueryRegistry,
+  defineNamedQuery,
+  isNamedQueryName,
+  isNamedQueryParamKey,
+  judgeNamedParams,
+  NAMED_QUERY_DEFAULT_TIMEOUT_MS,
+  NAMED_QUERY_MAX_PARAMS,
+  NAMED_QUERY_MAX_TIMEOUT_MS,
+  NAMED_QUERY_TEXT,
+  NAMED_QUERY_TEXT_MAX,
+  namedQueryDeclaration,
+  namedQueryNeedsInput,
+  namedQueryParamNeedsInput,
+  namedQueryProblem,
+  namedQueryRowFields,
+  namedQueryTimeout,
+  param,
+} from "./named-query";
+
+// A block's visibility conditions: the operator vocabulary and its render
+// classes, the evaluator the renderer asks, and their save-time judgement.
+export {
+  canonicalConditions,
+  conditionDemand,
+  conditionScopeIn,
+  CONDITION_FIELD_CODES,
+  CONDITION_ISSUE_CODES,
+  CONDITION_KIND_OPS,
+  CONDITION_MAX,
+  CONDITION_OP_ALIASES,
+  CONDITION_OPS,
+  CONDITION_REGISTRY,
+  conditionFieldKind,
+  conditionIssues,
+  conditionOp,
+  evaluateConditions,
+  withConditions,
+} from "./visibility-conditions";
+export type {
+  ConditionDayStart,
+  ConditionDemand,
+  ConditionEvaluation,
+  ConditionFieldKind,
+  ConditionInput,
+  ConditionIssue,
+  ConditionIssueCode,
+  ConditionJudgement,
+  ConditionOp,
+  ConditionRegistry,
+  ConditionRenderClass,
+  ConditionScope,
+  ConditionSource,
+  ConditionSubject,
+} from "./visibility-conditions";
+export type {
+  BooleanParam,
+  ChoiceParam,
+  DayParam,
+  EntryParam,
+  NamedParamJudgement,
+  NamedParamProblem,
+  NamedQueryChoice,
+  NamedQueryDeclaration,
+  NamedQueryDefinition,
+  NamedQueryKnown,
+  NamedQueryNeed,
+  NamedQueryParam,
+  NamedQueryParams,
+  NamedQueryParamType,
+  NamedQueryParamValue,
+  NamedQueryParamValues,
+  NamedQueryReader,
+  NamedQueryRegistry,
+  NamedQueryResult,
+  NamedQueryRows,
+  NamedQueryRunArgs,
+  NamedQuerySource,
+  NamedReadFilter,
+  NamedReadQuery,
+  NumberParam,
+  TextParam,
+} from "./named-query";
+export type {
+  ListNamedQuery,
+  NamedQueryHiddenRead,
+  ListFieldCode,
+  ListFieldKind,
+  ListFields,
+  ListFieldSource,
+  ListFilter,
+  ListFilterOp,
+  ListFilterScalar,
+  ListPageCode,
+  ListQuery,
+  ListQueryJudgement,
+  ListQueryProblem,
+  ListQueryProp,
+  ListRelation,
+  ListShapeCode,
+  ListSortKey,
+  PaginatedList,
+} from "./list-query";

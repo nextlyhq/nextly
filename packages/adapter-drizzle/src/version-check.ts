@@ -106,6 +106,32 @@ export interface DialectVersionInfo {
    * dialect's own server (and always null on PostgreSQL and SQLite).
    */
   variant: DialectVariant | null;
+  /**
+   * Whether the server can key a unique index on an expression, such as `NULLIF(col, '')`.
+   * PostgreSQL and SQLite always can. MySQL can from 8.0.13 (functional key parts). The
+   * MySQL-compatible variants are reported as unable: MariaDB has no functional key parts, and
+   * the others are not tested, so a rule that needs one is refused there rather than left
+   * unenforced. Optional, so a `DialectVersionInfo` written before this was reported still is
+   * one; absent means unknown, which a caller reads as unable.
+   */
+  functionalIndexes?: boolean;
+  /**
+   * Whether the server enforces CHECK constraints, not merely accepts the
+   * syntax. MySQL before 8.0.16 parses a CHECK and ignores it, so a rule a
+   * declaration means to guarantee would hold nothing; MySQL 8.0.16 and later
+   * enforce. The MySQL-compatible variants are reported as not enforcing:
+   * MariaDB does from 10.2 and the others are not tested, so a rule that must
+   * hold is refused there rather than trusted to a server this cannot speak
+   * for. PostgreSQL and SQLite always enforce. Absent means unknown, which a
+   * caller reads as not enforcing where a rule must hold.
+   */
+  enforcesCheckConstraints?: boolean;
+  /**
+   * The server's own version string, as it answered `version()`. A refusal
+   * that depends on the version names it, so the operator sees which server
+   * answered rather than a threshold without an actor.
+   */
+  serverVersion?: string;
 }
 
 // What: the variants that reject `SELECT ... FOR SHARE` as a syntax error.
@@ -132,6 +158,35 @@ const SQLITE_REGEX = /^(\d+)\.(\d+)\.(\d+)/;
 interface ParsedVersion {
   major: number;
   minor: number;
+  /** Read where the dialect's minimum is not the whole answer (MySQL's functional key parts). */
+  patch?: number;
+}
+
+/** MySQL's first release with functional key parts. */
+const MYSQL_FUNCTIONAL_KEY_PARTS = { major: 8, minor: 0, patch: 13 };
+
+/** MySQL's first release that enforces CHECK constraints. */
+const MYSQL_ENFORCED_CHECKS = { major: 8, minor: 0, patch: 16 };
+
+/** Whether a real MySQL release has functional key parts. */
+function mysqlHasFunctionalKeyParts(version: ParsedVersion): boolean {
+  return atOrAfter(version, MYSQL_FUNCTIONAL_KEY_PARTS);
+}
+
+/** Whether a real MySQL release enforces CHECK constraints. */
+function mysqlEnforcesCheckConstraints(version: ParsedVersion): boolean {
+  return atOrAfter(version, MYSQL_ENFORCED_CHECKS);
+}
+
+/** Whether `version` is at or past `at`, compared part by part. */
+function atOrAfter(
+  version: ParsedVersion,
+  at: { major: number; minor: number; patch?: number }
+): boolean {
+  const { major, minor, patch = 0 } = version;
+  if (major !== at.major) return major > at.major;
+  if (minor !== at.minor) return minor > at.minor;
+  return patch >= (at.patch ?? 0);
 }
 
 function parsePostgres(raw: string): ParsedVersion | null {
@@ -143,7 +198,11 @@ function parsePostgres(raw: string): ParsedVersion | null {
 function parseMySQL(raw: string): ParsedVersion | null {
   const match = MYSQL_REGEX.exec(raw);
   if (!match) return null;
-  return { major: Number(match[1]), minor: Number(match[2]) };
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
 }
 
 function parseSQLite(raw: string): ParsedVersion | null {
@@ -213,7 +272,12 @@ export async function checkDialectVersion(
       `officially supported in v1 but most operations should work. ` +
       `See ${DOCS_URL}.`;
     if (options?.onWarning) options.onWarning(warning);
-    return { variant };
+    return {
+      variant,
+      functionalIndexes: false,
+      enforcesCheckConstraints: false,
+      serverVersion: raw,
+    };
   }
 
   // Step 2/3: strict regex parse for real dialects.
@@ -253,7 +317,16 @@ export async function checkDialectVersion(
         `${parsed.major}.${parsed.minor}. See ${DOCS_URL}.`,
     });
   }
-  return { variant: null };
+  return {
+    variant: null,
+    serverVersion: raw,
+    ...(dialect !== "mysql"
+      ? { functionalIndexes: true, enforcesCheckConstraints: true }
+      : {
+          functionalIndexes: mysqlHasFunctionalKeyParts(parsed),
+          enforcesCheckConstraints: mysqlEnforcesCheckConstraints(parsed),
+        }),
+  };
 }
 
 // What: PG version query.

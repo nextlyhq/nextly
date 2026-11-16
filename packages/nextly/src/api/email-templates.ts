@@ -24,6 +24,11 @@ import { z } from "zod";
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
+import { templateVariablesSchema } from "../domains/email/template-variables";
 import type { WrittenDocument } from "../domains/email/written/document";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
@@ -38,12 +43,6 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
   await getCachedNextly();
   return container.get<EmailTemplateService>("emailTemplateService");
 }
-
-const variableSchema = z.object({
-  name: z.string().min(1),
-  description: z.string(),
-  required: z.boolean().optional(),
-});
 
 const createTemplateSchema = z
   .object({
@@ -60,7 +59,7 @@ const createTemplateSchema = z
     // Required for a coded template; a written one's is written from its blocks.
     htmlContent: z.string(),
     plainTextContent: z.string().optional().nullable(),
-    variables: z.array(variableSchema).optional().nullable(),
+    variables: templateVariablesSchema.optional(),
     useLayout: z.boolean().optional(),
     isActive: z.boolean().optional(),
     providerId: z.string().uuid().optional().nullable(),
@@ -109,8 +108,7 @@ const createTemplateSchema = z
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
+      ...SYSTEM_READ_POLICY.emailTemplates.read.anyOf,
     ]);
 
     const service = await getEmailTemplateService();
@@ -141,8 +139,7 @@ export const GET = withErrorHandler(
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
     const auth = await requireRouteAnyPermission(request, [
-      { action: "create", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
+      ...SYSTEM_WRITE_POLICY.emailTemplates.create.anyOf,
     ]);
 
     const body = await readJsonBody(request);
@@ -156,8 +153,10 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailTemplateService();
+    // The checked body, passed as the dispatcher passes its own: a
+    // declaration's description may be absent at the check and is stored so.
     const template = await service.createTemplate(
-      validated,
+      validated as Parameters<typeof service.createTemplate>[0],
       actorFromAuthContext(auth)
     );
 

@@ -269,6 +269,25 @@ describe("ApiKeyService – Token Duration Enforcement", () => {
       expect(meta.expiresAt).toBeNull();
     });
 
+    it("should floor expiresAt to whole seconds", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-06-01T12:00:00.700Z").getTime());
+      try {
+        const { meta } = await service.createApiKey(userId, {
+          name: "Floored Key",
+          tokenType: "read-only",
+          expiresIn: "7d",
+        });
+        expect(meta.expiresAt).not.toBeNull();
+        const expiresAtMs = new Date(meta.expiresAt!).getTime();
+        expect(expiresAtMs).toBe(
+          new Date("2026-06-08T12:00:00.000Z").getTime()
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("should create a key that authenticates successfully immediately after creation", async () => {
       // Round-trip: create → authenticate verifies the full pipeline:
       //   resolveExpiresAt() → DB insert → hash lookup → isKeyExpired() → auth tuple

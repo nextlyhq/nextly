@@ -20,6 +20,11 @@ import { expect, type Page, type Request } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
+import { canvasFrame } from "./support/canvas-frame";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.homepage] });
 
 /*
  * The control that opens the page builder, in either of its wordings, kept as a
@@ -62,7 +67,7 @@ function savesThePattern(request: Request): boolean {
 
 async function openBuilder(page: Page): Promise<void> {
   const seeded = await page.request.patch(HOMEPAGE_API, {
-    data: { layout: DOCUMENT },
+    data: { layout: DOCUMENT, _overwrite: true },
   });
   expect(seeded.ok(), `seeding the homepage layout: ${seeded.status()}`).toBe(
     true
@@ -70,7 +75,7 @@ async function openBuilder(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   await expect(
-    page.locator('[data-nx-node="pattern-source"]').first()
+    canvasFrame(page).locator('[data-nx-node="pattern-source"]').first()
   ).toBeVisible({ timeout: 30_000 });
 }
 
@@ -85,7 +90,10 @@ test.describe("the save-as-pattern dialog", () => {
       }
     });
 
-    await page.locator('[data-nx-node="pattern-source"]').first().click();
+    await canvasFrame(page)
+      .locator('[data-nx-node="pattern-source"]')
+      .first()
+      .click();
     await page.getByRole("button", { name: "Save as pattern" }).click();
     const dialog = page.getByRole("dialog", { name: "Save as pattern" });
     await expect(dialog).toBeVisible();

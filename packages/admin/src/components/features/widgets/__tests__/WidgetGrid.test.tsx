@@ -3,10 +3,11 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, type JSX, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LOADING_FRAME_TIMES } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
@@ -14,9 +15,9 @@ import {
   registerComponents,
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
+import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
-import { coreDraws } from "../outcome";
-import { GRID_GAP_PX } from "../sizes";
+import { cardSpanClass, GRID_CLASS } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -80,46 +81,24 @@ function renderGrid() {
 }
 
 /**
- * An archetype core cannot draw in THIS release, derived rather than named.
- *
- * Several cases below need a widget nothing can render — to prove the grid does
- * not spend a query on it, does not claim freshness for it, and still counts it
- * as failed. Naming one (`list`, until it gained a body) makes those cases go
- * quietly wrong the day that archetype lands: they keep passing while testing
- * something else entirely. Asking the renderer table keeps them pointed at
- * whatever is genuinely undrawn.
+ * An archetype this release does not know: what an admin meets when its server is newer and
+ * declares a card from a later vocabulary. The card is asked for like any other, and says it is
+ * not rendered yet.
  */
-// Listed here rather than imported: `nextly/config` publishes the archetype
-// VOCABULARY as a type only, and is deliberately almost free of runtime values.
-// The names are stable; which of them core can draw is the part that moves, and
-// that is asked of `coreDrawsArchetype` below.
-const HOST_DRAWN_ARCHETYPES = ["metric", "table", "list", "text", "actions"];
+const UNDRAWABLE = "sparkline";
 
-// Every name above draws now, so the archetype nothing can render is one THIS
-// release does not know: what an admin meets when its server is newer and
-// declares a card from a later vocabulary. That is the realistic shape of
-// "undrawable" from here on, and the cases below test the grid's conduct
-// toward it -- no query spent, no freshness claimed, counted as failed.
-const NEWER_CORE_ARCHETYPE = "sparkline";
-
-const UNDRAWABLE = [...HOST_DRAWN_ARCHETYPES, NEWER_CORE_ARCHETYPE].find(
-  // A declaration carrying a query, so what is being asked is "can core draw
-  // this archetype at all", not "is this particular widget under-declared".
-  archetype =>
-    !coreDraws({ archetype, query: { select: ["title"], op: "list" } })
-);
-
-it("has an archetype core cannot draw, which several cases below need", () => {
-  // Stated as its own case so that if the renderer table ever admits a name it
-  // does not know, this fails with a sentence instead of leaving the cases
-  // below silently vacuous.
-  expect(UNDRAWABLE).toBe(NEWER_CORE_ARCHETYPE);
-});
-
+/**
+ * Branding carrying `widgets` as the registry publishes them, each written as
+ * briefly as a case needs: one naming a component and no archetype is drawn
+ * by that component, and one naming no title is titled by its id.
+ */
 function brandingWith(widgets: unknown[]): AdminBranding {
-  return {
-    plugins: [{ name: "@acme", collections: [], widgets }],
-  } as unknown as AdminBranding;
+  return brandingWithRegistered(
+    widgets.map(widget => {
+      const brief = widget as { id: string; archetype?: string };
+      return { archetype: "custom", title: brief.id, ...brief };
+    })
+  );
 }
 
 /** Branding carrying REGISTERED widgets and no plugin contribution at all. */
@@ -135,7 +114,14 @@ beforeEach(() => {
   stubDashboardWidth();
   granted = [];
   vi.clearAllMocks();
-  vi.mocked(protectedApi.post).mockResolvedValue({ results: [] });
+  // Every card answered with data of nothing in particular, so a card drawn by its own component
+  // draws; a case about what a card shows answers its own.
+  vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => ({
+    results: (body as { queries: unknown[] }).queries.map(() => ({
+      ok: true,
+      result: { op: "data", data: null },
+    })),
+  }));
 });
 
 afterEach(() => {
@@ -160,7 +146,7 @@ afterEach(() => {
  * invariant exists to catch.
  */
 /**
- * A `POST /dashboard/query` mock that answers the query it was ASKED.
+ * A `POST /dashboard/query` mock that answers the card it was ASKED for.
  *
  * Positional fixtures — an array of results lined up with the widgets as
  * declared — encode the batch's ORDER into every test that uses one. The batch
@@ -169,18 +155,19 @@ afterEach(() => {
  * order is therefore an implementation detail, and a fixture that depends on it
  * fails for a reason that has nothing to do with what it is testing.
  *
- * Keyed by source, so each widget gets its own number however the batch is
- * arranged. A source the caller did not name comes back as a failed slot rather
- * than as a silent zero, so a test that mis-names one is told.
+ * Keyed by the widget each card is asked for, so each widget gets its own
+ * number however the batch is arranged. A widget the caller did not name comes
+ * back as a failed slot rather than as a silent zero, so a test that mis-names
+ * one is told.
  */
-function mockCountsBySource(counts: Record<string, number>): void {
+function mockCountsByWidget(counts: Record<string, number>): void {
   vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => {
-    const queries = (body as { queries: Array<{ source: string }> }).queries;
+    const queries = (body as { queries: Array<{ widget: string }> }).queries;
     return {
       results: queries.map(query =>
-        query.source in counts
-          ? { ok: true, result: { op: "count", total: counts[query.source] } }
-          : { ok: false, error: `no fixture for ${query.source}` }
+        query.widget in counts
+          ? { ok: true, result: { op: "count", total: counts[query.widget] } }
+          : { ok: false, error: `no fixture for ${query.widget}` }
       ),
     };
   });
@@ -195,7 +182,7 @@ function gridLiveRegions(container: HTMLElement): Element[] {
 }
 
 describe("WidgetGrid — collection and gating", () => {
-  it("renders nothing when no plugin contributes a widget", () => {
+  it("renders nothing when the registry publishes no widget", () => {
     mockBranding = {
       plugins: [{ name: "@acme", collections: [] }],
     } as unknown as AdminBranding;
@@ -220,7 +207,7 @@ describe("WidgetGrid — collection and gating", () => {
     expect(screen.getByTestId("dashboard-container")).toBeEmptyDOMElement();
   });
 
-  it("shows a permitted widget and hides a denied one", () => {
+  it("shows a permitted widget and hides a denied one", async () => {
     granted = ["read-stats"];
     registerComponents({
       "@acme/admin#Stats": () => <div>stats widget</div>,
@@ -239,64 +226,121 @@ describe("WidgetGrid — collection and gating", () => {
       },
     ]);
     renderGrid();
-    expect(screen.getByText("stats widget")).toBeInTheDocument();
+    expect(await screen.findByText("stats widget")).toBeInTheDocument();
     expect(screen.queryByText("secret widget")).not.toBeInTheDocument();
   });
 
-  it("skips a declaration that describes no body, rather than drawing an empty card", () => {
-    // Neither an archetype nor a component: the plugin half is gone, or the
-    // declaration was never renderable. A titled card with nothing under it
-    // reads as a product bug rather than as a missing plugin.
-    registerComponents({ "@acme/admin#Real": () => <div>real body</div> });
-    mockBranding = brandingWith([
-      { id: "hollow", title: "Hollow" },
-      { id: "real", component: "@acme/admin#Real" },
-    ]);
-    renderGrid();
-    expect(screen.queryByTestId("widget-cell-hollow")).not.toBeInTheDocument();
-    expect(screen.queryByText("Hollow")).not.toBeInTheDocument();
-    // The grid itself survives it.
-    expect(screen.getByText("real body")).toBeInTheDocument();
-  });
-
-  it("keeps one cell when two plugins ship the same widget id", () => {
-    // The id keys a batch result back to its card, so a duplicate would hand
-    // both widgets the same slot and one would show the other's number.
+  it("draws a throwing component's error once, and never remounts the component card beside it", async () => {
+    // 🔴 The grid hands each card its answer afresh on every render. Keyed on a
+    // new object each time, a component that threw was caught, re-rendered the
+    // grid by reporting the failure, met a "new" answer, drew and threw again
+    // until React stopped it ("Maximum update depth exceeded"), and every
+    // component card remounted whenever the grid re-rendered.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let draws = 0;
+    let mounts = 0;
+    const Throws = (): JSX.Element => {
+      draws += 1;
+      throw new Error("boom");
+    };
+    const Counts = (): JSX.Element => {
+      useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <p>counted body</p>;
+    };
     registerComponents({
-      "@acme/admin#First": () => <div>first body</div>,
-      "@other/admin#Second": () => <div>second body</div>,
+      "@acme/admin#Throws": Throws,
+      "@acme/admin#Counts": Counts,
     });
-    mockBranding = {
-      plugins: [
-        {
-          name: "@acme",
-          collections: [],
-          widgets: [{ id: "shared", component: "@acme/admin#First" }],
-        },
-        {
-          name: "@other",
-          collections: [],
-          widgets: [{ id: "shared", component: "@other/admin#Second" }],
-        },
+    mockBranding = brandingWithRegistered(
+      ["throws", "counts"].map(name => ({
+        id: `acme/${name}`,
+        title: name,
+        archetype: "custom",
+        size: { default: { w: 6, h: 3 } },
+        component: `@acme/admin#${name[0].toUpperCase()}${name.slice(1)}`,
+      }))
+    );
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "data", data: 1 } },
+        { ok: true, result: { op: "data", data: 2 } },
       ],
-    } as unknown as AdminBranding;
+    });
+
     renderGrid();
-    expect(screen.getAllByTestId("widget-cell-shared")).toHaveLength(1);
-    expect(screen.getByText("first body")).toBeInTheDocument();
-    expect(screen.queryByText("second body")).not.toBeInTheDocument();
+
+    const failed = await screen.findByRole("region", { name: "throws" });
+    await waitFor(() => expect(failed).toHaveAttribute("data-state", "error"));
+    expect(screen.getByText("counted body")).toBeInTheDocument();
+    // Settled, and stays settled: no further draws once the error is shown.
+    const drawn = draws;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(draws).toBe(drawn);
+    // React draws a throwing component again once before giving up on it; a
+    // loop draws it until the update limit.
+    expect(draws).toBeLessThanOrEqual(4);
+    expect(mounts).toBe(1);
+    expect(
+      errors.mock.calls.some(call =>
+        String(call[0]).includes("Maximum update depth")
+      )
+    ).toBe(false);
   });
 
-  it("renders a widget the app only REGISTERED, with no contribution beside it", () => {
-    // The registry is what `registerWidget` writes to, and it is the store this
-    // whole system is built around. A widget that reached it without also being
-    // declared under `contributes.admin.widgets` was invisible to the grid.
+  it("asks a card core answers on the server at the size it is drawn at and its predicted tier", async () => {
+    // A full-width card on a 1,200 px dashboard is large, and a card of three columns on it is
+    // 288 px wide, small: the tier its widget's `load` is handed, beside the card's grid size.
+    mockBranding = brandingWithRegistered([
+      {
+        id: "acme/big",
+        title: "Big",
+        archetype: "metric",
+        size: { default: { w: 12, h: 4 } },
+      },
+      {
+        id: "acme/narrow",
+        title: "Narrow",
+        archetype: "metric",
+        size: { default: { w: 3, h: 3 } },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 1 } },
+        { ok: true, result: { op: "count", total: 2 } },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalled());
+    const sent = (
+      vi.mocked(protectedApi.post).mock.calls[0][1] as { queries: unknown[] }
+    ).queries;
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          widget: "acme/big",
+          size: { w: 12, h: 4, tier: "large" },
+        }),
+        expect.objectContaining({
+          widget: "acme/narrow",
+          size: { w: 3, h: 3, tier: "small" },
+        }),
+      ])
+    );
+  });
+
+  it("renders a widget the registry publishes", () => {
     mockBranding = brandingWithRegistered([
       {
         id: "acme/revenue",
         title: "Revenue",
         archetype: "metric",
-        defaultSize: "sm",
-        query: { source: "collection:orders", op: "count" },
+        size: { default: { w: 3, h: 3 } },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -311,19 +355,38 @@ describe("WidgetGrid — collection and gating", () => {
     });
   });
 
+  it("gives the page a freshness from the cards' answers, and no card its own", async () => {
+    // No card says when its data arrived; the page's one line is told the oldest answer on
+    // show, from the cards that took part.
+    mockBranding = brandingWith([
+      { id: "acme/posts", title: "Posts", archetype: "metric" },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 3 } }],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("3")
+    );
+    expect(document.querySelectorAll("time")).toHaveLength(0);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Dashboard widgets")).toHaveAttribute(
+        "data-answered-at"
+      )
+    );
+  });
+
   it("draws a contributed widget that ships NO component at all", async () => {
-    // Tier 1 end to end, and the thing the contract change exists for: the
-    // plugin declares an archetype and a query, ships no UI code, and the host
-    // draws the card. `component` was required on every contributed widget
-    // until now, so this declaration could not be written -- an author had to
-    // name a component core would never resolve.
+    // Tier 1 end to end: the widget declares an archetype, ships no UI code,
+    // and the host draws the card from the answer its `load` gave.
     mockBranding = brandingWith([
       {
         id: "acme/posts",
         title: "Published posts",
         archetype: "metric",
-        defaultSize: "sm",
-        query: { source: "collection:posts", op: "count" },
+        size: { default: { w: 3, h: 3 } },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -332,204 +395,30 @@ describe("WidgetGrid — collection and gating", () => {
 
     renderGrid();
 
-    // The card, drawn by core from the query result -- not a plugin component,
-    // and not the "archetype is not rendered yet" refusal.
+    // The card, drawn by core from the answer -- not a plugin component, and
+    // not the "archetype is not rendered yet" refusal.
     await waitFor(() =>
       expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("42")
     );
     expect(screen.getByText("Published posts")).toBeInTheDocument();
+    // Asked for by its card id, the placement a widget's own id names by default.
     expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
-      queries: [{ source: "collection:posts", op: "count" }],
-    });
-  });
-
-  it("spends no query on a widget nothing can draw", async () => {
-    // A declarative widget naming an archetype core has no renderer for, and
-    // shipping no component to draw it instead, resolves to a card reading
-    // "not rendered yet". Asking for its data would spend an access-checked
-    // read, and one of the batch's limited slots, on a result discarded on
-    // arrival -- on every mount and every window focus.
-    mockBranding = brandingWith([
-      {
-        id: "acme/recent",
-        title: "Recent posts",
-        archetype: UNDRAWABLE,
-        query: { source: "collection:posts", op: "list" },
-      },
-    ]);
-
-    renderGrid();
-
-    // The card is drawn and says why, so the widget is not silently missing.
-    await waitFor(() =>
-      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
-    );
-    expect(screen.getByText(/not rendered yet/i)).toBeInTheDocument();
-    // And nothing was asked of the server on its behalf.
-    expect(protectedApi.post).not.toHaveBeenCalled();
-  });
-
-  it("claims no freshness for a query that never ran", async () => {
-    // The widget declares a query, so `widget.query` is truthy -- but its
-    // archetype is undrawable, so the grid deliberately left it out of the
-    // batch. Reading `widget.query` again to decide the card's freshness gave
-    // it an "Updated just now" for a request nothing ever sent, and marked it
-    // busy while an unrelated widget refetched.
-    mockBranding = brandingWith([
-      {
-        id: "acme/recent",
-        title: "Recent posts",
-        archetype: UNDRAWABLE,
-        query: { source: "collection:posts", op: "list" },
-      },
-      {
-        id: "acme/posts",
-        title: "Posts",
-        archetype: "metric",
-        query: { source: "collection:posts", op: "count" },
-      },
-    ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [{ ok: true, result: { op: "count", total: 3 } }],
-    });
-
-    renderGrid();
-
-    // The metric card asked and answered, so it carries the batch's timestamp.
-    await waitFor(() =>
-      expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("3")
-    );
-    const cells = screen.getAllByTestId(/^widget-cell-/);
-    expect(cells).toHaveLength(2);
-
-    // Exactly one freshness line on the page: the widget that took part.
-    expect(screen.getAllByTestId("widget-card-freshness")).toHaveLength(1);
-  });
-
-  it("DOES spend a query when a component can draw the result", async () => {
-    // The control, and the boundary: the same undrawable archetype WITH a
-    // component resolves to `custom`, the plugin's component consumes the slot,
-    // so the read is wanted. A grid that simply skipped undrawable archetypes
-    // would starve it.
-    registerComponents({ "@acme/admin#Recent": () => <div>recent body</div> });
-    mockBranding = brandingWith([
-      {
-        id: "acme/recent",
-        title: "Recent posts",
-        archetype: UNDRAWABLE,
-        component: "@acme/admin#Recent",
-        query: { source: "collection:posts", op: "list" },
-      },
-    ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [{ ok: true, result: { op: "list", items: [] } }],
-    });
-
-    renderGrid();
-
-    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    expect(screen.getByText("recent body")).toBeInTheDocument();
-  });
-
-  it("spends no query on a list that selects nothing", async () => {
-    // The declaration is refused by the archetype itself, so the card can never
-    // be drawn -- but the refusal used to arrive only after the query ran. The
-    // grid batched it because `list` had a renderer, the server performed an
-    // UNPROJECTED read and shipped whole documents to the browser, and the card
-    // threw them away to print the refusal. On every mount and every focus.
-    mockBranding = brandingWith([
-      {
-        id: "acme/recent",
-        title: "Recent posts",
-        archetype: "list",
-        query: { source: "collection:posts", op: "list" },
-      },
-    ]);
-
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
-    );
-    expect(screen.getByText(/selects no fields/i)).toBeInTheDocument();
-    expect(protectedApi.post).not.toHaveBeenCalled();
-  });
-
-  it("offers no Retry on a card refused before it was asked", async () => {
-    // The card never entered the batch, so there is no question to ask again: a Retry there
-    // would do nothing at all when pressed.
-    mockBranding = brandingWith([
-      {
-        id: "acme/recent",
-        title: "Recent posts",
-        archetype: "list",
-        query: { source: "collection:posts", op: "list" },
-      },
-    ]);
-
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
-    );
-    // The control: the card IS in its error state, so the absence below is about Retry.
-    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
-    expect(screen.queryByTestId("card-retry")).not.toBeInTheDocument();
-  });
-
-  it("keeps a contributed component when the registered list is under-declared", async () => {
-    // A widget declared through BOTH channels. The registration names `list`
-    // and omits `select`, so core cannot draw it -- and the contributed
-    // component is the only thing that can. The fallback fires when core cannot
-    // draw, and core reported that it could purely because `list` had an entry
-    // in the renderer table.
-    registerComponents({ "@acme/admin#Recent": () => <div>plugin rows</div> });
-    mockBranding = {
-      plugins: [
-        {
-          name: "@acme",
-          collections: [],
-          widgets: [{ id: "shared", component: "@acme/admin#Recent" }],
-        },
+      queries: [
+        expect.objectContaining({ widget: "acme/posts", card: "acme/posts" }),
       ],
-      widgets: [
-        {
-          id: "shared",
-          title: "Shared",
-          archetype: "list",
-          defaultSize: "md",
-          query: { source: "collection:posts", op: "list" },
-        },
-      ],
-    } as unknown as AdminBranding;
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [{ ok: true, result: { op: "list", items: [] } }],
     });
-
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getByText("plugin rows")).toBeInTheDocument()
-    );
-    expect(screen.queryByText(/selects no fields/i)).not.toBeInTheDocument();
   });
 
   it("draws a LIST widget end to end, from declaration to rows", async () => {
-    // The second host-drawn archetype, through the whole path: a declarative
-    // contribution with no component, its query batched, the `list` arm of the
-    // response validated, and the rows drawn from the fields it selected.
+    // The second host-drawn archetype, through the whole path: a declaration
+    // with no component, its card batched, the `list` arm of the response
+    // validated, and the rows drawn from the fields the answer describes.
     mockBranding = brandingWith([
       {
         id: "acme/recent",
         title: "Recent posts",
         archetype: "list",
-        defaultSize: "md",
-        query: {
-          source: "collection:posts",
-          op: "list",
-          select: ["title", "slug"],
-          limit: 5,
-        },
+        size: { default: { w: 4, h: 5 } },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -542,6 +431,8 @@ describe("WidgetGrid — collection and gating", () => {
               { title: "First post", slug: "first-post" },
               { title: "Second post", slug: "second-post" },
             ],
+            // The fields the answer's rows carry, described as the server answers them.
+            fields: [{ name: "title" }, { name: "slug" }],
           },
         },
       ],
@@ -550,131 +441,38 @@ describe("WidgetGrid — collection and gating", () => {
     renderGrid();
 
     await waitFor(() =>
-      expect(screen.getAllByTestId("widget-list-row")).toHaveLength(2)
+      expect(screen.getAllByTestId("entity-row")).toHaveLength(2)
     );
     expect(screen.getByText("First post")).toBeInTheDocument();
-    expect(screen.getByText("second-post")).toBeInTheDocument();
-    // And the select reached the server as declared, so the rows are drawn from
-    // fields the query actually asked for.
+    expect(screen.getAllByTestId("entity-row-meta")[1]).toHaveTextContent(
+      "second-post"
+    );
+    // And the card was asked for by its id, at the size it is drawn at, which its `load` reads.
     expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
       queries: [
-        {
-          source: "collection:posts",
-          op: "list",
-          select: ["title", "slug"],
-          // The five rows the card draws, and one more: the extra row is how a list learns that
-          // more exist, since its answer carries no total.
-          limit: 6,
-        },
+        expect.objectContaining({
+          widget: "acme/recent",
+          card: "acme/recent",
+          size: expect.objectContaining({ w: 4, h: 5 }),
+        }),
       ],
     });
-  });
-
-  it("shows an actions card's empty state when the reader may use none of them", async () => {
-    // The declaration is valid and carries shortcuts; the PERMISSION FILTER
-    // empties it. A drawability check that re-tested the length could not tell
-    // that apart from a widget declaring none, so it reported a malformed
-    // widget and made the card's own empty state unreachable.
-    mockBranding = brandingWith([
-      {
-        id: "core/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        actions: [
-          {
-            label: "Invite user",
-            href: "/admin/users/new",
-            requiredPermission: "create-users",
-          },
-        ],
-      },
-    ]);
-
-    renderGrid();
-
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("widget-cell-core/shortcuts")
-      ).toBeInTheDocument()
-    );
-    // The frame's empty state, and the frame says so: a bespoke "nothing here" node inside a
-    // card marked ready would keep its freshness line and footer link.
-    const cell = screen.getByTestId("widget-cell-core/shortcuts");
-    expect(within(cell).getByTestId("card-empty")).toBeInTheDocument();
-    expect(cell.querySelector("[data-state]")).toHaveAttribute(
-      "data-state",
-      "empty"
-    );
-    expect(
-      screen.queryByText(/declares no shortcuts/i)
-    ).not.toBeInTheDocument();
-  });
-
-  it("draws an actions card through the HOST even when a component is offered", async () => {
-    // `actions` is queryless by design, so a drawability test that asked "does
-    // it declare a query" called every actions widget undrawable and handed one
-    // carrying a component fallback to that component -- bypassing the host
-    // renderer and, with it, the per-item permission gating.
-    registerComponents({ "@acme/admin#Shortcuts": () => <div>plugin ui</div> });
-    mockBranding = brandingWith([
-      {
-        id: "acme/shortcuts",
-        title: "Shortcuts",
-        archetype: "actions",
-        component: "@acme/admin#Shortcuts",
-        actions: [{ label: "New post", href: "/admin/posts/new" }],
-      },
-    ]);
-
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getByTestId("widget-action")).toHaveTextContent("New post")
-    );
-    expect(screen.queryByText("plugin ui")).not.toBeInTheDocument();
-  });
-
-  it("STILL prefers the component when core cannot draw the declaration", async () => {
-    // The control for the change above: a metric with no query is genuinely
-    // undrawable, and the contributed component remains the only thing that can
-    // draw that card. Removing the query test must not have removed this.
-    registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
-    mockBranding = brandingWith([
-      {
-        id: "acme/queryless",
-        title: "Queryless",
-        archetype: "metric",
-        component: "@acme/admin#Panel",
-      },
-    ]);
-
-    renderGrid();
-
-    await waitFor(() =>
-      expect(screen.getByText("panel body")).toBeInTheDocument()
-    );
   });
 
   it("draws a TABLE end to end, headed by the columns the server described", async () => {
     // The whole path for the third host-drawn archetype: a declaration with no
-    // component, its query batched, the `list` arm validated with its column
-    // descriptions intact, and the headings taken from those rather than from
-    // `select` -- which is what keeps a field the reader may not see out of the
-    // header row. A full-width card on a 1200 px dashboard is large, the tier
-    // that draws its rows as a table.
+    // component, its card batched, the `list` arm validated with its column
+    // descriptions intact, and the headings taken from those -- which is what
+    // keeps a field the reader may not see out of the header row. A full-width
+    // card on a 1200 px dashboard is large, the tier that draws its rows as a
+    // table.
     stubDashboardWidth(1200, { cardWidth: 1200 });
     mockBranding = brandingWith([
       {
         id: "acme/posts",
         title: "Recent posts",
         archetype: "table",
-        defaultSize: "full",
-        query: {
-          source: "collection:posts",
-          op: "list",
-          select: ["title", "publishedAt"],
-          limit: 5,
-        },
+        size: { default: { w: 12, h: 3 } },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -696,66 +494,16 @@ describe("WidgetGrid — collection and gating", () => {
     renderGrid();
 
     await waitFor(() =>
-      expect(screen.getByTestId("widget-table")).toBeInTheDocument()
+      expect(screen.getByTestId("list-card-table")).toBeInTheDocument()
     );
-    expect(screen.getByText("Published at")).toBeInTheDocument();
+    expect(
+      screen.getByRole("columnheader", { name: "Published at" })
+    ).toBeInTheDocument();
     expect(screen.getByText("First post")).toBeInTheDocument();
     // The label reached the browser through the batch parser, which rebuilds a
     // list result from the fields it names -- so this also proves the
     // descriptions survive that boundary.
     expect(screen.queryByText("publishedAt")).not.toBeInTheDocument();
-  });
-
-  it("puts a registered widget's query in the same batch as a contributed one", async () => {
-    mockBranding = {
-      plugins: [
-        {
-          name: "@acme",
-          collections: [],
-          widgets: [
-            {
-              id: "contributed",
-              archetype: "metric",
-              title: "Contributed",
-              query: { source: "collection:posts", op: "count" },
-            },
-          ],
-        },
-      ],
-      widgets: [
-        {
-          id: "acme/registered",
-          title: "Registered",
-          archetype: "metric",
-          defaultSize: "sm",
-          query: { source: "collection:orders", op: "count" },
-        },
-      ],
-    } as unknown as AdminBranding;
-    mockCountsBySource({
-      "collection:posts": 1,
-      "collection:pages": 2,
-    });
-
-    renderGrid();
-    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    // The SET, not the sequence. The batch is built in a stable identity order
-    // rather than in display order, so that moving a card cannot change the
-    // query key and re-issue every request -- which makes the sequence an
-    // implementation detail. What this test is about is that both channels land
-    // in ONE request, and that survives whatever order they are sent in.
-    const sent = (
-      vi.mocked(protectedApi.post).mock.calls[0][1] as {
-        queries: Array<{ source: string; op: string }>;
-      }
-    ).queries;
-    expect(sent).toHaveLength(2);
-    expect(sent).toEqual(
-      expect.arrayContaining([
-        { source: "collection:posts", op: "count" },
-        { source: "collection:orders", op: "count" },
-      ])
-    );
   });
 
   it("gates a registered widget on its permission like any other", () => {
@@ -764,9 +512,8 @@ describe("WidgetGrid — collection and gating", () => {
         id: "acme/secret",
         title: "Secret",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 3 } },
         requiredPermission: "read-secrets",
-        query: { source: "collection:secrets", op: "count" },
       },
     ]);
     renderGrid();
@@ -791,49 +538,21 @@ describe("WidgetGrid — collection and gating", () => {
           id: "shared",
           title: "Shared",
           archetype: "metric",
-          defaultSize: "sm",
-          query: { source: "collection:posts", op: "count" },
+          size: { default: { w: 3, h: 3 } },
         },
       ],
     } as unknown as AdminBranding;
     renderGrid();
     expect(screen.getAllByTestId("widget-cell-shared")).toHaveLength(1);
     // The registry is the single place that knows which widgets exist in a
-    // running app, and `overrideWidget`/`extendWidget` exist so a later plugin
-    // can correct an earlier one. Letting the contribution win discarded every
-    // such correction -- a tightened `requiredPermission` among them -- so the
-    // registered definition is what the card is drawn from.
+    // running app, so the registered definition is what the card is drawn
+    // from, never a contribution beside it.
     expect(screen.getByText("Shared")).toBeInTheDocument();
     expect(screen.queryByText("panel body")).not.toBeInTheDocument();
-    // And its query is what reaches the batch.
+    // And its card is what reaches the batch.
     expect(protectedApi.post).toHaveBeenCalledWith("/dashboard/query", {
-      queries: [{ source: "collection:posts", op: "count" }],
+      queries: [expect.objectContaining({ widget: "shared", card: "shared" })],
     });
-  });
-
-  it("draws the contributed component when a data archetype declares no query", () => {
-    // `archetype: "metric"` with no `query` is a legal contribution: the field
-    // is optional and boot requires only `id` and `component`. Core cannot draw
-    // a metric without a result, no request is made for it, and reading the
-    // missing slot as "in flight" left the card busy forever. The component the
-    // author actually shipped is right there.
-    registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
-    mockBranding = brandingWith([
-      {
-        id: "queryless",
-        title: "Queryless",
-        archetype: "metric",
-        component: "@acme/admin#Panel",
-      },
-    ]);
-
-    renderGrid();
-    expect(screen.getByText("panel body")).toBeInTheDocument();
-    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
-      "aria-busy",
-      "false"
-    );
-    expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
   it("names a blank title's widget instead of drawing an unnamed landmark", () => {
@@ -850,44 +569,66 @@ describe("WidgetGrid — collection and gating", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a widget that declares no permission at all", () => {
+  it("shows a widget that declares no permission at all", async () => {
     registerComponents({ "@acme/admin#Open": () => <div>open widget</div> });
     mockBranding = brandingWith([
       { id: "open", component: "@acme/admin#Open" },
     ]);
     renderGrid();
-    expect(screen.getByText("open widget")).toBeInTheDocument();
+    expect(await screen.findByText("open widget")).toBeInTheDocument();
   });
 });
 
 describe("WidgetGrid — sizing", () => {
-  it("gives every cell a full-width base span whatever its size", () => {
+  /** A component-drawn widget declared `w` columns by `h` rows. */
+  const sized = (id: string, w: number, h = 3) => ({
+    id,
+    component: "@acme/admin#A",
+    size: { default: { w, h } },
+  });
+
+  it("gives every cell a full-width base span but a quarter one, half the row on a phone", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
-      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
-      { id: "medium", component: "@acme/admin#A", defaultSize: "md" },
-      { id: "large", component: "@acme/admin#A", defaultSize: "lg" },
-      { id: "xlarge", component: "@acme/admin#A", defaultSize: "xl" },
-      { id: "whole", component: "@acme/admin#A", defaultSize: "full" },
+      sized("w3", 3),
+      sized("w4", 4),
+      sized("w6", 6),
+      sized("w8", 8),
+      sized("w12", 12),
     ]);
     renderGrid();
-    for (const id of ["small", "medium", "large", "xlarge", "whole"]) {
+    // The phone's base span: half the row for a quarter card, which pairs with another there,
+    // and the whole row for every wider one.
+    for (const id of ["w4", "w6", "w8", "w12"]) {
       const cell = screen.getByTestId(`widget-cell-${id}`);
       expect(cell.className.split(" ")).toContain("col-span-12");
     }
+    const quarter = screen.getByTestId("widget-cell-w3").className.split(" ");
+    expect(quarter).toContain("col-span-6");
+    expect(quarter).not.toContain("col-span-12");
   });
 
-  it("narrows a small widget only as the DASHBOARD widens, not the window", () => {
+  it("spans a card's w columns by the DASHBOARD's width, not the window, and no rows: it is as tall as its content", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
-    ]);
+    mockBranding = brandingWith([sized("narrow", 3, 4), sized("wide", 8, 2)]);
     renderGrid();
-    expect(screen.getByTestId("widget-cell-small")).toHaveClass(
-      "col-span-12",
-      "@min-[640px]/dashboard:col-span-6",
+    const narrow = screen.getByTestId("widget-cell-narrow");
+    expect(narrow).toHaveClass(
+      "col-span-6",
       "@min-[1024px]/dashboard:col-span-3"
     );
+    expect(narrow).not.toHaveClass("col-span-12");
+    // 🔴 No row span and nothing that clips: a card's height is its content's, not its `h`.
+    expect(narrow.style.gridRow).toBe("");
+    expect(narrow).toHaveClass("relative", "min-w-0");
+    expect(narrow).not.toHaveClass("overflow-hidden");
+    expect(narrow).not.toHaveClass("min-h-0");
+    expect(narrow).not.toHaveClass("contain-size");
+    const wide = screen.getByTestId("widget-cell-wide");
+    // Wider than six columns: the whole row in the middle band, so no 640 px class at all.
+    expect(wide).toHaveClass("@min-[1024px]/dashboard:col-span-8");
+    expect(wide.className).not.toMatch(/@min-\[640px\]/);
+    expect(wide.style.gridRow).toBe("");
     // The container those classes answer to is the dashboard's own, so a
     // dashboard narrowed by a sidebar draws the band that fits it.
     expect(
@@ -897,47 +638,122 @@ describe("WidgetGrid — sizing", () => {
     ).toBe(screen.getByTestId("dashboard-container"));
   });
 
-  it("draws its gap at the pixels a card's predicted width counts", () => {
-    // A card's first query is sized from a width predicted with GRID_GAP_PX. A gap in rem would
-    // follow the page's root font size and draw cards at another width than predicted.
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
-    ]);
-    renderGrid();
-    expect(screen.getByLabelText("Dashboard widgets").className).toContain(
-      `gap-[${GRID_GAP_PX}px]`
+  /**
+   * A stored arrangement holding one placement of `acme/one`, twelve columns wide (its widget
+   * declares six) and `h` rows high as stored.
+   */
+  function storedLayout(h: number): DashboardLayoutResponse {
+    return {
+      placements: [
+        { id: "p-one", widgetId: "acme/one", w: 12, h, removed: false },
+      ],
+      widgets: { "acme/one": { allowsSeveral: false } },
+      available: [],
+      defaultPlacements: [],
+      version: 2,
+      source: "own",
+      arranged: true,
+      scope: "tok",
+      audience: "aud",
+    };
+  }
+
+  /** The grid drawn from `layout`, read and fresh, with its query client. */
+  function renderStored(layout: DashboardLayoutResponse) {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          retryDelay: 0,
+          gcTime: 0,
+          staleTime: Infinity,
+        },
+      },
+    });
+    client.setQueryData(DASHBOARD_LAYOUT_KEY, layout);
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
+    return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
+  }
+
+  it("draws its outline at the stored arrangement's widths while the widgets are on their way", () => {
+    // The arrangement answered, the workspace's declarations not yet: the
+    // outline stands in, and its cards take the stored cards' spans, so the
+    // cards land where it drew them. A removed card takes no place.
+    mockBranding = brandingWith([]);
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    const layout = storedLayout(4);
+    layout.placements = [
+      { id: "a", widgetId: "acme/one", w: 3, h: 2, removed: false },
+      { id: "b", widgetId: "acme/one", w: 3, h: 2, removed: true },
+      { id: "c", widgetId: "acme/one", w: 8, h: 4, removed: false },
+    ];
+    // The outline is drawn once its 0.4 s have passed.
+    vi.useFakeTimers();
+    renderStored(layout);
+    act(() => {
+      vi.advanceTimersByTime(LOADING_FRAME_TIMES.outline);
+    });
+    vi.useRealTimers();
+    const outline = within(screen.getByTestId("widget-grid-loading"));
+    expect(
+      outline
+        .getAllByTestId("dashboard-card-outline")
+        .map(card => card.getAttribute("data-span"))
+    ).toEqual([cardSpanClass(3), cardSpanClass(8)]);
   });
 
-  it("honours the deprecated half alias without half-width phones", () => {
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "halved", component: "@acme/admin#A", size: "half" },
-    ]);
-    renderGrid();
-    const cell = screen.getByTestId("widget-cell-halved");
-    expect(cell).toHaveClass(
-      "col-span-12",
-      "@min-[1024px]/dashboard:col-span-6"
-    );
-    expect(cell.className.split(" ")).not.toContain("col-span-6");
-  });
-
-  it("prefers an explicit defaultSize over the deprecated alias", () => {
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
+  it("draws a layout stored with any h alike, keeping the stored h and setting no height from it", async () => {
+    // 🔴 Fails where a stored `h` still sizes the cell: a row span, or a height asked for, of two
+    // rows for one and of the widget's six-row maximum for the other.
+    registerComponents({ "@acme/admin#A": () => <div>answered</div> });
     mockBranding = brandingWith([
       {
-        id: "both",
+        id: "acme/one",
+        title: "One",
         component: "@acme/admin#A",
-        size: "half",
-        defaultSize: "sm",
+        size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
       },
     ]);
+    const drawn: { style: string | null; className: string }[] = [];
+    // Two rows, within the widget's bounds, and ten, past its maximum of six.
+    for (const h of [2, 10]) {
+      const { client, unmount } = renderStored(storedLayout(h));
+      const cell = screen.getByTestId("widget-cell-acme/one");
+      await within(cell).findByText("answered");
+      // The stored placement is the one drawn: full width at every band, not the declared half.
+      expect(cell).toHaveClass("col-span-12");
+      expect(cell.className).not.toMatch(/col-span-6/);
+      expect(cell.style.gridRow).toBe("");
+      expect(cell.style.height).toBe("");
+      expect(cell.style.minHeight).toBe("");
+      drawn.push({
+        style: cell.getAttribute("style"),
+        className: cell.className,
+      });
+      // Drawing reads the stored value and never rewrites it.
+      expect(
+        client.getQueryData<DashboardLayoutResponse>(DASHBOARD_LAYOUT_KEY)
+          ?.placements[0]?.h
+      ).toBe(h);
+      unmount();
+    }
+    expect(drawn[1]).toEqual(drawn[0]);
+  });
+
+  it("lays its cards on twelve columns in rows as tall as their cards, in order, with the gaps a card's predicted width counts", () => {
+    // A card is first asked for at a size predicted with these gaps. A gap in rem would
+    // follow the page's root font size and draw cards at another width than predicted.
+    // 🔴 Fails on rows of 72 px, where no card can be drawn at its content's height.
+    registerComponents({ "@acme/admin#A": () => <div>a</div> });
+    mockBranding = brandingWith([sized("one", 3)]);
     renderGrid();
-    expect(screen.getByTestId("widget-cell-both")).toHaveClass(
-      "@min-[1024px]/dashboard:col-span-3"
-    );
+    const grid = screen.getByLabelText("Dashboard widgets");
+    for (const cls of GRID_CLASS.split(" ")) expect(grid).toHaveClass(cls);
+    expect(grid).toHaveClass("auto-rows-auto");
+    expect(grid).not.toHaveClass("auto-rows-[72px]");
+    expect(grid.className).not.toMatch(/dense/);
   });
 });
 
@@ -948,19 +764,14 @@ describe("WidgetGrid — batching", () => {
         id: "posts",
         archetype: "metric",
         title: "Posts",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "pages",
         archetype: "metric",
         title: "Pages",
-        query: { source: "collection:pages", op: "count" },
       },
     ]);
-    mockCountsBySource({
-      "collection:posts": 12,
-      "collection:pages": 34,
-    });
+    mockCountsByWidget({ posts: 12, pages: 34 });
 
     renderGrid();
     await waitFor(() =>
@@ -968,15 +779,6 @@ describe("WidgetGrid — batching", () => {
     );
     expect(screen.getByTestId("widget-cell-pages")).toHaveTextContent("34");
     expect(protectedApi.post).toHaveBeenCalledTimes(1);
-  });
-
-  it("issues no request when nothing on the dashboard asks for data", () => {
-    registerComponents({ "@acme/admin#A": () => <div>a</div> });
-    mockBranding = brandingWith([
-      { id: "custom-only", component: "@acme/admin#A" },
-    ]);
-    renderGrid();
-    expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
   it("does not ask on behalf of a widget the user may not see", async () => {
@@ -987,14 +789,12 @@ describe("WidgetGrid — batching", () => {
         archetype: "metric",
         title: "Posts",
         requiredPermission: "read-posts",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "secrets",
         archetype: "metric",
         title: "Secrets",
         requiredPermission: "read-secrets",
-        query: { source: "collection:secrets", op: "count" },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -1004,7 +804,7 @@ describe("WidgetGrid — batching", () => {
     renderGrid();
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
     expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
-      queries: [{ source: "collection:posts", op: "count" }],
+      queries: [expect.objectContaining({ widget: "posts" })],
     });
   });
 
@@ -1014,13 +814,11 @@ describe("WidgetGrid — batching", () => {
         id: "broken",
         archetype: "metric",
         title: "Broken",
-        query: { source: "collection:gone", op: "count" },
       },
       {
         id: "fine",
         archetype: "metric",
         title: "Fine",
-        query: { source: "collection:posts", op: "count" },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -1050,13 +848,11 @@ describe("WidgetGrid — a request that fails outright", () => {
         id: "posts",
         archetype: "metric",
         title: "Posts",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "pages",
         archetype: "metric",
         title: "Pages",
-        query: { source: "collection:pages", op: "count" },
       },
     ]);
 
@@ -1103,7 +899,6 @@ describe("WidgetGrid — refetching", () => {
         id: "posts",
         archetype: "metric",
         title: "Posts",
-        query: { source: "collection:posts", op: "count" },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValueOnce({
@@ -1144,13 +939,11 @@ describe("WidgetGrid — a malformed response member", () => {
         id: "broken",
         archetype: "metric",
         title: "Broken",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "fine",
         archetype: "metric",
         title: "Fine",
-        query: { source: "collection:pages", op: "count" },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -1183,19 +976,16 @@ describe("WidgetGrid — accessibility", () => {
         id: "one",
         archetype: "metric",
         title: "One",
-        query: { source: "collection:a", op: "count" },
       },
       {
         id: "two",
         archetype: "metric",
         title: "Two",
-        query: { source: "collection:b", op: "count" },
       },
       {
         id: "three",
         archetype: "metric",
         title: "Three",
-        query: { source: "collection:c", op: "count" },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -1214,40 +1004,38 @@ describe("WidgetGrid — accessibility", () => {
   });
 
   it("counts a card that cannot RENDER as failed, not as updated", async () => {
-    // A slot can be `ok` and still unrenderable: this release draws `metric`
-    // and nothing else, and a metric handed a list payload refuses it. Counting
-    // slots said every widget updated while both cards showed an error.
-    //
-    // `listy` is counted as a failure WITHOUT being queried: nothing can draw a
-    // `list` result in this release and it ships no component, so the grid does
-    // not ask -- which is why only two results come back for three widgets.
-    // The announcement still has to describe all three.
+    // A slot can be `ok` and still unrenderable: a card whose archetype this
+    // release does not draw, and a metric handed a list payload, which refuses
+    // it. Counting slots said every widget updated while both cards showed an
+    // error. The announcement has to describe all three.
     mockBranding = brandingWith([
       {
         id: "listy",
         archetype: UNDRAWABLE,
         title: "Recent",
-        query: { source: "collection:posts", op: "list" },
       },
       {
         id: "mismatched",
         archetype: "metric",
         title: "Mismatched",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "fine",
         archetype: "metric",
         title: "Fine",
-        query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "list", items: [] } },
-        { ok: true, result: { op: "count", total: 4 } },
-      ],
-    });
+    // Answered by the widget each card is asked for: the batch is built in a
+    // stable identity order rather than in display order, so which goes first
+    // is an implementation detail and not what this test is about.
+    vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => ({
+      results: (body as { queries: Array<{ widget: string }> }).queries.map(
+        query =>
+          query.widget === "mismatched"
+            ? { ok: true, result: { op: "list", items: [] } }
+            : { ok: true, result: { op: "count", total: 4 } }
+      ),
+    }));
 
     renderGrid();
     await waitFor(() =>
@@ -1255,23 +1043,17 @@ describe("WidgetGrid — accessibility", () => {
         /1 of 3 widgets updated, 2 failed/i
       )
     );
-    // Two queries for three widgets -- the undrawable one is never asked -- and
-    // the keying still lands each result on the widget that asked for it. The
-    // SET rather than the sequence: the batch is built in a stable identity
-    // order rather than in display order, so which of the two goes first is an
-    // implementation detail and not what this test is about.
+    // Every card is asked for, the one this release cannot draw included.
     const sent = (
       vi.mocked(protectedApi.post).mock.calls[0][1] as {
-        queries: Array<{ source: string; op: string }>;
+        queries: Array<{ widget: string }>;
       }
     ).queries;
-    expect(sent).toHaveLength(2);
-    expect(sent).toEqual(
-      expect.arrayContaining([
-        { source: "collection:posts", op: "count" },
-        { source: "collection:pages", op: "count" },
-      ])
-    );
+    expect(sent.map(query => query.widget).sort()).toEqual([
+      "fine",
+      "listy",
+      "mismatched",
+    ]);
   });
 
   it("has exactly ONE live region for the whole grid", async () => {
@@ -1280,19 +1062,14 @@ describe("WidgetGrid — accessibility", () => {
         id: "posts",
         archetype: "metric",
         title: "Posts",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "pages",
         archetype: "metric",
         title: "Pages",
-        query: { source: "collection:pages", op: "count" },
       },
     ]);
-    mockCountsBySource({
-      "collection:posts": 1,
-      "collection:pages": 2,
-    });
+    mockCountsByWidget({ posts: 1, pages: 2 });
 
     const { container } = renderGrid();
     await waitFor(() =>
@@ -1307,19 +1084,14 @@ describe("WidgetGrid — accessibility", () => {
         id: "posts",
         archetype: "metric",
         title: "Posts",
-        query: { source: "collection:posts", op: "count" },
       },
       {
         id: "pages",
         archetype: "metric",
         title: "Pages",
-        query: { source: "collection:pages", op: "count" },
       },
     ]);
-    mockCountsBySource({
-      "collection:posts": 1,
-      "collection:pages": 2,
-    });
+    mockCountsByWidget({ posts: 1, pages: 2 });
 
     renderGrid();
     await waitFor(() =>
@@ -1335,13 +1107,11 @@ describe("WidgetGrid — accessibility", () => {
         id: "broken",
         archetype: "metric",
         title: "Broken",
-        query: { source: "collection:gone", op: "count" },
       },
       {
         id: "fine",
         archetype: "metric",
         title: "Fine",
-        query: { source: "collection:posts", op: "count" },
       },
     ]);
     vi.mocked(protectedApi.post).mockResolvedValue({
@@ -1396,7 +1166,10 @@ describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", 
     // that supplied widgets.
     mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
     renderGrid();
-    expect(screen.getByTestId("widget-grid-loading")).toBeInTheDocument();
+    // The dashboard's outline stands in the grid's place: the screen's wait,
+    // drawn from 0.4 s by the frame's one outline, never an empty page.
+    const loading = screen.getByTestId("widget-grid-loading");
+    expect(loading).toContainElement(screen.getByTestId("screen-outline"));
   });
 
   it("says so when the workspace never answered", () => {

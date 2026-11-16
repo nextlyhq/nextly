@@ -80,7 +80,7 @@ function save(
 ) {
   return entries.updateEntry(
     { collectionName: COLLECTION, entryId: id, overrideAccess: true, locale },
-    body
+    { ...body, _overwrite: true }
   );
 }
 
@@ -192,6 +192,7 @@ describe.each(getConfiguredTestDialects())(
         entryId: id,
         overrideAccess: true,
         locale: "en",
+        version: { _overwrite: true },
       });
       expect(taken.data).toEqual({ taken: ["hero", "tags"], outOfDate: [] });
       const published = await save(entries, id, "en", { status: "published" });

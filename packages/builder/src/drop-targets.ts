@@ -65,14 +65,24 @@
 import type {
   BlockDocument,
   BlockNode,
-  NestingRefusal,
+  ComponentLookup,
   NestingSource,
+  PlacedNode,
+  PlacementRefusal,
+  PlacementRefused,
+  PlacementSources,
+  PlacementVerdict,
 } from "@nextlyhq/blocks-engine";
-import { placementVerdict } from "@nextlyhq/blocks-engine";
+import {
+  canPlaceIn,
+  findNode,
+  placementVerdict,
+  registryBlockSource,
+} from "@nextlyhq/blocks-engine";
 
 import type { Point, Rect } from "./geometry";
 import type { PlacementTarget, SlotSource } from "./inserter";
-import type { OpPosition } from "./ops";
+import type { OpPosition } from "./op-vocabulary";
 
 /**
  * The direction a region lays its children out.
@@ -187,6 +197,11 @@ export interface DropRefusal {
   /**
    * The container node the refusing region belongs to, absent at the root.
    *
+   * Where an ancestor on the page refused for its content model, that ancestor
+   * instead: a Button aimed at a Box inside a linked Card names the Card, which
+   * is the block the refusal's words name and the one its notice sits over.
+   * {@link DropRefusal.regionId} still names the region the pointer is in.
+   *
    * Carried for the same reason `permitted` is: a surface explaining the
    * refusal needs it, and this is the only place it is still known. A region is
    * identified by `"<parentId>::<slot>"`, so recovering the node from
@@ -199,8 +214,67 @@ export interface DropRefusal {
    * from one that needs a container to exist first.
    */
   readonly parentId?: string;
-  readonly reason: NestingRefusal;
+  /**
+   * Why the region refuses. Beside the name rules' reasons (`"wrong-parent"`,
+   * `"restricted-at-root"`, `"not-allowed-in-slot"`) this carries the
+   * placement rule's: `"undeclared-slot"`, `"holds-no-blocks"`,
+   * `"phrasing-only"` and `"content-model"`. A `switch` over it needs a
+   * `default`, or a case for each of those; {@link DropRefusal.verdict}
+   * carries the facts each of them is explained by.
+   */
+  readonly reason: PlacementRefusal;
   readonly permitted: readonly string[];
+  /**
+   * The one placement rule's whole answer, when the drop was judged by it, so
+   * its words can name a slot the container lacks or the linked block that
+   * refuses what is being dropped.
+   */
+  readonly verdict?: PlacementRefused;
+}
+
+/**
+ * What the one placement rule needs to judge a drop: the document, the blocks
+ * being placed with everything inside them, and where it reads its answers.
+ */
+export interface DropPlacement {
+  readonly nodes: readonly unknown[];
+  /**
+   * The blocks being placed, read only when a region is judged: an insert has
+   * no node until its palette builds one, and asking for it is what builds
+   * it. An empty answer leaves the drop to the name rules.
+   */
+  readonly placing: () => readonly PlacedNode[];
+  readonly sources: PlacementSources;
+  /**
+   * The answers already reached, kept for one gesture. The document, the
+   * blocks being placed and the regions are fixed while a drag lasts, so a
+   * region's answer is too, and every pointer move and autoscroll frame would
+   * otherwise walk the same subtree again.
+   */
+  readonly verdicts?: RegionVerdicts;
+}
+
+/**
+ * Region answers keyed by the region's container, then its slot, with the
+ * root region under `undefined` for both.
+ *
+ * Two keys rather than {@link DropRegion.id}: that id joins the two with `::`,
+ * and a node id or a slot name may itself contain `::`, so container `a` with
+ * slot `b::c` and container `a::b` with slot `c` spell the same id while
+ * being different regions with different answers.
+ */
+export type RegionVerdicts = Map<
+  string | undefined,
+  Map<string | undefined, RegionVerdict>
+>;
+
+/**
+ * A region's answer: the rule's verdict, and for a refusal the container it is
+ * drawn over, worked out with the verdict so a cached answer carries both.
+ */
+export interface RegionVerdict {
+  readonly verdict: PlacementVerdict;
+  readonly parentId: string | undefined;
 }
 
 /**
@@ -290,13 +364,19 @@ export function axisOfRects(rects: readonly Rect[]): DropAxis {
 export function collectRegions(
   document: BlockDocument,
   slots: SlotSource,
-  rects: RectSource
+  rects: RectSource,
+  /**
+   * The slots a NODE declares, where its type alone cannot say: a component
+   * placement declares the slots its component exposes. Absent, or answering
+   * undefined, the type's slots are read.
+   */
+  slotsOfNode?: (node: BlockNode) => readonly string[] | undefined
 ): DropRegion[] {
   const regions: DropRegion[] = [];
 
   const walk = (nodes: readonly BlockNode[], depth: number): void => {
     for (const node of nodes) {
-      const declared = slots.slotsOf(node.type) ?? [];
+      const declared = slotsOfNode?.(node) ?? slots.slotsOf(node.type) ?? [];
       for (const slot of declared) {
         const rect = rects.rectOf(node.id);
         if (rect === undefined) continue;
@@ -456,6 +536,28 @@ export function movingSubtree(
   return ids;
 }
 
+/**
+ * Where the one placement rule reads its answers in the editor: the host's
+ * nesting rules, the registered blocks, and the component definitions the
+ * canvas draws instances from, when it has them.
+ *
+ * One builder for every surface that asks the rule — the canvas drag, the
+ * Layers drag and the keyboard move — so a placement cannot be judged against
+ * one set of sources on one surface and another set beside it.
+ */
+export function placementSources(current: {
+  nesting: NestingSource;
+  definitions?: ComponentLookup;
+}): PlacementSources {
+  return {
+    nesting: current.nesting,
+    definitions: registryBlockSource(),
+    ...(current.definitions === undefined
+      ? {}
+      : { components: current.definitions }),
+  };
+}
+
 /** What {@link resolveDrop} needs to answer a pointer. */
 export interface DropQuery {
   /**
@@ -482,6 +584,11 @@ export interface DropQuery {
   readonly regions: readonly DropRegion[];
   readonly nesting: NestingSource;
   readonly rects: RectSource;
+  /**
+   * The blocks being placed, judged by the one placement rule. Absent, the
+   * drop is judged by the name rules alone, as before the rule existed.
+   */
+  readonly placement?: DropPlacement;
 }
 
 /**
@@ -537,29 +644,18 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
   const region = regionAt(query.regions, pointer, query.forbiddenParents);
   if (region === undefined) return { kind: "none" };
 
-  const verdict = placementVerdict(
-    query.blockNames,
-    region.target,
-    query.nesting
-  );
+  const { verdict, parentId } = judgeRegion(query, region);
   if (!verdict.allowed) {
     return {
       kind: "refused",
       refusal: {
         regionId: region.id,
-        // Taken from the region rather than parsed back out of its id: the
-        // region is the richer value and it is already in hand here.
-        //
         // SPREAD rather than assigned, so the root case has no `parentId` key
-        // at all. Writing `parentId: undefined` creates an own property whose
-        // value is undefined, which reads the same through `?.` and differently
-        // through `in`, `Object.keys` and a strict comparison — and the type
-        // documents the field as absent at the root rather than as present and
-        // empty. A shape that only matches its documentation under the loosest
-        // reading is one nobody can rely on.
-        ...(region.parentId === undefined ? {} : { parentId: region.parentId }),
+        // at all, as the type documents it.
+        ...(parentId === undefined ? {} : { parentId }),
         reason: verdict.reason,
-        permitted: verdict.permitted,
+        permitted: "permitted" in verdict ? verdict.permitted : [],
+        ...(query.placement === undefined ? {} : { verdict }),
       },
     };
   }
@@ -583,4 +679,89 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
   // unusable coordinates would resolve to one of them.
   if (best === undefined) return { kind: "none" };
   return { kind: "target", target: best };
+}
+
+/**
+ * Whether the dragged blocks may go into a region: the one placement rule at
+ * the region's position when the query carries the placement, the name rules
+ * otherwise.
+ */
+function judgeRegion(query: DropQuery, region: DropRegion): RegionVerdict {
+  const { placement } = query;
+  const held = placement?.verdicts?.get(region.parentId)?.get(region.slot);
+  if (held !== undefined) return held;
+  const placing = placement?.placing() ?? [];
+  const verdict =
+    placement === undefined || placing.length === 0
+      ? nameVerdict(query, region)
+      : canPlaceIn(
+          placement.nodes,
+          placing,
+          region.parentId === undefined
+            ? { kind: "root" }
+            : {
+                kind: "slot",
+                parentId: region.parentId,
+                slot: region.slot ?? "",
+              },
+          placement.sources
+        );
+  const judged: RegionVerdict = {
+    verdict,
+    parentId: verdict.allowed
+      ? region.parentId
+      : refusingParent(query, region, verdict),
+  };
+  const verdicts = placement?.verdicts;
+  if (verdicts !== undefined) {
+    const bySlot = verdicts.get(region.parentId) ?? new Map();
+    bySlot.set(region.slot, judged);
+    verdicts.set(region.parentId, bySlot);
+  }
+  return judged;
+}
+
+/**
+ * The container a refusal is drawn over, as the `parentId` it carries.
+ *
+ * The region's own container, except where the rule refused because of an
+ * ancestor's content model: a Button aimed at a Box inside a linked Card is
+ * refused by the Card, so the Card is the block the notice names and the one
+ * it sits over. Only an ancestor ON THE PAGE that holds the region counts; a
+ * refuser inside the dragged blocks themselves is not where the author aimed,
+ * and an insert's is not on the page at all.
+ */
+function refusingParent(
+  query: DropQuery,
+  region: DropRegion,
+  verdict: PlacementRefused
+): string | undefined {
+  const own = region.parentId;
+  if (verdict.reason !== "content-model" || own === undefined) return own;
+  const refuserId = verdict.refusedBy.id;
+  const nodes = query.placement?.nodes;
+  if (refuserId === undefined || nodes === undefined) return own;
+  // Asserted only to the mutable array `findNode` is typed to take; it reads
+  // the forest and writes nothing.
+  const refuser = findNode(nodes as BlockNode[], refuserId);
+  return refuser !== undefined && findNode([refuser], own) !== undefined
+    ? refuserId
+    : own;
+}
+
+/** The name rules' answer for a region, in the one placement rule's shape. */
+function nameVerdict(query: DropQuery, region: DropRegion): PlacementVerdict {
+  const verdict = placementVerdict(
+    query.blockNames,
+    region.target,
+    query.nesting
+  );
+  return verdict.allowed
+    ? { allowed: true }
+    : {
+        allowed: false,
+        reason: verdict.reason,
+        blockType: query.blockNames[0] ?? "",
+        permitted: verdict.permitted,
+      };
 }

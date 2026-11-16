@@ -54,13 +54,23 @@ export function entryHeading<TFallback extends string | undefined>(
   titleField: string | null | undefined,
   fallback: TFallback
 ): string | TFallback {
-  const candidates = [
-    titleField ? data[titleField] : undefined,
-    ...COMMON_TITLE_FIELDS.map(name => data[name]),
-  ];
-  for (const candidate of candidates) {
-    const text = readableTitleText(candidate);
-    if (text !== undefined) return text;
+  return entryHeadingSource(data, titleField)?.text ?? fallback;
+}
+
+/**
+ * The heading {@link entryHeading} gives, with the field it came from, or `undefined` where no
+ * candidate is usable: for a caller that must later ask whether a reader may see that field.
+ */
+export function entryHeadingSource(
+  data: Record<string, unknown>,
+  titleField: string | null | undefined
+): { text: string; field: string } | undefined {
+  for (const field of [
+    ...(titleField ? [titleField] : []),
+    ...COMMON_TITLE_FIELDS,
+  ]) {
+    const text = readableTitleText(data[field]);
+    if (text !== undefined) return { text, field };
   }
-  return fallback;
+  return undefined;
 }

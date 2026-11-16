@@ -6,7 +6,7 @@
  * at module startup. Because this lives outside the DI container, it survives
  * `clearServices()` / `shutdownServices()`, which clear only the container — so
  * when services reboot in the same process (HMR, a test harness), the reboot
- * re-seeds the adapter rather than falling back to the no-op default. The
+ * re-seeds the adapter rather than falling back to the default. The
  * adapter's own registration hook (`instrumentation.ts` / `createDynamicHandlers`)
  * runs only once at startup and would not re-run on a reboot, which is why the
  * container alone cannot carry it.
@@ -18,7 +18,7 @@
  *
  * @module revalidation/default-revalidator
  */
-import { NoopRevalidator } from "./noop-revalidator";
+import { HandOffRevalidator } from "./handoff-revalidator";
 import type { CacheRevalidator } from "./types";
 
 const globalForRevalidator = globalThis as unknown as {
@@ -27,7 +27,7 @@ const globalForRevalidator = globalThis as unknown as {
 
 /**
  * Install the factory used to build the default revalidator (or pass `null` to
- * clear it and fall back to the no-op). Called by the Next adapter's
+ * clear it and fall back to the hand-off default). Called by the Next adapter's
  * registration one-liner.
  */
 export function setDefaultRevalidatorFactory(
@@ -38,9 +38,11 @@ export function setDefaultRevalidatorFactory(
 
 /**
  * Build the default revalidator for a freshly (re)booted container: the
- * installed adapter when one is present, otherwise the no-op.
+ * installed adapter when one is present, otherwise one that hands a write's
+ * tags to the expiry hand-off, so a write made outside Next.js (the CLI, a
+ * script) still reaches every instance through the ledger.
  */
 export function createDefaultRevalidator(): CacheRevalidator {
   const factory = globalForRevalidator.__nextly_default_revalidator_factory;
-  return factory ? factory() : new NoopRevalidator();
+  return factory ? factory() : new HandOffRevalidator();
 }

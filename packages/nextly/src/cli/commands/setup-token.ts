@@ -19,21 +19,31 @@ import {
   generateSetupToken,
   replaceSetupToken,
   type SetupTokenMeta,
+  operatorSetupToken,
 } from "../../auth/setup-token/setup-token";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { MetaService } from "../../domains/meta/services/meta-service";
 import { superAdminRoleHeld } from "../../domains/users/services/last-super-admin";
-import { describeError, NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/index";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
+import { exitWithError, type CliError } from "../errors";
+import {
+  setupAlreadyComplete,
+  setupInProgress,
+  setupTokenSetByEnv,
+} from "../errors/areas/commands";
 import type { CommandContext, GlobalOptions } from "../program";
-import { withAdapter } from "../utils/adapter";
+import { openCommandAdapter, withAdapter } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
 
-/** What the command concluded, for its shell to print and exit on. */
-export interface SetupTokenCommandResult {
-  ok: boolean;
-  lines: string[];
-}
+/**
+ * What the command concluded, for its shell to print and exit on: the lines
+ * to print, or the refusal the command ends with.
+ */
+export type SetupTokenCommandResult =
+  | { ok: true; lines: string[] }
+  | { ok: false; error: CliError };
 
 /**
  * The command's decisions, apart from connecting: kept separate so they are
@@ -64,42 +74,60 @@ export async function setupTokenCommand(input: {
   // accepted cannot complete it after being replaced, nor delete its
   // replacement when it is spent.
   const claim = await claimFirstSetup(input.meta);
-  if (!claim) {
-    return {
-      ok: false,
-      lines: [
-        "A setup is in progress on this install, so the token was not replaced. Run this again in a moment.",
-      ],
-    };
-  }
+  if (!claim) return { ok: false, error: setupInProgress("setup-token") };
   let outcome: Awaited<ReturnType<typeof replaceSetupToken>>;
   try {
     if (await input.hasAdministrator()) {
-      return {
-        ok: false,
-        lines: [
-          "This install already has an administrator: setup is complete, and no token is needed.",
-        ],
-      };
+      return { ok: false, error: setupAlreadyComplete("setup-token") };
     }
     outcome = await replaceSetupToken({ meta: input.meta, env: input.env });
   } finally {
     await claim.release();
   }
   if (outcome.kind === "operator-token") {
-    return {
-      ok: false,
-      lines: [
-        `${SETUP_TOKEN_ENV} sets this install's token, so there is no generated one to replace. ` +
-          "Change the variable where it is set.",
-      ],
-    };
+    return { ok: false, error: setupTokenSetByEnv(SETUP_TOKEN_ENV) };
   }
   return { ok: true, lines: [outcome.line] };
 }
 
+/**
+ * What replacing the setup token would do, asked as the command asks it and
+ * written by nothing: no setup claim is taken and no token is made, so none
+ * is printed. Each refusal is the real run's.
+ */
+export async function previewSetupToken(input: {
+  hasAdministrator: () => Promise<boolean>;
+  env?: Readonly<Record<string, string | undefined>>;
+}): Promise<DryRunPlan> {
+  if (await input.hasAdministrator()) {
+    return {
+      changes: [],
+      refusals: [setupAlreadyComplete("setup-token").what],
+    };
+  }
+  // The question `replaceSetupToken` asks before it stores anything.
+  if (operatorSetupToken(input.env ?? process.env).kind !== "absent") {
+    return {
+      changes: [],
+      refusals: [setupTokenSetByEnv(SETUP_TOKEN_ENV).what],
+    };
+  }
+  return {
+    changes: [
+      {
+        action: "write",
+        target:
+          "a new setup token in the install's store, replacing any current one",
+      },
+    ],
+    notes: ["The new token is printed by a real run only."],
+  };
+}
+
 interface SetupTokenCommandOptions {
   generate?: boolean;
+  /** `--dry-run`: name the replacement, make and print no token. */
+  dryRun?: boolean;
 }
 
 export async function runSetupTokenCommand(
@@ -115,6 +143,11 @@ export async function runSetupTokenCommand(
       configPath: context.options.config,
       cwd: context.options.cwd,
     });
+  }
+  // `--generate` touches nothing, so a dry run of it is the same run.
+  if (options.dryRun === true && !options.generate) {
+    await previewOverStore(logger);
+    return;
   }
   // `--generate` touches nothing, so it needs no database; otherwise the
   // connection refuses a missing or unusable database setting itself.
@@ -142,39 +175,53 @@ export async function runSetupTokenCommand(
         },
         { logger }
       );
-  for (const line of result.lines) {
-    if (result.ok) logger.info(line);
-    else logger.error(line);
-  }
-  if (!result.ok) process.exit(1);
+  if (!result.ok) exitWithError(logger, result.error);
+  for (const line of result.lines) logger.info(line);
 }
 
 /**
- * Register the `nextly setup-token` command. The program hands in its context
- * factory, so this module imports nothing at runtime from the program that
- * imports it.
+ * The dry run over the install's store, opened read-only: a database that is
+ * not there is named as the refusal.
  */
-export function registerSetupTokenCommand(
-  program: Command,
+async function previewOverStore(
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const adapter = await openCommandAdapter({ dryRun: true }, logger);
+  if (adapter === undefined) return;
+  try {
+    const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+    const { dialect } = drizzleAdapter.getCapabilities();
+    const schemaRegistry = new SchemaRegistry(dialect);
+    schemaRegistry.registerStaticSchemas(getDialectTables(dialect));
+    drizzleAdapter.setTableResolver(schemaRegistry);
+    reportDryRun(
+      logger,
+      await previewSetupToken({
+        hasAdministrator: () =>
+          superAdminRoleHeld(
+            drizzleAdapter.getDrizzle(),
+            getDialectTables(dialect)
+          ),
+      })
+    );
+  } finally {
+    await adapter.disconnect();
+  }
+}
+
+/**
+ * The action of `nextly setup-token`, loaded when it runs, building its
+ * context with the factory the program hands in.
+ */
+export function setupTokenAction(
   createContext: (options: GlobalOptions) => CommandContext
-): void {
-  program
-    .command("setup-token")
-    .description(
-      "Replace the production setup token and print the new one, or print a value for NEXTLY_SETUP_TOKEN"
-    )
-    .option(
-      "--generate",
-      "Print a value suitable for NEXTLY_SETUP_TOKEN, touching nothing",
-      false
-    )
-    .action(async (cmdOptions: { generate?: boolean }, cmd: Command) => {
-      const context = createContext(cmd.optsWithGlobals());
-      try {
-        await runSetupTokenCommand(cmdOptions, context);
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      }
-    });
+): (cmdOptions: SetupTokenCommandOptions, cmd: Command) => Promise<void> {
+  return async (cmdOptions: SetupTokenCommandOptions, cmd: Command) => {
+    const context = createContext(cmd.optsWithGlobals());
+    try {
+      await runSetupTokenCommand(cmdOptions, context);
+    } catch (error) {
+      exitWithError(context.logger, error);
+    }
+  };
 }

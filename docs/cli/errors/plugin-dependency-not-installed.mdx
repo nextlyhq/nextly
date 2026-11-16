@@ -1,0 +1,26 @@
+---
+title: PLUGIN_DEPENDENCY_NOT_INSTALLED
+description: "A plugin to install depends on a plugin that is not installed on this database."
+---
+
+## Cause
+
+A plugin to install depends on a plugin that is not installed on this database.
+
+A plugin is installed once its migrations are applied and `nextly plugins install` has run its `onInstall`. Installing a dependency runs its own hook, so Nextly does not do it on your behalf. The Why line lists each dependency in the order to install them. Nothing was changed.
+
+## Fix
+
+- Run each command the Why line names, in order.
+- Or run `nextly plugins install --all`, which installs every configured plugin, dependencies first.
+
+## Example
+
+```text
+✗ "@acme/sitemap" cannot be installed until its dependency is installed.
+  Why:  Install them in this order:
+        - "@acme/seo": its migration(s) 20261020_120000_add_redirects is not applied — run `nextly plugins install @acme/seo`
+        Nothing was changed.
+  Next: Install each dependency listed, in the order shown, then run this install again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-not-installed  (PLUGIN_DEPENDENCY_NOT_INSTALLED)
+```

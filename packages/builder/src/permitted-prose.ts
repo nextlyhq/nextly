@@ -16,43 +16,22 @@
  * @module permitted-prose
  */
 
+import {
+  asPermittedList,
+  permittedLabel as permittedLabelWith,
+} from "@nextlyhq/blocks-engine";
+
 import { blockLabel } from "./inserter";
 
 /**
- * One entry of a permitted list, as an author reads it.
- *
- * A slot may admit a whole NAMESPACE rather than named types — `nesting.ts`
- * matches an entry ending `/*` as a prefix — and such an entry is not a block
- * name. Sending it through {@link blockLabel} humanises it into the bare `"*"`,
- * so a slot admitting everything core would announce "Takes *".
- *
- * The group is named instead. It is deliberately lower case where a block label
- * is not: "any core block" is a description of a set, and capitalising it would
- * dress it as the name of a block that does not exist.
+ * One entry of a permitted list, as an author reads it: a block's label, or
+ * "any core block" for a namespace. The engine words it, so a refusal read on
+ * the canvas and one read from a save name the same set the same way; this
+ * binds it to the editor's labels.
  */
 export function permittedLabel(entry: string): string {
-  if (!entry.endsWith("/*")) return blockLabel(entry);
-  const namespace = entry.slice(0, -2);
-  return namespace === "" ? "any block" : `any ${namespace} block`;
+  return permittedLabelWith(entry, blockLabel);
 }
 
-/**
- * The permitted types as prose.
- *
- * A sentence an author reads rather than a set they scan, so it takes a word
- * rather than a delimiter. Two members join without a comma; three or more take
- * commas up to the last.
- *
- * The joiner is the caller's because it carries meaning: a list of containers a
- * block may sit in is alternatives an author picks between — "or" — while a
- * list of what a slot holds is an enumeration — "and".
- */
-export function asPermittedList(
-  labels: readonly string[],
-  joiner: string
-): string {
-  if (labels.length === 1) return labels[0] ?? "";
-  if (labels.length === 2) return `${labels[0]} ${joiner} ${labels[1]}`;
-  const last = labels[labels.length - 1];
-  return `${labels.slice(0, -1).join(", ")} ${joiner} ${last}`;
-}
+/** "A", "A and B", "A, B and C", as the engine joins a permitted list. */
+export { asPermittedList };

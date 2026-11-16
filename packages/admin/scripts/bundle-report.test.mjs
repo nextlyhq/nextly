@@ -4,7 +4,13 @@
  * for the dists that cannot be measured honestly.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DECLARED_BROWSER_ENTRIES,
+  distStaleness,
   findJsFiles,
   formatKB,
   formatReport,
@@ -208,6 +215,70 @@ describe("bundle-report", () => {
       expect(parsed.totals.browser.count).toBe(4);
     });
 
+    it("states each route's direct visit and, apart, what it adds to the shell", () => {
+      const dist = createFixtureDist({
+        "index.mjs": `
+          import { shell } from "./chunk-shell.mjs";
+          const LazyRoute = () => import("./chunk-route.mjs");
+        `,
+        "chunk-shell.mjs": `export const shell = "${"s".repeat(4000)}";`,
+        "chunk-route.mjs": `export default "${"r".repeat(2000)}";`,
+      });
+
+      const report = measureBundle({ distDir: dist, commit: "abc1234" });
+      const [route] = report.routes;
+      const shell = report.totals.firstScreen;
+
+      expect(route.directVisit.minifiedBytes).toBe(
+        shell.minifiedBytes + route.beyondShell.minifiedBytes
+      );
+      // The printed line is the direct visit, shell included, as its
+      // heading says; not the route's own closure.
+      const text = formatReport(report);
+      const line = text
+        .slice(text.indexOf("Route first loads"))
+        .split("\n")
+        .find(l => l.includes("chunk-route.mjs"));
+      expect(line).toContain(`${formatKB(route.directVisit.minifiedBytes)} KB`);
+    });
+
+    it("states a direct visit from the shell total the shell budget reads, whatever the shell's chunks are named", () => {
+      // A chunk the entry imports statically whose name matches the CLI
+      // rule: the shell total classifies it as CLI, so a visit summed from
+      // the closure itself would count it where the shell total does not.
+      const dist = createFixtureDist({
+        "index.mjs": `
+          import { shell } from "./cli.shared.mjs";
+          const LazyRoute = () => import("./chunk-route.mjs");
+        `,
+        "cli.shared.mjs": `export const shell = "${"c".repeat(3000)}";`,
+        "chunk-route.mjs": `import "./cli.shared.mjs"; export default "${"r".repeat(2000)}";`,
+      });
+
+      const report = measureBundle({ distDir: dist, commit: "abc1234" });
+      const [route] = report.routes;
+      const shell = report.totals.firstScreen;
+
+      expect(route.directVisit.gzippedBytes).toBe(
+        shell.gzippedBytes + route.beyondShell.gzippedBytes
+      );
+      expect(route.directVisit.minifiedBytes).toBe(
+        shell.minifiedBytes + route.beyondShell.minifiedBytes
+      );
+    });
+
+    it("calls a dist stamped by another commit stale", () => {
+      const result = {
+        commit: "unversioned",
+        builtAt: "2026-10-27T00:00:00.000Z",
+        buildInfo: { commit: "aaaaaaa" },
+      };
+      expect(distStaleness({ ...result, commit: "bbbbbbb" }).stale).toBe(true);
+      expect(
+        distStaleness({ ...result, buildInfo: { commit: "unversioned" } }).stale
+      ).toBe(false);
+    });
+
     it("throws when dist directory does not exist", () => {
       expect(() =>
         measureBundle({ distDir: join(tmpdir(), "nonexistent-dist-dir-1234") })
@@ -300,9 +371,9 @@ describe("bundle-report", () => {
 
       // The lazy route stays route-later even though the other entry
       // shares its imports.
-      expect(
-        report.categories.routeLater.chunks.map(c => c.rel)
-      ).toEqual(["chunk-route.mjs"]);
+      expect(report.categories.routeLater.chunks.map(c => c.rel)).toEqual([
+        "chunk-route.mjs",
+      ]);
       // First-screen is untouched by the other entry.
       expect(report.totals.firstScreen.count).toBe(3);
 
@@ -324,9 +395,9 @@ describe("bundle-report", () => {
       expect(report.chunks.find(c => c.file === "cli.cjs").minified).toBe(
         false
       );
-      expect(
-        report.chunks.find(c => c.file === "index.mjs").minified
-      ).toBe(true);
+      expect(report.chunks.find(c => c.file === "index.mjs").minified).toBe(
+        true
+      );
 
       const text = formatReport(report, { json: false });
       expect(text).toContain("Other entry chunks (2 chunks");
@@ -468,9 +539,31 @@ describe("bundle-report", () => {
         // The build emits no orphan: every chunk is reachable from an entry.
         // esbuild used to leave some behind, imported by nothing; one coming
         // back is bytes every install downloads and no page can load.
-        expect(report.categories.unreachable.chunks.map(c => c.rel)).toEqual([]);
+        expect(report.categories.unreachable.chunks.map(c => c.rel)).toEqual(
+          []
+        );
         expect(report.totals.routeLater.count).toBeGreaterThan(0);
         expect(report.routes.length).toBeGreaterThan(0);
+
+        // Invariant 2c: the widget preview board is test code. It ships only
+        // behind the test entry (`testing.mjs`), and nothing the admin's own
+        // entry loads, eagerly or lazily, holds it. The board's own words are
+        // its fingerprint; finding them in the dist first is the control, so a
+        // board renamed out from under the check fails it rather than passing
+        // on words found nowhere.
+        const BOARD_WORDS = ["Check accessibility", "data-preview-section"];
+        const holdsBoard = rel => {
+          const code = readFileSync(join(distDir, rel), "utf8");
+          return BOARD_WORDS.some(words => code.includes(words));
+        };
+        expect(report.chunks.map(c => c.file).filter(holdsBoard)).not.toEqual(
+          []
+        );
+        const adminFiles = [
+          ...firstScreenFiles,
+          ...report.categories.routeLater.chunks.map(c => c.rel),
+        ];
+        expect(adminFiles.filter(holdsBoard)).toEqual([]);
 
         // Invariant 3: CLI files must not be in browser categories
         expect(firstScreenFiles).not.toContain("cli.cjs");

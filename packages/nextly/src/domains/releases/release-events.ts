@@ -12,7 +12,6 @@
  * already records a document's `created`, `published` and `deleted`.
  *
  * @module domains/releases/release-events
- * @experimental
  */
 import { eq, type Column, type Table } from "drizzle-orm";
 import { z } from "zod";
@@ -53,8 +52,6 @@ const documentPayload = z
 
 /**
  * Each kind Releases records, by the name its writer uses.
- *
- * @experimental
  */
 export const RELEASE_CONTENT_EVENT_KINDS = {
   created: { name: "release-created", label: "Created by {actor}" },
@@ -120,8 +117,6 @@ export const RELEASE_CONTENT_EVENT_KINDS = {
 
 /**
  * A kind's key in {@link RELEASE_CONTENT_EVENT_KINDS}.
- *
- * @experimental
  */
 export type ReleaseContentEventKind = keyof typeof RELEASE_CONTENT_EVENT_KINDS;
 
@@ -138,8 +133,6 @@ export function ensureReleaseContentEventKinds(): void {
 /**
  * Who a release event names: a person, an API key by its own id, or the
  * system, which is how the drain's runs and stops are recorded.
- *
- * @experimental
  */
 export type ReleaseEventActor =
   | { kind: "person"; userId: string }
@@ -330,8 +323,6 @@ function recordedActor(
 /**
  * Record `event` about release `releaseId` on `tx`, the transaction of the
  * change it records.
- *
- * @experimental
  */
 export async function recordReleaseEvent(
   tx: ReleaseEventTx & LockingReadTx,
@@ -357,8 +348,12 @@ export async function recordReleaseEvent(
   });
 }
 
-/** The kinds of release event that name a document of the release. */
-const DOCUMENT_EVENT_KINDS: ReadonlySet<string> = new Set([
+/**
+ * The kinds of release event that name a document of the release: the one
+ * list a reader of a release's documents, and a rename that rewrites them,
+ * select those events by.
+ */
+export const DOCUMENT_EVENT_KINDS: ReadonlySet<string> = new Set([
   RELEASE_CONTENT_EVENT_KINDS.documentAdded.name,
   RELEASE_CONTENT_EVENT_KINDS.documentRemoved.name,
   RELEASE_CONTENT_EVENT_KINDS.documentActionChanged.name,
@@ -415,8 +410,6 @@ export function documentEventPayload(member: {
  * `recorded` is whether its history began with its creation: a release made
  * before releases recorded their events has none, and its history cannot say
  * whether it ran. `ran` is whether it started publishing or was published.
- *
- * @experimental
  */
 export interface ReleaseRunHistory {
   recorded: boolean;

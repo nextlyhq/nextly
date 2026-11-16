@@ -20,6 +20,14 @@ describe("webhookApi", () => {
     expect(result).toEqual([summary]);
   });
 
+  it("lists the event types an endpoint may subscribe to, and unwraps items", async () => {
+    const entry = { type: "acme-shop.order.paid", owner: "@acme/shop" };
+    fetcherSpy.mockResolvedValue({ items: [entry], meta: { total: 1 } });
+    const result = await webhookApi.listWebhookEventTypes();
+    expect(fetcherSpy).toHaveBeenCalledWith("/webhooks/event-types", {}, true);
+    expect(result).toEqual([entry]);
+  });
+
   it("reads one endpoint as a bare doc", async () => {
     fetcherSpy.mockResolvedValue(summary);
     const result = await webhookApi.getWebhook("wh_1");

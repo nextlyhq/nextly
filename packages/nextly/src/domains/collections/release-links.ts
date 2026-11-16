@@ -18,13 +18,17 @@
  * and field by field, by each field's own key.
  *
  * @module domains/collections/release-links
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
+import {
+  asNotMigrated,
+  collectionRowNotMigrated,
+} from "../../database/with-db-errors";
 import { container } from "../../di/container";
+import { rethrowIfRuleCouldNotRun } from "../../errors/rule-could-not-run";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import {
   applyFieldReadAccess,
@@ -56,8 +60,6 @@ import {
  * `data` is the walk's own copy, and `keys` names each object in it that
  * holds a link field, so a field's key is that object and the field's name:
  * unique in the document whatever its path.
- *
- * @experimental
  */
 export interface ScannedDocument {
   kind: "collection" | "single";
@@ -123,8 +125,6 @@ function eachReference(
  *
  * `enriched` are the schema's fields with their components' schemas, as the
  * walk reads them.
- *
- * @experimental
  */
 export function linksInDocument(
   enriched: readonly FieldConfig[],
@@ -192,9 +192,8 @@ function copiedWithOrigins(
  * that same document with the field read rules applied for the reader, the
  * document's own and each component's, as a read applies them; then walked
  * as it was scanned. A field the rules removed, anywhere, is not among them.
- * Rules that cannot be evaluated show no field at all.
- *
- * @experimental
+ * Rules that cannot be evaluated show no field at all; a rule that could not
+ * run, for want of a database connection, ends the request instead.
  */
 export async function linkFieldKeysVisibleIn(
   scanned: ScannedDocument,
@@ -233,7 +232,10 @@ export async function linkFieldKeysVisibleIn(
         grants,
       }
     );
-  } catch {
+  } catch (error) {
+    // A field rule that could not run never answered: the request ends with
+    // that, not with every link field reading as hidden.
+    rethrowIfRuleCouldNotRun(error);
     return new Set();
   }
   const visible = new Set<string>();
@@ -342,12 +344,21 @@ async function publishedEntries(
   const table = collectionTableName(record, collection);
   if (!(await adapter.tableExists(table))) return published;
   const lifecycle = record.status === true;
-  const rows = await adapter.select<{ id: unknown; status?: unknown }>(table, {
-    columns: lifecycle ? ["id", "status"] : ["id"],
-    where: {
-      and: [{ column: "id", op: "IN", value: [...new Set(entryIds)] }],
-    },
-  });
+  const rows = await adapter
+    .select<{ id: unknown; status?: unknown }>(table, {
+      columns: lifecycle ? ["id", "status"] : ["id"],
+      where: {
+        and: [{ column: "id", op: "IN", value: [...new Set(entryIds)] }],
+      },
+    })
+    .catch(async (error: unknown) => {
+      // A collection this instance has not registered, or whose table the
+      // database lacks, answers as its entry reads do, from the row in hand.
+      throw await asNotMigrated(
+        error,
+        collectionRowNotMigrated(collection, record)
+      );
+    });
   for (const row of rows) {
     published.set(String(row.id), !lifecycle || row.status === "published");
   }
@@ -357,8 +368,6 @@ async function publishedEntries(
 /**
  * The reads the releases domain's link check asks, bound to one adapter.
  * Each scanned link list carries its {@link ScannedDocument}.
- *
- * @experimental
  */
 export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
   return {
@@ -392,8 +401,6 @@ export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
  * For each of these scanned documents, by `id`, the keys of the link fields
  * a reader may view ({@link linkFieldKeysVisibleIn}), judged on the scanned
  * document itself. A scan this module did not make shows no field.
- *
- * @experimental
  */
 export async function linkFieldKeysVisibleTo(
   scans: ReadonlyArray<{ id: string; scanned: ScannedLinks }>,

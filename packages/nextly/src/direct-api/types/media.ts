@@ -108,6 +108,45 @@ export interface FindMediaByIDArgs extends DirectAPIConfig {
 }
 
 /**
+ * Arguments for a resized copy of an image: the image, by a media item's id
+ * or by an address, and the width it is shown at.
+ *
+ * @experimental
+ *
+ * @example
+ * ```typescript
+ * const copy = await nextly.media.copyOf({ id: "media-1", width: 700 });
+ * // { url: "/api/media/media-1/copy/640?v=…", width: 640 }, or null
+ * ```
+ */
+export type MediaCopyArgs = DirectAPIConfig & {
+  /** The width the image is shown at, in pixels; snapped to an allowed one. */
+  width: number;
+} & ({ id: string; url?: never } | { url: string; id?: never });
+
+/**
+ * Arguments for finding several media files by their ids, in one read.
+ *
+ * @experimental
+ *
+ * @example
+ * ```typescript
+ * const files = await nextly.media.findByIDs({ ids: ['media-1', 'media-2'] });
+ * ```
+ */
+export interface FindMediaByIDsArgs extends DirectAPIConfig {
+  /** The ids, at most {@link MEDIA_IDS_PER_READ}. */
+  ids: readonly string[];
+}
+
+/**
+ * The most ids one `media.findByIDs` read takes: one page of a list.
+ *
+ * @experimental
+ */
+export const MEDIA_IDS_PER_READ = 100;
+
+/**
  * Arguments for updating media metadata.
  *
  * @example
@@ -134,6 +173,10 @@ export interface UpdateMediaArgs extends DirectAPIConfig {
     tags?: string[];
     /** Move to folder (null for root) */
     folderId?: string | null;
+    /** Focus point, whole percent from the left edge (0 to 100) */
+    focalX?: number;
+    /** Focus point, whole percent from the top edge (0 to 100) */
+    focalY?: number;
   };
 }
 

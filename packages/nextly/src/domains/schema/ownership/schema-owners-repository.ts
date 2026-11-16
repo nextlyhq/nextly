@@ -189,6 +189,22 @@ export class SchemaOwnersRepository {
   async deleteByOwner(ownerId: string): Promise<void> {
     await this.db.delete(this.table).where(eq(this.table.ownerId, ownerId));
   }
+
+  /**
+   * Delete a plugin's owner rows and nothing else's. Scoped by kind as well
+   * as id, because a plugin may share its name with another owner (one
+   * called `app`, or a collection's slug), whose rows must stay.
+   */
+  async deletePluginOwner(pluginName: string): Promise<void> {
+    await this.db
+      .delete(this.table)
+      .where(
+        and(
+          eq(this.table.ownerKind, "plugin"),
+          eq(this.table.ownerId, pluginName)
+        )
+      );
+  }
 }
 
 /**

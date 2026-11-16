@@ -25,24 +25,22 @@ describe("translationCounts", () => {
         es: { translated: true, status: "draft" },
         fr: { translated: false },
       },
-      CODES,
-      DEFAULT
+      CODES
     );
-    // `en` is the default: the source, not a translation. Three translatable
-    // languages remain, of which `es` is done.
-    expect(counts).toEqual({ translated: 1, published: 0, total: 3 });
+    // Every configured language is counted, the default included: `en` and
+    // `es` carry content, `en` is live.
+    expect(counts).toEqual({ translated: 2, published: 1, total: 4 });
   });
 
-  it("excludes the default language from both sides of the count", () => {
-    // The case that made this worth unifying: a document with ONLY its default
-    // language written has had nothing translated. Counting the default made
-    // the panel read "1 of 3 translated" while the list's badge read "0/2".
+  it("counts the default language on both sides of the count", () => {
+    // Every language a reader can be shown is counted, the default among
+    // them: a document with only its default written has one of its three
+    // languages, and every surface reading this count says so alike.
     const counts = translationCounts(
       { en: { translated: true, status: "published" } },
-      ["en", "es", "ar"],
-      "en"
+      ["en", "es", "ar"]
     );
-    expect(counts).toEqual({ translated: 0, published: 0, total: 2 });
+    expect(counts).toEqual({ translated: 1, published: 1, total: 3 });
   });
 
   it("counts a language absent from the map as untranslated", () => {
@@ -50,17 +48,16 @@ describe("translationCounts", () => {
     // entry saying `translated: false` and must count the same way.
     const counts = translationCounts(
       { en: { translated: true }, es: { translated: true } },
-      CODES,
-      DEFAULT
+      CODES
     );
-    expect(counts).toEqual({ translated: 1, published: 0, total: 3 });
+    expect(counts).toEqual({ translated: 2, published: 0, total: 4 });
   });
 
   it("treats a missing map as nothing translated rather than as an error", () => {
-    expect(translationCounts(undefined, CODES, DEFAULT)).toEqual({
+    expect(translationCounts(undefined, CODES)).toEqual({
       translated: 0,
       published: 0,
-      total: 3,
+      total: 4,
     });
   });
 
@@ -73,11 +70,10 @@ describe("translationCounts", () => {
         es: { translated: true, status: "published" },
         zz: { translated: true, status: "published" },
       },
-      CODES,
-      DEFAULT
+      CODES
     );
     expect(counts.translated).toBe(1);
-    expect(counts.total).toBe(3);
+    expect(counts.total).toBe(4);
   });
 
   it("never reports more published than translated", () => {
@@ -86,17 +82,18 @@ describe("translationCounts", () => {
     // segment negative.
     const counts = translationCounts(
       { es: { translated: false, status: "published" } },
-      CODES,
-      DEFAULT
+      CODES
     );
     expect(counts.published).toBeLessThanOrEqual(counts.translated);
     expect(counts.published).toBe(0);
   });
 
-  it("reports zero total when the app configures nothing but the default", () => {
-    expect(
-      translationCounts({ en: { translated: true } }, ["en"], "en")
-    ).toEqual({ translated: 0, published: 0, total: 0 });
+  it("counts the one language an app configures nothing beside", () => {
+    expect(translationCounts({ en: { translated: true } }, ["en"])).toEqual({
+      translated: 1,
+      published: 0,
+      total: 1,
+    });
   });
 });
 
@@ -109,12 +106,16 @@ describe("untranslatedLocales", () => {
 
   it("names the languages still awaiting a translation", () => {
     expect(
-      untranslatedLocales({ es: { translated: true } }, LOCALES, "en")
+      untranslatedLocales(
+        { en: { translated: true }, es: { translated: true } },
+        LOCALES
+      )
     ).toEqual(["Arabic"]);
   });
 
-  it("never names the default language, which is the source", () => {
-    expect(untranslatedLocales(undefined, LOCALES, "en")).toEqual([
+  it("names every language without content, the default included", () => {
+    expect(untranslatedLocales(undefined, LOCALES)).toEqual([
+      "English",
       "Spanish",
       "Arabic",
     ]);
@@ -126,10 +127,9 @@ describe("untranslatedLocales", () => {
     const translations = { es: { translated: true } };
     const { translated, total } = translationCounts(
       translations,
-      LOCALES.map(l => l.code),
-      "en"
+      LOCALES.map(l => l.code)
     );
-    expect(untranslatedLocales(translations, LOCALES, "en")).toHaveLength(
+    expect(untranslatedLocales(translations, LOCALES)).toHaveLength(
       total - translated
     );
   });

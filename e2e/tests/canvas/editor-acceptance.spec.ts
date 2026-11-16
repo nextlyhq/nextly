@@ -23,13 +23,13 @@
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "../support/test";
-import { STORAGE_STATE } from "../../global-setup";
 
 import {
   announcer,
   boxOf,
   clearSelection,
   clickBlock,
+  editorSelectionText,
   field as fieldOf,
   glyphPoint,
   canvasScope,
@@ -46,6 +46,20 @@ import {
   EDITOR_PROPERTIES,
   editorTitleFor,
 } from "./editor-manifest";
+import { LOCK } from "../support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.homepage] });
+
+// The editor's own undo and redo, spelled with the key its `mod` means HERE.
+// The editor reads `mod` from the platform the browser reports, and the
+// Desktop Chrome device this suite runs as reports Windows on every host, so
+// `mod` is Control. Playwright's `ControlOrMeta` follows the host instead, and
+// on a Mac presses Command, which the editor rightly ignores, so undo did
+// nothing there. Native editing inside a field (a rich-text bold) follows
+// the host, and keeps `ControlOrMeta`.
+const UNDO = "Control+z";
+const REDO = "Control+Shift+z";
 
 function text(id: string, words: string) {
   return { id, type: "core/text", version: 1, props: { text: words } };
@@ -130,6 +144,32 @@ const SEEDED = [
 /** The word-wise caret modifier: Alt on macOS, Control elsewhere. */
 const WORD = process.platform === "darwin" ? "Alt" : "Control";
 
+/**
+ * Drag one Layers row by the pointer: pressed on its name, moved past the
+ * activation distance, then to a point and released there.
+ *
+ * Aimed by fractions of a row so the gap is named by the row the pointer is
+ * over and which half of it, and by a horizontal offset from where the press
+ * began, which is how a Layers drag reads depth: 20px right is one level in.
+ */
+async function dragRow(
+  page: Page,
+  id: string,
+  onto: string,
+  fraction: number,
+  right = 0
+): Promise<void> {
+  const from = await layerRow(page, id).boundingBox();
+  const to = await layerRow(page, onto).boundingBox();
+  if (from === null || to === null) throw new Error("[e2e] a row has no box");
+  const x = from.x + 48;
+  await page.mouse.move(x, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, from.y + from.height / 2 + 6, { steps: 3 });
+  await page.mouse.move(x + right, to.y + to.height * fraction, { steps: 12 });
+  await page.mouse.up();
+}
+
 /** Double-click a field's words and wait until it is being edited. */
 async function editField(
   page: Page,
@@ -154,9 +194,8 @@ async function editField(
 
 // Not `serial`: every test reseeds the page it edits, so none depends on one
 // before it, and a failure should not hide the verdicts after it. The shared
-// homepage single is safe because the config runs one worker everywhere.
-
-test.use({ storageState: STORAGE_STATE });
+// homepage single is safe because this file holds the homepage lock (above):
+// no other spec that writes or asserts it runs beside this one.
 
 /**
  * What each covered property does, by its number.
@@ -172,7 +211,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await openLayers(page);
     expect(await selection(page)).not.toContain("ea-second");
     await clickBlock(page, "ea-second");
-    expect(await selection(page)).toEqual(["ea-second"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-second"]);
     // The same SET on both surfaces: a stale row left marked in Layers would
     // pass a check of only the rows it names.
     await expect.poll(() => selectedLayers(page)).toEqual(["ea-second"]);
@@ -188,37 +227,37 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // the third block alone, and a toggle would add it to the first and skip
     // what lies between. Nested blocks are not listed, since their container
     // is selected.
-    expect(await selection(page)).toEqual([
-      "ea-first",
-      "ea-second",
-      "ea-section",
-      "ea-third",
-    ]);
+    await expect
+      .poll(() => selection(page))
+      .toEqual(["ea-first", "ea-second", "ea-section", "ea-third"]);
 
     // Mod-click takes ONE block out and leaves the rest of the run as it was:
     // the whole set is compared, so a toggle that also loses part of the run
     // fails. The first block left becomes primary, the leader having gone.
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
-    expect(await selection(page)).toEqual([
-      "ea-second",
-      "ea-section",
-      "ea-third",
-    ]);
+    await expect
+      .poll(() => selection(page))
+      .toEqual(["ea-second", "ea-section", "ea-third"]);
 
     // And puts it back as the leader, the block the author just pointed at.
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
-    expect(await selection(page)).toEqual([
-      "ea-first",
-      "ea-second",
-      "ea-section",
-      "ea-third",
-    ]);
+    await expect
+      .poll(() => selection(page))
+      .toEqual(["ea-first", "ea-second", "ea-section", "ea-third"]);
   },
   3: async page => {
-    await clickBlock(page, "ea-first");
-    expect(await selection(page)).toEqual(["ea-first"]);
+    // Up a level from a nested block, then cleared from the top.
+    await clickBlock(page, "ea-inner");
+    await expect.poll(() => selection(page)).toEqual(["ea-inner"]);
     await page.keyboard.press("Escape");
-    expect(await selection(page)).toEqual([]);
+    await expect.poll(() => selection(page)).toEqual(["ea-section"]);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => selection(page)).toEqual([]);
+
+    await clickBlock(page, "ea-first");
+    await expect.poll(() => selection(page)).toEqual(["ea-first"]);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => selection(page)).toEqual([]);
     // Cleared, not removed: a handler that deleted the block would empty the
     // selection the same way.
     expect(await structure(page)).toEqual(SEEDED);
@@ -226,9 +265,9 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
   4: async page => {
     await openLayers(page);
     await layerRow(page, "ea-third").click();
-    expect(await selection(page)).toEqual(["ea-third"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-third"]);
     await layerRow(page, "ea-heading").click();
-    expect(await selection(page)).toEqual(["ea-heading"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-heading"]);
   },
   5: async page => {
     await clickBlock(page, "ea-second");
@@ -238,7 +277,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
       .toEqual(["ea-heading", "ea-second", "ea-first", ...SEEDED.slice(3)]);
     await expect(announcer(page)).toHaveText("Block moved");
     // Still selected, so a run of presses keeps moving the same block.
-    expect(await selection(page)).toEqual(["ea-second"]);
+    await expect.poll(() => selection(page)).toEqual(["ea-second"]);
 
     // The down move announces too, and FRESHLY: its words are the same as the
     // up move's, so the region alternates a zero-width space to make the text
@@ -282,9 +321,9 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await expect.poll(() => structure(page)).not.toEqual(SEEDED);
     // ONE undo restores the tree: a move recorded as several entries would
     // leave it half-done here.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect.poll(() => structure(page)).toEqual(SEEDED);
-    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await page.keyboard.press(REDO);
     await expect
       .poll(() => structure(page))
       .toEqual(["ea-heading", "ea-second", "ea-first", ...SEEDED.slice(3)]);
@@ -317,7 +356,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
         "ea-section>ea-inner",
         "ea-passage",
       ]);
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect.poll(() => structure(page)).toEqual(SEEDED);
   },
   9: async page => {
@@ -338,22 +377,26 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
       "Renamed heading"
     );
     // Through the store, not left in the DOM: undo brings the old words back.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field).toHaveText(HEADING);
   },
   10: async page => {
-    const field = await fieldOf(page, "ea-heading", "text");
-    await editField(page, "ea-heading", "text");
-    await page.keyboard.type("Discard me");
-    await expect(field).toHaveText("Discard me");
+    // Inside a section, so the second Escape has a parent to select.
+    const field = await fieldOf(page, "ea-inner", "text");
+    await editField(page, "ea-inner", "text");
+    await page.keyboard.type(" kept");
+    await expect(field).toContainText("kept");
     await page.keyboard.press("Escape");
+    // The edit ends with the words kept, and the block still selected.
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
-    await expect(field).toHaveText(HEADING);
-    // Cancelling wrote nothing: an undo now has nothing of this edit to bring
-    // back, where a cancel that wrote the words and then wrote the old ones
-    // over them would surface "Discard me" here.
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect(field).toHaveText(HEADING);
+    await expect(field).toContainText("kept");
+    await expect.poll(() => selection(page)).toEqual(["ea-inner"]);
+    // The second Escape goes up a level, as it does with no edit open.
+    await page.keyboard.press("Escape");
+    await expect.poll(() => selection(page)).toEqual(["ea-section"]);
+    // Written once, through the store: one undo takes the words back.
+    await page.keyboard.press(UNDO);
+    await expect(field).toHaveText("Inside the section");
   },
   11: async page => {
     const field = await fieldOf(page, "ea-first", "text");
@@ -375,7 +418,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // And it was one write: a single undo, pressed on the canvas rather than
     // in the inspector's own field, restores the words as they were.
     await clickBlock(page, "ea-third");
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field).toHaveText("First paragraph");
   },
   12: async page => {
@@ -386,16 +429,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await page.keyboard.press(`Shift+${WORD}+ArrowLeft`);
     // The editor applies a selection asynchronously, so each step waits for
     // the previous one to land: a format pressed before the word is selected
-    // formats nothing, and the passage commits plain. Read from the passage's
-    // own window, which is the canvas frame's once there is one.
-    await expect
-      .poll(() =>
-        field.evaluate(
-          element =>
-            element.ownerDocument.defaultView?.getSelection()?.toString() ?? ""
-        )
-      )
-      .toBe("bold");
+    // formats nothing, and the passage commits plain. Waited on in the editor's
+    // own state, not the browser's: the browser shows the word selected before
+    // the editor has read it, and the format acts on what the editor holds.
+    await expect.poll(() => editorSelectionText(field)).toBe("bold");
     await page.keyboard.press("ControlOrMeta+b");
     await expect(field.locator("strong")).toHaveText("bold");
     await clickBlock(page, "ea-heading");
@@ -403,7 +440,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // Rendered back from the stored value, so the bold run is in the document.
     await expect(field.locator("strong")).toHaveText("bold");
     await expect(field).toContainText(PASSAGE);
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field.locator("strong")).toHaveCount(0);
     await expect(field).toHaveText(PASSAGE);
   },
@@ -414,13 +451,50 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await page.keyboard.type("zzz");
     await expect(field).toContainText("zzz");
     await page.keyboard.press("Escape");
+    // The edit ends with the words kept, rendered back from what was stored.
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
+    await expect(field).toContainText("zzz");
+    // Written once: one undo puts the passage back as it was.
+    await page.keyboard.press(UNDO);
     await expect(field).not.toContainText("zzz");
     expect(await field.innerHTML()).toBe(before);
-    // And left no history behind, as for plain text.
-    await page.keyboard.press("ControlOrMeta+z");
-    await expect(field).not.toContainText("zzz");
-    expect(await field.innerHTML()).toBe(before);
+  },
+  14: async page => {
+    await openLayers(page);
+    // Up the list, at the depth it had: over the lower half of the heading's
+    // row, which is the gap after the heading.
+    await dragRow(page, "ea-third", "ea-heading", 0.75);
+    await expect
+      .poll(() => structure(page))
+      .toEqual([
+        "ea-heading",
+        "ea-third",
+        "ea-first",
+        "ea-second",
+        "ea-section",
+        "ea-section>ea-inner",
+        "ea-passage",
+      ]);
+    await page.keyboard.press(UNDO);
+    await expect.poll(() => structure(page)).toEqual(SEEDED);
+
+    // Right, from its own row's upper half: the gap under the section, one
+    // level in, so the block goes inside the section, after what it holds.
+    await dragRow(page, "ea-third", "ea-third", 0.25, 26);
+    await expect
+      .poll(() => structure(page))
+      .toEqual([
+        "ea-heading",
+        "ea-first",
+        "ea-second",
+        "ea-section",
+        "ea-section>ea-inner",
+        "ea-section>ea-third",
+        "ea-passage",
+      ]);
+    // One undo step for the whole gesture.
+    await page.keyboard.press(UNDO);
+    await expect.poll(() => structure(page)).toEqual(SEEDED);
   },
 };
 

@@ -48,30 +48,45 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
+import { canPrompt } from "../../domains/schema/migrate/can-prompt";
+import {
+  consentCovers,
+  consentToCover,
+  countDeletions,
+  describeDeletion,
+  judgeDataLoss,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
 import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { appMigrationInputs } from "../../domains/schema/migrate-create/app-migration-inputs";
+import { contributedElementsOf } from "../../domains/schema/migrate-create/app-stream";
 import {
-  compileAppStreamTables,
-  contributedElementsOf,
-  hasAppStreamTables,
-  type AppStreamTables,
-} from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+  declaredPermissionsOf,
+  describePermissionChange,
+} from "../../domains/schema/migrate-create/declared-permissions";
+import { describeSettingsChange } from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
-import { generateMigration } from "../../domains/schema/migrate-create/generate";
+import {
+  generateMigration,
+  type GenerateResult,
+} from "../../domains/schema/migrate-create/generate";
 import {
   generateBlankPluginMigration,
   generatePluginMigration,
+  type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
 import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
@@ -79,38 +94,46 @@ import type {
   ContributedElements,
   TableSpec,
 } from "../../domains/schema/pipeline/diff/types";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
-import {
-  applyDeferredExtendsToManifest,
-  mergeUiEntities,
-} from "../../domains/schema/ui-schema/merge";
-import {
-  buildCollectionMetadataUpsert,
-  buildComponentMetadataUpsert,
-  buildSingleMetadataUpsert,
-} from "../../domains/schema/ui-schema/metadata-sql";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../../domains/schema/utils/resolve-table-name";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
 import { topoSortPlugins } from "../../plugins/topo-sort";
-import { CORE_TABLE_NAMES } from "../../schemas/index";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
-import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { createContext, type CommandContext } from "../program";
+import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
+import type { CommandContext } from "../context";
+import { projectPath, reportDryRun } from "../dry-run";
 import {
+  consentTookTheName,
+  migrationCreateCancelled,
+  migrationDeletionsDeclined,
+  migrationNameRequired,
+  recordSnapshotNeedsAppMigration,
+} from "../errors/areas/migrate-create";
+import { exitWithError } from "../errors/index";
+import {
+  type CLIDatabaseAdapter,
+  createCliAdapter,
   getDialectDisplayName,
-  validateDatabaseEnv,
+  type MissingDatabase,
+  openDryRunAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadConfig } from "../utils/config-loader";
+import {
+  askToDeleteInTerminal,
+  readDataLossConsent,
+  requireConsented,
+  type AcceptDataLossOption,
+} from "../utils/data-loss-consent";
 import { formatDuration } from "../utils/logger";
+
+import { commandRun } from "./command-run";
+import { isPluginDefinition } from "./plugin-definition-shape";
 
 // ============================================================================
 // Types
@@ -131,16 +154,10 @@ export interface MigrateCreateCommandOptions {
   blank?: boolean;
 
   /**
-   * Skip interactive prompts. Used in CI / non-TTY environments. With
-   * this flag set and `--accept-renames` not set, all rename candidates
-   * are declined (DROP + ADD with possible data loss).
-   * @default detected from process.stdout.isTTY
-   */
-  nonInteractive?: boolean;
-
-  /**
-   * Only meaningful with `--non-interactive`. Auto-accept all rename
-   * candidates. ADVANCED — verify the diff first via `migrate:create`
+   * Only meaningful when the run cannot prompt (`canPrompt`: no terminal,
+   * `CI` set, or the global `--non-interactive`), where rename candidates are
+   * otherwise declined (DROP + ADD with possible data loss). Auto-accept all
+   * rename candidates. ADVANCED — verify the diff first via `migrate:create`
    * in interactive mode before flipping this on for CI.
    * @default false
    */
@@ -162,9 +179,43 @@ export interface MigrateCreateCommandOptions {
    * @default true
    */
   transaction?: boolean;
+
+  /**
+   * Write a migration that changes nothing, whose snapshot records which fields are
+   * translated, for a project whose latest snapshot was written before
+   * snapshots recorded them. Refused while the config has changes to migrate.
+   * The name defaults to `record_translated_fields`.
+   * @default false
+   */
+  recordSnapshot?: boolean;
+
+  /**
+   * `--dry-run`: plan the migration as a real run does, rename questions included, print it and
+   * the files it would write, and write nothing. A refusal of the plan is reported and exits 0.
+   */
+  dryRun?: boolean;
+
+  /**
+   * `--accept-data-loss[=targets]`: the data-loss consent for a migration that deletes data. Alone it
+   * covers every deletion and the run lists each one; a list (`dc_posts,dc_pages.summary`) covers
+   * those tables and columns only. Without it (or `NEXTLY_ACCEPT_DATA_LOSS`) a run at a terminal
+   * lists the deletions and asks, and a run that cannot ask writes no file.
+   */
+  acceptDataLoss?: AcceptDataLossOption;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
+  /**
+   * Drop the columns a plugin's scope keeps on types switched off, rather
+   * than keep them (`GenerateArgs.releaseHeldBack`). Not a flag: `nextly
+   * prune` sets it, after its data-loss consent.
+   */
+  releaseHeldBack?: boolean;
+  /**
+   * Deletions the caller already had agreed to in this run (`nextly prune`'s consent for the kept
+   * columns it drops): written without asking again. Not a flag.
+   */
+  approvedDeletions?: readonly Deletion[];
   config?: string;
   verbose?: boolean;
   quiet?: boolean;
@@ -176,25 +227,308 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 
 /**
- * Whether the app stream has nothing it could possibly emit.
- *
- * Needs BOTH sides empty. A config that has just removed its last entity or
- * its last contribution still has something to emit — the drop — and only the
- * latest snapshot says so. Deciding on the config alone skipped exactly that
- * migration, while `migrate:check`, which compares against the snapshot, kept
- * reporting it as pending.
+ * What `--record-snapshot` reads the translations tables through (`liveCompanionColumns`): the
+ * database `DATABASE_URL` names, opened on the first read and closed by `close`. Nothing for any
+ * other run, which stays offline.
  */
-export function nothingToGenerate(input: {
-  entityCount: number;
-  appStream: AppStreamTables;
-  recordedTableCount: number;
-}): boolean {
-  return (
-    input.entityCount === 0 &&
-    !hasAppStreamTables(input.appStream) &&
-    input.recordedTableCount === 0
-  );
+function recordModeReader(
+  recording: boolean | undefined,
+  dryRun: boolean | undefined
+): {
+  read?: (tableName: string) => Promise<readonly string[]>;
+  close: () => Promise<void>;
+} {
+  if (recording !== true) return { close: () => Promise.resolve() };
+  // A dry run opens the database read-only; one that is not there has no
+  // translation tables, which is what a real run would find in the one it makes.
+  let adapter: Promise<CLIDatabaseAdapter | MissingDatabase> | undefined;
+  return {
+    read: async tableName => {
+      adapter ??= dryRun === true ? openDryRunAdapter() : createCliAdapter();
+      const opened = await adapter;
+      if ("missing" in opened) return [];
+      const { companionColumnNames } = await import(
+        "../../domains/i18n/runtime/companion-io"
+      );
+      return companionColumnNames(
+        opened as unknown as Parameters<typeof companionColumnNames>[0],
+        tableName
+      );
+    },
+    close: async () => {
+      const opened = adapter ? await adapter : undefined;
+      if (opened && !("missing" in opened)) await opened.disconnect();
+    },
+  };
 }
+
+/**
+ * The errors a plan's own checks raise when the real run would refuse: a
+ * declaration or a change the checks reject, a plugin module that may not be
+ * written, and the bookkeeping `migrate:baseline` must not adopt over. A dry
+ * run reports these and exits 0. Anything else, such as a database that cannot
+ * be reached, means the plan could not be worked out, and the dry run fails on
+ * it as the real run does.
+ */
+const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "VALIDATION_ERROR",
+  "PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN",
+  "PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA",
+  "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED",
+  "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
+  // `upgrade`'s: an events table of the wrong shape, and a backup nobody
+  // confirmed.
+  "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+  "NEXTLY_UPGRADE_IN_PROGRESS",
+  // `migrate:resolve`'s checks: the file, its snapshot, the live schema
+  // against it, and the ledger's state for the mode asked for.
+  "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",
+  "NEXTLY_MIGRATION_FILE_MISSING",
+  "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+  "NEXTLY_MIGRATION_RESOLVE_DRIFT",
+]);
+
+/** The refusal a dry run reports for `error`, in the real run's own words. */
+export function dryRunRefusalOf(error: unknown): string | undefined {
+  if (!NextlyError.is(error) || !PLAN_REFUSAL_CODES.has(error.code)) {
+    return undefined;
+  }
+  return error.publicMessage;
+}
+
+/**
+ * Handles an error the plan's checks raised. A dry run reports it as the real run's refusal and
+ * exits 0. Any other run, or an error that is no refusal, goes on as it did before the dry run
+ * existed: `otherwise`, which rethrows unless the call site already ended the run itself.
+ */
+function stopOnPlanError(
+  error: unknown,
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined,
+  otherwise: () => never = () => {
+    throw error;
+  }
+): never {
+  const refusal = dryRun === true ? dryRunRefusalOf(error) : undefined;
+  if (refusal !== undefined) {
+    reportDryRun(logger, { changes: [], refusals: [refusal] });
+    process.exit(0);
+  }
+  otherwise();
+}
+
+/**
+ * What a dry run of a generated migration prints: the migration's text, then the migration and
+ * its snapshot as the real run would write them, and any translation-table file beside them.
+ */
+function reportMigrationDryRun(
+  result: GenerateResult,
+  cwd: string,
+  logger: CommandContext["logger"]
+): void {
+  const sqlFile = projectPath(cwd, result.sqlPath);
+  logger.info(`${sqlFile} would hold:\n${result.sqlContent.trimEnd()}`);
+  reportDryRun(logger, {
+    changes: [
+      { action: "write", target: sqlFile },
+      { action: "write", target: projectPath(cwd, result.snapshotPath) },
+      // The translation-table migration files, written after the pair.
+      ...result.companionFiles.map(file => ({
+        action: "write" as const,
+        target: projectPath(cwd, file.path),
+      })),
+    ],
+  });
+}
+
+/**
+ * `--record-snapshot` with nothing to record exits 0, as a plain run with
+ * nothing to write does: nothing to do is not a failure. The message, not the
+ * code, tells it from a record to commit.
+ */
+function nothingToRecord(
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined
+): never {
+  logger.newline();
+  logger.info(
+    "Nothing to record: no snapshot here predates the record of which fields are translated."
+  );
+  endNothingToDo(logger, dryRun);
+  process.exit(0);
+}
+
+/**
+ * Where the real run has nothing to do, a dry run says the same and then ends
+ * as every dry run ends, so a script can rely on its last lines.
+ */
+function endNothingToDo(
+  logger: CommandContext["logger"],
+  dryRun: boolean | undefined
+): void {
+  if (dryRun === true) reportDryRun(logger, { changes: [] });
+}
+
+/**
+ * How long a count waits for the database to open. The counts are for the
+ * listing only and never decide the file, so an unreachable host costs a few
+ * seconds at most rather than the driver's own connect timeout.
+ */
+const COUNT_CONNECT_MS = 3000;
+
+/**
+ * How long the counts may take, all of them together. A count is a scan of a
+ * table that may be large; past this the rest are listed without one, so a
+ * listing never waits minutes for numbers that decide nothing.
+ */
+const COUNT_BUDGET_MS = 5000;
+
+/**
+ * `deletions` with their counts, where the database `DATABASE_URL` names can
+ * be read: opened read-only (nothing is created, no lock taken) and closed
+ * again. Any failure leaves them uncounted, said in one line: `migrate:create`
+ * needs no database, and the listing is asked about either way. Counting
+ * stops once `budgetMs` has passed: no further count starts, and one still
+ * running is not waited for (the database finishes it; no dialect cancels it
+ * the same way), so the rest are listed without a count. SQLite counts in
+ * the call itself, so one count there cannot be cut short: the budget is
+ * checked before each, and at most the one under way runs past it.
+ */
+export async function countWhereReadable(
+  deletions: readonly Deletion[],
+  dialect: SupportedDialect,
+  logger: CommandContext["logger"],
+  budgetMs: number = COUNT_BUDGET_MS
+): Promise<Deletion[]> {
+  const opening = openDryRunAdapter({ dialect });
+  const opened = await within(opening, COUNT_CONNECT_MS);
+  if (opened === "timed-out") {
+    // An open that arrives late is closed, so it holds the process open no longer than it must.
+    opening.then(
+      late => ("missing" in late ? undefined : late.disconnect()),
+      () => undefined
+    );
+  }
+  if (opened === undefined || opened === "timed-out" || "missing" in opened) {
+    logger.info("Counts not shown: the database could not be read.");
+    return [...deletions];
+  }
+  // The CLI adapter is the Drizzle adapter its factory made, as every command that reads with it treats it.
+  const db = (opened as unknown as DrizzleAdapter).getDrizzle();
+  const deadline = Date.now() + budgetMs;
+  const counted: Deletion[] = [];
+  let unfinished: Promise<unknown> | undefined;
+  let stopped = false;
+  for (const deletion of deletions) {
+    const left = deadline - Date.now();
+    if (stopped || left <= 0) {
+      stopped = true;
+      counted.push(deletion);
+      continue;
+    }
+    const counting = countDeletions([deletion], db, dialect);
+    const one = await within(counting, left);
+    if (one === "timed-out") {
+      stopped = true;
+      unfinished = counting;
+      counted.push(deletion);
+    } else {
+      counted.push(one?.[0] ?? deletion);
+    }
+  }
+  if (stopped) {
+    logger.info(
+      "Counts stopped at their time limit; the rest are listed without one."
+    );
+  }
+  // Closed once the count still running settles, rather than waited for here.
+  const close = () => opened.disconnect().catch(() => undefined);
+  if (unfinished === undefined) await close();
+  else void unfinished.then(close, close);
+  return counted;
+}
+
+/** `work`'s result, or `timed-out` once `ms` have passed first; undefined where it failed. */
+async function within<T>(
+  work: Promise<T>,
+  ms: number
+): Promise<T | "timed-out" | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timed-out">(settle => {
+    timer = setTimeout(() => settle("timed-out"), ms);
+  });
+  try {
+    return await Promise.race([work, timedOut]).catch(() => undefined);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The judge `generateMigration` calls with what the plan deletes, before it
+ * writes anything: counted where the database can be read, then
+ *
+ * - on a dry run, listed with the consent a real run that cannot ask needs;
+ * - otherwise judged by the data-loss consent: printed and written where it
+ *   covers every deletion, asked about at a terminal, and refused (no file
+ *   written, exit 1) where nobody can be asked or a named consent leaves one
+ *   out. A no at the prompt writes nothing either.
+ *
+ * `approved` is what the caller already agreed to in this run, which is not
+ * asked about again. `counted` receives the deletions as judged.
+ */
+async function judgeMigrationDeletions(
+  deletions: readonly Deletion[],
+  args: {
+    consent: DataLossConsent;
+    dialect: SupportedDialect;
+    dryRun: boolean;
+    approved: readonly Deletion[];
+    logger: CommandContext["logger"];
+    counted: (deletions: readonly Deletion[]) => void;
+  }
+): Promise<void> {
+  const { logger } = args;
+  const listed = await countWhereReadable(deletions, args.dialect, logger);
+  args.counted(listed);
+  if (args.dryRun) {
+    logger.info(
+      `This migration deletes ${String(listed.length)} item(s), which cannot be undone:`
+    );
+    for (const deletion of listed) {
+      logger.info(`  - ${describeDeletion(deletion)}`);
+    }
+    const uncovered = listed.filter(d => !consentCovers(args.consent, d));
+    const targets = args.consent.given?.targets;
+    if (uncovered.length > 0 && targets !== undefined && targets !== "all") {
+      // A consent naming targets is refused where it leaves one out, even at a terminal.
+      logger.info(
+        `A real run refuses: the consent given does not cover ${uncovered.map(describeDeletion).join("; ")}. It needs: ${consentToCover(listed)}.`
+      );
+    } else if (uncovered.length > 0) {
+      logger.info(
+        `A real run asks before writing it. A real run that cannot ask needs: ${consentToCover(listed)}.`
+      );
+    }
+    return;
+  }
+  const verdict = await judgeDataLoss({
+    deletions: listed,
+    consent: args.consent,
+    interactive: canPrompt(),
+    ask: askToDeleteInTerminal,
+    print: line => logger.info(line),
+    approved: args.approved,
+  });
+  if (verdict.kind === "declined") throw migrationDeletionsDeclined();
+  requireConsented(verdict);
+}
+
+/**
+ * Whether the app stream has nothing it could possibly emit; it lives with the
+ * inputs it judges, and is re-exported for the command's tests.
+ */
+export { nothingToGenerate } from "../../domains/schema/migrate-create/app-migration-inputs";
 
 export async function runMigrateCreate(
   nameArg: string | undefined,
@@ -203,7 +537,22 @@ export async function runMigrateCreate(
 ): Promise<void> {
   const { logger } = context;
 
+  // The app's snapshot is the one that records translated fields; a blank
+  // file and a plugin module have none.
+  if (options.recordSnapshot === true && (options.blank || options.plugin)) {
+    exitWithError(logger, recordSnapshotNeedsAppMigration());
+  }
+
   if (options.plugin) {
+    // A plugin's module is never generated with a drop, so the consent has nothing to cover here.
+    if (
+      options.acceptDataLoss !== undefined &&
+      options.acceptDataLoss !== false
+    ) {
+      context.logger.warn(
+        "--accept-data-loss has no effect with --plugin: a plugin's migration module is never generated with a drop. Hand-write one that drops, and `nextly migrate` asks the consent when it runs it."
+      );
+    }
     await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
     return;
   }
@@ -216,6 +565,7 @@ export async function runMigrateCreate(
       publicMessage:
         "--no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin). A generated migration file is not marked: marking it changes the contents its snapshot was taken over. Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.",
       statusCode: 400,
+      logContext: { reason: "no-transaction-not-blank" },
     });
   }
 
@@ -226,43 +576,32 @@ export async function runMigrateCreate(
   // F11 PR 3: dialect comes from DATABASE_URL (no DB connection needed —
   // we just need to know which SQL flavor to emit). validateDatabaseEnv
   // handles the parsing without opening a connection.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables. " +
-        "(migrate:create does not connect to the DB but needs the dialect to emit the right SQL.)"
-    );
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect!;
+  const dbValidation = requireDatabaseEnv(logger);
+  const dialect = dbValidation.dialect;
 
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
-  const name = options.name ?? nameArg;
+  const name =
+    options.name ??
+    nameArg ??
+    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
   if (!options.blank && !name) {
-    logger.error(
-      "--name is required for non-blank migrations. " +
-        "Use --blank to create an empty migration without a name, or pass --name=<slug>."
-    );
-    process.exit(1);
+    // `--accept-data-loss` takes an optional list, so a name written after it is read as the list.
+    if (typeof options.acceptDataLoss === "string") {
+      exitWithError(logger, consentTookTheName(options.acceptDataLoss));
+    }
+    exitWithError(logger, migrationNameRequired());
   }
 
   // Load config.
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -283,17 +622,24 @@ export async function runMigrateCreate(
       migrationsDir,
       context,
       startTime,
-      options.transaction !== false
+      options.transaction !== false,
+      options.dryRun === true
     );
     return;
   }
 
-  // F11 PR 3: detect non-interactive mode from the explicit flag OR from
-  // a non-TTY stdout. CI environments typically have isTTY=false; the
-  // safer default in that case is to decline renames (treat as DROP+ADD)
+  // The data-loss consent, read before anything is planned, so a malformed
+  // list is refused before a question is asked or a file written.
+  const consent = readDataLossConsent({
+    flag: options.acceptDataLoss,
+    warn: message => logger.warn(message),
+  });
+
+  // Whether rename candidates may be asked about: the one answer every
+  // prompt takes (terminal on stdin and stdout, no `CI`, no global
+  // `--non-interactive`). Without one, renames are declined (DROP + ADD)
   // unless --accept-renames is explicit.
-  const nonInteractive =
-    options.nonInteractive === true || !process.stdout.isTTY;
+  const nonInteractive = !canPrompt();
 
   // F11 PR 3 review fix #8: surface a warning when --accept-renames was
   // passed but interactive mode is in effect. The flag is only consulted
@@ -307,159 +653,80 @@ export async function runMigrateCreate(
     );
   }
 
-  // Convert config entries to the minimal shape the orchestrator needs. Each
-  // kind resolves its table name through the same helper the runtime uses, so
-  // generated names match the live database (collections, singles, and
-  // components each normalize differently).
-  const codeCollections = toMinimalEntities(
-    configResult.config.collections,
-    e => resolveCollectionTableName(e.slug, e.dbName)
-  );
-  const codeSingles = toMinimalEntities(configResult.config.singles ?? [], e =>
-    resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-  );
-  const codeComponents = toMinimalEntities(
-    configResult.config.fieldGroups ?? [],
-    e => resolveComponentTableName(e.slug)
-  );
-
-  // Load + merge UI-built entities (code-first wins on slug collision).
-  let manifest;
+  // The inputs every app migration is generated from, read and checked as
+  // the server reads them for a Schema Builder save (`appMigrationInputs`).
+  // A dry run reports a refusal of the plan and exits 0. A real run throws
+  // that refusal on, for the command's handler to print; anything else (a
+  // definition that cannot be read, a removed collection something still
+  // depends on) ends the run here, printed in the error shape.
+  let inputs: Awaited<ReturnType<typeof appMigrationInputs>>;
   try {
-    manifest = await loadUiSchema({
+    inputs = await appMigrationInputs({
+      config: configResult.config,
+      ...(configResult.deferredExtends === undefined
+        ? {}
+        : { deferredExtends: configResult.deferredExtends }),
       projectRoot: cwd,
-      uiSchemaFile: configResult.config.db.uiSchemaFile,
+      migrationsDir,
+      dialect,
+      logger,
     });
   } catch (error) {
-    logger.error(`Failed to load UI schema: ${describeError(error)}`);
-    process.exit(1);
+    stopOnPlanError(error, logger, options.dryRun, () => {
+      if (dryRunRefusalOf(error) !== undefined) throw error;
+      exitWithError(logger, error);
+    });
   }
-
-  // Materialize plugin extends that target Builder-made entities (P8): append
-  // the deferred extend fields onto the matching ui-schema entity so they land
-  // in BOTH the table diff (below) and the dynamic_collections.fields metadata.
-  manifest = applyDeferredExtendsToManifest(
-    manifest,
-    configResult.deferredExtends ?? []
-  );
-
-  const merged = mergeUiEntities({
-    codeCollections,
-    codeSingles,
-    codeComponents,
-    manifest,
+  const {
+    collections,
+    singles,
+    components,
+    metadataUpserts,
+    previousMetadataUpserts,
+    appStream,
+    nothing,
+  } = inputs;
+  // Every permission the config declares, by owner, which every snapshot records; a plugin
+  // release that only adds or removes one is a migration of its own. Read before the empty-schema
+  // check: an app with no table yet may still declare permissions, which travel as a migration.
+  const permissions = declaredPermissionsOf(configResult.config, {
+    collections,
+    singles,
   });
-  for (const slug of merged.droppedUiSlugs) {
-    logger.warn(
-      `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
+  // Either side counts: the config declaring one now, or the newest snapshot recording one the
+  // config no longer declares, whose removal is a change too.
+  const ownsAny = (record: { app: object; plugins: object } | undefined) =>
+    record !== undefined &&
+    (Object.keys(record.app).length > 0 ||
+      Object.keys(record.plugins).length > 0);
+  const declaresPermissions =
+    ownsAny(permissions) ||
+    ownsAny(
+      (await loadLatestSnapshot(resolve(migrationsDir, "meta")))?.data
+        .permissions
     );
-  }
-  const { collections, singles, components } = merged;
-
-  // Checked on the config's and the manifest's own entries rather than the
-  // merged ones: the merge has already dropped shadowed Builder entities by
-  // slug, and those are filtered per kind below instead.
-  //
-  // A migration is the one artifact that outlives the process that wrote it, so
-  // a declaration its own field type rejects would become a deployment that
-  // materializes the schema and then cannot boot on it.
-  //
-  // A Builder entity shadowed by a code-first one of the same slug contributes
-  // nothing to this migration, so it is skipped rather than failed on — a
-  // cleanup that changes no DDL is not worth blocking on.
-  // Shadowing is per KIND: the manifest allows the same slug on a collection, a
-  // single and a field group, and the merge resolves each kind separately. A
-  // single set of dropped slugs would filter out an unshadowed single named
-  // `home` because a collection of that name was shadowed, and it would then
-  // reach the migration unchecked.
-  const survivingOf = <T extends { slug: string }>(
-    list: readonly T[],
-    codeFirst: ReadonlyArray<{ slug: string }>
-  ): T[] => {
-    const shadowed = new Set(codeFirst.map(e => e.slug));
-    return list.filter(e => !shadowed.has(e.slug));
-  };
-
-  assertPluginFieldDeclarations({
-    collections: configResult.config.collections,
-    singles: configResult.config.singles,
-    fieldGroups: configResult.config.fieldGroups,
-  });
-  assertPluginFieldDeclarations({
-    collections: survivingOf(
-      manifest.collections,
-      configResult.config.collections
-    ),
-    singles: survivingOf(manifest.singles, configResult.config.singles ?? []),
-    fieldGroups: survivingOf(
-      manifest.components,
-      configResult.config.fieldGroups ?? []
-    ),
-  });
-
-  // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
-  // survived the merge (code-first wins → shadowed UI slugs are skipped).
-  const dropped = new Set(merged.droppedUiSlugs);
-  const tn = (
-    slug: string,
-    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-  ) => `${prefix}${slug.replace(/-/g, "_")}`;
-  const metadataUpserts: { tableName: string; sql: string }[] = [];
-  for (const c of manifest.collections) {
-    if (dropped.has(c.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(c.slug, "dc_"),
-      sql: buildCollectionMetadataUpsert(c, dialect),
-    });
-  }
-  for (const s of manifest.singles) {
-    if (dropped.has(s.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(s.slug, "single_"),
-      sql: buildSingleMetadataUpsert(s, dialect),
-    });
-  }
-  for (const cp of manifest.components) {
-    if (dropped.has(cp.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
-      sql: buildComponentMetadataUpsert(cp, dialect),
-    });
-  }
-
-  // The APP stream's extension schema, compiled the way boot compiles it:
-  // tables the app declares through `db.schema.extend`, and elements it
-  // contributes to a plugin's table. Plugins are compiled alongside because an
-  // app hook may extend a plugin's table and would not resolve without them.
-  //
-  // Computed BEFORE the empty-entities check, because an app can have nothing
-  // but extension schema. Taking that early return first meant an
-  // extension-only configuration wrote no migration at all and production
-  // never received the table.
-  const appStream = await compileAppStreamTables({
-    config: configResult.config,
-    dialect,
-    logger: { warn: m => logger.warn(m) },
-  });
-
-  const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
-  if (
-    nothingToGenerate({
-      entityCount: collections.length + singles.length + components.length,
-      appStream,
-      recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
-    })
-  ) {
+  // A project with no tables has no translated field to record, and says so as any recording run
+  // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
+  if (nothing && options.recordSnapshot === true)
+    nothingToRecord(logger, options.dryRun);
+  if (nothing && !declaresPermissions) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
     logger.info("Use --blank to create an empty migration for custom SQL.");
+    endNothingToDo(logger, options.dryRun);
     return;
   }
 
   logger.newline();
   logger.info("Comparing config to latest snapshot...");
 
+  // `--record-snapshot` records which fields are translated as the database holds them, so it reads
+  // the translations tables, connecting only once it has one to check. Every other run stays offline.
+  const live = recordModeReader(options.recordSnapshot, options.dryRun);
+  // The deletions as judged, with their counts where the database could be read, listed again
+  // once the file is written.
+  let counted: readonly Deletion[] = [];
   let result;
   try {
     result = await generateMigration({
@@ -468,13 +735,34 @@ export async function runMigrateCreate(
       migrationsDir,
       appStream,
       defaultLocale: configResult.config.localization?.defaultLocale,
+      // The configuration's order, which decides a field leaving translation's shared value.
+      languageOrder: configResult.config.localization?.locales.map(
+        locale => locale.code
+      ),
       onWarning: message => logger.warn(message),
       collections,
       singles,
       components,
       metadataUpserts,
+      previousMetadataUpserts,
+      permissions,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
+      recordSnapshot: options.recordSnapshot === true,
+      liveCompanionColumns: live.read,
+      dryRun: options.dryRun === true,
+      releaseHeldBack: options.releaseHeldBack === true,
+      judgeDeletions: deletions =>
+        judgeMigrationDeletions(deletions, {
+          consent,
+          dialect,
+          dryRun: options.dryRun === true,
+          approved: options.approvedDeletions ?? [],
+          logger,
+          counted: listed => {
+            counted = listed;
+          },
+        }),
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -482,11 +770,18 @@ export async function runMigrateCreate(
     // migration: Cancelled by user." stack-style message.
     if (error instanceof PromptCancelledError) {
       // The prompt-renames helper already printed clack's `cancel()`
-      // message before throwing. Just exit.
-      process.exit(1);
+      // message before throwing; the error says what it left undone.
+      exitWithError(logger, migrationCreateCancelled());
     }
-    logger.error(`Failed to generate migration: ${describeError(error)}`);
-    process.exit(1);
+    stopOnPlanError(error, logger, options.dryRun, () =>
+      exitWithError(logger, error)
+    );
+  } finally {
+    await live.close();
+  }
+
+  if (result === null && options.recordSnapshot === true) {
+    nothingToRecord(logger, options.dryRun);
   }
 
   if (result === null) {
@@ -494,18 +789,61 @@ export async function runMigrateCreate(
     logger.info(
       "No changes detected. Your config matches the latest snapshot."
     );
-    // Per spec: exit code 2 distinguishes "happy no-op" from "actual
-    // error" so CI scripts can react differently.
-    process.exit(2);
+    // Nothing to do is not a failure: 0, as every command ends a run with
+    // nothing to do.
+    endNothingToDo(logger, options.dryRun);
+    process.exit(0);
+  }
+
+  if (options.dryRun === true) {
+    reportMigrationDryRun(result, cwd, logger);
+    return;
   }
 
   const duration = Date.now() - startTime;
+  // A settings or permissions change is written as the migration it is, below; its snapshot is
+  // the record.
+  if (
+    options.recordSnapshot === true &&
+    result.settingsChanges.length + result.permissionChanges.length > 0
+  ) {
+    logger.newline();
+    logger.info(
+      "The config's settings or permissions have changes to migrate, so they are written as a migration with no table statements, whose snapshot records which fields are translated."
+    );
+  } else if (options.recordSnapshot === true) {
+    logger.newline();
+    logger.success(`Recorded translated fields → ${result.snapshotPath}`);
+    logger.success(`Migration (changes nothing) → ${result.sqlPath}`);
+    logger.newline();
+    logger.info("Next steps:");
+    logger.item("Commit both files", 1);
+    logger.item(
+      "Make your change to the config, then run `nextly migrate:create --name <name>`",
+      1
+    );
+    return;
+  }
   logger.newline();
   logger.success(`Created migration → ${result.sqlPath}`);
   logger.success(`Snapshot → ${result.snapshotPath}`);
   logger.keyValue("Operations", result.operationCount);
+  for (const change of result.settingsChanges) {
+    logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
+  }
+  for (const change of result.permissionChanges) {
+    logger.item(`Permissions: ${describePermissionChange(change)}`, 1);
+  }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
+  }
+  // What the file deletes, as consented to; its header names the same, and `nextly migrate` asks
+  // the consent for it again on every database it runs on.
+  // Listed once already, before the file was written; this says what applying it needs.
+  if (counted.length > 0) {
+    logger.warn(
+      `It deletes data; \`nextly migrate\` needs consent to apply it: ${consentToCover(counted)}`
+    );
   }
   logger.newline();
   logger.divider();
@@ -527,7 +865,8 @@ async function runBlankPath(
   migrationsDir: string,
   context: CommandContext,
   startTime: number,
-  transaction: boolean
+  transaction: boolean,
+  dryRun: boolean
 ): Promise<void> {
   const { logger } = context;
 
@@ -535,7 +874,6 @@ async function runBlankPath(
   const baseName = `${formatTimestamp(now)}_${slugify(name)}`;
   const sqlPath = resolve(migrationsDir, `${baseName}.sql`);
 
-  await mkdir(migrationsDir, { recursive: true });
   // F11 PR 3 review fix #7: pass the slug-only name (not the timestamp-
   // prefixed baseName) so the file's `-- Migration:` header matches the
   // non-blank path's convention (e.g. "-- Migration: custom_seed", not
@@ -543,6 +881,14 @@ async function runBlankPath(
   const content = formatBlankFile(slugify(name), dialect, now, {
     transaction,
   });
+  // A dry run prints the file and its path, and writes neither the file nor its folder.
+  if (dryRun) {
+    const sqlFile = projectPath(context.cwd, sqlPath);
+    logger.info(`${sqlFile} would hold:\n${content.trimEnd()}`);
+    reportDryRun(logger, { changes: [{ action: "write", target: sqlFile }] });
+    return;
+  }
+  await mkdir(migrationsDir, { recursive: true });
   await writeFile(sqlPath, content, "utf-8");
 
   // F11 PR 3: blank migrations don't get a paired snapshot file. The
@@ -662,6 +1008,7 @@ async function buildPluginDraft(args: {
         `Singles or field groups, what the hook adds to it is migrated by the APP: \`nextly migrate:create\` ` +
         `in the app writes it, whoever contributed it. Guard the hook with ` +
         `\`schema.getTable("${missing}")\` so it skips the table when compiled for this module.`,
+      logContext: { reason: "plugin-extend-target-outside", target: missing },
     });
   }
 }
@@ -761,21 +1108,6 @@ export function missingExtendTarget(error: unknown): string | undefined {
   return undefined;
 }
 
-/** Whether a module export is a plugin definition rather than, say, a table. */
-function isPluginDefinition(
-  value: unknown
-): value is Partial<PluginDefinition> {
-  // `name` alone is not enough: a `defineTable` result carries a name too.
-  // `version` is required of every plugin and of no table.
-  const candidate = value as { name?: unknown; version?: unknown } | null;
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof candidate.name === "string" &&
-    typeof candidate.version === "string"
-  );
-}
-
 /**
  * The plugin definition a `--plugin` entry exports.
  *
@@ -804,7 +1136,7 @@ function pluginDefinitionFrom(
         .join(
           ", "
         )}). Point --plugin at a file that exports one, or export it as the default.`,
-      logContext: { entry },
+      logContext: { reason: "plugin-entry-exports-several", entry },
     });
   }
   if (named.length === 1) return named[0][1] as Partial<PluginDefinition>;
@@ -837,6 +1169,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `The plugin entry ${relative(cwd, entryPath)} exports no definition with a name, so its migrations cannot be attributed.`,
       statusCode: 400,
+      logContext: { reason: "plugin-entry-unnamed" },
     });
   }
   if (typeof definition.schemaVersion !== "number") {
@@ -844,6 +1177,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `Plugin "${definition.name}" declares no schemaVersion. A plugin needs one before migrations can be generated for it.`,
       statusCode: 400,
+      logContext: { reason: "plugin-schema-version-missing" },
     });
   }
   return definition as GeneratablePlugin;
@@ -906,6 +1240,11 @@ async function loadShippedMigrations(
         `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
         `Fix the barrel (or the module it imports) and run this again.`,
       statusCode: 400,
+      logContext: {
+        reason: "plugin-migrations-barrel-unreadable",
+        barrel: relative(cwd, barrelPath),
+        detail: describeError(error),
+      },
     });
   }
   const shipped = (loaded.mod as { migrations?: PluginMigration[] }).migrations;
@@ -941,7 +1280,12 @@ async function writeBlankPluginMigration(
     migrationsDir: generation.migrationsDir,
     existing: generation.existing,
     transaction: generation.options.transaction,
+    dryRun: generation.options.dryRun === true,
   });
+  if (generation.options.dryRun === true) {
+    reportPluginDryRun(blank, cwd, logger);
+    return;
+  }
   logger.success(`Created ${relative(cwd, blank.modulePath)}`);
   logger.info(`Rewrote ${relative(cwd, blank.indexPath)}`);
   logger.info(
@@ -1117,6 +1461,32 @@ async function compilePluginDialects(draft: PluginDraftInput): Promise<{
   };
 }
 
+/**
+ * What a dry run of a plugin module prints: the module's text, then the module and the barrel as
+ * the real run would write them. The barrel is rewritten whole, so it is an edit where one is
+ * already there.
+ */
+function reportPluginDryRun(
+  planned: Pick<
+    GeneratePluginMigrationResult,
+    "modulePath" | "moduleContent" | "indexPath"
+  >,
+  cwd: string,
+  logger: CommandContext["logger"]
+): void {
+  const moduleFile = projectPath(cwd, planned.modulePath);
+  logger.info(`${moduleFile} would hold:\n${planned.moduleContent.trimEnd()}`);
+  reportDryRun(logger, {
+    changes: [
+      { action: "write", target: moduleFile },
+      {
+        action: existsSync(planned.indexPath) ? "edit" : "write",
+        target: projectPath(cwd, planned.indexPath),
+      },
+    ],
+  });
+}
+
 /** Report a generated module: its path, each dialect's count, the barrel. */
 function reportPluginMigration(
   result: NonNullable<Awaited<ReturnType<typeof generatePluginMigration>>>,
@@ -1185,121 +1555,104 @@ async function runMigrateCreatePlugin(
   const { dependencyPlugins, dependencies, pluginPrefixes } =
     pluginDependencyClosure(target, configured);
 
+  // What the compile and the module's checks refuse ends the run, and a dry run reports it.
+  const planned = <T>(work: () => Promise<T>): Promise<T> =>
+    work().catch(error => stopOnPlanError(error, logger, options.dryRun));
+
   const {
     tablesByDialect,
     contributedByDialect,
     contributedBaselineByDialect,
     contributions,
-  } = await compilePluginDialects({
-    pluginName: definition.name,
-    pluginPrefixes,
-    tables,
-    extend,
-    dependencies,
-    // Dependencies FIRST, and among them each before its dependents:
-    // `runExtensionHooks` takes the list already topologically sorted, and a
-    // hook cannot extend a table the draft has not been told about yet.
-    dependencyPlugins,
-  });
+  } = await planned(() =>
+    compilePluginDialects({
+      pluginName: definition.name,
+      pluginPrefixes,
+      tables,
+      extend,
+      dependencies,
+      // Dependencies FIRST, and among them each before its dependents:
+      // `runExtensionHooks` takes the list already topologically sorted, and a
+      // hook cannot extend a table the draft has not been told about yet.
+      dependencyPlugins,
+    })
+  );
 
   if (options.blank) {
-    await writeBlankPluginMigration(
-      {
-        definition,
-        name,
-        cwd,
-        migrationsDir,
-        existing,
-        options,
-        logger,
-      },
-      {
-        tablesByDialect,
-        contributedByDialect,
-        contributedBaselineByDialect,
-        contributions,
-      }
+    await planned(() =>
+      writeBlankPluginMigration(
+        {
+          definition,
+          name,
+          cwd,
+          migrationsDir,
+          existing,
+          options,
+          logger,
+        },
+        {
+          tablesByDialect,
+          contributedByDialect,
+          contributedBaselineByDialect,
+          contributions,
+        }
+      )
     );
     return;
   }
 
-  const result = await generatePluginMigration({
-    contributedByDialect,
-    contributedBaselineByDialect,
-    contributions,
-    pluginName: definition.name,
-    schemaVersion: definition.schemaVersion,
-    name: name ?? "migration",
-    migrationsDir,
-    tablesByDialect,
-    existing,
-    transaction: options.transaction,
-    // A module that runs outside a transaction is written to be edited:
-    // its generated `CREATE INDEX` is what becomes `CREATE INDEX
-    // CONCURRENTLY`.
-    handSealed: options.transaction === false,
-  });
+  const result = await planned(() =>
+    generatePluginMigration({
+      contributedByDialect,
+      contributedBaselineByDialect,
+      contributions,
+      pluginName: definition.name,
+      schemaVersion: definition.schemaVersion,
+      name: name ?? "migration",
+      migrationsDir,
+      tablesByDialect,
+      existing,
+      transaction: options.transaction,
+      // A module that runs outside a transaction is written to be edited:
+      // its generated `CREATE INDEX` is what becomes `CREATE INDEX
+      // CONCURRENTLY`.
+      handSealed: options.transaction === false,
+      dryRun: options.dryRun === true,
+    })
+  );
 
   if (!result) {
     logger.info(
       `No schema changes detected for plugin "${definition.name}" — nothing to generate.`
     );
-    process.exit(2);
+    // Nothing to do, which is not a failure.
+    endNothingToDo(logger, options.dryRun);
+    process.exit(0);
   }
 
+  if (options.dryRun === true) {
+    reportPluginDryRun(result, cwd, logger);
+    return;
+  }
   reportPluginMigration(result, cwd, logger);
 }
 
-export function registerMigrateCreateCommand(program: Command): void {
-  program
-    .command("migrate:create")
-    .description(
-      "Create a new migration file from schema changes or for custom SQL"
-    )
-    .argument("[name]", "Migration name (slug-cased, e.g., add_excerpt)")
-    .option("--name <name>", "Migration name (alternate to positional arg)")
-    .option("--blank", "Create an empty migration file for custom SQL", false)
-    .option(
-      "--non-interactive",
-      "Skip interactive prompts (auto-detected from non-TTY)",
-      false
-    )
-    .option(
-      "--accept-renames",
-      "ADVANCED: auto-accept all rename candidates in non-interactive mode",
-      false
-    )
-    .option(
-      "--plugin <entry>",
-      "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
-    )
-    .option(
-      "--no-transaction",
-      "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
-    )
-    .action(
-      async (
-        positionalName: string | undefined,
-        cmdOptions: MigrateCreateCommandOptions,
-        cmd: Command
-      ) => {
-        const globalOpts = cmd.optsWithGlobals();
-        const context = createContext(globalOpts);
+/**
+ * The action of `nextly migrate:create`, loaded when it runs.
+ */
+export async function migrateCreateAction(
+  positionalName: string | undefined,
+  cmdOptions: MigrateCreateCommandOptions,
+  cmd: Command
+): Promise<void> {
+  const { context, options } = commandRun(cmdOptions, cmd);
+  const resolvedOptions: ResolvedMigrateCreateOptions = options;
 
-        const resolvedOptions: ResolvedMigrateCreateOptions = {
-          ...cmdOptions,
-          config: globalOpts.config,
-          verbose: globalOpts.verbose,
-          quiet: globalOpts.quiet,
-          cwd: globalOpts.cwd,
-        };
-
-        try {
-          await runMigrateCreate(positionalName, resolvedOptions, context);
-        } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
-        }
-      }
-    );
+  try {
+    await runMigrateCreate(positionalName, resolvedOptions, context);
+  } catch (error) {
+    exitWithError(context.logger, error);
+  }
 }
+
+export { registerMigrateCreateCommand } from "./migrate-create.command";

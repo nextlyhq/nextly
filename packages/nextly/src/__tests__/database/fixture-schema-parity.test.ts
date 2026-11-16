@@ -13,11 +13,18 @@
  * asserted is that a table it does declare matches the real one, which is the
  * condition under which a test built on it observes production behaviour.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import { generateCreateTableSql } from "./_fixture-schema/generator";
 import { getCoreSchema } from "../../schemas/index";
 import { nextlyTables } from "./_fixture-schema/unified";
+import { loadDialectTables } from "../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /**
  * There is no exemption list any more, and that is the point.

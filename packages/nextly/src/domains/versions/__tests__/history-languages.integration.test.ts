@@ -120,6 +120,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "code" }),
         ],
       }),
+      // The same, kept with the working drafts a restore writes.
+      defineCollection({
+        slug: "regional_drafts",
+        localized: true,
+        status: true,
+        versions: true,
+        hooks: { afterRead: [closedRegion] },
+        fields: [
+          text({ name: "title", localized: true }),
+          text({ name: "region", localized: true }),
+          text({ name: "code" }),
+        ],
+      }),
       // No languages of its own, in an install that has them.
       defineCollection({
         slug: "plain",
@@ -275,37 +288,60 @@ const outcome = (read: Promise<unknown>) =>
     () => "refused"
   );
 
+/** The version a read of this document in this language gives. */
+async function revIn(
+  t: TestNextly,
+  collection: string,
+  id: string,
+  locale?: string
+): Promise<string> {
+  const read = (await t.nextly.findByID({
+    collection: collection as never,
+    id,
+    ...(locale === undefined ? {} : { locale }),
+    overrideAccess: true,
+  } as never)) as { _rev?: unknown };
+  return String(read._rev);
+}
+
 /**
  * A regional document: created in English, saved twice in Spanish, its
  * shared field saved alone, then saved in English again. A save of the shared
  * field is a version of the language it was saved in, and an event of the
  * shared part.
  */
-async function regionalDocument(t: TestNextly): Promise<string> {
+async function regionalDocument(
+  t: TestNextly,
+  slug = "regional"
+): Promise<string> {
   const created = await t.nextly.create({
-    collection: "regional",
+    collection: slug,
     data: { title: "hello", region: "open", code: "c1" },
     locale: "en",
   });
   const id = (created.item as { id: string }).id;
   for (const title of ["hola", "hola de nuevo"]) {
     await t.nextly.update({
-      collection: "regional",
+      collection: slug,
       id,
-      data: { title, region: "closed" },
+      data: {
+        title,
+        region: "closed",
+        _rev: await revIn(t, slug, id, "es"),
+      },
       locale: "es",
     });
   }
   await t.nextly.update({
-    collection: "regional",
+    collection: slug,
     id,
-    data: { code: "c2" },
+    data: { code: "c2", _rev: await revIn(t, slug, id, "en") },
     locale: "en",
   });
   await t.nextly.update({
-    collection: "regional",
+    collection: slug,
     id,
-    data: { title: "hello again" },
+    data: { title: "hello again", _rev: await revIn(t, slug, id, "en") },
     locale: "en",
   });
   return id;
@@ -488,7 +524,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id: plainId,
-        data: { title: "two" },
+        data: {
+          title: "two",
+          _rev: String((created.item as { _rev: string })._rev),
+        },
       });
       // Its versions are of no language, which the readable languages do not
       // name.
@@ -516,7 +555,7 @@ describe.each(getConfiguredTestDialects())(
       const as = { overrideAccess: true };
       const written = await singles.update(
         "bulletin",
-        { headline: "hello", region: "open" },
+        { headline: "hello", region: "open", _overwrite: true },
         { ...as, locale: "en" }
       );
       expect(written.success).toBe(true);
@@ -525,14 +564,19 @@ describe.each(getConfiguredTestDialects())(
         (
           await singles.update(
             "bulletin",
-            { headline: "hola", region: "closed" },
+            { headline: "hola", region: "closed", _overwrite: true },
             { ...as, locale: "es" }
           )
         ).success
       ).toBe(true);
-      expect((await singles.publishAllLocales("bulletin", as)).success).toBe(
-        true
-      );
+      expect(
+        (
+          await singles.publishAllLocales("bulletin", {
+            ...as,
+            data: { _overwrite: true },
+          })
+        ).success
+      ).toBe(true);
       const subject = { kind: "single" as const, slug: "bulletin", id };
       const document = {
         scopeKind: "single" as const,
@@ -709,18 +753,28 @@ describe.each(getConfiguredTestDialects())(
 
     it("asks a version's own language before naming or restoring it, and names it only there", async () => {
       const t = await boot(dialect);
-      const key = await keyHolding(t, ["read-regional", "update-regional"]);
-      const reader = await personHolding(t, ["read-regional"]);
-      const id = await regionalDocument(t);
+      // Kept with drafts, which a restore writes.
+      const key = await keyHolding(t, [
+        "read-regional_drafts",
+        "update-regional_drafts",
+      ]);
+      const reader = await personHolding(t, ["read-regional_drafts"]);
+      const id = await regionalDocument(t, "regional_drafts");
       const byLanguage = await versionsByLanguage(
         t,
         "collection",
-        "regional",
+        "regional_drafts",
         id
       );
       const [es] = byLanguage.get("es") ?? [];
       const [en] = byLanguage.get("en") ?? [];
-      const versions = ["collections", "regional", "entries", id, "versions"];
+      const versions = [
+        "collections",
+        "regional_drafts",
+        "entries",
+        id,
+        "versions",
+      ];
       const okOrNot = (response: Promise<Response>) =>
         response.then(r => (r.ok ? "done" : "refused"));
 
@@ -729,7 +783,9 @@ describe.each(getConfiguredTestDialects())(
           restWrite("PATCH", key, [...versions, String(es)], { label: "x" })
         ),
         await okOrNot(
-          restWrite("POST", key, [...versions, String(es), "restore"])
+          restWrite("POST", key, [...versions, String(es), "restore"], {
+            _overwrite: true,
+          })
         ),
       ]).toEqual(["refused", "refused"]);
       // The same caller names and restores a version of a language it reads.
@@ -738,20 +794,28 @@ describe.each(getConfiguredTestDialects())(
           restWrite("PATCH", key, [...versions, String(en)], { label: "y" })
         ),
         await okOrNot(
-          restWrite("POST", key, [...versions, String(en), "restore"])
+          restWrite("POST", key, [...versions, String(en), "restore"], {
+            _overwrite: true,
+          })
         ),
       ]).toEqual(["done", "done"]);
 
       // Naming a Spanish version, as trusted code may, is an event of Spanish.
-      await t
-        .getService("versionsService")
-        .setLabel(
-          { scopeKind: "collection", scopeSlug: "regional", entryId: id },
-          es!,
-          "Spanish name",
-          { actor: { type: "system" } }
-        );
-      const subject = { kind: "collection" as const, slug: "regional", id };
+      await t.getService("versionsService").setLabel(
+        {
+          scopeKind: "collection",
+          scopeSlug: "regional_drafts",
+          entryId: id,
+        },
+        es!,
+        "Spanish name",
+        { actor: { type: "system" } }
+      );
+      const subject = {
+        kind: "collection" as const,
+        slug: "regional_drafts",
+        id,
+      };
       const named = (await t.nextly.contentEvents.list({ subject })).items
         .filter(e => e.kind === "named")
         .map(e => [e.payload?.label, e.parts]);
@@ -889,7 +953,10 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "plain",
         id,
-        data: { title: "two" },
+        data: {
+          title: "two",
+          _rev: String((created.item as { _rev: string })._rev),
+        },
       });
       const subject = { kind: "collection" as const, slug: "plain", id };
       const repo = new VersionsRepository(

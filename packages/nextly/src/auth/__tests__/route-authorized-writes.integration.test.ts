@@ -43,6 +43,8 @@ const HIDDEN_READ = "hidden_read";
 const PLAIN = "plain";
 /** A Single with a status, and no rules. */
 const S_STATUS = "s_status";
+/** Drafts on, and a read rule that answers a filter: `team` must be `open`. */
+const FILTERED_READ = "filtered_read";
 
 function fixtures() {
   return {
@@ -57,6 +59,13 @@ function fixtures() {
         versions: { drafts: true },
         access: { read: () => false },
         fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: FILTERED_READ,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => ({ team: { equals: "open" } }) },
+        fields: [text({ name: "title" }), text({ name: "team" })],
       }),
       defineCollection({
         slug: PLAIN,
@@ -105,6 +114,11 @@ interface Callers {
   creator: Headers;
   /** Read and update on `plain` and `s_status`, but no publish. */
   noPublisher: Headers;
+  /** Read on `plain` and nothing else: no create. */
+  reader: Headers;
+  /** The editor's and the reader's user ids, for Direct API calls. */
+  editorId: string;
+  readerId: string;
   /** The install's first user, its super-admin. */
   rootId: string;
 }
@@ -155,7 +169,7 @@ async function sessionFor(
 }
 
 const FIXTURE_SLUG = new RegExp(
-  `-(${[REFUSES_UPDATE, S_REFUSES_UPDATE, HIDDEN_READ, PLAIN, S_STATUS].join("|")})$`
+  `-(${[REFUSES_UPDATE, S_REFUSES_UPDATE, HIDDEN_READ, PLAIN, S_STATUS, FILTERED_READ].join("|")})$`
 );
 
 async function seedCallers(t: TestNextly): Promise<Callers> {
@@ -196,12 +210,21 @@ async function seedCallers(t: TestNextly): Promise<Callers> {
       `update-${S_STATUS}`,
     ].includes(slug)
   );
+  const reader = await sessionFor(
+    t,
+    services,
+    "reader",
+    slug => slug === `read-${PLAIN}`
+  );
   return {
     editor: editor.headers,
     editorKey: { authorization: `Bearer ${key.key}` },
     updater: updater.headers,
     creator: creator.headers,
     noPublisher: noPublisher.headers,
+    reader: reader.headers,
+    editorId: editor.id,
+    readerId: reader.id,
     rootId: String((root.item as { id: string | number }).id),
   };
 }
@@ -284,7 +307,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `collections/${REFUSES_UPDATE}/entries/${entryId}`,
           callers.editorKey,
-          { title: "changed" }
+          { title: "changed", _overwrite: true }
         );
         expect(update.status).toBe(403);
 
@@ -301,7 +324,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `singles/${S_REFUSES_UPDATE}`,
           callers.editorKey,
-          { headline: "changed" }
+          { headline: "changed", _overwrite: true }
         );
         expect(update.status).toBe(403);
 
@@ -315,7 +338,7 @@ for (const dialect of getConfiguredTestDialects()) {
           "PATCH",
           `collections/${REFUSES_UPDATE}/entries/${entryId}`,
           callers.editor,
-          { title: "changed" }
+          { title: "changed", _overwrite: true }
         );
         expect(update.status).toBe(403);
 
@@ -335,8 +358,8 @@ for (const dialect of getConfiguredTestDialects()) {
       const writes = (slug: string, entryId: string) =>
         [
           ["PATCH", `versions/1`, { label: "named" }],
-          ["POST", `versions/1/restore`, undefined],
-          ["DELETE", `versions/working-draft`, undefined],
+          ["POST", `versions/1/restore`, { _overwrite: true }],
+          ["DELETE", `versions/working-draft?_overwrite=true`, undefined],
           ["PUT", `versions/autosave`, { snapshot: { title: "x" } }],
         ].map(([method, tail, body]) => ({
           method: method as Method,
@@ -350,7 +373,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: slug,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         return entryId;
       }
@@ -375,13 +398,16 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: HIDDEN_READ,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         for (const who of [callers.editor, callers.editorKey]) {
           const entry = `collections/${HIDDEN_READ}/entries/${entryId}`;
           // The caller may update the entry through REST, so the route's
           // update gate passes and only the read it asks next can refuse.
-          const update = await rest("PATCH", entry, who, { title: "edited" });
+          const update = await rest("PATCH", entry, who, {
+            title: "edited",
+            _overwrite: true,
+          });
           expect(update.ok, `PATCH ${entry}: ${update.status}`).toBe(true);
           const read = await rest("GET", entry, who);
           expect(REFUSED).toContain(read.status);
@@ -400,12 +426,13 @@ for (const dialect of getConfiguredTestDialects()) {
         await t.nextly.update({
           collection: PLAIN,
           id: entryId,
-          data: { title: "second" },
+          data: { title: "second", _overwrite: true },
         });
         const entry = `collections/${PLAIN}/entries/${entryId}`;
         // As above: the update passes, the read does not.
         const update = await rest("PATCH", entry, callers.updater, {
           title: "edited",
+          _overwrite: true,
         });
         expect(update.ok, `PATCH ${entry}: ${update.status}`).toBe(true);
         const read = await rest("GET", entry, callers.updater);
@@ -426,8 +453,8 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     it("a duplicate, authorized as a create, is refused to a caller who may not read the source", async () => {
-      // Published, since a duplicate reads only what the caller's own read
-      // would show, and that is the published row.
+      // Published, so the refusal below can only be the read gate's, never
+      // the source's lifecycle state.
       const entryId = await makeEntry(t, PLAIN, { status: "published" });
       const path = `collections/${PLAIN}/entries/${entryId}/duplicate`;
       // A caller who may read and create duplicates it.
@@ -451,6 +478,208 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await t.nextly.count({ collection: PLAIN })).toEqual(before);
     });
 
+    describe("a duplicate of a draft, read as the caller", () => {
+      const duplicatePath = (collection: string, id: string) =>
+        `collections/${collection}/entries/${id}/duplicate`;
+      /** The REST answer's item, or its error code when refused. */
+      async function answer(res: Response) {
+        const body = (await res.json()) as {
+          item?: Record<string, unknown>;
+          error?: { code?: unknown };
+        };
+        return { status: res.status, item: body.item, code: body.error?.code };
+      }
+      /** A stored row, read trusted and in every lifecycle state. */
+      const stored = async (collection: string, id: unknown) =>
+        (await t.nextly.findByID({
+          collection,
+          id: String(id),
+          status: "all",
+        })) as Record<string, unknown> | null;
+      const total = (collection: string) => t.nextly.count({ collection });
+      /** An id no row has, for the answer a missing source gets. */
+      const MISSING = "00000000-0000-4000-8000-000000000000";
+
+      it("copies a never-published draft the caller may read, as a draft", async () => {
+        const draftId = await makeEntry(t, PLAIN, {
+          title: "draft body",
+          status: "draft",
+        });
+        // Never published: the caller's own default read does not show it,
+        // and its read of every lifecycle state does.
+        const entry = `collections/${PLAIN}/entries/${draftId}`;
+        expect((await rest("GET", entry, callers.editor)).status).toBe(404);
+        expect(
+          (await rest("GET", `${entry}?status=all`, callers.editor)).status
+        ).toBe(200);
+
+        const viaRest = await answer(
+          await rest("POST", duplicatePath(PLAIN, draftId), callers.editor)
+        );
+        expect(viaRest.status).toBe(201);
+        expect(viaRest.item?.id).not.toBe(draftId);
+        const restCopy = await stored(PLAIN, viaRest.item?.id);
+        expect(restCopy?.title).toBe("draft body (Copy)");
+        expect(restCopy?.status).toBe("draft");
+
+        const viaDirect = await t.nextly.duplicate({
+          collection: PLAIN,
+          id: draftId,
+          overrideAccess: false,
+          user: { id: callers.editorId },
+        });
+        const directCopy = await stored(PLAIN, viaDirect.item.id);
+        expect(directCopy?.title).toBe("draft body (Copy)");
+        expect(directCopy?.status).toBe("draft");
+        // The source is untouched.
+        expect((await stored(PLAIN, draftId))?.title).toBe("draft body");
+      });
+
+      it("answers a draft the caller's read rule excludes as a missing id, and creates nothing", async () => {
+        const hidden = await makeEntry(t, FILTERED_READ, {
+          team: "closed",
+          status: "draft",
+        });
+        // A draft the rule's filter admits is copied, so the refusal below is
+        // the filter's and not the draft's.
+        const shown = await makeEntry(t, FILTERED_READ, {
+          team: "open",
+          status: "draft",
+        });
+        const allowed = await answer(
+          await rest(
+            "POST",
+            duplicatePath(FILTERED_READ, shown),
+            callers.editor
+          )
+        );
+        expect(allowed.status).toBe(201);
+        expect((await stored(FILTERED_READ, allowed.item?.id))?.team).toBe(
+          "open"
+        );
+
+        const before = await total(FILTERED_READ);
+        const refused = await answer(
+          await rest(
+            "POST",
+            duplicatePath(FILTERED_READ, hidden),
+            callers.editor
+          )
+        );
+        const missing = await answer(
+          await rest(
+            "POST",
+            duplicatePath(FILTERED_READ, MISSING),
+            callers.editor
+          )
+        );
+        expect(refused.status).toBe(404);
+        expect({ status: refused.status, code: refused.code }).toEqual({
+          status: missing.status,
+          code: missing.code,
+        });
+        await expect(
+          t.nextly.duplicate({
+            collection: FILTERED_READ,
+            id: hidden,
+            overrideAccess: false,
+            user: { id: callers.editorId },
+          })
+        ).rejects.toMatchObject({ statusCode: 404 });
+        expect(await total(FILTERED_READ)).toEqual(before);
+      });
+
+      it("refuses a caller who may create but not read the draft, as for a missing id", async () => {
+        const draftId = await makeEntry(t, PLAIN, { status: "draft" });
+        const before = await total(PLAIN);
+        const refused = await answer(
+          await rest("POST", duplicatePath(PLAIN, draftId), callers.creator)
+        );
+        const missing = await answer(
+          await rest("POST", duplicatePath(PLAIN, MISSING), callers.creator)
+        );
+        expect(REFUSED).toContain(refused.status);
+        expect({ status: refused.status, code: refused.code }).toEqual({
+          status: missing.status,
+          code: missing.code,
+        });
+        expect(await total(PLAIN)).toEqual(before);
+      });
+
+      it("refuses a caller who may read the draft but not create, and creates nothing", async () => {
+        const draftId = await makeEntry(t, PLAIN, { status: "draft" });
+        // The reader sees the draft, so only the create can refuse.
+        expect(
+          (
+            await rest(
+              "GET",
+              `collections/${PLAIN}/entries/${draftId}?status=all`,
+              callers.reader
+            )
+          ).status
+        ).toBe(200);
+        const before = await total(PLAIN);
+        const viaRest = await rest(
+          "POST",
+          duplicatePath(PLAIN, draftId),
+          callers.reader
+        );
+        expect(REFUSED).toContain(viaRest.status);
+        // The Direct API has no route gate in front, so the service's own
+        // create check is what refuses here.
+        await expect(
+          t.nextly.duplicate({
+            collection: PLAIN,
+            id: draftId,
+            overrideAccess: false,
+            user: { id: callers.readerId },
+          })
+        ).rejects.toMatchObject({ statusCode: 403 });
+        expect(await total(PLAIN)).toEqual(before);
+      });
+
+      it("copies a published entry's live content, not its pending working draft", async () => {
+        const liveId = await makeEntry(t, PLAIN, {
+          title: "live",
+          status: "published",
+        });
+        await t.nextly.update({
+          collection: PLAIN,
+          id: liveId,
+          data: { title: "pending", _overwrite: true },
+        });
+        // A working draft is pending, so copying the live row is a choice.
+        const withDraft = (await t.nextly.findByID({
+          collection: PLAIN,
+          id: liveId,
+          draft: true,
+        })) as { title?: unknown } | null;
+        expect(withDraft?.title).toBe("pending");
+
+        const copy = await answer(
+          await rest("POST", duplicatePath(PLAIN, liveId), callers.editor)
+        );
+        expect(copy.status).toBe(201);
+        const row = await stored(PLAIN, copy.item?.id);
+        expect(row?.title).toBe("live (Copy)");
+        expect(row?.status).toBe("published");
+      });
+
+      it("lets a trusted call copy a draft as before", async () => {
+        const draftId = await makeEntry(t, PLAIN, {
+          title: "trusted draft",
+          status: "draft",
+        });
+        const copy = await t.nextly.duplicate({
+          collection: PLAIN,
+          id: draftId,
+        });
+        const row = await stored(PLAIN, copy.item.id);
+        expect(row?.title).toBe("trusted draft (Copy)");
+        expect(row?.status).toBe("draft");
+      });
+    });
+
     it("publishing every language, authorized as an update, is refused without publish", async () => {
       const statusOf = async (id: string) =>
         (
@@ -461,7 +690,9 @@ for (const dialect of getConfiguredTestDialects()) {
           })) as { status?: unknown } | null
         )?.status;
       const publishAll = (id: string, who: Headers) =>
-        rest("POST", `collections/${PLAIN}/entries/${id}/publish-all`, who);
+        rest("POST", `collections/${PLAIN}/entries/${id}/publish-all`, who, {
+          _overwrite: true,
+        });
 
       // A caller who may publish publishes it.
       const allowed = await makeEntry(t, PLAIN, { status: "draft" });
@@ -475,7 +706,7 @@ for (const dialect of getConfiguredTestDialects()) {
         "PATCH",
         `collections/${PLAIN}/entries/${entryId}`,
         callers.noPublisher,
-        { title: "edited" }
+        { title: "edited", _overwrite: true }
       );
       expect(update.ok, `update: ${update.status}`).toBe(true);
       expect(REFUSED).toContain(
@@ -494,7 +725,7 @@ for (const dialect of getConfiguredTestDialects()) {
               "content-type": "application/json",
               ...who,
             },
-            body: JSON.stringify({ headline: "out", status }),
+            body: JSON.stringify({ headline: "out", status, _overwrite: true }),
           }),
           { params: Promise.resolve({ slug: S_STATUS }) }
         );

@@ -21,6 +21,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { JOURNAL_QUERY_KEY } from "@admin/hooks/queries/useJournal";
+import {
+  recallPreference,
+  rememberPreference,
+} from "@admin/lib/device-memory/device-memory";
 import type { JournalRow } from "@admin/services/journalApi";
 
 export const LAST_SEEN_KEY = "nextly:journal:lastSeen";
@@ -33,7 +37,8 @@ export interface UseUnreadCountResult {
 function readLastSeen(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    return localStorage.getItem(LAST_SEEN_KEY);
+    // Through the device memory, which reads storage that throws as nothing.
+    return recallPreference(LAST_SEEN_KEY);
   } catch {
     // Some embedded browsers / privacy modes throw on localStorage
     // access. Treat as "no last-seen recorded" — every row is unread.
@@ -44,7 +49,9 @@ function readLastSeen(): string | null {
 function writeLastSeen(value: string): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(LAST_SEEN_KEY, value);
+    // Kept through the device memory, which keeps nothing where the site
+    // turned remembering off.
+    rememberPreference(LAST_SEEN_KEY, value);
   } catch {
     // Same reasoning as readLastSeen — silently no-op on storage failure.
   }

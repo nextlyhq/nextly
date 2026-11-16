@@ -10,16 +10,16 @@
  *
  * @module runtime/routing/resolve-content
  */
-import { requireNextly } from "../../direct-api/nextly";
+import { requireNextlyOnceStarted } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 import { TRUSTS_EVERY_COLLECTION } from "../../services/collections/trust-grant";
 import { cachedFind } from "../cache/cached-find";
-import { nextlyTags } from "../cache/nextly-tags";
+import { nextlyTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
-import { markDynamic } from "./mark-dynamic";
+import { deferToRequest } from "./defer-to-request";
 
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
@@ -36,7 +36,7 @@ export type NextlyContentReader = Pick<Nextly, "find" | "findByID">;
 /** Options for {@link resolveContent}. */
 interface ResolveContentOptionsBase {
   /**
-   * A booted Nextly instance. Defaults to the runtime singleton (`requireNextly()`),
+   * A booted Nextly instance. Defaults to the runtime singleton (`requireNextly()`, once any start in flight has finished),
    * which requires services to be registered — pass one explicitly (e.g. the
    * value from `await getNextly({ config })` from `nextly`) from a frontend read
    * path that boots
@@ -109,6 +109,11 @@ interface ResolveContentOptionsBase {
   locale?: string;
   /** Rich-text output format for rich-text fields (default the reader's). */
   richTextFormat?: "json" | "html" | "both";
+  /**
+   * How rich-text HTML is styled (default the reader's): `"none"` for classes
+   * only, so the site's stylesheet decides the look.
+   */
+  richTextStyles?: "default" | "none";
   /**
    * Extra cache tags merged with the collection's own tag. Add related
    * collections' tags (e.g. `nextlyTags("authors")`) when a `depth > 0` read
@@ -269,17 +274,38 @@ async function readOverlay(
   }
 }
 
+/**
+ * How a read returns rich text, from the options: each part only where the
+ * caller set it, so an unset one leaves the reader's own default.
+ */
+function richTextOutputOf(
+  options: Pick<ResolveContentOptions, "richTextFormat" | "richTextStyles">
+): Pick<ResolveContentOptions, "richTextFormat" | "richTextStyles"> {
+  return {
+    ...(options.richTextFormat
+      ? { richTextFormat: options.richTextFormat }
+      : {}),
+    ...(options.richTextStyles
+      ? { richTextStyles: options.richTextStyles }
+      : {}),
+  };
+}
+
 export async function resolveContent(
   collection: string,
   slug: string,
   options: ResolveContentOptions = {}
 ): Promise<ContentEntry | null> {
-  const nextly = options.nextly ?? requireNextly();
+  // Waits for a start in flight, as the start-up hook no longer holds requests
+  // until Nextly has started.
+  const nextly = options.nextly ?? (await requireNextlyOnceStarted());
   const slugField = options.slugField ?? "slug";
   const draft = options.draft ?? false;
   const grantedEntryId = options.entryId;
   const depth = options.depth ?? 1;
   const locale = options.locale;
+  // How rich text comes back, on every read below.
+  const richTextOutput = richTextOutputOf(options);
   const overrideAccess = options.overrideAccess ?? false;
   const callerOverrideAccess = options.callerOverrideAccess ?? overrideAccess;
   const user = options.user;
@@ -406,9 +432,7 @@ export async function resolveContent(
       overrideAccess: callerOverrideAccess,
       trusted,
       user,
-      ...(options.richTextFormat
-        ? { richTextFormat: options.richTextFormat }
-        : {}),
+      ...richTextOutput,
       ...(locale ? { locale } : {}),
     });
     return result.items[0] ?? null;
@@ -434,9 +458,7 @@ export async function resolveContent(
             // Keeps the row bypass above and gives back the field half, judged
             // as the sharer.
             ...sharerFieldAccess,
-            ...(options.richTextFormat
-              ? { richTextFormat: options.richTextFormat }
-              : {}),
+            ...richTextOutput,
             ...(locale ? { locale } : {}),
           })
         );
@@ -451,8 +473,9 @@ export async function resolveContent(
         // published-only from here, which is what makes the fall-through safe
         // to take without a second identity check downstream: a named grant
         // authorizes exactly one entry, and the widened lifecycle scope exists
-        // solely to reach it.
-        return publishedOnly();
+        // solely to reach it. Awaited, so a refusal of that read reaches the
+        // catch below and answers as absent rather than escaping as an error.
+        return await publishedOnly();
       }
 
       const result = await nextly.find({
@@ -487,9 +510,7 @@ export async function resolveContent(
         // hands back the field half to the sharer's own rules. Resolves to
         // today's behaviour on every non-draft read.
         ...sharerFieldAccess,
-        ...(options.richTextFormat
-          ? { richTextFormat: options.richTextFormat }
-          : {}),
+        ...richTextOutput,
         // The content locale drives the localized read + fallback.
         ...(locale ? { locale } : {}),
       });
@@ -526,20 +547,24 @@ export async function resolveContent(
           // by the same rules. Carrying the plain `user` here handed back the
           // fully trusted draft and undid the enforcement one line earlier.
           ...sharerFieldAccess,
-          ...(options.richTextFormat
-            ? { richTextFormat: options.richTextFormat }
-            : {}),
+          ...richTextOutput,
           ...(locale ? { locale } : {}),
         })
       );
       return overlaid ?? found;
     } catch (error) {
-      // An access denial (403) means the read policy hides this entry from the
+      // An access denial (403), or a visitor asked to sign in
+      // (`AUTH_REQUIRED`), means the read policy hides this entry from the
       // caller — treat it as absent (→ notFound), never as a transient error.
-      // Any other error still rethrows (retryable, not a permanently-cached 404).
-      // `NextlyError.is` matches across bundled package copies where a plain
-      // `instanceof` would miss a differently-realmed error class.
-      if (NextlyError.is(error) && error.statusCode === 403) {
+      // Any other error still rethrows (retryable, not a permanently-cached
+      // 404), other 401s included: an invalid or expired credential is the
+      // caller's to fix, not a missing page. `NextlyError.is` matches across
+      // bundled package copies where a plain `instanceof` would miss a
+      // differently-realmed error class.
+      if (
+        (NextlyError.is(error) && error.statusCode === 403) ||
+        NextlyError.isCode(error, "AUTH_REQUIRED")
+      ) {
         return null;
       }
       throw error;
@@ -590,17 +615,17 @@ export async function resolveContent(
   // option names the related collections a populated read depends on.
   //
   // Per-request rendering is not available as an alternative here anyway. The
-  // only escape from caching in this module is `markDynamic()`, and the one
-  // factory that reaches this path, `createPublicContentRoute`, exports
-  // `generateStaticParams` — so marking its render dynamic would contradict
-  // what the route has already told Next, exactly as `draft` would.
+  // only escape from caching in this module is `deferToRequest()`, and the
+  // one factory that reaches this path, `createPublicContentRoute`, exports
+  // `generateStaticParams` — so deferring its render to the request would
+  // contradict what the route has already told Next, exactly as `draft` would.
   const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
     // Cache, so a page rendered while a policy was public could stay statically
-    // cached after it tightens. Mark the render dynamic so an enforced read
-    // genuinely runs fresh per request.
-    markDynamic();
+    // cached after it tightens. Wait for the request, so an enforced read
+    // genuinely runs fresh per request and takes its clock after it.
+    await deferToRequest();
     return read();
   }
 
@@ -612,7 +637,7 @@ export async function resolveContent(
   return cachedFind(read, {
     // Tag by the collection so any write to it makes this read fresh, plus any
     // caller-supplied tags (related collections a populated read depends on).
-    tags: [...nextlyTags(collection), ...(options.tags ?? [])],
+    tags: readTags(nextlyTags(collection), options.tags),
     keyParts: [
       "nextly",
       "resolve-content",
@@ -630,6 +655,8 @@ export async function resolveContent(
       // not be "json"), so key it as "inherit" — never as a concrete format — so
       // an explicit-format call can't reuse an inherited-shape cache entry.
       options.richTextFormat ?? "inherit",
+      // The styles change the HTML the read returns, keyed the same way.
+      options.richTextStyles ?? "inherit",
       // The bound changes which related rows come back, so two routes that
       // differ only in what they trust must not share an entry.
       //

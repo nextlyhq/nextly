@@ -1,10 +1,12 @@
 // Collection and dynamic content types for the admin app
 
+import type { RemovedFromCodeMark } from "./removed-from-code";
+
 /**
  * All supported field types in Nextly
  *
  * These map to the field types available in FieldPalette.tsx:
- * - Text: text, textarea, richText, email, password, code
+ * - Text: text, textarea, richText, email, password, code, icon
  * - Number: number
  * - Selection: checkbox, date, select, radio
  * - Media: upload
@@ -19,6 +21,7 @@ export type FieldPrimitiveType =
   | "email"
   | "password"
   | "code"
+  | "icon"
   // Number types
   | "number"
   // Selection types
@@ -212,7 +215,7 @@ export interface CollectionAdminComponents {
   AfterEdit?: string;
 }
 
-export interface Collection {
+export interface Collection extends RemovedFromCodeMark {
   id: string;
   name: string;
   /** Slug for the collection (new API format) */
@@ -236,6 +239,8 @@ export interface Collection {
     isPlugin?: boolean;
     /** Hide the "New …" affordances (machine-created collections) */
     disableCreate?: boolean;
+    /** Hide the admin's own Delete (deleted through a plugin's own action) */
+    disableDelete?: boolean;
     /** Custom components for admin UI */
     components?: CollectionAdminComponents;
   };
@@ -260,6 +265,12 @@ export interface Collection {
    * Schema Builder always resolves drafts off.
    */
   draftsEnabled?: boolean;
+  /**
+   * Why drafts are off, when the configuration asked for them. With
+   * `localized-component`, a draft saved before the rule may still be held,
+   * and the editor reads it (`readsHeldDraft`).
+   */
+  draftsDisabledReason?: string;
   /**
    * Resolved cache-revalidation config, or null/absent when revalidation is on
    * with no override. The server normalizes the Schema Builder's on/off switch
@@ -365,6 +376,8 @@ export interface CreateCollectionPayload {
    *  versioned collection). Derived server-side; read-only. Only code-first
    *  collections enable it — the Schema Builder always resolves drafts off. */
   draftsEnabled?: boolean;
+  /** Why drafts are off, when the configuration asked for them; see `readsHeldDraft`. */
+  draftsDisabledReason?: string;
   /** Whether writes bust cache tags. Default true; false opts the collection out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Default true; false

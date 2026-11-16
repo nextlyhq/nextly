@@ -19,6 +19,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import {
+  STORAGE_MODES,
+  type StorageMode,
+} from "../../plugins/__tests__/helpers/dialect-matrix";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -45,110 +49,124 @@ const siteConfig = () =>
 
 const PUBLISHED_AT = new Date("2026-08-04T09:33:20.000Z");
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  storage: StorageMode
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    perLanguageStorage: storage.perLanguageStorage,
     collections: [articles()],
     singles: [siteConfig()],
   });
   return current;
 }
 
-describe.each(getConfiguredTestDialects())(
-  "Direct API row shape (%s)",
-  dialect => {
-    it("returns Date timestamps from a create", async () => {
-      const { nextly } = await boot(dialect);
+// Both storage layouts: where translatable values live must not change what this answers.
+describe.each(
+  STORAGE_MODES.flatMap(storage =>
+    getConfiguredTestDialects().map(dialect => ({
+      dialect,
+      storage,
+      mode: storage.name,
+    }))
+  )
+)("Direct API row shape ($dialect, $mode)", ({ dialect, storage }) => {
+  it("returns Date timestamps from a create", async () => {
+    const { nextly } = await boot(dialect, storage);
 
-      const { item } = await nextly.create({
-        collection: "articles",
-        data: { title: "a", publishedAt: PUBLISHED_AT.toISOString() },
-        overrideAccess: true,
-      });
-
-      expect(item.createdAt).toBeInstanceOf(Date);
-      expect(item.updatedAt).toBeInstanceOf(Date);
-      // A user-declared `date` field is stored in a timestamp column too, so it
-      // comes back decoded exactly like the built-in ones.
-      expect(item.publishedAt).toBeInstanceOf(Date);
+    const { item } = await nextly.create({
+      collection: "articles",
+      data: { title: "a", publishedAt: PUBLISHED_AT.toISOString() },
+      overrideAccess: true,
     });
 
-    it("returns Date timestamps from a read", async () => {
-      const { nextly } = await boot(dialect);
-      const { item } = await nextly.create({
-        collection: "articles",
-        data: { title: "a", publishedAt: PUBLISHED_AT.toISOString() },
-        overrideAccess: true,
-      });
+    expect(item.createdAt).toBeInstanceOf(Date);
+    expect(item.updatedAt).toBeInstanceOf(Date);
+    // A user-declared `date` field is stored in a timestamp column too, so it
+    // comes back decoded exactly like the built-in ones.
+    expect(item.publishedAt).toBeInstanceOf(Date);
+  });
 
-      const found = await nextly.findByID({
-        collection: "articles",
-        id: String(item.id),
-        overrideAccess: true,
-      });
-
-      expect(found?.createdAt).toBeInstanceOf(Date);
-      expect(found?.publishedAt).toBeInstanceOf(Date);
-      // Asserted on the read as well as the create: a driver that decodes one
-      // path and not the other is exactly how the representation came to differ.
-      expect(found?.updatedAt).toBeInstanceOf(Date);
+  it("returns Date timestamps from a read", async () => {
+    const { nextly } = await boot(dialect, storage);
+    const { item } = await nextly.create({
+      collection: "articles",
+      data: { title: "a", publishedAt: PUBLISHED_AT.toISOString() },
+      overrideAccess: true,
     });
 
-    it("returns Date timestamps from a list", async () => {
-      const { nextly } = await boot(dialect);
-      await nextly.create({
-        collection: "articles",
-        data: { title: "a", publishedAt: PUBLISHED_AT.toISOString() },
-        overrideAccess: true,
-      });
-
-      const { items } = await nextly.find({
-        collection: "articles",
-        overrideAccess: true,
-      });
-
-      expect(items).toHaveLength(1);
-      expect(items[0]?.createdAt).toBeInstanceOf(Date);
-      expect(items[0]?.publishedAt).toBeInstanceOf(Date);
+    const found = await nextly.findByID({
+      collection: "articles",
+      id: String(item.id),
+      overrideAccess: true,
     });
 
-    it("reports a single's own date field as a Date and its updatedAt as a string", async () => {
-      // The two halves of a single disagree, so both are pinned. `updatedAt` is
-      // put through a deserializer that normalizes the system timestamps to ISO
-      // strings; a user-declared date field is not, and arrives decoded. Typing
-      // either one after the other would compile and then fail on every single.
-      const { nextly } = await boot(dialect);
+    expect(found?.createdAt).toBeInstanceOf(Date);
+    expect(found?.publishedAt).toBeInstanceOf(Date);
+    // Asserted on the read as well as the create: a driver that decodes one
+    // path and not the other is exactly how the representation came to differ.
+    expect(found?.updatedAt).toBeInstanceOf(Date);
+  });
 
-      await nextly.updateSingle({
-        slug: "site-config",
-        data: { tagline: "x", launchedAt: PUBLISHED_AT.toISOString() },
-        overrideAccess: true,
-      });
-
-      const single = await nextly.findSingle({
-        slug: "site-config",
-        overrideAccess: true,
-      });
-
-      expect(single.launchedAt).toBeInstanceOf(Date);
-      expect(typeof single.updatedAt).toBe("string");
+  it("returns Date timestamps from a list", async () => {
+    const { nextly } = await boot(dialect, storage);
+    await nextly.create({
+      collection: "articles",
+      data: { title: "a", publishedAt: PUBLISHED_AT.toISOString() },
+      overrideAccess: true,
     });
 
-    it("leaves a date field null rather than decoding an absent value", async () => {
-      const { nextly } = await boot(dialect);
-
-      const { item } = await nextly.create({
-        collection: "articles",
-        data: { title: "a" },
-        overrideAccess: true,
-      });
-
-      // Absent, not the epoch: a decoder applied to a missing value would answer
-      // 1970 and every caller reading it would believe the article was published.
-      // `null`, and asserted as `null` rather than through a nullish coalesce:
-      // the two are different claims about the row, and a check that accepts
-      // either would pass whichever the column started returning.
-      expect(item.publishedAt).toBeNull();
+    const { items } = await nextly.find({
+      collection: "articles",
+      overrideAccess: true,
     });
-  }
-);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.createdAt).toBeInstanceOf(Date);
+    expect(items[0]?.publishedAt).toBeInstanceOf(Date);
+  });
+
+  it("reports a single's own date field as a Date and its updatedAt as a string", async () => {
+    // The two halves of a single disagree, so both are pinned. `updatedAt` is
+    // put through a deserializer that normalizes the system timestamps to ISO
+    // strings; a user-declared date field is not, and arrives decoded. Typing
+    // either one after the other would compile and then fail on every single.
+    const { nextly } = await boot(dialect, storage);
+
+    await nextly.updateSingle({
+      slug: "site-config",
+      data: {
+        tagline: "x",
+        launchedAt: PUBLISHED_AT.toISOString(),
+        _overwrite: true,
+      },
+      overrideAccess: true,
+    });
+
+    const single = await nextly.findSingle({
+      slug: "site-config",
+      overrideAccess: true,
+    });
+
+    expect(single.launchedAt).toBeInstanceOf(Date);
+    expect(typeof single.updatedAt).toBe("string");
+  });
+
+  it("leaves a date field null rather than decoding an absent value", async () => {
+    const { nextly } = await boot(dialect, storage);
+
+    const { item } = await nextly.create({
+      collection: "articles",
+      data: { title: "a" },
+      overrideAccess: true,
+    });
+
+    // Absent, not the epoch: a decoder applied to a missing value would answer
+    // 1970 and every caller reading it would believe the article was published.
+    // `null`, and asserted as `null` rather than through a nullish coalesce:
+    // the two are different claims about the row, and a check that accepts
+    // either would pass whichever the column started returning.
+    expect(item.publishedAt).toBeNull();
+  });
+});

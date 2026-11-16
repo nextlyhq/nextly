@@ -5,7 +5,10 @@
  * @module components/features/settings/EmailTemplateForm/workbench-model
  */
 
-import { ownerGroupOf } from "@admin/components/features/email-hub/messages/messages-model";
+import {
+  type KnownPlugins,
+  ownerGroupOf,
+} from "@admin/components/features/email-hub/messages/messages-model";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 /**
@@ -64,7 +67,14 @@ export function ownsContent(record: EmailTemplateRecord | undefined): boolean {
   }
 }
 
-/** The owner's name as a person reads it: "Nextly", a plugin's, "This site". */
-export function ownerName(record: EmailTemplateRecord): string {
-  return ownerGroupOf(record.owner).label;
+/**
+ * The owner's name as a person reads it: "Nextly", a plugin's as the admin
+ * names it everywhere else, "This site". `plugins` are the installed plugins
+ * the admin knows (`branding.plugins`); `useOwnerName` passes them.
+ */
+export function ownerName(
+  record: EmailTemplateRecord,
+  plugins: KnownPlugins
+): string {
+  return ownerGroupOf(record.owner, plugins).label;
 }

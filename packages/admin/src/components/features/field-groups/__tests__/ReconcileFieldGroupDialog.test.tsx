@@ -45,6 +45,9 @@ function plan(
     removed: [],
     repaired: [],
     adopted: [],
+    // Always present on a preview: the fields inside a group with no name whose column is still to
+    // come. Empty here, like every other list, so a test sets only the case it is about.
+    awaitingColumns: [],
     blockers: [],
     unchanged: true,
     wouldWrite: false,

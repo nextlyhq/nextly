@@ -166,6 +166,9 @@ describe("the derived policy list", () => {
     const keys = passes.map(pass => pass.key).sort();
     expect(keys).toEqual([
       "audit.retention.lastPassAt",
+      // The cache tag expiry ledger, pruned past the age the cache handlers
+      // serve entries for, with nothing to configure either.
+      "cache-tags.retention.lastPassAt",
       // A deleted subject's content events are kept for the activity log's
       // window too, so the audit policy brings their pass as well.
       "content-events.retention.lastPassAt",
@@ -173,9 +176,15 @@ describe("the derived policy list", () => {
       // Notices follow the activity log's window, so the audit policy brings
       // their pass too.
       "notices.retention.lastPassAt",
+      // Plugins' finished durable events, kept a fixed 30 days, with nothing
+      // to configure, as the one-purpose secrets beside them.
+      "plugin-events.retention.lastPassAt",
       // Recorded preview links long past their end, with nothing to configure,
       // as the one-purpose secrets beside them.
       "preview-links.retention.lastPassAt",
+      // Plugins' received-webhook claims, kept a fixed 30 days, with nothing
+      // to configure, as the one-purpose secrets beside them.
+      "received-webhooks.retention.lastPassAt",
       "secrets.retention.lastPassAt",
       "webhooks.retention.lastPassAt",
     ]);

@@ -19,6 +19,7 @@
  * @module domains/widgets/execute
  */
 
+import type { InternalTimeseriesArgs } from "../../direct-api/namespaces/collections";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import { NextlyError } from "../../errors/nextly-error";
@@ -32,7 +33,13 @@ import {
 
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
-import { relativeSpanStart, type WidgetQuery } from "./query";
+import {
+  openWindowEnd,
+  rangeWindow,
+  relativeSpanStart,
+  type TimeseriesRange,
+  type WidgetQuery,
+} from "./query";
 import type { ResolverOptions, WidgetScope } from "./resolved-sources";
 import type { WidgetResult, WidgetResultField } from "./result";
 import {
@@ -132,9 +139,30 @@ function windowedQuery(
   now: Date
 ): WidgetQuery {
   if (query.since === undefined) return query;
+  // A window left open at the batch's instant keeps that instant's whole
+  // second (`openWindowEnd`); a stated `until` is a boundary in the past.
+  return boundedBy(
+    query,
+    field,
+    relativeSpanStart(query.since, now),
+    query.until === undefined ? openWindowEnd(now) : windowEnd(query, now)
+  );
+}
+
+/**
+ * `query` keeping only rows whose `field` falls in `[from, to)`, joined with
+ * its own `where` under `and`, so a declared condition keeps its top-level
+ * keys.
+ */
+function boundedBy(
+  query: WidgetQuery,
+  field: string,
+  from: Date,
+  to: Date
+): WidgetQuery {
   const window: Record<string, string> = {
-    greater_than_equal: relativeSpanStart(query.since, now).toISOString(),
-    less_than: windowEnd(query, now).toISOString(),
+    greater_than_equal: from.toISOString(),
+    less_than: to.toISOString(),
   };
   const where = query.where ?? {};
   const and = Array.isArray(where.and) ? where.and : [];
@@ -142,6 +170,37 @@ function windowedQuery(
     ...query,
     where: { ...where, and: [...and, { [field]: window }] },
   };
+}
+
+/**
+ * How many rows of `collection`, by the slug it is registered under, match
+ * `where`, as `caller` may read them: the count a widget's `count` runs, with
+ * the same read arguments (`sharedReadArgs`), so the access decision and the
+ * field guards are the one path every dashboard read takes. For a reader that
+ * names a collection the server chose, not a widget source: a collection kept
+ * off the dashboard is counted all the same, since hiding one from the
+ * navigation says nothing about who may read it. Throws as the count does,
+ * for a collection the caller may not read included.
+ */
+export async function countAsCaller(
+  collection: string,
+  where: Record<string, unknown> | undefined,
+  caller: ReadCaller
+): Promise<number> {
+  const query: WidgetQuery = {
+    source: `collection:${collection}`,
+    op: "count",
+    // Every entry the reader may open, drafts included, as the collection's
+    // own list counts them: a read naming no status counts published entries
+    // only. A `where` still narrows it, to drafts for one.
+    status: "all",
+    ...(where === undefined ? {} : { where }),
+  };
+  const result = await requireNextly().count({
+    collection,
+    ...sharedReadArgs(query, caller),
+  });
+  return result.total;
 }
 
 async function runCount(
@@ -234,6 +293,9 @@ async function runTimeseries(
   // the time a query reaches execution both are present. The fallbacks keep
   // that assumption from becoming an unchecked cast.
   const dateField = query.dateField ?? "";
+  if (query.range !== undefined) {
+    return runRangedTimeseries(collection, query, query.range, caller, now);
+  }
   const interval = query.interval ?? "day";
   const result = await requireNextly().timeseries({
     collection,
@@ -250,6 +312,43 @@ async function runTimeseries(
     now: windowEnd(query, now),
     ...sharedReadArgs(windowedQuery(query, dateField, now), caller),
   });
+  return { op: "timeseries", points: result.points, interval: result.interval };
+}
+
+/**
+ * A timeseries over a range. The range states the whole window: its interval,
+ * how many intervals it overlaps, the instant the last one is placed by, and
+ * the rows it counts, all from one reading of the batch's instant
+ * (`rangeWindow`), so the points and the rows they count cannot disagree.
+ */
+async function runRangedTimeseries(
+  collection: string,
+  query: WidgetQuery,
+  range: TimeseriesRange,
+  caller: ReadCaller,
+  now: Date
+): Promise<WidgetResult> {
+  const dateField = query.dateField ?? "";
+  const window = rangeWindow(range, now);
+  // The rows end at the batch's instant's whole second (`openWindowEnd`); the
+  // intervals are still placed by the instant itself, and a row stored rounded
+  // across the last interval's end, before that second ends, counts in the
+  // last interval, as the row filter below keeps it. Named through the Direct
+  // API's internal arguments (`InternalTimeseriesArgs`), which the published
+  // `TimeseriesArgs` leaves out.
+  const args: InternalTimeseriesArgs = {
+    collection,
+    dateField,
+    interval: window.interval,
+    intervals: window.intervals,
+    now: window.anchor,
+    rowsEnd: openWindowEnd(now),
+    ...sharedReadArgs(
+      boundedBy(query, dateField, window.start, openWindowEnd(now)),
+      caller
+    ),
+  };
+  const result = await requireNextly().timeseries(args);
   return { op: "timeseries", points: result.points, interval: result.interval };
 }
 
@@ -316,22 +415,33 @@ async function runList(
   collection: string,
   query: WidgetQuery,
   caller: ReadCaller,
-  source: WidgetSource
+  source: WidgetSource,
+  depth: 0 | undefined,
+  hookContext: Readonly<Record<string, unknown>> | undefined
 ): Promise<WidgetResult> {
   const select = toSelect(query.select);
   const result = await requireNextly().find({
     collection,
     limit: query.limit,
+    // Passed only when asked for, so every other read keeps core's default.
+    ...(depth === 0 ? { depth } : {}),
+    // The hooks' context, as core's own `find` hands it to them; a copy, so a
+    // hook writing to it changes nothing the data function holds.
+    ...(hookContext === undefined ? {} : { context: { ...hookContext } }),
     ...(query.sort ? { sort: query.sort } : {}),
     ...(select ? { select } : {}),
     ...sharedReadArgs(query, caller),
   });
   const items = result.items ?? [];
   const fields = describeSelectedFields(query, source, items);
+  // The read's own count of what it matched, so a card's "View all (N)" is the
+  // number its linked list shows; absent when the read did not count.
+  const total = result.meta?.total;
   return {
     op: "list",
     items,
     ...(fields && { fields }),
+    ...(typeof total === "number" && { total }),
   };
 }
 
@@ -363,6 +473,7 @@ const SINGLE_QUERY_FIELD_USE: Record<
   // A Single is one document; there are no rows to bound by when they were made.
   since: "refused",
   until: "refused",
+  range: "refused",
 };
 
 /**
@@ -393,9 +504,18 @@ const SINGLE_QUERY_FIELD_USE: Record<
  * no such claim, or claims another single, and stays the failure it is: the
  * Direct API surfaces it, and a card drawn over it would say "Nothing yet"
  * about a document that exists.
+ *
+ * Nor is a `NOT_FOUND` the access gate gave: a caller who may not read the
+ * Single is answered as if it were missing, identically on the wire, and the
+ * gate's reason rides only in the server-side `logContext`. A card is the one
+ * place that answer is not taken at its word. Singles are the site's own
+ * configuration, defined in code, so their names are no secret to hide, and a
+ * card reading "Nothing yet" for a refusal would tell the admin something
+ * false; the refusal fails the card instead.
  */
 function singleAnswersNoDocument(error: unknown, slug: string): boolean {
   if (!NextlyError.is(error) || error.code !== "NOT_FOUND") return false;
+  if (error.logContext?.reason !== undefined) return false;
   const about = error.publicData;
   return about !== undefined && "single" in about && about.single === slug;
 }
@@ -428,7 +548,13 @@ async function runSingle(
   const items =
     document === undefined ? [] : [projectedTo(document, query.select)];
   const fields = describeSelectedFields(query, source, items);
-  return { op: "list", items, ...(fields && { fields }) };
+  // A Single is its one document, so the rows shown are all there are.
+  return {
+    op: "list",
+    items,
+    ...(fields && { fields }),
+    total: items.length,
+  };
 }
 
 /**
@@ -500,6 +626,20 @@ async function hasReleaseToRead(caller: ReadCaller): Promise<boolean> {
  */
 export interface CoreQueryOptions extends ResolverOptions {
   callerScope?: WidgetScope;
+  /**
+   * `0` for a collection `list` that answers each link (a relationship or an
+   * upload) as the id it stores, unexpanded: core's own `find` with
+   * `depth: 0`. Absent, the read expands links as core's `find` does by
+   * default. Handed only by a declared widget's data read, never named in a
+   * query, so a card's own query cannot ask for it.
+   */
+  depth?: 0;
+  /**
+   * The context a collection `list` hands the collection's hooks, as core's
+   * own `find` takes it. Handed only by a declared widget's data read, never
+   * named in a query.
+   */
+  hookContext?: Readonly<Record<string, unknown>>;
 }
 
 export async function executeWidgetQuery(
@@ -560,7 +700,16 @@ export async function executeWidgetQuery(
   // the same moment.
   const now = opts?.now ?? new Date();
   if (query.op === "count") return runCount(collection, query, caller, now);
-  if (query.op === "list") return runList(collection, query, caller, source);
+  if (query.op === "list") {
+    return runList(
+      collection,
+      query,
+      caller,
+      source,
+      opts?.depth,
+      opts?.hookContext
+    );
+  }
   if (query.op === "groupBy") {
     return runGroupBy(collection, query, caller, source);
   }

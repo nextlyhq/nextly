@@ -14,10 +14,13 @@
  *
  * @module lib/site-content
  */
-import type { BlocksDataProvider } from "@nextlyhq/blocks-react";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
-import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
+import type {
+  NextlyContentReader,
+  NextlySingleReader,
+  PublicSiteSettingsSource,
+} from "nextly/runtime";
 
 import nextlyConfig from "../../nextly.config";
 
@@ -60,9 +63,14 @@ type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
  * `src` — resolves to null and draws nothing.
  */
 export const siteReader: NextlyContentReader &
-  NextlySingleReader & { media: MediaLookup } = {
+  NextlySingleReader &
+  PublicSiteSettingsSource & { media: MediaLookup } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // The site settings a page shows, its name and time zone among them. A
+  // block route reads them through the reader it is given; one that left this
+  // out would read the process's registered instance and warn once.
+  publicSiteSettings: async () => (await instance()).publicSiteSettings(),
   // A Single page reads the document itself through `findSingle` and its BLOCKS
   // through `find`/`findByID`. One reader carrying both is what keeps a page and
   // everything embedded in it coming from a single instance — which on a
@@ -72,87 +80,6 @@ export const siteReader: NextlyContentReader &
     findByID: async args => (await instance()).media.findByID(args),
   },
 };
-
-/**
- * What a dynamic block reads, backed by this site's own content.
- *
- * Without one, `createStandaloneContext` installs `emptyDataProvider` and every
- * `core/collection-loop` answers with nothing: the block emits its container and
- * no entries, so a page that says it lists posts renders an empty box. That is
- * the forgiving-render default doing its job for a standalone consumer with no
- * database, and it is the wrong answer for a route that has one.
- *
- * Bounded by the route helper rather than here. `createBlocksPage` creates a
- * fresh query budget per render, because depth in a document becomes
- * multiplication in reads — so a loop nested in a loop is capped by the helper
- * whatever this provider is willing to answer.
- *
- * PAGE, not offset, and the mismatch is stated rather than papered over. Nextly
- * paginates by page number; `BlocksQuery` carries an offset. The two agree only
- * when the offset is a whole number of pages, so an offset that is not gets a
- * refusal instead of the nearest page — silently serving entries 4 to 6 for a
- * request that asked for 6 to 8 is the kind of wrong answer nobody reports.
- * Unreachable today, since `core/collection-loop` sends no offset at all, which
- * is exactly what makes the guard cheap.
- */
-export function createSiteDataProvider(
-  reader: Pick<NextlyContentReader, "find">
-): BlocksDataProvider {
-  return {
-    find: async ({ collection, limit, offset, sort, locale }) => {
-      if (offset !== undefined && offset !== 0) {
-        if (limit === undefined || limit <= 0 || offset % limit !== 0) {
-          throw new Error(
-            `This site reads by page, so an offset of ${offset} with a limit ` +
-              `of ${String(limit)} names no page it can ask for.`
-          );
-        }
-      }
-      const result = await reader.find({
-        collection,
-        /*
-         * ANONYMOUS and PUBLISHED-ONLY, and both are preconditions rather than
-         * tuning.
-         *
-         * A stored block document names the collection it loops, and this route
-         * is reachable by anyone with a URL — so the read is on behalf of that
-         * visitor, not of the process. `Nextly.find` defaults to a TRUSTED read,
-         * which evaluates no access rule and applies no lifecycle filter, and a
-         * document could then name any collection in the site.
-         *
-         * Measured against the seeded playground data: the bare call returns 5
-         * posts including 2 drafts, while `overrideAccess: false` returns 3 and
-         * `status: "published"` returns 3.
-         *
-         * Both, because they answer different questions. Access decides WHO may
-         * see a row; the lifecycle decides whether a row is public yet. A draft
-         * that anonymous access rules would admit is still not published, and a
-         * published row behind a restrictive rule is still not this visitor's.
-         */
-        overrideAccess: false,
-        status: "published",
-        ...(limit === undefined ? {} : { limit }),
-        ...(offset === undefined || offset === 0 || limit === undefined
-          ? {}
-          : { page: offset / limit + 1 }),
-        ...(sort === undefined ? {} : { sort }),
-        ...(locale === undefined ? {} : { locale }),
-      });
-      return { items: result.items, total: result.meta.total };
-    },
-  };
-}
-
-/**
- * The provider this app's routes use, over its own reader.
- *
- * A factory above and one instance here, so the mapping can be exercised against
- * a stub: the offset-to-page translation and its refusal are decisions worth a
- * test, and a provider closed over the live instance could only be tested with a
- * database attached.
- */
-export const siteDataProvider: BlocksDataProvider =
-  createSiteDataProvider(siteReader);
 
 /**
  * The site's breakpoints, and the reason a route compiles its own sheet.
@@ -209,13 +136,41 @@ export const SITE_STYLES = {
 };
 
 /**
+ * Whether this site runs the SEO plugin, read from the config the site boots
+ * with, so the routes and the plugin list never disagree about it.
+ */
+const seoPluginRuns = (nextlyConfig.plugins ?? []).some(
+  plugin => plugin.name === "@nextlyhq/plugin-seo"
+);
+
+/**
+ * The title a route states for a page's browser tab: the page's own title,
+ * never a heading or other text its blocks offer, since a page's first heading
+ * is often a section title rather than what the page is called.
+ *
+ * Nothing where the SEO plugin runs. A title a route states outranks the
+ * plugin's title pattern, so stating the page's title there would keep the
+ * site's pattern ("Pricing · Site name") off every page. The plugin works the
+ * title out itself from the page's SEO title, its pattern and the page's own
+ * title. Without the plugin, the page's title is stated so the tab is never
+ * empty.
+ *
+ * Shared by every route on this site that serves a page, so each answers the
+ * tab the same way.
+ */
+export function pageTitle(
+  document: Record<string, unknown>
+): string | undefined {
+  if (seoPluginRuns) return undefined;
+  return typeof document.title === "string" ? document.title : undefined;
+}
+
+/**
  * The metadata a Single-backed page derives from its document.
  *
- * Shared by the two single-page routes, which had the same nine lines each. The
- * SEO derivation wins over the stored field where it has an answer, because it
- * reads the page's own first heading and opening paragraph — a title an author
- * changed in the layout should not be contradicted by a `title` field they
- * forgot.
+ * Shared by the two single-page routes, which had the same nine lines each.
+ * The title is the page's own ({@link pageTitle}); the description and share
+ * image are what its blocks offer.
  *
  * Not shared with the collection route, whose version also states `canonical`:
  * an entry has a path within its collection and a Single does not.
@@ -234,7 +189,7 @@ export function singleMetadata(
   openGraph?: { images: { url: string }[] };
 } {
   return {
-    title: derived.title ?? (document.title as string | undefined),
+    title: pageTitle(document),
     description: derived.description,
     ...(derived.image
       ? { openGraph: { images: [{ url: derived.image }] } }

@@ -70,7 +70,13 @@ describe("localized companion filters cover every translated operator", () => {
   it.each(internalOperators())(
     'expresses "$operator" ($op) against the companion table',
     ({ operator, op, value }) => {
-      const condition = buildLocalizedWhereExists(CTX, "region", op, value);
+      const condition = buildLocalizedWhereExists(
+        CTX,
+        "region",
+        op,
+        value,
+        "postgresql"
+      );
 
       expect(
         condition,
@@ -85,12 +91,18 @@ describe("localized companion filters cover every translated operator", () => {
     // empty so the caller's own untranslatable check can refuse it, rather than
     // being turned into some nearby condition.
     expect(
-      buildLocalizedWhereExists(CTX, "region", "BETWEEN", [1, 2])
+      buildLocalizedWhereExists(CTX, "region", "BETWEEN", [1, 2], "postgresql")
     ).toBeUndefined();
   });
 
   it("constrains the companion row by locale", () => {
-    const condition = buildLocalizedWhereExists(CTX, "region", "=", "emea");
+    const condition = buildLocalizedWhereExists(
+      CTX,
+      "region",
+      "=",
+      "emea",
+      "postgresql"
+    );
 
     // The locale has to reach the subquery: without it the filter matches a
     // value in ANY language, which for an access rule admits rows on the
@@ -103,7 +115,13 @@ describe("localized companion filters cover every translated operator", () => {
     // A field with no translation for the locale usually has no companion row at
     // all, so `EXISTS(col IS NULL)` would match nothing and quietly exclude
     // every untranslated row.
-    const condition = buildLocalizedWhereExists(CTX, "region", "IS NULL", null);
+    const condition = buildLocalizedWhereExists(
+      CTX,
+      "region",
+      "IS NULL",
+      null,
+      "postgresql"
+    );
 
     expect(JSON.stringify(condition)).toContain("NOT");
   });

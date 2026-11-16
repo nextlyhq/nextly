@@ -84,6 +84,12 @@ export interface SchemaPreviewLeavingTranslation {
   total: number | null;
   /** Entries with no default-language value, which keep another language's; null if unknown. */
   entriesWithoutDefault: number | null;
+  /**
+   * Entries whose shared value comes from a language other than the default one, by that
+   * language: what their default-language readers will see. Null if unknown; absent from an
+   * older server.
+   */
+  sharedFrom?: Record<string, number> | null;
   /** The language whose value becomes the shared one. */
   defaultLocale: string;
   restoreCommand: string;
@@ -108,6 +114,20 @@ export interface SchemaPreviewResponse {
   // preview detects (drop, add) pairs that might be column renames.
   renamed: SchemaPreviewRenameCandidate[];
   leavingTranslation?: SchemaPreviewLeavingTranslation[];
+  joiningTranslation?: SchemaPreviewJoiningTranslation[];
+}
+
+/**
+ * A field becoming translated, as the schema preview reports it: its values become the default
+ * language's, and every other language falls back to them until translated.
+ */
+export interface SchemaPreviewJoiningTranslation {
+  name: string;
+  column: string;
+  /** How many entries hold a value in it; null if they could not be counted. */
+  values: number | null;
+  /** The language whose value each one becomes. */
+  defaultLocale: string;
 }
 
 // Response from the apply endpoint.
@@ -146,11 +166,19 @@ export const schemaApi = {
     // against a DIFFERENT localization state can miss a required-column
     // prompt the apply turns out to need — the save then fails after the user
     // already confirmed. Undefined leaves the persisted flag in charge.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, so a field taking one of the lifecycle's own names is
+    // refused when the same save turns the lifecycle on. Judged with, never applied: the settings
+    // save that follows the fields sets it. Undefined leaves the stored flag alone in charge.
+    status?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/collections/schema/${slug}/preview`,
-      { fields, ...(localized !== undefined ? { localized } : {}) }
+      {
+        fields,
+        ...(localized !== undefined ? { localized } : {}),
+        ...(status !== undefined ? { status } : {}),
+      }
     );
   },
 
@@ -176,7 +204,9 @@ export const schemaApi = {
     // fields provisions the companion in the same request instead of diffing
     // against the registry flag as it was before the save. Undefined leaves
     // the persisted value untouched.
-    localized?: boolean
+    localized?: boolean,
+    // The pending Draft/Published toggle, judged with as the preview is (see above).
+    status?: boolean
   ): Promise<SchemaApplyResponse> => {
     const result = await protectedApi.post<
       ActionResponse<{ newSchemaVersion: number; toastSummary?: string }>
@@ -187,6 +217,7 @@ export const schemaApi = {
       resolutions,
       renameResolutions,
       ...(localized !== undefined ? { localized } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
     return {
       success: true,

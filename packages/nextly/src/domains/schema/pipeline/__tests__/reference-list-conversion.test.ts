@@ -133,7 +133,8 @@ describe("the statements a reference-list conversion runs", () => {
 
   it("restates NOT NULL on MySQL when the column keeps it", () => {
     const statements = referenceConversionStatements(
-      { ...mysqlOp, nullable: false },
+      // NOT NULL before and after: the live nullability is what each MODIFY restates.
+      { ...mysqlOp, nullable: false, fromNullable: false },
       "mysql"
     );
     expect(statements[0]).toMatch(/text NOT NULL$/);
@@ -181,9 +182,12 @@ describe("the generated DOWN of a reference-list conversion", () => {
     });
   });
 
-  it("is not run by an apply, which only ever converts forward", () => {
+  // The same op is also a FORWARD apply: a field switched from many to one converts its list
+  // back to a scalar before anything else runs, so an apply orders it with the other conversions
+  // while it stays apart from the scalar-to-list kind.
+  it("is ordered with the conversions an apply runs first, apart from the list kind", () => {
     expect(isReferenceListConversion(pgInverse)).toBe(false);
-    expect(isPreResolutionOp(pgInverse)).toBe(false);
+    expect(isPreResolutionOp(pgInverse)).toBe(true);
   });
 
   it("unwraps a one-item list on PostgreSQL, and casts any longer list so the old type refuses it", () => {
@@ -219,5 +223,68 @@ describe("the generated DOWN of a reference-list conversion", () => {
     expect(generateSQL(mysqlInverse, "mysql")).toBe(
       referenceConversionStatements(mysqlInverse, "mysql").join("; ")
     );
+  });
+});
+
+describe("the generated DOWN of a relation switched from many to one", () => {
+  // The forward conversion reads each list back as its one id. Its DOWN has to make each id a
+  // one-item list again: PostgreSQL has no cast from uuid to jsonb, and MySQL would read the id as
+  // a bare JSON scalar rather than a list.
+  const forward: ChangeColumnTypeOp = {
+    type: "change_column_type",
+    tableName: "dc_posts",
+    columnName: "author",
+    fromType: "jsonb",
+    toType: "uuid",
+    nullable: true,
+    fromNullable: true,
+    conversion: "referenceScalar",
+  };
+  const [inverse] = buildInverseOperations([forward], {
+    tables: [],
+  }) as ChangeColumnTypeOp[];
+
+  it("converts back into the list", () => {
+    expect(inverse).toMatchObject({
+      fromType: "uuid",
+      toType: "jsonb",
+      conversion: "referenceList",
+    });
+    const [statement] = referenceConversionStatements(inverse, "postgresql");
+    expect(statement).toMatch(
+      /^ALTER TABLE "dc_posts" ALTER COLUMN "author" SET DATA TYPE jsonb USING CASE/
+    );
+  });
+});
+
+describe("MySQL's conversion keeps the column's live nullability", () => {
+  // The conversion runs before the apply's pre-cleanup, which fills or removes the rows a column
+  // becoming NOT NULL would refuse. Restating NOT NULL in the conversion's MODIFY would refuse them
+  // first; the separate nullability change tightens the column afterwards.
+  const op = (
+    conversion: "referenceList" | "referenceScalar"
+  ): ChangeColumnTypeOp => ({
+    type: "change_column_type",
+    tableName: "dc_posts",
+    columnName: "author",
+    fromType: conversion === "referenceList" ? "varchar(36)" : "json",
+    toType: conversion === "referenceList" ? "json" : "varchar(36)",
+    nullable: false,
+    fromNullable: true,
+    conversion,
+  });
+
+  it("restates the live NULL on each MODIFY, in both directions", () => {
+    for (const conversion of ["referenceList", "referenceScalar"] as const) {
+      const modifies = referenceConversionStatements(
+        op(conversion),
+        "mysql"
+      ).filter(statement => statement.includes("MODIFY COLUMN"));
+      expect(modifies.length).toBeGreaterThan(0);
+      for (const statement of modifies) {
+        expect(statement).toMatch(/ NULL$/);
+        expect(statement).not.toMatch(/NOT NULL/);
+      }
+    }
   });
 });

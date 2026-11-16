@@ -129,9 +129,11 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import { CORE_TABLE_NAMES } from "../../../schemas";
+import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
+import { SCHEMA_OWNERS_TABLE } from "../../../schemas/schema-owners";
 import { scanSql, type SqlSegment } from "../migrate/sql-scan";
 import type { ContributedElements, TableSpec } from "../pipeline/diff/types";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 
 import type { OwnerRecord } from "./owner-registry";
 import { SchemaOwnersRepository } from "./schema-owners-repository";
@@ -606,6 +608,57 @@ const NAME_RESOLUTION_STATEMENTS: Partial<
 };
 
 /**
+ * Statements, by the word that opens them, that may put a relation under a
+ * name they spell: a CREATE of any kind, `SELECT ... INTO` (also after
+ * `WITH`), and MySQL's `RENAME TABLE`. An `ALTER ... RENAME` does too.
+ */
+const MAY_PLACE_A_NAME = new Set(["CREATE", "SELECT", "WITH", "RENAME"]);
+
+/**
+ * Statements, by the word that opens them, that run code which may put a
+ * relation under any name, spelled or not: a block, a procedure call, a
+ * prepared or dynamic statement, an import of foreign tables.
+ */
+const MAY_PLACE_ANY_NAME = new Set(["DO", "CALL", "EXECUTE", "IMPORT"]);
+
+/**
+ * The only statements, by the word that opens them, that this guard reads
+ * on PostgreSQL as putting no relation under any name. Any other may: a
+ * query, function or trigger it runs can create one, and a CREATE or ALTER
+ * may make a sequence or index under a name it generates rather than spells.
+ */
+const POSTGRES_PLACES_NOTHING = new Set([
+  "DROP",
+  "COMMENT",
+  "GRANT",
+  "REVOKE",
+  "SET",
+  "RESET",
+]);
+
+/**
+ * Whether a statement may put a relation under a name: under any name
+ * (`MAY_PLACE_ANY_NAME`, or on PostgreSQL any statement but those
+ * `POSTGRES_PLACES_NOTHING` lists), under the names it spells
+ * (`MAY_PLACE_A_NAME`, or an `ALTER ... RENAME`), or under none.
+ */
+function placesNames(
+  tokens: readonly Token[],
+  dialect: SupportedDialect
+): "any" | "spelled" | undefined {
+  const first = tokens.find(token => token.kind === "word");
+  const opener = first?.kind === "word" ? first.upper : "";
+  if (MAY_PLACE_ANY_NAME.has(opener)) return "any";
+  if (dialect === "postgresql") {
+    return POSTGRES_PLACES_NOTHING.has(opener) ? undefined : "any";
+  }
+  if (MAY_PLACE_A_NAME.has(opener)) return "spelled";
+  const renames =
+    opener === "ALTER" && tokens.some(token => isWord(token, "RENAME"));
+  return renames ? "spelled" : undefined;
+}
+
+/**
  * Words that, before `SCHEMA`, make or rename a PostgreSQL schema — which
  * may then be the `$user` schema the search path starts with.
  */
@@ -879,6 +932,20 @@ class DropReader {
    * before the list runs decides their credit (`tablesCreatedBy`).
    */
   readonly creating = new Set<string>();
+  /** Every table name this list creates, under any schema. */
+  private readonly createdAnywhere = new Set<string>();
+  /** Names a statement vacated while naming their schema. */
+  private readonly vacatedQualified = new Set<string>();
+  /** The statements read so far, counted as `read` is called. */
+  private reads = 0;
+  /** The statement that last vacated each name, by its count (`reads`). */
+  private readonly vacatedIn = new Map<string, number>();
+  /** Statements that may have put a relation under each name (`notePlacing`). */
+  private readonly placingIn = new Map<string, number[]>();
+  /** Statements that may have put a relation under any name, by count. */
+  private readonly placingAnyIn: number[] = [];
+  /** Entries of the list holding more than one statement, by count (`reads`). */
+  private readonly packedReads = new Set<number>();
   /**
    * Whether the list holds a statement that may change which table an
    * unqualified name reaches (`changesNameResolution`). Once it does, no
@@ -973,8 +1040,42 @@ class DropReader {
 
   read(statement: string): void {
     this.nextStatement();
+    this.reads += 1;
     const tokens = new Lexer(this.dialect, statement).tokens(statement);
+    const ends = tokens.findIndex(token => token.kind === "end");
+    if (ends !== -1 && ends < tokens.length - 1)
+      this.packedReads.add(this.reads);
+    this.notePlacing(tokens);
     new StatementWalk(this, tokens, statement).run();
+  }
+
+  /**
+   * Records the names a statement may put a relation under: each name a
+   * `MAY_PLACE_A_NAME` statement or an `ALTER ... RENAME` spells, and every
+   * name for one that may run code (`placesNames`). A later `CREATE TABLE IF NOT
+   * EXISTS` may find such a relation standing (`fillIfVacated`).
+   */
+  private notePlacing(tokens: readonly Token[]): void {
+    // An entry holding more than one statement may place a name after its
+    // first, which its opener does not show.
+    const places = this.packedReads.has(this.reads)
+      ? "any"
+      : placesNames(tokens, this.dialect);
+    if (places === "any") this.placingAnyIn.push(this.reads);
+    if (places !== "spelled") return;
+    for (const token of tokens) {
+      const written =
+        token.kind === "escaped-name" ? undefined : writtenName(token);
+      if (written) this.notePlaced(written);
+    }
+  }
+
+  /** Records that this statement may put a relation under `written`. */
+  private notePlaced(written: string): void {
+    const name = canonicalTableName(storedNameKey(written, this.dialect));
+    const placing = this.placingIn.get(name);
+    if (placing === undefined) this.placingIn.set(name, [this.reads]);
+    else placing.push(this.reads);
   }
 
   /**
@@ -1012,9 +1113,12 @@ class DropReader {
   /**
    * A relation name that a statement drops, renames or moves away: a later
    * lookup of it may reach a relation it shadowed (`lookupsAfterVacating`).
+   * `local` is false when the statement named the relation's schema.
    */
-  vacate(name: string): void {
+  vacate(name: string, local = true): void {
     this.vacated.set(name, this.statementIndex);
+    this.vacatedIn.set(name, this.reads);
+    if (!local) this.vacatedQualified.add(name);
   }
 
   /**
@@ -1028,6 +1132,54 @@ class DropReader {
   /** A name a CREATE or a rename fills again: it reaches what the list put there. */
   private occupy(table: TableRef): void {
     if (table.local) this.vacated.delete(table.name);
+  }
+
+  /**
+   * A `CREATE TABLE IF NOT EXISTS` under `table`'s name: it fills the name
+   * only when an earlier statement of this list vacated it, since nothing
+   * stands there then, and the create makes the table. Not when this list
+   * created a table of the name before, under any schema: a temporary one
+   * shadows a real one, and dropping it leaves the real one standing, which
+   * the create leaves in place. Not when the create, or a statement that
+   * vacated the name, named a schema: an unqualified name may then reach
+   * another schema than the one emptied, where a table may stand. Nor once a
+   * statement may have changed which schema an unqualified name reaches
+   * (`resolutionMayChange`). Nor when an earlier statement other than the
+   * one that vacated the name may have put a relation under it
+   * (`notePlacing`), or the name was vacated by an earlier list of the run,
+   * whose statements this reader has not read. Credited with nothing else
+   * (`create`).
+   */
+  fillIfVacated(table: TableRef): void {
+    if (!table.local) return;
+    const at = this.vacated.get(table.name);
+    if (at === undefined || at >= this.statementIndex) return;
+    if (this.mayStillStand(table.name)) return;
+    this.occupy(table);
+  }
+
+  /**
+   * Whether a relation may still stand under a vacated `name`, for
+   * `fillIfVacated`: one of the conditions it lists holds.
+   */
+  private mayStillStand(name: string): boolean {
+    const emptiedIn = this.vacatedIn.get(name);
+    // An entry holding more than one statement is read as one: what else in
+    // it may have placed the name cannot be told from the vacating statement.
+    if (emptiedIn === undefined || this.packedReads.has(emptiedIn)) return true;
+    const placedEarlier = (this.placingIn.get(name) ?? []).some(
+      read => read < this.reads && read !== emptiedIn
+    );
+    const placedAnyEarlier = this.placingAnyIn.some(
+      read => read < this.reads && read !== emptiedIn
+    );
+    return (
+      placedEarlier ||
+      placedAnyEarlier ||
+      this.createdAnywhere.has(name) ||
+      this.vacatedQualified.has(name) ||
+      this.resolutionMayChange
+    );
   }
 
   /**
@@ -1051,6 +1203,7 @@ class DropReader {
    * statement naming the existing table reaches the existing table.
    */
   create(table: TableRef): void {
+    this.createdAnywhere.add(table.name);
     this.occupy(table);
     if (!table.local) return;
     this.creating.add(table.name);
@@ -1092,7 +1245,7 @@ class DropReader {
 
   /** Records a dropped name, and the original name if a rename made it. */
   drop(table: TableRef): void {
-    this.vacate(table.name);
+    this.vacate(table.name, table.local);
     if (this.takeCreated(table)) return;
     const original = this.renamedFrom.get(table.name);
     this.droppedAt.set(table.name, this.statementIndex);
@@ -1104,7 +1257,7 @@ class DropReader {
   }
 
   rename(from: TableRef, to: TableRef): void {
-    this.vacate(from.name);
+    this.vacate(from.name, from.local);
     if (this.takeCreated(from)) {
       this.create(to);
       return;
@@ -1123,7 +1276,7 @@ class DropReader {
    */
   relocate(table: TableRef): string {
     const { name } = table;
-    this.vacate(name);
+    this.vacate(name, table.local);
     if (this.takeCreated(table)) return name;
     const original = this.renamedFrom.get(name) ?? name;
     this.renamed.push(original);
@@ -1261,7 +1414,8 @@ class DropReader {
     // is dropped or renamed its name may reach a relation it shadowed.
     if (table === undefined) {
       this.lookUp(name);
-      this.vacate(name);
+      // Its schema is not carried here, so it is read as if it named one.
+      this.vacate(name, false);
     }
     if (table?.local && this.created.has(table.name)) return;
     this.elements.push({
@@ -1788,7 +1942,7 @@ class StatementWalk {
     for (;;) {
       const name = this.qualifiedName(k);
       if (name === undefined) return;
-      this.reader.vacate(name.name);
+      this.reader.vacate(name.name, name.local);
       if (this.punct(name.next) !== ",") return;
       k = name.next + 1;
     }
@@ -1802,7 +1956,7 @@ class StatementWalk {
   private readRelationMove(at: number): void {
     const relation = this.movableRelationAt(at);
     if (relation !== undefined && this.movesAwayFrom(relation.next)) {
-      this.reader.vacate(relation.name);
+      this.reader.vacate(relation.name, relation.local);
     }
   }
 
@@ -2006,6 +2160,8 @@ class StatementWalk {
    * succeed. `IF NOT EXISTS` may create nothing, and a rebuild's twin is
    * judged as the table it rebuilds, so neither is recorded; nor is a name
    * that is not local (`TableRef`), which the reader declines to record.
+   * `IF NOT EXISTS` under a name this list vacated fills that name again
+   * (`DropReader.fillIfVacated`).
    */
   private readCreateTable(at: number): void {
     // Only a statement that opens with CREATE: one inside a routine body is
@@ -2066,10 +2222,25 @@ class StatementWalk {
 
   /** The table a plain `CREATE TABLE` names at `at`, recorded as created. */
   private readCreatedTable(at: number): void {
-    if (this.word(at) === "IF") return;
+    if (this.word(at) === "IF") {
+      this.readCreatedIfAbsent(at);
+      return;
+    }
     const created = this.qualifiedName(at);
     if (created === undefined || created.twin) return;
     this.reader.create(created);
+  }
+
+  /**
+   * The table a `CREATE TABLE IF NOT EXISTS` names after the `IF` at `at`:
+   * it fills a name this list vacated (`DropReader.fillIfVacated`), and is
+   * recorded as nothing else.
+   */
+  private readCreatedIfAbsent(at: number): void {
+    if (this.word(at + 1) !== "NOT" || this.word(at + 2) !== "EXISTS") return;
+    const created = this.qualifiedName(at + 3);
+    if (created === undefined || created.twin) return;
+    this.reader.fillIfVacated(created);
   }
 
   /**
@@ -3150,6 +3321,12 @@ function modelsStatement(
     prefix.every((word, at) => words[at] === word)
   );
   if (!begins) return false;
+  // A SQLite rebuild's guard row is inserted into a table the same list
+  // creates and drops (`sqliteTableRebuildStatements`), from a query over
+  // the schema catalogue whose `il.name` and `ix.key` are column
+  // references, not qualified tables. It writes nothing a followed table
+  // holds, so a DOWN that rebuilds a table is followed like any other.
+  if (dialect !== "postgresql" && insertsIntoRebuildGuard(tokens)) return true;
   return !tokens.some(
     (token, at) =>
       token.kind === "punct" &&
@@ -3157,6 +3334,28 @@ function modelsStatement(
       isNameToken(tokens[at - 1]) &&
       isNameToken(tokens[at + 1])
   );
+}
+
+/** The guard table a SQLite rebuild or swap creates for itself and drops. */
+const REBUILD_GUARD_NAME = /^__nextly_(?:rebuild|swap)_.+_guard$/;
+
+/**
+ * Whether a statement is `INSERT INTO <guard> ...` for a rebuild's or a
+ * swap's own guard table, named as the SQL templates name it.
+ */
+function insertsIntoRebuildGuard(tokens: readonly Token[]): boolean {
+  const [insert, into, target] = tokens;
+  return (
+    isWord(insert, "INSERT") &&
+    isWord(into, "INTO") &&
+    REBUILD_GUARD_NAME.test(plainName(target) ?? "")
+  );
+}
+
+/** A bare or quoted name's text, or undefined for any other token. */
+function plainName(token: Token | undefined): string | undefined {
+  if (token?.kind === "name") return token.name;
+  return token?.kind === "word" ? token.text : undefined;
 }
 
 /**
@@ -3619,6 +3818,25 @@ export function tableInsertedInto(
  * under different rules.
  */
 function readStatements(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  liveColumns: LiveColumns | undefined,
+  liveTables: LiveTables | undefined,
+  liveElements?: LiveElements
+): Reading {
+  return readPlainStatements(
+    // Nextly's own MySQL runs that build a statement from the live catalog are read as the plain
+    // statement each amounts to; any other PREPARE stays unreadable and is refused.
+    dialect === "mysql" ? plainMysqlEquivalents(statements) : statements,
+    dialect,
+    liveColumns,
+    liveTables,
+    liveElements
+  );
+}
+
+/** `readStatements`, over a list with no run of Nextly's own left in it. */
+function readPlainStatements(
   statements: readonly string[],
   dialect: SupportedDialect,
   liveColumns: LiveColumns | undefined,
@@ -4925,11 +5143,18 @@ function shapeKept(
       twin.unique.has(set) ||
       set.split(",").some(column => !twin.columns.has(column))
   );
+  // Only the columns the table has can be stripped. A twin column the live
+  // table lacks is one an earlier statement of the list adds (an `ADD
+  // COLUMN` before the rebuild that puts a contributed key on it), which
+  // takes nothing from the table: the live columns the twin leaves out are
+  // judged as drops on their own, and a copy naming a column that exists
+  // nowhere fails before a row moves.
   return (
     keptUnique &&
-    [...twin.columns].every(([name, column]) =>
-      columnKept(live.columns.get(name), column)
-    )
+    [...twin.columns].every(([name, column]) => {
+      const before = live.columns.get(name);
+      return before === undefined || columnKept(before, column);
+    })
   );
 }
 
@@ -5188,7 +5413,9 @@ export function assertNoForeignDrops(args: {
    * change, never a drop or a rename. The caller decides the value family the
    * change must stay within; this guard does not read the column types.
    */
-  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  columnOverrides?:
+    | ReadonlyArray<{ table: string; column: string }>
+    | undefined;
 }): void {
   const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
@@ -5811,7 +6038,9 @@ function refuseInPlaceChanges(
     stream: MigrationStream;
     source: string;
     liveIndexTables?: ReadonlyMap<string, string>;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   }
 ): void {
   for (const change of read.alteredColumns) {
@@ -5938,7 +6167,9 @@ function refuseIndexNamed(
 function overridden(
   args: {
     stream: MigrationStream;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   },
   table: string,
   column: string
@@ -6065,19 +6296,52 @@ export function dropsPluginMigratedTable(
  * registry. Undefined when the registry cannot be read (a database that
  * predates it, or a fresh install before core reconcile), which callers read
  * as "nothing is claimed" — the pre-registry behaviour exactly.
+ *
+ * Whether the registry exists is asked of the catalog first, never learned
+ * from a failed read: `db` may be a schema apply's open transaction, and on
+ * PostgreSQL a statement that fails there aborts it, so every statement the
+ * apply runs after it would be refused.
  */
 export async function pluginMigratedTableSet(
   db: unknown,
   dialect: SupportedDialect
 ): Promise<ReadonlySet<string> | undefined> {
   try {
-    const rows = await new SchemaOwnersRepository(db, dialect).read();
-    return new Set(
-      rows
-        .filter(row => row.migratedBy.startsWith("plugin:"))
-        .map(row => row.tableName.toLowerCase())
+    const { introspectTableNames } = await import(
+      "../pipeline/diff/introspect-live"
+    );
+    const registry = await introspectTableNames(db, dialect, [
+      SCHEMA_OWNERS_TABLE,
+    ]);
+    if (registry.length === 0) return undefined;
+    return pluginMigratedTablesOf(
+      await new SchemaOwnersRepository(db, dialect).read()
     );
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The tables whose own owner row names a plugin's migration stream,
+ * lower-cased.
+ *
+ * Table-level rows only. An element row says who added a column, index, key
+ * or check to a table, not who carries the table: read as a table claim, a
+ * plugin's column on the app's table made every drop of that table count as a
+ * plugin table's, the drop inside a SQLite rebuild of it included, which then
+ * left the rebuild's twin with nowhere to be renamed to.
+ */
+export function pluginMigratedTablesOf(
+  rows: readonly OwnerRecord[]
+): Set<string> {
+  return new Set(
+    rows
+      .filter(
+        row =>
+          (row.elementKind ?? "table") === "table" &&
+          row.migratedBy.startsWith("plugin:")
+      )
+      .map(row => row.tableName.toLowerCase())
+  );
 }

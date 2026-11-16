@@ -103,6 +103,20 @@ export function lowestFloor(range: string): string {
   });
 }
 
+/**
+ * The majors with at least one stable release in Node's index (`v26.13.0`).
+ *
+ * Prereleases are not releases: the index lists a major's `v27.0.0-alpha…`
+ * entries before `v27.0.0` ships, and a major named only by one of them has no
+ * `27.0.0` for `setup-node` to install, so counting it fails the job for a
+ * Node version nobody can run yet.
+ */
+export function stableMajors(versions: readonly string[]): number[] {
+  return versions
+    .filter(version => /^v\d+\.\d+\.\d+$/.test(version))
+    .map(version => Number(version.slice(1).split(".")[0]));
+}
+
 /** Every major with at least one release, read from Node's own index. */
 async function releasedMajors() {
   const response = await fetch(RELEASE_INDEX);
@@ -115,9 +129,7 @@ async function releasedMajors() {
   // The index is an array of `{ version: "vX.Y.Z" }`; narrowed here rather than trusted, since
   // `response.json()` is `any` and a shape change would otherwise surface as a wrong matrix.
   const releases = (await response.json()) as readonly { version: string }[];
-  return releases.map(release =>
-    Number(release.version.slice(1).split(".")[0])
-  );
+  return stableMajors(releases.map(release => release.version));
 }
 
 const invokedDirectly =

@@ -28,6 +28,7 @@ import {
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { EMAIL_DELIVERIES_READ_PERMISSION } from "@admin/constants/email-hub";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { formatRelativeTime } from "@admin/lib/dashboard";
@@ -54,6 +55,7 @@ import {
   compareGroups,
   type MessageGroup,
   type MessagesQuery,
+  type KnownPlugins,
   type OwnerGroup,
   type StateFilter,
 } from "./messages-model";
@@ -296,6 +298,43 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+/** Each owner the list holds, once, in owner order: the owner filter's options. */
+function ownerOptions(
+  messages: EmailTemplateRecord[],
+  plugins: KnownPlugins
+): OwnerGroup[] {
+  const seen = new Map<string, OwnerGroup>();
+  for (const record of messages) {
+    const group = ownerGroupOf(record.owner, plugins);
+    seen.set(group.key, group);
+  }
+  return [...seen.values()].sort(compareGroups);
+}
+
+/**
+ * The owner filter's options and the groups the query keeps, each plugin
+ * named as the admin names it (`branding.plugins`).
+ */
+function useOwnerGroups(
+  messages: EmailTemplateRecord[],
+  query: MessagesQuery
+): { owners: OwnerGroup[]; groups: MessageGroup[] } {
+  const { plugins } = useBranding();
+  const owners = useMemo(
+    () => ownerOptions(messages, plugins),
+    [messages, plugins]
+  );
+  const groups = useMemo(
+    () =>
+      groupByOwner(
+        messages.filter(record => matchesQuery(record, query)),
+        plugins
+      ),
+    [messages, query, plugins]
+  );
+  return { owners, groups };
+}
+
 /**
  * Messages: every email the site sends, grouped by who owns it.
  *
@@ -320,18 +359,7 @@ export function MessagesList(): JSX.Element {
   });
 
   const messages = useMemo(() => templates.filter(isMessage), [templates]);
-  const owners = useMemo(() => {
-    const seen = new Map<string, OwnerGroup>();
-    for (const record of messages) {
-      const group = ownerGroupOf(record.owner);
-      seen.set(group.key, group);
-    }
-    return [...seen.values()].sort(compareGroups);
-  }, [messages]);
-  const groups = useMemo(
-    () => groupByOwner(messages.filter(record => matchesQuery(record, query))),
-    [messages, query]
-  );
+  const { owners, groups } = useOwnerGroups(messages, query);
 
   // Shown to a reader who may read deliveries, once the list reports it.
   const showLastSent =

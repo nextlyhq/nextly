@@ -288,12 +288,15 @@ describe.each(getConfiguredTestDialects())(
     it("refuses a mark from an API key and from the system", async () => {
       const doc = await documentWithHistory(dialect, ["en", "en"]);
 
-      expect(await refusal(doc.mark(ANA, 1, KEY))).toMatchObject({
+      // Told why: what kind of caller asked, not a permission it lacks.
+      const onlyAPerson = {
         code: "FORBIDDEN",
-      });
-      expect(await refusal(doc.mark(ANA, 1, SYSTEM))).toMatchObject({
-        code: "FORBIDDEN",
-      });
+        publicMessage: "Only a signed-in person can mark a version as seen.",
+      };
+      expect(await refusal(doc.mark(ANA, 1, KEY))).toMatchObject(onlyAPerson);
+      expect(await refusal(doc.mark(ANA, 1, SYSTEM))).toMatchObject(
+        onlyAPerson
+      );
       expect(await doc.markers()).toEqual([]);
     });
 
@@ -339,7 +342,7 @@ describe.each(getConfiguredTestDialects())(
             overrideAccess: true,
             locale: "en",
           },
-          { title }
+          { title, _overwrite: true }
         );
       }
       expect(await refusal(doc.mark(ANA, 3))).toMatchObject({

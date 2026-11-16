@@ -33,6 +33,20 @@ describe("hasPluginsSection", () => {
     ).toBe(true);
   });
 
+  /**
+   * A role holding only a plugin's own settings permission. It manages no
+   * settings and may read no collection, but the plugin's settings page lets
+   * it in, and the panel is the one route to that page.
+   */
+  it("shows it for a role that can open a plugin's settings page and nothing else", () => {
+    expect(
+      hasPluginsSection(
+        { canManageSettings: false, canViewCollections: false },
+        { ...SETTLED, hasReachablePluginSettings: true }
+      )
+    ).toBe(true);
+  });
+
   it("hides it from a user with neither capability", () => {
     expect(
       hasPluginsSection(
@@ -82,7 +96,7 @@ describe("hasPluginsSection", () => {
   /**
    * A collection reader whose plugins own no collection they may see has no
    * reachable destination in the panel: the overview and the per-plugin pages
-   * are both manage-settings guarded. The rail item would open an empty panel.
+   * are both guarded by the settings permissions. The rail item would open an empty panel.
    */
   it("hides it from a collection reader whose plugins expose nothing to them", () => {
     expect(
@@ -104,6 +118,19 @@ describe("hasPluginsSection", () => {
         { canManageSettings: false, canViewCollections: true },
         SETTLED
       )
+    ).toBe(false);
+  });
+
+  it("shows it to anyone who may open a plugin menu item it lists", () => {
+    // A plugin page with no collection beside it, for a reader who neither
+    // manages settings nor views collections: the item is the destination.
+    const neither = { canManageSettings: false, canViewCollections: false };
+    expect(
+      hasPluginsSection(neither, { ...SETTLED, hasVisibleMenuItem: true })
+    ).toBe(true);
+    // The control: the same reader with no such item sees no entry.
+    expect(
+      hasPluginsSection(neither, { ...SETTLED, hasVisibleMenuItem: false })
     ).toBe(false);
   });
 });

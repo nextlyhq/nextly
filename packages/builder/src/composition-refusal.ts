@@ -76,7 +76,7 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
 
   // From a component's exposure, for the verbs that create one.
   "invalid-exposure":
-    "One of the properties chosen cannot be exposed. Remove it and try again.",
+    "One of the values chosen can’t be changed per use. Untick it and try again.",
   "ambiguous-exposure":
     "Two blocks here answer to one name. Rename one and try again.",
   "self-reference":
@@ -84,6 +84,8 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
   "not-a-component": "That library entry is not a component.",
   "condition-gated":
     "This selection is shown conditionally and holds conditions of its own. Simplify one of them first.",
+  "composed-depth":
+    "As a component, this selection would nest deeper than the page allows. Select less, or fewer components inside it.",
 };
 
 /**

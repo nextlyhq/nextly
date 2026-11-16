@@ -7,6 +7,8 @@
  */
 
 import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
+import type { PartOutcome } from "../../domains/collections/services/publish-parts";
+import type { FieldRewriteValue } from "../../domains/versions/field-rewrite";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 
 import type {
@@ -14,6 +16,7 @@ import type {
   DirectAPIConfig,
   PopulateOptions,
   RunAsPrincipal,
+  SingleSlug,
   WhereFilter,
 } from "./shared";
 
@@ -101,6 +104,22 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
   page?: number;
 
   /**
+   * Rows to skip before the first one returned, instead of a page: `offset:
+   * 6, limit: 6` returns items 7 to 12, whether or not that is a page. A whole
+   * number from 0; refused together with `page`. The total stays the full
+   * match count, and `hasNext` and `hasPrev` follow the offset.
+   */
+  offset?: number;
+
+  /**
+   * What a sort key naming no sortable field does: `"drop"` (the default)
+   * warns and sorts by the others; `"refuse"` refuses the read, naming each.
+   *
+   * @experimental
+   */
+  unknownSort?: "drop" | "refuse";
+
+  /**
    * Sort order.
    *
    * Use field name for ascending, prefix with `-` for descending.
@@ -109,9 +128,14 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
    * ```typescript
    * sort: '-createdAt'  // Newest first
    * sort: 'title'       // Alphabetical
+   * sort: ['-featured', '-createdAt'] // Featured first, then newest
    * ```
+   *
+   * Several keys sort in turn. Entries still tied come back in id order, and
+   * an entry with no value for a key comes after those with one, in either
+   * direction.
    */
-  sort?: string;
+  sort?: string | string[];
 
   /**
    * Specific fields to include/exclude.
@@ -273,22 +297,27 @@ export interface CreateArgs<TSlug extends CollectionSlug = CollectionSlug>
  *
  * Supports updating by ID or by where clause (bulk update).
  *
+ * An update says which version it changes, the `_rev` from the read it was
+ * made from, or that it replaces whatever is stored (`_overwrite: true`).
+ * One that says neither is refused with `VERSION_REQUIRED`.
+ *
  * @typeParam TSlug - The collection slug literal type (auto-inferred from `collection`)
  *
  * @example
  * ```typescript
- * // Update by ID
+ * // Update by ID, from a read of it
+ * const post = await nextly.findByID({ collection: 'posts', id: 'post-123' });
  * await nextly.update({
  *   collection: 'posts',
  *   id: 'post-123',
- *   data: { status: 'published' },
+ *   data: { status: 'published', _rev: post?._rev },
  * });
  *
- * // Bulk update by where clause
+ * // Bulk update by where clause: a query names no one document's version
  * await nextly.update({
  *   collection: 'posts',
  *   where: { status: { equals: 'draft' } },
- *   data: { status: 'archived' },
+ *   data: { status: 'archived', _overwrite: true },
  * });
  * ```
  */
@@ -695,4 +724,90 @@ export interface BulkOperationResult<T = { id: string }> {
    * caller a saved row failed and invite a retry that writes it twice.
    */
   warnings?: HookWarning[];
+}
+
+/**
+ * Arguments for `nextly.publish()` and `nextly.unpublish()`: which parts of one entry move.
+ *
+ * @experimental Until publishing per language is complete.
+ */
+export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
+  extends DirectAPIConfig,
+    RunAsPrincipal {
+  /**
+   * Skip cache revalidation for this change (the outbox drain still runs), as an update can: for
+   * a caller that owns its cache strategy.
+   */
+  disableRevalidate?: boolean;
+  /** Collection slug (required). */
+  collection: TSlug;
+  /** The entry's id (required). */
+  id: string;
+  /** The languages chosen, or `"all"` for every language the site has. */
+  locales: readonly string[] | "all";
+  /** Whether the shared part is chosen as well. */
+  shared?: boolean;
+  /** Say what the change would do, and change nothing. */
+  describe?: boolean;
+  /**
+   * The version the change is made from, as a read returned it (`_rev`, such as `"7"`, or
+   * `"7.es:3"` from a read of Spanish), or `_overwrite: true`.
+   */
+  data?: { _rev?: string; _overwrite?: boolean };
+}
+
+/**
+ * What `nextly.publish()` and `nextly.unpublish()` did, or would do, to each part of the entry.
+ *
+ * @experimental
+ */
+export interface PublishResult {
+  id: string;
+  languages: PartOutcome[];
+  shared: { changes: boolean; added: boolean };
+}
+
+/** What every `nextly.rewriteField` call names, of an entry or of a Single. */
+interface RewriteFieldArgsBase
+  extends Pick<DirectAPIConfig, "overrideAccess" | "user"> {
+  /** A top-level field, by name. */
+  field: string;
+  /**
+   * The language a translated field is rewritten in; the default language
+   * when omitted. A shared field takes none.
+   */
+  locale?: string;
+  /** The version (`_rev`) the document was read at. */
+  expectedVersion: string;
+  /** The new value, or how to compute it from each copy's own. */
+  set: FieldRewriteValue;
+  /** Why, kept in the document's history. */
+  reason: string;
+}
+
+/**
+ * @experimental Arguments for `nextly.rewriteField` on an entry: one field of
+ * one entry, rewritten on its live copy and on every pending draft that holds
+ * it, without publishing, from the version the caller read.
+ *
+ * Trusted server code by default, as every Direct API call is
+ * (`overrideAccess: true`). Made for a person (`overrideAccess: false` with
+ * `user`), it needs their permission to update the entry and, where the
+ * collection has a publish lifecycle, to publish it.
+ */
+export interface RewriteFieldArgs extends RewriteFieldArgsBase {
+  /** The entry's collection. */
+  collection: CollectionSlug;
+  /** The entry's id. */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for `nextly.rewriteField` on a Single: as
+ * {@link RewriteFieldArgs}, with the Single named by its slug in place of a
+ * collection and an id.
+ */
+export interface RewriteSingleFieldArgs extends RewriteFieldArgsBase {
+  /** The Single, by slug. */
+  single: SingleSlug;
 }

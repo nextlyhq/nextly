@@ -1,0 +1,63 @@
+/**
+ * A chart's series config, built the way shadcn builds its charts: each series' key in the drawn
+ * data mapped to what it is called and its chart colour.
+ *
+ * The chart's container sets each series' colour once, as `--color-<key>`, and every mark reads
+ * it from there, so a line, its area and its point in view cannot draw one series in two colours.
+ * Keys are the chart's own (`s0`, `s1`, … and `count`), never a stored value, so each is a valid
+ * CSS name whatever the data holds.
+ *
+ * Free of the chart engine: the charts that load the engine lazily build their config here first.
+ *
+ * @module components/features/widgets/charts/chart-config
+ */
+
+import type { SizeTier } from "@nextlyhq/ui/format";
+import type { CSSProperties } from "react";
+
+import { markColour, type ChartMark } from "./chart-colour";
+
+/**
+ * A chart's sizes in pixels, here rather than beside the drawing so a chart can hold its place
+ * while the engine loads without importing the engine: a chart over time's marks at each of its
+ * card's size tiers and the row of dates under them, and one row of a chart of groups, its name,
+ * bar and count with the gap below.
+ *
+ * A card is as tall as its content, so a chart's marks are as tall as these make them: taller as
+ * the card is wider, since the tier is read from the card's drawn width, and never set by a row
+ * count. A wider chart spreads its points further apart, and a taller plot keeps their slope
+ * readable.
+ */
+export const CHART_PLOT_HEIGHTS: Readonly<Record<SizeTier, number>> =
+  Object.freeze({ small: 96, medium: 160, large: 220 });
+export const CHART_DATES_HEIGHT = 18;
+export const CHART_ROW_HEIGHT = 22;
+
+/** One series: what it is called, and the mark it is drawn in. */
+export interface ChartSeriesConfig {
+  label: string;
+  mark: ChartMark;
+}
+
+/** Every series of one chart, by its key in the drawn data. */
+export type ChartConfig = Readonly<Record<string, ChartSeriesConfig>>;
+
+/** The key of the series at `index` in the drawn data. */
+export function seriesKey(index: number): string {
+  return `s${index}`;
+}
+
+/** The CSS variables a chart's container sets: one colour per series, from its mark's token. */
+export function chartConfigStyle(config: ChartConfig): CSSProperties {
+  return Object.fromEntries(
+    Object.entries(config).map(([key, series]) => [
+      `--color-${key}`,
+      markColour(series.mark),
+    ])
+  );
+}
+
+/** The colour a mark of the series `key` is drawn in, as its container set it. */
+export function seriesColour(key: string): string {
+  return `var(--color-${key})`;
+}

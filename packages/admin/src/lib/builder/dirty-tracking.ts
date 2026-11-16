@@ -44,6 +44,10 @@ const FIELD_SHAPE_KEYS: ReadonlyArray<keyof BuilderField> = [
   "component",
   "components",
   "repeatable",
+  // A blocks field's policy and a plugin type's own options are settings the
+  // settings panel writes like any other, so a change to either is a change.
+  "blocks",
+  "pluginOptions",
 ];
 
 /**
@@ -60,6 +64,38 @@ function signatureOf(field: BuilderField): string {
   // inside a repeater bumps the parent's signature.
   shape.fields = (field.fields ?? []).map(signatureOf);
   return JSON.stringify(shape);
+}
+
+/**
+ * `value` as JSON with every object's keys in sorted order, so two settings
+ * objects that hold the same values compare equal however they were built:
+ * the settings panel spreads a field's objects as it edits them, which keeps
+ * the values and can change the order.
+ */
+function sortedJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        )
+      : inner
+  );
+}
+
+/**
+ * One field's own settings as a deterministic signature: every editable key
+ * but its name, its type and the fields it holds. A rename, a type change and
+ * a change inside a container are each their own pending change, so none of
+ * them may read as a change of settings too.
+ */
+export function settingsSignatureOf(field: BuilderField): string {
+  const shape: Record<string, unknown> = {};
+  for (const key of FIELD_SHAPE_KEYS) {
+    if (key === "name" || key === "type") continue;
+    const value = field[key];
+    shape[key] = value === undefined ? null : value;
+  }
+  return sortedJson(shape);
 }
 
 /**

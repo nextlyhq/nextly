@@ -30,8 +30,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { BaseAdapterConfig } from "@nextlyhq/adapter-drizzle/types";
 
-import { assertSupportedPostgresSchema } from "../domains/schema/services/postgres-schema";
-import { env } from "../lib/env";
+import { validatePostgresSchema } from "../domains/schema/services/postgres-schema";
+import { env, readPoolSettings } from "../lib/env";
+
+import { loadDialectTables } from "./dialect-tables";
 
 /**
  * Supported database adapter types
@@ -57,6 +59,14 @@ export interface AdapterConfig extends BaseAdapterConfig {
    * or DATABASE_URL protocol.
    */
   type?: AdapterType;
+
+  /**
+   * Connect without creating anything, for a run that must change nothing:
+   * SQLite opens its file read-only and makes no folder or file, PostgreSQL
+   * checks for its schema instead of creating it. MySQL creates nothing on
+   * connect either way.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -79,17 +89,21 @@ function mergedAdapterConfig(
   // own dialect-specific defaults intact (e.g. the Postgres adapter's
   // `min: 0` cold-start-friendly default for Neon).
   const explicit = config ?? {};
+  // Read alone rather than through `env`, which validates the whole environment: a caller that
+  // names its database (`type` and `url`) must not be refused for a database target the
+  // environment states, or leaves out.
+  const settings = readPoolSettings();
   return {
     ...explicit,
     url,
     pool: overEnvDefaults(explicit.pool ?? {}, {
-      max: env.DB_POOL_MAX,
-      min: env.DB_POOL_MIN,
-      idleTimeoutMs: env.DB_POOL_IDLE_TIMEOUT,
+      max: settings.DB_POOL_MAX,
+      min: settings.DB_POOL_MIN,
+      idleTimeoutMs: settings.DB_POOL_IDLE_TIMEOUT,
     }),
     queryTimeout: overEnvDefaults(
       { value: (explicit as { queryTimeout?: number }).queryTimeout },
-      { value: env.DB_QUERY_TIMEOUT }
+      { value: settings.DB_QUERY_TIMEOUT }
     ).value,
   };
 }
@@ -130,7 +144,10 @@ async function loadAdapter(
   try {
     if (type === "postgresql") {
       const mod = await import("@nextlyhq/adapter-postgres");
-      return mod.createPostgresAdapter(adapterConfig);
+      return mod.createPostgresAdapter({
+        ...adapterConfig,
+        readOnly: adapterConfig.readOnly === true,
+      });
     } else if (type === "mysql") {
       const mod = await import("@nextlyhq/adapter-mysql");
       return mod.createMySqlAdapter(adapterConfig);
@@ -139,6 +156,8 @@ async function loadAdapter(
       const sqliteConfig = {
         ...adapterConfig,
         url: url ?? "file:./data/nextly.db",
+        // The SQLite adapter's own spelling: no folder made, file opened read-only.
+        readonly: adapterConfig.readOnly === true,
       };
       return mod.createSqliteAdapter(sqliteConfig);
     }
@@ -225,13 +244,20 @@ export async function createAdapter(
     throw new Error(`Unsupported database type: ${unknownType}`);
   }
   // Before the adapter exists: connecting one with a schema runs
-  // `CREATE SCHEMA`, so refusing afterwards would already have changed the
-  // database. Every adapter built from config comes through here — the
-  // server's and each CLI command's — so this is where they all refuse.
+  // `CREATE SCHEMA`, so an unusable name refused afterwards would already have
+  // changed the database. Every adapter built from config comes through here
+  // — the server's and each CLI command's — so this is where they all refuse,
+  // naming the config setting rather than the adapter option.
   if (type === "postgresql" && config?.schema) {
-    assertSupportedPostgresSchema(config.schema);
+    validatePostgresSchema(config.schema);
   }
-  const adapter = await loadAdapter(type, adapterConfig, url);
+  // The dialect's own tables load beside its adapter, so every adapter this
+  // returns can have its tables read synchronously, and no other dialect's
+  // tables are imported at all.
+  const [adapter] = await Promise.all([
+    loadAdapter(type, adapterConfig, url),
+    loadDialectTables(type),
+  ]);
   await adapter.connect();
   return adapter;
 }
@@ -263,11 +289,12 @@ export async function createAdapterFromEnv(
    * `db.postgres.schema` is the first: it comes from `nextly.config.ts`, not
    * from an env var, and the adapter is the thing that has to apply it.
    */
-  options?: { schema?: string }
+  options?: { schema?: string; readOnly?: boolean }
 ): Promise<DrizzleAdapter> {
-  return createAdapter(
-    options?.schema !== undefined ? { schema: options.schema } : undefined
-  );
+  return createAdapter({
+    ...(options?.schema !== undefined ? { schema: options.schema } : {}),
+    ...(options?.readOnly === true ? { readOnly: true } : {}),
+  });
 }
 
 /**

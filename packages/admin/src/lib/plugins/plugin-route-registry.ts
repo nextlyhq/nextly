@@ -14,6 +14,8 @@
  * @module lib/plugins/plugin-route-registry
  */
 
+import { pluginPageAddress } from "nextly/config";
+
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 
 export interface RegisteredPluginPage {
@@ -33,10 +35,27 @@ export interface RegisteredPluginPage {
 
 const registry = new Map<string, RegisteredPluginPage>();
 
-/** Build the namespaced admin path for a plugin page. */
+/** Where every plugin page's address starts, ahead of its slug. */
+const PLUGIN_PAGE_PREFIX = "/admin/plugins/";
+
+/**
+ * Build the namespaced admin path for a plugin page: core's
+ * `pluginPageAddress`, the address the prebuilt admin page names the page's
+ * startup reads by, so the page is registered where those reads look for it.
+ */
 export function pluginPagePath(slug: string, path: string): string {
-  const clean = path.replace(/^\/+/, "");
-  return `/admin/plugins/${slug}/${clean}`;
+  return pluginPageAddress(slug, path);
+}
+
+/**
+ * Whether `pathname` has a plugin page's shape, `/admin/plugins/<slug>/<path>`:
+ * a slug and at least one segment after it. A plugin's own detail address,
+ * `/admin/plugins/<slug>`, is a core route and is not.
+ */
+export function isPluginPageAddress(pathname: string): boolean {
+  if (!pathname.startsWith(PLUGIN_PAGE_PREFIX)) return false;
+  const [slug, ...rest] = pathname.slice(PLUGIN_PAGE_PREFIX.length).split("/");
+  return Boolean(slug) && rest.some(Boolean);
 }
 
 /** Register a single plugin page. */
@@ -76,6 +95,26 @@ export function matchPluginPage(
   pathname: string
 ): RegisteredPluginPage | undefined {
   return registry.get(pathname);
+}
+
+/**
+ * Whether the registry has been filled from an admin-meta answer at least once.
+ *
+ * Until then an address under the plugin prefix that matches nothing may yet
+ * be a plugin page, so it is held rather than answered as not found. Kept
+ * apart from the pages themselves: each answer clears and refills them, and
+ * the registry stays known throughout.
+ */
+let known = false;
+
+/** Records whether the registry has been filled from admin-meta. */
+export function setPluginPagesKnown(value: boolean): void {
+  known = value;
+}
+
+/** Whether the registry has been filled from admin-meta at least once. */
+export function arePluginPagesKnown(): boolean {
+  return known;
 }
 
 /** Clear all registered plugin pages (rebuild on admin-meta change / tests). */

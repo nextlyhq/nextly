@@ -8,6 +8,7 @@ import {
   PENDING_AUTH_TYP,
   MUST_CHANGE_PASSWORD_CHALLENGE,
 } from "../pending-token";
+import { TOKEN_TYP } from "../../jwt/sign";
 
 const secret = "test-secret-at-least-32-chars-long-aaaa";
 
@@ -57,15 +58,31 @@ describe("pending-auth token", () => {
     );
   });
 
-  it("still rejects a claim-only pending impostor with no header typ", async () => {
-    // The claim check remains load-bearing: a token minted before the header
-    // existed carries no typ to refuse, so nothing else would catch this.
+  it("rejects a token with no header typ", async () => {
+    // Tokens signed before the header existed carry no typ, and a claim-only
+    // impostor looks the same. The required-header rule refuses one before the
+    // claim check is reached, so the reason is the verifier's refusal.
     const untyped = await new SignJWT({ sub: "u1", email: "a@b.c" })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setExpirationTime("5m")
       .sign(new TextEncoder().encode(secret));
     await expect(verifyPendingToken(untyped, secret)).rejects.toThrow(
+      /invalid pending-auth token: invalid/
+    );
+  });
+
+  it("still rejects a token signed with the pending header but carrying no pending claim", async () => {
+    // The claim check remains load-bearing where the header rule cannot
+    // reach: a token whose header names the pending purpose but whose payload
+    // carries no pending claim passes the verifier and is refused only by the
+    // claim.
+    const claimless = await new SignJWT({ sub: "u1", email: "a@b.c" })
+      .setProtectedHeader({ alg: "HS256", typ: TOKEN_TYP.pending })
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(new TextEncoder().encode(secret));
+    await expect(verifyPendingToken(claimless, secret)).rejects.toThrow(
       /wrong-type/
     );
   });

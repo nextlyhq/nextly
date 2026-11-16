@@ -3,7 +3,6 @@
 import type { JSX, ReactNode } from "react";
 
 import { useSuppressedChrome } from "./ChromeSuppression";
-import { CONTENT_PAGE_MEASURE } from "./content-measure";
 import { PageContainer } from "./page-container";
 
 interface MeasuredPageFrameProps {
@@ -107,15 +106,23 @@ export function MeasuredPageFrame({
   // `== null` deliberately, covering `null` as well as `undefined`: a caller
   // whose trail is conditional renders `null`, and that is the same statement
   // — there is nothing to put a gap around.
+  // `empty:hidden` for a trail drawn elsewhere: in the admin a breadcrumb is
+  // drawn in the top bar, leaving this row with nothing in it.
   const trailClass = framed
     ? breadcrumbs == null
       ? undefined
-      : "mb-6"
+      : "mb-6 empty:hidden"
     : "hidden";
 
   return (
     <PageContainer
-      width={contentCarriesMeasure ? "full" : CONTENT_PAGE_MEASURE}
+      // An editor that measures its own field column is an Editor page: full
+      // width, no gutter, its panel against the window's edge. Any other view
+      // (a plugin's custom edit view) keeps the gutter but no cap, since it was
+      // drawn for a padded page and its layout is its own.
+      {...(contentCarriesMeasure
+        ? { type: "editor" as const }
+        : { width: "full" as const })}
       className={framed ? undefined : "contents"}
     >
       <div className={trailClass}>{breadcrumbs}</div>

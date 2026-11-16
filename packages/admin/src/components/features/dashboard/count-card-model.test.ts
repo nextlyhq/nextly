@@ -1,31 +1,68 @@
 /**
- * How a Count card reads its cells: the number from the split or the plain
- * count, the split's links under the card's Filter, and the trend's change.
+ * How a Count card reads the data its `load` answers: what the number counts
+ * and where it links, the one line under it, each part of the split linking
+ * under the card's Filter, and the scheduled figure only where it was
+ * answered.
  */
-import type { WidgetSlot } from "nextly/widget-result";
+import type { CountWidgetData } from "nextly/core-widget-data";
 import { describe, expect, it } from "vitest";
 
-import { collectionLabelOf, countView } from "./count-card-model";
+import {
+  changeSentence,
+  collectionLabelOf,
+  countView,
+} from "./count-card-model";
 
-const split: WidgetSlot = {
-  ok: true,
-  result: {
-    op: "groupBy",
-    buckets: [
-      { value: "published", count: 7 },
-      { value: "draft", count: 3 },
-      { value: null, count: 1 },
-    ],
-  },
+const SPLIT: CountWidgetData = {
+  total: 10,
+  counted: "all",
+  line: "split",
+  split: { published: 7, draft: 3 },
 };
 
-describe("the Count card's view of its cells", () => {
-  it("is the split's buckets summed, the null bucket included, with each part linking to its list", () => {
-    const view = countView({ split }, { collection: "posts" });
-    if (view.state !== "ready") throw new Error(view.state);
-    expect(view.total).toBe(11);
-    expect(view.href).toBe("/admin/collections/posts");
-    expect(view.split).toEqual({
+/** The ready view, or a failure naming the state it was in instead. */
+function ready(data: CountWidgetData, settings: Record<string, unknown>) {
+  const view = countView(data, settings);
+  if (view.state !== "ready") throw new Error(view.state);
+  return view;
+}
+
+describe("the Count card's view of its data", () => {
+  it("names what the number counts, and links it to that list", () => {
+    const base = { total: 4, line: "none" } as const;
+    expect(
+      ready({ ...base, counted: "all" }, { collection: "posts" })
+    ).toMatchObject({ label: "Entries", href: "/admin/collections/posts" });
+    expect(
+      ready({ ...base, counted: "published" }, { collection: "posts" })
+    ).toMatchObject({
+      label: "Published",
+      href: "/admin/collections/posts?status=published",
+    });
+    expect(
+      ready({ ...base, counted: "draft" }, { collection: "posts" })
+    ).toMatchObject({
+      label: "Drafts",
+      href: "/admin/collections/posts?status=draft",
+    });
+  });
+
+  it("counts people for Users, linking to the users list whatever its Filter holds", () => {
+    const view = ready(
+      { total: 12, counted: "people", line: "change", change: 1 },
+      { collection: "users", filter: { title: { contains: "x" } } }
+    );
+    expect(view).toMatchObject({
+      label: "People",
+      total: 12,
+      href: "/admin/users",
+      line: { kind: "change", change: 1 },
+    });
+  });
+
+  it("splits by status, each part linking to its list", () => {
+    expect(ready(SPLIT, { collection: "posts" }).line).toEqual({
+      kind: "split",
       published: {
         count: 7,
         href: "/admin/collections/posts?status=published",
@@ -36,107 +73,69 @@ describe("the Count card's view of its cells", () => {
 
   it("carries the card's Filter into every link", () => {
     const filter = { title: { contains: "news" } };
-    const view = countView({ split }, { collection: "posts", filter });
-    if (view.state !== "ready") throw new Error(view.state);
+    const view = ready(SPLIT, { collection: "posts", filter });
     const where = encodeURIComponent(JSON.stringify(filter)).replaceAll(
       "%20",
       "+"
     );
-    expect(view.split?.draft.href).toBe(
+    expect(view.href).toBe(`/admin/collections/posts?where=${where}`);
+    if (view.line.kind !== "split") throw new Error(view.line.kind);
+    expect(view.line.draft.href).toBe(
       `/admin/collections/posts?status=draft&where=${where}`
     );
   });
 
-  it("counts what scheduled releases will publish, linking to that list under the card's Filter", () => {
-    const filter = { title: { contains: "news" } };
-    const view = countView(
-      {
-        split,
-        scheduled: { ok: true, result: { op: "count", total: 2 } },
-      },
-      { collection: "posts", filter }
-    );
-    if (view.state !== "ready") throw new Error(view.state);
-    expect(view.scheduled?.count).toBe(2);
-    const href = view.scheduled?.href ?? "";
-    expect(href.split("?")[0]).toBe("/admin/collections/posts");
-    // The release condition at the top level, beside the Filter, where the
-    // list reads it.
-    expect(
-      JSON.parse(new URLSearchParams(href.split("?")[1]).get("where") ?? "null")
-    ).toEqual({ title: { contains: "news" }, _inRelease: true });
-  });
-
-  it("shows a scheduled figure of zero, and leaves it out when not available or failed", () => {
-    const zero = countView(
-      { split, scheduled: { ok: true, result: { op: "count", total: 0 } } },
+  it("links what scheduled releases will publish to exactly that list, only where it was read", () => {
+    const view = ready(
+      { ...SPLIT, split: { published: 7, draft: 3, scheduled: 2 } },
       { collection: "posts" }
     );
-    expect(zero.state === "ready" && zero.scheduled?.count).toBe(0);
-    for (const scheduled of [
-      { ok: false, error: "x", code: "unavailable" },
-      { ok: false, error: "Down" },
-    ] as const) {
-      const view = countView({ split, scheduled }, { collection: "posts" });
-      // One part of the card: the number and split still draw.
-      expect(view).toMatchObject({ state: "ready", total: 11 });
-      expect("scheduled" in view).toBe(false);
-    }
+    if (view.line.kind !== "split") throw new Error(view.line.kind);
+    expect(view.line.scheduled?.count).toBe(2);
+    expect(view.line.scheduled?.href).toContain("where=");
+    const without = ready(SPLIT, { collection: "posts" });
+    if (without.line.kind !== "split") throw new Error(without.line.kind);
+    expect(without.line.scheduled).toBeUndefined();
   });
 
-  it("is the plain count, with no split, for a collection without a lifecycle", () => {
-    const view = countView(
-      { total: { ok: true, result: { op: "count", total: 4 } } },
-      { collection: "notes" }
-    );
-    expect(view).toMatchObject({ state: "ready", total: 4 });
-    expect("split" in view).toBe(false);
-  });
-
-  it("measures the last 30 days against the 30 before", () => {
-    const view = countView(
-      {
-        split,
-        trend: {
-          ok: true,
-          result: {
-            op: "timeseries",
-            interval: "day",
-            points: [
-              { start: "2026-10-20T00:00:00.000Z", count: 2 },
-              { start: "2026-10-21T00:00:00.000Z", count: 5 },
-            ],
-          },
-        },
-        prior: { ok: true, result: { op: "count", total: 4 } },
-      },
+  it("draws no line where the line it asked could not be read", () => {
+    const view = ready(
+      { total: 3, counted: "all", line: "change" },
       { collection: "posts" }
     );
-    if (view.state !== "ready") throw new Error(view.state);
-    expect(view.trend).toMatchObject({ recent: 7, prior: 4, change: 3 });
+    expect(view.line).toEqual({ kind: "none" });
+    const trendless = ready(
+      { total: 3, counted: "all", line: "trend" },
+      { collection: "posts" }
+    );
+    expect(trendless.line).toEqual({ kind: "none" });
   });
 
-  it("is loading before the number has answered, and not available when its read was refused", () => {
-    expect(countView({}, { collection: "posts" })).toEqual({
-      state: "loading",
-    });
-    expect(
-      countView(
-        { split: { ok: false, error: "x", code: "unavailable" } },
-        { collection: "posts" }
-      )
-    ).toEqual({ state: "unavailable" });
-    expect(countView({ split }, {})).toEqual({ state: "unavailable" });
+  it("is not available when it is set to no collection", () => {
+    expect(countView(SPLIT, {})).toEqual({ state: "unavailable" });
   });
 });
 
-describe("the name a Count card shows for its collection", () => {
-  it("is the label the server published, or the slug where none is known", () => {
-    const sources = [{ collection: "posts", label: "Blog posts" }];
+describe("the change line", () => {
+  const plain = (value: number) => value.toLocaleString("en-US");
+  it("says what was made this week, or that nothing was", () => {
+    expect(changeSentence(3, plain)).toBe("+3 this week");
+    expect(changeSentence(1204, plain)).toBe("+1,204 this week");
+    expect(changeSentence(0, plain)).toBe("No change this week");
+  });
+});
+
+describe("what a Count card is set to, by name", () => {
+  it("is the collection's label as published to the reader, or its slug", () => {
+    const sources = [{ collection: "posts", label: "Articles" }];
     expect(collectionLabelOf({ collection: "posts" }, sources)).toBe(
-      "Blog posts"
+      "Articles"
     );
-    expect(collectionLabelOf({ collection: "pages" }, sources)).toBe("pages");
+    expect(collectionLabelOf({ collection: "notes" }, sources)).toBe("notes");
     expect(collectionLabelOf({}, sources)).toBeUndefined();
+  });
+
+  it("is Users for the people", () => {
+    expect(collectionLabelOf({ collection: "users" }, [])).toBe("Users");
   });
 });

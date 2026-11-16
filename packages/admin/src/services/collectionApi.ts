@@ -12,6 +12,8 @@ import type {
 } from "../types/collection";
 import type { ApiCollection } from "../types/entities";
 
+import { withListOwner, type ListOwner } from "./list-owner";
+
 // Build query string for pagination and search using shared utility
 const buildQuery = (params: TableParams): string => {
   return buildQueryUtil(params, {
@@ -26,13 +28,27 @@ const buildQuery = (params: TableParams): string => {
 };
 
 /**
+ * The path a list of collections is read from, for `params`: the one place it is
+ * spelled, shared by the list's own read and the admin's startup request,
+ * which must name exactly the path the read will ask for.
+ */
+export function collectionsListPath(
+  params: TableParams,
+  owner?: ListOwner
+): string {
+  const query = withListOwner(buildQuery(params), owner);
+  return `/collections${query ? `?${query}` : ""}`;
+}
+
+/**
  * Fetch collections with pagination.
  */
 export const fetchCollections = async (
-  params: TableParams
+  params: TableParams,
+  // The site's collections or the plugins'; none lists both.
+  owner?: ListOwner
 ): Promise<ListResponse<ApiCollection>> => {
-  const query = buildQuery(params);
-  const url = `/collections${query ? `?${query}` : ""}`;
+  const url = collectionsListPath(params, owner);
 
   const result = await fetcher<ListResponse<ApiCollection>>(url, {}, true);
 
@@ -73,6 +89,34 @@ export const deleteCollection = async (collectionId: string): Promise<void> => {
     },
     true
   );
+};
+
+/** What one plugin says deleting collections takes with it. */
+export interface CollectionDeleteImpactGroup {
+  /** The plugin's name, which the dialog lists the items under. */
+  plugin: string;
+  items: Array<{ label: string; kind: string }>;
+}
+
+/**
+ * What deleting `slugs` together takes with it besides their own entries, by
+ * plugin: the server asks each plugin's collection-delete hook, and deletes
+ * nothing. The first slug goes in the path and the rest in `?together=`, as
+ * the delete itself sends them.
+ */
+export const fetchCollectionDeleteImpact = async (
+  slugs: readonly string[]
+): Promise<CollectionDeleteImpactGroup[]> => {
+  const [first, ...rest] = slugs;
+  if (first === undefined) return [];
+  const together =
+    rest.length > 0 ? `?together=${encodeURIComponent(rest.join(","))}` : "";
+  const result = await protectedApi.get<{
+    impact: CollectionDeleteImpactGroup[];
+  }>(
+    `/collections/schema/${encodeURIComponent(first)}/delete-impact${together}`
+  );
+  return result.impact;
 };
 
 /** The type of {@link collectionApi}. */

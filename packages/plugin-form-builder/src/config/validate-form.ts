@@ -62,6 +62,7 @@ export type FormValidationErrorCode =
   | "MIN_GREATER_THAN_MAX"
   | "MIN_LENGTH_GREATER_THAN_MAX"
   | "FILE_MAX_SIZE_INVALID"
+  | "CONSENT_TEXT_REQUIRED"
   // Conditional logic errors
   | "CONDITIONS_REQUIRED"
   | "CONDITION_FIELD_REQUIRED"
@@ -454,6 +455,21 @@ function validateFieldByType(
       }
       break;
     }
+
+    case "consent":
+      // The text is what the visitor agrees to and what their answer keeps:
+      // a consent with none would store an agreement to nothing.
+      if (
+        typeof field.agreementText !== "string" ||
+        field.agreementText.trim() === ""
+      ) {
+        errors.push({
+          path: `${path}.agreementText`,
+          message: "A consent field needs the text the visitor agrees to",
+          code: "CONSENT_TEXT_REQUIRED",
+        });
+      }
+      break;
   }
 }
 

@@ -25,10 +25,25 @@
 
 import { formBuilder } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
-import { defineConfig } from "nextly/config";
+import { seoPlugin } from "@nextlyhq/plugin-seo";
+import {
+  defineCollection,
+  defineConfig,
+  date,
+  defineSingle,
+  text,
+  textarea,
+  upload,
+} from "nextly/config";
 
+import { JOURNAL, JOURNAL_COLLECTIONS } from "./src/blog-fixture/collections";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
+import { BoundEntries } from "./src/collections/bound-entries";
+import { EntryArticles } from "./src/collections/entry-articles";
+import { ContributionStories } from "./src/collections/contribution-stories";
+import { ListStories } from "./src/collections/list-stories";
+import { E2E_NAMED_QUERIES } from "./src/named-queries";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -36,13 +51,26 @@ import { LinkedEntries } from "./src/collections/linked-entries";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
+import { TranslatorNotes } from "./src/collections/translator-notes";
+import { siteNotesWidget } from "./src/dashboard/site-notes-widget";
 import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
+import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
+import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
+import { readingListsFixturePlugin } from "./src/plugins/reading-lists-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
+import { startupReadFixturePlugin } from "./src/plugins/startup-read-fixture/plugin";
+import {
+  releaseNotesFixturePlugin,
+  whatsNewFixturePlugin,
+} from "./src/plugins/item-place-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
+import { widgetCheckFixturePlugin } from "./src/plugins/widget-check-fixture/plugin";
+import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
+import { ContactDetails } from "./src/singles/contact-details";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
 import { RelatedLinks } from "./src/singles/related-links";
@@ -52,21 +80,141 @@ import { SiteSettings } from "./src/singles/site-settings";
 // "1" rather than checked for presence so an empty value reads as off.
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
 
-// Set by e2e/playwright.config.ts for the suite's dev server. The suite signs
-// in once and drives every spec through that one session at machine pace, far
-// past the 500 reads a minute the default session budget allows a person, so
-// it is given a session budget of its own. Every other limit keeps its
-// default, and the admin request budget test still holds each page to its bar
-// at the default numbers. Never honoured in a production build, so neither the
-// production suite nor a deployment can raise the limit through this flag.
-const e2eSessionBudget =
-  process.env.NEXTLY_E2E_SESSION_BUDGET === "1" &&
-  process.env.NODE_ENV !== "production";
+/**
+ * Plugins this playground registers only when asked, by name, in a
+ * comma-separated `NEXTLY_PLAYGROUND_PLUGINS` (`seo`, `reading-lists`). Off by
+ * default: each
+ * one adds fields, routes or dashboard cards that a contributor's daily
+ * `pnpm dev:app` and every other browser spec would otherwise meet.
+ * `e2e/playwright.config.ts` names the ones the suite's own server runs with.
+ */
+const playgroundPlugins = new Set(
+  (process.env.NEXTLY_PLAYGROUND_PLUGINS ?? "")
+    .split(",")
+    .map(name => name.trim())
+    .filter(name => name !== "")
+);
+const seoPluginEnabled = playgroundPlugins.has("seo");
+/**
+ * The reading-lists fixture: a plugin with tables of its own, their migration
+ * modules and a hidden column on Posts, for trying the plugin schema surface
+ * and its install commands against this site (see its `plugin.ts`). Its
+ * integration test runs it on a scratch site of its own, not this one.
+ */
+const readingListsEnabled = playgroundPlugins.has("reading-lists");
+
+/**
+ * The collection and the Single the SEO plugin extends here, registered with
+ * it. Their own rather than Posts or a Single another spec edits, so the `seo`
+ * group and the SEO tab the plugin adds reach no entry form, list or count
+ * another spec reads. Each page has an address and an excerpt, so its tab has
+ * automatic values to show.
+ */
+const SeoPages = defineCollection({
+  slug: "seo-pages",
+  labels: { singular: "SEO page", plural: "SEO pages" },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    text({ name: "slug", label: "Slug" }),
+    textarea({ name: "excerpt", label: "Excerpt" }),
+    text({ name: "author", label: "Author" }),
+    date({ name: "publishedAt", label: "Published at" }),
+    upload({ name: "coverImage", label: "Cover image", relationTo: "media" }),
+  ],
+  publicAddress: "/seo/{slug}",
+});
+/** A kind of listing page hidden from search as a whole, as tag pages often are. */
+const SeoTags = defineCollection({
+  slug: "seo-tags",
+  labels: { singular: "Tag", plural: "Tags" },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    text({ name: "slug", label: "Slug" }),
+    textarea({ name: "description", label: "Description" }),
+  ],
+  publicAddress: "/seo/tag/{slug}",
+});
+const SeoHome = defineSingle({
+  slug: "seo-home",
+  label: { singular: "SEO home" },
+  fields: [
+    text({ name: "title", label: "Title" }),
+    textarea({ name: "summary", label: "Summary" }),
+  ],
+});
+
+/**
+ * Extra plain collections for the admin speed check's comparison of a start
+ * with few entities and with many (`e2e/admin-speed`): a start's work must not
+ * grow with the number of collections, and this is how that check adds them.
+ * `NEXTLY_SPEED_EXTRA_COLLECTIONS` is a count, unset or 0 everywhere else, so
+ * no other run or contributor sees them.
+ */
+const speedExtraCollections = Array.from(
+  {
+    length: Math.max(
+      0,
+      Number(process.env.NEXTLY_SPEED_EXTRA_COLLECTIONS) || 0
+    ),
+  },
+  (_, index) =>
+    defineCollection({
+      slug: `speed-extra-${index + 1}`,
+      labels: {
+        singular: `Speed extra ${index + 1}`,
+        plural: `Speed extras ${index + 1}`,
+      },
+      fields: [text({ name: "title", label: "Title", required: true })],
+    })
+);
+
+/**
+ * The page builder, as one instance, so the site's routes can hand their
+ * pages this site's own named queries (`namedQueriesOf`) and never another
+ * site's served from the same process.
+ */
+export const pageBuilderPlugin = pageBuilder({
+  siteStyle: SITE_STYLE_DEFAULTS,
+  // The browser tests' custom sources, registered by the same switch as
+  // the collections and the Single they read.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  pagePreviewPath: "/{slug}",
+  // Each post is served at `/blog/<its slug>` by the same route as the pages,
+  // drawn with the Posts template once one is published.
+  // The Entry content fixture's articles at `/articles/<slug>`, and the blog
+  // fixture's posts at `/journal/<slug>`, with it.
+  templates: {
+    addresses: {
+      posts: "/blog",
+      ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+        ? {
+            "entry-articles": "/articles",
+            // The blog fixture's posts, rebuilt with their template.
+            [JOURNAL.posts]: "/journal",
+          }
+        : {}),
+    },
+  },
+  // The route that draws the editor's canvas inside this site's layout.
+  canvasPath: "/page-builder-canvas",
+  // The browser suite's stand-in Google Fonts catalogue, so adding a font
+  // there never reaches the real one. Unset everywhere else: the plugin's
+  // defaults (Fontsource and jsDelivr) apply.
+  ...(process.env.NEXTLY_E2E_FONT_CATALOGUE === undefined
+    ? {}
+    : {
+        fonts: {
+          catalogue: {
+            api: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+            files: process.env.NEXTLY_E2E_FONT_CATALOGUE,
+          },
+        },
+      }),
+});
 
 export default defineConfig({
-  ...(e2eSessionBudget
-    ? { rateLimit: { sessions: { readLimit: 5000, writeLimit: 1500 } } }
-    : {}),
   admin: {
     branding: {
       logoUrlLight: "/Nextly_Icon_dark.svg",
@@ -91,6 +239,14 @@ export default defineConfig({
       email: "dev@nextly.local",
       password: "DevPassword123!",
     },
+    // A widget the site declares itself, offered in the Add panel like a
+    // plugin's, for site-widget.spec.ts.
+    dashboard: { widgets: [siteNotesWidget] },
+    // The environment badge in the dashboard's header, only when a contributor
+    // names one: never guessed, as an app is told to configure it.
+    ...(process.env.NEXTLY_ENV_LABEL
+      ? { environment: { label: process.env.NEXTLY_ENV_LABEL } }
+      : {}),
   },
   localization: {
     locales: [
@@ -127,6 +283,34 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
+    // The browser test of a document editable in one language and read-only
+    // in another needs a rule that answers by language; registered for the
+    // e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatorNotes] : []),
+    // The browser test of bindings served to the public needs a list whose
+    // fields include one the public may not read; registered for the e2e run
+    // only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [BoundEntries] : []),
+    // What a template's Entry content block draws, for its browser tests.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [EntryArticles] : []),
+    // The browser test of a collection list's related source needs a public,
+    // page-built entry holding a public to-many relation; registered for the
+    // e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ListStories] : []),
+    // The one collection the contributions fixture's replacement applies to,
+    // for the browser test of a plugin extending a page, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [ContributionStories]
+      : []),
+    // The blog template's own posts, authors, categories and tags, renamed,
+    // for the browser test of its post page rebuilt with a template.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? JOURNAL_COLLECTIONS
+      : []),
+    // The collection the SEO plugin extends, by the plugin's own switch.
+    ...(seoPluginEnabled ? [SeoPages, SeoTags] : []),
+    // The admin speed check's extra collections; none unless it asks.
+    ...speedExtraCollections,
   ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish
@@ -140,6 +324,11 @@ export default defineConfig({
     // related item the editor cannot read; registered for the e2e run only, by
     // the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [RelatedLinks] : []),
+    // A Single with a field the public may not read, for the browser test of
+    // the editor marking a bound value a visitor will not see.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ContactDetails] : []),
+    // The Single the SEO plugin extends, by the plugin's own switch.
+    ...(seoPluginEnabled ? [SeoHome] : []),
   ],
   fieldGroups: [
     Seo,
@@ -169,10 +358,7 @@ export default defineConfig({
     // nor discover that `(frontend)/[...slug]` is mounted at the site root, so
     // passing it is the only signal available that a minted link will land.
     // Without it every page-builder share is refused at the click.
-    pageBuilder({
-      siteStyle: SITE_STYLE_DEFAULTS,
-      pagePreviewPath: "/{slug}",
-    }),
+    pageBuilderPlugin,
     // `redirectRelationships` states where each collection's documents are
     // served, for the same reason `pagePreviewPath` above does and in the same
     // syntax: the plugin cannot discover that this app mounts
@@ -184,6 +370,60 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),
+    // A plugin's own item at the rail's foot and in the person's menu, for the
+    // browser suite and the visual checks, which run with the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [releaseNotesFixturePlugin, whatsNewFixturePlugin]
+      : []),
+    // Always on, because its widgets are drawn by their own components, which
+    // the committed component map must hold; offered only from the add panel,
+    // named as test fixtures.
+    widgetKitFixturePlugin,
+    // The widget check's page, where the e2e suite draws every widget from its
+    // preview cases and checks each state's accessibility. A test page, so it
+    // exists only on that suite's own server.
+    ...(process.env.NEXTLY_E2E_WIDGET_CHECK === "1"
+      ? [widgetCheckFixturePlugin]
+      : []),
+    // A plugin page that declares the read it makes as it opens, for the
+    // browser test that a tab opening on it asks for that read inside the
+    // admin's startup request. A test page, on the suite's own server only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [startupReadFixturePlugin]
+      : []),
+    // Always on, for the same reason: the blocks it contributes reach the
+    // editor through the committed component map. Offered only in the Add
+    // panel, named as test fixtures, for plugin-blocks.spec.ts.
+    blockFixturePlugin,
+    // Always on: the plugin contributions a page offers (today one entry-list
+    // filter on Posts) appear only in its menus until someone chooses them,
+    // and their screenshots, and the browser tests to come, need them in every
+    // build.
+    // Named as a fixture, and inert: no tables, routes, jobs or hooks.
+    contributionsFixturePlugin,
+    // The SEO plugin as it ships, for the browser test of its dashboard card
+    // and its Needs attention line, by the switch above. No sitemap: a public
+    // route is not what that test is about.
+    ...(seoPluginEnabled
+      ? [
+          seoPlugin({
+            collections: [SeoPages.slug, SeoTags.slug],
+            singles: [SeoHome.slug],
+            sitemap: false,
+            // Its pages are articles, which name their author; its tags are
+            // hidden from search whole.
+            structuredData: { types: { [SeoPages.slug]: { type: "article" } } },
+            hiddenTypes: [SeoTags.slug],
+            // Where a production build is served, so share images and
+            // structured data name whole addresses; unset in development.
+            ...(process.env.NEXT_PUBLIC_APP_URL
+              ? { baseUrl: process.env.NEXT_PUBLIC_APP_URL }
+              : {}),
+          }),
+        ]
+      : []),
+    // The reading-lists fixture, by the switch above.
+    ...(readingListsEnabled ? [readingListsFixturePlugin] : []),
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
     ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"

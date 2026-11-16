@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { DbError } from "../database/errors";
+import {
+  forgetServerErrors,
+  serverErrorsInLastDay,
+} from "../domains/health/server-errors";
 import { NextlyError } from "../errors/nextly-error";
 import { setNextlyLogger, type NextlyLogger } from "../observability/logger";
 import { setGlobalOnError, type OnErrorHook } from "../observability/on-error";
@@ -291,5 +295,27 @@ describe("withErrorHandler — logger integration", () => {
       code: "FORBIDDEN",
       route: "/api/x",
     });
+  });
+});
+
+describe("withErrorHandler — the server-error tally", () => {
+  beforeEach(() => forgetServerErrors());
+  afterEach(() => forgetServerErrors());
+
+  it("counts a server error toward System health's last 24 hours, and not a refusal", async () => {
+    const failing = withErrorHandler(async () => {
+      throw new Error("boom");
+    });
+    const refusing = withErrorHandler(async () => {
+      throw NextlyError.forbidden();
+    });
+    expect((await refusing(new Request("http://localhost/api/x"))).status).toBe(
+      403
+    );
+    expect(serverErrorsInLastDay().count).toBe(0);
+    expect((await failing(new Request("http://localhost/api/x"))).status).toBe(
+      500
+    );
+    expect(serverErrorsInLastDay().count).toBe(1);
   });
 });

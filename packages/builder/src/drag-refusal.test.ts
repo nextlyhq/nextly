@@ -23,13 +23,13 @@ const refusal = (
 ): DropRefusal => ({ regionId: "r1", reason, permitted });
 
 describe("refusalWording", () => {
-  it("names the parent and the block for wrong-parent", () => {
+  it("names the block and the container for wrong-parent, in plain words", () => {
     const { headline } = refusalWording(
       refusal("wrong-parent"),
       "core/image",
       "core/accordion"
     );
-    expect(headline).toBe("Accordion does not take an Image.");
+    expect(headline).toBe("An Image can't go inside this Accordion.");
   });
 
   it("tells restricted-at-root to go inside something, not to aim elsewhere", () => {
@@ -38,7 +38,7 @@ describe("refusalWording", () => {
       "core/list-item",
       undefined
     );
-    expect(headline).toBe("List item has to sit inside a container.");
+    expect(headline).toBe("A List item has to go inside a container.");
     // The remedy for this reason is NOT "choose another container": at the root
     // there is no container on screen that would satisfy it, so that advice
     // cannot be followed. This assertion is what stops the three reasons being
@@ -46,41 +46,42 @@ describe("refusalWording", () => {
     expect(headline).not.toContain("another");
   });
 
-  it("names the slot rather than the parent for not-allowed-in-slot", () => {
+  it("names the spot rather than the parent for not-allowed-in-slot", () => {
     const { headline } = refusalWording(
       refusal("not-allowed-in-slot"),
       "core/image",
       "core/columns"
     );
-    expect(headline).toBe("This slot does not take an Image.");
+    expect(headline).toBe("An Image can't go here.");
+    expect(headline).not.toContain("Columns");
   });
 
   it("says what a SLOT admits, because that is what its list means", () => {
-    // `canHoldInSlot` returns the slot's allow-list, so "Takes" is a true
-    // statement about the region here and only here.
+    // `canHoldInSlot` returns the slot's allow-list, so "This spot takes" is a
+    // true statement about the region here and only here.
     const { remedy } = refusalWording(
       refusal("not-allowed-in-slot", ["core/heading", "core/paragraph"]),
       "core/image",
       "core/accordion"
     );
-    expect(remedy).toBe("Takes Heading and Paragraph");
+    expect(remedy).toBe("This spot takes a Heading or a Paragraph.");
   });
 
   it("does NOT claim the region accepts a moving block's valid parents", () => {
     /*
      * The separating case. For `wrong-parent`, `canNest` returns
      * `restrictionFor(childType)` — the containers the MOVING block may sit
-     * inside — not anything the refusing region accepts. Wording it as "Takes"
-     * produces "Accordion does not take a Column. Takes Columns", which asserts
-     * the accordion admits columns. Nothing measured that.
+     * inside — not anything the refusing region accepts. Wording it as "This
+     * spot takes" would assert the accordion admits columns. Nothing measured
+     * that.
      */
     const { remedy } = refusalWording(
       refusal("wrong-parent", ["core/columns"]),
       "core/column",
       "core/accordion"
     );
-    expect(remedy).toBe("Column goes inside Columns");
-    expect(remedy).not.toContain("Takes");
+    expect(remedy).toBe("A Column goes inside a Columns.");
+    expect(remedy).not.toContain("takes");
   });
 
   it("offers a parent list as alternatives to choose between", () => {
@@ -89,7 +90,9 @@ describe("refusalWording", () => {
       "core/accordion-item",
       undefined
     );
-    expect(remedy).toBe("Accordion item goes inside Accordion or Columns");
+    expect(remedy).toBe(
+      "An Accordion item goes inside an Accordion or a Columns."
+    );
   });
 
   it("reads as prose for three or more admitted types", () => {
@@ -102,19 +105,19 @@ describe("refusalWording", () => {
       "core/image",
       "core/accordion"
     );
-    expect(remedy).toBe("Takes Heading, Paragraph and List");
+    expect(remedy).toBe("This spot takes a Heading, a Paragraph or a List.");
   });
 
   it("names a namespace wildcard as a group, not as a block called *", () => {
     // `nesting.ts` matches an allow entry ending "/*" as a prefix, so a slot
     // can admit a whole namespace. Humanising that as a block name yields the
-    // bare "*", and the slot would announce "Takes *".
+    // bare "*", and the spot would announce "This spot takes *".
     const { remedy } = refusalWording(
       refusal("not-allowed-in-slot", ["core/*"]),
       "acme/widget",
       "core/columns"
     );
-    expect(remedy).toBe("Takes any core block");
+    expect(remedy).toBe("This spot takes any core block.");
     expect(remedy).not.toContain("*");
   });
 
@@ -124,7 +127,7 @@ describe("refusalWording", () => {
       "core/image",
       "core/columns"
     );
-    expect(remedy).toBe("Takes Heading and any acme block");
+    expect(remedy).toBe("This spot takes a Heading or any acme block.");
   });
 
   it("omits the second line entirely when nothing is permitted", () => {
@@ -146,7 +149,7 @@ describe("refusalWording", () => {
       "core/accordion",
       "core/card"
     );
-    expect(headline).toBe("Card does not take an Accordion.");
+    expect(headline).toBe("An Accordion can't go inside this Card.");
   });
 
   it("still produces a sentence with an EMPTY block registry", () => {
@@ -158,20 +161,20 @@ describe("refusalWording", () => {
       "acme/hero-banner",
       "acme/tab-set"
     );
-    expect(headline).toBe("Tab set does not take a Hero banner.");
-    expect(remedy).toBe("Hero banner goes inside Rich text");
+    expect(headline).toBe("A Hero banner can't go inside this Tab set.");
+    expect(remedy).toBe("A Hero banner goes inside a Rich text.");
   });
 
   it("does not name a container it was not given", () => {
     // wrong-parent normally knows its region, but the caller resolves that from
     // the document by id and can legitimately come up empty. The sentence must
-    // degrade rather than render "undefined does not take…".
+    // degrade rather than render "…inside this undefined".
     const { headline } = refusalWording(
       refusal("wrong-parent"),
       "core/image",
       undefined
     );
-    expect(headline).toBe("That container does not take an Image.");
+    expect(headline).toBe("An Image can't go here.");
     expect(headline).not.toContain("undefined");
   });
 });

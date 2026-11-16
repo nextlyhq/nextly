@@ -9,7 +9,14 @@
     "isolatedDeclarations": true
   },
   "include": ["src/**/*"],
-  // The type tests are checked by tsconfig.tests.json, where exports need not
-  // state their types: they publish nothing.
-  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.test-d.ts"]
+  // The tests, type tests and render tests alike, are checked by
+  // tsconfig.tests.json, where exports need not state their types: they
+  // publish nothing.
+  "exclude": [
+    "dist",
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.test-d.ts"
+  ]
 }

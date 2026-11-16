@@ -1,0 +1,24 @@
+---
+title: DATABASE_CATALOG_UNREADABLE
+description: "The database catalog could not be read, so the command could not tell which field-group registry table the database uses."
+---
+
+## Cause
+
+The database catalog could not be read, so the command could not tell which field-group registry table the database uses.
+
+On a database with no core tables, the command reads the catalog first to learn which spelling of the field-group registry table the database uses. Creating tables without that answer could leave a database that cannot repair itself, so nothing was created.
+
+## Fix
+
+- Check that the database is running and that `DATABASE_URL` names it, then run the command again.
+- Run it with `--verbose` to see why the catalog could not be read.
+
+## Example
+
+```text
+✗ Could not read the database catalog, so core tables were not created.
+  Why:  The catalog says which field-group registry this database uses, and creating the tables without it would leave a database that cannot repair itself.
+  Next: Re-run once the database is reachable; `--verbose` shows why the catalog could not be read.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-catalog-unreadable  (DATABASE_CATALOG_UNREADABLE)
+```

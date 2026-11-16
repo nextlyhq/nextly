@@ -14,6 +14,7 @@ import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useApiKeys, useUpdateApiKey } from "@admin/hooks/queries/useApiKeys";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
@@ -38,6 +39,8 @@ const EditApiKeyContent: React.FC<{ id: string }> = ({ id }) => {
   const { mutate: doUpdate, isPending } = useUpdateApiKey();
 
   const apiKey = data?.data.find(k => k.id === id) ?? null;
+  // The tab names the key being edited once the list holding it has arrived.
+  useDocumentTitle(apiKey?.name);
 
   const handleSubmit = useCallback(
     (values: EditApiKeyFormValues) => {
@@ -117,7 +120,7 @@ export default function EditApiKeyPage(): React.JSX.Element {
 
   if (!id) {
     return (
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout {...API_KEYS_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
@@ -136,7 +139,7 @@ export default function EditApiKeyPage(): React.JSX.Element {
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
+      <PageContainer type="form">
         <SettingsLayout {...API_KEYS_PAGE}>
           <EditApiKeyContent id={id} />
         </SettingsLayout>

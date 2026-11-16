@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, asc, count, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
+import { and, asc, count, desc, eq, gte, inArray, lte } from "drizzle-orm";
 
 import type { RoleListSelectResult } from "@nextly/types/rbac-operations";
 
@@ -10,6 +11,11 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
+import {
+  builtInMarkOf,
+  isAssignableRole,
+  type BuiltInRole,
+} from "../public-role";
 
 import { toDialectBool } from "./utils";
 
@@ -63,9 +69,14 @@ export class RoleQueryService extends BaseService {
     data: Array<{
       id: string;
       name: string;
+      slug: string;
       description: string | null;
       level: number;
       isSystem: boolean;
+      /** Whether it may be given to someone or inherited (`isAssignableRole`). */
+      assignable: boolean;
+      /** Which built-in role it is, if one (`builtInMarkOf`). */
+      builtIn?: BuiltInRole;
     }>;
     meta: {
       total: number;
@@ -94,10 +105,11 @@ export class RoleQueryService extends BaseService {
 
       // Search by name (case-insensitive)
       if (search) {
-        // Use database-agnostic case-insensitive search
-        // ilike() only works on PostgreSQL, so use sql with LOWER() for cross-database compatibility
-        const searchPattern = `%${search}%`;
-        conditions.push(sql`LOWER(${roles.name}) LIKE LOWER(${searchPattern})`);
+        // The name contains the text as typed, ignoring case on every dialect, through the one
+        // rule for it: ilike() exists on PostgreSQL only, and SQLite's lower() folds ASCII only.
+        conditions.push(
+          caseInsensitiveContains(this.dialect, roles.name, search)
+        );
       }
 
       // Filter by isSystem
@@ -218,6 +230,8 @@ export class RoleQueryService extends BaseService {
           description: row.description,
           level: row.level,
           isSystem: Boolean(row.isSystem),
+          assignable: isAssignableRole({ slug: String(row.slug) }),
+          ...builtInMarkOf({ slug: String(row.slug) }),
           childRoleIds: childRolesMap.get(roleId) ?? [],
           ...(includePermissions && {
             permissionIds: permissionsMap.get(roleId) ?? [],
@@ -255,6 +269,10 @@ export class RoleQueryService extends BaseService {
     description: string | null;
     level: number;
     isSystem: boolean;
+    /** Whether it may be given to someone or inherited (`isAssignableRole`). */
+    assignable: boolean;
+    /** Which built-in role it is, if one (`builtInMarkOf`). */
+    builtIn?: BuiltInRole;
   }> {
     try {
       // Validate input. Per §13.8 the public message names the field but
@@ -309,6 +327,8 @@ export class RoleQueryService extends BaseService {
         description: role.description,
         level: role.level,
         isSystem: Boolean(role.isSystem),
+        assignable: isAssignableRole({ slug: String(role.slug) }),
+        ...builtInMarkOf({ slug: String(role.slug) }),
       };
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Map raw DB errors via fromDatabaseError.

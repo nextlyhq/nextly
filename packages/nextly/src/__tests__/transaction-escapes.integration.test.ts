@@ -86,12 +86,14 @@ describeEachDialect("the transaction escape guard", dialect => {
     }
   );
 
-  it("reports a transaction opened inside another's work", async () => {
+  it("reports nothing for a transaction opened inside another's work, which joins it", async () => {
+    // The inner call runs on the outer's connection on every dialect, so it
+    // takes nothing from the pool.
     await current.adapter.transaction(async () => {
       await current.adapter.transaction(ctx => ctx.execute("SELECT 1"));
     });
 
-    expect(drain()).toHaveLength(pooled ? 1 : 0);
+    expect(drain()).toEqual([]);
   });
 
   it("reports nothing when the same work runs through the transaction", async () => {

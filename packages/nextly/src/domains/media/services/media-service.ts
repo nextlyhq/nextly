@@ -48,7 +48,11 @@
 // PR 4 migration: replaced ServiceError throws + mapLegacy/mapSimple helpers
 // with NextlyError factories. Identifiers (mediaId/folderId/etc) move to
 // logContext per §13.8; public messages remain generic and end with a period.
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../../auth/resource-readable";
+import { SYSTEM_READ_POLICY } from "../../../domains/auth/system-write-policy";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
@@ -71,7 +75,10 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
-import type { UploadValidator } from "../../../services/upload-validation";
+import type {
+  UploadValidator,
+  ValidatedFile,
+} from "../../../services/upload-validation";
 import type {
   ImageProcessor,
   ImageValidity,
@@ -79,11 +86,24 @@ import type {
 import type { IStorageAdapter } from "../../../storage/types";
 import {
   isImageMimeType,
+  UpdateMediaInputSchema,
   validateFileSize,
+  type MediaPageQuery,
   type MediaParams,
+  type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import {
+  copyOfMedia,
+  mediaCopyStorage,
+  mediaIdOfCopySource,
+  type MediaCopy,
+  type MediaCopySource,
+} from "../copies/media-copies";
+import type { MediaLibraryCounts } from "../media-library-query";
+import type { DeleteClaim, PendingMediaDeletes } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
+import type { MediaFilesRecord } from "../stored-files";
 import type {
   MediaFile,
   UploadMediaInput,
@@ -189,6 +209,50 @@ function isRefusedInput(result: {
 // ============================================================
 // MediaService
 // ============================================================
+
+/** The focus point fields of the update body, as the REST route parses them. */
+const FocalPointSchema = UpdateMediaInputSchema.pick({
+  focalX: true,
+  focalY: true,
+});
+
+/**
+ * The focus point an update names, or nothing when it names none.
+ *
+ * Whole percentages from 0 to 100, refused otherwise with a validation error
+ * naming each bad field, as the REST route refuses them.
+ */
+function parseFocalPoint(input: UpdateMediaInput): {
+  focalX?: number;
+  focalY?: number;
+} {
+  const parsed = FocalPointSchema.safeParse({
+    focalX: input.focalX,
+    focalY: input.focalY,
+  });
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: issue.path.join("."),
+        code: issue.code,
+        message: issue.message,
+      })),
+    });
+  }
+  return {
+    ...(parsed.data.focalX !== undefined ? { focalX: parsed.data.focalX } : {}),
+    ...(parsed.data.focalY !== undefined ? { focalY: parsed.data.focalY } : {}),
+  };
+}
+
+/**
+ * A page of media items. Unused's alone also says whether the usage record
+ * it was read from was complete (`usageRecorded`), which the admin lists that
+ * view on; every other list leaves it out.
+ */
+export type MediaListPage = PaginatedResult<MediaFile> & {
+  usageRecorded?: boolean;
+};
 
 /**
  * MediaService - Unified service for media files and folders
@@ -310,40 +374,17 @@ export class MediaService {
   // ============================================================
 
   /**
-   * Upload a media file
-   *
-   * @param input - Upload data (buffer, filename, mimeType, size)
-   * @param context - Request context with user info
-   * @returns Uploaded media file
-   * @throws NextlyError if upload fails (e.g., invalid file, size limit).
-   *
-   * @example
-   * ```typescript
-   * const file = await service.upload({
-   *   buffer: fileBuffer,
-   *   filename: 'photo.jpg',
-   *   mimeType: 'image/jpeg',
-   *   size: 1024000,
-   * }, context);
-   * ```
+   * A file a person sends, checked as every upload is: its size against the
+   * configured limit, its metadata sanitized, and its bytes by the upload
+   * validator. Answers the file as the validator passed it. Shared by an
+   * upload and a replace, so a file is accepted for one exactly when it is
+   * for the other.
    */
-  async upload(
+  private async checkedFile(
     input: UploadMediaInput,
     context: RequestContext,
-    // The transport-resolved caller, threaded to the outbox event so an upload
-    // attributes to the real session or API key rather than only the uploader.
-    actor?: RequestActor
-  ): Promise<MediaFile> {
-    // Ensure storage is configured before upload
-    this.ensureStorageConfigured();
-
-    this.logger.debug("Uploading media file", {
-      filename: input.filename,
-      mimeType: input.mimeType,
-      size: input.size,
-      userId: context.user?.id,
-    });
-
+    operation: "upload" | "replace"
+  ): Promise<ValidatedFile> {
     // Validate file size. Field-level message names the path ("size") but
     // never the value; the actual byte count + driver-supplied reason live
     // in logContext for operators.
@@ -382,7 +423,7 @@ export class MediaService {
       this.logger.warn("upload.rejected", {
         event: "nextly.upload.rejected",
         code: validation.errors[0]?.code,
-        route: "media-service.upload",
+        route: `media-service.${operation}`,
         mimeType: input.mimeType,
         filename: input.filename,
         size: input.size,
@@ -391,12 +432,51 @@ export class MediaService {
         errors: validation.errors,
         logContext: {
           ...validation.logContext,
-          operation: "media-service.upload",
+          operation: `media-service.${operation}`,
           userId: context.user?.id ?? null,
         },
       });
     }
     const validated = validation.value;
+    return validated;
+  }
+
+  /**
+   * Upload a media file
+   *
+   * @param input - Upload data (buffer, filename, mimeType, size)
+   * @param context - Request context with user info
+   * @returns Uploaded media file
+   * @throws NextlyError if upload fails (e.g., invalid file, size limit).
+   *
+   * @example
+   * ```typescript
+   * const file = await service.upload({
+   *   buffer: fileBuffer,
+   *   filename: 'photo.jpg',
+   *   mimeType: 'image/jpeg',
+   *   size: 1024000,
+   * }, context);
+   * ```
+   */
+  async upload(
+    input: UploadMediaInput,
+    context: RequestContext,
+    // The transport-resolved caller, threaded to the outbox event so an upload
+    // attributes to the real session or API key rather than only the uploader.
+    actor?: RequestActor
+  ): Promise<MediaFile> {
+    // Ensure storage is configured before upload
+    this.ensureStorageConfigured();
+
+    this.logger.debug("Uploading media file", {
+      filename: input.filename,
+      mimeType: input.mimeType,
+      size: input.size,
+      userId: context.user?.id,
+    });
+
+    const validated = await this.checkedFile(input, context, "upload");
 
     // Validate the target folder BEFORE persisting the file so a bad folderId
     // fails fast (throws NOT_FOUND) instead of leaving an orphaned upload, and
@@ -422,6 +502,9 @@ export class MediaService {
         // (which left subscribers seeing the wrong folder and no move event).
         // The legacy insert normalizes a missing folder to null itself.
         folderId: input.folderId ?? undefined,
+        // As `sanitizeMediaInput` left it above, so the stored alt text carries
+        // no markup.
+        altText: input.altText,
         contentDisposition:
           validated.isSvg && this.svgCsp ? "attachment" : undefined,
       },
@@ -459,6 +542,67 @@ export class MediaService {
   }
 
   /**
+   * Replace an item's file, keeping the item: the same id, name, alt text,
+   * caption, folder and usage, with the new file at a new address and a new
+   * thumbnail, and the old files removed once the change has committed.
+   * The new file is checked exactly as an upload's is.
+   *
+   * @throws NextlyError(NOT_FOUND) when the item does not exist.
+   */
+  async replaceFile(
+    mediaId: string,
+    input: UploadMediaInput,
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<MediaFile> {
+    this.ensureStorageConfigured();
+    const validated = await this.checkedFile(input, context, "replace");
+    // Loaded when a file is replaced, not with the service.
+    const [{ replaceMediaFile }, { container }, { getMediaStorage }] =
+      await Promise.all([
+        import("../replace-media-file"),
+        import("../../../di/container"),
+        import("../../../storage/storage"),
+      ]);
+    const replaced = await replaceMediaFile(
+      {
+        adapter: container.get<DrizzleAdapter>("adapter"),
+        storage: getMediaStorage(),
+        images: this.imageProcessor,
+        logger: this.logger,
+        addressHolders: address =>
+          this.legacyMediaService.addressHolderCount(address),
+      },
+      mediaId,
+      {
+        buffer: validated.buffer,
+        filename: validated.filename,
+        mimeType: validated.mimeType,
+        ...(validated.isSvg && this.svgCsp
+          ? { contentDisposition: "attachment" as const }
+          : {}),
+      },
+      actorForWrite(actor, context.user)
+    );
+    this.logger.info("Media file replaced", { mediaId });
+    await this.legacyMediaService.whenCommitted(() =>
+      emitMediaEvent("updated", { mediaId })
+    );
+    // The replace committed a media.updated outbox row; drain and prune it.
+    await this.afterWrite();
+    return this.mapToMediaFile(replaced);
+  }
+
+  /**
+   * How many records outside content (users' avatars, the email brand's
+   * logo, the site's logos) keep `address`. Each goes on naming it after a
+   * Replace, so the old file is kept for them.
+   */
+  addressHolderCount(address: string): Promise<number> {
+    return this.legacyMediaService.addressHolderCount(address);
+  }
+
+  /**
    * Find a media file by ID
    *
    * @param mediaId - Media file ID
@@ -493,6 +637,81 @@ export class MediaService {
   }
 
   /**
+   * A resized copy of an image, by its address, at the allowed width nearest
+   * `width`: made the first time it is fetched and kept beside the original.
+   * `null` when no copy can be had, and the original is to be used: an
+   * address that is not a media item's, an image type that is not resized, a
+   * storage that cannot keep copies, or an install without the image library.
+   *
+   * Reads like `findById`, so a missing item is NOT_FOUND. Whoever calls it
+   * has decided the caller may read the item; the copy route serves it only
+   * to whoever may read the item.
+   *
+   * @experimental
+   */
+  async copyOf(
+    source: MediaCopySource,
+    width: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy | null> {
+    const id = mediaIdOfCopySource(source);
+    if (id === undefined) return null;
+    let item: MediaFile;
+    try {
+      item = await this.findById(id, context);
+    } catch (error) {
+      // An address naming an item that is gone is used as it is, like any
+      // other address that is not a media item's; an id asked for directly
+      // is not found, as `findById` answers.
+      if ("url" in source && NextlyError.isNotFound(error)) return null;
+      throw error;
+    }
+    // A copy's address is on the public media route, which serves copies
+    // only while a visitor may read media. Where one may not, the address
+    // could never load, so the original is used as it is.
+    if (
+      !(await visitorReadsSystemResource(
+        SYSTEM_READ_POLICY.media.read.resource
+      ))
+    ) {
+      return null;
+    }
+    return await copyOfMedia(item, width, {
+      storage: mediaCopyStorage(),
+      processor: this.imageProcessor,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Several media files by id, in one read: each file found, once, in the
+   * order its id was first asked for; an id with no file has none. Judged
+   * by the caller as `findById` is: this answers what it is asked.
+   *
+   * @param mediaIds - The ids, at most a page of them
+   * @param context - Request context
+   * @returns The files found
+   */
+  async findByIds(
+    mediaIds: readonly string[],
+    _context: RequestContext
+  ): Promise<MediaFile[]> {
+    const asked = [...new Set(mediaIds)];
+    this.logger.debug("Finding media by ids", { count: asked.length });
+    const result = await this.legacyMediaService.getMediaByIds(asked);
+    if (!result.success || result.data === null) {
+      throw this.mapLegacyErrorToNextlyError(
+        { ...result, statusCode: result.statusCode, data: null },
+        { entity: "media" }
+      );
+    }
+    const found = new Map(
+      result.data.map(row => [row.id, this.mapToMediaFile(row)] as const)
+    );
+    return asked.flatMap(id => found.get(id) ?? []);
+  }
+
+  /**
    * List media files with pagination and filtering
    *
    * @param options - Query options (pagination, search, filters)
@@ -502,18 +721,21 @@ export class MediaService {
   async listMedia(
     options: ListMediaOptions = {},
     _context: RequestContext
-  ): Promise<PaginatedResult<MediaFile>> {
-    this.logger.debug("Listing media files", { options });
+  ): Promise<MediaListPage> {
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing media files");
 
     const page = options.page ?? 1;
     const limit = options.limit ?? 24;
 
-    const queryParams: MediaParams = {
+    const queryParams: MediaParams & { view?: MediaView } = {
       page,
       limit,
       search: options.search,
       type: options.type,
       folderId: options.folderId,
+      view: options.view,
       sortBy: options.sortBy ?? "uploadedAt",
       sortOrder: options.sortOrder ?? "desc",
     };
@@ -528,6 +750,7 @@ export class MediaService {
     const total = result.meta?.total ?? files.length;
     const offset = (page - 1) * limit;
 
+    const usageRecorded = result.meta?.usageRecorded;
     return {
       data: files,
       pagination: {
@@ -536,7 +759,29 @@ export class MediaService {
         offset,
         hasMore: offset + files.length < total,
       },
+      ...(usageRecorded === undefined ? {} : { usageRecorded }),
     };
+  }
+
+  /**
+   * The media library sidebar's counts: every folder's items and each view's,
+   * read from the database in one query.
+   */
+  async countLibrary(_context: RequestContext): Promise<MediaLibraryCounts> {
+    return this.legacyMediaService.countLibrary();
+  }
+
+  /**
+   * @experimental Whether anything uses the item: a document's field, or an
+   * avatar or logo that keeps its address. In use whenever that cannot be
+   * known yet (no usage record, or one not built for older content), so a
+   * caller deleting unused items never deletes on a guess.
+   */
+  // Reached through the plugin facade's read list (`PLUGIN_MEDIA_READS`),
+  // picked by name, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async isInUse(mediaId: string): Promise<boolean> {
+    return this.legacyMediaService.isInUse(mediaId);
   }
 
   /**
@@ -575,6 +820,11 @@ export class MediaService {
       await this.findFolderById(input.folderId, context);
     }
 
+    // The focus point is checked against the rule the REST body is parsed
+    // with, so a Direct API call can't store a point the route would refuse.
+    // Checked before the write: a refused point changes nothing.
+    const focalPoint = parseFocalPoint(input);
+
     const result = await this.legacyMediaService.updateMedia(
       mediaId,
       {
@@ -582,6 +832,9 @@ export class MediaService {
         caption: input.caption ?? undefined,
         tags: input.tags,
         ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
+        // Passed on only when named, so an update that doesn't mention the
+        // point leaves the stored one as it is.
+        ...focalPoint,
       },
       resolvedActor
     );
@@ -616,7 +869,10 @@ export class MediaService {
     mediaId: string,
     context: RequestContext,
     // The transport-resolved caller, threaded to the outbox event.
-    actor?: RequestActor
+    actor?: RequestActor,
+    // Run in the delete's transaction, for the end of an Undo window: see
+    // the legacy service's `deleteMedia`.
+    claim?: DeleteClaim
   ): Promise<void> {
     this.logger.debug("Deleting media file", { mediaId });
 
@@ -628,7 +884,8 @@ export class MediaService {
 
     const result = await this.legacyMediaService.deleteMedia(
       mediaId,
-      resolvedActor
+      resolvedActor,
+      claim
     );
 
     if (!result.success) {
@@ -647,6 +904,45 @@ export class MediaService {
 
     // The delete committed a media.deleted outbox row; drain and prune it.
     await this.afterWrite();
+  }
+
+  /**
+   * Delete a media file now and remove its stored files durably: {@link delete},
+   * with the files recorded as left to remove in the delete's own
+   * transaction and the finalising job queued there, so a removal storage
+   * refuses, or one a stopped worker never started, is tried again until the
+   * files are gone (`PendingMediaDeletes.deleteNow`). What a plugin's
+   * `ctx.services.media.delete` runs.
+   *
+   * @throws NextlyError if deletion fails, not-found for an item already gone.
+   */
+  async deleteDurably(
+    mediaId: string,
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<void> {
+    // Loaded when an item is deleted, not with the service.
+    const { bootedPendingDeletes } = await import("../booted-pending-deletes");
+    // Named by its type, the class whose method is called below.
+    const pending: PendingMediaDeletes = bootedPendingDeletes();
+    await pending.deleteNow(
+      mediaId,
+      actorForWrite(actor, context.user),
+      // The files go once the delete is durable, as an ordinary delete's do.
+      effect => this.legacyMediaService.whenCommitted(effect)
+    );
+  }
+
+  /**
+   * Remove the stored files of an item already deleted, `record` being its
+   * row as it was; answers whether it could finish. For a delete whose
+   * claimer removes the files, and to finish a removal cut short.
+   */
+  removeFilesOfDeleted(
+    mediaId: string,
+    record: MediaFilesRecord
+  ): Promise<boolean> {
+    return this.legacyMediaService.removeFilesOfDeleted(mediaId, record);
   }
 
   /**
@@ -1085,11 +1381,16 @@ export class MediaService {
    */
   async getFolderContents(
     folderId: string | null,
-    _context: RequestContext
+    _context: RequestContext,
+    /** Which page of its items, and how they are narrowed and sorted. */
+    query: Partial<MediaPageQuery> = {}
   ): Promise<FolderContents> {
     this.logger.debug("Getting folder contents", { folderId });
 
-    const result = await this.legacyFolderService.getFolderContents(folderId);
+    const result = await this.legacyFolderService.getFolderContents(
+      folderId,
+      query
+    );
 
     if (!result.success || !result.data) {
       // One throw. The converter answers a code-less 404 with the same generic
@@ -1108,6 +1409,7 @@ export class MediaService {
         this.mapToMediaFile(m)
       ),
       breadcrumbs: result.data.breadcrumbs,
+      meta: result.data.meta,
     };
   }
 
@@ -1259,25 +1561,20 @@ export class MediaService {
   /**
    * Map legacy media data to MediaFile type
    *
-   * `sizes`, `focalX` and `focalY` are carried through rather than dropped. The
-   * row holds all three in every dialect, and dropping them meant the same
-   * media file described itself differently depending on how it was read: with
-   * variants when populated as a relationship on another collection, without
-   * them from `media.findByID()` and `GET /api/media/:id`.
+   * `focalX` and `focalY` are carried through rather than dropped, so the same
+   * media file describes itself alike whether populated as a relationship on
+   * another collection or read from `media.findByID()` and `GET /api/media/:id`.
    *
    * The URLs go through `normalizeMediaUrls`, which the relationship and
    * Single paths use too, so the three cannot disagree about what a media URL
    * is: as the storage wrote it, the local adapter's own base followed by the
    * file's path, which the app's pages resolve on whatever host serves them.
-   * It carries the part that is easy to get wrong by hand: SQLite stores
-   * `sizes` as TEXT and returns a JSON string, which it parses, so the shape a
-   * caller receives is the same on all three dialects.
+   * A row's stored `sizes` is not carried: image sizes are no longer offered.
    */
   private mapToMediaFile(data: MediaRow): MediaFile {
-    const { url, thumbnailUrl, sizes } = normalizeMediaUrls({
+    const { url, thumbnailUrl } = normalizeMediaUrls({
       url: data.url,
       thumbnailUrl: data.thumbnailUrl,
-      sizes: data.sizes,
     });
     return {
       id: String(data.id),
@@ -1290,7 +1587,6 @@ export class MediaService {
       duration: data.duration,
       url,
       thumbnailUrl,
-      sizes,
       focalX: data.focalX,
       focalY: data.focalY,
       altText: data.altText,

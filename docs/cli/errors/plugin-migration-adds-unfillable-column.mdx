@@ -1,0 +1,24 @@
+---
+title: PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN
+description: "A plugin migration would add a NOT NULL column with no default to a table that already has rows."
+---
+
+## Cause
+
+A plugin migration would add a NOT NULL column with no default to a table that already has rows.
+
+The dialects disagree about a NOT NULL column with no default added to a table with rows: SQLite refuses it, PostgreSQL refuses it once the table has rows, and MySQL fills the rows with 0 or an empty string without saying so. So the generator refuses it on every dialect.
+
+## Fix
+
+- Give the column a default.
+- Or write the addition by hand in a module from `nextly migrate:create --plugin <entry> --blank`: add the column nullable, fill the existing rows, then make it NOT NULL.
+
+## Example
+
+```text
+✗ This migration would add seo_redirects.status as NOT NULL with no default to a table plugin "@acme/seo" created earlier, and the rows already in it would have no value for it.
+  Why:  SQLite refuses such a column, PostgreSQL refuses it once the table has rows, and MySQL fills the rows with 0 or '' without saying so, so it is refused on every dialect when the migration is generated.
+  Next: Give the column a default, or write the addition by hand — add the column nullable, fill the existing rows, then make it NOT NULL — in a module from `nextly migrate:create --plugin <entry> --blank`, which records this change for the SQL you write.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-adds-unfillable-column  (PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN)
+```

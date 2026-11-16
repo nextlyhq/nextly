@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The drag library's context around the dashboard's cards, and the chip a pointer drag holds.
+ * The drag library's context around the dashboard's cards, and the picture a pointer drag holds.
  *
  * Its own component so the grid states only that its cards can be dragged: which sensors run,
  * what is announced and what follows the pointer are the drag's business (`useCardDrag`).
@@ -9,34 +9,51 @@
  * @module components/features/widgets/edit/drag/CardDragContext
  */
 
-import { DndContext, DragOverlay } from "@dnd-kit/core";
-import type { JSX, ReactNode } from "react";
-
-import * as Icons from "@admin/components/icons";
-
 import {
-  chipAtPointer,
-  DRAG_SCREEN_READER,
-  SILENT_DRAG,
-  type CardDrag,
-} from "./useCardDrag";
+  DndContext,
+  DragOverlay,
+  defaultDropAnimationSideEffects,
+  type DropAnimation,
+} from "@dnd-kit/core";
+import { useCallback, type JSX, type ReactNode } from "react";
 
-/** The chip modifier, made once: a new array each render would reset the overlay. */
-const CHIP_MODIFIERS = [chipAtPointer];
+import { usePrefersReducedMotion } from "../../charts/reduced-motion";
 
-/** What a pointer drag holds: the card's name, beside the pointer. */
-function DragChip({ title }: { title: string }) {
+import { SILENT_DRAG, type CardDrag } from "./useCardDrag";
+import { SLIDE_MS } from "./useCardFlip";
+
+/**
+ * On release the picture settles into the card's new place, as the other cards slide into
+ * theirs; the card itself is drawn once the picture has arrived.
+ */
+const SETTLE: DropAnimation = {
+  duration: SLIDE_MS,
+  easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+  sideEffects: defaultDropAnimationSideEffects({
+    styles: { active: { opacity: "0" } },
+  }),
+};
+
+/**
+ * The card as it was picked up, under the pointer: a copy of what was drawn, lifted off the page
+ * with a shadow. Drawn only, never reached or read: the card itself is still on the page, as
+ * the outline where it will land.
+ */
+function CardGhost({ picture }: { picture: HTMLElement }) {
+  const hold = useCallback(
+    (element: HTMLDivElement | null) => {
+      element?.replaceChildren(picture);
+    },
+    [picture]
+  );
   return (
     <div
-      data-testid="widget-drag-chip"
-      className="inline-flex max-w-xs items-center gap-1.5 rounded-md border border-border bg-popover px-2.5 py-1.5 text-sm font-medium text-popover-foreground shadow-md"
-    >
-      <Icons.GripVertical
-        aria-hidden
-        className="size-4 shrink-0 text-muted-foreground"
-      />
-      <span className="truncate">{title}</span>
-    </div>
+      ref={hold}
+      aria-hidden
+      inert
+      data-testid="widget-drag-ghost"
+      className="h-full w-full cursor-grabbing rounded-lg opacity-95 shadow-lg"
+    />
   );
 }
 
@@ -47,7 +64,8 @@ export function CardDragContext({
   drag: CardDrag;
   children: ReactNode;
 }): JSX.Element {
-  const held = drag.drag;
+  const reduced = usePrefersReducedMotion();
+  const picture = drag.drag?.ghost ?? null;
   return (
     <DndContext
       // The same sensors at every width. dnd-kit reads the list as an effect's dependencies, so
@@ -59,15 +77,11 @@ export function CardDragContext({
       onDragMove={drag.onDragMove}
       onDragEnd={drag.onDragEnd}
       onDragCancel={drag.onDragCancel}
-      accessibility={{
-        announcements: SILENT_DRAG,
-        screenReaderInstructions: DRAG_SCREEN_READER,
-      }}
+      accessibility={{ announcements: SILENT_DRAG }}
     >
       {children}
-      {/* No drop animation: the card is put down where the line was, not flown back to it. */}
-      <DragOverlay modifiers={CHIP_MODIFIERS} dropAnimation={null}>
-        {held?.by === "pointer" ? <DragChip title={held.title} /> : null}
+      <DragOverlay dropAnimation={reduced ? null : SETTLE}>
+        {picture === null ? null : <CardGhost picture={picture} />}
       </DragOverlay>
     </DndContext>
   );

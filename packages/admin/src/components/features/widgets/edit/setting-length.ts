@@ -3,19 +3,15 @@
  * server counts them.
  *
  * `textLength`, from `nextly/config`, is the ONE counter: the layout write
- * refuses a note over its bound with it, so the sheet asks it the same question
- * before Done saves. The field's own `maxLength` is not handed to the textarea,
- * whose native attribute counts UTF-16 units: it would stop a reader typing
- * emoji well before a bound the server would accept.
+ * refuses a note over its bound with it, so the drawer asks it the same question
+ * before Save, and counts the characters left with it. The bound is not handed
+ * to the textarea, whose native attribute counts UTF-16 units: it would stop a
+ * reader typing emoji well before a bound the server would accept.
  *
  * @module components/features/widgets/edit/setting-length
  */
 
-import {
-  textLength,
-  type AnyWidgetSetting,
-  type WidgetSetting,
-} from "nextly/config";
+import { textLength, type AnyWidgetSetting } from "nextly/config";
 
 /** A textarea setting whose value is over its bound: the setting, and its bound. */
 export interface OverlongSetting {
@@ -40,19 +36,7 @@ export function overlongSetting(
   return undefined;
 }
 
-/**
- * The setting as `FieldRenderer` draws it: a textarea without its `maxLength`,
- * which `overlongSetting` judges instead; any other setting as it is.
- */
-export function drawnSetting(setting: WidgetSetting): WidgetSetting {
-  if (setting.type !== "textarea" || setting.maxLength === undefined) {
-    return setting;
-  }
-  const { maxLength: _judgedOnDone, ...drawn } = setting;
-  return drawn;
-}
-
-/** What the sheet says under a note over its bound. */
+/** What the drawer says under a note over its bound. */
 export function overlongMessage(maxLength: number): string {
   return `At most ${maxLength} characters.`;
 }

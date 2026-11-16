@@ -61,7 +61,8 @@ vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (...a: unknown[]) => navigateMock(...a),
 }));
 
-import { VersionComparePage, versionsHref } from "../VersionComparePage";
+import { VersionComparePage } from "../VersionComparePage";
+import { versionsHref } from "../versions-href";
 
 const row = (versionNo: number, locale: string | null = null) => ({
   id: `v${versionNo}`,

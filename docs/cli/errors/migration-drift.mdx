@@ -1,0 +1,33 @@
+---
+title: MIGRATION_DRIFT
+description: "The database matches neither the state a migration starts from nor the state it produces."
+---
+
+## Cause
+
+The database matches neither the state a migration starts from nor the state it produces.
+
+Before it runs a migration, `nextly migrate` compares the database with the state the migration starts from and the state it produces. The database matches neither, which usually means its schema was changed outside Nextly: by hand, by a failed earlier run, or by another branch.
+
+## Fix
+
+- Pick one of the recoveries the Next line lists: sync the database to your config, mark the migration applied if you ran it by hand, or capture the difference in a new migration.
+- [Production migrations](/docs/guides/production-migrations) explains each.
+
+## Example
+
+```text
+✗ Migration `20261020_120000_add_posts` cannot be applied: schema drift detected.
+  Why:  Your database differs from BOTH the pre-migration baseline and the expected post-migration state. This usually means schema changes were made outside Nextly's tracked paths (manual SQL, a failed prior run, divergent teammate state).
+        Drift summary (2 differences):
+          + column 'dc_posts.subtitle' present in DB
+          - column 'dc_posts.summary' absent from DB
+  Next: Recovery (pick one):
+          [A] Sync the DB to your config, then re-run migrate:
+                pnpm nextly db:sync && pnpm nextly migrate
+          [B] Mark it applied without executing (if you applied it manually):
+                pnpm nextly migrate:resolve --applied 20261020_120000_add_posts
+          [C] Capture the drift in a new migration:
+                pnpm nextly migrate:create --name capture_drift && pnpm nextly migrate
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-drift  (MIGRATION_DRIFT)
+```

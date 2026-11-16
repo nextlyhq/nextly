@@ -31,7 +31,6 @@
  * object, so a feature can only record the data its own kind declares.
  *
  * @module domains/notices/notice-kinds
- * @experimental Until the notices feature is complete.
  */
 import type { z } from "zod";
 
@@ -57,8 +56,15 @@ export interface NoticeRenderContext {
  * A kind of notice.
  *
  * @typeParam TData - The snapshot each notice of this kind stores.
- * @experimental
  */
+/** One notice as its kind's `readable` is asked about it. */
+export interface NoticeToJudge<TData> {
+  id: string;
+  subjectId: string;
+  /** Its snapshot, as the kind's schema reads it. */
+  data: TData;
+}
+
 export interface NoticeKind<TData = unknown> {
   /**
    * Unique, and namespaced by the feature that owns it: `releases.stopped`,
@@ -89,6 +95,27 @@ export interface NoticeKind<TData = unknown> {
    * Omitted, they always may.
    */
   visible?: (userId: string) => Promise<boolean>;
+  /**
+   * What of these notices this person may be told about now, for a kind whose subject is
+   * something the person reads through access rules, such as a document: by id, the snapshot to
+   * show them, which may withhold part of the stored one (a title a field rule hides from them,
+   * say). Asked per notice, with its snapshot, so a kind can judge what a notice names beyond
+   * its subject, such as the language it is about. A notice not among them is listed with none of its snapshot's text and
+   * no link, and its email is not sent: what the person may not read, a notice does not tell
+   * them. A notice whose subject `link` finds gone is withheld the same way, whoever reads it:
+   * there are no rules left to ask, so it fails closed, saying only {@link goneText}. Omitted,
+   * every notice may be.
+   */
+  readable?: (
+    userId: string,
+    notices: readonly NoticeToJudge<TData>[]
+  ) => Promise<ReadonlyMap<string, TData>>;
+  /**
+   * What a notice of a kind with `readable` says, in place of its snapshot, once its subject is
+   * gone, such as "The document has since been deleted.". Omitted, it says only that it can no
+   * longer be shown.
+   */
+  goneText?: string;
 }
 
 /**
@@ -108,8 +135,6 @@ export const NOTICE_REFERENCE_MAX = 191;
  *
  * An identity function that exists for the types: `record()` reads `TData`
  * off the object this returns.
- *
- * @experimental
  */
 export function defineNoticeKind<TData>(
   kind: NoticeKind<TData>
@@ -143,8 +168,6 @@ const kinds = new Map<string, NoticeKind<unknown>>();
  * because each key is namespaced by its feature. A kind registered with a
  * different subject under an existing key is refused: that is two features
  * claiming one key, not a reload.
- *
- * @experimental
  */
 export function registerNoticeKind<TData>(kind: NoticeKind<TData>): void {
   defineNoticeKind(kind);

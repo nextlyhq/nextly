@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { Loader2, Search, X } from "@admin/components/icons";
 import { Input } from "@admin/components/ui";
+import { useT } from "@admin/lib/i18n/I18nProvider";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -123,7 +124,7 @@ export const SearchBar: React.ForwardRefExoticComponent<
     {
       value = "",
       onChange,
-      placeholder = "Search...",
+      placeholder,
       debounceDelay = 300,
       isLoading = false,
       className,
@@ -131,6 +132,9 @@ export const SearchBar: React.ForwardRefExoticComponent<
     },
     ref
   ) => {
+    // The bar's own words read in the interface language; a caller's own
+    // placeholder is shown as given.
+    const t = useT();
     // Internal state for immediate UI updates
     const [internalValue, setInternalValue] = React.useState(value);
 
@@ -221,7 +225,7 @@ export const SearchBar: React.ForwardRefExoticComponent<
           // native WebKit cancel button is suppressed because this component
           // renders its own clear affordance, which also handles focus return.
           type="search"
-          placeholder={placeholder}
+          placeholder={placeholder ?? t("nextly.search.placeholder")}
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
@@ -251,7 +255,7 @@ export const SearchBar: React.ForwardRefExoticComponent<
               <button
                 type="button"
                 onClick={handleClear}
-                aria-label="Clear search"
+                aria-label={t("nextly.search.clear")}
                 className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded-md hover-unified"
               >
                 <X className="h-3.5 w-3.5" />

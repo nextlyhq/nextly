@@ -28,5 +28,6 @@ export const AUTHORING_SUPPORTS: {
   position: [],
   container: [],
   list: [],
+  disclosure: [],
   customCss: [],
 };

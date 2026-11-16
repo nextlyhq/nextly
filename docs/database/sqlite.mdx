@@ -146,7 +146,7 @@ SQLite is intentionally simple, and that simplicity is the trade-off:
 - **Fragile across crashes and shared filesystems.** Process crashes during writes can leave WAL files in inconsistent states; running over NFS / SMB / Docker bind mounts can corrupt the database.
 - **Weaker schema operations.** SQLite's `ALTER TABLE` is much more limited than PostgreSQL or MySQL -- some column changes require recreating the table. Nextly's migration model handles this where possible, but you will hit cases the other dialects handle natively.
 - **Weaker types.** SQLite uses dynamic typing with type affinity; numbers, strings, and dates flow through with less validation than PostgreSQL or MySQL provide.
-- **No `ILIKE`.** Case-insensitive search uses `LOWER(column) LIKE LOWER(value)`.
+- **No `ILIKE`.** Case-insensitive search folds both sides, then compares with `LIKE`. SQLite's own `LOWER()` folds ASCII letters only, so Nextly registers a Unicode case fold, `nextly_fold_case()`, on every connection it opens and folds with that: "CRÈME" finds "crème" as on PostgreSQL and MySQL. A connection opened by other software does not have the function, and a Nextly search run on one fails with `no such function: nextly_fold_case` rather than matching ASCII letters only.
 - **No JSONB.** JSON is stored as TEXT and queried with `json_extract()`. No JSON indexes.
 - **No array types.** Store arrays as JSON text.
 - **999 parameter limit per query.** PostgreSQL and MySQL allow 65,535. Bulk operations may need batching at lower thresholds for SQLite.

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { autosaveIntervalFrom } from "../autosave-interval";
+import { autosaveEnabledFor, autosaveIntervalFrom } from "../autosave-interval";
 
 describe("autosaveIntervalFrom", () => {
   it("reads the configured interval", () => {
@@ -46,5 +46,25 @@ describe("autosaveIntervalFrom", () => {
         })
       ).toBeUndefined();
     }
+  });
+});
+
+describe("autosaveEnabledFor", () => {
+  it("is true only where the configuration turns recovery points on", () => {
+    expect(
+      autosaveEnabledFor({
+        versions: { drafts: { autosave: { enabled: true, intervalMs: 5000 } } },
+      })
+    ).toBe(true);
+    expect(
+      autosaveEnabledFor({
+        versions: { drafts: { autosave: { enabled: false } } },
+      })
+    ).toBe(false);
+    expect(
+      autosaveEnabledFor({ versions: { drafts: { enabled: true } } })
+    ).toBe(false);
+    expect(autosaveEnabledFor({ versions: null })).toBe(false);
+    expect(autosaveEnabledFor(null)).toBe(false);
   });
 });

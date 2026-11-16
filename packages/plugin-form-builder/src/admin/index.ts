@@ -26,16 +26,27 @@
 
 import {
   registerComponents,
-  registerKnownPlugin,
   type ComponentPath,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { FORM_EDITOR_VIEW } from "../form-pages";
+
 import { SubmissionsView } from "./components/submissions/SubmissionsView";
 import { FormBuilderView } from "./FormBuilderView";
+import { SubmissionPage } from "./SubmissionPage";
 
 export { FormBuilderView, type FormBuilderViewProps } from "./FormBuilderView";
 export { SubmissionsView } from "./components/submissions/SubmissionsView";
-export { SubmissionSheet } from "./components/submissions/SubmissionSheet";
+export { SubmissionPage, type SubmissionPageProps } from "./SubmissionPage";
+
+// ============================================================================
+// Dashboard Widgets
+// ============================================================================
+
+// The New form submissions card's body, at the path its widget declares
+// ("@nextlyhq/plugin-form-builder/admin#NewSubmissionsCard"). A site's
+// generated component map imports it from here.
+export { NewSubmissionsCard } from "../dashboard/NewSubmissionsCard";
 
 // ============================================================================
 // Builder Sub-Components
@@ -43,12 +54,8 @@ export { SubmissionSheet } from "./components/submissions/SubmissionSheet";
 
 export {
   FieldCards,
-  AddFieldDialog,
-  FieldEditor,
   FormPreview,
   type FieldCardsProps,
-  type AddFieldDialogProps,
-  type FieldEditorProps,
   type FormPreviewProps,
 } from "./components/builder";
 
@@ -81,12 +88,15 @@ export { FormSettingsTab } from "./components/builder/FormSettingsTab";
 export { FormNotificationsTab } from "./components/builder/FormNotificationsTab";
 
 /** Component path for FormBuilderView */
-export const FORM_BUILDER_VIEW_PATH: ComponentPath =
-  "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
+export const FORM_BUILDER_VIEW_PATH: ComponentPath = FORM_EDITOR_VIEW;
 
 /** Component path for SubmissionsView */
 export const SUBMISSIONS_VIEW_PATH: ComponentPath =
   "@nextlyhq/plugin-form-builder/admin#SubmissionsView";
+
+/** Component path for SubmissionPage, a submission's own page */
+export const SUBMISSION_PAGE_PATH: ComponentPath =
+  "@nextlyhq/plugin-form-builder/admin#SubmissionPage";
 
 // ============================================================================
 // Auto-Registration with Admin
@@ -101,24 +111,5 @@ export const SUBMISSIONS_VIEW_PATH: ComponentPath =
 registerComponents({
   [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
   [SUBMISSIONS_VIEW_PATH]: SubmissionsView,
+  [SUBMISSION_PAGE_PATH]: SubmissionPage,
 });
-
-/**
- * Also register with the known plugin system for consistency.
- *
- * This supports the auto-registration flow where the admin detects
- * component paths and triggers registration. Since we eagerly register
- * above, this callback is effectively a no-op but keeps the plugin
- * compatible with both eager and lazy registration patterns.
- */
-registerKnownPlugin(
-  "@nextlyhq/plugin-form-builder",
-  // eslint-disable-next-line @typescript-eslint/require-await -- registerKnownPlugin's second arg is typed `() => Promise<void>` (strict, not a union); body is synchronous
-  async () => {
-    // Components already registered above, but re-register for safety
-    registerComponents({
-      [FORM_BUILDER_VIEW_PATH]: FormBuilderView,
-      [SUBMISSIONS_VIEW_PATH]: SubmissionsView,
-    });
-  }
-);

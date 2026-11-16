@@ -29,7 +29,6 @@ export type ServiceType =
   | "pluginSettings"
   | "previewLinks"
   | "previewUrl"
-  | "imageSizes"
   | "dashboard"
   | "documentLock"
   | "translations"
@@ -37,7 +36,10 @@ export type ServiceType =
   | "email"
   | "schema"
   // A subject's content events read by subject; its handler owns its auth.
-  | "contentEvents";
+  | "contentEvents"
+  // What the roles screen shows for each collection and Single; its handler
+  // owns its auth.
+  | "rolesScreen";
 
 export type OperationType =
   | "single"

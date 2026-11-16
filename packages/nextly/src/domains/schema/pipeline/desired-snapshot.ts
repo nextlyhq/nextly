@@ -14,7 +14,9 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { builderKeyTables } from "../../dynamic-collections/services/collection-tables";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import type { ExtensionSchema } from "../extension/build-extension-schema";
 import { withEntityContributions } from "../extension/entity-contributions";
 import { identifierCaseRules } from "../utils/resolve-catalog-name";
@@ -111,6 +113,15 @@ export function buildDesiredSnapshot(args: {
       dialect
     );
 
+  // The table each collection is stored in, by slug: a relationship's key references the table a
+  // renamed target kept, not one spelled from the slug its relationships now name. Read for a
+  // Schema Builder collection's own keys (only `withBuilderForeignKeys` asks), so a relationship
+  // naming its target by `relationTo`, as the admin writes it, is keyed to a collection this
+  // schema holds, and one pointing at a Single or at nothing gets no key.
+  const targetTables = builderKeyTables(
+    Object.values(desired.collections).map(c => [c.slug, c.tableName] as const)
+  );
+
   const snapshot: NextlySchemaSnapshot = {
     tables: [
       // A Schema Builder collection's table also carries its foreign keys:
@@ -122,7 +133,8 @@ export function buildDesiredSnapshot(args: {
             desiredCollectionTable(c, dialect),
             c,
             liveTablesByName.get(c.tableName),
-            dialect
+            dialect,
+            targetTables
           )
         )
       ),
@@ -137,9 +149,9 @@ export function buildDesiredSnapshot(args: {
             {
               builtBy: builtByFor("single", s.builderOwned),
               hasStatus: s.status === true,
-              // A localized single's translatable columns live in its
-              // companion, so they are left off the main table.
-              localized: s.localized === true,
+              // A Single whose translatable columns live in its companion has them left off the
+              // main table (`storesPerLanguage`).
+              localized: storesPerLanguage(s),
             }
           )
         )
@@ -154,7 +166,8 @@ export function buildDesiredSnapshot(args: {
             dialect,
             {
               builtBy: builtByFor("fieldGroup", c.builderOwned),
-              localized: c.localized === true,
+              // Likewise for a component's translatable columns.
+              localized: storesPerLanguage(c),
               typeColumn: fieldGroupTypeColumns.get(c.tableName),
             }
           )

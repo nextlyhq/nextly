@@ -1,5 +1,6 @@
 "use client";
 
+import { PageHeader } from "@nextlyhq/ui";
 import { useCallback, type JSX } from "react";
 
 import {
@@ -8,6 +9,7 @@ import {
   type UserFieldFormValues,
 } from "@admin/components/features/settings/UserFieldForm";
 import { UserBreadcrumbs } from "@admin/components/features/user-management/breadcrumbs";
+import { PermissionGuard } from "@admin/components/guards/PermissionGuard";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -16,8 +18,11 @@ import { ROUTES } from "@admin/constants/routes";
 import { useCreateUserField } from "@admin/hooks/queries/useUserFields";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
-export default function CreateUserFieldPage(): JSX.Element {
+import { UserFieldsGuard } from "./user-fields-guard";
+
+function CreateUserFieldPageContent(): JSX.Element {
   const { mutate: createField, isPending } = useCreateUserField();
 
   const handleSubmit = useCallback(
@@ -44,33 +49,40 @@ export default function CreateUserFieldPage(): JSX.Element {
     [createField]
   );
 
+  // The route asks `create-settings`; the page also asks `read-settings`,
+  // which the list it is reached from and returns to asks, so a role that may
+  // only create is refused here rather than after its create.
   return (
-    <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
-        <div>
-          <div className="mb-6">
-            <UserBreadcrumbs currentPage="fields-create" />
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-xl font-semibold tracking-tight">
-                Create Field
-              </h1>
-              {/* Muted foreground so this secondary subtitle meets contrast (a faint primary alpha did not). */}
-              <p className="text-sm font-normal text-muted-foreground mt-1">
-                Add a new custom attribute to user accounts
-              </p>
+    <PermissionGuard requiredPermission={READ_SETTINGS}>
+      <QueryErrorBoundary fallback={<PageErrorFallback />}>
+        <PageContainer type="form">
+          <div>
+            <div className="mb-6 empty:hidden">
+              <UserBreadcrumbs currentPage="fields-create" />
             </div>
-          </div>
 
-          <UserFieldForm
-            mode="create"
-            isPending={isPending}
-            onSubmit={handleSubmit}
-          />
-        </div>
-      </PageContainer>
-    </QueryErrorBoundary>
+            <PageHeader
+              title="Create Field"
+              description="Add a new custom attribute to user accounts"
+            />
+
+            <UserFieldForm
+              mode="create"
+              isPending={isPending}
+              onSubmit={handleSubmit}
+            />
+          </div>
+        </PageContainer>
+      </QueryErrorBoundary>
+    </PermissionGuard>
+  );
+}
+
+/** The page, opened only to a reader who may also see users (`UserFieldsGuard`). */
+export default function CreateUserFieldPage(): JSX.Element {
+  return (
+    <UserFieldsGuard>
+      <CreateUserFieldPageContent />
+    </UserFieldsGuard>
   );
 }

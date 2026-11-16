@@ -15,20 +15,13 @@
 import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
-import { Check, ChevronDown, Globe } from "@admin/components/icons";
+import { ChevronDown, Globe } from "@admin/components/icons";
 import {
   Button,
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@admin/components/ui";
-import { cn } from "@admin/lib/utils";
 
 import {
   calendarZoneGroups,
@@ -36,6 +29,7 @@ import {
   zoneDisplayName,
   zoneOffsetLabel,
 } from "./release-calendar-zones";
+import { ReleaseZoneList } from "./ReleaseZoneList";
 
 export function ReleaseCalendarZoneControl({
   zone,
@@ -65,17 +59,6 @@ export function ReleaseCalendarZoneControl({
       }),
     [readerZone, zone, scheduledZones]
   );
-  // Read only while the list is open: one formatter per zone is a few hundred
-  // of them, which the closed control has no reason to pay for.
-  const offsets = useMemo(() => {
-    if (!open) return new Map<string, string>();
-    return new Map(
-      groups.flatMap(group =>
-        group.zones.map(z => [z, zoneOffsetLabel(z, at)] as const)
-      )
-    );
-  }, [open, groups, at]);
-
   const offset = zoneOffsetLabel(zone, at);
   const isReaderZone = zone === readerZone;
   // The trigger's name is its visible text, so a speech user can say what
@@ -118,42 +101,17 @@ export function ReleaseCalendarZoneControl({
         align="end"
         className="w-[22rem] max-w-[calc(100vw-2rem)] p-0"
       >
-        <Command>
-          <CommandInput placeholder="Search time zones" />
-          <CommandList className="max-h-72">
-            <CommandEmpty>No time zone matches.</CommandEmpty>
-            {groups.map(group => (
-              <CommandGroup key={group.id} heading={group.label}>
-                {group.zones.map(choice => (
-                  <CommandItem
-                    key={choice}
-                    // The offset is searchable too, so "GMT+5" finds Karachi.
-                    value={`${choice} ${zoneDisplayName(choice)} ${offsets.get(choice) ?? ""}`}
-                    onSelect={() => {
-                      onChange(choice);
-                      setOpen(false);
-                    }}
-                    className="flex items-center gap-2"
-                  >
-                    <Check
-                      aria-hidden
-                      className={cn(
-                        "size-4 shrink-0",
-                        choice === zone ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    <span className="min-w-0 flex-1 truncate">
-                      {zoneDisplayName(choice)}
-                    </span>
-                    <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-                      {offsets.get(choice)}
-                    </span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            ))}
-          </CommandList>
-        </Command>
+        {/* Drawn only while open: one formatter per zone is a few hundred
+          of them, which the closed control has no reason to pay for. */}
+        <ReleaseZoneList
+          groups={groups}
+          zone={zone}
+          at={at}
+          onSelect={choice => {
+            onChange(choice);
+            setOpen(false);
+          }}
+        />
       </PopoverContent>
     </Popover>
   );

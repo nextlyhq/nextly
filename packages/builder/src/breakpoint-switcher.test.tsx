@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 /**
- * What the switcher is responsible for, which is narrower than it looks.
+ * What the device buttons are responsible for: offering the site's devices,
+ * emitting the breakpoint the author chose, showing which one is being styled
+ * with the exact width it is previewed at, and being operable from a keyboard.
  *
- * It SETS a width and reports which option that width corresponds to. Which
- * tier an edit lands in is `canvas-width.ts`'s answer and has its own suite;
- * what is only true here is that choosing an option emits the tier's own bound,
- * that a width no option could have set selects NOTHING, and that the control
- * is operable from a keyboard.
+ * Which width a device is previewed at, and which breakpoint an unknown choice
+ * resolves to, are `canvas-width.ts`'s answers and have their own suite.
  *
  * @module breakpoint-switcher.test
  */
@@ -26,474 +25,171 @@ const site = (): BreakpointSet => ({
   container: [],
 });
 
-/*
- * The tier indicator, read from the live region rather than by text.
- *
- * A text query would match the option BUTTON of the same name — "Tablet"
- * appears on both — so an assertion phrased that way passes whether or not the
- * indicator rendered at all, which is the one thing these cases are about.
- */
-const appliedNote = (root: HTMLElement): HTMLElement | null =>
-  root.querySelector<HTMLElement>("[aria-live]");
-
-/**
- * What the live region is SAYING, which is what varies.
- *
- * The element itself is mounted from the first render — a live region is
- * registered when it enters the accessibility tree, and content arriving in the
- * same insertion is often not announced — so its presence is not the signal and
- * asserting on it would pass whatever the control reports.
- */
-const applied = (root: HTMLElement): string =>
-  appliedNote(root)?.textContent ?? "";
-
 const options = (): HTMLElement[] => screen.getAllByRole("radio");
 const checked = (): HTMLElement[] =>
   options().filter(option => option.getAttribute("aria-checked") === "true");
 
-describe("choosing a tier", () => {
-  it("emits the tier's OWN bound, not an index or an id", () => {
-    /*
-     * The width is the whole output of this control. Emitting an id would push
-     * the width lookup onto every host, which is a second place for the
-     * canvas's size and the selected tier to disagree.
-     */
-    const onSelect = vi.fn();
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={onSelect}
-        status="ready"
-      />
-    );
+function mount(
+  props: Partial<React.ComponentProps<typeof BreakpointSwitcher>> = {}
+) {
+  const onSelect = vi.fn();
+  const view = render(
+    <BreakpointSwitcher
+      breakpoints={site()}
+      selected="base"
+      onSelect={onSelect}
+      status="ready"
+      {...props}
+    />
+  );
+  return { onSelect, ...view };
+}
 
-    fireEvent.click(screen.getByRole("radio", { name: /Tablet/ }));
-
-    expect(onSelect).toHaveBeenCalledWith(991);
+describe("choosing a device", () => {
+  it("emits the breakpoint's id", () => {
+    const { onSelect } = mount();
+    fireEvent.click(screen.getByRole("radio", { name: /^Tablet/ }));
+    expect(onSelect).toHaveBeenCalledWith("tablet");
   });
 
-  it("emits the width at which BASE applies, for the unconditional tier", () => {
-    /*
-     * It used to emit `undefined` — fill the region — on the reasoning that the
-     * unconditional tier has no upper bound so any number would be invented.
-     * The number is not invented: it is one past the widest bound, which is the
-     * narrowest width the site's own tiers leave to base.
-     *
-     * And filling the region does not select base wherever the region is
-     * narrower than the widest bound, which is the ordinary case — around 912px
-     * of canvas on the supported 1280px shell against a tablet bound of 991. It
-     * put every edit in tablet while this control read as the widest tier, so
-     * the one option naming the tier an author most often wants was the one
-     * that could not reach it. The canvas is scaled to fit rather than gaining
-     * gutters, which is what makes a real width affordable here.
-     */
-    const onSelect = vi.fn();
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={575}
-        onSelect={onSelect}
-        status="ready"
-      />
-    );
-
-    fireEvent.click(
-      screen.getByRole("radio", { name: "Full width, from 992 pixels" })
-    );
-
-    // One past the widest bound this site declares, not a chosen number.
-    expect(onSelect).toHaveBeenCalledWith(992);
+  it("emits the base breakpoint for Desktop", () => {
+    const { onSelect } = mount({ selected: "mobile" });
+    fireEvent.click(screen.getByRole("radio", { name: /^Desktop/ }));
+    expect(onSelect).toHaveBeenCalledWith("base");
   });
 
-  it("says the WIDTH in each option's accessible name", () => {
-    // "Tablet" alone does not say what choosing it will do, and the number is
-    // the entire content of the choice. In the name rather than a tooltip, so a
-    // screen-reader user gets it.
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
+  it("names the base breakpoint Desktop, with where it applies", () => {
+    mount();
     expect(
-      screen.getByRole("radio", { name: "Tablet, up to 991 pixels" })
+      screen.getByRole("radio", { name: "Desktop, from 992 pixels" })
     ).toBeDefined();
+  });
+
+  it("says each breakpoint's range in its accessible name and tooltip", () => {
+    mount();
+    const tablet = screen.getByRole("radio", {
+      name: "Tablet, up to 991 pixels",
+    });
+    expect(tablet.getAttribute("title")).toBe("Tablet, up to 991 pixels");
   });
 });
 
-describe("what the control reports as selected", () => {
-  it("selects the option whose bound the canvas is EXACTLY at", () => {
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={991}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
+describe("focus", () => {
+  it("draws the house ring on every device button, not the browser's outline", () => {
+    // Off the button by a gap, so it shows on the chosen device's fill too.
+    mount({ selected: "mobile" });
+    for (const option of options()) {
+      expect(option.className).toContain("focus-visible:ring-2");
+      expect(option.className).toContain("focus-visible:ring-offset-1");
+      expect(option.className).toContain("focus-visible:outline-none");
+    }
+  });
+});
 
-    expect(checked()).toHaveLength(1);
+describe("which device is shown as being styled", () => {
+  it("selects the device the author chose", () => {
+    mount({ selected: "tablet" });
+    expect(checked()).toEqual([screen.getByRole("radio", { name: /^Tablet/ })]);
+  });
+
+  it("shows the chosen device's exact preview width, unrounded", () => {
+    // A breakpoint at 991 reads 991, not 990 or 1000: the width an author
+    // styles at is the width the button says.
+    mount({ selected: "tablet" });
+    expect(checked()[0]?.textContent).toBe("Tablet · 991px");
+  });
+
+  it("shows Desktop at the width it is previewed at", () => {
+    mount({ selected: "base" });
+    expect(checked()[0]?.textContent).toBe("Desktop · 1280px");
+  });
+
+  it("shows the base as chosen for a breakpoint the site no longer defines", () => {
+    // Where the host sends the edit, so the control and the edit agree.
+    mount({ selected: "watch" });
+    expect(checked()[0]?.textContent).toBe("Desktop · 1280px");
+  });
+
+  it("lets the chosen device's label give way first on a narrow top bar", () => {
+    // A container query on the top bar hides it; the accessible name keeps
+    // the device and its range.
+    mount({ selected: "tablet" });
+    const label = checked()[0]?.querySelector("span");
+    expect(label?.className).toContain("@max-[1400px]/topbar:hidden");
     expect(checked()[0]?.getAttribute("aria-label")).toBe(
       "Tablet, up to 991 pixels"
     );
   });
 
-  it("selects NOTHING at a width no option could have set", () => {
-    /*
-     * The property that separates this control from one that merely reports the
-     * live tier. At 700 the tablet rules ARE applying, and the canvas is not at
-     * the tablet width — so showing Tablet as chosen would tell an author the
-     * box is 991 when it is 700, and clicking Tablet would then look like a
-     * no-op that silently resizes.
-     *
-     * Asserted as an empty set rather than "Tablet is not checked", so a
-     * version that selected Mobile instead would also fail.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={700}
-        onSelect={vi.fn()}
-        status="ready"
-      />
+  it("names only the chosen device in visible text", () => {
+    mount({ selected: "tablet" });
+    const unchosen = options().filter(
+      option => option.getAttribute("aria-checked") !== "true"
     );
-
-    expect(checked()).toHaveLength(0);
-  });
-
-  it("still names the tier that IS applying at that width", () => {
-    // The counterpart to the case above: selecting nothing must not mean saying
-    // nothing. The width changed which declarations are live, and that is the
-    // fact this control exists to make legible.
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={700}
-        appliedWidth={700}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(applied(container)).toBe("700px · Tablet");
-  });
-
-  it("names the tier by its LABEL, not by its stored id", () => {
-    /*
-     * The id is an addressing detail an author never chose and may never have
-     * seen — a site is free to key its tablet tier `bp_2`. Reporting it here
-     * would put a string from the storage layer in front of the author at the
-     * one moment the control is explaining itself.
-     */
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={{
-          viewport: [{ id: "bp_2", label: "Tablet", maxWidth: 991 }],
-          container: [],
-        }}
-        width={700}
-        appliedWidth={700}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(applied(container)).toBe("700px · Tablet");
-  });
-
-  it("reports the tier a NARROW REGION put the canvas in, at the widest option", () => {
-    /*
-     * The case the mount actually produces, and the one this indicator exists
-     * for. `undefined` width asks for the full region; a region narrower than
-     * the widest tier's bound hands the box less, and the narrower tier is then
-     * what the browser paints and what an edit lands in.
-     *
-     * Without this the author sees "Full width" selected, edits what they
-     * believe is the base tier, and every value silently goes to tablet — the
-     * exact state where what you edit disagrees with what you see.
-     *
-     * The selection is asserted alongside, because the honest answer is BOTH:
-     * the author did ask for the full width, and the box is in tablet.
-     */
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        appliedWidth={900}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(checked()[0]?.getAttribute("aria-label")).toBe(
-      "Full width, from 992 pixels"
-    );
-    expect(applied(container)).toBe("900px · Tablet");
-  });
-
-  it("says NOTHING at the widest option when the region honoured it", () => {
-    /*
-     * The control on the case above, and Gutenberg's own finding: a badge at
-     * the widest tier is actively confusing, because edits there apply to every
-     * breakpoint rather than overriding one.
-     *
-     * Without this, a version that showed the indicator unconditionally would
-     * satisfy every assertion above.
-     */
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        appliedWidth={1400}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(applied(container)).toBe("");
-    /*
-     * MOUNTED while empty. A live region is registered when it enters the
-     * accessibility tree, so one that appears together with its first text is
-     * often not announced — and the first tier change is the announcement that
-     * matters most.
-     */
-    expect(appliedNote(container)).not.toBeNull();
-  });
-
-  it("says nothing about a box that has NOT been measured", () => {
-    /*
-     * `appliedWidth` is undefined until the canvas reports its first
-     * measurement, and that is a real state rather than a missing default.
-     * Falling back to the REQUESTED width here would state a tier for a box
-     * nobody has looked at — and the request is a ceiling the region may not
-     * have honoured, so it is precisely the number that could be wrong.
-     */
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={700}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(applied(container)).toBe("");
-    /*
-     * MOUNTED while empty. A live region is registered when it enters the
-     * accessibility tree, so one that appears together with its first text is
-     * often not announced — and the first tier change is the announcement that
-     * matters most.
-     */
-    expect(appliedNote(container)).not.toBeNull();
-  });
-
-  it("stays SELECTED after choosing the unconditional tier's own width", () => {
-    /*
-     * Choosing that option sets a real width now, and it is no tier's BOUND —
-     * so a match computed from the bounded tiers is false the moment it is
-     * pressed. The canvas sizes correctly and edits base; the control reports
-     * `aria-checked="false"` on every radio and reads as having no selection.
-     *
-     * A press that visibly deselects everything is worse than one that does
-     * nothing: it says the choice was refused while the edit it enabled is
-     * quietly landing where the author wanted.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={992}
-        appliedWidth={992}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(checked()).toHaveLength(1);
-    expect(checked()[0]?.getAttribute("aria-label")).toBe(
-      "Full width, from 992 pixels"
-    );
-  });
-
-  it("selects the widest when the canvas is UNBOUNDED, which is the control", () => {
-    /*
-     * Without this, a control that selected nothing under every circumstance
-     * would satisfy the empty-set assertion above — the negative there is
-     * satisfied by absence, so its meaning depends on this.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(checked()).toHaveLength(1);
-    expect(checked()[0]?.getAttribute("aria-label")).toBe(
-      "Full width, from 992 pixels"
-    );
+    for (const option of unchosen) expect(option.textContent).toBe("");
   });
 });
 
 describe("the gate on the saved read", () => {
-  it("is INERT until the saved set has been read", () => {
-    /*
-     * The same gate the manager beside it carries, and for a reason that is
-     * stronger here: until the read answers, the value in hand is the host's
-     * config defaults, so sizing the canvas to one of those bounds would make
-     * every subsequent edit land in a tier the author never chose.
-     *
-     * Asserted on the callback as well as on `disabled` — a disabled attribute
-     * that some other handler ignores is not a gate.
-     */
-    const onSelect = vi.fn();
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={onSelect}
-        status="loading"
-      />
-    );
-
-    const tablet = screen.getByRole("radio", { name: /Tablet/ });
-    expect((tablet as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(tablet);
+  it("is inert until the saved breakpoints have been read", () => {
+    const { onSelect } = mount({ status: "loading" });
+    for (const option of options()) {
+      expect((option as HTMLButtonElement).disabled).toBe(true);
+    }
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("reports nothing as selected while it cannot be trusted", () => {
-    // Showing a selection derived from config defaults would state which tier
-    // the canvas is at, on the strength of a set the site may never have saved.
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="unavailable"
-      />
-    );
-
-    expect(checked()).toHaveLength(0);
+  it("shows nothing as chosen while it cannot be trusted", () => {
+    mount({ status: "unavailable", selected: "tablet" });
+    expect(checked()).toEqual([]);
   });
 });
 
 describe("keyboard operation", () => {
-  it("moves the selection with the arrow keys", () => {
-    // A radio group's expected behaviour, and the reason the roles are worth
-    // having: a row of plain buttons gives a keyboard user no way to move
-    // between options without leaving and re-entering the group.
-    const onSelect = vi.fn();
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={onSelect}
-        status="ready"
-      />
-    );
-
+  it("moves the choice with the arrow keys", () => {
+    const { onSelect } = mount({ selected: "base" });
     fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
-
-    expect(onSelect).toHaveBeenCalledWith(991);
+    expect(onSelect).toHaveBeenCalledWith("tablet");
   });
 
-  it("WRAPS at the end rather than stopping", () => {
-    // Three options and a left-arrow from the first reaches the last. Stopping
-    // dead at an edge is the behaviour a roving tabindex most often gets wrong,
-    // and it strands a keyboard user at whichever end they entered from.
-    const onSelect = vi.fn();
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={onSelect}
-        status="ready"
-      />
-    );
-
-    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowLeft" });
-
-    expect(onSelect).toHaveBeenCalledWith(575);
+  it("wraps at the end rather than stopping", () => {
+    const { onSelect } = mount({ selected: "mobile" });
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(onSelect).toHaveBeenCalledWith("base");
   });
 
-  it("keeps exactly ONE option in the tab order", () => {
-    /*
-     * The roving tabindex. Every option reachable by Tab would cost a keyboard
-     * user one stop per breakpoint to cross a control they may not be using —
-     * and a site may define up to seven per axis.
-     *
-     * Asserted as a count over the whole group rather than on one element, so a
-     * version that gave every option `tabIndex={0}` fails here.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(options().filter(option => option.tabIndex === 0)).toHaveLength(1);
+  it("keeps exactly one option in the tab order", () => {
+    mount({ selected: "tablet" });
+    const stops = options().filter(option => option.tabIndex === 0);
+    expect(stops).toEqual([screen.getByRole("radio", { name: /^Tablet/ })]);
   });
 
-  it("leaves a stop in the tab order at a width matching NO option", () => {
-    /*
-     * The case a roving tabindex keyed only on the selection gets wrong: with
-     * nothing selected there is nothing carrying `tabIndex={0}`, and the whole
-     * control drops out of the tab order — unreachable by keyboard at exactly
-     * the widths an author reaches by dragging.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={700}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
+  it("moves focus to the option the arrow key chose", () => {
+    mount({ selected: "base" });
+    options()[0]?.focus();
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(options()[1]);
+  });
 
-    expect(options().filter(option => option.tabIndex === 0)).toHaveLength(1);
+  it("leaves focus alone when the control is not ready", () => {
+    mount({ status: "loading" });
+    const before = document.activeElement;
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(before);
   });
 });
 
 describe("a site with no viewport breakpoints", () => {
-  it("renders NOTHING rather than a control offering one option", () => {
-    // "Full width" alone is not a choice; it occupies top-bar space to say the
-    // canvas is the width it visibly is. The manager beside it is where tiers
-    // are added, so the affordance appears when there is something to switch.
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={{ viewport: [], container: [] }}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
+  it("renders nothing rather than a control offering Desktop alone", () => {
+    const { container } = mount({
+      breakpoints: { viewport: [], container: [] },
+    });
     expect(container.firstChild).toBeNull();
   });
 
-  it("DROPS a tier the compiler emits no bound for", () => {
-    /*
-     * The switcher offers what the SHEET can respond to, not what storage
-     * happens to hold. `breakpointContexts` applies its own reading of a stored
-     * axis, so a definition it declines to emit a bounded context for has no
-     * query anywhere in the compiled page.
-     *
-     * Offered anyway, picking it resizes the canvas to a width nothing responds
-     * to: the box changes size and the page does not reflow, which reads as the
-     * feature being broken rather than as a definition the compiler rejected.
-     *
-     * A non-positive bound is the reachable case — `isUsableWidth` refuses it,
-     * and storage is an ordinary record the API or an import can write.
-     */
+  it("drops a breakpoint the compiler emits no bound for", () => {
+    // Offered anyway, choosing it would style a breakpoint no query reaches.
     const rejected = {
       viewport: [
         { id: "tablet", label: "Tablet", maxWidth: 991 },
@@ -501,140 +197,61 @@ describe("a site with no viewport breakpoints", () => {
       ],
       container: [],
     } as unknown as BreakpointSet;
-
-    render(
-      <BreakpointSwitcher
-        breakpoints={rejected}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    // The accepted tier is asserted alongside, so a version rendering no
-    // options at all would not pass by dropping this one.
-    expect(screen.getByRole("radio", { name: /Tablet/ })).toBeDefined();
+    mount({ breakpoints: rejected });
+    expect(screen.getByRole("radio", { name: /^Tablet/ })).toBeDefined();
     expect(screen.queryByRole("radio", { name: /Broken/ })).toBeNull();
   });
 
-  it("does not count a stored row using the RESERVED base id", () => {
-    /*
-     * The plugin's own README documents a host config carrying
-     * `{ id: "base", label: "Base" }`, and a stored set can hold one too.
-     * Passed through, it appears as a tier named "Base" beside the "Full width"
-     * option this control already offers — two entries for one thing, one of
-     * which cannot be selected meaningfully.
-     *
-     * Asserted through the rendering rather than on a count, because the count
-     * is the mechanism and what the author sees is the property.
-     */
+  it("does not offer a stored row using the reserved base id", () => {
     const withReserved = {
       viewport: [{ id: "base", label: "Base", maxWidth: undefined }],
       container: [],
     } as unknown as BreakpointSet;
-
-    const { container } = render(
-      <BreakpointSwitcher
-        breakpoints={withReserved}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
+    const { container } = mount({ breakpoints: withReserved });
     expect(container.firstChild).toBeNull();
   });
 });
 
 describe("a stored set the compiler has to reconcile", () => {
-  it("offers ONE option per id when a set carries the id twice", () => {
-    /*
-     * A set written through the API or an import can carry two rows with one
-     * id. `breakpointContexts` claims each id once, so the sheet has a single
-     * tier — but a control built from the raw definitions keeps both, giving
-     * two radios that share a React key and a bound, one of which can never be
-     * selected because the match resolves to the first.
-     *
-     * Asserted as a count over the whole group rather than "Tablet appears
-     * once", so a version emitting two DIFFERENTLY-labelled duplicates fails
-     * here too.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={{
-          viewport: [
-            { id: "tablet", label: "Tablet", maxWidth: 991 },
-            { id: "tablet", label: "Tablet Copy", maxWidth: 700 },
-          ],
-          container: [],
-        }}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    // Full width, and one tablet.
+  it("offers one option per id when a set carries the id twice", () => {
+    mount({
+      breakpoints: {
+        viewport: [
+          { id: "tablet", label: "Tablet", maxWidth: 991 },
+          { id: "tablet", label: "Tablet Copy", maxWidth: 700 },
+        ],
+        container: [],
+      },
+    });
     expect(options()).toHaveLength(2);
   });
 
-  it("offers ONE radio when two tiers share a bound", () => {
-    /*
-     * Distinct ids, so `breakpointContexts` emits BOTH — this is not the
-     * duplicate-id case. Selecting a tier only sets a width, so two radios
-     * emitting 991 are not two choices: the match resolves to one and clicking
-     * the other silently selects it.
-     *
-     * The one kept is the tier the browser paints: both are emitted into a
-     * single at-rule in order, so the later declaration wins.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={{
-          viewport: [
-            { id: "alpha", label: "Alpha", maxWidth: 991 },
-            { id: "beta", label: "Beta", maxWidth: 991 },
-          ],
-          container: [],
-        }}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    expect(options()).toHaveLength(2); // Full width, and one of the two.
+  it("offers one option when two breakpoints share a bound", () => {
+    mount({
+      breakpoints: {
+        viewport: [
+          { id: "alpha", label: "Alpha", maxWidth: 991 },
+          { id: "beta", label: "Beta", maxWidth: 991 },
+        ],
+        container: [],
+      },
+    });
+    expect(options()).toHaveLength(2);
     expect(
       screen.getByRole("radio", { name: "Beta, up to 991 pixels" })
     ).toBeDefined();
   });
 
-  it("labels the surviving tier from the definition the compiler KEPT", () => {
-    /*
-     * Measured: among rows sharing an id the compiler keeps the WIDEST, not the
-     * first stored. A label looked up by id alone therefore names the surviving
-     * tier after the row the sheet discarded — here the control would offer a
-     * 991px tier called "Draft".
-     *
-     * The stored order puts the discarded row FIRST deliberately: with the kept
-     * row first, a by-id lookup would produce the right answer by accident and
-     * this case could not fail.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={{
-          viewport: [
-            { id: "tablet", label: "Draft", maxWidth: 700 },
-            { id: "tablet", label: "Tablet", maxWidth: 991 },
-          ],
-          container: [],
-        }}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
+  it("labels the surviving breakpoint from the definition the compiler kept", () => {
+    mount({
+      breakpoints: {
+        viewport: [
+          { id: "tablet", label: "Draft", maxWidth: 700 },
+          { id: "tablet", label: "Tablet", maxWidth: 991 },
+        ],
+        container: [],
+      },
+    });
     expect(
       screen.getByRole("radio", { name: "Tablet, up to 991 pixels" })
     ).toBeDefined();
@@ -642,118 +259,204 @@ describe("a stored set the compiler has to reconcile", () => {
   });
 });
 
-describe("where focus goes when the keyboard moves the selection", () => {
-  it("moves FOCUS to the option the arrow key selected", () => {
-    /*
-     * The roving tabindex makes every unselected option `tabIndex={-1}`, so
-     * focus left behind is stranded on a button that is neither checked nor in
-     * the tab order. Assistive technology announces nothing for the option that
-     * just became selected, and every further arrow press changes a radio the
-     * user cannot hear.
-     *
-     * Asserted on `document.activeElement` rather than on a focus handler
-     * firing, because what matters is where focus ENDED UP.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
+/**
+ * A site's breakpoints, `count` of them with the base counted as one: the
+ * tiers from the widest down, so the first `count - 1` are taken.
+ */
+function devicesFor(count: number): BreakpointSet {
+  const tiers = [
+    { id: "laptop", label: "Laptop", maxWidth: 1199 },
+    { id: "tablet", label: "Tablet", maxWidth: 991 },
+    { id: "phone-l", label: "Phone L", maxWidth: 767 },
+    { id: "phone", label: "Phone", maxWidth: 575 },
+    { id: "phone-s", label: "Phone S", maxWidth: 375 },
+    { id: "watch", label: "Watch", maxWidth: 280 },
+  ];
+  // Stored narrowest first, so the order on screen is the switcher's own.
+  return { viewport: tiers.slice(0, count - 1).reverse(), container: [] };
+}
 
-    const group = screen.getByRole("radiogroup");
-    options()[0]?.focus();
-    fireEvent.keyDown(group, { key: "ArrowRight" });
+const moreDevices = (): HTMLElement | null =>
+  screen.queryByRole("button", { name: /^More devices/ });
 
-    expect(document.activeElement).toBe(options()[1]);
-  });
+function openMore(): HTMLElement[] {
+  const trigger = moreDevices();
+  if (trigger === null) throw new Error("no More devices button");
+  fireEvent.pointerDown(trigger, { pointerType: "mouse" });
+  return screen.getAllByRole("menuitemradio");
+}
 
-  it("leaves focus alone when the control is not ready", () => {
-    /*
-     * The control. Without it, a version that focused on every key event —
-     * including while disabled, where no selection can be made — would satisfy
-     * the case above.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={site()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="loading"
-      />
-    );
+const names = (elements: HTMLElement[]): string[] =>
+  elements.map(element => element.getAttribute("aria-label") ?? "");
 
-    const group = screen.getByRole("radiogroup");
-    const before = document.activeElement;
-    fireEvent.keyDown(group, { key: "ArrowRight" });
+describe("the open device menu and the rest of the editor", () => {
+  it("leaves the editor around it in the accessibility tree", () => {
+    // As the zoom menu: a modal menu hides the focusable editor around it,
+    // which axe reports as aria-hidden-focus.
+    mount({ breakpoints: devicesFor(5) });
+    const trigger = moreDevices();
+    if (trigger === null) throw new Error("no More devices button");
 
-    expect(document.activeElement).toBe(before);
+    expect(openMore().length).toBeGreaterThan(0);
+
+    expect(trigger.closest('[aria-hidden="true"]')).toBeNull();
+    expect(document.querySelector('[aria-hidden="true"] button')).toBeNull();
   });
 });
 
-describe("telling two tiers apart", () => {
-  /*
-   * A site whose narrow tiers land in the same width class.
-   *
-   * The glyph comes from the bound, so both of these draw the same picture —
-   * which is the case that decides whether a name is reachable before the
-   * canvas has already changed.
-   */
-  const narrowTiers = (): BreakpointSet => ({
-    viewport: [
-      { id: "wide-phone", label: "Wide phone", maxWidth: 480 },
-      { id: "phone", label: "Phone", maxWidth: 375 },
-    ],
-    container: [],
+describe("how many devices are buttons", () => {
+  it("offers nothing on a site with the base breakpoint alone", () => {
+    const { container } = mount({ breakpoints: devicesFor(1) });
+    expect(container.firstChild).toBeNull();
   });
 
-  it("names every option, not only the selected one", () => {
-    render(
-      <BreakpointSwitcher
-        breakpoints={narrowTiers()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
-
-    /*
-     * Asserted on the two that COLLIDE rather than on the whole group, so the
-     * unconditional option — which keeps its word on screen and would satisfy
-     * a blanket assertion — cannot answer for them.
-     */
-    const titles = options()
-      .map(option => option.getAttribute("title"))
-      .filter((title): title is string => title !== null);
-
-    expect(titles).toContain("Phone, up to 375 pixels");
-    expect(titles).toContain("Wide phone, up to 480 pixels");
+  it("shows two buttons and no menu for two breakpoints", () => {
+    mount({ breakpoints: devicesFor(2) });
+    expect(names(options())).toEqual([
+      "Desktop, from 1200 pixels",
+      "Laptop, up to 1199 pixels",
+    ]);
+    expect(moreDevices()).toBeNull();
   });
 
-  it("carries the width in the accessible name as well as the tooltip", () => {
-    /*
-     * A tooltip is a pointer affordance and reaches neither a screen reader nor
-     * a keyboard. The two names are asserted separately because they are
-     * separate mechanisms: dropping the accessible name leaves this control
-     * usable with a mouse and unusable without one, and nothing about the
-     * rendered output would look wrong.
-     */
-    render(
-      <BreakpointSwitcher
-        breakpoints={narrowTiers()}
-        width={undefined}
-        onSelect={vi.fn()}
-        status="ready"
-      />
-    );
+  it("shows three buttons and no menu for three breakpoints", () => {
+    mount({ breakpoints: devicesFor(3) });
+    expect(options()).toHaveLength(3);
+    expect(moreDevices()).toBeNull();
+  });
 
-    expect(
-      screen.getByRole("radio", { name: "Phone, up to 375 pixels" })
-    ).toBeDefined();
-    expect(
-      screen.getByRole("radio", { name: "Wide phone, up to 480 pixels" })
-    ).toBeDefined();
+  it("puts the fourth breakpoint in a menu, the base and the two widest staying buttons", () => {
+    mount({ breakpoints: devicesFor(4) });
+    expect(names(options())).toEqual([
+      "Desktop, from 1200 pixels",
+      "Laptop, up to 1199 pixels",
+      "Tablet, up to 991 pixels",
+    ]);
+    expect(openMore().map(item => item.textContent)).toEqual([
+      "Phone L · 767px",
+    ]);
+  });
+
+  it("lists every breakpoint past the third in the menu, widest first, for seven", () => {
+    mount({ breakpoints: devicesFor(7) });
+    expect(options()).toHaveLength(3);
+    expect(openMore().map(item => item.textContent)).toEqual([
+      "Phone L · 767px",
+      "Phone · 575px",
+      "Phone S · 375px",
+      "Watch · 280px",
+    ]);
+  });
+
+  it("keeps the menu outside the radio group, as its own button", () => {
+    mount({ breakpoints: devicesFor(4) });
+    const group = screen.getByRole("radiogroup", { name: "Device" });
+    const more = moreDevices();
+    expect(more).not.toBeNull();
+    expect(group.contains(more)).toBe(false);
+  });
+});
+
+describe("a device chosen from the menu", () => {
+  it("emits the breakpoint's id", () => {
+    const { onSelect } = mount({ breakpoints: devicesFor(7) });
+    const phone = openMore().find(item => item.textContent === "Phone · 575px");
+    if (phone === undefined) throw new Error("no Phone item");
+    fireEvent.click(phone);
+    expect(onSelect).toHaveBeenCalledWith("phone");
+  });
+
+  it("shows on the menu's button, with its exact width, while it is the one styled", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    const trigger = moreDevices();
+    expect(trigger?.textContent).toBe("Phone · 575px");
+    expect(trigger?.getAttribute("aria-label")).toBe(
+      "More devices, styling Phone, up to 575 pixels"
+    );
+  });
+
+  it("leaves no button checked, and the buttons where they were", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(checked()).toEqual([]);
+    expect(names(options())).toEqual([
+      "Desktop, from 1200 pixels",
+      "Laptop, up to 1199 pixels",
+      "Tablet, up to 991 pixels",
+    ]);
+  });
+
+  it("keeps the first button in the tab order when the choice is in the menu", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(options().filter(option => option.tabIndex === 0)).toEqual([
+      options()[0],
+    ]);
+  });
+
+  it("is marked as chosen in the open menu", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone-s" });
+    const marked = openMore().filter(
+      item => item.getAttribute("aria-checked") === "true"
+    );
+    expect(marked.map(item => item.textContent)).toEqual(["Phone S · 375px"]);
+  });
+
+  it("names the menu's button plainly while a button is the one styled", () => {
+    mount({ breakpoints: devicesFor(7), selected: "tablet" });
+    expect(moreDevices()?.getAttribute("aria-label")).toBe("More devices");
+    expect(moreDevices()?.textContent).toBe("");
+  });
+
+  it("is inert until the saved breakpoints have been read", () => {
+    mount({ breakpoints: devicesFor(7), status: "loading" });
+    expect((moreDevices() as HTMLButtonElement | null)?.disabled).toBe(true);
+  });
+});
+
+describe("arrow keys with a menu of devices", () => {
+  it("move among the buttons only, wrapping past the last", () => {
+    const { onSelect } = mount({
+      breakpoints: devicesFor(7),
+      selected: "tablet",
+    });
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(onSelect).toHaveBeenCalledWith("base");
+  });
+
+  it("start from the first button when the choice is in the menu", () => {
+    const { onSelect } = mount({
+      breakpoints: devicesFor(7),
+      selected: "phone",
+    });
+    fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+    expect(onSelect).toHaveBeenCalledWith("laptop");
+  });
+});
+
+describe("the menu's button while a device in it is styled", () => {
+  it("keeps the device and its range in its tooltip, for when its label is hidden", () => {
+    mount({ breakpoints: devicesFor(7), selected: "phone" });
+    expect(moreDevices()?.getAttribute("title")).toBe(
+      "Phone, up to 575 pixels"
+    );
+  });
+});
+
+describe("an open menu when the saved breakpoints stop being trusted", () => {
+  it("closes, so nothing in it can be chosen against an untrusted list", () => {
+    const onSelect = vi.fn();
+    const props = {
+      breakpoints: devicesFor(7),
+      selected: "base",
+      onSelect,
+    } as const;
+    const { rerender } = render(
+      <BreakpointSwitcher {...props} status="ready" />
+    );
+    openMore();
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(4);
+
+    rerender(<BreakpointSwitcher {...props} status="loading" />);
+    expect(screen.queryAllByRole("menuitemradio")).toEqual([]);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

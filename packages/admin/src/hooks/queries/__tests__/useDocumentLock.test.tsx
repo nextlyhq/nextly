@@ -16,6 +16,8 @@ import {
   DOCUMENT_LOCK_LOSS_AFTER_MS,
 } from "nextly/document-lock";
 
+import { parseApiError } from "@admin/lib/api/parseApiError";
+
 import { useDocumentLock } from "../useDocumentLock";
 
 const ref = {
@@ -187,6 +189,87 @@ describe("useDocumentLock", () => {
     );
 
     unmount();
+
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("hands the claim back once, in a request that outlives the page, when the page goes away", async () => {
+    // 🔴 Closing the tab, reloading or following a link out runs no React
+    // cleanup, so without this the claim sits on the server for a whole lease.
+    // `keepalive` is what lets the request finish after the page has gone, and
+    // the unmount that may still follow must not send it a second time.
+    const { result, unmount } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: false })
+      );
+    });
+    unmount();
+
+    expect(del).toHaveBeenCalledTimes(1);
+    expect(del).toHaveBeenCalledWith(
+      "/document-lock",
+      { ...ref, claimToken: "t1" },
+      { keepalive: true }
+    );
+  });
+
+  it("hands nothing back on the way out when a colleague holds it", async () => {
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: false })
+      );
+    });
+
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("claims again when the page comes back from the back-forward cache", async () => {
+    // The claim was handed back as the page was hidden, so a page the browser
+    // restores holds nothing until it asks again.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: true })
+      );
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pageshow", { persisted: true })
+      );
+    });
+
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+
+  it("stops listening for the page going away once the editor has gone", async () => {
+    // A listener left behind would release, on some later page exit, a claim
+    // that belongs to whatever editor the person opened next.
+    const { result, unmount } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    unmount();
+    del.mockClear();
+
+    act(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pagehide", { persisted: false })
+      );
+    });
 
     expect(del).not.toHaveBeenCalled();
   });
@@ -1514,5 +1597,463 @@ describe("useDocumentLock", () => {
       ).toBeGreaterThan(0)
     );
     await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+  });
+});
+
+describe("useDocumentLock: gaining a document this editor was kept out of", () => {
+  // A gain is what makes the form editable over a copy that may be out of
+  // date: the editor read the document while a colleague held it, and the
+  // colleague may have saved meanwhile. Each gain is counted so the editor can
+  // load the current document before it unlocks, once per gain and not once
+  // per beat.
+
+  /** Hold the document for a colleague until `released()` is called. */
+  function heldUntilReleased() {
+    let free = false;
+    post.mockImplementation(async () => (free ? acquired : held));
+    return {
+      released: () => {
+        free = true;
+      },
+    };
+  }
+
+  /** One beat at a time, each settled, so no poll overlaps the next. */
+  async function beat(times = 1) {
+    for (let i = 0; i < times; i += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      });
+    }
+  }
+
+  it("counts no gain for the first claim, nor for the beats that renew it", async () => {
+    // The first claim unlocks over a document read a moment ago, on purpose.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    await beat(3);
+
+    expect(result.current.gains).toBe(0);
+  });
+
+  it("counts a gain when the colleague holding it leaves", async () => {
+    const holder = heldUntilReleased();
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+    expect(result.current.gains).toBe(0);
+
+    holder.released();
+    await beat();
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(1);
+  });
+
+  it("counts a gain when the colleague's lease lapses, and not before", async () => {
+    // A lapse reaches this editor the way a release does, a beat's claim that
+    // is granted, only a whole lease later. Every beat until then is refused.
+    const lapsesAt = Date.now() + DOCUMENT_LOCK_LOSS_AFTER_MS;
+    post.mockImplementation(async () =>
+      Date.now() >= lapsesAt ? acquired : held
+    );
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    const beatsToLapse = Math.ceil(
+      DOCUMENT_LOCK_LOSS_AFTER_MS / DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS
+    );
+    await beat(beatsToLapse - 1);
+    expect(result.current.state.status).toBe("held-by-other");
+    expect(result.current.gains).toBe(0);
+
+    await beat(2);
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(1);
+  });
+
+  it("counts a gain when this editor takes it over", async () => {
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    await act(async () => {
+      result.current.takeOver();
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(1);
+  });
+
+  it("counts a gain when a failed poll came between the colleague and the claim", async () => {
+    // The form stayed read-only through the failed poll (the colleague
+    // outlives it), so the claim after it still unlocks a copy read while
+    // they held it.
+    post.mockResolvedValue(held);
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockRejectedValueOnce(new Error("offline"));
+    await beat();
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+
+    post.mockResolvedValue(acquired);
+    await beat();
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(1);
+  });
+
+  it("counts no gain when a failed first claim is retried", async () => {
+    // Nobody held it: the form was editable throughout, over the copy it opened.
+    post.mockRejectedValueOnce(new Error("offline"));
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+
+    post.mockResolvedValue(acquired);
+    await beat();
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(0);
+  });
+
+  it("counts no gain when a displaced editor takes the document back", async () => {
+    // Their unsaved work is on screen, and loading the document over it would
+    // be the one unrecoverable thing to do. Taking back is not this gain.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    await act(async () => {
+      result.current.takeOver();
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(0);
+  });
+
+  it("counts no gain for a displaced editor even once a colleague's claim is reported to them", async () => {
+    // Holding the document first is what decides it, not the refusal on the
+    // way back: the work they kept is on screen either way.
+    const { result } = renderHook(() => useDocumentLock(ref));
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    post.mockResolvedValue(held);
+    await act(async () => {
+      result.current.requestAccess();
+    });
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2" },
+    });
+    await act(async () => {
+      result.current.takeOver();
+    });
+
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(0);
+  });
+
+  it("counts one gain however many beats renew it, and keeps counting on the next document", async () => {
+    // Monotonic across documents, so a gain on the next document is never
+    // mistaken for the one already handled on this one.
+    const holder = heldUntilReleased();
+    const { result, rerender } = renderHook(
+      ({ entryId }: { entryId: string }) =>
+        useDocumentLock({ ...ref, entryId }),
+      { initialProps: { entryId: "42" } }
+    );
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+    holder.released();
+    await beat();
+    await waitFor(() => expect(result.current.gains).toBe(1));
+
+    await beat(3);
+    expect(result.current.gains).toBe(1);
+
+    const next = heldUntilReleased();
+    rerender({ entryId: "43" });
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+    expect(result.current.gains).toBe(1);
+
+    next.released();
+    await beat();
+    await waitFor(() => expect(result.current.gains).toBe(2));
+  });
+});
+
+describe("useDocumentLock: a claim refused because its row vanished", () => {
+  // The server refuses a claim whose row a release removed while it was being
+  // written, as when a page reloads or React mounts an effect twice, and says
+  // the caller may retry. Waiting for the next beat leaves the document held by
+  // nobody for up to a beat, and a colleague opening it then takes it.
+  const vanished = () =>
+    parseApiError(
+      {
+        error: {
+          code: "CONFLICT",
+          message: "Could not start editing just now. Please try again.",
+          requestId: "r1",
+        },
+      },
+      409
+    );
+
+  it("claims again at once, and holds the document", async () => {
+    post.mockRejectedValueOnce(vanished());
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    // No beat has passed: the second claim followed the refusal directly.
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[1]).toEqual(post.mock.calls[0]);
+  });
+
+  it("reports a second refusal as before, and asks no third time", async () => {
+    post.mockRejectedValueOnce(vanished()).mockRejectedValueOnce(vanished());
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a claim that could not be sent at all", async () => {
+    // A server that is down is asked again on the next beat, not at once.
+    post.mockRejectedValueOnce(new Error("offline"));
+    const { result } = renderHook(() => useDocumentLock(ref));
+
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("unavailable")
+    );
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useDocumentLock: someone else's change to the document held", () => {
+  /** What the server says changed since the version the copy started from. */
+  const changeTo = (currentVersion: string) => ({
+    currentVersion,
+    changedBy: { kind: "person" as const, name: "Ana" },
+    changedAt: "2026-11-05T10:42:00.000Z",
+  });
+  const renewedWith = (changed?: ReturnType<typeof changeTo>) => ({
+    message: "",
+    item: {
+      status: "renewed",
+      waiting: false,
+      ...(changed ? { changed } : {}),
+    },
+  });
+
+  /** Run one heartbeat, letting its answer land. */
+  async function beat() {
+    await act(async () => {
+      vi.advanceTimersByTime(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+  }
+
+  it("sends the version the copy holds now with every claim and beat", async () => {
+    // Read where each request is built, never captured once: the copy's
+    // version moves with each save, and a beat naming the version the editor
+    // opened would report their own saves as someone else's change.
+    let copy = "1";
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => copy })
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(post).toHaveBeenLastCalledWith(
+      "/document-lock",
+      expect.objectContaining({ _rev: "1" })
+    );
+
+    copy = "2";
+    await beat();
+    expect(patch).toHaveBeenLastCalledWith(
+      "/document-lock",
+      expect.objectContaining({ claimToken: "t1", _rev: "2" })
+    );
+  });
+
+  it("reports a change a beat carries, naming who made it", async () => {
+    patch.mockResolvedValue(renewedWith(changeTo("2")));
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => "1" })
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.change).toBeNull();
+
+    await beat();
+    await waitFor(() =>
+      expect(result.current.change).toEqual({
+        change: changeTo("2"),
+        whileAway: false,
+      })
+    );
+    // Still the holder: the lock gates no write, and the notice withholds
+    // nothing.
+    expect(result.current.state.status).toBe("held-by-me");
+  });
+
+  it("does not report the editor's own save that landed while the beat was out", async () => {
+    // The beat was sent from version 1; the editor's save answered version 2
+    // before the beat's answer came back naming version 2 as the current
+    // one. That version is the editor's own, judged when the answer ARRIVES.
+    let copy = "1";
+    let answer: (value: unknown) => void = () => {};
+    patch.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answer = resolve;
+        })
+    );
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => copy })
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    await beat();
+    copy = "2";
+    await act(async () => {
+      answer(renewedWith(changeTo("2")));
+    });
+    expect(result.current.change).toBeNull();
+  });
+
+  it("tells each change once, and a newer one again", async () => {
+    patch.mockResolvedValue(renewedWith(changeTo("2")));
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => "1" })
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    await beat();
+    await waitFor(() => expect(result.current.change).not.toBeNull());
+    const first = result.current.change;
+
+    // The editor chose (kept editing): the same version is not told again on
+    // the next beat, which keeps naming it as long as the copy is older.
+    act(() => result.current.settleChange());
+    await beat();
+    expect(result.current.change).toBeNull();
+
+    patch.mockResolvedValue(renewedWith(changeTo("3")));
+    await beat();
+    await waitFor(() =>
+      expect(result.current.change?.change.currentVersion).toBe("3")
+    );
+    expect(result.current.change).not.toBe(first);
+  });
+
+  it("reports a change a take-back's claim carries as made while the editor was away", async () => {
+    let copy = "1";
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => copy })
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    patch.mockResolvedValue({
+      message: "",
+      item: { status: "lost", holder: other },
+    });
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("taken-over"));
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2", changed: changeTo("4") },
+    });
+    act(() => result.current.takeOver());
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(post).toHaveBeenLastCalledWith(
+      "/document-lock",
+      expect.objectContaining({ takeover: true, _rev: "1" })
+    );
+    expect(result.current.change).toEqual({
+      change: changeTo("4"),
+      whileAway: true,
+    });
+    copy = "4";
+  });
+
+  it("leaves a gain's change to the gain, which loads the document anyway", async () => {
+    // Kept out by a colleague, then won: the form reloads before it unlocks,
+    // so telling the change as well would load it twice.
+    post.mockResolvedValueOnce(held);
+    const { result } = renderHook(() =>
+      useDocumentLock({ ...ref, version: () => "1" })
+    );
+    await waitFor(() =>
+      expect(result.current.state.status).toBe("held-by-other")
+    );
+
+    post.mockResolvedValue({
+      message: "",
+      item: { status: "acquired", claimToken: "t2", changed: changeTo("2") },
+    });
+    await beat();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    expect(result.current.gains).toBe(1);
+    expect(result.current.change).toBeNull();
+  });
+
+  it("forgets the last document's change when it moves to another", async () => {
+    patch.mockResolvedValue(renewedWith(changeTo("2")));
+    const { result, rerender } = renderHook(
+      ({ entryId }: { entryId: string }) =>
+        useDocumentLock({ ...ref, entryId, version: () => "1" }),
+      { initialProps: { entryId: "42" } }
+    );
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+    await beat();
+    await waitFor(() => expect(result.current.change).not.toBeNull());
+
+    patch.mockResolvedValue(renewedWith());
+    rerender({ entryId: "43" });
+    await waitFor(() => expect(result.current.change).toBeNull());
   });
 });

@@ -52,6 +52,7 @@ const SHAPES: Record<DynamicFieldType, Array<Record<string, unknown>>> = {
   email: [{ type: "email" }],
   password: [{ type: "password" }],
   code: [{ type: "code" }],
+  icon: [{ type: "icon" }],
   number: [
     { type: "number" },
     { type: "number", dbType: "decimal", precision: 10, scale: 2 },

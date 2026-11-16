@@ -23,6 +23,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
+import {
+  keptElements,
+  pushElementOwners,
+  withKeptElements,
+} from "../ownership/kept-elements";
 
 import { RealClassifier } from "./classifier/classifier";
 import {
@@ -30,6 +35,7 @@ import {
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { relationSwitches } from "./companion-shape-switches";
 import {
   buildDesiredSnapshot,
   desiredSchemaTableNames,
@@ -37,6 +43,8 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
+import { withKeptScopeFieldsIn } from "./kept-scope-fields";
+import { withoutUniquesAlreadyEnforced } from "./live-uniques";
 import { operationsToJudge, planCompanionMoves } from "./moved-to-companion";
 import {
   excludeLockedTableOps,
@@ -48,6 +56,7 @@ import type {
   RenameCandidate,
   RenameDetector,
 } from "./pushschema-pipeline-interfaces";
+import { withRecordedShapes } from "./recorded-shapes";
 import { RegexRenameDetector } from "./rename-detector";
 import type { ClassifierEvent } from "./resolution/types";
 import type { DesiredSchema } from "./types";
@@ -116,7 +125,7 @@ export async function previewDesiredSchema(
   // Resolved once, here, so the snapshot this function builds and the DDL the apply path builds
   // from the same declaration describe the same column. Two different builders read a desired
   // schema, and normalising what they share is what keeps them from disagreeing forever.
-  const desired = args.desired;
+  let desired = args.desired;
   const renameDetector = deps.renameDetector ?? new RegexRenameDetector();
   const classifier = deps.classifier ?? new RealClassifier();
   const introspect = deps.introspect ?? introspectLiveSnapshot;
@@ -134,14 +143,58 @@ export async function previewDesiredSchema(
     dialect,
     desiredSchemaTableNames(desired, extensions)
   );
-  const { snapshot: desiredSnapshot } = buildDesiredSnapshot({
+  // The fields a plugin holds back from a type switched off, kept while
+  // their columns are live, as the apply keeps them (`kept-scope-fields.ts`).
+  desired = withKeptScopeFieldsIn(desired, liveSnapshot, dialect);
+  const { snapshot: configuredSnapshot } = buildDesiredSnapshot({
     desired,
     dialect,
     liveSnapshot,
     extensions,
   });
+  // What a plugin no longer configured added to other owners' tables, kept
+  // as the apply keeps it (`kept-elements.ts`), so the preview shows no drop
+  // the apply will not make. Read only: the apply records the owner rows.
+  const owners = await pushElementOwners({
+    db,
+    dialect,
+    schema: extensions,
+    managedTables: desiredSchemaTableNames(desired, extensions),
+    live: liveSnapshot,
+    record: false,
+  });
+  const desiredSnapshot = withKeptElements(
+    configuredSnapshot,
+    liveSnapshot,
+    owners
+      ? keptElements({
+          rows: owners.rows,
+          declaring: owners.declaring,
+          live: liveSnapshot,
+          desired: configuredSnapshot,
+        })
+      : []
+  );
 
-  const allOperations = diffSnapshots(liveSnapshot, desiredSnapshot);
+  // The live columns given the shape each relation's recorded field stored, so a switch the type
+  // does not show is previewed as the apply plans it (`withRecordedShapes`).
+  // A translated relation's switch on its companion joins them, as the apply plans it
+  // (`relationSwitches`), so what is confirmed here is what runs.
+  // Less the unique indexes a column already has, which SQLite's snapshot cannot show
+  // (`withoutUniquesAlreadyEnforced`), so the preview plans what the apply plans.
+  const diffed = await withoutUniquesAlreadyEnforced(
+    diffSnapshots(withRecordedShapes(liveSnapshot, desired), desiredSnapshot),
+    { db, dialect, live: liveSnapshot }
+  );
+  const switches = await relationSwitches({
+    db,
+    dialect,
+    desired,
+    live: liveSnapshot,
+    desiredSnapshot,
+    planned: diffed,
+  });
+  const allOperations = [...diffed, ...switches.ops];
 
   // Preview is what the browser asks the operator to confirm, so it must show the operation set the
   // apply can actually run. The apply drops operations on code-first and plugin-owned tables before

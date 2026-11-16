@@ -14,6 +14,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -84,6 +86,9 @@ const OPEN = { ...SINGLE_OPEN, delete: () => true };
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // Each case reads as a visitor, judged by the Public role a real boot
+    // makes, which reads every collection and the Single here by its rule.
+    seedPublic: true,
     collections: [
       // Pending work in another language stops a document-wide write.
       defineCollection({
@@ -201,6 +206,22 @@ async function singleVisible(t: TestNextly): Promise<boolean> {
   return result.success === true;
 }
 
+/**
+ * Gives a plain author what a release's run meets on the documents here. A
+ * code rule only narrows the permission, so the author holds read, update and
+ * publish on each, and unpublish on each but memos, whose takedown has no rule
+ * and is decided by grants alone. Notes are left out: who publishes one is a
+ * role's business.
+ */
+async function mayRelease(t: TestNextly, author: string): Promise<string> {
+  const ruled = ["pages", "articles", "posts", "dossiers", "letters", "notice"];
+  for (const action of ["read", "update", "publish"]) {
+    await grantTo(t, author, action, [...ruled, "memos"]);
+  }
+  await grantTo(t, author, "unpublish", ruled);
+  return author;
+}
+
 interface Arranged {
   releaseId: string;
   owner: string;
@@ -223,7 +244,8 @@ async function dueRelease(
   people?: { owner: string; author: string }
 ): Promise<Arranged> {
   const owner = people?.owner ?? (await seedLiveAuthor(t));
-  const author = people?.author ?? (await seedPlainAuthor(t));
+  const author =
+    people?.author ?? (await mayRelease(t, await seedPlainAuthor(t)));
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({
     title: "Launch",
@@ -264,7 +286,7 @@ async function futureRelease(
       entryId,
       locale: null,
       action: "publish",
-      createdBy: await seedPlainAuthor(t),
+      createdBy: await mayRelease(t, await seedPlainAuthor(t)),
     },
     ANY_EDITABLE_STATE
   );
@@ -419,7 +441,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           locale: "de",
         },
-        { title: "DE pending" }
+        { title: "DE pending", _overwrite: true }
       );
 
       expect(await visibleIds(t, "pages")).toContain(page);
@@ -436,7 +458,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.updateSingle({
           slug: "notice" as never,
           locale,
-          data: { headline, status: "published" } as never,
+          data: { headline, status: "published", _overwrite: true } as never,
         });
       }
       const row = await t.adapter.selectOne<{ id: string }>(
@@ -457,7 +479,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.updateSingle({
         slug: "notice" as never,
         locale: "de",
-        data: { headline: "DE pending" } as never,
+        data: { headline: "DE pending", _overwrite: true } as never,
       });
 
       expect(await singleVisible(t)).toBe(true);
@@ -526,7 +548,7 @@ describe.each(getConfiguredTestDialects())(
       // decides. Stopping only the one with a problem would hand the other
       // both documents, and with them an effect the pair never had.
       const t = await boot(dialect);
-      const going = await seedPlainAuthor(t);
+      const going = await mayRelease(t, await seedPlainAuthor(t));
       const coming = await seedPlainAuthor(t);
       const roleId = await grantRole(t, coming, [
         "update-memos",
@@ -641,7 +663,12 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const owner = await seedLiveAuthor(t);
       const author = await seedPlainAuthor(t);
-      const roleId = await grantRole(t, author, ["update-notes"]);
+      // A code rule only narrows the permission, so the role also grants
+      // publish on notes, and the rule naming it still decides.
+      const roleId = await grantRole(t, author, [
+        "update-notes",
+        "publish-notes",
+      ]);
       // The slug `grantRole` gives the role it makes.
       publisherSlug = `role-${author.slice(0, 8)}`;
       const note = await entry(t, "notes", "draft");
@@ -724,7 +751,7 @@ describe.each(getConfiguredTestDialects())(
       const written = await handlerOf(t)
         .getEntryService()
         .updateEntries({ collectionName: "dossiers", overrideAccess: true }, [
-          { id: dossier, data: { guarded: "secret" } },
+          { id: dossier, data: { guarded: "secret", _overwrite: true } },
         ]);
       expect(written.successful).toBe(1);
 
@@ -748,6 +775,10 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await visibleIds(t, "articles")).toContain(kept);
 
+      // The bulk delete runs as a visitor, who needs the Public role to hold
+      // the delete as well as the rule answering \`true\`; granted as a site
+      // admin would, since who deletes is not what this case is about.
+      await grantPublic(t, ["delete-articles"]);
       const deleted = await handlerOf(t)
         .getEntryService()
         .deleteEntries({ collectionName: "articles" }, [gone]);
@@ -874,7 +905,7 @@ describe.each(getConfiguredTestDialects())(
 
       await handlerOf(t).updateEntry(
         { collectionName: "articles", entryId: article, overrideAccess: true },
-        { title: "Edited" }
+        { title: "Edited", _overwrite: true }
       );
 
       expect(await visibleIds(t, "articles")).toContain(article);

@@ -1,5 +1,6 @@
 import {
   DEFAULT_LIMITS,
+  storedVisibilityOf,
   type BlockDocument,
   type BlockNode,
   type DocumentLimits,
@@ -67,7 +68,16 @@ export function sanitizeDocument(
         continue;
       }
 
-      const candidate = node as BlockNode;
+      // Placement gates are written by the resolver while a page is drawn and
+      // never stored, so one arriving with a stored node is dropped: stored
+      // data must not add a gate no author set.
+      const stored = node as BlockNode;
+      const visibility = storedVisibilityOf(stored.visibility);
+      const candidate =
+        visibility === stored.visibility
+          ? stored
+          : ({ ...stored, visibility } as BlockNode);
+      if (candidate !== stored) changed = true;
 
       // Identity has to be text. A node whose `type` is an object reaches the
       // unknown-block placeholder, which puts that value in the DOM as a data

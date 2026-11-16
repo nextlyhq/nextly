@@ -9,8 +9,13 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { defaultSizeOf } from "./support/dashboard-sizes";
+import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.dashboard] });
 
 const API = "/admin/api";
 const CARD = "core/note";
@@ -33,7 +38,7 @@ async function putNote(page: Page, text: string) {
         {
           id: "e2e-note",
           widgetId: CARD,
-          width: "half",
+          ...(await defaultSizeOf(page, CARD)),
           removed: false,
           config: { text },
         },
@@ -74,6 +79,30 @@ test("a Note draws its reader's Markdown, and runs none of it", async ({
       () => (window as unknown as { __noteRan?: boolean }).__noteRan
     )
   ).toBeUndefined();
+});
+
+test("an unwritten Note is empty by its declaration, and its action opens the note to write", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  // Whitespace alone is no note: judged on the server by the declaration's
+  // `isEmpty`, and drawn by the frame with the declared message and action.
+  await ok(await putNote(page, "   "));
+  await gotoAdmin(page, "/");
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  const empty = card.getByTestId("card-empty");
+  await expect(empty).toContainText("Nothing written yet.");
+  await empty.getByRole("button", { name: "Write a note" }).click();
+  // The card's own settings drawer, on the field the note is written in, which says what
+  // Markdown it takes and how many characters are left.
+  const sheet = page.getByTestId("widget-settings-drawer");
+  await expect(sheet).toBeVisible();
+  const text = sheet.getByRole("textbox", { name: "Text" });
+  await expect(text).toBeFocused();
+  await expect(text).toHaveAccessibleDescription(
+    /Supports Markdown: .*\*\*bold\*\*.*_italic_.*- lists.*\[links\]\(https:\/\/…\)/
+  );
+  await expect(text).toHaveAccessibleDescription(/1,997 characters left/);
 });
 
 test("a Note over its bound is refused by the layout write", async ({

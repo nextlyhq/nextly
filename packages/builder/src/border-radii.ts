@@ -278,6 +278,18 @@ export function insetCornerRadii(
 }
 
 /**
+ * The radii of a shape drawn `by` pixels outside one with these, so the two
+ * stay concentric: each curve grows by the distance, and a square corner stays
+ * square, as `outline-offset` draws one.
+ */
+export function outsetCornerRadii(radii: CornerRadii, by: number): CornerRadii {
+  return mapCorners(radii, corner => ({
+    x: corner.x > 0 ? corner.x + by : 0,
+    y: corner.y > 0 ? corner.y + by : 0,
+  }));
+}
+
+/**
  * Radii moved from layout pixels into the rendered pixels a transform draws
  * them at.
  *

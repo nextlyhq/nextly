@@ -21,6 +21,7 @@
 import { z } from "zod";
 
 import { WEBHOOK_ROTATION_MAX_OVERLAP_SECONDS } from "../../domains/webhooks/secret-entries";
+import { subscriptionList } from "../../domains/webhooks/subscription-list";
 import {
   REDACTED_HEADER_VALUE,
   WEBHOOK_EVENT_TYPES,
@@ -51,25 +52,12 @@ export const WebhookEventSubscriptionSchema = z.union([
 ]);
 
 /**
- * The subscription list an endpoint create/update accepts: at least one entry,
- * no duplicates, and the wildcard cannot be combined with specific types (it
- * already covers them, so a mix is contradictory rather than additive).
+ * The subscription list an endpoint create/update accepts: core's types or the
+ * wildcard, under the rules every subscription list is held to.
  */
-const EventSubscriptionsSchema = z
-  .array(WebhookEventSubscriptionSchema)
-  .min(1, "Subscribe to at least one event type.")
-  // A duplicate would not change delivery, but it would make the stored
-  // subscription disagree with what the user typed.
-  .refine(types => new Set(types).size === types.length, {
-    message: "Event types must be unique.",
-  })
-  .refine(
-    types => !types.includes(WEBHOOK_EVENT_WILDCARD) || types.length === 1,
-    {
-      message:
-        'Use "*" on its own to subscribe to all events; do not combine it with specific types.',
-    }
-  );
+const EventSubscriptionsSchema = subscriptionList(
+  WebhookEventSubscriptionSchema
+);
 
 /** Header names a caller may not set, because delivery owns them. */
 const RESERVED_HEADER_PREFIXES = ["webhook-", "content-type", "user-agent"];

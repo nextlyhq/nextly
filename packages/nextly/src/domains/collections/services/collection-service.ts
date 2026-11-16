@@ -70,7 +70,14 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import {
+  parseFieldRewrite,
+  rewriteCallerOf,
+  rewritesSingle,
+  type FieldRewriteResult,
+} from "../../versions/field-rewrite";
 import type { WhereFilter } from "../query/query-operators";
 
 import type { CollectionMetadataService } from "./collection-metadata-service";
@@ -150,6 +157,14 @@ export interface CollectionEntry {
   [key: string]: unknown;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * The entry's version: changed by every save and by no read, and naming each
+   * language the read or write covered. Opaque — hand it back as it is.
+   *
+   * @experimental An update that hands it back is refused when it is no
+   *   longer the current version (`STALE_VERSION`).
+   */
+  _rev?: string;
 }
 
 /**
@@ -281,8 +296,8 @@ export class CollectionService extends BaseService {
     });
     // Reached only on a successful commit; a rejected transaction throws above
     // and flushes nothing. The captured `collector` outlives the map binding.
-    // On SQLite this transaction may itself be a savepoint of an enclosing one,
-    // so the flush and maintenance wait for that one's commit.
+    // This transaction may have joined an enclosing one, on any dialect, so
+    // the flush and maintenance wait for that one's commit.
     const collectedIntents = collector ?? [];
     await this.afterCommit(async () => {
       if (ownsFlush && collectedIntents.length > 0) {
@@ -435,6 +450,16 @@ export class CollectionService extends BaseService {
    * service.registerDynamicSchemas(dynamicSchemas);
    * ```
    */
+  /** {@link CollectionMetadataService.companionSchemaOf}. */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  companionSchemaOf(
+    slug: string,
+    executor?: unknown
+  ): Promise<CompanionSchema | null> {
+    return this.metadataService.companionSchemaOf(slug, executor);
+  }
+
   registerDynamicSchemas(schemas: Record<string, unknown>): void {
     this.metadataService.registerDynamicSchemas(schemas);
   }
@@ -509,7 +534,9 @@ export class CollectionService extends BaseService {
     // callers (and future ACL/multitenant logic) can pass request context.
     _context: RequestContext
   ): Promise<PaginatedResult<Collection>> {
-    this.logger.debug("Listing collections", { options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing collections");
 
     const result = await this.metadataService.listCollections(options);
 
@@ -597,6 +624,56 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * @experimental Hold collection `collectionName`'s registry row for share
+   * inside `tx` until it ends, and answer whether the collection exists.
+   *
+   * For a write that must not outlive the collection it names: a delete of
+   * the collection holds the row for update before it removes anything, so
+   * the write either commits before the delete reads what to remove with it,
+   * or waits for the delete and is told the collection is gone. On SQLite,
+   * with one writer at a time, the row is only read. On MySQL, where a table
+   * drop commits the delete's row locks, the collection's named lock holds
+   * the two apart until the delete has removed the row.
+   *
+   * @param tx - The transaction the write runs in
+   * @param collectionName - The collection the write names
+   * @returns Whether the collection exists
+   */
+  async holdCollectionInTransaction(
+    tx: TransactionContext,
+    collectionName: string
+  ): Promise<boolean> {
+    return this.metadataService.holdCollectionIn(tx, collectionName);
+  }
+
+  /**
+   * @experimental Hold entry `entryId` of collection `collectionName` for
+   * share inside `tx` until it ends, and answer whether it exists.
+   *
+   * For a write that must not outlive the entry it names: a delete of the
+   * entry locks its row for update before it removes it, and runs its
+   * in-transaction handlers after, so the write either commits before the
+   * delete goes on, and those handlers see it, or waits for the delete and is
+   * told the entry is gone. The entry's collection is held first, as
+   * {@link holdCollectionInTransaction} holds it, so a delete of the whole
+   * collection takes turns with the write as well. On SQLite, with one writer
+   * at a time, the rows are only read. Reads only whether the collection and
+   * the row are there, on `tx`'s connection.
+   *
+   * @param tx - The transaction the write runs in
+   * @param collectionName - The collection of the entry the write names
+   * @param entryId - The entry the write names
+   * @returns Whether the entry exists
+   */
+  async holdEntryInTransaction(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): Promise<boolean> {
+    return this.metadataService.holdEntryIn(tx, collectionName, entryId);
+  }
+
+  /**
    * Delete a collection
    *
    * @param collectionName - Name of the collection to delete
@@ -657,7 +734,12 @@ export class CollectionService extends BaseService {
     );
 
     if (!result.success) {
-      this.logger.warn("Entry creation failed", {
+      // A duplicate is thrown to the caller, which receives it and decides:
+      // several writers making one row at once (parallel build workers) is
+      // no fault, so only other failures are warned of here. Told by its
+      // code, since other refusals (a hook's conflict) answer 409 too.
+      const log = result.code === "DUPLICATE" ? "debug" : "warn";
+      this.logger[log]("Entry creation failed", {
         collectionName,
         message: result.message,
         statusCode: result.statusCode,
@@ -796,7 +878,9 @@ export class CollectionService extends BaseService {
     options: QueryOptions = {},
     context: RequestContext
   ): Promise<PaginatedResult<CollectionEntry>> {
-    this.logger.debug("Listing entries", { collectionName, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Listing entries", { collectionName });
 
     const limit = options.pagination?.limit ?? 10;
     const page = options.pagination?.page ?? 1;
@@ -865,6 +949,53 @@ export class CollectionService extends BaseService {
     }
 
     return result.data.totalDocs;
+  }
+
+  /**
+   * How many entries carry each distinct value of one field, over the rows a
+   * `count` with the same filter would count.
+   *
+   * Not on `ctx.services.collections`: a plugin reaches it only through
+   * `ctx.services.ownCollections`, whose safe-delete bookkeeping needs it.
+   *
+   * @param collectionName - Name of the collection
+   * @param options - The field to group by, an optional `where`, and a bucket cap
+   * @param context - Request context
+   * @returns The buckets, largest first, and whether the cap left any out
+   * @throws NextlyError if grouping fails
+   */
+  async group(
+    collectionName: string,
+    options: {
+      groupBy: string;
+      where?: Record<string, unknown>;
+      bucketLimit?: number;
+    },
+    context: RequestContext
+  ): Promise<{
+    buckets: { value: string | null; count: number }[];
+    truncated: boolean;
+  }> {
+    this.logger.debug("Grouping entries", { collectionName });
+
+    const result = await this.entryService.groupEntries({
+      collectionName,
+      ...forwardedFromContext(context),
+      groupBy: options.groupBy,
+      where: options.where as WhereFilter | undefined,
+      ...(options.bucketLimit === undefined
+        ? {}
+        : { bucketLimit: options.bucketLimit }),
+    });
+
+    if (!result.success || !result.data) {
+      throw this.mapLegacyErrorToNextlyError(result);
+    }
+
+    return {
+      buckets: result.data.buckets,
+      truncated: result.data.truncated,
+    };
   }
 
   /**
@@ -956,6 +1087,45 @@ export class CollectionService extends BaseService {
   }
 
   /**
+   * @experimental Rewrite one field of an entry on its live copy and on every
+   * pending draft that holds it, in one transaction, without publishing, from
+   * the version the caller read. See `domains/versions/field-rewrite`.
+   *
+   * @param input - The rewrite of an entry, parsed here (`FieldRewriteRequest`)
+   * @param context - Who it is made as
+   * @param plugin - The plugin making it, by the name it booted under, for
+   *   history. Passed only by a plugin's own services, from its identity.
+   * @throws NextlyError if it is refused
+   */
+  async rewriteField(
+    input: unknown,
+    context: RequestContext,
+    plugin?: string
+  ): Promise<FieldRewriteResult> {
+    const request = parseFieldRewrite(input);
+    // A Single's rewrite reaches the Single's own write path, which a
+    // plugin's services route it to before this one.
+    if (rewritesSingle(request)) {
+      throw NextlyError.invalidInput({
+        message:
+          "A collection entry's rewrite names `collection` and `id`; this service rewrites no Single.",
+      });
+    }
+    const result = await this.entryService.rewriteField({
+      request,
+      ...rewriteCallerOf(context, plugin),
+    });
+    if (!result.success) {
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName: request.collection,
+        entryId: request.id,
+      });
+    }
+    return result.data as FieldRewriteResult;
+  }
+
+  /**
    * Delete an entry
    *
    * @param collectionName - Name of the collection
@@ -1028,6 +1198,15 @@ export class CollectionService extends BaseService {
    */
   async warmLocalizedReadiness(collectionName: string): Promise<void> {
     await this.entryService.warmLocalizedReadiness(collectionName);
+  }
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * for `nextly media reindex-usage`. Returns how many entries it read.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    return this.entryService.rebuildMediaUsage(collectionName);
   }
 
   /**
@@ -1166,8 +1345,9 @@ export class CollectionService extends BaseService {
     const result = await this.entryService.deleteEntryInTransaction(tx, {
       collectionName,
       entryId,
-      actor,
       ...forwardedFromContext(context),
+      // The actor passed beside the context wins over one the context names.
+      ...(actor === undefined ? {} : { actor }),
     });
 
     this.settleTxWrite<unknown>(tx, result, {

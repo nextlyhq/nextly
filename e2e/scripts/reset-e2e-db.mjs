@@ -7,12 +7,22 @@
 // things rests on it never being pointed at a database anyone wanted, and a
 // glob here — or a path assembled from an env var — is how that stops being
 // true.
+//
+// On PostgreSQL and MySQL (`E2E_DB_DIALECT`) it also creates the run's own
+// database, empty (`support/server-database.mjs`), named by
+// `support/e2e-database.mjs` and never by the environment, so the server boots
+// on an empty database the run made.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { e2eDatabase } from "../support/e2e-database.mjs";
+import { removeOwedMigrations } from "../support/owed-migrations.mjs";
+import { recreateServerDatabase } from "../support/server-database.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(HERE, "..", "..", "apps", "playground", "data");
+const PLAYGROUND_DIR = path.resolve(HERE, "..", "..", "apps", "playground");
+const DATA_DIR = path.join(PLAYGROUND_DIR, "data");
 
 // sqlite in WAL mode keeps two sidecar files. Leaving them behind restores
 // pages from the previous run into a database meant to be empty.
@@ -27,17 +37,44 @@ const FILES = [
   "e2e-setup.db-wal",
 ];
 
+/**
+ * The production suite's own database, emptied only when it is the one the
+ * server about to start opens. The seed adds only what is missing, so a file
+ * an earlier run left would keep that run's seeded content and a change to the
+ * seed would never reach the suite; and named by the server's own
+ * `DATABASE_URL` rather than always, so the other suite's reset never empties
+ * it under a production run beside it.
+ */
+const PRODUCTION_DB = "e2e-prod.db";
+const PRODUCTION_FILES = [
+  PRODUCTION_DB,
+  `${PRODUCTION_DB}-shm`,
+  `${PRODUCTION_DB}-wal`,
+];
+
 const DEV_DB = "nextly.db";
 
 async function main() {
+  const database = e2eDatabase({ port: Number(process.env.PORT) });
+  if (database.dialect !== "sqlite") await recreateServerDatabase(database);
+
   await fs.mkdir(DATA_DIR, { recursive: true });
 
-  for (const name of FILES) {
+  const opensProduction =
+    process.env.DATABASE_URL === `file:./data/${PRODUCTION_DB}`;
+  for (const name of opensProduction
+    ? [...FILES, ...PRODUCTION_FILES]
+    : FILES) {
     if (name.includes(DEV_DB)) {
       throw new Error(`Refusing to delete the development database: ${name}`);
     }
     await fs.rm(path.join(DATA_DIR, name), { force: true });
   }
+
+  // The migrations a stopped run owed, removed before the server boots: a
+  // booting dev server applies every file it finds to the empty database, and
+  // its ledger would then record files the run's teardown never got to.
+  await removeOwedMigrations();
 
   console.log(`[e2e] Reset ${path.join(DATA_DIR, FILES[0])}`);
 }

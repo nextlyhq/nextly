@@ -41,21 +41,28 @@ import type { StyleControl } from "./style-controls";
 export type LogicalSide = keyof LogicalSidesShape["sides"];
 
 /**
- * Where each side sits in the drawn box, top row first.
+ * The order the sides come in the document, which is the order Tab visits
+ * them: the CSS shorthand's, top, then the inline end (right in a
+ * left-to-right page), bottom, and the inline start. An author typing a box
+ * from the keyboard goes round it as they would write `margin: 1px 2px 3px
+ * 4px`.
+ *
+ * Where each side is DRAWN is not decided here: the stylesheet places every
+ * side by which side it is, so this order moves no side on screen.
  *
  * A `Record` over the engine's own union, so this cannot fall out of step with
  * the catalog without failing to compile. The numbers are this module's
- * decision — they are a reading order, which the engine has no opinion about.
+ * decision, which the engine has no opinion about.
  */
 const DRAW_ORDER: Record<LogicalSide, number> = {
   blockStart: 0,
-  inlineStart: 1,
-  inlineEnd: 2,
-  blockEnd: 3,
+  inlineEnd: 1,
+  blockEnd: 2,
+  inlineStart: 3,
 };
 
 /**
- * The four sides, in the order the box draws them.
+ * The four sides, in the order they come in the document and Tab visits them.
  *
  * Derived from `DRAW_ORDER` rather than written out a second time: two lists of
  * the same four names is exactly the drift this module exists to avoid.
@@ -156,4 +163,70 @@ export function sideOf(
   if (!box.boxed) return undefined;
   const side = control.path[0];
   return side === undefined ? undefined : (side as LogicalSide);
+}
+
+/**
+ * A side's plain name, "top" or "left", for an element whose axes make it one.
+ *
+ * Only for a horizontal writing mode, where the block axis runs top to bottom
+ * and the inline axis follows the direction, so a right-to-left element's
+ * inline start is its right. In a vertical mode the physical edge depends on
+ * more than this pair reads, so there is no plain name, and the caller keeps
+ * the logical one.
+ *
+ * @param side - the logical side
+ * @param axes - the edited element's writing mode and direction
+ * @returns "top", "right", "bottom" or "left", or `undefined`
+ */
+export function physicalSideName(
+  side: LogicalSide,
+  axes: SideOrientation
+): "top" | "right" | "bottom" | "left" | undefined {
+  if (axes.writingMode !== "horizontal-tb") return undefined;
+  const rtl = axes.direction === "rtl";
+  switch (side) {
+    case "blockStart":
+      return "top";
+    case "blockEnd":
+      return "bottom";
+    case "inlineStart":
+      return rtl ? "right" : "left";
+    case "inlineEnd":
+      return rtl ? "left" : "right";
+    default:
+      return undefined;
+  }
+}
+
+/** Whether a key names one of the four logical sides. */
+export function isLogicalSide(key: string): key is LogicalSide {
+  return (LOGICAL_SIDES as readonly string[]).includes(key);
+}
+
+/**
+ * A corner's plain name, "top left" or "bottom right", for an element whose
+ * axes make it one: the block side, then the inline side, each named as
+ * {@link physicalSideName} names it.
+ *
+ * @param corner - the logical corner, block side first (`startEnd`)
+ * @param axes - the edited element's writing mode and direction
+ * @returns the corner in plain words, or `undefined` in a vertical mode
+ */
+export function physicalCornerName(
+  corner: string,
+  axes: SideOrientation
+): string | undefined {
+  const match = /^(start|end)(Start|End)$/.exec(corner);
+  if (match === null) return undefined;
+  const block = physicalSideName(
+    match[1] === "start" ? "blockStart" : "blockEnd",
+    axes
+  );
+  const inline = physicalSideName(
+    match[2] === "Start" ? "inlineStart" : "inlineEnd",
+    axes
+  );
+  return block === undefined || inline === undefined
+    ? undefined
+    : `${block} ${inline}`;
 }

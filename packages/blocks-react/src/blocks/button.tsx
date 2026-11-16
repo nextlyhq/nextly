@@ -14,7 +14,15 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext } from "../context";
 
 import { INTERACTIVE } from "./categories";
-import { oneOf, relFor, text, url } from "./props";
+import { buttonLooks } from "./looks";
+import {
+  boundText,
+  LINK_PROPS,
+  linkFor,
+  oneOf,
+  readClaimOf,
+  text,
+} from "./props";
 
 /** The button's HTML behaviour when it is not a link. */
 export const BUTTON_TYPES = ["button", "submit", "reset"] as const;
@@ -42,27 +50,23 @@ export async function renderButton({
   props,
   className,
   ctx,
+  node,
+  bound,
 }: BlockRenderArgs<ButtonProps>): Promise<ReactElement> {
-  const label = text(props.label);
-  const collection = text(props.entryCollection);
-  const entryId = text(props.entryId);
-
-  // An entry reference beats a typed URL: it survives the entry being renamed,
-  // which a pasted path does not. Resolution is a read, so it can fail, and a
-  // failure means "no destination" rather than a lost page.
-  const resolvedPath =
-    collection !== "" && entryId !== ""
-      ? await ctx.resolveEntryPath(collection, entryId).catch(() => null)
-      : null;
-
-  const href = url(resolvedPath ?? undefined) ?? url(props.href);
+  // A bound date keeps its machine-readable value inside the button or link.
+  const label = boundText(text(props.label), bound?.label);
+  // Where it goes, read as every linking block reads it.
+  // Claimed as this block's, so a page past its allowance names it.
+  const link = await linkFor(props, (collection, id) =>
+    ctx.resolveEntryPath(collection, id, readClaimOf(node))
+  );
   const ariaLabel = text(props.ariaLabel);
   const shared = {
     className,
     ...(ariaLabel === "" ? {} : { "aria-label": ariaLabel }),
   };
 
-  if (href === undefined) {
+  if (link === undefined) {
     return (
       <button {...shared} type={oneOf(props.type, BUTTON_TYPES, "button")}>
         {label}
@@ -70,14 +74,8 @@ export async function renderButton({
     );
   }
 
-  const rel = relFor(props.target, props.rel);
   return (
-    <a
-      {...shared}
-      href={href}
-      {...(props.target === "_blank" ? { target: "_blank" } : {})}
-      {...(rel === undefined ? {} : { rel })}
-    >
+    <a {...shared} {...link}>
       {label}
     </a>
   );
@@ -127,6 +125,10 @@ export const BUTTON_BASE_STYLES = {
   base: {
     base: {
       display: "inline-block",
+      // Centred, as a user agent centres a `<button>` and not an `<a>`: given
+      // any width beyond its label (full width, a set width), a link-button's
+      // label would otherwise sit at the start while a button's sat centred.
+      textAlign: "center",
       // A user agent gives `<button>` a border box and `<a>` a content box, so
       // an authored width means two different outer sizes depending only on
       // whether a destination is set. Measured with `width: 200px` and this
@@ -134,10 +136,10 @@ export const BUTTON_BASE_STYLES = {
       // 200px. Stated once here, both are the same control.
       boxSizing: "border-box",
       padding: {
-        blockStart: "0.5rem",
-        blockEnd: "0.5rem",
-        inlineStart: "1rem",
-        inlineEnd: "1rem",
+        blockStart: { $token: "button.padding-y" },
+        blockEnd: { $token: "button.padding-y" },
+        inlineStart: { $token: "button.padding-x" },
+        inlineEnd: { $token: "button.padding-x" },
       },
       backgroundColor: { $token: "color.primary" },
       color: { $token: "color.background" },
@@ -178,8 +180,11 @@ export const BUTTON_BASE_STYLES = {
 export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
   name: "core/button",
   version: 1,
-  description:
-    "A call to action. Renders a link when it has a destination and a button when it does not, so it is operable either way.",
+  // What an author reads, in the Add panel and the block card: one plain line.
+  // What the block does, for whoever maintains it: A call to action. Renders a
+  // link when it has a destination and a button when it does not, so it is
+  // operable either way.
+  description: "A link that looks like a button.",
   // Palette metadata. The category is imported rather than spelled here so
   // nineteen blocks cannot drift into nineteen headings; keywords are what
   // let a search for a word the description never uses still find this.
@@ -188,17 +193,25 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     icon: "button",
     category: INTERACTIVE,
     keywords: ["link", "cta", "call to action"],
+    // Its looks, offered as tiles on a block already on the page.
+    variations: buttonLooks(),
   },
   baseStyles: BUTTON_BASE_STYLES,
   props: {
-    label: { role: "content", type: "text" },
-    href: { role: "content", type: "url" },
-    entryCollection: { role: "content", type: "text" },
-    entryId: { role: "content", type: "text" },
-    target: { type: "select", options: ["_self", "_blank"] },
-    rel: { type: "text" },
-    type: { type: "select", options: [...BUTTON_TYPES] },
-    ariaLabel: { role: "content", type: "text" },
+    label: { label: "Label", role: "content", type: "text" },
+    ...LINK_PROPS,
+    // What the button does when it is not a link: offered only without a
+    // link, to a URL or to an entry, since a link is what it then does. An
+    // entry link is the collection and the entry together, as the renderer
+    // resolves one.
+    type: {
+      label: "Acts as",
+      optionLabels: { button: "Button", submit: "Submit", reset: "Reset" },
+      type: "select",
+      options: [...BUTTON_TYPES],
+      onlyWithout: ["href", ["entryCollection", "entryId"]],
+    },
+    ariaLabel: { label: "Accessible label", role: "content", type: "text" },
   },
   defaultProps: { label: "", type: "button" },
   example: { props: { label: "Get started", href: "/signup" } },
@@ -212,5 +225,7 @@ export const button: BlockDefinition<ButtonProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // An `<a>` or a `<button>` either way: interactive phrasing content.
+  contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
   render: renderButton,
 });

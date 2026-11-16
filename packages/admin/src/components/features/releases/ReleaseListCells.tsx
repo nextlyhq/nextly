@@ -98,13 +98,13 @@ export const RELEASE_STATUS_TONE: Record<
 > = {
   scheduled: { bar: "bg-primary", icon: "text-primary" },
   overdue: {
-    bar: "bg-warning-500",
-    icon: "text-warning-600 dark:text-warning-400",
+    bar: "bg-warning-solid",
+    icon: "text-warning-text",
   },
   stopped: { bar: "bg-destructive", icon: "text-destructive" },
   published: {
-    bar: "bg-success-500",
-    icon: "text-success-600 dark:text-success-400",
+    bar: "bg-success-solid",
+    icon: "text-success-text",
   },
   draft: { bar: "bg-border", icon: "text-muted-foreground" },
   cancelled: { bar: "bg-muted-foreground/40", icon: "text-muted-foreground" },
@@ -299,7 +299,13 @@ function ReadinessLine({
   readiness: ReleaseRowReadiness;
 }) {
   if (readiness.status === "pending") {
-    return <Skeleton className="h-2.5 w-24" aria-busy="true" />;
+    // Inside a line as tall as the readiness line it stands for (small text),
+    // so the row keeps its height when the checks answer.
+    return (
+      <span className="flex h-4 items-center">
+        <Skeleton className="h-2.5 w-24" aria-busy="true" />
+      </span>
+    );
   }
   const entry = readiness.status === "known" ? readiness.entry : undefined;
   if (entry === undefined) {

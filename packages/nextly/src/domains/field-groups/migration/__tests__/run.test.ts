@@ -9,7 +9,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
@@ -34,12 +34,23 @@ import {
   hashRegistryIdentity,
 } from "../manifest";
 import { readRegistryRows, runFieldGroupMigration } from "../run";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import { MIGRATION_LOCK_TABLE } from "../session";
 import {
   classifyLockStatement,
   createLockRow,
   interpretLockStatement,
 } from "./helpers/migration-lock-double";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
 
@@ -559,6 +570,19 @@ describe("companion ownership", () => {
   // to the application — and adopting it into the plan renames it away.
   it("claims no companion for a group the registry says is not localized", async () => {
     await expect(companionFor({ rows: { localized: 0 } })).resolves.toBe(false);
+  });
+
+  // Under `experimental.perLanguageStorage` every group keeps its translatable values per
+  // language, so its companion moves with it whether or not the group is marked translatable.
+  it("claims the companion of an untranslated group under the setting", async () => {
+    setPerLanguageStorage(true);
+    try {
+      await expect(companionFor({ rows: { localized: 0 } })).resolves.toBe(
+        true
+      );
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("claims the companion when the flag and the table agree", async () => {
@@ -1956,11 +1980,16 @@ describe("a preview that meets a writer mid-run", () => {
         logger,
         direction: "up",
         backupConfirmed: true,
+        // A writing run waits for a held lock as every command-line run does; not waiting keeps
+        // this to the refusal itself.
+        lockWaitMs: 0,
       })
     ).rejects.toSatisfy(
       error =>
         NextlyError.is(error) &&
-        error.logContext?.reason === "migration lock is held elsewhere"
+        error.code === "NEXTLY_MIGRATE_LOCK_BUSY" &&
+        (error.logContext?.holder as { kind?: string } | undefined)?.kind ===
+          "earlier-field-group-lock"
     );
 
     // 🔴 Zero, and that is the assertion. Against the very world a preview re-reads, a run that

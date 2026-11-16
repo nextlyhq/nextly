@@ -1,7 +1,7 @@
 /**
  * Media tables — PostgreSQL.
  *
- * Tables: media, mediaFolders, imageSizes.
+ * Tables: media, mediaFolders.
  * Moved verbatim from packages/nextly/src/database/schema/postgres.ts as part
  * of Plan A schemas consolidation. No behavior change.
  *
@@ -19,10 +19,7 @@ import {
   text,
   timestamp,
   integer,
-  jsonb,
   index,
-  uniqueIndex,
-  boolean,
   varchar,
   type AnyPgColumn,
   type PgBuildExtraConfigColumns,
@@ -56,9 +53,6 @@ export function mediaColumns() {
     // Crop point for smart image cropping (percentage from top-left, 0-100)
     focalX: integer("focal_x"), // Horizontal position (0=left, 100=right)
     focalY: integer("focal_y"), // Vertical position (0=top, 100=bottom)
-
-    // Generated image size variants (JSONB with size name → metadata)
-    sizes: jsonb("sizes"),
 
     // Metadata for accessibility and searchability
     altText: text("alt_text"), // Alt text for images (accessibility)
@@ -177,53 +171,4 @@ export const mediaFolders = pgTable(
     index("media_folders_created_by_idx").on(t.createdBy), // For filtering by creator
     index("media_folders_created_at_idx").on(t.createdAt), // For sorting by creation date
   ]
-);
-
-/**
- * Image Sizes table for named image size configurations.
- *
- * Stores configured image sizes (thumbnail, medium, large, etc.) that are
- * generated for every uploaded image. Supports both code-first (synced from
- * nextly.config.ts) and Visual (managed in admin Settings) approaches.
- *
- * @example
- * ```typescript
- * await db.insert(imageSizes).values({
- *   name: 'thumbnail',
- *   width: 150,
- *   height: 150,
- *   fit: 'cover',
- *   quality: 80,
- *   format: 'webp',
- * });
- * ```
- */
-export const imageSizes = pgTable(
-  "image_sizes",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => crypto.randomUUID()),
-
-    // Size definition
-    name: varchar("name", { length: 50 }).notNull(), // Unique name (e.g., "thumbnail", "medium", "large")
-    width: integer("width"), // Target width in pixels (null = auto, keep aspect ratio)
-    height: integer("height"), // Target height in pixels (null = auto, keep aspect ratio)
-    fit: varchar("fit", { length: 20 }).notNull().default("inside"), // 'cover' | 'inside' | 'contain' | 'fill'
-    quality: integer("quality").notNull().default(80), // Image quality 1-100
-    format: varchar("format", { length: 10 }).notNull().default("auto"), // 'auto' | 'webp' | 'jpeg' | 'png' | 'avif'
-
-    // Management flags
-    isDefault: boolean("is_default").notNull().default(true), // true = applies to all collections
-    sortOrder: integer("sort_order").notNull().default(0), // For UI ordering
-
-    // Timestamps
-    createdAt: timestamp("created_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: false })
-      .defaultNow()
-      .notNull(),
-  },
-  t => [uniqueIndex("image_sizes_name_unique").on(t.name)]
 );

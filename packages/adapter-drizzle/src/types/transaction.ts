@@ -60,6 +60,19 @@ export interface TransactionOptions {
   retryDelayMs?: number;
 
   /**
+   * Whether the error that ended an attempt is worth another attempt, within
+   * `retryCount`. Asked first, of every error, application errors included,
+   * so a caller can retry a conflict of its own, such as a version conflict,
+   * that would otherwise reach it unretried. When it answers false, a
+   * dialect still retries its own serialization failures and deadlocks.
+   * Asked of an outermost transaction only: a call joined to an open
+   * transaction is never retried itself.
+   *
+   * @experimental
+   */
+  retryWhen?: (error: unknown) => boolean;
+
+  /**
    * MySQL only: run the transaction in strict mode, so a statement that would
    * cut a string to its column's length or clamp a number to its range fails
    * rather than applying with a warning. The session's own mode is restored
@@ -68,6 +81,89 @@ export interface TransactionOptions {
    * declared length.
    */
   strictSqlMode?: boolean;
+}
+
+/**
+ * Server-side bounds on the transactions opened inside
+ * `withTransactionBounds`, for work that may run on after the process stops
+ * running it: a serverless platform freezes a function once its response is
+ * sent, and a transaction background work had open then would otherwise stay
+ * open, idle, holding its locks, until the function runs again.
+ *
+ * PostgreSQL applies both to each outermost transaction it opens in the
+ * scope (`SET LOCAL lock_timeout` and `idle_in_transaction_session_timeout`).
+ * MySQL and SQLite run the transactions as before.
+ *
+ * @experimental
+ */
+export interface TransactionBounds {
+  /**
+   * How long a statement waits for a lock another transaction holds before
+   * it fails, in milliseconds.
+   */
+  lockWaitMs?: number;
+  /**
+   * How long the transaction may stay open with no statement running before
+   * the server ends its session, rolling it back and releasing its locks, in
+   * milliseconds. The transaction's next statement then fails.
+   */
+  idleMs?: number;
+}
+
+/**
+ * Options for a session run outside a transaction (`withSession`).
+ *
+ * @public
+ */
+export interface SessionOptions {
+  /**
+   * MySQL only: run the session in strict mode, as `TransactionOptions`'s
+   * option of the same name does for a transaction, and restore the
+   * session's own mode before the connection returns to the pool.
+   * PostgreSQL and SQLite ignore it.
+   */
+  strictSqlMode?: boolean;
+}
+
+/**
+ * Statements run one after another outside a transaction, each committing as
+ * it runs, on the connection `withSession` holds for them.
+ *
+ * @public
+ */
+export interface StatementSession {
+  /** Runs one statement and returns its rows. */
+  execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+}
+
+/**
+ * The open transaction a call is made inside, as
+ * `DrizzleAdapter.transactionInFlow` answers it: something to key what the
+ * transaction alone may reuse, and whether what the call's part of it did
+ * has since been undone.
+ *
+ * @experimental
+ */
+export interface TransactionInFlow {
+  /**
+   * Stands for the transaction: the same object for every call made inside
+   * it, from any part joined to it, and a new one for each attempt and each
+   * transaction. Held by nothing once the transaction has ended, so a
+   * `WeakMap` keyed by it lets go of what it holds.
+   */
+  readonly transaction: object;
+  /**
+   * Whether any part of the transaction has rolled back to its savepoint
+   * since this was asked: what was read before may describe a write the
+   * rollback took away, whichever part wrote it and whichever read it.
+   */
+  undone(): boolean;
+  /**
+   * Whether `executor` runs on this transaction's connection: a Drizzle
+   * handle a context of this transaction built. A handle on the pool, or on
+   * another transaction, answers false.
+   */
+  runsOn(executor: unknown): boolean;
 }
 
 /**

@@ -6,9 +6,8 @@
  * in reach at all. Composed here rather than at each such surface, because the
  * composition is where the mistakes live. The dashboard's own version of it
  * once derived the set by filtering permission slugs, which looked equivalent
- * and was wrong in both directions: an entity authorized purely in code has no
- * permission row to find, and one REFUSED in code still has the row a slug
- * filter admits it on.
+ * and was not: an entity REFUSED in code still has the row a slug filter admits
+ * it on, since a code rule only narrows the grant.
  *
  * Every part of the answer is already published by the module that owns it. The
  * registry says which entities exist, {@link readAccessCaller} converts the

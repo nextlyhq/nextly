@@ -10,12 +10,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const find = vi.fn<() => Promise<string[]>>();
 const clear = vi.fn<() => Promise<number>>();
+/** The options each clean-up was built with. */
+const built: unknown[] = [];
+/** What the install's config says, as the loader hands it back. */
+let loadedConfig: Record<string, unknown> = {};
 
 vi.mock("../../../domains/users/services/plaintext-password-cleanup", () => ({
   PlainTextPasswordCleanup: class {
     find = find;
     clear = clear;
+    constructor(_adapter: unknown, _logger: unknown, options: unknown) {
+      built.push(options);
+    }
   },
+}));
+
+vi.mock("../../utils/config-loader", () => ({
+  loadConfig: vi.fn(async () => ({ config: loadedConfig })),
 }));
 
 vi.mock("../../utils/adapter", () => ({
@@ -41,11 +52,15 @@ const context = {
     success: (m: string) => printed.push(`OK ${m}`),
     newline: vi.fn(),
     keyValue: (k: string, v: string) => printed.push(`${k}=${v}`),
+    getOptions: () => ({ noColor: true }),
   },
+  options: {},
 } as unknown as Parameters<typeof runClearPlaintextPasswords>[1];
 
 beforeEach(() => {
   printed.length = 0;
+  built.length = 0;
+  loadedConfig = {};
   find.mockReset().mockResolvedValue(["user-a", "user-b"]);
   clear.mockReset().mockResolvedValue(2);
 });
@@ -62,10 +77,15 @@ describe("users:clear-plaintext-passwords", () => {
   it("refuses --apply without the hasher confirmation, before reading anything", async () => {
     // The app's own hasher is invisible to the CLI, and its hashes can look
     // like plain text; clearing them locks people out.
-    expect(await runClearPlaintextPasswords(true, context)).toBeNull();
+    const refusal = runClearPlaintextPasswords(true, context);
+    await expect(refusal).rejects.toMatchObject({
+      code: "PASSWORD_CLEAR_UNCONFIRMED",
+    });
+    await expect(refusal).rejects.toMatchObject({
+      next: expect.stringContaining("--apply --confirm-default-hasher"),
+    });
     expect(clear).not.toHaveBeenCalled();
     expect(find).not.toHaveBeenCalled();
-    expect(printed.join("\n")).toContain("--confirm-default-hasher");
   });
 
   it("exits with status 1 when --apply lacks the hasher confirmation", async () => {
@@ -74,6 +94,7 @@ describe("users:clear-plaintext-passwords", () => {
     const exit = vi
       .spyOn(process, "exit")
       .mockImplementation(() => undefined as never);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const run = async (...args: string[]) => {
         const program = new Command();
@@ -84,6 +105,9 @@ describe("users:clear-plaintext-passwords", () => {
       };
       await run("--apply");
       expect(exit).toHaveBeenCalledWith(1);
+      expect(String(stderr.mock.calls[0]?.[0])).toContain(
+        "(PASSWORD_CLEAR_UNCONFIRMED)"
+      );
       expect(clear).not.toHaveBeenCalled();
 
       // The control: with the confirmation the same command clears, and does
@@ -94,6 +118,7 @@ describe("users:clear-plaintext-passwords", () => {
       expect(exit).not.toHaveBeenCalled();
     } finally {
       exit.mockRestore();
+      stderr.mockRestore();
     }
   });
 
@@ -131,5 +156,12 @@ describe("users:clear-plaintext-passwords", () => {
     expect(plainTextPasswordNotice(3)).toContain(
       "a passwordHasher to getNextly"
     );
+  });
+
+  it("recognises the configured hasher's values, as the app's sign-in does", async () => {
+    const hasher = { name: "own", reach: "unbounded" };
+    loadedConfig = { auth: { passwordHasher: hasher } };
+    await runClearPlaintextPasswords(false, context);
+    expect(built).toEqual([{ hasher }]);
   });
 });

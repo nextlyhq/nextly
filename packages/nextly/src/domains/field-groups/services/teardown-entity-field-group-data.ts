@@ -43,9 +43,6 @@ import {
 import { MIGRATION_TARGET } from "../migration/manifest";
 import { resolveRegistryTableName } from "../storage/resolve-storage-names";
 
-/** Bound on how deep component nesting is followed; mirrors MAX_FIELD_GROUP_NESTING_DEPTH. */
-const DEFAULT_MAX_DEPTH = 10;
-
 /**
  * Registry table holding one row per component, including its physical table
  * name. Resolved rather than constant: the field-group storage migration
@@ -84,8 +81,6 @@ export interface TeardownEntityComponentDataArgs {
    * component instance whose `_parent_table` is this table belongs to the entity.
    */
   parentTable: string;
-  /** Override the nesting bound; primarily for tests. */
-  maxDepth?: number;
 }
 
 export interface TeardownEntityComponentDataResult {
@@ -152,9 +147,31 @@ async function assertNoRowsForFrontier(
   componentTable: string,
   parent: Frontier
 ): Promise<void> {
+  const count = await countRowsUnder(adapter, componentTable, parent);
+  if (count === 0) return;
+
+  throw NextlyError.internal({
+    logContext: {
+      reason: "component-table-unresolvable-with-rows",
+      componentTable,
+      parentTable: parent.table,
+      rows: count,
+    },
+  });
+}
+
+/**
+ * How many rows of `componentTable` the frontier entry owns; none for a table without a
+ * `_parent_table` column, which holds no component instances whatever its prefix.
+ */
+async function countRowsUnder(
+  adapter: TeardownComponentDataAdapter,
+  componentTable: string,
+  parent: Frontier
+): Promise<number> {
   // `ids: null` means every row under this parent table belongs to the entity; otherwise
   // only the instances deleted at the previous level own the rows below them.
-  if (parent.ids !== null && parent.ids.length === 0) return;
+  if (parent.ids !== null && parent.ids.length === 0) return 0;
 
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
@@ -184,21 +201,11 @@ async function assertNoRowsForFrontier(
     // No `_parent_table` column means the table does not hold component instances at all,
     // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
     // leaves the question unanswered and must not be read as "empty".
-    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return;
+    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return 0;
     throw error;
   }
 
-  const count = Number(rows[0]?.n ?? 0);
-  if (count === 0) return;
-
-  throw NextlyError.internal({
-    logContext: {
-      reason: "component-table-unresolvable-with-rows",
-      componentTable,
-      parentTable: parent.table,
-      rows: count,
-    },
-  });
+  return Number(rows[0]?.n ?? 0);
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -282,18 +289,12 @@ async function listRegisteredComponentTables(
 }
 
 /**
- * Deletes every component instance owned by `parentTable`, following nesting, and the
- * matching `comp_<slug>_locales` rows.
- *
- * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
- * but running first keeps the entity intact if the sweep fails.
+ * Every table that can hold component rows: `comp_` and `fg_` prefixed ones, and every table the
+ * registry names, without the registry itself or any translations table.
  */
-
-export async function teardownEntityComponentData(
-  args: TeardownEntityComponentDataArgs
-): Promise<TeardownEntityComponentDataResult> {
-  const { adapter, parentTable, maxDepth = DEFAULT_MAX_DEPTH } = args;
-
+async function componentTablesOf(
+  adapter: TeardownComponentDataAdapter
+): Promise<string[]> {
   // Component data tables: `comp_` prefixed by convention, plus every table the
   // registry has registered — a row written before names resolved canonically can
   // point at a table carrying no prefix, so prefix discovery alone would leave its
@@ -303,7 +304,7 @@ export async function teardownEntityComponentData(
   const discovered = await adapter.listTables();
   const registered = await listRegisteredComponentTables(adapter, discovered);
   const registry = await registryTableName(adapter);
-  const componentTables = [
+  return [
     ...new Set([
       // Both prefixes. The registry-derived list below cannot recover a table
       // whose metadata row is exactly what went missing, so prefix discovery is
@@ -321,6 +322,42 @@ export async function teardownEntityComponentData(
     // `_parent_table` column breaks the delete and a permissive adapter could
     // damage the metadata.
   ].filter(name => name !== registry && !isCompanionTable(name));
+}
+
+/**
+ * The component rows an entity's table owns directly, for each component table holding any: what a
+ * create over a leftover entity table counts as that table's content (`clearLeftoverStorage`), so
+ * it is refused rather than taken by this teardown. Reads only.
+ */
+export async function countEntityComponentRows(args: {
+  adapter: TeardownComponentDataAdapter;
+  parentTable: string;
+}): Promise<{ table: string; rows: number }[]> {
+  const owned: { table: string; rows: number }[] = [];
+  for (const table of await componentTablesOf(args.adapter)) {
+    const rows = await countRowsUnder(args.adapter, table, {
+      table: args.parentTable,
+      ids: null,
+    });
+    if (rows > 0) owned.push({ table, rows });
+  }
+  return owned;
+}
+
+/**
+ * Deletes every component instance owned by `parentTable`, following nesting, and the
+ * matching `comp_<slug>_locales` rows.
+ *
+ * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
+ * but running first keeps the entity intact if the sweep fails.
+ */
+
+export async function teardownEntityComponentData(
+  args: TeardownEntityComponentDataArgs
+): Promise<TeardownEntityComponentDataResult> {
+  const { adapter, parentTable } = args;
+
+  const componentTables = await componentTablesOf(adapter);
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };
@@ -328,21 +365,30 @@ export async function teardownEntityComponentData(
 
   const tablesTouched = new Set<string>();
   const skippedTables = new Set<string>();
-  // Resolvability is a property of the table, so it is established once; whether such a
-  // table is SAFE to skip depends on the frontier and is re-checked at every level.
+  // Resolvability is a property of the table, so it is established once, either way; whether an
+  // unresolvable table is SAFE to skip depends on the frontier and is re-checked at every level.
   const unresolvable = new Set<string>();
+  const resolvable = new Set<string>();
   let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
-  let depth = 0;
+  // Field groups nest to any depth, so the walk goes down until a level finds nothing. Each
+  // instance is followed once: a level deletes what it finds, and an id already reached in a
+  // table is not reached again even if its delete removed nothing, so the walk ends.
+  const reached = new Map<string, Set<string>>();
 
-  while (frontier.length > 0 && depth < maxDepth) {
+  while (frontier.length > 0) {
     const nextFrontier: Frontier[] = [];
 
+    // Every component table, at every level: a row's parent is where it was written, which a
+    // definition as it stands now cannot vouch for — one that has since stopped placing a field
+    // group leaves that field group's rows stored beneath its own. Each read is a lookup on the
+    // parent index.
     for (const componentTable of componentTables) {
       if (
-        unresolvable.has(componentTable) ||
-        !(await isResolvable(adapter, componentTable))
+        !resolvable.has(componentTable) &&
+        (unresolvable.has(componentTable) ||
+          !(await isResolvable(adapter, componentTable)))
       ) {
         unresolvable.add(componentTable);
         // Skipping is only safe when the table holds nothing owned by THIS level. An
@@ -356,6 +402,7 @@ export async function teardownEntityComponentData(
         skippedTables.add(componentTable);
         continue;
       }
+      resolvable.add(componentTable);
 
       for (const parent of frontier) {
         // Match on parent id as well as parent table for nested levels — without it the
@@ -415,15 +462,21 @@ export async function teardownEntityComponentData(
             }
           }
 
-          if (instanceIds.length > 0) {
-            nextFrontier.push({ table: componentTable, ids: instanceIds });
+          let reachedHere = reached.get(componentTable);
+          if (reachedHere === undefined) {
+            reachedHere = new Set();
+            reached.set(componentTable, reachedHere);
+          }
+          const newIds = instanceIds.filter(id => !reachedHere.has(id));
+          for (const id of newIds) reachedHere.add(id);
+          if (newIds.length > 0) {
+            nextFrontier.push({ table: componentTable, ids: newIds });
           }
         }
       }
     }
 
     frontier = nextFrontier;
-    depth += 1;
   }
 
   return {

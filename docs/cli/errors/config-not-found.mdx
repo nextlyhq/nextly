@@ -1,0 +1,24 @@
+---
+title: CONFIG_NOT_FOUND
+description: "The configuration file named with `-c` or `--config` does not exist."
+---
+
+## Cause
+
+The configuration file named with `-c` or `--config` does not exist.
+
+Without `-c`, a command looks for `nextly.config.ts` in the project folder. With `-c`, it reads the file you name, relative to the project folder (or to `--cwd`), and stops when nothing is there.
+
+## Fix
+
+- Check the path you passed to `-c`: it is read from the project folder, not from where the command was typed.
+- Or leave `-c` out, and the command uses the `nextly.config.ts` in the project folder.
+
+## Example
+
+```text
+✗ `-c config/nextly.config.ts` names a configuration file that does not exist.
+  Why:  Nothing is at /home/you/app/config/nextly.config.ts.
+  Next: Pass `-c` the path of your configuration file, relative to the project folder, or leave `-c` out to use the project's `nextly.config.ts`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-not-found  (CONFIG_NOT_FOUND)
+```

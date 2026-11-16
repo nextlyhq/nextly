@@ -21,20 +21,21 @@
  * @module domains/i18n/migration/label-legacy-archive-rows
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, getTableName, inArray, sql } from "drizzle-orm";
+import { and, count, eq, getTableName, inArray, sql } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
-import { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/mysql";
-import { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
-import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
-import {
+import { loadedDialect } from "../../../database/dialect-tables";
+import type { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/mysql";
+import type { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
+import type { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
+import type {
   buildDynamicFieldGroupsMysql,
   buildDynamicFieldGroupsPg,
   buildDynamicFieldGroupsSqlite,
 } from "../../../schemas/dynamic-field-groups";
-import { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
-import { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
-import { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
+import type { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
+import type { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
+import type { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
 import {
   nextlyI18nArchiveTables,
   UNKNOWN_ARCHIVE_KIND,
@@ -92,24 +93,13 @@ async function registries(
   adapter: LabelArchiveAdapter
 ): Promise<{ kind: I18nTransitionKind; table: RegistryTable }[]> {
   const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter);
-  const byDialect = {
-    postgresql: () => [
-      dynamicCollectionsPg,
-      dynamicSinglesPg,
-      buildDynamicFieldGroupsPg(fieldGroupRegistry),
-    ],
-    mysql: () => [
-      dynamicCollectionsMysql,
-      dynamicSinglesMysql,
-      buildDynamicFieldGroupsMysql(fieldGroupRegistry),
-    ],
-    sqlite: () => [
-      dynamicCollectionsSqlite,
-      dynamicSinglesSqlite,
-      buildDynamicFieldGroupsSqlite(fieldGroupRegistry),
-    ],
-  } as const;
-  const [collections, singles, fieldGroups] = byDialect[adapter.dialect]();
+  // The loaded dialect's own tables and builder, so only that dialect's files
+  // are imported; `createAdapter` loads them.
+  const loaded = loadedDialect(adapter.dialect);
+  const collections = loaded.tables.dynamicCollections;
+  const singles = loaded.tables.dynamicSingles;
+  const fieldGroups =
+    loaded.builders.buildDynamicFieldGroups(fieldGroupRegistry);
   return [
     { kind: "collection", table: collections },
     { kind: "single", table: singles },
@@ -197,6 +187,97 @@ function creationMargin(dialect: SupportedDialect): number {
   return 1;
 }
 
+/** The entity the labelling gives a slug's unknown rows: the slug's one holder, or none. */
+export interface LegacyLabel {
+  kind: I18nTransitionKind;
+  /** When the holder was created; a row archived before it belongs to an earlier holder. */
+  createdAt: Date;
+}
+
+/** The label for `slug`, from its holders: only a slug exactly one entity holds is labelled. */
+function labelFrom(
+  holders: Map<string, LegacyLabel[]>,
+  slug: string
+): LegacyLabel | undefined {
+  const found = holders.get(slug) ?? [];
+  return found.length === 1 ? found[0] : undefined;
+}
+
+/**
+ * The label `labelLegacyArchiveRows` would give `slug`'s unknown rows, read and not written: a
+ * dry run counts the slug's legacy rows by it, through `ownedSince`, as the labelling sets them.
+ */
+export async function legacyLabelFor(
+  adapter: LabelArchiveAdapter,
+  slug: string
+): Promise<LegacyLabel | undefined> {
+  const db = adapter.getDrizzle<LabelDb>();
+  return labelFrom(await holdersOf(adapter, db, [slug]), slug);
+}
+
+/**
+ * The condition an unknown row meets to be its label's entity's: archived well after the entity
+ * was created (`creationMargin`), compared as instants (`archivedEpoch`). Rows archived before
+ * the entity existed belong to whatever held the slug then.
+ */
+export function ownedSince(
+  dialect: SupportedDialect,
+  archivedAt: AnyColumn,
+  createdAt: Date
+): SQL {
+  return sql`${archivedEpoch(dialect, archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) + creationMargin(dialect)}`;
+}
+
+/** One kind the labelling gives unknown rows, and the rows it gives it, by their condition. */
+interface PlannedLabel {
+  kind: string;
+  where: SQL | undefined;
+}
+
+/**
+ * What `labelLegacyArchiveRows` does, read and not written: each labelled slug's rows (unknown,
+ * the slug's, archived after its holder was created) with the kind they get, and then every row
+ * still unknown, which becomes unresolved. `kindColumn: false` plans for an archive older than the
+ * kind, whose rows all become unknown once the column is added.
+ */
+async function planLegacyArchiveLabels(
+  adapter: LabelArchiveAdapter,
+  { kindColumn = true }: { kindColumn?: boolean } = {}
+): Promise<PlannedLabel[]> {
+  const db = adapter.getDrizzle<LabelDb>();
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  const unknown = kindColumn
+    ? eq(archive.entityKind, UNKNOWN_ARCHIVE_KIND)
+    : undefined;
+  const slugs = (
+    (await db
+      .selectDistinct({ slug: archive.collection })
+      .from(archive)
+      .where(unknown)) as { slug: string }[]
+  ).map(r => r.slug);
+  if (slugs.length === 0) return [];
+
+  const holders = await holdersOf(adapter, db, slugs);
+  const planned: PlannedLabel[] = [];
+  for (const slug of slugs) {
+    const label = labelFrom(holders, slug);
+    if (label === undefined) continue;
+    planned.push({
+      kind: label.kind,
+      where: and(
+        unknown,
+        eq(archive.collection, slug),
+        ownedSince(adapter.dialect, archive.archivedAt, label.createdAt)
+      ),
+    });
+  }
+  // Every row this pass did not label stays without an owner, decided now rather than later.
+  planned.push({ kind: UNRESOLVED_ARCHIVE_KIND, where: unknown });
+  return planned;
+}
+
 /**
  * Settles the unknown rows: those whose owner the registries identify get its kind, and the rest
  * become unresolved. Idempotent: it reads and writes only rows still unknown, so it can run before
@@ -209,35 +290,42 @@ export async function labelLegacyArchiveRows(
   const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
     adapter.dialect
   );
-  const unknown = eq(archive.entityKind, UNKNOWN_ARCHIVE_KIND);
-  const slugs = (
-    (await db
-      .selectDistinct({ slug: archive.collection })
-      .from(archive)
-      .where(unknown)) as { slug: string }[]
-  ).map(r => r.slug);
-  if (slugs.length === 0) return;
-
-  const holders = await holdersOf(adapter, db, slugs);
-  for (const slug of slugs) {
-    const found = holders.get(slug) ?? [];
-    if (found.length !== 1) continue;
-    const [{ kind, createdAt }] = found;
-    await db
-      .update(archive)
-      .set({ entityKind: kind })
-      .where(
-        and(
-          unknown,
-          eq(archive.collection, slug),
-          // Rows archived before the entity existed belong to whatever held the slug then.
-          sql`${archivedEpoch(adapter.dialect, archive.archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) + creationMargin(adapter.dialect)}`
-        )
-      );
+  // In order: each slug's own rows first, then every row left unknown.
+  for (const { kind, where } of await planLegacyArchiveLabels(adapter)) {
+    await db.update(archive).set({ entityKind: kind }).where(where);
   }
-  // Every row this pass did not label stays without an owner, decided now rather than later.
-  await db
-    .update(archive)
-    .set({ entityKind: UNRESOLVED_ARCHIVE_KIND })
-    .where(unknown);
+}
+
+/**
+ * How many rows `labelLegacyArchiveRows` would give each kind, counted from its own plan and
+ * written nowhere; kinds it would give no row are left out. `kindColumn: false` counts for an
+ * archive older than the kind, whose rows all become unknown once the column is added.
+ */
+export async function countLegacyArchiveLabels(
+  adapter: LabelArchiveAdapter,
+  options: { kindColumn?: boolean } = {}
+): Promise<{ kind: string; rows: number }[]> {
+  const db = adapter.getDrizzle<LabelDb>();
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  const counts = new Map<string, number>();
+  let labelled = 0;
+  for (const { kind, where } of await planLegacyArchiveLabels(
+    adapter,
+    options
+  )) {
+    const [row] = (await db
+      .select({ n: count() })
+      .from(archive)
+      .where(where)) as { n: number | string }[];
+    // The last step labels what the steps before it left unknown.
+    const rows =
+      kind === UNRESOLVED_ARCHIVE_KIND
+        ? Number(row?.n ?? 0) - labelled
+        : Number(row?.n ?? 0);
+    if (kind !== UNRESOLVED_ARCHIVE_KIND) labelled += rows;
+    if (rows > 0) counts.set(kind, (counts.get(kind) ?? 0) + rows);
+  }
+  return [...counts].map(([kind, rows]) => ({ kind, rows }));
 }

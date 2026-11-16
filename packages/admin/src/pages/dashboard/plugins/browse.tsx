@@ -11,6 +11,7 @@
  * @module pages/dashboard/plugins/browse
  */
 
+import { PageHeader } from "@nextlyhq/ui";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, useMemo, useState } from "react";
@@ -213,13 +214,10 @@ const PluginBrowsePage: React.FC = () => (
         className="mb-6"
       />
 
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold tracking-tight">Browse plugins</h1>
-        <p className="mt-1 text-sm font-normal text-muted-foreground">
-          Plugins published by Nextly. Adding one is a dependency and a line in
-          your Nextly config, so open a plugin to get both.
-        </p>
-      </div>
+      <PageHeader
+        title="Browse plugins"
+        description="Plugins published by Nextly. Adding one is a dependency and a line in your Nextly config, so open a plugin to get both."
+      />
 
       <Suspense
         fallback={

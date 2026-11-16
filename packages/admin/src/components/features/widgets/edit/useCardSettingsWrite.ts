@@ -1,19 +1,22 @@
 "use client";
 
 /**
- * Saving one card's settings at once, outside customise mode: the quick setting on the card,
- * and the settings sheet's Done when the reader is not customising.
+ * Saving one change to one card at once, outside customise mode: its settings (the quick setting
+ * on the card's header, and the settings drawer's Save when the reader is not customising), with
+ * its width where the drawer changed it.
  *
  * The same single-card write a dismissal makes (`single-card-write`), on its own channel: the
- * whole arrangement with this card's settings changed, under the read's own version and scope,
- * sent as not arranged so the reader keeps following the default. A write raced against
- * another tab is refused, the dashboard is read again, and the reader is told nothing was
- * saved; it is not retried, because the change it carried was made against a dashboard that
- * has since moved.
+ * whole arrangement with this one card changed, under the read's own version and scope, sent as
+ * not arranged so the reader keeps following the default. It is the request customise mode's
+ * Save sends for the same change, through the same server write, apart from that flag. A write
+ * raced against another tab is refused, the dashboard is read again, and the reader is told
+ * nothing was saved; it is not retried, because the change it carried was made against a
+ * dashboard that has since moved.
  *
  * @module components/features/widgets/edit/useCardSettingsWrite
  */
 
+import type { GridSize, WidgetSizeBounds } from "nextly/config";
 import { useCallback } from "react";
 
 import { toast } from "@admin/components/ui";
@@ -21,18 +24,37 @@ import {
   isConflictError,
   type UseDashboardLayoutResult,
 } from "@admin/hooks/queries/useDashboardLayout";
+import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
-import { setPlacementConfig } from "../layout-editor";
+import { setPlacementConfig, setPlacementSize } from "../layout-editor";
 
 import { sameSettingValue } from "./content-settings";
 import { landed, singleCardWrite } from "./single-card-write";
+
+/**
+ * One change to one card: its settings, as `toStoredConfig` builds them (only what departs from
+ * a default), and, where the change sets them, its own title and its size, held to its widget's
+ * bounds as customise mode's resize is.
+ */
+export interface CardChange {
+  readonly config: Record<string, unknown>;
+  /**
+   * The title the reader gave the card, where the change sets it: the settings drawer's Title.
+   * Absent, the card keeps the title it has.
+   */
+  readonly ownTitle?: string;
+  /** The card's size, where the change sets it: the settings drawer's Width. */
+  readonly size?: {
+    readonly size: GridSize;
+    readonly bounds: WidgetSizeBounds;
+  };
+}
 
 export interface CardSettingsWriteInput {
   placementId: string;
   /** The card's title, for what the reader is told. */
   title: string;
-  /** The settings to store, as `toStoredConfig` builds them: only what departs from a default. */
-  config: Record<string, unknown>;
+  change: CardChange;
 }
 
 export interface CardSettingsWriteCallbacks {
@@ -74,6 +96,44 @@ const BUSY =
   "Another change to your dashboard is still saving. Try again in a moment.";
 const GONE = (title: string) =>
   `${title} is no longer on your dashboard, so its settings were not saved.`;
+const OUT_OF_BOUNDS = (title: string) =>
+  `${title} can't be that size, so it was not resized.`;
+
+/**
+ * `change` applied to the stored list, and how the card in it shows the change. The list is
+ * changed by the customise editor's own functions, so a change saved at once is the change
+ * customise mode would stage for Save.
+ */
+function applied(
+  placements: readonly WidgetPlacement[],
+  placementId: string,
+  change: CardChange
+): {
+  placements: WidgetPlacement[];
+  shows: (placement: WidgetPlacement) => boolean;
+} {
+  const configured = setPlacementConfig(
+    placements,
+    placementId,
+    change.config,
+    change.ownTitle
+  );
+  const { size } = change;
+  return {
+    placements:
+      size === undefined
+        ? configured
+        : setPlacementSize(configured, placementId, size.size, size.bounds),
+    // Compared by value: the settings come back from the server as a new object. The title as
+    // the write stores it, trimmed, absent when nothing is left.
+    shows: placement =>
+      sameSettingValue(placement.config ?? {}, change.config) &&
+      (change.ownTitle === undefined ||
+        (placement.title ?? "") === change.ownTitle.trim()) &&
+      (size === undefined ||
+        (placement.w === size.size.w && placement.h === size.size.h)),
+  };
+}
 
 /** Why a card's settings cannot be written from this layout, or `undefined` when they can. */
 function unavailableFor(layout: UseDashboardLayoutResult): string | undefined {
@@ -110,42 +170,39 @@ export function useCardSettingsWrite(
         fail(BUSY);
         return;
       }
+      const next = applied(stored.placements, input.placementId, input.change);
       if (!stored.placements.some(p => p.id === input.placementId)) {
         fail(GONE(input.title));
+        return;
+      }
+      // A size outside the widget's bounds leaves the list as it was (`setPlacementSize`), and
+      // a write of an unchanged list would be reported as one that did not show.
+      const drawn = next.placements.find(p => p.id === input.placementId);
+      if (drawn === undefined || !next.shows(drawn)) {
+        fail(OUT_OF_BOUNDS(input.title));
         return;
       }
 
       // Cleared before the attempt, so a retry that succeeds does not leave a failure reported.
       layout.cardSettings.reset();
-      layout.cardSettings.mutate(
-        singleCardWrite(
-          stored,
-          setPlacementConfig(stored.placements, input.placementId, input.config)
-        ),
-        {
-          onSuccess: () => {
-            // Compared by value: the settings come back from the server as a new object.
-            if (
-              !landed(layout, input.placementId, p =>
-                sameSettingValue(p.config ?? {}, input.config)
-              )
-            ) {
-              fail(REFRESH_FAILED(input.title));
-              return;
-            }
-            callbacks?.onLanded?.();
-          },
-          onError: error => {
-            if (isConflictError(error)) {
-              // Read again, so the next change is made against the dashboard as it now is.
-              void layout.reload();
-              fail(CONFLICT(input.title));
-              return;
-            }
-            fail(FAILED(input.title, error.message));
-          },
-        }
-      );
+      layout.cardSettings.mutate(singleCardWrite(stored, next.placements), {
+        onSuccess: () => {
+          if (!landed(layout, input.placementId, next.shows)) {
+            fail(REFRESH_FAILED(input.title));
+            return;
+          }
+          callbacks?.onLanded?.();
+        },
+        onError: error => {
+          if (isConflictError(error)) {
+            // Read again, so the next change is made against the dashboard as it now is.
+            void layout.reload();
+            fail(CONFLICT(input.title));
+            return;
+          }
+          fail(FAILED(input.title, error.message));
+        },
+      });
     },
     [layout]
   );

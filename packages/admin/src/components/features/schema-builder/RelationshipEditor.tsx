@@ -181,7 +181,9 @@ export function RelationshipEditor({
       <div className="flex items-center gap-2">
         <Icons.Link2 className="h-4 w-4 text-muted-foreground" />
         <Label className="text-xs font-medium">
-          Relationship Configuration
+          {/* "Settings": the options header above already names the type
+              in its plain words, and every Builder label is in sentence case. */}
+          Settings
         </Label>
       </div>
 
@@ -216,6 +218,7 @@ export function RelationshipEditor({
                     <span className="text-xs">{collection?.label || slug}</span>
                     <button
                       type="button"
+                      aria-label={`Remove ${collection?.label || slug}`}
                       onClick={() => handleRemoveCollection(slug)}
                       className="ml-0.5 rounded-md p-0.5 hover-subtle-row"
                     >
@@ -250,6 +253,7 @@ export function RelationshipEditor({
                 <div className="relative">
                   <Icons.Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
+                    aria-label="Search collections"
                     value={collectionSearch}
                     onChange={e => setCollectionSearch(e.target.value)}
                     placeholder="Search collections..."
@@ -321,11 +325,12 @@ export function RelationshipEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Multiple"
+              label="Allow multiple"
               description="Reference multiple documents"
             />
           </div>
           <Switch
+            aria-label="Allow multiple"
             checked={hasMany || false}
             onCheckedChange={onHasManyChange}
           />
@@ -336,8 +341,8 @@ export function RelationshipEditor({
           <FormLabelWithTooltip
             htmlFor="max-depth"
             className="text-xs font-medium"
-            label="Max Population Depth"
-            description="How deep to populate nested relationships (0-10)"
+            label="Max population depth"
+            description="How deep to populate linked entries (0-10)"
           />
           <Input
             id="max-depth"
@@ -359,7 +364,7 @@ export function RelationshipEditor({
       {/* Admin Options */}
       <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          Admin Options
+          Admin options
         </Label>
 
         {/* PR E3: Appearance picker shape. "select" = inline picker
@@ -376,6 +381,8 @@ export function RelationshipEditor({
             <div className="inline-flex divide-x divide-border rounded-sm border border-border overflow-hidden">
               <button
                 type="button"
+                // aria-pressed says which one is chosen, which the fill alone does not.
+                aria-pressed={(appearance ?? "select") === "select"}
                 onClick={() => onAppearanceChange("select")}
                 className={`px-3 py-1 text-xs ${
                   (appearance ?? "select") === "select"
@@ -387,6 +394,7 @@ export function RelationshipEditor({
               </button>
               <button
                 type="button"
+                aria-pressed={appearance === "drawer"}
                 onClick={() => onAppearanceChange("drawer")}
                 className={`px-3 py-1 text-xs ${
                   appearance === "drawer"
@@ -405,11 +413,12 @@ export function RelationshipEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Create"
+              label="Allow create"
               description="Create new documents from this field"
             />
           </div>
           <Switch
+            aria-label="Allow create"
             checked={allowCreate !== false}
             onCheckedChange={onAllowCreateChange}
           />
@@ -420,11 +429,12 @@ export function RelationshipEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Edit"
+              label="Allow edit"
               description="Edit related documents from this field"
             />
           </div>
           <Switch
+            aria-label="Allow edit"
             checked={allowEdit !== false}
             onCheckedChange={onAllowEditChange}
           />
@@ -441,6 +451,7 @@ export function RelationshipEditor({
               />
             </div>
             <Switch
+              aria-label="Sortable"
               checked={isSortable !== false}
               onCheckedChange={onIsSortableChange}
             />
@@ -453,7 +464,7 @@ export function RelationshipEditor({
         <div className="flex items-center justify-between">
           <FormLabelWithTooltip
             className="text-xs font-medium"
-            label="Filter Options"
+            label="Filter options"
             description="Limit available documents by a field value"
           />
           {filterOptions && (
@@ -476,12 +487,14 @@ export function RelationshipEditor({
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Input
+                aria-label="Filter field"
                 value={filterOptions.field || ""}
                 onChange={e => handleFilterUpdate({ field: e.target.value })}
                 placeholder="Field name"
                 className="h-8 text-sm font-mono"
               />
               <Input
+                aria-label="Filter value"
                 value={filterOptions.equals || ""}
                 onChange={e => handleFilterUpdate({ equals: e.target.value })}
                 placeholder="equals value"
@@ -501,7 +514,7 @@ export function RelationshipEditor({
             onClick={() => handleFilterUpdate({ field: "", equals: "" })}
           >
             <Icons.Settings className="h-3 w-3 mr-1" />
-            Add Filter
+            Add filter
           </Button>
         )}
       </div>

@@ -96,12 +96,17 @@ function declaredSources(css: string): string[] {
 }
 
 function scannedRoots(): string[] {
-  const declared = declaredSources(readFileSync(GLOBALS_CSS, "utf8"));
+  const css = readFileSync(GLOBALS_CSS, "utf8");
+  const declared = declaredSources(css).map(spec =>
+    resolve(dirname(GLOBALS_CSS), spec)
+  );
+  // With automatic detection on, Tailwind also reads the package it runs in,
+  // whose source is the admin's own; with `source(none)` only what is declared.
+  const automatic = !/@import\s+["']tailwindcss["']\s+source\(none\)/.test(css);
 
   return [
-    ADMIN_SRC,
-    ...declared.map(spec => resolve(dirname(GLOBALS_CSS), spec)),
-  ].map(toPosix);
+    ...new Set([...(automatic ? [ADMIN_SRC] : []), ...declared].map(toPosix)),
+  ];
 }
 
 /** Every `.ts`/`.tsx` under `root`, as absolute paths. */
@@ -176,12 +181,12 @@ const HORIZONTAL_CANCEL = /(?:^|[\s:"'`{(,!])-mx?-8\b/;
 
 describe("a measured entry page", () => {
   it("reads every tree the build reads", () => {
-    // Four trees, not one: the admin's own source plus `@nextlyhq/ui` and both
-    // plugin admin trees, which `globals.css` pulls in so a utility used only
-    // there is not dropped from the build. A class in any of them reaches the
-    // same stylesheet.
+    // Five trees, not one: the admin's own source plus `@nextlyhq/ui` and the
+    // three first-party plugin admin trees, which `globals.css` pulls in so a
+    // utility used only there is not dropped from the build. A class in any of
+    // them reaches the same stylesheet.
     const roots = scannedRoots();
-    expect(roots).toHaveLength(4);
+    expect(roots).toHaveLength(5);
     expect(roots.some(r => r.endsWith("packages/ui/src"))).toBe(true);
 
     const files = sourceFiles();

@@ -29,6 +29,7 @@ const { registerComponentReadinessNotice, COMPONENTS_NOT_PUBLISHED_CODE } =
   await import("./component-readiness-hook");
 
 const COMPONENTS = "nx_pb_components";
+const LAYOUTS = "nx_pb_layouts";
 const LIMITS = { maxDepth: 12, maxNodes: 5000, maxBytes: 2_097_152 };
 
 const doc = (componentIds: string[]) => ({
@@ -99,6 +100,7 @@ function harness(
     ctx: ctx as never,
     componentCollection: COMPONENTS,
     componentField: "content",
+    layoutCollection: LAYOUTS,
     limits: () => LIMITS,
   });
   const nextly = {
@@ -168,6 +170,54 @@ describe("the publish-readiness notice", () => {
     expect((recorded[0] as { message: string }).message).toContain(
       "1 component"
     );
+  });
+
+  it("reports a published Layout whose areas place a component that is not live", async () => {
+    // A Layout names its area components in a repeater, not a blocks field,
+    // so reading blocks fields alone says nothing about the header every page
+    // inside it will miss.
+    const h = harness({ published: ["footer"] });
+    const ctx = writeContext({
+      collection: LAYOUTS,
+      data: {
+        id: "l1",
+        status: "published",
+        areas: [
+          { area: "header", component: "hero" },
+          { area: "footer", component: { id: "footer" } },
+        ],
+      },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      code: COMPONENTS_NOT_PUBLISHED_CODE,
+      collection: LAYOUTS,
+      entryId: "l1",
+    });
+    expect((recorded[0] as { message: string }).message).toBe(
+      "This Layout embeds 1 component that is not published, so it will not appear for visitors."
+    );
+  });
+
+  it("says nothing about a published Layout whose area components are live", async () => {
+    const h = harness({ published: ["hero"] });
+    const ctx = writeContext({
+      collection: LAYOUTS,
+      data: {
+        id: "l1",
+        status: "published",
+        areas: [{ area: "header", component: "hero" }],
+      },
+    });
+    (ctx.req as Record<string, unknown>).nextly = h.nextly;
+
+    await h.handlers[0]!(ctx);
+
+    expect(recorded).toEqual([]);
   });
 
   it("says nothing when every embedded component is live", async () => {
@@ -495,13 +545,10 @@ describe("the store the notice judges a page against", () => {
 });
 
 describe("asking the resolver rather than walking stored nodes", () => {
-  it("does NOT report a condition-gated instance", async () => {
-    // The discriminating case for the whole approach. A gated instance is a
-    // node the walk reports and the resolver never asks for, so a check built
-    // on a walk warns about a component no visitor encounters — and this is
-    // the exact disagreement the renderer's own discovery was written to
-    // delete. Reported here, it would be a warning about a page that renders
-    // correctly.
+  it("reports a condition-gated instance, which shows wherever its conditions hold", async () => {
+    // A placement's conditions are decided once the page is read, so the
+    // renderer composes a gated instance like any other: a visitor its
+    // conditions admit meets the same hole, and the author is told.
     const h = harness({ published: [] });
     const ctx = writeContext({
       data: {
@@ -528,11 +575,13 @@ describe("asking the resolver rather than walking stored nodes", () => {
 
     await h.handlers[0]!(ctx);
 
-    expect(recorded).toEqual([]);
-    // The stronger half: the store was never even ASKED about it. A walk-based
-    // check would have queried for `hero` and then reported it, so an empty
-    // query log is what separates asking the resolver from asking a traversal.
-    expect(h.finds).toEqual([]);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      code: COMPONENTS_NOT_PUBLISHED_CODE,
+    });
+    // Asked of the store, as the render's own discovery asks.
+    expect(h.finds).toHaveLength(1);
+    expect(h.finds[0]).toMatchObject({ where: { id: { in: ["hero"] } } });
   });
 
   it("reads only the component field the renderer reads", async () => {

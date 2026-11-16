@@ -6,9 +6,9 @@
  * it holds. MySQL commits each schema statement as it runs, so by then the statements before the
  * refused one have been applied. These are asked of the live table first, on every dialect so the
  * refusal reads the same everywhere, and a save that would fail is refused naming the field and
- * the entries in the way, with nothing changed. (A field made required over entries that hold no
- * value, and a required field added with nothing to give existing entries, are refused by the ALTER
- * generator, which already reads the live table for them.)
+ * the entries in the way, with nothing changed. A field made required over entries that hold no
+ * value, and a required field added with nothing to give existing entries, are counted here too
+ * when the caller names the entity (`requiredColumns`), so the refusal names it and the count.
  *
  * @module domains/dynamic-collections/services/save-preconditions
  */
@@ -16,10 +16,15 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { ValidationPublicData } from "../../../errors/public-data";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { RequiredColumnEntity } from "../../schema/required-column-refusal";
+import { requiredColumnSaveRefusals } from "../../schema/required-column-save-refusals";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
+
+import { builderColumnIsUnique } from "./dynamic-collection-schema-service";
 
 type Refusal = ValidationPublicData["errors"][number];
 
@@ -78,6 +83,8 @@ export async function refusalsForCollectionSave(args: {
   newFields: readonly FieldDefinition[];
   /** A renamed field, which keeps its column and its values. */
   rename?: { from: FieldDefinition; to: FieldDefinition } | null;
+  /** Further renamed fields, where a save carries several the admin accepted. */
+  renames?: readonly { from: FieldDefinition; to: FieldDefinition }[];
   addedColumnBackfill: (field: FieldDefinition) => string | null;
   /**
    * The columns the live table has. Outside development a save writes its migration without
@@ -85,14 +92,37 @@ export async function refusalsForCollectionSave(args: {
    * no entries to check yet, and reading its column would fail.
    */
   presentColumns: ReadonlySet<string>;
+  /** The entity the table belongs to, and its Drizzle handle: asks the required-column count. */
+  requiredColumns?: { db: unknown; entity: RequiredColumnEntity };
+  /**
+   * Ask only whether a column the save makes unique holds values that repeat. The push road's
+   * apply narrows other columns and fills required ones by its own preconditions, and asks this
+   * one question here so both roads answer it alike.
+   */
+  only?: "uniqueness";
+  /**
+   * The columns the live table already keeps unique, where the caller read them. A column is made
+   * unique by this save when its field asks for it and the table does not already hold it: a
+   * one-to-one an earlier release added by an edit was recorded as one-to-one but given no unique
+   * index, so its definition alone does not say the table enforces it. Without this, the field's
+   * previous definition decides.
+   */
+  liveUniqueColumns?: ReadonlySet<string>;
 }): Promise<SaveRefusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
-  const before = new Map(args.oldFields.map(f => [f.name, f]));
+  // The fields whose columns sit on the row, those inside a group with no name among them, as the
+  // migration this guards reads them (`fieldsStoredOnRow`): the group has no column of its own.
+  const oldFields = fieldsStoredOnRow(args.oldFields);
+  const newFields = fieldsStoredOnRow(args.newFields);
+  const before = new Map(oldFields.map(f => [f.name, f]));
+  const renamed = [
+    ...(args.rename ? [args.rename] : []),
+    ...(args.renames ?? []),
+  ];
   const previousOf = (field: FieldDefinition) =>
-    args.rename?.to.name === field.name
-      ? args.rename.from
-      : before.get(field.name);
+    renamed.find(rename => rename.to.name === field.name)?.from ??
+    before.get(field.name);
   let rowCount: number | undefined;
   const rows = async () => {
     rowCount ??= Number(
@@ -106,7 +136,7 @@ export async function refusalsForCollectionSave(args: {
   };
 
   const refusals: SaveRefusal[] = [];
-  for (const field of args.newFields) {
+  for (const field of newFields) {
     const column = getColumnDescriptor(field, dialect, "collection");
     if (!column) continue;
     const previous = previousOf(field);
@@ -117,6 +147,18 @@ export async function refusalsForCollectionSave(args: {
       ...(await fieldRefusals(field, previous, quote(dialect, held), column))
     );
   }
+  // Fields made required over rows holding no value, each named with the entity and the count.
+  if (args.requiredColumns && args.only === undefined)
+    refusals.push(
+      ...(
+        await requiredColumnSaveRefusals({
+          ...args,
+          newFields,
+          ...args.requiredColumns,
+          previousOf,
+        })
+      ).map(error => ({ error }))
+    );
   return refusals;
 
   /**
@@ -130,19 +172,35 @@ export async function refusalsForCollectionSave(args: {
     col: string,
     column: { length?: number }
   ): Promise<SaveRefusal[]> {
+    // Unique by its mark or, for a relationship the Builder stored as one-to-one, by its
+    // cardinality: one rule, so a relationship becoming one-to-one is asked as a field marked
+    // unique is.
     const unique =
-      field.unique === true && previous?.unique !== true
+      builderColumnIsUnique(field) && !alreadyUnique(previous)
         ? await uniqueRefusal({ field, previous, col })
         : undefined;
-    const length = await lengthRefusal({
-      field,
-      previous,
-      col,
-      length: column.length,
-    });
+    const length =
+      args.only === undefined
+        ? await lengthRefusal({
+            field,
+            previous,
+            col,
+            length: column.length,
+          })
+        : undefined;
     return [unique, length].filter(
       (refusal): refusal is SaveRefusal => refusal !== undefined
     );
+  }
+
+  /** Whether the column is unique before this save: as the live table holds it, where read. */
+  function alreadyUnique(previous: FieldDefinition | undefined): boolean {
+    if (previous === undefined) return false;
+    const held = heldColumn(previous, dialect);
+    if (args.liveUniqueColumns !== undefined && held !== undefined) {
+      return args.liveUniqueColumns.has(held);
+    }
+    return builderColumnIsUnique(previous);
   }
 
   async function uniqueRefusal(at: {
@@ -167,29 +225,41 @@ export async function refusalsForCollectionSave(args: {
           })
         : undefined;
     }
+    // How many values repeat, and how many entries share the commonest of them: never the values,
+    // which are stored content. An entry holding no value (NULL) never repeats; a unique index
+    // leaves those free on every dialect.
     const [repeat] = await adapter.executeQuery<{
       n: number | string;
+      most: number | string | null;
     }>(
-      // Only how many share the commonest repeated value: the value itself is never read.
-      `SELECT COUNT(*) AS n FROM ${table} WHERE ${at.col} IS NOT NULL ` +
-        `GROUP BY ${at.col} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
+      `SELECT COUNT(*) AS n, MAX(c) AS most FROM (SELECT COUNT(*) AS c FROM ${table} ` +
+        `WHERE ${at.col} IS NOT NULL GROUP BY ${at.col} HAVING COUNT(*) > 1) repeated`
     );
+    const repeated = Number(repeat?.n ?? 0);
+    if (repeated === 0) return undefined;
+    const most = Number(repeat?.most ?? 0);
     // The repeated value is stored content, which someone who may edit the schema need not be
     // allowed to read, so neither the message nor the log carries it.
-    return repeat
-      ? refused(
-          {
-            path,
-            code: "UNIQUE_OVER_DUPLICATES",
-            message:
-              `${entries(Number(repeat.n))} share a value for ${at.field.name}, which must be unique. ` +
+    return refused(
+      {
+        path,
+        code: "UNIQUE_OVER_DUPLICATES",
+        message:
+          at.field.type === "relationship"
+            ? // A relationship made unique is one-to-one: each entry points at its own target.
+              `"${at.field.name}" can't become one-to-one: ${repeated === 1 ? "1 target is" : `${repeated} targets are`} each pointed at by more than one entry. ` +
+              `Point each entry at its own target, or clear the repeats, then make it one-to-one.`
+            : `${entries(most)} share a value for ${at.field.name}, which must be unique. ` +
               `Give them their own values first, then turn Unique on.`,
-          },
-          // The field and how many entries share a value, never the value: logs are kept and
-          // read more widely than the table, and the value may be a secret.
-          { field: at.field.name, entriesSharingAValue: Number(repeat.n) }
-        )
-      : undefined;
+      },
+      // The field and how many values repeat, never the values: logs are kept and read more
+      // widely than the table, and a value may be a secret.
+      {
+        field: at.field.name,
+        valuesRepeated: repeated,
+        entriesSharingAValue: most,
+      }
+    );
   }
 
   async function lengthRefusal(at: {

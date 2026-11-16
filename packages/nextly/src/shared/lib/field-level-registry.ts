@@ -26,6 +26,8 @@
  * @module shared/lib/field-level-registry
  */
 
+import type { VisitorActor } from "../../auth/access/actor";
+import { actorForVisitor } from "../../auth/access/resolve-actor";
 import {
   buildRuleContext,
   type HeldPermission,
@@ -41,10 +43,15 @@ import {
 } from "../../auth/principal-scope";
 import type { RequestContext } from "../../collections/fields/types/base";
 import { NextlyError } from "../../errors/nextly-error";
+import {
+  ruleCouldNotRun,
+  waitedOutPoolBound,
+} from "../../errors/rule-could-not-run";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
+import { immutableSystemColumnNames } from "../../lib/system-columns";
 import {
   listEffectiveGrants,
   listRoleSlugsForUser,
@@ -77,6 +84,22 @@ export interface CallerGrants {
 }
 
 /**
+ * Where a visitor's Public grants are read, handed the executor the caller's
+ * own lookups read on (a transaction's, or none for the pool).
+ *
+ * Absent, they are read through the global container, the process's cached
+ * copy. A service holding a database of its own with no access-control
+ * service passes one reading that database, as its collection gate does, so
+ * a field rule and the gate above it are handed one Public role: the
+ * container may be missing in such a setup, or filled for another instance.
+ */
+export type VisitorGrantsLoader = (executor?: unknown) => Promise<VisitorActor>;
+
+/** The process's Public role: the default {@link VisitorGrantsLoader}. */
+const processVisitor: VisitorGrantsLoader = executor =>
+  actorForVisitor({ executor });
+
+/**
  * Resolve the caller's grants once, on the first rule that actually runs.
  *
  * Field access is evaluated on every authenticated write and read, and most
@@ -89,9 +112,21 @@ export interface CallerGrants {
 function grantsResolver(
   userId: string | undefined,
   scope?: AuthenticatedScope,
-  executor?: unknown
+  executor?: unknown,
+  visitor: VisitorGrantsLoader = processVisitor
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
+  // A lookup that rejects is forgotten once it settles, so the next rule asks
+  // again rather than being handed the failure: a lookup that waited out the
+  // bound for a database connection ends its request, and a retry is judged
+  // afresh. Only the rules already awaiting it share the rejection.
+  const remembered = (lookup: Promise<CallerGrants>) => {
+    pending = lookup;
+    lookup.catch(() => {
+      if (pending === lookup) pending = undefined;
+    });
+    return lookup;
+  };
   return () => {
     if (pending) return pending;
     // A scoped API key is judged on the grants stamped on the KEY. `userId`
@@ -117,19 +152,32 @@ function grantsResolver(
       return pending;
     }
     if (!userId) {
-      pending = Promise.resolve({ permissions: [], roles: [] });
-      return pending;
+      // A plugin's person holds no role and no permission. A visitor (no
+      // user, no person) holds what the Public role grants, read through the
+      // same actor the collection and Single rules are handed, so a field
+      // rule and the rule above it answer a visitor alike, from the database
+      // `visitor` reads. A read of Public that fails rejects, and the rule is
+      // denied as a user's would be.
+      return remembered(
+        currentPrincipal() !== null
+          ? Promise.resolve({ permissions: [], roles: [] })
+          : visitor(executor).then(actor => ({
+              permissions: actor.permissions,
+              roles: [],
+            }))
+      );
     }
-    pending = Promise.all([
-      listEffectiveGrants(userId, executor),
-      listRoleSlugsForUser(userId, executor),
-    ])
-      // A lookup that fails rejects, and every rule awaiting it is denied by
-      // its own guard (`runFieldRule`). Not an empty grant set: that denies
-      // a rule asking for a role or a permission, and allows one asking for
-      // the absence of one.
-      .then(([permissions, roles]) => ({ permissions, roles }));
-    return pending;
+    return remembered(
+      Promise.all([
+        listEffectiveGrants(userId, executor),
+        listRoleSlugsForUser(userId, executor),
+      ])
+        // A lookup that fails rejects, and every rule awaiting it is denied
+        // by its own guard (`runFieldRule`). Not an empty grant set: that
+        // denies a rule asking for a role or a permission, and allows one
+        // asking for the absence of one.
+        .then(([permissions, roles]) => ({ permissions, roles }))
+    );
   };
 }
 
@@ -273,7 +321,7 @@ function extractFieldFunctions(
  * could read the result, a field reached through an unnamed repeater is
  * indistinguishable from one reached through an unnamed group.
  */
-function storedAtThisLevel(container: { type?: unknown }): boolean {
+export function storedAtThisLevel(container: { type?: unknown }): boolean {
   return container.type === "group";
 }
 
@@ -490,6 +538,35 @@ export function hasFieldAccessRule(
 }
 
 /**
+ * Whether any field of this entity declares a hook for one phase, at any
+ * depth.
+ *
+ * Asked by a read deciding whether it may take fewer columns than the whole
+ * row: a field hook is handed the row its field sits in, so it may read a
+ * sibling the caller did not select, and such a read has to take every value
+ * a hook could look at.
+ */
+export function hasFieldHook(
+  kind: EntityKind,
+  slug: string,
+  phase: keyof NonNullable<FieldFunctions["hooks"]>
+): boolean {
+  const fns = getFieldFunctions(kind, slug);
+  return fns ? nestedHasHook(fns, phase) : false;
+}
+
+function nestedHasHook(
+  fns: Record<string, FieldFunctions>,
+  phase: keyof NonNullable<FieldFunctions["hooks"]>
+): boolean {
+  for (const entry of Object.values(fns)) {
+    if ((entry.hooks?.[phase]?.length ?? 0) > 0) return true;
+    if (entry.fields && nestedHasHook(entry.fields, phase)) return true;
+  }
+  return false;
+}
+
+/**
  * Whether any field group declares an access rule for one operation, at any
  * depth.
  *
@@ -563,9 +640,16 @@ async function fieldRuleAllows(
   fn: FieldAccessFn,
   operation: FieldRuleOperation,
   ctx: FieldRuleCaller,
-  snapshot: Record<string, unknown> | undefined
+  snapshot: Record<string, unknown> | undefined,
+  field: string
 ): Promise<boolean> {
-  return runFieldRule(fn, operation, ctx, { id: ctx.id, data: snapshot });
+  return runFieldRule(
+    fn,
+    operation,
+    ctx,
+    { id: ctx.id, data: snapshot },
+    field
+  );
 }
 
 /** What a field rule may be asked: the field operations alone. */
@@ -573,7 +657,8 @@ type FieldRuleOperation = "create" | "read" | "update";
 
 /**
  * Call a field rule with the caller's grants and the entry fields given, and
- * read its answer; a rule that throws denies (fail-secure).
+ * read its answer; a rule that throws denies (fail-secure), except one that
+ * could not reach the database, which ends the request (`ruleCouldNotRun`).
  *
  * `entry` is spread into the arguments, so a caller may pass accessors in
  * place of values and observe whether the rule reads them.
@@ -582,7 +667,9 @@ async function runFieldRule(
   fn: FieldAccessFn,
   operation: FieldRuleOperation,
   ctx: Omit<FieldRuleCaller, "id">,
-  entry: Pick<AccessRuleContext, "id" | "data">
+  entry: Pick<AccessRuleContext, "id" | "data">,
+  /** The field the rule guards, where the caller knows it, to name it. */
+  field?: string
 ): Promise<boolean> {
   // A literal answers before the grants are resolved: it reads neither them
   // nor the entry, so resolving them would be a lookup with no question.
@@ -593,7 +680,6 @@ async function runFieldRule(
     const userId = ctx.user?.id;
     const email = ctx.user?.email;
     const args = buildRuleContext(
-      fn,
       {
         user:
           typeof userId === "string"
@@ -612,7 +698,19 @@ async function runFieldRule(
       entry
     );
     return await fn(args);
-  } catch {
+  } catch (error) {
+    // A rule whose own query, or the caller's grants it reads, waited out the
+    // bound for a database connection never answered: the field is neither
+    // shown nor hidden, and the whole request ends naming the rule, rather
+    // than returning the document with the field silently withheld.
+    if (waitedOutPoolBound(error)) {
+      throw ruleCouldNotRun({
+        subject: ctx.target.slug,
+        ...(field !== undefined ? { field } : {}),
+        rule: `the field ${operation} rule`,
+        cause: error,
+      });
+    }
     // Fail-secure: an access rule that throws denies the field.
     return false;
   }
@@ -684,16 +782,18 @@ async function applyWriteAccessRec(
   data: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update",
-  ctx: FieldRuleCaller
+  ctx: FieldRuleCaller,
+  asStored?: (snapshot: Record<string, unknown>) => Record<string, unknown>
 ): Promise<void> {
   // Taken BEFORE the recursion below, which rewrites nested containers in
   // place as it redacts them: a rule at this level that reads into a nested
   // value must see what the level held when it was entered, not what an
   // earlier-registered field's recursion left behind. Skipped entirely when no
   // rule at this level will run.
-  const snapshot = levelHasAccessCallback(fns, operation)
+  const detached = levelHasAccessCallback(fns, operation)
     ? detachData(data)
     : undefined;
+  const snapshot = detached && asStored ? asStored(detached) : detached;
   const denied: string[] = [];
   for (const [name, entry] of Object.entries(fns)) {
     if (!(name in data)) continue;
@@ -704,7 +804,7 @@ async function applyWriteAccessRec(
     }
     const fn = entry.access?.[operation];
     if (!fn) continue;
-    const allowed = await fieldRuleAllows(fn, operation, ctx, snapshot);
+    const allowed = await fieldRuleAllows(fn, operation, ctx, snapshot, name);
     if (!allowed) denied.push(name);
   }
   for (const name of denied) delete data[name];
@@ -725,6 +825,11 @@ export async function applyFieldWriteAccess(opts: {
   /** The caller's own grants when they arrived on an API key; see {@link grantsResolver}. */
   authenticatedScope?: AuthenticatedScope;
   overrideAccess?: boolean;
+  /**
+   * The id the entry is stored under, which a rule is told as `id` and finds
+   * as `data.id`: the stored row's on an update, never the one the request
+   * named, which a database matching ids loosely may have found it by.
+   */
   id?: string;
   /**
    * A resolver shared with another pass over the same write, so the caller's
@@ -733,6 +838,11 @@ export async function applyFieldWriteAccess(opts: {
    * builds its own, which is right for a write judged only once.
    */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Where a visitor's Public grants are read when this pass builds its own
+   * resolver; see {@link VisitorGrantsLoader}.
+   */
+  visitor?: VisitorGrantsLoader;
 }): Promise<void> {
   // Bypass for a caller that has SAID it is trusted, and only that. The read
   // side gates on the same single condition, and the two must agree: a rule
@@ -752,21 +862,51 @@ export async function applyFieldWriteAccess(opts: {
   if (opts.overrideAccess) return;
   const fns = getFieldFunctions(opts.kind, opts.slug);
   if (!fns) return;
-  await applyWriteAccessRec(opts.data, fns, opts.operation, {
-    user: opts.user,
-    id: opts.id,
-    target: fieldRuleTarget(opts.kind, opts.slug),
-    // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
-    // answers `{ permissions: [], roles: [] }` — so a rule written as
-    // `({ permissions }) => permissions.includes(...)` refuses it, which is
-    // the correct answer rather than an accident of the shape.
-    grants:
-      opts.grants ??
-      grantsResolver(
-        typeof opts.user?.id === "string" ? opts.user.id : undefined,
-        opts.authenticatedScope
-      ),
-  });
+  await applyWriteAccessRec(
+    opts.data,
+    fns,
+    opts.operation,
+    {
+      user: opts.user,
+      id: opts.id,
+      target: fieldRuleTarget(opts.kind, opts.slug),
+      // An anonymous writer holds what the Public role grants, and no role
+      // (see `grantsResolver`), so a rule written as
+      // `({ permissions }) => permissions.includes(...)` answers it as the
+      // collection rule does, and refuses it what Public does not grant.
+      grants:
+        opts.grants ??
+        grantsResolver(
+          typeof opts.user?.id === "string" ? opts.user.id : undefined,
+          opts.authenticatedScope,
+          undefined,
+          opts.visitor
+        ),
+    },
+    asStoredFor(opts.kind, opts.id)
+  );
+}
+
+/**
+ * The entry a write rule reads as `data`, made the stored one's where the
+ * caller could make it differ: the system columns only the service decides
+ * are not there, and `id` is the id the entry is stored under. A body may
+ * carry any of them, and none of them is what is stored. A field group's
+ * instances are told their own stored id by the write that saves them.
+ */
+function asStoredFor(
+  kind: EntityKind,
+  id: string | undefined
+):
+  | ((snapshot: Record<string, unknown>) => Record<string, unknown>)
+  | undefined {
+  if (kind === "fieldGroup") return undefined;
+  const closed = immutableSystemColumnNames(kind);
+  return snapshot => {
+    for (const name of closed) delete snapshot[name];
+    if (id !== undefined) snapshot.id = id;
+    return snapshot;
+  };
 }
 
 /**
@@ -921,7 +1061,7 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    const allowed = await fieldRuleAllows(fn, "read", ctx, snapshot);
+    const allowed = await fieldRuleAllows(fn, "read", ctx, snapshot, name);
     if (!allowed) denied.push(name);
   }
   // Record what stays removed for the next pass to restore as evidence. A prior
@@ -967,9 +1107,16 @@ async function applyReadAccessRec(
  */
 export async function resolvedCallerGrants(
   user: Record<string, unknown> | undefined,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /** Where a visitor's Public grants are read; see {@link VisitorGrantsLoader}. */
+  visitor?: VisitorGrantsLoader
 ): Promise<() => Promise<CallerGrants>> {
-  const grants = await callerAccessGrants(user, authenticatedScope)();
+  const grants = await callerAccessGrants(
+    user,
+    authenticatedScope,
+    undefined,
+    visitor
+  )();
   return () => Promise.resolve(grants);
 }
 
@@ -991,12 +1138,18 @@ export function callerAccessGrants(
    * its connection: the lookups then read on it, rather than waiting on the
    * pool for the connection the transaction itself is holding.
    */
-  executor?: unknown
+  executor?: unknown,
+  /**
+   * Where a visitor's Public grants are read, handed `executor`; see
+   * {@link VisitorGrantsLoader}.
+   */
+  visitor?: VisitorGrantsLoader
 ): () => Promise<CallerGrants> {
   return grantsResolver(
     typeof user?.id === "string" ? user.id : undefined,
     authenticatedScope,
-    executor
+    executor,
+    visitor
   );
 }
 
@@ -1026,6 +1179,11 @@ export async function applyFieldReadAccess(
      * authority; see {@link callerAccessGrants}.
      */
     grants?: () => Promise<CallerGrants>;
+    /**
+     * Where a visitor's Public grants are read when this pass builds its own
+     * resolver; see {@link VisitorGrantsLoader}.
+     */
+    visitor?: VisitorGrantsLoader;
   },
   redactions?: ReadAccessRedactions
 ): Promise<void> {
@@ -1051,12 +1209,14 @@ export async function applyFieldReadAccess(
       target: fieldRuleTarget(opts.kind, opts.slug),
       // An unauthenticated read still runs the rules — this path, unlike the
       // write one, does not bail without a user — so the resolver is handed the
-      // same absent id and answers with no grants rather than not being called.
+      // same absent id and answers with what the Public role grants.
       grants:
         opts.grants ??
         grantsResolver(
           typeof opts.user?.id === "string" ? opts.user.id : undefined,
-          opts.authenticatedScope
+          opts.authenticatedScope,
+          undefined,
+          opts.visitor
         ),
     },
     store,

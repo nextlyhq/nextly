@@ -24,6 +24,17 @@ import { section } from "./section";
 
 const NODE: BlockNode = { id: "n1", type: "core/box", version: 1, props: {} };
 
+/**
+ * The elements a list drew for its entries: what stands between its note and
+ * its page links, the entries themselves or its empty state.
+ */
+function drawnEntries(element: ReactElement): ReactElement<unknown>[] {
+  const { children } = (
+    element as ReactElement<{ children: (ReactElement<unknown>[] | null)[] }>
+  ).props;
+  return children.find(child => Array.isArray(child)) ?? [];
+}
+
 /** Coerce deliberately-malformed stored props, the way a document can hold them. */
 function storedProps(props: unknown): ContainerProps {
   return props as ContainerProps;
@@ -67,9 +78,11 @@ function args<P>(
     partClass: () => "",
     ctx,
     drawnWith,
-    renderSlot: (_name: string, override?: PageContext) => {
+    renderSlot: (name: string, override?: PageContext) => {
       const used = override ?? ctx;
       drawnWith.push(used);
+      // The empty state names itself, so a test tells it from an entry.
+      if (name === "empty") return <span>empty</span>;
       const title = used.item?.title;
       return <span>{typeof title === "string" ? title : "child"}</span>;
     },
@@ -140,6 +153,15 @@ describe("the container presets", () => {
 });
 
 describe("core/collection-loop", () => {
+  it("is named Collection list for authors, under its stored type", () => {
+    // The name an author reads changes; the type a stored page names does
+    // not, so every page that holds one still finds its block.
+    expect(collectionLoop.editor?.label).toBe("Collection list");
+    expect(collectionLoop.name).toBe("core/collection-loop");
+    // A search for the old name still finds it.
+    expect(collectionLoop.editor?.keywords).toContain("loop");
+  });
+
   it("repeats its template once per entry", async () => {
     const { provider, calls } = stubProvider([{ id: "a" }, { id: "b" }]);
     const element = await renderCollectionLoop(
@@ -150,10 +172,10 @@ describe("core/collection-loop", () => {
     );
     const html = renderToStaticMarkup(element);
     expect(html.match(/<span>child<\/span>/g)).toHaveLength(2);
-    expect(calls).toEqual([{ collection: "posts", limit: 5 }]);
+    expect(calls).toEqual([{ collection: "posts", limit: 5, sort: [] }]);
   });
 
-  it("passes a sort through only when one is set", async () => {
+  it("sends the stored sort, and an empty one when none is set", async () => {
     const { provider, calls } = stubProvider([]);
     await renderCollectionLoop(
       args<{ collection?: string; sort?: string }>(
@@ -173,7 +195,8 @@ describe("core/collection-loop", () => {
     // conditional slots, and this is the block saying its children are one.
     // Without the declaration the walk has nothing to skip, and an empty loop's
     // template would title the page with content it never rendered.
-    expect(collectionLoop.conditionalSlots).toEqual(["children"]);
+    // Its empty state is the other half: drawn only when no entry is.
+    expect(collectionLoop.conditionalSlots).toEqual(["children", "empty"]);
   });
 
   it("queries in the locale the page is being rendered in", async () => {
@@ -187,7 +210,12 @@ describe("core/collection-loop", () => {
         testContext({ data: provider, locale: "fr" })
       )
     );
-    expect(calls[0]).toEqual({ collection: "posts", limit: 10, locale: "fr" });
+    expect(calls[0]).toEqual({
+      collection: "posts",
+      limit: 10,
+      sort: [],
+      locale: "fr",
+    });
   });
 
   it("omits the locale key entirely on an unlocalized page", async () => {
@@ -200,7 +228,7 @@ describe("core/collection-loop", () => {
         testContext({ data: provider })
       )
     );
-    expect(calls[0]).toEqual({ collection: "posts", limit: 10 });
+    expect(calls[0]).toEqual({ collection: "posts", limit: 10, sort: [] });
     expect("locale" in (calls[0] ?? {})).toBe(false);
   });
 
@@ -226,6 +254,77 @@ describe("core/collection-loop", () => {
     expect(renderToStaticMarkup(element)).toContain("<span>child</span>");
   });
 
+  it("lists in id order once when its stored sort is refused", async () => {
+    const calls: Parameters<BlocksDataProvider["find"]>[0][] = [];
+    const refusingSort: BlocksDataProvider = {
+      find: query => {
+        calls.push(query);
+        return Array.isArray(query.sort) && query.sort.length === 0
+          ? Promise.resolve({ items: [{ id: "a" }] })
+          : Promise.reject(
+              Object.assign(new Error("Validation failed."), {
+                publicData: {
+                  errors: [{ path: "sort.secret", code: "FIELD_NOT_SORTABLE" }],
+                },
+              })
+            );
+      },
+    };
+    let claims = 0;
+    const element = await renderCollectionLoop(
+      args<{ collection?: string; sort?: string }>(
+        { collection: "posts", sort: "-secret" },
+        testContext({
+          data: refusingSort,
+          queries: { take: () => (claims += 1) > 0 },
+        })
+      )
+    );
+    expect(
+      renderToStaticMarkup(element).match(/<span>child<\/span>/g)
+    ).toHaveLength(1);
+    expect(calls.map(call => call.sort)).toEqual(["-secret", []]);
+    // The refusal comes before any read, so the retry claims nothing more.
+    expect(claims).toBe(1);
+  });
+
+  it("does not retry a sorted read that failed for another reason", async () => {
+    let reads = 0;
+    const timingOut: BlocksDataProvider = {
+      find: () => {
+        reads += 1;
+        return Promise.reject(new Error("connection reset"));
+      },
+    };
+    const element = await renderCollectionLoop(
+      args<{ collection?: string; sort?: string }>(
+        { collection: "posts", sort: "-date" },
+        testContext({ data: timingOut })
+      )
+    );
+    expect(reads).toBe(1);
+    expect(renderToStaticMarkup(element)).toBe(
+      '<div class="nx-n1"><span>empty</span></div>'
+    );
+  });
+
+  it("does not retry a read that failed with no sort to drop", async () => {
+    let reads = 0;
+    const failing: BlocksDataProvider = {
+      find: () => {
+        reads += 1;
+        return Promise.reject(new Error("no database"));
+      },
+    };
+    await renderCollectionLoop(
+      args<{ collection?: string }>(
+        { collection: "posts" },
+        testContext({ data: failing })
+      )
+    );
+    expect(reads).toBe(1);
+  });
+
   it("renders empty rather than throwing when the query fails", async () => {
     const failing: BlocksDataProvider = {
       find: () => Promise.reject(new Error("no database")),
@@ -237,9 +336,10 @@ describe("core/collection-loop", () => {
       )
     );
     const html = renderToStaticMarkup(element);
-    // The page survives a data source it cannot reach: this block goes empty,
-    // and everything around it still renders.
-    expect(html).toBe('<div class="nx-n1"></div>');
+    // The page survives a data source it cannot reach: this block draws its
+    // empty state, and everything around it still renders. A visitor is
+    // shown no note about why.
+    expect(html).toBe('<div class="nx-n1"><span>empty</span></div>');
   });
 
   it("keys each iteration by the entry id, falling back to its position", async () => {
@@ -252,10 +352,7 @@ describe("core/collection-loop", () => {
         testContext({ data: provider })
       )
     );
-    const children = (
-      element as ReactElement<{ children: ReactElement<unknown>[] }>
-    ).props.children;
-    expect(children.map(child => child.key)).toEqual(["0", "1"]);
+    expect(drawnEntries(element).map(child => child.key)).toEqual(["0", "1"]);
   });
 
   it("draws its template again per entry, under that entry's context", async () => {
@@ -306,10 +403,7 @@ describe("core/collection-loop", () => {
         testContext({ data: provider })
       )
     );
-    const children = (
-      element as ReactElement<{ children: ReactElement<unknown>[] }>
-    ).props.children;
-    expect(children.map(child => child.key)).toEqual(["7", "8"]);
+    expect(drawnEntries(element).map(child => child.key)).toEqual(["7", "8"]);
   });
 
   it("leaves its empty body structurally editable", () => {
@@ -373,7 +467,11 @@ describe("core/collection-loop", () => {
       )
     );
     expect(calls).toEqual([]);
-    expect(renderToStaticMarkup(element)).toBe('<div class="nx-n1"></div>');
+    // Past the allowance a visitor sees the list's designed empty state, as
+    // for a list with no matches, with the page's other content around it.
+    expect(renderToStaticMarkup(element)).toBe(
+      '<div class="nx-n1"><span>empty</span></div>'
+    );
   });
 });
 

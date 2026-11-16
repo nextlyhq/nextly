@@ -15,6 +15,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -49,6 +50,9 @@ describe("publish enforcement on the batch worker paths (integration)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the author holds create on
+    // posts; the publish rule still refuses the published rows.
+    await userWhoMay(current, "author", "create", ["posts"]);
     const collectionService =
       current.getService<CollectionService>("collectionService");
 
@@ -95,6 +99,9 @@ describe("publish enforcement on the batch worker paths (integration)", () => {
         }),
       ],
     });
+    // A code rule only narrows the permission, so the author holds update on
+    // posts; the publish rule still refuses the move to published.
+    await userWhoMay(current, "author", "update", ["posts"]);
     const handler =
       current.getService<CollectionsHandler>("collectionsHandler");
     const entryService = handler.getEntryService();
@@ -114,7 +121,7 @@ describe("publish enforcement on the batch worker paths (integration)", () => {
     // and consults the pre-resolved publish denial.
     const publishAttempt = await entryService.updateEntries(
       { collectionName: "posts", user: { id: "author" } },
-      ids.map(id => ({ id, data: { status: "published" } }))
+      ids.map(id => ({ id, data: { status: "published", _overwrite: true } }))
     );
     expect(publishAttempt.successful).toBe(0);
     expect(publishAttempt.failed).toBe(2);
@@ -122,7 +129,7 @@ describe("publish enforcement on the batch worker paths (integration)", () => {
     // A content-only batch update (no status change) is untouched by the gate.
     const contentEdit = await entryService.updateEntries(
       { collectionName: "posts", user: { id: "author" } },
-      ids.map(id => ({ id, data: { title: "edited" } }))
+      ids.map(id => ({ id, data: { title: "edited", _overwrite: true } }))
     );
     expect(contentEdit.successful).toBe(2);
     expect(contentEdit.failed).toBe(0);

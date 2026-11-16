@@ -1,0 +1,23 @@
+---
+title: REFUSED_STATEMENT
+description: "A migration holds a statement the runner refuses to run where it is, so nothing in it ran."
+---
+
+## Cause
+
+A migration holds a statement the runner refuses to run where it is, so nothing in it ran.
+
+The runner checks every statement before a migration runs. A migration that runs in a transaction cannot open, commit or end its own, change a session setting the runner owns, or hold a statement that cannot run in a transaction; one that runs outside a transaction has rules of its own. The Why line names each refused statement and what to do with it. Nothing in the migration ran.
+
+## Fix
+
+Change each statement as the Why line says: remove it, move it to a migration of its own, or mark that migration with `-- nextly:no-transaction` where the line says so. Then run the command again.
+
+## Example
+
+```text
+✗ `20261029_090000_compact.sql` was refused, and nothing in it ran.
+  Why:  "VACUUM" cannot run inside a transaction, and this file runs in one. To run it as a migration, make `-- nextly:no-transaction` the file's first line: the file then runs outside a transaction, statement by statement, and a failure part-way leaves the statements before it applied.
+  Next: Change each statement as its line above says, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/refused-statement  (REFUSED_STATEMENT)
+```

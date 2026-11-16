@@ -5,6 +5,7 @@
  * @module errors/from-service-envelope
  */
 
+import { recordRefusalReason } from "../auth/access/refusal-message";
 import { isDatabaseBusy } from "../database/errors";
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
@@ -17,6 +18,7 @@ import {
 import { NextlyError } from "./nextly-error";
 import { originalErrorOf, withOriginalError } from "./original-error";
 import type { PublicData } from "./public-data";
+import { ruleCouldNotRunIn } from "./rule-could-not-run";
 
 /** The failure fields a service envelope can carry. */
 export interface ServiceErrorEnvelope {
@@ -38,12 +40,20 @@ export interface ServiceErrorEnvelope {
     field?: string;
     code?: string;
     message: string;
+    /** The language the issue is in, where it is about one language's own value. */
+    locale?: string;
   }>;
   /**
    * Whether the write this envelope reports committed before it failed. A
    * write result carries it; any other envelope leaves it unset.
    */
   committed?: boolean;
+  /**
+   * Which check refused, for the server's log only, set by an access gate on
+   * its refusal. Logged where the refusal reaches its caller, which is never a
+   * gate asked only whether something is allowed.
+   */
+  refusalReason?: string;
 }
 
 /**
@@ -75,6 +85,9 @@ function validationFromEnvelope(
         path: e.path ?? e.field ?? "",
         code: e.code ?? "INVALID",
         message: e.message,
+        // An issue in one language keeps naming it, so a refusal of several languages says
+        // which language each issue is in.
+        ...(typeof e.locale === "string" ? { locale: e.locale } : {}),
       }))
     : [
         {
@@ -110,6 +123,22 @@ function validationFromEnvelope(
 }
 
 /**
+ * Record an access gate's refusal, from the reason its envelope carries, where
+ * the refusal reaches its caller: here when it is converted to the caller's
+ * error, or where a boundary answers with it some other way, such as a batch
+ * reporting every item refused. A failure that is not a gate's refusal
+ * carries no reason and records nothing.
+ */
+export function recordServiceRefusal(envelope: ServiceErrorEnvelope): void {
+  if (envelope.refusalReason === undefined) return;
+  recordRefusalReason({
+    status: envelope.statusCode ?? NEXTLY_ERROR_STATUS.FORBIDDEN,
+    code: envelope.code ?? "FORBIDDEN",
+    reason: envelope.refusalReason,
+  });
+}
+
+/**
  * Turn a failed service envelope back into the error that produced it.
  *
  * This is the ONLY place that knows how. Every boundary that hands a service
@@ -138,7 +167,16 @@ export function errorFromServiceEnvelope(
   // something bolted on after the fact.
   cause?: Error
 ): NextlyError {
-  const rebuilt = rebuildFromEnvelope(envelope, logContext, cause);
+  const { refusalReason } = envelope;
+  const rebuilt = rebuildFromEnvelope(
+    envelope,
+    refusalReason === undefined
+      ? logContext
+      : { ...logContext, reason: refusalReason },
+    cause
+  );
+  // The refusal reaches its caller here, so it is recorded here, once.
+  recordServiceRefusal(envelope);
   // Decided here, on the rebuilt error, because every boundary rebuilds
   // through this function: a busy read in a post-commit step reaches it from a
   // collection write and a Single write alike, already flattened to a code.
@@ -258,6 +296,16 @@ export function errorEnvelopeFields(
   // bound for a connection, and the caller should be told DATABASE_BUSY and
   // when to retry, not the 500 a service gives an unexpected failure.
   if (!NextlyError.is(error)) {
+    // A rule that could not run, re-wrapped on its way out of a transaction,
+    // keeps its own answer: the request ends saying which rule, not as a
+    // busy database or an internal error.
+    const couldNotRun = ruleCouldNotRunIn(error);
+    if (couldNotRun) {
+      recordFlattenedError(couldNotRun);
+      return error instanceof Error
+        ? withOriginalError(publicFieldsOf(couldNotRun), error)
+        : publicFieldsOf(couldNotRun);
+    }
     if (!isDatabaseBusy(error)) {
       return error instanceof Error ? withOriginalError({}, error) : {};
     }

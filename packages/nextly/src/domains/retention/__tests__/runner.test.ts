@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveWebhookRetentionConfig } from "../../webhooks/retention-config";
 import { buildRetentionRunner } from "../passes";
+import { RetentionRunner } from "../runner";
 
 const T0 = new Date("2026-07-21T12:00:00.000Z");
 
@@ -22,6 +23,19 @@ function inline(
 ): <T>(work: (tx: TransactionContext) => Promise<T>) => Promise<T> {
   return work => work(db as TransactionContext);
 }
+
+/**
+ * The cache tag expiry ledger's part of an adapter, on a database without its
+ * table: these runners take no ledger pass, and one that did would ask the
+ * catalogue and stop there.
+ */
+const withoutLedger = {
+  getCapabilities: () => ({ dialect: "sqlite" as const }),
+  tableExists: async () => false,
+  getDrizzle: () => {
+    throw new Error("the ledger's table is not in this test");
+  },
+} as const;
 
 /** Records the policy each pass ran with, so the budget is observable. */
 function spyAdapter() {
@@ -36,7 +50,10 @@ function spyAdapter() {
     },
     delete: async (): Promise<number> => 0,
   };
-  return { limits, adapter: { ...db, transaction: inline(db) } };
+  return {
+    limits,
+    adapter: { ...db, ...withoutLedger, transaction: inline(db) },
+  };
 }
 
 function alwaysClaims() {
@@ -116,6 +133,7 @@ describe("RetentionRunner", () => {
           throw new Error("connection reset");
         },
         delete: async () => 0,
+        ...withoutLedger,
         transaction: inline({}),
       },
       gate: alwaysClaims(),
@@ -136,5 +154,58 @@ describe("RetentionRunner", () => {
 
     await runner!.maybeRun();
     expect(f.limits).toHaveLength(0);
+  });
+});
+
+describe("RetentionRunner inside an open transaction", () => {
+  // A pass and a gate that record being reached, so "offered nothing" is
+  // observed rather than inferred from an absence of rows.
+  function counting(transactionOpen: () => boolean) {
+    const claims: string[] = [];
+    const runs: string[] = [];
+    const runner = new RetentionRunner({
+      passes: [
+        {
+          key: "probe",
+          intervalMs: () => 0,
+          run: async () => {
+            runs.push("probe");
+          },
+        },
+      ],
+      gate: {
+        claim: async (key: string): Promise<boolean> => {
+          claims.push(key);
+          return true;
+        },
+      } as never,
+      now: () => T0,
+      transactionOpen,
+    });
+    return { runner, claims, runs };
+  }
+
+  it("offers no pass, and claims no turn, while the flow holds a transaction", async () => {
+    const { runner, claims, runs } = counting(() => true);
+    await runner.maybeRun();
+    expect(claims).toEqual([]);
+    expect(runs).toEqual([]);
+  });
+
+  it("offers the passes once the transaction has finished", async () => {
+    let open = true;
+    const { runner, runs } = counting(() => open);
+    await runner.maybeRun();
+    open = false;
+    await runner.maybeRun();
+    expect(runs).toEqual(["probe"]);
+  });
+
+  it("counts a check that fails as an open transaction", async () => {
+    const { runner, runs } = counting(() => {
+      throw new Error("no flow store");
+    });
+    await expect(runner.maybeRun()).resolves.toBeUndefined();
+    expect(runs).toEqual([]);
   });
 });

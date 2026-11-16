@@ -5,6 +5,8 @@
 // their children share the parent's row, so `unique` works correctly.
 //
 // Brainstorm 2026-05-04 Option B locked this predicate.
+import { isFieldGroupFieldType } from "nextly/field-group-type";
+
 import type { BuilderField } from "../../components/features/schema-builder/types";
 
 /**
@@ -30,9 +32,17 @@ export function isInsideRepeatingAncestor(
   return result.found && result.insideRepeating;
 }
 
-function isRepeatingContainer(field: BuilderField): boolean {
+/**
+ * Whether a container holds a list of rows rather than one: repeating rows, or
+ * a field group set to repeat. Field groups are asked through the shared
+ * predicate so both stored spellings of the type count. Exported so the API
+ * path a field is shown under marks the same containers as lists.
+ */
+export function isRepeatingContainer(field: BuilderField): boolean {
   if (field.type === "repeater") return true;
-  if (field.type === "component" && field.repeatable === true) return true;
+  if (isFieldGroupFieldType(field.type) && field.repeatable === true) {
+    return true;
+  }
   return false;
 }
 

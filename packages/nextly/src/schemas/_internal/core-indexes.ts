@@ -115,6 +115,57 @@ export const NOTICES_INDEXES = [
   { name: "nextly_notices_created_idx", columns: ["createdAt"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const DASHBOARD_PINS_INDEXES = [
+  // One pin per reader per target. A Single's `entryId` is "" rather than
+  // NULL, so this holds on every dialect: NULLs are distinct in a unique index,
+  // and a partial index is not dialect-neutral.
+  {
+    name: "nextly_dashboard_pins_target_uidx",
+    columns: ["userId", "targetType", "targetSlug", "entryId"],
+    unique: true,
+  },
+  // A reader's pins, in the order they are listed: newest first.
+  {
+    name: "nextly_dashboard_pins_user_idx",
+    columns: ["userId", "pinnedAt"],
+  },
+  // The pins that point at a target, so deleting an entry or a Single can
+  // remove every reader's pin of it.
+  {
+    name: "nextly_dashboard_pins_entry_idx",
+    columns: ["targetType", "targetSlug", "entryId"],
+  },
+] as const satisfies readonly CoreIndex<string>[];
+
+export const MEDIA_USAGE_INDEXES = [
+  // One row per item per field per language of a document. It also serves
+  // replacing a document's rows, which reads them by its leading columns.
+  {
+    name: "nextly_media_usage_uidx",
+    columns: [
+      "subjectKind",
+      "subjectSlug",
+      "documentId",
+      "fieldPath",
+      "locale",
+      "mediaId",
+    ],
+    unique: true,
+  },
+  // Where one item is used, and whether it is used at all: the Unused view
+  // and its count ask this of every item.
+  { name: "nextly_media_usage_media_idx", columns: ["mediaId"] },
+] as const satisfies readonly CoreIndex<string>[];
+
+export const DASHBOARD_PREFERENCES_INDEXES = [
+  // One value per reader per key.
+  {
+    name: "nextly_dashboard_preferences_key_uidx",
+    columns: ["userId", "key"],
+    unique: true,
+  },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const NEXTLY_RELEASES_INDEXES = [
   // The due-release query reads exactly these two columns together.
   { name: "nextly_releases_due_idx", columns: ["state", "scheduledAt"] },

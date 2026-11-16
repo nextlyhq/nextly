@@ -1,13 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 
 import type { RenameCandidate } from "../../pipeline/pushschema-pipeline-interfaces";
 
 const confirm = vi.fn();
 const warn = vi.fn();
+/** The value @clack/prompts answers a cancelled prompt with. */
+const CANCEL = vi.hoisted(() => Symbol("clack:cancel"));
 
 vi.mock("@clack/prompts", () => ({
   confirm: (...args: unknown[]) => confirm(...args),
-  isCancel: () => false,
+  isCancel: (value: unknown) => value === CANCEL,
   cancel: vi.fn(),
   log: { warn: (...args: unknown[]) => warn(...args) },
 }));
@@ -106,5 +116,83 @@ describe("promptRenames - non-interactive", () => {
     });
     expect(decision?.accepted).toBe(false);
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("promptRenames - a field group", () => {
+  const group = candidate({
+    tableName: "dc_posts",
+    fromColumn: "seo",
+    toColumn: "legacySeo",
+    fromType: "field group",
+    toType: "field group",
+    preservesValues: true,
+    valueChangeReason: undefined,
+    fieldGroupTables: ["comp_seo"],
+  });
+
+  it("asks whether its rows move, suggesting the rename", async () => {
+    await promptRenames([group]);
+    expect(askedWith().message).toContain("field group rename");
+    expect(askedWith().message).toContain(
+      "Its stored rows in comp_seo move to the new name"
+    );
+    expect(askedWith().initialValue).toBe(true);
+  });
+
+  it("warns when a run that cannot ask declines it, since nothing is dropped to ask consent for", async () => {
+    const [decision] = await promptRenames([group], { nonInteractive: true });
+    expect(decision?.accepted).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('stay under "seo", where nothing reads them')
+    );
+  });
+
+  it("stays silent when --accept-renames accepts it", async () => {
+    const [decision] = await promptRenames([group], {
+      nonInteractive: true,
+      autoAccept: true,
+    });
+    expect(decision?.accepted).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("promptRenames - a cancel", () => {
+  /** What `process.exit` was asked for, thrown so the prompt goes no further. */
+  class Exited extends Error {
+    constructor(readonly code: number | string | null | undefined) {
+      super(`process.exit(${String(code)})`);
+    }
+  }
+  let errors: Mock<(message?: unknown) => void>;
+
+  beforeEach(() => {
+    errors = vi.fn<(message?: unknown) => void>();
+    vi.spyOn(console, "error").mockImplementation(errors);
+    vi.spyOn(process, "exit").mockImplementation(code => {
+      throw new Exited(code);
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("exits 130, still saying migrate:create wrote no migration", async () => {
+    confirm.mockResolvedValue(CANCEL);
+    await expect(promptRenames([candidate()])).rejects.toMatchObject({
+      code: 130,
+    });
+    expect(String(errors.mock.calls[0]?.[0])).toContain(
+      "(MIGRATION_CREATE_CANCELLED)"
+    );
+  });
+
+  it("a no declines the rename and asks nothing more of the run", async () => {
+    confirm.mockResolvedValue(false);
+    const [decision] = await promptRenames([candidate()]);
+    expect(decision?.accepted).toBe(false);
+    expect(process.exit).not.toHaveBeenCalled();
   });
 });

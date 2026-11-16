@@ -1,8 +1,13 @@
+import { CACHE_TAG_EXPIRIES_TABLE } from "../schemas/cache-tag-expiries/table-name";
+import { DASHBOARD_PINS_TABLE } from "../schemas/dashboard-pins/table-name";
+import { DASHBOARD_PREFERENCES_TABLE } from "../schemas/dashboard-preferences/table-name";
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
+import { MEDIA_USAGE_TABLE } from "../schemas/media-usage/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
@@ -49,6 +54,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "email_verified_via" TEXT,
       "password_updated_at" INTEGER,
       "image" TEXT,
+      "interface_language" TEXT,
       "password_hash" TEXT,
       "is_active" INTEGER NOT NULL DEFAULT 0,
       "deactivated_at" INTEGER,
@@ -164,6 +170,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "user_roles_user_id_idx"
       ON "user_roles" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_role_id_idx"
+      ON "user_roles" ("role_id")`,
     `CREATE INDEX IF NOT EXISTS "user_roles_expires_at_idx"
       ON "user_roles" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "role_inherits" (
@@ -207,7 +215,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "alt_text" TEXT,
       "focal_x" INTEGER,
       "focal_y" INTEGER,
-      "sizes" TEXT,
       "caption" TEXT,
       "tags" TEXT,
       "folder_id" TEXT REFERENCES "media_folders"("id") ON DELETE SET NULL,
@@ -223,22 +230,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "media" ("uploaded_at")`,
     `CREATE INDEX IF NOT EXISTS "media_folder_id_idx"
       ON "media" ("folder_id")`,
-    `CREATE TABLE IF NOT EXISTS "user_permission_cache" (
-      "id" TEXT PRIMARY KEY,
-      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-      "action" TEXT NOT NULL,
-      "resource" TEXT NOT NULL,
-      "has_permission" INTEGER NOT NULL,
-      "role_ids" TEXT NOT NULL,
-      "expires_at" INTEGER NOT NULL,
-      "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
-    )`,
-    `CREATE INDEX IF NOT EXISTS "upc_user_id_idx"
-      ON "user_permission_cache" ("user_id")`,
-    `CREATE INDEX IF NOT EXISTS "upc_expires_at_idx"
-      ON "user_permission_cache" ("expires_at")`,
-    `CREATE INDEX IF NOT EXISTS "upc_user_action_resource_idx"
-      ON "user_permission_cache" ("user_id", "action", "resource")`,
     // The counter every instance reads to decide whether a cached
     // authorization answer is still current. One row, keyed `global`: the
     // primary key is what makes a second counter unrepresentable, so nothing
@@ -418,7 +409,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
-      "revision" INTEGER NOT NULL DEFAULT 0
+      "revision" INTEGER NOT NULL DEFAULT 0,
+      "base_version_no" INTEGER,
+      "base_draft_revision" INTEGER,
+      "field_sources" TEXT
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
@@ -459,6 +453,60 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_version_views" ("scope_kind", "scope_slug", "entry_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_version_views_user_idx"
       ON "nextly_version_views" ("user_id")`,
+    // A workflow's review state per document and part. Columns match
+    // schemas/review-states/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_review_states" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "part" TEXT,
+      "part_key" TEXT NOT NULL,
+      "stage" TEXT NOT NULL,
+      "entered_at" INTEGER NOT NULL,
+      "entered_by" TEXT,
+      "assignee_kind" TEXT,
+      "assignee_id" TEXT,
+      "due_at" INTEGER,
+      "approved_version_no" INTEGER,
+      "approved_digest" TEXT,
+      "approved_by" TEXT,
+      "approved_at" INTEGER,
+      "definition_hash" TEXT NOT NULL,
+      "revision" INTEGER NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_review_states_key_uidx"
+      ON "nextly_review_states" ("part_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_doc_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_stage_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "stage")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_assignee_idx"
+      ON "nextly_review_states" ("assignee_kind", "assignee_id")`,
+    // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "workflow" TEXT NOT NULL,
+      "settings" TEXT NOT NULL,
+      "revision" INTEGER NOT NULL,
+      "updated_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_workflow_settings_workflow_uidx"
+      ON "nextly_workflow_settings" ("workflow")`,
+    // A plugin schedule's windows. Columns match schemas/schedule-windows/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_schedule_windows" (
+      "schedule_key" TEXT NOT NULL,
+      "window_at" INTEGER NOT NULL,
+      "job_id" TEXT,
+      "created_at" INTEGER NOT NULL,
+      PRIMARY KEY ("schedule_key", "window_at")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_schedule_windows_window_idx"
+      ON "nextly_schedule_windows" ("window_at")`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
@@ -703,6 +751,56 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_one_time_secrets" ("subject_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
       ON "nextly_one_time_secrets" ("expires_at")`,
+    // The webhooks plugins have received, one claim per plugin, provider and
+    // delivery. Columns match schemas/received-webhooks/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_received_webhooks" (
+      "delivery_key" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "provider" TEXT NOT NULL,
+      "delivery_id" TEXT,
+      "freshness" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "claim_token" TEXT NOT NULL,
+      "lease_until" INTEGER,
+      "received_at" INTEGER NOT NULL,
+      "completed_at" INTEGER,
+      "prune_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_received_webhooks_prune_idx"
+      ON "nextly_received_webhooks" ("prune_at")`,
+    // Durable plugin events and their deliveries. Columns match
+    // schemas/plugin-events/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_events" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "name" TEXT NOT NULL,
+      "payload" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "fanned_out_at" INTEGER,
+      "finished_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_events_fan_out_idx"
+      ON "nextly_plugin_events" ("fanned_out_at", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_events_finished_idx"
+      ON "nextly_plugin_events" ("finished_at")`,
+    `CREATE TABLE IF NOT EXISTS "nextly_plugin_event_deliveries" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "event_id" TEXT NOT NULL,
+      "subscriber" TEXT NOT NULL,
+      "subscriber_key" TEXT NOT NULL,
+      "status" TEXT NOT NULL,
+      "attempt_count" INTEGER NOT NULL DEFAULT 0,
+      "next_attempt_at" INTEGER NOT NULL,
+      "locked_by" TEXT,
+      "locked_until" INTEGER,
+      "last_error" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "finished_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_plugin_event_deliveries_event_subscriber_unique"
+      ON "nextly_plugin_event_deliveries" ("event_id", "subscriber_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_plugin_event_deliveries_due_idx"
+      ON "nextly_plugin_event_deliveries" ("status", "next_attempt_at")`,
     // The database limit store's counts, used when a site selects it. An
     // integer of milliseconds for the expiry, as the Drizzle bundle declares.
     `CREATE TABLE IF NOT EXISTS "${LIMIT_STORE_TABLE}" (
@@ -715,6 +813,15 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${LIMIT_STORE_TABLE}" ("expires_at")`,
     `CREATE INDEX IF NOT EXISTS "nls_generation_idx"
       ON "${LIMIT_STORE_TABLE}" ("generation")`,
+    // When each cache tag last expired, read by every instance's cache
+    // handlers. An integer of milliseconds, as the Drizzle bundle declares.
+    `CREATE TABLE IF NOT EXISTS "${CACHE_TAG_EXPIRIES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "tag" TEXT NOT NULL,
+      "expired_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "ncte_expired_at_idx"
+      ON "${CACHE_TAG_EXPIRIES_TABLE}" ("expired_at")`,
     // The two-factor challenges already answered, so an answer is accepted
     // once on every instance. An integer of milliseconds for the expiry, as
     // the Drizzle bundle declares.
@@ -749,6 +856,52 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
       ON "${NOTICES_TABLE}" ("created_at")`,
+    // Each reader's pinned entries and Singles. Columns match
+    // schemas/dashboard-pins/sqlite.ts; a Single's `entry_id` is "" so the
+    // unique index holds without a partial index.
+    `CREATE TABLE IF NOT EXISTS "${DASHBOARD_PINS_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "target_type" TEXT NOT NULL,
+      "target_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "pinned_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_pins_target_uidx"
+      ON "${DASHBOARD_PINS_TABLE}" ("user_id", "target_type", "target_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_dashboard_pins_user_idx"
+      ON "${DASHBOARD_PINS_TABLE}" ("user_id", "pinned_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_dashboard_pins_entry_idx"
+      ON "${DASHBOARD_PINS_TABLE}" ("target_type", "target_slug", "entry_id")`,
+    // Each reader's remembered dashboard choices. Columns match
+    // schemas/dashboard-preferences/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "${DASHBOARD_PREFERENCES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "preference_key" TEXT NOT NULL,
+      "value" TEXT NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_preferences_key_uidx"
+      ON "${DASHBOARD_PREFERENCES_TABLE}" ("user_id", "preference_key")`,
+    // Which media items each document uses. Columns match
+    // schemas/media-usage/sqlite.ts; a Single's `document_id` and a shared
+    // value's `locale` are "" so the unique index holds without a partial
+    // index.
+    `CREATE TABLE IF NOT EXISTS "${MEDIA_USAGE_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "media_id" TEXT NOT NULL REFERENCES "media"("id") ON DELETE CASCADE,
+      "subject_kind" TEXT NOT NULL,
+      "subject_slug" TEXT NOT NULL,
+      "document_id" TEXT NOT NULL,
+      "field_path" TEXT NOT NULL,
+      "locale" TEXT NOT NULL,
+      "address" TEXT
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_media_usage_uidx"
+      ON "${MEDIA_USAGE_TABLE}" ("subject_kind", "subject_slug", "document_id", "field_path", "locale", "media_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_media_usage_media_idx"
+      ON "${MEDIA_USAGE_TABLE}" ("media_id")`,
     // The site's email brand settings, one row. Columns match
     // schemas/email-brand/sqlite.ts; each setting is nullable, null being its
     // starting value.
@@ -831,8 +984,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
       "state" TEXT NOT NULL,
-      "job_id" TEXT NOT NULL,
+      "job_id" TEXT,
       "message" TEXT,
+      "principal_kind" TEXT,
+      "principal_id" TEXT,
       "failure" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
@@ -840,6 +995,16 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "email_queue_state_idx"
       ON "${EMAIL_QUEUE_TABLE}" ("state", "settled_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_principal_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("principal_kind", "principal_id")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
+      "queued_id" TEXT NOT NULL,
+      "recipient_hash" TEXT NOT NULL,
+      "recipient_kind" TEXT NOT NULL,
+      PRIMARY KEY ("queued_id", "recipient_hash")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
+      ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
   ];
 }
 

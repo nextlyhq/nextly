@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, it, expect } from "vitest";
 
-import { parseSqlSections } from "../../../cli/commands/migrate";
+import { parseSqlSections } from "../../schema/migrate/sql-sections";
 
 import {
   LOCALIZATION_INTENT_HEADER,

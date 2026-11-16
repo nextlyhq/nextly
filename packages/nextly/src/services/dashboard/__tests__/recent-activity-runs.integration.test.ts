@@ -15,6 +15,7 @@ import { randomUUID } from "crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
@@ -106,6 +107,9 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   // identity already erased.
   for (const person of [ANA, BEN, BOSS]) {
     await t.adapter.insert("users", { ...person, is_active: true });
+    // A code rule only narrows the permission, so each reader holds read on
+    // every collection and the Single here and the rules decide what they see.
+    await grantTo(t, person.id, "read", [NOTES, HIDDEN, SECRET, HOME]);
   }
   return t;
 }
@@ -204,8 +208,11 @@ describe.each(getConfiguredTestDialects())(
       for (let i = 0; i < 5; i++) {
         const saved = await singles.update(
           HOME,
-          { headline: `Welcome ${i}` },
-          { overrideAccess: true, actor: { type: "user", id: ANA.id } }
+          { headline: `Welcome ${i}`, _overwrite: true },
+          {
+            overrideAccess: true,
+            actor: { type: "user", id: ANA.id },
+          }
         );
         expect(saved.success).toBe(true);
       }
@@ -463,7 +470,10 @@ describe.each(getConfiguredTestDialects())(
       });
       const update = (minutes: number, data: Record<string, unknown>) =>
         written(t, at(minutes), () =>
-          handler.updateEntry({ ...asAna, entryId: id }, data)
+          handler.updateEntry(
+            { ...asAna, entryId: id },
+            { ...data, _overwrite: true }
+          )
         );
       const firstSave = await update(4, { title: "one" });
       await update(3, { title: "two" });

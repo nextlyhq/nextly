@@ -13,9 +13,10 @@
  * colour alone: the dot's SHAPE differs per state and every dot carries the
  * language and its state in its accessible name.
  *
- * The DEFAULT language is deliberately absent. It is the source these are
- * translated from, not one of them, and a permanently-filled dot in every row
- * of the table is a column of noise.
+ * Every configured language has a dot, the DEFAULT included, in the configured
+ * order. The count beside the dots, the summary and the editor's language panel
+ * all count the default as one of the languages a reader can be shown, so the
+ * dots do too: dots that left it out would sit beside a count that includes it.
  *
  * @module components/features/entries/EntryList/LanguageDots
  */
@@ -57,18 +58,18 @@ export function LanguageDots({
   onOpenLocale,
   className,
 }: LanguageDotsProps): JSX.Element | null {
-  const { enabled, locales, defaultLocale } = useLocalization();
+  const { enabled, locales } = useLocalization();
   if (!enabled || locales.length < 2) return null;
 
-  const translatable = locales.filter(l => l.code !== defaultLocale);
+  // The dots and the count read one list of languages, so they cannot
+  // disagree about how many there are.
   const { translated, total } = translationCounts(
     translations,
-    locales.map(l => l.code),
-    defaultLocale
+    locales.map(l => l.code)
   );
-  const missing = untranslatedLocales(translations, locales, defaultLocale);
-  const shown = translatable.slice(0, MAX_DOTS);
-  const overflow = translatable.length - shown.length;
+  const missing = untranslatedLocales(translations, locales);
+  const shown = locales.slice(0, MAX_DOTS);
+  const overflow = locales.length - shown.length;
 
   // One spoken summary for the whole group, so a reader gets the row's answer
   // without stepping through every dot — while each dot still names itself for

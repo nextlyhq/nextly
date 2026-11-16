@@ -1,0 +1,411 @@
+/**
+ * System health's source: what the System health card answers, and the
+ * "System problems" kind of the attention digest, both from one read.
+ *
+ * ## It combines domain reads and owns no rule
+ *
+ * - **Version:** the running core version (`getCoreVersion`).
+ * - **Migrations:** the boot migrations gate's own state, read without waiting
+ *   on it (`assertBootMigrationsSettled`): still running at boot, or refused;
+ *   and the schema ledger's migrations with an attempt, an apply's or a
+ *   rollback's, that did not finish and that nothing has resolved since
+ *   (`readSchemaProblems`, by each migration's standing, as `migrate:status`
+ *   reads it), told apart into those still running in another process and
+ *   those that failed or were interrupted.
+ * - **Schema changes:** the ledger's collections whose newest schema change
+ *   failed or was interrupted, from the same read.
+ * - **Storage:** the storage layer's last failed write, which it keeps per
+ *   process (`lastStorageWriteFailure`), and the adapter's type.
+ * - **Database:** the adapter's own read of its connection
+ *   (`readDatabaseHealth`): the server's version, a round trip, and whether
+ *   the connection is encrypted, read from the session.
+ * - **The newest version, email, jobs, runtime and plugins:** the health
+ *   domain's reads (`domains/health`), each answered on its own, so one that
+ *   fails leaves its line "Couldn't check" and the card still drawn.
+ *
+ * The attention digest reads only what its items count (migrations, schema
+ * changes, storage and the database's connection), never the registry or the
+ * jobs table, so Needs your attention does not wait on the newest-version
+ * read.
+ *
+ * None of these is computed here a second way: the card and the attention
+ * items are two views of {@link readSystemHealth}, so they cannot disagree
+ * about what is wrong.
+ *
+ * ## Only a super-admin is answered
+ *
+ * Every answer is the install's, not the reader's, so who may see it is the
+ * one question: a super-admin, by the one decision (`callerIsSuperAdmin`),
+ * asked before anything is read. Anyone else gets no card (the audience never
+ * hands it) and no attention item (the kind is hidden, as an absent one is).
+ *
+ * @module services/dashboard/system-health-source
+ */
+
+import {
+  callerIsSuperAdmin,
+  readAccessCaller,
+} from "../../auth/entity-read-access";
+import { container } from "../../di/container";
+import type { NextlyServiceConfig } from "../../di/register";
+import {
+  connectionAttention,
+  readDatabaseHealth,
+  type InspectableAdapter,
+} from "../../domains/health/database-health";
+import { readEmailHealth } from "../../domains/health/email-health";
+import { readJobsHealth } from "../../domains/health/jobs-health";
+import { readLatestVersion } from "../../domains/health/latest-version";
+import {
+  pluginsHealth,
+  readRuntimeHealth,
+} from "../../domains/health/runtime-health";
+import { readSchemaProblems } from "../../domains/schema/events/schema-problems";
+import type { DigestReader } from "../../domains/widgets/attention/digest";
+import {
+  provideSystemHealth,
+  type SystemHealthData,
+  type SystemHealthMigrationStatus,
+} from "../../domains/widgets/core-widgets/system-health";
+import { boundCaller } from "../../domains/widgets/declaration/read-services";
+import { NextlyError } from "../../errors/nextly-error";
+import { assertBootMigrationsSettled } from "../../init/boot-migrations-gate";
+import { getCoreVersion } from "../../plugins/core-version";
+import { isProductionRuntime } from "../../shared/builder-refusal";
+import { lastStorageWriteFailure } from "../../storage/last-write-failure";
+
+import type { ReadCaller } from "./readable-resources";
+
+/** How many failed collections the card names; past it, it says how many more. */
+const SYSTEM_HEALTH_LISTED_COLLECTIONS = 3;
+
+/** The boot migrations gate's state, read without waiting on it. */
+type BootGateState = "settled" | "pending" | "refused";
+
+/**
+ * The gate's state, by what it answers a caller that cannot wait: nothing
+ * once settled, its pending refusal while boot migrations run, and the
+ * process's refusal once refused.
+ */
+function bootGateState(): BootGateState {
+  try {
+    assertBootMigrationsSettled();
+    return "settled";
+  } catch (error) {
+    return error instanceof NextlyError &&
+      error.code === "NEXTLY_BOOT_MIGRATIONS_PENDING"
+      ? "pending"
+      : "refused";
+  }
+}
+
+/** The handle the ledger, the jobs and the connection are read through. */
+interface AdapterLike extends InspectableAdapter {
+  getDrizzle: () => unknown;
+}
+
+/** The documentation on encrypting the database connection. */
+export const ENCRYPTED_CONNECTIONS_DOCS =
+  "https://nextlyhq.com/docs/database/encrypted-connections";
+
+/** The registry the failed collections' labels are read from. */
+interface CollectionLabels {
+  getCollectionBySlug(
+    slug: string
+  ): Promise<{ labels?: { plural?: string } } | null>;
+}
+
+/** A collection's plural label, or its slug when the registry has no row for it. */
+async function collectionLabel(slug: string): Promise<string> {
+  const registry = container.get<CollectionLabels>("collectionRegistryService");
+  const collection = await registry.getCollectionBySlug(slug);
+  const label = collection?.labels?.plural;
+  return typeof label === "string" && label !== "" ? label : slug;
+}
+
+/**
+ * The migrations line: failed when the gate refused or a migration has an
+ * unresolved attempt that failed or was interrupted; pending while boot
+ * migrations are still running, or while another process (a CLI, a second
+ * instance) is applying one; otherwise up to date.
+ *
+ * While the gate is pending, an attempt with no outcome yet is the boot's own
+ * run under way, so every unresolved attempt is counted as pending. Once
+ * settled, this process is applying nothing, so an attempt still open was
+ * recorded by another one: running while it is younger than the threshold a
+ * schema change is judged by (`SCHEMA_CHANGE_STALE_MS`, as `readSchemaProblems`
+ * splits them), and interrupted, the failure it may be, past it.
+ */
+function migrationsLine(
+  gate: BootGateState,
+  unfinished: number,
+  running: number
+): SystemHealthData["migrations"] {
+  if (gate === "pending") {
+    return { status: "pending", failed: 0, pending: unfinished + running };
+  }
+  const failed = unfinished + (gate === "refused" && unfinished === 0 ? 1 : 0);
+  let status: SystemHealthMigrationStatus = "ok";
+  if (failed > 0) status = "failed";
+  else if (running > 0) status = "pending";
+  return { status, failed, pending: running };
+}
+
+/**
+ * The collection the media library's uploads are routed by: storage picks a
+ * collection's own adapter (S3, Vercel Blob, UploadThing) by it, and falls back
+ * to local disk for any other.
+ */
+const MEDIA_COLLECTION = "media";
+
+/**
+ * The type of the storage adapter the media library writes through, or
+ * nothing when storage could not say.
+ */
+function storageType(): { type?: string } {
+  try {
+    const type = container
+      .get<{ getStorageType: (collection?: string) => string }>("mediaStorage")
+      .getStorageType(MEDIA_COLLECTION);
+    return typeof type === "string" && type !== "" ? { type } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The storage line: working, or when, where and why its last write failed. */
+function storageLine(): SystemHealthData["storage"] {
+  const failure = lastStorageWriteFailure();
+  return failure === undefined
+    ? { status: "ok", ...storageType() }
+    : {
+        status: "failed",
+        ...storageType(),
+        failedAt: failure.at,
+        adapter: failure.adapter,
+        reason: failure.reason,
+      };
+}
+
+/** What a line's own read answered, or `null` when it failed. */
+async function orNull<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The site's own name for the deployment (`admin.environment.label`), when it
+ * gives one. Read from the booted config on demand, so this module does not
+ * load the route handler's.
+ */
+async function environmentLabel(): Promise<{ label?: string }> {
+  try {
+    const { getHandlerConfig } = await import(
+      "../../route-handler/auth-handler"
+    );
+    const label = getHandlerConfig()?.admin?.environment?.label;
+    return typeof label === "string" && label.trim() !== "" ? { label } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The facts the attention kind counts: each problem System health reports. */
+type ProblemFacts = Pick<
+  SystemHealthData,
+  "migrations" | "schemaChanges" | "storage" | "database"
+>;
+
+/**
+ * The facts a problem is counted from: migrations, schema changes, storage
+ * and the database's connection, read at once. Takes no caller: who may see
+ * them is decided before they are asked.
+ */
+async function readProblemFacts(): Promise<ProblemFacts> {
+  const adapter = container.get<AdapterLike>("adapter");
+  const gate = bootGateState();
+  const [problems, database] = await Promise.all([
+    readSchemaProblems({ db: adapter.getDrizzle(), dialect: adapter.dialect }),
+    readDatabaseHealth(adapter, isProductionRuntime()),
+  ]);
+  const failed = problems.failedCollectionChanges;
+  const listed = failed.slice(0, SYSTEM_HEALTH_LISTED_COLLECTIONS);
+  return {
+    database,
+    migrations: migrationsLine(
+      gate,
+      problems.unfinishedMigrations.length,
+      problems.runningMigrations.length
+    ),
+    schemaChanges: {
+      failed: await Promise.all(
+        listed.map(async slug => ({ slug, label: await collectionLabel(slug) }))
+      ),
+      more: failed.length - listed.length,
+    },
+    storage: storageLine(),
+  };
+}
+
+/**
+ * The install's health, as System health draws it: the problem facts, and
+ * the version's channel, the environment, email, jobs, runtime and plugins,
+ * each read on its own beside them.
+ */
+async function readSystemHealth(): Promise<SystemHealthData> {
+  const adapter = container.get<AdapterLike>("adapter");
+  const config = container.get<NextlyServiceConfig>("config");
+  const version = getCoreVersion();
+  const [facts, latest, label, email, jobs] = await Promise.all([
+    readProblemFacts(),
+    readLatestVersion(version),
+    environmentLabel(),
+    orNull(() =>
+      readEmailHealth(
+        adapter.getDrizzle(),
+        adapter.dialect,
+        config.email?.providerConfig?.provider
+      )
+    ),
+    orNull(() =>
+      readJobsHealth(adapter.getDrizzle(), adapter.dialect, new Date())
+    ),
+  ]);
+  return {
+    version,
+    latest,
+    environment: { production: isProductionRuntime(), ...label },
+    ...facts,
+    email,
+    jobs,
+    runtime: readRuntimeHealth(process.cwd()),
+    plugins: pluginsHealth(config.plugins),
+  };
+}
+
+/** Whether `caller` may be shown the install's health: a super-admin, by the one decision. */
+function maySeeSystemHealth(caller: ReadCaller): Promise<boolean> {
+  return callerIsSuperAdmin(readAccessCaller(caller));
+}
+
+/**
+ * The "System problems" kind: one item per problem System health reports,
+ * each with why it matters and where to go about it: critical, but for a
+ * connection whose encryption could not be read in production, a warning.
+ *
+ * A migration has no page in the admin, and the System health card may not
+ * be placed, so a migration's item links nowhere: its reason names the
+ * command that says which migrations, and what to do about them.
+ */
+const SYSTEM_PROBLEMS: readonly {
+  id: string;
+  label: string;
+  reason: string;
+  severity?: "critical" | "warning";
+  link?: string;
+  help?: string;
+  single?: true;
+  count: (health: ProblemFacts) => number;
+}[] = [
+  {
+    id: "core/system-migrations-failed",
+    label: "Failed migrations",
+    reason:
+      "A migration did not finish applying or rolling back. Run nextly migrate:status to see which.",
+    count: health => health.migrations.failed,
+  },
+  {
+    id: "core/system-migrations-pending",
+    label: "Pending migrations",
+    reason:
+      "Migrations are still being applied. Run nextly migrate:status to see which.",
+    // Pending with no attempt recorded yet is still one thing waiting; and a
+    // migration another process is applying is pending beside a failed one.
+    count: health =>
+      health.migrations.status === "pending"
+        ? Math.max(1, health.migrations.pending)
+        : health.migrations.pending,
+  },
+  {
+    id: "core/system-schema-changes",
+    label: "Failed schema changes",
+    reason: "A collection's last schema change failed or did not finish.",
+    link: "builder/collections",
+    count: health =>
+      health.schemaChanges.failed.length + health.schemaChanges.more,
+  },
+  {
+    id: "core/system-storage",
+    label: "Failed storage write",
+    reason: "The storage adapter's last write failed.",
+    link: "media",
+    count: health => (health.storage.status === "failed" ? 1 : 0),
+  },
+  {
+    id: "core/system-connection-unencrypted",
+    label: "Database connection is not encrypted",
+    reason: "Passwords and data cross the network as plain text.",
+    help: ENCRYPTED_CONNECTIONS_DOCS,
+    single: true,
+    count: health =>
+      connectionAttention(health.database) === "unencrypted" ? 1 : 0,
+  },
+  {
+    id: "core/system-connection-unchecked",
+    label: "Couldn't check the database connection's encryption",
+    reason: "It may cross the network as plain text.",
+    severity: "warning",
+    help: ENCRYPTED_CONNECTIONS_DOCS,
+    single: true,
+    count: health =>
+      connectionAttention(health.database) === "unchecked" ? 1 : 0,
+  },
+];
+
+/**
+ * A reader for each system problem, for the attention digest. A reader who is
+ * not a super-admin is shown none, as on an install with nothing wrong; so is
+ * one whose roles could not be read, since `callerIsSuperAdmin` fails closed.
+ * The problem facts are read once for all of them, and only after the caller is known
+ * to be a super-admin: each item's own budget bounds it, and a read that fails
+ * fails these items alone.
+ */
+export function systemProblemReaders(caller: ReadCaller): DigestReader[] {
+  let allowed: Promise<boolean> | undefined;
+  const visible = () => (allowed ??= maySeeSystemHealth(caller));
+  let health: Promise<ProblemFacts> | undefined;
+  const read = () => (health ??= readProblemFacts());
+  return SYSTEM_PROBLEMS.map(problem => ({
+    id: problem.id,
+    kind: "system" as const,
+    label: problem.label,
+    reason: problem.reason,
+    severity: problem.severity ?? ("critical" as const),
+    ...(problem.link === undefined ? {} : { link: problem.link }),
+    ...(problem.help === undefined ? {} : { help: problem.help }),
+    ...(problem.single === undefined ? {} : { single: problem.single }),
+    owner: "core",
+    visible,
+    read: async () => problem.count(await read()),
+  }));
+}
+
+/**
+ * Hand the System health card its read: as the caller its read services were
+ * bound for, refused before anything is read unless that caller is a
+ * super-admin.
+ */
+export function registerSystemHealthSource(): void {
+  provideSystemHealth(async services => {
+    const caller = boundCaller(services);
+    if (!(await maySeeSystemHealth(caller))) {
+      throw NextlyError.forbidden({
+        logContext: { reason: "system-health-super-admin-required" },
+      });
+    }
+    return readSystemHealth();
+  });
+}

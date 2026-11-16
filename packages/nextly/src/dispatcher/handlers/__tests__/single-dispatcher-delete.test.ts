@@ -57,6 +57,12 @@ function wireRegistry(deleteSingle: () => Promise<void>) {
       tableName: `single_${SLUG}`,
       locked: false,
     }),
+    // The delete reads the Single as stored, past the registry row cache.
+    getSingleForWrite: vi.fn().mockResolvedValue({
+      slug: SLUG,
+      tableName: `single_${SLUG}`,
+      locked: false,
+    }),
     deleteSingle: vi.fn(deleteSingle),
   };
   vi.mocked(getSingleRegistryFromDI).mockReturnValue(
@@ -130,7 +136,7 @@ describe("the metadata service tolerates one failure and no others", () => {
       // Read INSIDE the exclusion before anything is dropped, so a Single that became code-first
       // while the request waited is refused rather than force-deleted. Answers `null` here: these
       // cases are about a row that is already gone, which delete tolerates by intent.
-      getSingleBySlug: vi.fn().mockResolvedValue(null),
+      getSingleForWrite: vi.fn().mockResolvedValue(null),
       deleteSingle: vi.fn(deleteSingle),
     };
     return {

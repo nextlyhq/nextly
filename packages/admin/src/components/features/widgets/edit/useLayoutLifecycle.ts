@@ -16,9 +16,16 @@ import {
   isConflictError,
   type UseDashboardLayoutResult,
 } from "@admin/hooks/queries/useDashboardLayout";
+import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
-import { hasChanges, withinSubmissionLimit } from "../layout-editor";
+import {
+  hasChanges,
+  setPlacementConfig,
+  setPlacementSize,
+  withinSubmissionLimit,
+} from "../layout-editor";
 
+import type { PanelKept } from "./panel-values";
 import type { LayoutDraft } from "./useLayoutEditor";
 
 /** What a save may say beyond the draft itself. */
@@ -29,6 +36,56 @@ export interface SaveOptions {
    * without it.
    */
   replaceUnreadable?: boolean;
+  /**
+   * Cards' settings changes still in their open settings panels, as each panel's Done would keep
+   * them, saved with the draft: the unsaved-changes prompt's Save, which would otherwise leave
+   * them behind. Applied by the editor's own `setPlacementConfig` and `setPlacementSize`, as the
+   * drawer's Save applies them.
+   */
+  staged?: readonly StagedSettings[];
+  /**
+   * Cards added this session that are not saved: the card the add panel added as one the reader
+   * already has, while it still matches it (`useProvisionalCard`). Taken out of what is sent, as
+   * if never added.
+   */
+  leaveOut?: readonly string[];
+}
+
+/**
+ * One card's settings, own title and, where the reader chose another width, its size, as its
+ * settings drawer's Save would keep them.
+ */
+export interface StagedSettings {
+  placementId: string;
+  config: Record<string, unknown>;
+  ownTitle: string;
+  resize?: PanelKept["resize"];
+}
+
+/** The draft's placements with each staged drawer's change applied, as its Save applies one. */
+function withStaged(
+  placements: readonly WidgetPlacement[],
+  staged: readonly StagedSettings[] | undefined
+): WidgetPlacement[] {
+  return (staged ?? []).reduce(
+    (current, change) => {
+      const configured = setPlacementConfig(
+        current,
+        change.placementId,
+        change.config,
+        change.ownTitle
+      );
+      return change.resize === undefined
+        ? configured
+        : setPlacementSize(
+            configured,
+            change.placementId,
+            change.resize.size,
+            change.resize.bounds
+          );
+    },
+    [...placements]
+  );
 }
 
 /**
@@ -67,10 +124,12 @@ export interface LayoutLifecycle {
  * following the default, so later changes to it reach them. Once they change
  * the staged default it is their own arrangement, and it is saved like one.
  */
-function savesAsReset(draft: LayoutDraft): boolean {
+function savesAsReset(
+  draft: LayoutDraft,
+  placements: readonly WidgetPlacement[]
+): boolean {
   return (
-    draft.stagedReset !== null &&
-    !hasChanges(draft.stagedReset, draft.placements)
+    draft.stagedReset !== null && !hasChanges(draft.stagedReset, placements)
   );
 }
 
@@ -109,8 +168,13 @@ export function useLayoutLifecycle(
     async (options: SaveOptions = {}): Promise<SaveOutcome> => {
       // Nothing held is nothing lost: there is no draft to keep.
       if (!draft) return "saved";
+      const leftOut = new Set(options.leaveOut);
+      const placements = withStaged(
+        draft.placements.filter(placement => !leftOut.has(placement.id)),
+        options.staged
+      );
       try {
-        if (savesAsReset(draft)) {
+        if (savesAsReset(draft, placements)) {
           // The guards the reset was staged against, so a stale tab cannot
           // delete an arrangement another tab saved since.
           await layout.reset.mutateAsync({
@@ -123,7 +187,7 @@ export function useLayoutLifecycle(
             // the array's, so nothing is renumbered on the way out. Within the
             // endpoint's limit, shedding removed cards if a regained
             // arrangement holds more than one save may carry.
-            placements: [...withinSubmissionLimit(draft.placements)],
+            placements: [...withinSubmissionLimit(placements)],
             version: draft.version,
             scope: draft.scope,
             // The editor is the one route that can reorder, resize or remove
@@ -150,16 +214,19 @@ export function useLayoutLifecycle(
   );
 
   const stageReset = useCallback(() => {
-    const defaults = layout.layout?.defaultPlacements;
-    if (!defaults) return;
+    const read = layout.layout;
+    if (!read?.defaultPlacements) return;
+    const withDefaults = (
+      current: LayoutDraft,
+      defaults: readonly WidgetPlacement[]
+    ): LayoutDraft => ({
+      ...current,
+      placements: [...defaults],
+      stagedReset: [...defaults],
+    });
+    // Staged at once from this read's default, so the reset answers now.
     setDraft(current =>
-      current
-        ? {
-            ...current,
-            placements: [...defaults],
-            stagedReset: [...defaults],
-          }
-        : current
+      current ? withDefaults(current, read.defaultPlacements) : current
     );
   }, [layout.layout, setDraft]);
 

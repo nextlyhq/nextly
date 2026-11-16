@@ -16,6 +16,7 @@
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { generateSQL } from "../../schema/pipeline/sql-templates";
 import {
   indexCatalog,
@@ -236,10 +237,17 @@ function renameStep(
   // positionally against `renames`. `undefined` means that source was already
   // gone when this step ran, so there is nothing to compare against — reported
   // as not comparable rather than as nothing lost.
-  let indexesBefore: (string[] | undefined)[] = [];
+  //
+  // Read once, by the step's first run. A step runs again in each try for a busy
+  // table, and a try after one whose rename committed (MySQL commits a rename on
+  // its own) finds the source gone; reading again then would leave nothing to
+  // compare against and pass a rename that lost an index.
+  let indexesBefore: (string[] | undefined)[] | undefined;
 
   return {
     id: `${entry.kind}:${entry.from}->${entry.to}`,
+    // Its renames wait for a table another session is using, in tries for a busy table.
+    changesStructure: true,
     async run(session) {
       // Observed BEFORE the transaction opens. The observer reads through the
       // adapter, which takes its own connection; asking it from inside the
@@ -252,11 +260,14 @@ function renameStep(
       );
       // Sequential rather than concurrent: the observer checks out a connection
       // per call, and a pool sized to one cannot serve two at once.
-      indexesBefore = [];
-      for (const source of sources) {
-        indexesBefore.push(
-          source === undefined ? undefined : await observer.indexNames(source)
-        );
+      if (indexesBefore === undefined) {
+        const read: (string[] | undefined)[] = [];
+        for (const source of sources) {
+          read.push(
+            source === undefined ? undefined : await observer.indexNames(source)
+          );
+        }
+        indexesBefore = read;
       }
       // Observed outside the transaction for the same reason the catalog is,
       // and observed fresh per step rather than once per run: earlier steps have
@@ -337,6 +348,9 @@ function renameStep(
               SET ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.to}
               WHERE ${sql.identifier(REGISTRY_TABLE_NAME_COLUMN)} = ${entry.from}`
         );
+        // Written past the registry service, so a component row cached with the old table name
+        // is cleared here.
+        clearRegistryRowCache();
       });
     },
     async verify(session) {
@@ -356,7 +370,7 @@ function renameStep(
         // Refuses rather than returning false: a lost index is not "not yet
         // done", and a retry cannot bring it back.
         const lost = findLostIndexes(
-          indexesBefore[index],
+          indexesBefore?.[index],
           await observer.indexNames(target)
         );
         if (lost.comparable && lost.lost.length > 0) {
@@ -393,6 +407,8 @@ function columnStep(entry: ManifestEntry, context: StepContext): MigrationStep {
 
   return {
     id: `column:${table}.${entry.from}->${entry.to}`,
+    // Its rename waits for a table another session is using, in tries for a busy table.
+    changesStructure: true,
     async run(session) {
       if (applied) return;
       // Observed BEFORE the transaction, for the same reason the table path is:

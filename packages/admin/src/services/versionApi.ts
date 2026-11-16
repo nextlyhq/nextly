@@ -30,6 +30,10 @@ import type {
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
+import {
+  DOCUMENT_VERSION_KEY,
+  type StaleVersion,
+} from "@admin/lib/document-version";
 
 // The diff wire types live in core (the engine produces them); re-exported here
 // so admin components import them from the same place as the other version types.
@@ -73,13 +77,14 @@ export type VersionScope =
 
 /**
  * Who or what history credits a version or an event to: a person, an API key
- * (by its own name), a plugin's own kind of person, a release, the system, or
- * an agent.
+ * (by its own name), a plugin's own kind of person, a plugin acting on its own
+ * behalf (by its name), a release, the system, or an agent.
  */
 export type HistoryActorKind =
   | "person"
   | "apiKey"
   | "principal"
+  | "plugin"
   | "release"
   | "system"
   | "agent";
@@ -114,8 +119,11 @@ export type VersionDetail = VersionMeta & {
   snapshot: unknown;
   /**
    * What the read rules held back from this reader: top-level field names, and
-   * dotted paths below them (`banner.secret`). A field named here was withheld,
-   * not absent from the version.
+   * dotted paths below them (`banner.secret`), a list row named by its index in
+   * this version (`items.1.secret`). A field named here was withheld, not absent
+   * from the version.
+   *
+   * @experimental
    */
   withheld: string[];
 };
@@ -208,17 +216,21 @@ export interface AutosaveDetail {
   snapshot: unknown;
   updatedAt: string;
   locale: string | null;
-}
-
-/** What a restore reports back. */
-export interface RestoreVersionResponse {
-  message: string;
-  restoredFrom: number;
   /**
-   * Snapshot keys the current schema no longer accepts. A restore with a
-   * non-empty list succeeded but did not bring the document back in full.
+   * Whether the document has been written since this recovery point began,
+   * and by whom, as the server keeps it: `by-you` (this author's own later
+   * save or publish), `by-another` (anyone else, or a write that names no
+   * one), or `unknown` (a point recorded before this was kept). Absent while
+   * the document is as it was when the point began.
    */
-  droppedFields: string[];
+  superseded?: "by-you" | "by-another" | "unknown";
+  /**
+   * What changed in the document since the version the point's edits began
+   * from, as a refused save says it; absent while nothing it covers did.
+   */
+  changedSince?: StaleVersion;
+  /** The point was saved without its starting version, before versions. */
+  startingVersionUnknown?: boolean;
 }
 
 /** What a rename reports back: the version's metadata, without its snapshot. */
@@ -293,20 +305,6 @@ export const versionApi = {
     protectedApi.get<VersionDetail>(`${basePath(scope)}/${versionNo}`),
 
   /**
-   * Put the document back to an earlier version. A write, not a read: the
-   * server resubmits the stored snapshot through the ordinary update path and
-   * records the result as a new version.
-   */
-  restore: (
-    scope: VersionScope,
-    versionNo: number
-  ): Promise<RestoreVersionResponse> =>
-    protectedApi.post<RestoreVersionResponse>(
-      `${basePath(scope)}/${versionNo}/restore`,
-      {}
-    ),
-
-  /**
    * Name a version, or clear its name with `null`.
    *
    * A PATCH on the version itself rather than a nested action, because it is
@@ -354,10 +352,16 @@ export const versionApi = {
    */
   discardWorkingDraft: (
     scope: VersionScope,
-    locale?: string | null
+    locale?: string | null,
+    /**
+     * The version the editor's copy started from. A discard moves the
+     * document's version, and is refused when the document changed since.
+     */
+    version?: string
   ): Promise<DiscardWorkingDraftResponse> => {
     const search = new URLSearchParams();
     if (locale) search.set("locale", locale);
+    if (version) search.set(DOCUMENT_VERSION_KEY, version);
     const query = search.toString();
 
     return protectedApi.delete<DiscardWorkingDraftResponse>(
@@ -373,7 +377,12 @@ export const versionApi = {
    */
   takeLiveSharedValues: (
     scope: VersionScope,
-    locale?: string | null
+    locale?: string | null,
+    /**
+     * The version of the pending change's language the editor holds: a take
+     * is refused when the document changed since.
+     */
+    version?: string
   ): Promise<TakeLiveSharedValuesResponse> => {
     const search = new URLSearchParams();
     if (locale) search.set("locale", locale);
@@ -381,7 +390,7 @@ export const versionApi = {
 
     return protectedApi.post<TakeLiveSharedValuesResponse>(
       `${basePath(scope)}/working-draft/take-live${query ? `?${query}` : ""}`,
-      {}
+      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
     );
   },
 

@@ -5,7 +5,7 @@ description: Define single-document content like site settings, headers, and foo
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-A single is a one-off document — content that exists as exactly one instance. Site settings, navigation headers, footers, and homepage configurations are typical singles. Unlike [collections](/docs/configuration/collections), singles have no list view, no create/delete operations, and are auto-created on first access.
+A single is a one-off document — content that exists as exactly one instance. Site settings, navigation headers, footers, and homepage configurations are typical singles. Unlike [collections](/docs/configuration/collections), singles have no list view, no create/delete operations, and are auto-created on first access. When several requests reach a single that has no document yet at the same moment, such as the first page views of a new site, one document is created from its defaults and every request gets it.
 
 > **Source of truth:** the `SingleConfig` interface lives in `packages/nextly/src/singles/config/types.ts`. The `defineSingle()` helper is in `packages/nextly/src/singles/config/define-single.ts`.
 
@@ -56,8 +56,9 @@ export default defineSingle({
     }),
   ],
   access: {
+    // Visitors can read, and signed-in callers holding read-site-settings;
+    // the role's update-site-settings decides an update.
     read: true,
-    update: ({ permissions }) => permissions.includes("update-site-settings"),
   },
   hooks: {
     afterChange: [
@@ -119,6 +120,8 @@ The Schema Builder produces the same `SingleConfig` that code-first singles use.
 ## Single options
 
 Only `slug` and `fields` are required.
+
+A Single's slug follows the [address rule](/docs/configuration/collections#the-address-rule) shared by collections and field groups.
 
 ### `slug`
 
@@ -183,6 +186,15 @@ When enabled, the global sanitization hook strips HTML tags from plain-text fiel
 
 Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
 
+### `publicAddress`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | `undefined` |
+
+Where the Single is served on your site, as a fixed path: `"/"` for a homepage, `"/about"`. A Single is one page, so its address has no placeholder. `publicAddressOf` answers that a Single without one has no address. Two Singles can't share an address: the configuration stops loading, naming both. See [Public addresses](/docs/configuration/public-addresses).
+
 ## Admin options
 
 Configure how the single appears in the admin panel via the `admin` property.
@@ -200,17 +212,17 @@ Configure how the single appears in the admin panel via the `admin` property.
 
 ## Access control
 
-A single's access rules are `read`, `update`, `publish` and `unpublish` — there is no `create` or `delete`, since the document is auto-created on first access and cannot be removed. `publish` and `unpublish` are judged on top of `update`, for a single with `status: true`. Any other key stops startup with `ACCESS_KEY_UNKNOWN`, naming the key; remove it to fix the config.
+A single's access rules are `read`, `update`, `publish` and `unpublish` — there is no `create` or `delete`, since the document is auto-created on first access and cannot be removed. For a single with `status: true`, a write that changes only its status is judged by `publish` or `unpublish` alone, so a publisher sends `{ "status": "published" }`; a write that also edits fields needs `update` too. Any other key stops startup with `ACCESS_KEY_UNKNOWN`, naming the key; remove it to fix the config.
 
 ```typescript
 access: {
   read: true,
-  update: ({ permissions, target }) =>
-    permissions.includes(`update-${target.slug}`),
+  // On top of the role's update permission: not while a content freeze is on.
+  update: () => process.env.CONTENT_FREEZE !== "on",
 }
 ```
 
-Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule is what a signed-in user is judged by, so it checks the permission itself and narrows from there; don't decide by a role's name. Super-admin always bypasses checks. A Single's rule is handed the same context as a collection's, with `target.kind` set to `"single"`: see [collections](/docs/configuration/collections#access-control).
+Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule only narrows the permission: a signed-in user or an API key needs it first, and the rule lets them through only by returning `true`; don't decide by a role's name. Super-admin always bypasses checks. A Single's rule is handed the same context as a collection's, with `target.kind` set to `"single"`: see [collections](/docs/configuration/collections#access-control).
 
 ## Hooks
 
@@ -304,8 +316,9 @@ export default defineSingle({
     }),
   ],
   access: {
+    // Visitors can read, and signed-in callers holding read-header; the
+    // role's update-header decides an update.
     read: true,
-    update: ({ permissions }) => permissions.includes("update-header"),
   },
 });
 ```

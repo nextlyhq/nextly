@@ -1,0 +1,32 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+"create-nextly-app": patch
+"nextly": patch
+---
+
+The admin shows an entry's own design where an author meets it: a Design section first in every entry's side panel, and above the form on a phone (which design the entry is shown with, giving it its own design, editing or removing it, and the template to open or create where its collection has no published one), a Design column right after Status (or after the entry's name, where the list has no Status) on the entry list of a collection with a template or own designs (taken back from an open list once a later read finds neither), and, on a template, the entries with their own design in its side panel and a count in the builder's top bar. Deleting a template from its document says first which own designs are kept and that the collection's other entries stop being shown as pages, and checks the delete with a dry run as the dialog opens, so a delete the site would refuse says why and is not offered. The page builder adds `GET /templates/entry-designs`, a collection's own designs and template read as the caller, and the `delete-template` template action. The admin draws side panel sections declared at the `collection.edit` place where they are placed among the panel's own sections, leaves out a plugin's panel section whose component draws nothing for the document, draws one declared `narrow: "above-form"` (experimental) above the fields instead where the editor is phone-narrow, and adds a list column or action a plugin registers while the list is on screen, bulk actions in the selection bar included. `registerColumns`, `transformColumns`, `registerRowAction` and `registerBulkAction` now return a function that takes the registration back, from an open list too. A side panel section that replaces a built-in section only for some collections or entries gives the built-in back wherever it does not apply. `nextly generate:types` adds the components of a plugin's declared admin contributions (blocks, tabs, side panel sections, drawn columns and the components an action opens) to the generated component map, so a plugin whose only admin UI is one of them draws in a consuming app. The own designs read goes on past entries the caller may not read until its list is full, and where it stops short of every own design, the template's side panel and its delete dialog say more may exist rather than that there are none.

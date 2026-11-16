@@ -15,6 +15,7 @@ import type { eq as drizzleEq } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { resolveRelations } from "../../database/resolve-relations";
+import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
 import {
   buildAuditLogWriter,
@@ -29,6 +30,7 @@ import {
   type RateLimitStore,
 } from "../../middleware/rate-limit";
 import {
+  bootNameOf,
   NO_PLUGIN_GRANTS,
   type PluginGrants,
 } from "../../plugins/plugin-consent";
@@ -37,10 +39,6 @@ import {
   type PluginContext,
   type PluginDefinition,
 } from "../../plugins/plugin-context";
-import {
-  soonestExpiry,
-  userRoleAssignmentsInForce,
-} from "../../services/lib/role-assignments";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import { readUnderRowLock, type LockableRead } from "../../shared/lib/row-lock";
 import {
@@ -58,6 +56,7 @@ import { createPasswordStrategy } from "../pipeline/password-strategy";
 import { databaseSpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
+import { readSessionRoles } from "../session/read-session-roles";
 import type { SessionRoles } from "../session/session-roles";
 import { claimFirstSetup, sharedRecordReader } from "../setup-token/setup-gate";
 import {
@@ -164,34 +163,10 @@ export function buildAuthRouterDeps(
       return toAccountState(result[0]);
     },
 
-    fetchSessionRoles: async (userId: string): Promise<SessionRoles> => {
-      // Only the assignments in force: an expired role granted nothing, and
-      // put into the claims it would be handed back to every reader of them
-      // until the token expired. The condition is the one every reader of
-      // `user_roles` that decides access shares. The soonest expiry comes
-      // back with the roles, so the token ends when the first of them lapses.
-      //
-      // Errors propagate, as in fetchAccountState above, so a failed read
-      // refuses the login or refresh. Answered with no roles, it issued a
-      // session whose claims said the person held nothing, which each
-      // refresh repeated, with nothing to say a read had failed.
-      const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const rows = (await db
-        .select({
-          roleId: schema.userRoles.roleId,
-          expiresAt: schema.userRoles.expiresAt,
-        })
-        .from(schema.userRoles)
-        .where(
-          userRoleAssignmentsInForce(schema.userRoles, userId, new Date())
-        )) as Array<{ roleId: string; expiresAt: Date | null }>;
-      return {
-        roleIds: rows.map(r => r.roleId),
-        validUntil: soonestExpiry(rows),
-      };
-    },
+    // The roles the token carries and the soonest moment one lapses, read the
+    // way the Direct API's `login` reads them too (`readSessionRoles`).
+    fetchSessionRoles: (userId: string): Promise<SessionRoles> =>
+      readSessionRoles(getService("adapter"), userId),
 
     fetchCustomFields: async (userId: string) => {
       // No key for a value that is not known — no `user_ext` row, fields not
@@ -282,9 +257,9 @@ export function buildAuthRouterDeps(
       );
     },
 
-    // Sign-out and the theft response delete through `serializeOnSqlite`: a
-    // revocation another request's rollback undid would leave a session the
-    // user was told had ended.
+    // Sign-out and ending all of an account's sessions delete through
+    // `serializeOnSqlite`: a revocation another request's rollback undid
+    // would leave a session the user was told had ended.
     deleteRefreshTokenByHash: async (tokenHash: string) => {
       const { eq } = await import("drizzle-orm");
       const { refreshTokens } = getDialectTables();
@@ -305,12 +280,12 @@ export function buildAuthRouterDeps(
       // and collapsing an unknown answer to "no administrator" would both lie
       // about setup state and risk a second super-admin. Callers convert
       // failures to a 503 envelope. The same question the first-administrator
-      // grant asks, through the same query.
-      const { superAdminRoleHeld } = await import(
-        "../../domains/users/services/last-super-admin"
+      // grant asks, through the same query; a yes is kept under the role
+      // version, since setup-status asks it on every admin screen.
+      const { administratorExists } = await import(
+        "../../domains/users/services/administrator-known"
       );
-      const adapter = getService("adapter");
-      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
+      return administratorExists(getService("adapter"), getDialectTables());
     },
 
     setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),
@@ -538,6 +513,14 @@ export function buildAuthRouterDeps(
       // the context can be built before the database is connected.
       return getService(name);
     }
+    // The jobs runner's database is the container's adapter, under the
+    // name the plugin context asks for it by.
+    if (name === "jobsDatabase") return getService("adapter");
+    // Optional where webhooks are not registered, so asked for without
+    // throwing: the context reads `null` and offers no drain.
+    if (name === "webhookFastDrainScheduler") {
+      return container.has(name) ? container.get(name) : null;
+    }
     return getService(name);
   }) as Parameters<typeof createPluginContext>[0];
   const pluginCtx = createPluginContext(ctxGetService, getHookRegistry());
@@ -576,7 +559,12 @@ export function buildAuthRouterDeps(
       grants
     );
     if (authContrib.hooks) {
-      authHooks.add(bindHooksToContext(authContrib.hooks, ownCtx));
+      authHooks.add(
+        bindHooksToContext(
+          determineUserIfGranted(authContrib.hooks, plugin, grants),
+          ownCtx
+        )
+      );
     }
     for (const def of authContrib.challenges ?? []) {
       challengeRegistry.add(bindChallengeToContext(def, ownCtx));
@@ -774,6 +762,37 @@ function readPluginGrants(getService: (name: string) => unknown): PluginGrants {
   } catch {
     return NO_PLUGIN_GRANTS;
   }
+}
+
+/**
+ * `determineUser` decides who is signed in, which is one spelling of the
+ * login capability, so it registers only from a plugin the boot granted the
+ * login grant — meaning the hook was in the manifest when the consent rule
+ * ran and the app listed the plugin. A hook that appears only after boot,
+ * on a plugin holding no grant, registers nothing: `init` runs after the
+ * consent rule and can mutate its own `contributes`, and this bridge reads
+ * those contributions afterwards, so binding them alone would register
+ * whatever `init` added rather than what the app consented to. The other
+ * auth hooks are ordinary contributions rather than login-capability
+ * declarations, and bind as before.
+ */
+export function determineUserIfGranted(
+  hooks: AuthHooks,
+  plugin: PluginDefinition,
+  grants: PluginGrants
+): AuthHooks {
+  if (grants.login.includes(bootNameOf(plugin))) {
+    return hooks;
+  }
+  // The copy is unconditional, whatever this read of `determineUser` sees:
+  // the gate and the binder read the hooks object twice — `determineUser`
+  // here, every property again in `bindHooksToContext` — and the definition
+  // the property sits on is writable after the boot (`init` runs as a
+  // method on it), so an accessor installed there could answer `undefined`
+  // for this read and the function for the binder's; returning the live
+  // object registered whatever the second read produced. The copy reads
+  // every property once, and `determineUser` stays undefined on it.
+  return { ...hooks, determineUser: undefined };
 }
 
 /** Read the sanitized NextlyServiceConfig from the DI container, if present. */

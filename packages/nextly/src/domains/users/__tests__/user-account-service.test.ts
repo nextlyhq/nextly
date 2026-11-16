@@ -353,6 +353,69 @@ describe("UserAccountService", () => {
       expect(mockDb.update).toHaveBeenCalled();
     });
 
+    it("refuses a name or image longer than every dialect stores, writing nothing", async () => {
+      // `users.name` and `users.image` are 255 characters wide on MySQL, and
+      // text elsewhere: the one limit that holds on every dialect is refused
+      // here, in plain words, before the database is asked.
+      for (const changes of [
+        { image: `https://cdn.example.com/${"a".repeat(240)}.png` },
+        { name: "n".repeat(256) },
+      ]) {
+        const refused = await service.updateCurrentUser("user-1", changes).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(refused).toBeInstanceOf(NextlyError);
+        expect((refused as NextlyError).code).toBe("VALIDATION_ERROR");
+        expect(JSON.stringify(refused)).toContain("255");
+      }
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it("counts characters as the database does, not UTF-16 units", async () => {
+      // 128 emoji are 128 characters, which a 255-character column holds,
+      // though JavaScript's .length counts 256.
+      const name = "😀".repeat(128);
+      getUserByIdData = [
+        {
+          id: "user-1",
+          email: "emoji@example.com",
+          emailVerified: null,
+          name,
+          image: null,
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+
+      await service.updateCurrentUser("user-1", { name });
+
+      expect(mockDb.update).toHaveBeenCalled();
+    });
+
+    it("saves a name and image exactly at the width every dialect stores", async () => {
+      getUserByIdData = [
+        {
+          id: "user-1",
+          email: "edge@example.com",
+          emailVerified: null,
+          name: "n".repeat(255),
+          image: "i".repeat(255),
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+
+      await service.updateCurrentUser("user-1", {
+        name: "n".repeat(255),
+        image: "i".repeat(255),
+      });
+
+      expect(mockDb.update).toHaveBeenCalled();
+    });
+
     it("should throw NextlyError(NOT_FOUND) when updating non-existent user", async () => {
       getUserByIdData = [];
 

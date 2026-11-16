@@ -69,13 +69,34 @@ export interface ResolvedEntity {
   builtBy: ColumnOrigin;
 }
 
+/**
+ * Which registry an entity's row belongs in: `dynamic_collections`,
+ * `dynamic_singles`, or the field-group registry. The same slug may name one
+ * entity of each kind, so a slug alone does not say which row to look for.
+ */
+export type EntityKind = "collection" | "single" | "fieldGroup";
+
+/**
+ * A declared entity, with the registry its row belongs in. Every entity this
+ * module resolves carries its kind; a caller that only rebuilds tables takes
+ * the narrower {@link ResolvedEntity}.
+ */
+export interface DeclaredEntity extends ResolvedEntity {
+  kind: EntityKind;
+}
+
 export interface ResolvedSchema {
   /** Every declared entity, code-first winning on a slug collision. */
-  entities: ResolvedEntity[];
+  entities: DeclaredEntity[];
   /** Table names the schema declares, for telling a real table from a junction. */
   declaredTables: Set<string>;
   /** Junction tables named outright via `options.junctionTable`. */
   knownJunctions: Set<string>;
+  /**
+   * The same names by the collection whose own fields declare them, slug to
+   * names: what an old Builder file of that collection may touch as its own.
+   */
+  junctionsByEntity: Map<string, Set<string>>;
 }
 
 interface RawEntity {
@@ -87,12 +108,14 @@ interface RawEntity {
 
 function toResolved(
   entities: readonly unknown[],
+  kind: EntityKind,
   builtBy: ColumnOrigin,
   resolveTableName: (e: { slug: string; dbName?: string }) => string
-): ResolvedEntity[] {
+): DeclaredEntity[] {
   return entities.map(raw => {
     const e = raw as RawEntity;
     return {
+      kind,
       slug: e.slug,
       tableName: resolveTableName({ slug: e.slug, dbName: e.dbName }),
       fields: e.fields ?? [],
@@ -152,9 +175,19 @@ export async function resolveDeclaredSchema(
 ): Promise<ResolvedSchema> {
   const resolvers = args.resolvers ?? DEFAULT_TABLE_NAME_RESOLVERS;
   const codeFirst = [
-    ...toResolved(args.config.collections, "codeFirst", resolvers.collection),
-    ...toResolved(args.config.singles ?? [], "codeFirst", resolvers.single),
-    ...toResolved(args.config.fieldGroups ?? [], "codeFirst", e =>
+    ...toResolved(
+      args.config.collections,
+      "collection",
+      "codeFirst",
+      resolvers.collection
+    ),
+    ...toResolved(
+      args.config.singles ?? [],
+      "single",
+      "codeFirst",
+      resolvers.single
+    ),
+    ...toResolved(args.config.fieldGroups ?? [], "fieldGroup", "codeFirst", e =>
       resolvers.component(e)
     ),
   ];
@@ -169,8 +202,9 @@ export async function resolveDeclaredSchema(
     if ((error as { code?: string }).code !== "ENOENT") throw error;
   }
 
-  let builder: ResolvedEntity[] = [];
+  let builder: DeclaredEntity[] = [];
   let builderJunctions: string[] = [];
+  let builderJunctionsByEntity: Map<string, Set<string>> = new Map();
   if (manifest) {
     const merged = applyDeferredExtendsToManifest(
       manifest,
@@ -186,16 +220,18 @@ export async function resolveDeclaredSchema(
       args.config.collections
     );
     builder = [
-      ...toResolved(survivingCollections, "collection", e =>
+      ...toResolved(survivingCollections, "collection", "collection", e =>
         resolveCollectionTableName(e.slug)
       ),
       ...toResolved(
         survivingOf(merged.singles ?? [], args.config.singles ?? []),
+        "single",
         "collection",
         resolvers.single
       ),
       ...toResolved(
         survivingOf(merged.components ?? [], args.config.fieldGroups ?? []),
+        "fieldGroup",
         "fieldGroup",
         e => resolveComponentTableName(e.slug)
       ),
@@ -206,6 +242,7 @@ export async function resolveDeclaredSchema(
     // snapshot and preserve it forever instead of letting the first migration
     // after adoption drop it.
     builderJunctions = customJunctionNames(survivingCollections);
+    builderJunctionsByEntity = junctionsBySlug(survivingCollections);
   }
 
   const entities = [...codeFirst, ...builder];
@@ -217,5 +254,56 @@ export async function resolveDeclaredSchema(
       ...customJunctionNames(args.config.collections),
       ...builderJunctions,
     ]),
+    junctionsByEntity: new Map([
+      ...junctionsBySlug(args.config.collections),
+      ...builderJunctionsByEntity,
+    ]),
   };
+}
+
+/**
+ * The junction and entity tables the configuration and the Builder's manifest
+ * declare (`knownJunctions`, `declaredTables`), for a reader of the migrations
+ * folder: an old Builder file is judged against them as `nextly migrate`
+ * judges it. With `orNone`, a manifest that cannot be read declares none, so
+ * such a file is read as a migration, for a reader that only reports.
+ */
+export async function declaredNamesOf(
+  args: ResolveSchemaArgs,
+  options: { orNone?: boolean } = {}
+): Promise<
+  | {
+      junctions: ReadonlyMap<string, ReadonlySet<string>>;
+      tables: ReadonlySet<string>;
+    }
+  | undefined
+> {
+  try {
+    const resolved = await resolveDeclaredSchema(args);
+    return {
+      junctions: resolved.junctionsByEntity,
+      tables: resolved.declaredTables,
+    };
+  } catch (error) {
+    if (options.orNone === true) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Each collection's custom junction names (`customJunctionNames`), by its
+ * slug: the names its own fields declare.
+ */
+function junctionsBySlug(
+  collections: readonly unknown[]
+): Map<string, Set<string>> {
+  const bySlug = new Map<string, Set<string>>();
+  for (const collection of collections) {
+    const slug = (collection as { slug?: unknown }).slug;
+    const names = customJunctionNames([collection]);
+    if (typeof slug === "string" && names.length > 0) {
+      bySlug.set(slug, new Set(names));
+    }
+  }
+  return bySlug;
 }

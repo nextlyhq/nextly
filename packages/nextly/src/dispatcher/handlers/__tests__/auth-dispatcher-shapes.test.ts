@@ -294,7 +294,9 @@ describe("dispatchRbac — actions (respondAction)", () => {
   it("setRolePermissions returns count metadata", async () => {
     const container = {
       rolePermissions: {
-        setRolePermissions: vi.fn().mockResolvedValue(undefined),
+        setRolePermissions: vi
+          .fn()
+          .mockResolvedValue([{ id: "p1" }, { id: "p2" }, { id: "p3" }]),
       },
       roles: {},
       permissions: {},
@@ -312,6 +314,35 @@ describe("dispatchRbac — actions (respondAction)", () => {
       message: "Role permissions updated.",
       roleId: "r1",
       permissionCount: 3,
+    });
+  });
+
+  it("setRolePermissions counts what the role holds, not what was asked", async () => {
+    // A retired `manage-` permission asked for is stored as the plain four.
+    const stored = ["read", "create", "update", "delete"].map(action => ({
+      id: `${action}-media`,
+      action,
+      resource: "media",
+    }));
+    const container = {
+      rolePermissions: {
+        setRolePermissions: vi.fn().mockResolvedValue(stored),
+      },
+      roles: {},
+      permissions: {},
+    } as unknown as ServiceContainer;
+
+    const result = await dispatchRbac(
+      container,
+      "setRolePermissions",
+      { roleId: "r1" },
+      { permissionIds: ["manage-media-id"] }
+    );
+
+    expect(await (result as Response).json()).toEqual({
+      message: "Role permissions updated.",
+      roleId: "r1",
+      permissionCount: 4,
     });
   });
 });

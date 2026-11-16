@@ -19,6 +19,21 @@ describe("collectPluginContributedSlugs", () => {
     ]);
   });
 
+  it("keeps a contributed slug that names an inherited Object property", () => {
+    // `constructor` is a slug a plugin may own; with no rename for it, the
+    // rename map must not answer with the property every object inherits.
+    const plugins = [
+      {
+        name: "forms",
+        renameMap: {},
+        contributes: { collections: [{ slug: "constructor" }] },
+      },
+    ];
+    expect([...collectPluginContributedSlugs(plugins, "collections")]).toEqual([
+      "constructor",
+    ]);
+  });
+
   it("reads the legacy plugin.<kind> shape too", () => {
     const plugins = [{ name: "legacy", collections: [{ slug: "leads" }] }];
     expect(

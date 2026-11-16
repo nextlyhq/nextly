@@ -60,7 +60,11 @@
  * @packageDocumentation
  */
 
-import type { StoragePlugin, ClientUploadData } from "nextly/storage";
+import type {
+  ClientUploadData,
+  ClientUploadOptions,
+  StoragePlugin,
+} from "nextly/storage";
 
 import { S3StorageAdapter } from "./adapter";
 import type { S3StorageConfig } from "./types";
@@ -84,8 +88,8 @@ import type { S3StorageConfig } from "./types";
  * @param config - S3 storage configuration
  * @returns A StoragePlugin that MediaStorage can register
  *
- * @throws Error if bucket is not provided (via adapter)
- * @throws Error if region is not provided (via adapter)
+ * Constructing the plugin never requires the bucket or region: a missing
+ * one is refused when storage is first used, not while the config loads.
  */
 export function s3Storage(config: S3StorageConfig): StoragePlugin {
   // Handle disabled plugin
@@ -120,12 +124,14 @@ export function s3Storage(config: S3StorageConfig): StoragePlugin {
      * @param filename - Original filename from the client
      * @param mimeType - MIME type of the file
      * @param collection - Collection slug this upload belongs to
+     * @param options - The file's exact size, and the URL's lifetime
      * @returns Client upload data with pre-signed URL
      */
     async getClientUploadUrl(
       filename: string,
       mimeType: string,
-      collection: string
+      collection: string,
+      options?: ClientUploadOptions
     ): Promise<ClientUploadData> {
       // Get collection-specific configuration
       const collectionConfig = config.collections[collection];
@@ -139,7 +145,10 @@ export function s3Storage(config: S3StorageConfig): StoragePlugin {
       const key = generateStorageKey(filename, prefix);
 
       // Get pre-signed upload URL from adapter
-      return adapter.getPresignedUploadUrl(key, mimeType);
+      // Bound to the exact size, so S3 refuses any other file.
+      return adapter.getPresignedUploadUrl(key, mimeType, options?.expiresIn, {
+        contentLength: options?.size,
+      });
     },
 
     /**

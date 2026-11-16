@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
+
 import {
   canAccessApiKeys,
   canAccessWebhooks,
@@ -102,6 +104,41 @@ describe("hasSettingsSection", () => {
       hasSettingsSection(NONE, {
         ...settled,
         hasPermission: only("create-api-keys"),
+      })
+    ).toBe(false);
+  });
+});
+
+describe("the Settings entry for a reader whose only destination is Email", () => {
+  /*
+   * Email lives in the Settings panel, so a reader who may only see its tabs
+   * reaches it through the Settings entry or not at all. Derived as the
+   * product derives it: the capability comes from the reader's grants.
+   */
+  it.each(["read-email-templates", "read-email-providers"])(
+    "shows it for %s alone",
+    grant => {
+      const capabilities = buildCapabilities([grant], false, undefined);
+      expect(capabilities.canViewSettings).toBe(true);
+      expect(
+        hasSettingsSection(capabilities, {
+          isPending: false,
+          hasPermission: only(grant),
+        })
+      ).toBe(true);
+    }
+  );
+
+  it("does not show it for an email grant that shows no tab", () => {
+    const capabilities = buildCapabilities(
+      ["create-email-templates"],
+      false,
+      undefined
+    );
+    expect(
+      hasSettingsSection(capabilities, {
+        isPending: false,
+        hasPermission: only("create-email-templates"),
       })
     ).toBe(false);
   });

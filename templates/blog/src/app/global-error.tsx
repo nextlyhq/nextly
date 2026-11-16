@@ -1,10 +1,10 @@
 "use client";
 
 export default function GlobalError({
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   return (
     <html>
@@ -14,7 +14,7 @@ export default function GlobalError({
           The application crashed at the root level.
         </p>
         <button
-          onClick={() => reset()}
+          onClick={() => retry()}
           className="mt-6 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
         >
           Reset Application

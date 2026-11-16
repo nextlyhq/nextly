@@ -14,7 +14,8 @@ ESLint rules that keep admin UI on Nextly's design-token system.
 Nextly's admin is themeable: colours, spacing and radius come from tokens, and
 every surface that consumes them follows a retheme and flips between light and
 dark for free. A surface that reaches past the tokens does not. These rules catch
-the three ways that happens.
+the three ways that happens. One more, `no-experimental-sdk`, names the plugin
+SDK surfaces your plugin uses that may still change.
 
 They apply to **any** Nextly plugin, not just the first-party ones — which is why
 they ship as a package rather than living in Nextly's own repository.
@@ -129,6 +130,38 @@ theme.
 
 The rule only reports the all-constant case, so the legitimate use of inline
 style — a value you compute — needs no exemption and no allowlist.
+
+### `no-experimental-sdk`
+
+Not a design-token rule: this one is about upgrades. An `@experimental` surface
+of `@nextlyhq/plugin-sdk` carries no compatibility guarantee and may change or be
+removed in any release. The rule names each one your plugin uses, as a warning,
+so the choice to depend on it is made knowingly.
+
+```ts
+// ⚠ getCachedNextly is experimental
+import { getCachedNextly } from "@nextlyhq/plugin-sdk";
+
+// ✓ stable
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+```
+
+The list of experimental surfaces is generated from the SDK's stability ledger
+and TSDoc tags when this package is published (`src/sdk-stability.json`), so it
+follows the SDK release for release.
+
+Options:
+
+- `context: true` also checks members of the plugin context (`ctx.db`,
+  `ctx.services.ownCollections`), reached from a `definePlugin` lifecycle's first
+  parameter or from a binding annotated `PluginContext`. Off by default, because
+  without type information a context passed on under another name is not
+  followed.
+- `allow: [...]` lists surfaces adopted on purpose: an export name, or a context
+  path such as `db`.
+
+[API stability](https://nextlyhq.com/docs/plugins/stability) explains the
+stability ladder and what a graduation means.
 
 ## Exemptions
 

@@ -178,16 +178,9 @@ describe("field group DDL — pinned as it is today", () => {
           FIELD_GROUP_FIELDS as unknown as FieldConfig[]
         );
 
-      // The fixture carries a unique unbounded text field. A component's uniqueness is a
-      // SEPARATE `CREATE UNIQUE INDEX`, not an inline constraint, so on MySQL — which can key
-      // neither spelling of TEXT — the table would be created and then the index rejected,
-      // leaving a component without the guarantee it declared. There is no DDL to pin for that
-      // combination; the honest output is a refusal, so that is what is recorded.
-      if (dialect === "mysql") {
-        expect(generate).toThrow(/Validation failed/);
-        return;
-      }
-
+      // The fixture carries a unique text field that states no width. A component's uniqueness is
+      // a SEPARATE `CREATE UNIQUE INDEX`; on MySQL the column is the bounded default so that index
+      // can key it, and the other dialects keep TEXT.
       expect(generate().trim()).toMatchSnapshot();
     });
 

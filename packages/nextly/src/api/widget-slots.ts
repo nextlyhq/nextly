@@ -33,6 +33,7 @@ import {
   UNAVAILABLE_SOURCE_MESSAGE,
 } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
+import { ruleCouldNotRunIn } from "../errors/rule-could-not-run";
 import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
@@ -67,6 +68,15 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * `withErrorHandler` never sees it and neither did the logger. A dashboard
  * whose widgets all fail left no trace anywhere.
  */
+/**
+ * The one "not available" slot, byte for byte whoever gets it. Built here and nowhere else, so a
+ * card refused before it ran answers exactly what one refused while it ran does, and logs
+ * nothing: its caller says whether the refusal is worth a line.
+ */
+export function unavailableSlot(): Extract<QuerySlot, { ok: false }> {
+  return { ok: false, error: UNAVAILABLE_SOURCE_MESSAGE, code: "unavailable" };
+}
+
 // Narrowed to the failure arm so a caller can read the slot's `code` without a guard.
 export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // Guarded the way `withErrorHandler` guards its own logging call: a
@@ -88,16 +98,32 @@ export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // "not available" without matching the sentence. A FORBIDDEN raised while the query ran is not
   // one of them: the gate above has already refused a source the caller may not read, so that
   // one comes from a field-level rule on a source they can, and names the guard that refused.
-  if (isUnavailableSourceRefusal(error)) {
-    return {
-      ok: false,
-      error: UNAVAILABLE_SOURCE_MESSAGE,
-      code: "unavailable",
-    };
-  }
+  if (isUnavailableSourceRefusal(error)) return unavailableSlot();
+  // A rule that could not run never answered, so the slot says that, naming
+  // whose rule it is, rather than reading as an unexplained failure or as a
+  // source the caller may not read. Kept on the slot, not thrown, because a
+  // streamed batch has already answered 200 when a slot settles.
+  const couldNotRun = ruleCouldNotRunIn(error);
+  if (couldNotRun) return ruleCouldNotRunSlot(couldNotRun);
   return {
     ok: false,
     error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
+  };
+}
+
+/** The slot for a rule that could not run, naming the rule as its error does. */
+function ruleCouldNotRunSlot(
+  error: NextlyError
+): Extract<QuerySlot, { code: "RULE_COULD_NOT_RUN" }> {
+  const data: object = error.publicData ?? {};
+  const subject = "subject" in data ? data.subject : undefined;
+  const field = "field" in data ? data.field : undefined;
+  return {
+    ok: false,
+    error: error.publicMessage,
+    code: "RULE_COULD_NOT_RUN",
+    subject: typeof subject === "string" ? subject : "",
+    ...(typeof field === "string" ? { field } : {}),
   };
 }
 
@@ -284,14 +310,27 @@ export interface ReadyCardData {
     scope: WidgetScope;
     /** The batch's instant, the card's own copy. */
     now: Date;
-  }): Promise<{ result: WidgetResult; empty: boolean }>;
+  }): Promise<CardAnswer>;
 }
+
+/**
+ * What a declared card answers: its data and whether its empty test holds, or
+ * the slot it settles as without data, decided before its `load` ran (it asks
+ * for a setting, is not shown, or is not available to this person). None of
+ * those is a failure, so none is logged as one.
+ */
+export type CardAnswer =
+  | { result: WidgetResult; empty: boolean }
+  | { settled: Extract<QuerySlot, { ok: false }> };
 
 /** Anything a batch answers at its place: a ready query, or a declared card's own data. */
 export type ReadyEntry = ReadyQuery | ReadyCardData;
 
-/** What a failed or late slot names for the operator: the source asked, or the declared widget. */
-type SlotSubject = { source: string } | { widget: string };
+/**
+ * What a failed or late slot names for the operator: the source asked, or the
+ * declared widget and the owner that declared it.
+ */
+type SlotSubject = { source: string } | { widget: string; owner?: string };
 
 /** A slot's subject as the log names it. */
 function named(subject: SlotSubject): string {
@@ -387,7 +426,7 @@ async function answerCardData(
   const widget = card.widgetId;
   let slot: QuerySlot;
   try {
-    const { result, empty } = await withinSlotBudget(
+    const answer = await withinSlotBudget(
       signal =>
         card.answer({
           signal,
@@ -396,13 +435,17 @@ async function answerCardData(
           // would move every later card's.
           now: new Date(run.now),
         }),
-      () => slotTimedOut({ widget }),
+      () => slotTimedOut({ widget, owner: card.owner }),
       run.signal
     );
-    const sendable = serialisable(result, { widget });
-    slot = empty
-      ? { ok: true, result: sendable, empty: true }
-      : { ok: true, result: sendable };
+    if ("settled" in answer) {
+      slot = answer.settled;
+    } else {
+      const sendable = serialisable(answer.result, { widget });
+      slot = answer.empty
+        ? { ok: true, result: sendable, empty: true }
+        : { ok: true, result: sendable };
+    }
   } catch (error) {
     if (batchGivenUp(run)) return;
     slot = failedSlot(error);

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_UNINSTALL_UNFINISHED
+description: "A configured plugin's uninstall began and did not finish, so the app does not start with it."
+---
+
+## Cause
+
+A configured plugin's uninstall began and did not finish, so the app does not start with it.
+
+`nextly plugins uninstall` records the plugin as uninstalling before it runs `onUninstall` and the DOWN migrations. That uninstall stopped part way, and a plugin in that state is refused in every environment: its code would otherwise run over whatever tables are left.
+
+## Fix
+
+- Finish the uninstall with the command the Next line names, with the same `--keep-data` setting it began with.
+- Or reinstate the plugin with `nextly plugins install <name>`.
+
+## Example
+
+```text
+✗ The uninstall of the plugin "@acme/seo" began and did not finish.
+  Why:  A plugin removed part way is refused in every environment, so its code never runs over the tables that are left.
+  Next: Run "nextly plugins uninstall @acme/seo" to finish it, or "nextly plugins install @acme/seo" to reinstate it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-unfinished  (PLUGIN_UNINSTALL_UNFINISHED)
+```

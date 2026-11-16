@@ -1,0 +1,206 @@
+// Why: AdvancedTab handles two flags after PR E1 -- unique and
+// localized (placeholder until i18n ships). Index toggle was dropped
+// in PR E1 (auto-indexing is a future backend concern). Localized
+// badge styling switched from amber "Soon" to neutral "Coming Soon"
+// chip per feedback Section 4.
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+import { describe, expect, it, vi } from "vitest";
+
+import { render, screen } from "@admin/__tests__/utils";
+
+import type { BuilderKind } from "../../builder-config";
+import type { BuilderField } from "../../types";
+import { AdvancedTab } from "../AdvancedTab";
+
+const f: BuilderField = {
+  id: "f1",
+  name: "x",
+  label: "X",
+  type: "text",
+  isSystem: false,
+  validation: {},
+  admin: { width: "100%" },
+};
+
+function Controlled(props: {
+  initial: BuilderField;
+  kind?: BuilderKind;
+  readOnly?: boolean;
+  onChange?: (next: BuilderField) => void;
+}) {
+  const [field, setField] = useState<BuilderField>(props.initial);
+  return (
+    <AdvancedTab
+      field={field}
+      kind={props.kind ?? "collection"}
+      readOnly={props.readOnly}
+      onChange={next => {
+        setField(next);
+        props.onChange?.(next);
+      }}
+    />
+  );
+}
+
+describe("FieldEditorSheet — AdvancedTab", () => {
+  it("toggles unique through onChange.advanced.unique", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled initial={f} onChange={onChange} />);
+    await user.click(screen.getByRole("switch", { name: /^unique$/i }));
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.advanced?.unique).toBe(true);
+  });
+
+  it("does NOT render the Index switch (removed in PR E1)", () => {
+    render(<Controlled initial={f} />);
+    expect(
+      screen.queryByRole("switch", { name: /^index$/i })
+    ).not.toBeInTheDocument();
+  });
+
+  // H4: the localized switch reflects the backend smart default when unset — a
+  // text field localizes by default, so the switch starts ON and a click writes
+  // an explicit `false` (the author opting out), not `true`.
+  it("localized switch reflects the smart default (on for text) and toggles to explicit false", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Controlled initial={f} onChange={onChange} />);
+    const sw = screen.getByRole("switch", { name: /^localized$/i });
+    expect(sw).not.toBeDisabled();
+    expect(sw).toBeChecked();
+    await user.click(sw);
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.advanced?.localized).toBe(false);
+  });
+
+  // A value/structural field (number) is shared by default → switch starts OFF
+  // and a click writes an explicit `true`.
+  it("localized switch starts off for a non-text field and toggles to explicit true", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled initial={{ ...f, type: "number" }} onChange={onChange} />
+    );
+    const sw = screen.getByRole("switch", { name: /^localized$/i });
+    expect(sw).not.toBeChecked();
+    await user.click(sw);
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.advanced?.localized).toBe(true);
+  });
+
+  it("disables every editable switch in readOnly mode", () => {
+    render(<Controlled initial={f} readOnly />);
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: /^localized$/i })).toBeDisabled();
+  });
+});
+
+describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
+  it("does not disable unique when isInsideRepeatingAncestor is omitted", () => {
+    render(<Controlled initial={f} />);
+    expect(
+      screen.getByRole("switch", { name: /^unique$/i })
+    ).not.toBeDisabled();
+  });
+
+  it("greys out the unique switch and shows tooltip when isInsideRepeatingAncestor is true", () => {
+    render(
+      <AdvancedTab
+        field={f}
+        kind="collection"
+        isInsideRepeatingAncestor
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+    expect(
+      screen.getByText(
+        /unique can't be enforced inside repeating rows or a repeatable field group/i
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("readOnly takes precedence over isInsideRepeatingAncestor (both disable)", () => {
+    render(
+      <AdvancedTab
+        field={f}
+        kind="collection"
+        readOnly
+        isInsideRepeatingAncestor
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
+  });
+
+  it("disables Localized on a component reference and says where to localize instead", () => {
+    // A component reference holds no value of its own, so the flag was a
+    // silent no-op that read as Apply being broken. The switch must not
+    // offer what storage cannot honour. Both stored spellings are fed —
+    // the guard recognizes "component" and the migrated "fieldGroup", so
+    // a naive `type === "component"` check cannot pass here.
+    for (const type of ["component", "fieldGroup"] as const) {
+      const { unmount } = render(<Controlled initial={{ ...f, type }} />);
+      expect(
+        screen.getByRole("switch", { name: /^localized$/i })
+      ).toBeDisabled();
+      expect(
+        screen.getByText(/localization is set by the fields inside it/i)
+      ).toBeInTheDocument();
+      // The help names the kind the person knows; "component" is the code's
+      // name for a field group and is never shown.
+      expect(
+        screen.getByText(/^A field group's localization/)
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/component/i)).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("disables Localized on a password field, reads it as OFF and says why", () => {
+    // A password is one secret for the entry, never translatable: the server refuses a field
+    // marked so, so the switch must not offer it. A legacy `localized: true` reads OFF too.
+    render(
+      <Controlled
+        initial={{ ...f, type: "password", advanced: { localized: true } }}
+      />
+    );
+    const localized = screen.getByRole("switch", { name: /^localized$/i });
+    expect(localized).toBeDisabled();
+    expect(localized).not.toBeChecked();
+    expect(screen.getByText(/the same in every language/i)).toBeInTheDocument();
+  });
+
+  it("points the Localized help at the setting of the kind being edited", () => {
+    // A Single and a field group carry the same Internationalization setting
+    // a collection does, so the help names the one the person is editing.
+    const { unmount } = render(<Controlled initial={f} kind="single" />);
+    expect(
+      screen.getByText(/Requires the Single's Internationalization setting/)
+    ).toBeInTheDocument();
+    unmount();
+    render(<Controlled initial={f} kind="field-group" />);
+    expect(
+      screen.getByText(
+        /Requires the field group's Internationalization setting/
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/collection's/)).not.toBeInTheDocument();
+  });
+
+  it("reads a legacy localized flag on a component reference as OFF", () => {
+    // A save from before the gate could carry `localized: true` on the
+    // reference. The switch is disabled, so displaying that stale flag would
+    // present dead metadata as an active setting.
+    render(
+      <Controlled
+        initial={{ ...f, type: "component", advanced: { localized: true } }}
+      />
+    );
+    expect(
+      screen.getByRole("switch", { name: /^localized$/i })
+    ).not.toBeChecked();
+  });
+});

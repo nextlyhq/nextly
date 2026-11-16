@@ -167,6 +167,39 @@ describe("a contributed column reusing a name the entity already has", () => {
   });
 });
 
+// `media.sizes` is no longer declared, but an existing database may still
+// have the column that recorded each older item's image size files. A
+// contributed column of that name would be read as that record, its values
+// taken for files to delete, and the column dropped with it.
+describe("a column contributed to media under the name image sizes were stored in", () => {
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "is refused on %s, by key or by column name",
+    async dialect => {
+      for (const columns of [
+        { sizes: col.json({ nullable: true }) },
+        { sizes: col.shortText({ nullable: true }) },
+      ]) {
+        expect(
+          await refusedWith([contribute("media", columns)], dialect)
+        ).toMatch(/"sizes" is reserved on "media"/);
+      }
+    }
+  );
+
+  it("is accepted under another name, and on another table (the controls)", async () => {
+    expect(
+      await refusedWith([
+        contribute("media", { sizeNotes: col.json({ nullable: true }) }),
+      ])
+    ).toBe("not refused");
+    expect(
+      await refusedWith([
+        contribute("users", { sizes: col.json({ nullable: true }) }),
+      ])
+    ).toBe("not refused");
+  });
+});
+
 describe("a key or generated value contributed to a table somebody else owns", () => {
   it("refuses col.id(), a generated primary key", async () => {
     expect(

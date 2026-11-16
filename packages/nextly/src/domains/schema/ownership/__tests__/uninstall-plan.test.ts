@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { OwnerRecord } from "../owner-registry";
-import { planUninstall, type UninstallInput } from "../uninstall-plan";
+import {
+  planUninstall,
+  type UninstallDependent,
+  type UninstallInput,
+} from "../uninstall-plan";
 
 const owned: OwnerRecord[] = [
   {
@@ -105,8 +109,6 @@ describe("--keep-data", () => {
       finalState: "orphaned",
       downModules: [],
       tablesDropped: [],
-      elementsDropped: [],
-      supersedeFilenames: [],
     });
   });
 
@@ -136,13 +138,6 @@ describe("a full uninstall", () => {
 
   it("names the tables the operator is about to lose", () => {
     expect(planUninstall(input()).tablesDropped).toEqual(["auth__identities"]);
-  });
-
-  it("supersedes the plugin's qualified ledger rows", () => {
-    expect(planUninstall(input()).supersedeFilenames).toEqual([
-      "plugin:auth/002_add_column",
-      "plugin:auth/001_init",
-    ]);
   });
 
   it("refuses when any module cannot be undone", () => {
@@ -183,17 +178,17 @@ describe("a full uninstall", () => {
 });
 
 describe("element-aware planning (C7)", () => {
-  it("element rows do not multiply the table list; foreign elements are named", () => {
+  it("element rows do not multiply the table list", () => {
     const plan = planUninstall({
       pluginName: "fx",
-      enabled: [],
+      enabled: [{ name: "fx", dependsOn: [] }],
       owned: [
         {
           tableName: "fx__notes",
           ownerKind: "plugin",
           ownerId: "fx",
           migratedBy: "plugin:fx",
-          ownerVersion: null,
+          ownerVersion: "1.0.0",
           schemaVersion: 1,
           state: "active",
         },
@@ -209,23 +204,83 @@ describe("element-aware planning (C7)", () => {
           state: "active",
         },
       ],
-      foreignElements: [
-        {
-          tableName: "fx__notes",
-          elementKind: "index",
-          elementName: "idx_app_label",
-          ownerKind: "app",
-          ownerId: "app",
-          migratedBy: "app",
-          ownerVersion: null,
-          schemaVersion: null,
-          state: "active",
-        },
-      ],
       modules: [{ name: "001", reversible: true }],
       keepData: false,
     });
     expect(plan.tablesDropped).toEqual(["fx__notes"]);
-    expect(plan.elementsDropped).toEqual(["idx_app_label (index, app)"]);
+  });
+});
+
+describe("what other owners built on the plugin's schema", () => {
+  const appColumn: UninstallDependent = {
+    kind: "column",
+    name: "app_label",
+    table: "auth__identities",
+    owner: "the app",
+  };
+  const inboundKey: UninstallDependent = {
+    kind: "foreign key",
+    name: "fk_sso_identity",
+    table: "sso__links",
+    owner: "plugin sso",
+  };
+  const onContributed: UninstallDependent = {
+    kind: "index",
+    name: "idx_users_auth_handle",
+    table: "users",
+    owner: "plugin audit (removed from the config)",
+  };
+
+  it("refuses a full uninstall that would drop another owner's element, naming it, its owner and the way out", () => {
+    const error = refusal(() =>
+      planUninstall(input({ dependents: [appColumn] }))
+    );
+    expect(error.code).toBe("PLUGIN_UNINSTALL_WOULD_DROP_OTHERS");
+    expect(error.publicMessage).toContain("app_label");
+    expect(error.publicMessage).toContain("auth__identities");
+    expect(error.publicMessage).toContain("the app");
+    expect(error.publicMessage).toContain("--keep-data");
+  });
+
+  it("names every dependent at once, whatever its kind", () => {
+    const error = refusal(() =>
+      planUninstall(
+        input({ dependents: [appColumn, inboundKey, onContributed] })
+      )
+    );
+    for (const name of [
+      "app_label",
+      "fk_sso_identity",
+      "idx_users_auth_handle",
+    ]) {
+      expect(error.publicMessage).toContain(name);
+    }
+    expect(error.publicMessage).toContain("removed from the config");
+  });
+
+  it("refuses before checking whether its modules can be undone", () => {
+    // Taking another owner's data is the more consequential refusal, and the
+    // one an operator cannot fix by changing this plugin.
+    const error = refusal(() =>
+      planUninstall(
+        input({
+          dependents: [inboundKey],
+          modules: [{ name: "001_init", reversible: false }],
+        })
+      )
+    );
+    expect(error.publicMessage).toContain("fk_sso_identity");
+  });
+
+  it("CONTROL: keeping the data takes nothing from anyone, so it is allowed", () => {
+    const plan = planUninstall(
+      input({ dependents: [appColumn, inboundKey], keepData: true })
+    );
+    expect(plan.finalState).toBe("orphaned");
+  });
+
+  it("CONTROL: with nothing built on it, the full uninstall is planned", () => {
+    const plan = planUninstall(input({ dependents: [] }));
+    expect(plan.finalState).toBe("uninstalled");
   });
 });

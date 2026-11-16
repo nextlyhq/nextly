@@ -18,7 +18,8 @@
  */
 
 import { createAdapterFromEnv } from "../database/factory";
-import { getService, type NextlyServiceConfig } from "../di/register";
+import type { NextlyServiceConfig } from "../di/register";
+import { getService } from "../di/service-access";
 import { NextlyError } from "../errors/nextly-error";
 import { runWithRequestScope } from "../hooks/request-scope";
 import { ServiceContainer } from "../services";
@@ -36,6 +37,7 @@ import { dispatchSingles } from "./handlers/single-dispatcher";
 import { dispatchUser } from "./handlers/user-dispatcher";
 import { dispatchUserFields } from "./handlers/user-field-dispatcher";
 import { getAdapterFromDI } from "./helpers/di";
+import { returnedServiceFailure } from "./helpers/service-envelope";
 import type {
   DispatchRequest,
   DispatchResult,
@@ -231,15 +233,10 @@ export class ServiceDispatcher {
         return {
           success: r.success ?? true,
           message: r.success ? r.message : undefined,
-          // Even for legacy ServiceResult errors, propagate as NextlyError
-          // so the route wrapper can build a canonical response. Wrap the
-          // legacy string message in INTERNAL_ERROR.
-          error:
-            !r.success && r.message
-              ? NextlyError.internal({
-                  logContext: { legacyServiceResultMessage: r.message },
-                })
-              : undefined,
+          // A failed envelope is rebuilt as the error it reports, by the one
+          // converter every boundary uses, so a returned 403 is answered 403
+          // rather than as a server fault. Its message goes to the log only.
+          error: r.success === false ? returnedServiceFailure(r) : undefined,
           status: r.statusCode ?? r.status ?? 200,
           data: r.data,
           meta: (r as Record<string, unknown>).meta,
@@ -322,15 +319,7 @@ export class ServiceDispatcher {
     return Array.from(this.availableServices);
   }
 
-  /** Executes a function within a database transaction. */
-  async withTransaction<T>(
-    fn: (dispatcher: ServiceDispatcher) => Promise<T>
-  ): Promise<T> {
-    return this.container.withTransaction(async txServices => {
-      const txDispatcher = new ServiceDispatcher();
-      txDispatcher.container = txServices;
-      txDispatcher.availableServices = new Set(this.availableServices);
-      return fn(txDispatcher);
-    });
-  }
+  // No `withTransaction` here, for the reason the container has none: the
+  // services it dispatches to run on the pooled adapter. A transaction is the
+  // adapter's own `transaction()`.
 }

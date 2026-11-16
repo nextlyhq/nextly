@@ -4,9 +4,9 @@
  *
  * The escalation this pins, end to end through the real catch-all dispatcher:
  * `ctx.user` names the key's OWNER, so a facade that forwarded it alone reached
- * `rbacAccessControlService.checkAccess({ userId })`, whose first act is
- * `isSuperAdmin(userId)` — a database lookup on that owner. A read-only key
- * minted by a super-admin was therefore authorized to write.
+ * the session decision for that user id, whose first act is a super-admin
+ * lookup on that owner. A read-only key minted by a super-admin was therefore
+ * authorized to write.
  *
  * The setup is the ordinary one, not a contrived fixture: the first user of a
  * Nextly install holds the seeded `super-admin` role, and a read-only key is
@@ -41,6 +41,7 @@ const writePlugin = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "POST",
         path: "/write",
         // Composes `{ as: "user", user }` and NOTHING else — the shape every
@@ -64,6 +65,7 @@ const writePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/read",
         // Same shape, an operation the key DOES hold. Separates "held to its

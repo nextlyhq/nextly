@@ -13,6 +13,7 @@
 // genuinely reachable; with letters outside ASCII it is reached sooner.
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isMysqlTextOrBlobType } from "../pipeline/sql-templates/create-index";
 
 /**
  * The index name for one column of one table, bounded so every dialect stores it whole.
@@ -43,15 +44,29 @@ export function boundedIdentifier(full: string): string {
 }
 
 /**
- * `full` unchanged when it fits, otherwise its prefix followed by `_<suffix>`.
+ * A stored value bounded to the `maxBytes` of UTF-8 its column holds on every dialect, the way
+ * an identifier is: unchanged when it fits, else as much of its readable prefix as fits followed
+ * by a hash of the WHOLE value, so two long values sharing a prefix stay distinct where a plain
+ * truncation would store them as one.
+ */
+export function boundedValue(full: string, maxBytes: number): string {
+  return fitWithSuffix(full, fnv1a36(full), maxBytes);
+}
+
+/**
+ * `full` unchanged when it fits in `maxBytes`, otherwise its prefix followed by `_<suffix>`.
  *
  * The truncation itself, shared by the two ways a suffix is chosen: a hash of the whole name, or
  * the column-list digest a compound index name already carries.
  */
-function fitWithSuffix(full: string, suffix: string): string {
-  if (identifierBytes(full) <= MAX_INDEX_NAME_LENGTH) return full;
+function fitWithSuffix(
+  full: string,
+  suffix: string,
+  maxBytes: number = MAX_INDEX_NAME_LENGTH
+): string {
+  if (identifierBytes(full) <= maxBytes) return full;
   // The suffix is base-36, so its characters are its bytes.
-  return `${utf8Prefix(full, MAX_INDEX_NAME_LENGTH - suffix.length - 1)}_${suffix}`;
+  return `${utf8Prefix(full, maxBytes - suffix.length - 1)}_${suffix}`;
 }
 
 const utf8 = new TextEncoder();
@@ -99,6 +114,43 @@ export function foreignKeyNameForColumns(
   columns: readonly string[]
 ): string {
   return boundedIdentifier(`fk_${tableName}_${columns.join("_")}`);
+}
+
+/**
+ * The name a relationship's key takes when it moves to another target table.
+ *
+ * The new key is added before the old one is dropped, so the column is never left without one
+ * (MySQL commits each schema statement), and two keys cannot share a name. So a move alternates
+ * between the column's usual name (`foreignKeyNameForColumns`) and one naming the new target: a key
+ * under the usual name moves to `fk_<table>_<column>_to_<target>`, and one under any other name
+ * moves back to the usual name. Bounded as every derived identifier is.
+ */
+export function movedForeignKeyName(
+  tableName: string,
+  column: string,
+  currentName: string,
+  targetTable: string,
+  // Names the table's other keys hold or will hold: another column's usual name can spell the
+  // same as this one's moved name (`owner` and `owner_to_dc_editors`), so a taken one is skipped.
+  taken: ReadonlySet<string> = new Set()
+): string {
+  const usual = foreignKeyNameForColumns(tableName, [column]);
+  const held = new Set([...taken].map(name => name.toLowerCase()));
+  const free = (name: string) => !held.has(name.toLowerCase());
+  if (currentName.toLowerCase() !== usual.toLowerCase() && free(usual)) {
+    return usual;
+  }
+  const moved = foreignKeyNameForColumns(tableName, [
+    column,
+    "to",
+    targetTable,
+  ]);
+  // The first of `moved`, `moved_2`, `moved_3`, ... that no other key holds.
+  const candidate = (attempt: number) =>
+    attempt === 1 ? moved : boundedIdentifier(`${moved}_${attempt}`);
+  let attempt = 1;
+  while (!free(candidate(attempt))) attempt++;
+  return candidate(attempt);
 }
 
 /**
@@ -235,5 +287,38 @@ export function uniquenessCanBeAnIndex(
 ): boolean {
   if (!columnTypeIsIndexable(columnType, dialect)) return false;
   if (dialect !== "mysql") return true;
-  return !/\b(text|blob|longtext|mediumtext|tinytext)\b/i.test(columnType);
+  // The same TEXT/BLOB question the index renderer asks before keying a column by prefix, every
+  // size of both included.
+  return !isMysqlTextOrBlobType(columnType);
+}
+
+/**
+ * The refusal for a field marked unique whose column `dialect` cannot key: a
+ * MySQL TEXT or BLOB, say. One error for every path that judges it, the
+ * Builder's own DDL and the save writer alike.
+ */
+export function uniquenessNotEnforceableError(
+  tableName: string,
+  field: { name: string; type: string },
+  dialect: string
+): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${field.name}`,
+        code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+        message:
+          `"${field.name}" is marked unique, but ${dialect} cannot enforce ` +
+          `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
+          `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
+          `the unique flag.`,
+      },
+    ],
+    logContext: {
+      tableName,
+      field: field.name,
+      type: field.type,
+      dialect,
+    },
+  });
 }

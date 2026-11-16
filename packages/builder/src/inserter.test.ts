@@ -29,23 +29,29 @@ import {
 
 import {
   UNCATEGORISED,
+  COMPONENT_CATEGORY,
   type SlotSource,
   allowedEntries,
   blockSourceFor,
   catalogFrom,
+  categoryHeading,
   entryAllowedAt,
   filterEntries,
   groupByCategory,
-  insertionPointFor,
+  insertionCandidates,
+  insertionFor,
   nodeForEntry,
+  paletteGroups,
   patternEntriesFrom,
   PATTERN_ENTRY_PREFIX,
   COMPONENT_ENTRY_PREFIX,
   componentEntriesFrom,
+  unplaceableComponentEntries,
   compositionRefusal,
   nodeForComponentEntry,
   placementTypesOf,
   type BlockInsertEntry,
+  type ComponentInsertEntry,
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
@@ -209,6 +215,32 @@ describe("catalogFrom", () => {
     });
   });
 
+  it("offers a block once, not once per look", () => {
+    // A look (a variation with styles) and the block's own named look are
+    // picked for a block already on the page, so the Add panel lists the
+    // block, and its insert presets, and no row per look.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/card",
+        editor: {
+          variations: [
+            { name: "primary", label: "Primary", isDefault: true },
+            {
+              name: "outline",
+              label: "Outline",
+              styles: { base: { base: { color: "red" } } },
+            },
+            { name: "loud", props: { tone: "shout" } },
+          ],
+        },
+      },
+    ]);
+    expect(
+      entries.filter(each => each.kind === "block").map(each => each.id)
+    ).toEqual(["acme/card", "acme/card#loud"]);
+  });
+
   it("gives an entry its own props, so the definition cannot be reached through it", () => {
     const defaults = { tone: "plain" };
     const entries = catalog([
@@ -275,6 +307,20 @@ describe("filterEntries", () => {
     expect(filterEntries(entries(), "h1").map(e => e.id)).toEqual([
       "acme/heading",
     ]);
+  });
+
+  it("finds a block that names no keywords by its own name, and describes it by name when blank", () => {
+    // A plugin block without palette metadata still reads as itself.
+    const [entry] = catalogFrom([
+      {
+        ...base,
+        name: "acme/teaser",
+        description: "   ",
+        editor: { label: "Teaser" },
+      } as never,
+    ]);
+    expect(entry?.keywords).toEqual(["Teaser"]);
+    expect(entry?.description).toBe("Teaser");
   });
 
   it("matches the description", () => {
@@ -399,6 +445,124 @@ describe("groupByCategory", () => {
     expect(groupByCategory(entries)).toEqual([
       { category: UNCATEGORISED, entries: [entry(entries, "acme/loose")] },
     ]);
+  });
+});
+
+describe("paletteGroups and categoryHeading", () => {
+  /** A component entry whose row declared a category of its own. */
+  function componentEntry(): ComponentInsertEntry {
+    registerBlocks([{ ...base, name: "acme/text" }] as never, {
+      source: "acme",
+    });
+    const row: SavedComponent = {
+      id: "header",
+      title: "Header",
+      category: "layout",
+      document: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "component",
+        nodes: [{ id: "d1", type: "acme/text", version: 1, props: {} }],
+      },
+    };
+    const [component] = componentEntriesFrom(
+      [row],
+      new Map([[row.id, row.document as ComponentDocument]])
+    );
+    if (component === undefined) throw new Error("the component was withheld");
+    return component;
+  }
+
+  it("files every component under the one components group, with the component mark", () => {
+    // The row says "layout"; a component still reads as the site's own, apart
+    // from the library's blocks, so the row's category is not what groups it.
+    const component = componentEntry();
+
+    expect(component.category).toBe(COMPONENT_CATEGORY);
+    expect(component.icon).toBe("component");
+  });
+
+  it("puts the components after the ranked categories, and uncategorised blocks last", () => {
+    // Sorted by label the loose block arrives FIRST and the plugin's own
+    // category before "layout", so both orders below are the function's.
+    const blocks = catalog([
+      { ...base, name: "acme/aaa", editor: { label: "Aaa" } },
+      {
+        ...base,
+        name: "acme/chart",
+        editor: { label: "Chart", category: "acme-data" },
+      },
+      {
+        ...base,
+        name: "acme/box",
+        editor: { label: "Box", category: "layout" },
+      },
+    ]);
+    const entries = [...blocks, componentEntry()];
+
+    expect(paletteGroups(entries, ["layout"]).map(g => g.category)).toEqual([
+      "layout",
+      COMPONENT_CATEGORY,
+      "acme-data",
+      UNCATEGORISED,
+    ]);
+  });
+
+  it("offers the blocks the host ranks first in its order, the rest by label, variations behind their block", () => {
+    const blocks = catalog([
+      {
+        ...base,
+        name: "acme/aaa",
+        editor: { label: "Aaa", category: "layout" },
+      },
+      {
+        ...base,
+        name: "acme/section",
+        editor: {
+          label: "Section",
+          category: "layout",
+          variations: [{ name: "wide", label: "Wide section" }],
+        },
+      },
+      {
+        ...base,
+        name: "acme/box",
+        editor: { label: "Box", category: "layout" },
+      },
+      {
+        ...base,
+        name: "acme/zed",
+        editor: { label: "Zed", category: "layout" },
+      },
+    ]);
+
+    const labels = (order: readonly string[]) =>
+      paletteGroups(blocks, ["layout"], order)[0]?.entries.map(e => e.label);
+
+    // Unranked, the label order the catalog arrives in: the control.
+    expect(labels([])).toEqual([
+      "Aaa",
+      "Box",
+      "Section",
+      "Wide section",
+      "Zed",
+    ]);
+    expect(labels(["acme/section", "acme/box", "acme/nothing"])).toEqual([
+      "Section",
+      "Wide section",
+      "Box",
+      "Aaa",
+      "Zed",
+    ]);
+  });
+
+  it("names the library's categories as an author reads them, and leaves a plugin's as written", () => {
+    expect(categoryHeading("layout")).toBe("Layout");
+    expect(categoryHeading("content")).toBe("Text");
+    expect(categoryHeading("media")).toBe("Media");
+    expect(categoryHeading("interactive")).toBe("Interactive");
+    expect(categoryHeading(COMPONENT_CATEGORY)).toBe("Your components");
+    expect(categoryHeading(UNCATEGORISED)).toBe("More blocks");
+    expect(categoryHeading("acme-data")).toBe("acme-data");
   });
 });
 
@@ -578,152 +742,135 @@ function slotsFor(map: Record<string, readonly string[]>): SlotSource {
   return { slotsOf: type => map[type] };
 }
 
-describe("insertionPointFor", () => {
-  it("appends at the end of the document when nothing is selected", () => {
-    const document = documentOf([
-      { id: "a", type: "acme/text", version: 1, props: {} },
-    ]);
-
-    expect(insertionPointFor(document, null)).toEqual({
-      kind: "document-end",
-      at: { index: 1 },
-      target: { kind: "root" },
-    });
+describe("insertionCandidates and insertionFor", () => {
+  const text = (id: string) => ({
+    id,
+    type: "acme/text",
+    version: 1,
+    props: {},
   });
-
-  it("places a new block directly after the selected one", () => {
-    const document = documentOf([
-      { id: "a", type: "acme/text", version: 1, props: {} },
-      { id: "b", type: "acme/text", version: 1, props: {} },
-    ]);
-
-    // Index 1, not 0 and not 2: after "a" and before "b". A position that
-    // merely named the selection's own index would insert BEFORE it.
-    expect(insertionPointFor(document, "a")).toEqual({
-      kind: "after-selection",
-      at: { index: 1 },
-      target: { kind: "root" },
-    });
-  });
-
-  it("stays inside the selected block's own region", () => {
-    const document = documentOf([
+  const nested = () =>
+    documentOf([
       {
         id: "wrap",
         type: "acme/columns",
         version: 1,
         props: {},
-        slots: {
-          children: [{ id: "inner", type: "acme/text", version: 1, props: {} }],
-        },
+        slots: { children: [text("inner")] },
+      },
+      text("after"),
+    ]);
+
+  it("is the end of the page when nothing, or nothing still there, is selected", () => {
+    const document = documentOf([text("a")]);
+    for (const selected of [null, "gone"]) {
+      expect(insertionCandidates(document, selected)).toEqual([
+        { kind: "document-end", at: { index: 1 }, target: { kind: "root" } },
+      ]);
+    }
+  });
+
+  it("goes after the selection, then after each block it sits in", () => {
+    expect(insertionCandidates(nested(), "inner")).toEqual([
+      {
+        kind: "after-selection",
+        at: { parentId: "wrap", slot: "children", index: 1 },
+        target: { kind: "slot", parentType: "acme/columns", slot: "children" },
+        afterId: "inner",
+      },
+      {
+        kind: "after-ancestor",
+        at: { index: 1 },
+        target: { kind: "root" },
+        afterId: "wrap",
       },
     ]);
-
-    const point = insertionPointFor(document, "inner");
-
-    // The position AND the target, together. This is the property the module
-    // exists for: a panel filtering against the root while inserting into a
-    // slot would offer blocks the op layer then refuses.
-    expect(point).toEqual({
-      kind: "after-selection",
-      at: { parentId: "wrap", slot: "children", index: 1 },
-      target: { kind: "slot", parentType: "acme/columns", slot: "children" },
-    });
   });
 
-  it("falls back to the end when the selection names a node the document lost", () => {
-    // A stale id after an undo, or a selection made against a document that has
-    // since been replaced. Appending is right here because there is no
-    // surrounding region to be surprised about.
-    const document = documentOf([
-      { id: "a", type: "acme/text", version: 1, props: {} },
-    ]);
-
-    expect(insertionPointFor(document, "gone")?.kind).toBe("document-end");
-    expect(insertionPointFor(document, "gone")?.at).toEqual({ index: 1 });
-  });
-
-  it("places into an EMPTY container rather than beside it", () => {
-    // THE case. Without this a container can be inserted and never filled:
-    // every insert lands as a sibling, so a columns block arrives empty and
-    // stays empty, and every container in the library is decorative.
-    const document = documentOf([
-      { id: "wrap", type: "acme/columns", version: 1, props: {} },
-    ]);
-
-    expect(
-      insertionPointFor(
-        document,
-        "wrap",
-        slotsFor({ "acme/columns": ["children"] })
-      )
-    ).toEqual({
-      kind: "inside-selection",
-      at: { parentId: "wrap", slot: "children", index: 0 },
-      target: { kind: "slot", parentType: "acme/columns", slot: "children" },
-    });
-  });
-
-  it("places BESIDE a container that already holds something", () => {
-    // The separating case, and what keeps a sibling reachable at all. A
-    // container the author has filled takes a sibling; adding a third child is
-    // done by selecting the second and inserting after it.
+  it("puts a block after a selected container, and inside it only as the last place", () => {
     const document = documentOf([
       {
-        id: "wrap",
+        id: "box",
         type: "acme/columns",
         version: 1,
         props: {},
-        slots: {
-          children: [{ id: "kid", type: "acme/text", version: 1, props: {} }],
-        },
+        slots: { children: [text("held")] },
       },
     ]);
-
-    expect(
-      insertionPointFor(
-        document,
-        "wrap",
-        slotsFor({ "acme/columns": ["children"] })
-      )?.kind
-    ).toBe("after-selection");
-  });
-
-  it("reads the DEFINITION's slots, not the node's", () => {
-    // A container inserted from the palette carries no `slots` key at all, so a
-    // rule asking the node whether it is a container answers "no" for exactly
-    // the empty ones that need filling. Same node as the first case; without a
-    // source it can only be a sibling.
-    const document = documentOf([
-      { id: "wrap", type: "acme/columns", version: 1, props: {} },
-    ]);
-
-    expect(insertionPointFor(document, "wrap")?.kind).toBe("after-selection");
-  });
-
-  it("places beside a leaf, whatever the source says", () => {
-    // The control: a block declaring no slots is not a container, so the rule
-    // must not claim one. Without it, a source answering for every type would
-    // send every insert inside its own selection.
-    const document = documentOf([
-      { id: "a", type: "acme/text", version: 1, props: {} },
-    ]);
-
-    expect(
-      insertionPointFor(
-        document,
-        "a",
-        slotsFor({ "acme/columns": ["children"] })
-      )?.kind
-    ).toBe("after-selection");
-  });
-
-  it("is empty-document safe", () => {
-    expect(insertionPointFor(documentOf([]), null)).toEqual({
-      kind: "document-end",
-      at: { index: 0 },
-      target: { kind: "root" },
+    const places = insertionCandidates(document, "box");
+    // After it first, so a block that fits beside it goes there.
+    expect(places[0]).toMatchObject({
+      kind: "after-selection",
+      at: { index: 1 },
+      afterId: "box",
     });
+    // Inside it last, at the end of its region: what a block that only
+    // belongs inside such a container needs, once nothing after it takes it.
+    expect(places.at(-1)).toEqual({
+      kind: "inside",
+      at: { parentId: "box", slot: "children", index: 1 },
+      target: { kind: "slot", parentType: "acme/columns", slot: "children" },
+      insideId: "box",
+    });
+    const beside = insertionFor(places, () => "ok");
+    expect(beside?.candidate.kind).toBe("after-selection");
+    const within = insertionFor(places, place =>
+      place.kind === "inside" ? "ok" : undefined
+    );
+    expect(within?.candidate.kind).toBe("inside");
+  });
+
+  it("goes inside a container only when asked to, at the end of its region", () => {
+    expect(insertionCandidates(nested(), "inner", { inside: "wrap" })).toEqual([
+      {
+        kind: "inside",
+        at: { parentId: "wrap", slot: "children", index: 1 },
+        target: {
+          kind: "slot",
+          parentType: "acme/columns",
+          slot: "children",
+        },
+        insideId: "wrap",
+      },
+    ]);
+  });
+
+  it("adds five blocks in a row as five siblings, in order", () => {
+    let document = documentOf([text("a")]);
+    let selected = "a";
+    for (const id of ["b", "c", "d", "e", "f"]) {
+      const [place] = insertionCandidates(document, selected);
+      if (place === undefined) throw new Error("no place to insert");
+      document = applyOp(document, {
+        kind: "insert",
+        at: place.at,
+        node: text(id),
+      } as BuilderOp).document;
+      selected = id;
+    }
+    expect(document.nodes.map(node => node.id)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+    ]);
+  });
+
+  it("takes the first place that accepts the block, climbing out of a region that refuses it", () => {
+    // The columns' region refuses it; the page beside them accepts it.
+    const taken = insertionFor(insertionCandidates(nested(), "inner"), place =>
+      place.target.kind === "root" ? "ok" : undefined
+    );
+    expect(taken?.candidate).toMatchObject({
+      kind: "after-ancestor",
+      afterId: "wrap",
+    });
+    // And none at all when nothing accepts it: the panel says why.
+    expect(
+      insertionFor(insertionCandidates(nested(), "inner"), () => undefined)
+    ).toBeUndefined();
   });
 });
 
@@ -1333,6 +1480,19 @@ describe("the component tier", () => {
       )
     );
   }
+
+  it("lists as unplaceable exactly the rows the built entries leave out", () => {
+    // Read off the entries already built, so the definitions are walked once:
+    // a row with no document has no entry, and is the one listed.
+    const placed = stored({ id: "placed" });
+    const empty = stored({ id: "empty", document: null });
+    const entries = componentEntriesFrom([placed, empty], lookupOf(placed));
+
+    const unplaceable = unplaceableComponentEntries([placed, empty], entries);
+
+    expect(unplaceable.map(entry => entry.componentId)).toEqual(["empty"]);
+    expect(unplaceable[0]?.roots).toEqual([]);
+  });
 
   it("keys a component out of the block namespace, and apart from patterns", () => {
     // A definition may be saved under any id. Its catalog key carries the

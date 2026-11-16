@@ -36,7 +36,7 @@ import type {
   ReadableResources,
   ReadCaller,
 } from "../../../services/dashboard/readable-resources";
-import { refreshCollectionWidgets } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
 import { validateWidgetQuery } from "../query";
 import {
   readableCollectionSlugs,
@@ -97,7 +97,7 @@ describeEachDialect(
 
       // A cold process: what is published below is the refresh's own work.
       clearSources();
-      await refreshCollectionWidgets();
+      await refreshContentSources();
     });
 
     afterEach(async () => {
@@ -143,14 +143,12 @@ describeEachDialect(
       );
     });
 
-    it("offers no card for it", async () => {
-      const audience = await widgetAudience(readAccessCaller(superAdmin));
-      const offered = new Set(
-        audience.visible
-          .map(widget => (widget as { collection?: string }).collection)
-          .filter((slug): slug is string => slug !== undefined)
-      );
-      // The population control: the shown collection's cards ARE offered.
+    it("is not a collection a card may be set to", async () => {
+      // The collections a card's Collection setting may name, as the layout and
+      // the workspace payload are told them.
+      const offered = (await widgetAudience(readAccessCaller(superAdmin)))
+        .readableCollections;
+      // The population control: the shown collection IS offered.
       expect(offered.has(POSTS)).toBe(true);
       for (const slug of [...KEPT_OFF, INTERNAL_SINGLE]) {
         expect(offered.has(slug)).toBe(false);

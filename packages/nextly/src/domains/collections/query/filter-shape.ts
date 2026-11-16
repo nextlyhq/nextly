@@ -15,6 +15,11 @@
  * collection can filter on needs the table, so the condition builder refuses
  * that where it resolves the column (`services/collections/drizzle-condition`).
  *
+ * Browser-safe: `nextly/config` reaches this module, and so does the admin's
+ * bundle through it, so nothing here imports the database layer. The ORDER BY
+ * built from the sort keys parsed here lives in `sort-order`, which only the
+ * server's query service imports.
+ *
  * @module domains/collections/query/filter-shape
  */
 
@@ -187,7 +192,7 @@ const TEXT = accepting(isMatchable, "a string");
  * operand, and {@link FILTER_OPERATORS} is read from it rather than kept
  * beside it.
  */
-const OPERAND_RULES: Readonly<Record<string, OperandRule>> = {
+const OPERAND_RULES = {
   equals: EQUALITY,
   not_equals: EQUALITY,
   greater_than: ORDERED,
@@ -213,12 +218,23 @@ const OPERAND_RULES: Readonly<Record<string, OperandRule>> = {
   ),
   // A circle is the one region the parser reads.
   within: geo(parseWithinQuery, '"longitude,latitude,radius[,unit]"'),
-};
+} satisfies Readonly<Record<string, OperandRule>>;
+
+/**
+ * An operator a filter may use, by name. Read from the table above, so a
+ * typed filter offers exactly the operators the runtime accepts.
+ */
+export type FilterOperator = keyof typeof OPERAND_RULES;
 
 /** Every operator a filter may use, SQL and geo alike. */
 export const FILTER_OPERATORS: ReadonlySet<string> = new Set(
   Object.keys(OPERAND_RULES)
 );
+
+/** Whether `operator` names one of {@link FILTER_OPERATORS}. */
+function isFilterOperator(operator: string): operator is FilterOperator {
+  return FILTER_OPERATORS.has(operator);
+}
 
 /**
  * What is wrong with a known operator's operand, or `undefined` when usable.
@@ -228,7 +244,7 @@ export const FILTER_OPERATORS: ReadonlySet<string> = new Set(
  * false` and would otherwise get an empty answer with no reason given.
  */
 function operandIssue(
-  operator: string,
+  operator: FilterOperator,
   operand: unknown
 ): OperandIssue | undefined {
   if (operand === undefined) {
@@ -282,7 +298,7 @@ function operatorProblems(
     return;
   }
   for (const [operator, operand] of operators) {
-    const issue = FILTER_OPERATORS.has(operator)
+    const issue = isFilterOperator(operator)
       ? operandIssue(operator, operand)
       : {
           code: "FILTER_UNKNOWN_OPERATOR",
@@ -476,8 +492,9 @@ function nullAdvice(operator: string): string {
  * Validating one read of a filter and translating another would let a getter
  * or a proxy answer the check with a restrictive value and the translator
  * with none. Each property is read exactly once here, and both steps then
- * work on the copy. Plain objects and lists are copied; every other value,
- * dates included, is kept as it is for the shape check to judge. A filter
+ * work on the copy. Plain objects, lists and dates are copied, a date as a
+ * new one at the same moment, since a date can be changed after it is read;
+ * every other value is kept as it is for the shape check to judge. A filter
  * nested past any real need is refused rather than copied without end.
  */
 export function snapshotFilter<T>(value: T): T {
@@ -503,6 +520,7 @@ function copyFilterValue(value: unknown, depth: number): unknown {
     }
     return list;
   }
+  if (value instanceof Date) return new Date(value.getTime());
   if (!isPlainObject(value)) return value;
   const copy: Record<string, unknown> = {};
   for (const key of Object.keys(value)) {
@@ -525,4 +543,87 @@ export function refuseFilterProblems(problems: FilterProblem[]): void {
     errors: problems,
     logContext: { filterProblems: problems.map(p => p.code) },
   });
+}
+
+/*
+ * The sort and the offset of a read, judged before the query is built, as the
+ * filter's shape is above.
+ *
+ * The guard that refuses a sort on a field the caller may not read and the
+ * ORDER BY that sorts both take their keys from `parseSortKeys`, so the guard
+ * judges exactly the keys that are sorted. Two readers of one string drift:
+ * one splitting on commas and the other not would let a refused field ride in
+ * second position.
+ */
+
+/** One key of a sort, in the order it was given. */
+export interface SortKey {
+  /** The field as the caller wrote it, without the leading `-`. */
+  field: string;
+  /** `-field` sorts descending. */
+  desc: boolean;
+}
+
+/**
+ * Read a sort given as one string, a comma-separated string, or an array of
+ * either, into its keys in order.
+ *
+ * Whitespace around a key is dropped and so is an empty key, so a trailing
+ * comma names nothing. A field named twice keeps its first position and
+ * direction: a later key on it could never change the order, since every tie
+ * it could break has already been broken.
+ */
+export function parseSortKeys(
+  sort: string | readonly string[] | undefined
+): SortKey[] {
+  if (sort === undefined) return [];
+  const written = (typeof sort === "string" ? [sort] : sort).flatMap(item =>
+    item.split(",")
+  );
+  const keys: SortKey[] = [];
+  const seen = new Set<string>();
+  for (const raw of written) {
+    const trimmed = raw.trim();
+    const desc = trimmed.startsWith("-");
+    const field = (desc ? trimmed.slice(1) : trimmed).trim();
+    if (field === "" || seen.has(field)) continue;
+    seen.add(field);
+    keys.push({ field, desc });
+  }
+  return keys;
+}
+
+/**
+ * Whether the caller sorted by the id themselves, so the id tiebreak the read
+ * adds last would repeat it.
+ */
+export function sortsById(keys: readonly SortKey[]): boolean {
+  return keys.some(key => key.field === "id");
+}
+
+/**
+ * Refuse an offset that names no position, or one given together with a page.
+ *
+ * An offset is a whole number from zero, within the safe integer range. A page and an offset each say where
+ * the read starts, and two answers to one question have no right one to pick.
+ */
+export function assertReadOffset(
+  offset: number | undefined,
+  page: number | undefined
+): void {
+  if (offset === undefined) return;
+  // A safe integer: beyond 2^53 a number is no longer a row position, and
+  // the database would refuse it as an error rather than a refusal.
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw NextlyError.invalidInput({
+      message: "offset must be a whole number from 0.",
+      logContext: { reason: "read-offset-not-whole", offset },
+    });
+  }
+  if (page !== undefined) {
+    throw NextlyError.invalidInput({
+      message: "Give an offset or a page, not both.",
+      logContext: { reason: "read-offset-with-page", offset, page },
+    });
+  }
 }

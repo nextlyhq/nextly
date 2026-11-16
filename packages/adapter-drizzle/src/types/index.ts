@@ -70,13 +70,22 @@ export type {
 export type {
   TransactionIsolationLevel,
   TransactionOptions,
+  TransactionBounds,
   TransactionContext,
+  TransactionInFlow,
+  SessionOptions,
+  StatementSession,
 } from "./transaction";
 
 // ============================================================
 // Capability Types
 // ============================================================
-export type { DatabaseCapabilities, PoolStats } from "./capabilities";
+export type {
+  ConnectionEncryption,
+  ConnectionInspection,
+  DatabaseCapabilities,
+  PoolStats,
+} from "./capabilities";
 
 // ============================================================
 // Migration Types
@@ -118,6 +127,8 @@ export {
   isApplicationError,
   POOL_WAIT_TIMEOUT_CODE,
   poolWaitTimeoutError,
+  TABLE_NOT_REGISTERED_CODE,
+  tableNotRegisteredError,
 } from "./error";
 
 // ============================================================

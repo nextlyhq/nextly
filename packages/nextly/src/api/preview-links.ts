@@ -53,6 +53,7 @@ import {
   buildAuditLogWriter,
   type AuditLogWriter,
 } from "../domains/audit/audit-log-writer";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
@@ -66,6 +67,7 @@ import {
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
 import { resolvePreviewViewports } from "../domains/collections/services/preview-viewports";
+import { contentDiffersByLanguage } from "../domains/i18n/per-language-storage";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import { NextlyError } from "../errors/nextly-error";
@@ -88,7 +90,7 @@ import {
   respondList,
   respondMutation,
 } from "./response-shapes";
-import { requireRoutePermission } from "./route-auth";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -212,9 +214,13 @@ function sharedRedirectDeps(declaration: PreviewDeclaration | undefined): {
     // Already resolved by the caller, so this hands the value back rather than
     // fetching it again.
     loadDeclaration: () => Promise.resolve(declaration),
+    // From the row, never a kept copy: where a preview link sends its holder
+    // follows an address saved through another instance at once.
     loadSiteUrl: async () =>
       resolvePreviewSiteUrl(
-        await (await settingsService()).getSettings().then(s => s.siteUrl)
+        await (await settingsService())
+          .getSettings({ fresh: true })
+          .then(s => s.siteUrl)
       ),
   };
 }
@@ -509,7 +515,11 @@ async function respondWithPreviewLink(
   // Everything the answer needs that can still fail is read BEFORE the link is
   // recorded. A failure after the row is written would leave a live row whose
   // token nobody received, listed until it expired.
-  const settings = await (await settingsService()).getSettings();
+  //
+  // From the row, never a kept copy, as the generation above is: the site URL
+  // is where the link sends its holder, so an address saved through another
+  // instance a moment ago applies to this link.
+  const settings = await (await settingsService()).getSettings({ fresh: true });
   const viewports = await resolvePreviewViewports(declaration?.breakpoints);
 
   // Before signing: a revoke-all of this document that replaces the mark
@@ -647,7 +657,13 @@ async function singleFacts(
   // is the dangerous one: it accepts an omitted locale and signs a token whose
   // absent claim covers every translation.
   return {
-    localized: authored?.localized === true || stored?.localized === true,
+    // Whether its values differ by language: translated, or kept per language under
+    // `experimental.perLanguageStorage` with a translatable value to keep so, where a token with
+    // no locale would cover each of them.
+    localized: contentDiffersByLanguage({
+      localized: authored?.localized === true || stored?.localized === true,
+      fields: authored?.fields ?? stored?.fields ?? [],
+    }),
     hasStatus: authored?.status === true || stored?.status === true,
   };
 }
@@ -1180,7 +1196,10 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
     return revokeDocumentPreviewLinks(req, parseDocument(body));
   }
 
-  const auth = await requireRoutePermission(req, "manage", "settings");
+  // Ending every preview link is a settings change.
+  const auth = await requireRouteAnyPermission(req, [
+    ...SYSTEM_WRITE_POLICY.settings.update.anyOf,
+  ]);
   const generation = await (await settingsService()).revokeAllPreviewTokens();
   // The generation has ended every link: the revocation has happened, so it is
   // recorded before anything that could still fail. The rows are marked after.

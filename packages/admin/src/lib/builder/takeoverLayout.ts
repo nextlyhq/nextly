@@ -340,13 +340,21 @@ export function computeFieldsBeside<T extends LayoutField>(
    * what the exit control is for; a settings panel should not be a second,
    * unlabelled way to do it.
    */
-  const asking = fields.find(f => (f.name ?? "") === excludePath);
+  // A field inside a named group is asked for by its path (`hero.body`), and
+  // one inside a repeater's row by its form path (`sections.1.body`). The
+  // panel draws whole top-level fields, so the one to withhold is the
+  // container that holds it — drawing `hero` would draw the asking editor
+  // inside its own panel, and drawing `sections` would let its rows be
+  // reordered or removed under the editor open on one of them. Withheld
+  // together with whatever decides that container's visibility.
+  const top = excludePath.split(".")[0] ?? excludePath;
+  const asking = fields.find(f => (f.name ?? "") === top);
   const controller = asking === undefined ? undefined : controllerName(asking);
   const offered = fields.filter(
     f =>
       !isHidden(f) &&
       isConditionallyVisible(f, values) &&
-      (f.name ?? "") !== excludePath &&
+      (f.name ?? "") !== top &&
       (f.name ?? "") !== controller
   );
   // Partitioned from ONE filtered list rather than filtered twice, so a field

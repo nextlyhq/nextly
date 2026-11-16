@@ -14,7 +14,7 @@
  */
 
 import { healthCheck } from "../database/health";
-import { isServicesRegistered } from "../di/register";
+import { isServicesRegistered } from "../di/service-access";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";

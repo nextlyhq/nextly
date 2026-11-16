@@ -7,24 +7,37 @@
   "scripts": {
     "test:e2e": "playwright test",
     "test:e2e:prod": "playwright test --config playwright.production.config.ts",
+    "test:admin-speed": "node admin-speed/measure.mjs --build",
+    "test:builder-speed": "node builder-speed/measure.mjs --build",
     "test:e2e:dev-reload": "playwright test --config playwright.dev-reload.config.ts",
+    "test:e2e:multi-instance": "playwright test --config playwright.multi-instance.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
-    "check-types": "tsc --noEmit"
+    "check-types": "node ../scripts/tsc.mjs --noEmit"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@nextlyhq/adapter-drizzle": "workspace:*",
+    "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/builder": "workspace:*",
+    "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:*",
     "@nextlyhq/plugin-page-builder": "workspace:*",
+    "@nextlyhq/plugin-seo": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
-    "@playwright/test": "^1.58.2",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^22.20.5",
+    "@types/pg": "^8.15.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "next": "^16.4.2",
     "nextly": "workspace:*",
-    "typescript": "^7.0.2"
+    "pg": "^8.16.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "7.0.2"
   }
 }

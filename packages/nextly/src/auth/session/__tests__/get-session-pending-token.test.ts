@@ -10,10 +10,7 @@ vi.mock("../session-standing", async importOriginal => ({
 }));
 
 import { COOKIE_NAMES } from "../../cookies/cookie-config";
-import {
-  signUnmarkedPendingToken,
-  signUnmarkedPendingTokenWithoutMarker,
-} from "../../jwt/__tests__/unmarked-tokens";
+import { signUnmarkedPendingToken } from "../../jwt/__tests__/unmarked-tokens";
 import { signAccessToken } from "../../jwt/sign";
 import { mintPendingToken } from "../../pipeline/pending-token";
 import { getSession } from "../get-session";
@@ -49,23 +46,15 @@ describe("getSession rejects pending-auth tokens (D71 security gate)", () => {
 });
 
 describe("getSession and pending tokens minted before tokens named their purpose", () => {
-  // Such a token has no header `typ`, which the verifier still lets through
-  // for tokens already in circulation, so its `typ` claim is the only thing
-  // that keeps it from opening a session here.
+  // Such a token has no header `typ`. Since the release that made the header
+  // required, the verifier refuses it before its claim is read, and this
+  // reader answers the refusal as invalid. The control beside this test while
+  // unmarked tokens were still accepted — the same shape without the pending
+  // claim opening a session — went with that allowance, as its comment said
+  // it would.
   it("does NOT authenticate one", async () => {
     const pending = await signUnmarkedPendingToken("u1", secret);
     const res = await getSession(withAccessCookie(pending), secret);
     expect(res).toEqual({ authenticated: false, reason: "invalid" });
-  });
-
-  it("authenticates the same unmarked shape without the pending claim", async () => {
-    // The control that makes the refusal above mean something: a token of the
-    // same shape, missing only the pending claim, does open a session, so the
-    // refusal comes from that claim rather than from the cookie, the
-    // signature or the absent header. It holds only while unmarked tokens are
-    // accepted, and goes when that allowance ends.
-    const unmarked = await signUnmarkedPendingTokenWithoutMarker("u1", secret);
-    const res = await getSession(withAccessCookie(unmarked), secret);
-    expect(res.authenticated).toBe(true);
   });
 });

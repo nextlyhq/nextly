@@ -166,6 +166,7 @@ async function watchedResync(
     const result: LoadConfigResult = {
       config,
       appConfig: config,
+      projectRoot: process.cwd(),
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
     };

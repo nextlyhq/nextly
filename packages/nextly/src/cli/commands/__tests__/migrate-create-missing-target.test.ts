@@ -4,7 +4,7 @@
  * by reading the draft's message. The refusal here is the one the draft really
  * raises, not a copy of its text, so a change on either side is caught.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeAll } from "vitest";
 
 import {
   createOwnerDraft,
@@ -12,6 +12,13 @@ import {
 } from "../../../domains/schema/extension/draft";
 import { NextlyError } from "../../../errors/nextly-error";
 import { missingExtendTarget } from "../migrate-create";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 /** The refusal the draft raises for `extendTable` on a table it does not have. */
 function draftRefusal(table: string): unknown {

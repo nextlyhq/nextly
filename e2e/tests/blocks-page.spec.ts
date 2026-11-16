@@ -27,8 +27,8 @@
  */
 import { expect, type APIResponse } from "@playwright/test";
 
-import { test } from "./support/test";
-import { STORAGE_STATE } from "../global-setup";
+import { CACHE_COMPONENTS } from "./support/cache-components";
+import { fileAccount, test } from "./support/test";
 
 test.describe.configure({ mode: "serial" });
 
@@ -68,6 +68,9 @@ const GATED_TEXT = "vip-only-marker-8f21";
  * `getComputedStyle` reports so the comparison needs no parsing.
  */
 const STYLED_HEADING_COLOR = "rgb(17, 85, 204)";
+
+/** A paragraph carrying a top margin its author set. */
+const AUTHOR_SPACED_TEXT = "Spaced by its author.";
 
 /** A node id. Stable per fixture so a failure names the same node every run. */
 const id = (suffix: string) => `00000000-0000-4000-8000-0000000000${suffix}`;
@@ -125,6 +128,14 @@ const DOCUMENT = {
             props: { label: BUTTON_LABEL, href: "/blocks" },
           },
           {
+            id: id("08"),
+            type: "core/text",
+            version: 1,
+            props: { text: AUTHOR_SPACED_TEXT },
+            // An author's own margin, which must beat the section's gap.
+            styles: { base: { base: { margin: { blockStart: "40px" } } } },
+          },
+          {
             id: id("07"),
             type: "core/text",
             version: 1,
@@ -171,7 +182,7 @@ test.beforeAll(async ({ playwright }, testInfo) => {
   // `beforeAll`. The signed-in state is the same one every test runs with.
   const api = await playwright.request.newContext({
     baseURL,
-    storageState: STORAGE_STATE,
+    storageState: await fileAccount(baseURL, testInfo),
   });
 
   try {
@@ -255,6 +266,49 @@ test("an authored node style is compiled and applied", async ({ page }) => {
   await expect(heading).toHaveCSS("color", STYLED_HEADING_COLOR);
 });
 
+test("spacing comes from the section, and an author's own margin wins", async ({
+  page,
+}) => {
+  /** One computed length, in pixels, of the element holding `text`. */
+  const lengthOf = async (text: string, property: string): Promise<number> =>
+    Number.parseFloat(
+      await page
+        .getByText(text, { exact: true })
+        .evaluate(
+          (node, name) => getComputedStyle(node).getPropertyValue(name),
+          property
+        )
+    );
+
+  for (const [width, stack, sectionY] of [
+    [375, 16, 48],
+    [768, 18, 63],
+    [1280, 20, 80],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/blocks/${PUBLISHED_SLUG}`);
+
+    // The heading is flush: no outer margin of its own, above or below.
+    expect(await lengthOf(PAGE_HEADING, "margin-top")).toBe(0);
+    expect(await lengthOf(PAGE_HEADING, "margin-bottom")).toBe(0);
+    // The paragraph after it is spaced by the section's gap, which grows with
+    // the viewport.
+    expect(Math.round(await lengthOf(LEAD_PARAGRAPH, "margin-top"))).toBe(
+      stack
+    );
+    expect(await lengthOf(LEAD_PARAGRAPH, "margin-bottom")).toBe(0);
+    // An author's margin on a child beats the gap at every width.
+    expect(await lengthOf(AUTHOR_SPACED_TEXT, "margin-top")).toBe(40);
+
+    // The section pads its content above and below, per the viewport.
+    const padding = await page
+      .locator("section")
+      .first()
+      .evaluate(node => getComputedStyle(node).paddingTop);
+    expect(Math.abs(Number.parseFloat(padding) - sectionY)).toBeLessThan(1);
+  }
+});
+
 test("a condition-gated node is never sent to the client", async ({
   request,
 }) => {
@@ -273,8 +327,30 @@ test("a condition-gated node is never sent to the client", async ({
 });
 
 test("an unpublished entry is not served", async ({ page }) => {
-  const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
-  expect(response?.status()).toBe(404);
+  if (!CACHE_COMPONENTS) {
+    const response = await page.goto(`/blocks/${DRAFT_SLUG}`);
+    expect(response?.status()).toBe(404);
+    return;
+  }
+  // Under Cache Components the public route renders an unlisted path on its
+  // first request and streams its static shell before it reads the entry, so
+  // that status is 200 by the time it knows the entry is not published. The
+  // route answers a miss through the SEO plugin's `notFoundLogged`, which
+  // reads the request so that each miss is decided, and logged, per request:
+  // Next keeps no render of it, and a later request is answered the same
+  // way, in a production build as under `next dev`. Every request gets the
+  // not-found page marked `noindex`, and none of the draft's content.
+  for (const request of ["first", "second"]) {
+    const response = await page.request.get(`/blocks/${DRAFT_SLUG}`);
+    const html = await response.text();
+    expect(response.status(), `${request} request`).toBe(200);
+    expect(html, `${request} request`).toMatch(
+      /<meta[^>]+name="robots"[^>]+content="noindex"/
+    );
+    expect(html, `${request} request`).toMatch(/could not be found/);
+    expect(html, `${request} request`).not.toContain(PAGE_HEADING);
+    expect(html, `${request} request`).not.toContain("Dogfood draft");
+  }
 });
 
 test("block-declared metadata reaches the head", async ({ page }) => {

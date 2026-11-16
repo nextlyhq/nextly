@@ -39,9 +39,15 @@ const fb = formBuilder({
 
 export default defineConfig({
   plugins: [fb.plugin],
-  collections: [...fb.collections],
+  collections: [
+    /* your own collections only */
+  ],
 });
 ```
+
+The plugin registers its `forms` and `form-submissions` collections itself. Don't
+also add `fb.collections` to `collections`: the same slug twice stops the app
+from booting with a duplicate `forms` collection.
 
 > A `formBuilderPlugin` default-instance shortcut is also exported for cases where no customization is needed. See [the plugin docs](https://nextlyhq.com/docs/plugins/form-builder) for the full options reference.
 
@@ -60,7 +66,8 @@ import "@nextlyhq/plugin-form-builder/admin";
 - **Admin routes:** `/admin/collections/forms` and `/admin/collections/form-submissions`
 - **Collections:** `forms`, `form-submissions`
 - **Form lifecycle states:** Draft, Published, Closed
-- **Optional integrations:** email notifications, a `form.submission.created` webhook through Nextly's own webhooks, spam protection (honeypot, rate limit, reCAPTCHA v3)
+- **One response per person:** by email address, browser or network address, refused atomically by a keyed digest (the browser mode needs your form's script to send a token; see the docs)
+- **Optional integrations:** email notifications, a `form.submission.created` webhook through Nextly's own webhooks, spam protection (honeypot, rate limit, and a reCAPTCHA v3 or Cloudflare Turnstile bot check verified on the server)
 
 ### Submission privacy
 

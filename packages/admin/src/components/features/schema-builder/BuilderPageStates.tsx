@@ -26,7 +26,7 @@ function BuilderCenteredScreen({ children }: { children: ReactNode }) {
 }
 
 type BuilderNotFoundScreenProps = {
-  /** Heading, e.g. "Collection Not Found". */
+  /** Heading, e.g. "Collection not found". */
   title: string;
   /** Body copy naming what the route was missing. */
   description: string;

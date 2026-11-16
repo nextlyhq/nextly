@@ -74,23 +74,67 @@ describe("the card frame", () => {
       <WidgetCard
         title="Recent activity"
         customizing
-        link={{ label: "View all", href: "/a" }}
-        updatedAt={new Date()}
         quick={<button>30 days</button>}
       >
         <a href="/x">An entry</a>
       </WidgetCard>
     );
     expect(screen.getByText("An entry").closest("[inert]")).not.toBeNull();
-    expect(screen.getByText("View all").closest("[inert]")).not.toBeNull();
-    // The quick setting is for using the card, not arranging it.
-    expect(screen.queryByRole("button", { name: "30 days" })).toBeNull();
+    // The footer dims with the body, so whatever it holds does not look usable.
+    expect(screen.getByTestId("widget-card-footer")).toHaveClass("opacity-55");
+    // The quick setting is for using the card, not arranging it: it keeps its
+    // place, so the header keeps its shape, and is out of reach.
+    expect(screen.getByText("30 days").closest("[inert]")).not.toBeNull();
     expect(screen.getAllByRole("heading")).toHaveLength(1);
+  });
+
+  it("dims only an answer while customising, never a state's message", () => {
+    // 🔴 A state's message is an instruction: dimmed to 55%, "Choose collection in the card's
+    // settings." measured 2.65:1 in light, under the 4.5:1 text needs. An answer is out of reach
+    // while arranging and is dimmed to say so.
+    const { rerender } = render(
+      <WidgetCard
+        title="Posts"
+        customizing
+        state={{
+          kind: "empty",
+          empty: {
+            title: "No collection chosen yet",
+            detail: "Choose collection in the card's settings.",
+          },
+        }}
+      >
+        <p>12 posts</p>
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-body")).not.toHaveClass(
+      "opacity-55"
+    );
+    for (const state of [
+      { kind: "no-access" } as const,
+      { kind: "error", message: "It failed" } as const,
+    ]) {
+      rerender(
+        <WidgetCard title="Posts" customizing state={state}>
+          <p>12 posts</p>
+        </WidgetCard>
+      );
+      expect(screen.getByTestId("widget-card-body")).not.toHaveClass(
+        "opacity-55"
+      );
+    }
+    // The control: the answer itself, while customising, is dimmed.
+    rerender(
+      <WidgetCard title="Posts" customizing>
+        <p>12 posts</p>
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-body")).toHaveClass("opacity-55");
   });
 
   it("shows a skeleton, marked busy, while data has never arrived", () => {
     render(
-      <WidgetCard title="Posts" state="loading" skeleton="figure">
+      <WidgetCard title="Posts" state={{ kind: "loading" }} skeleton="figure">
         <p>never shown</p>
       </WidgetCard>
     );
@@ -112,23 +156,27 @@ describe("the card frame", () => {
     ).toBeNull();
   });
 
-  it("says what an empty card will show and offers at most its one action", () => {
+  it("says what an empty card will show, and offers at most its one action", () => {
     render(
       <WidgetCard
         title="Recent posts"
-        state="empty"
-        empty={{
-          title: "No posts yet",
-          detail: "Your newest posts show here.",
-          action: { label: "New post", href: "/posts/new" },
+        state={{
+          kind: "empty",
+          empty: {
+            title: "No posts yet",
+            detail: "Your newest posts show here.",
+            action: { label: "New post", href: "/posts/new" },
+          },
         }}
-        link={{ label: "View all posts", href: "/posts" }}
       >
         <p>never shown</p>
       </WidgetCard>
     );
     expect(screen.getByText("No posts yet")).toBeInTheDocument();
-    expect(screen.getAllByRole("link")).toHaveLength(1);
+    // The empty state's one action (foundations R-4), and no other link.
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual([
+      "New post",
+    ]);
     expect(screen.getByRole("link", { name: "New post" })).toHaveAttribute(
       "href",
       "/posts/new"
@@ -137,11 +185,7 @@ describe("the card frame", () => {
 
   it("says not available in one fixed wording, with no action and no link", () => {
     render(
-      <WidgetCard
-        title="Usage backfill"
-        state="unavailable"
-        link={{ label: "Open", href: "/u" }}
-      >
+      <WidgetCard title="Usage backfill" state={{ kind: "no-access" }}>
         <p>never shown</p>
       </WidgetCard>
     );
@@ -156,8 +200,11 @@ describe("the card frame", () => {
     render(
       <WidgetCard
         title="Posts by status"
-        error="The server didn't answer."
-        onRetry={onRetry}
+        state={{
+          kind: "error",
+          message: "The server didn't answer.",
+          retry: onRetry,
+        }}
       >
         <p>never shown</p>
       </WidgetCard>
@@ -171,7 +218,10 @@ describe("the card frame", () => {
 
   it("offers no Retry when the caller cannot retry", () => {
     render(
-      <WidgetCard title="Posts by status" error="The server didn't answer.">
+      <WidgetCard
+        title="Posts by status"
+        state={{ kind: "error", message: "The server didn't answer." }}
+      >
         <p>never shown</p>
       </WidgetCard>
     );

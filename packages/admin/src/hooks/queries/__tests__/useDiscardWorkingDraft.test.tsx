@@ -67,6 +67,8 @@ describe("useDiscardWorkingDraft", () => {
         slug: "posts",
         entryId: "e1",
       },
+      undefined,
+      // No version: the request sends none.
       undefined
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
@@ -99,7 +101,9 @@ describe("useDiscardWorkingDraft", () => {
 
     expect(discardSpy).toHaveBeenCalledWith(
       { kind: "collection", slug: "posts", entryId: "e1" },
-      "es"
+      "es",
+      // No version: the request sends none.
+      undefined
     );
   });
 
@@ -155,6 +159,32 @@ describe("useDiscardWorkingDraft", () => {
       title: "English live",
       _isWorkingDraft: true,
     });
+  });
+
+  it("reads the entry again and says so when the entry changed since", async () => {
+    const client = makeClient();
+    const invalidateSpy = vi.spyOn(client, "invalidateQueries");
+    discardSpy.mockRejectedValue(
+      Object.assign(
+        new Error("This document changed since the version you gave."),
+        { status: 409, code: "STALE_VERSION", data: { currentVersion: "5" } }
+      )
+    );
+
+    const { result } = renderHook(
+      () => useDiscardWorkingDraft({ collectionSlug: "posts", entryId: "e1" }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await expect(result.current.mutateAsync("3")).rejects.toThrow();
+
+    // Read again, so a second discard starts from the version on screen.
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: entryKeys.detail("posts", "e1"),
+    });
+    expect(toastErrorSpy).toHaveBeenCalledWith(
+      "This document changed since you opened it. It now shows the current version; discard again if you still want to."
+    );
   });
 
   it("toasts the error and does not invalidate on failure", async () => {

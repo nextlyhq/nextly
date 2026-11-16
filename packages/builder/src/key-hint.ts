@@ -63,12 +63,34 @@ const MODIFIERS: ReadonlyArray<{
   readonly held: (chord: KeyChord) => boolean;
   readonly apple: string;
   readonly other: string;
+  /** The Apple key's name in words, for text that is spoken. */
+  readonly appleSpoken: string;
 }> = [
-  { held: chord => chord.mod, apple: "⌘", other: "Ctrl" },
-  { held: chord => chord.ctrl, apple: "⌃", other: "Ctrl" },
-  { held: chord => chord.alt, apple: "⌥", other: "Alt" },
-  { held: chord => chord.shift, apple: "⇧", other: "Shift" },
-  { held: chord => chord.meta, apple: "⌘", other: "Meta" },
+  {
+    held: chord => chord.mod,
+    apple: "⌘",
+    other: "Ctrl",
+    appleSpoken: "Command",
+  },
+  {
+    held: chord => chord.ctrl,
+    apple: "⌃",
+    other: "Ctrl",
+    appleSpoken: "Control",
+  },
+  { held: chord => chord.alt, apple: "⌥", other: "Alt", appleSpoken: "Option" },
+  {
+    held: chord => chord.shift,
+    apple: "⇧",
+    other: "Shift",
+    appleSpoken: "Shift",
+  },
+  {
+    held: chord => chord.meta,
+    apple: "⌘",
+    other: "Meta",
+    appleSpoken: "Command",
+  },
 ];
 
 /** The modifier labels this chord carries, in that order. */
@@ -85,6 +107,8 @@ function modifierLabels(chord: KeyChord, apple: boolean): string[] {
  * does something, and a spec this cannot parse is one whose keystroke it does
  * not know. Showing a wrong one is worse than showing none, which is the same
  * judgement the toolbar made when it showed none at all.
+ *
+ * @experimental
  */
 export function keyHint(
   spec: string,
@@ -110,4 +134,58 @@ export function keyHint(
  */
 function capitalize(key: string): string {
   return key.length === 1 ? key.toUpperCase() : key;
+}
+
+/**
+ * Keys named differently in words than in the spec, for text that is spoken.
+ * A Mac labels Backspace "Delete" and Enter "Return"; arrows and the space
+ * bar have names rather than glyphs.
+ */
+const SPOKEN_KEYS: Readonly<
+  Record<string, { readonly apple: string; readonly other: string }>
+> = {
+  backspace: { apple: "Delete", other: "Backspace" },
+  enter: { apple: "Return", other: "Enter" },
+  arrowup: { apple: "Up Arrow", other: "Up Arrow" },
+  arrowdown: { apple: "Down Arrow", other: "Down Arrow" },
+  arrowleft: { apple: "Left Arrow", other: "Left Arrow" },
+  arrowright: { apple: "Right Arrow", other: "Right Arrow" },
+  " ": { apple: "Space", other: "Space" },
+};
+
+/**
+ * One binding in words, for text a screen reader speaks, or `null` when the
+ * spec cannot be read.
+ *
+ * Beside {@link keyHint}, not instead of it: glyphs read well on screen and
+ * badly aloud, where ⌥ and ⌫ are skipped or read as "symbol". Same parser,
+ * same modifier table and order, so the two never name different keys.
+ *
+ * @experimental
+ */
+export function spokenKeyHint(
+  spec: string,
+  apple: boolean = detectApplePlatform()
+): string | null {
+  let chords;
+  try {
+    chords = parseKeys(spec);
+  } catch {
+    return null;
+  }
+  return chords
+    .map(chord => {
+      const named = SPOKEN_KEYS[chord.key.toLowerCase()];
+      const key =
+        named === undefined
+          ? capitalize(chord.key)
+          : apple
+            ? named.apple
+            : named.other;
+      const modifiers = MODIFIERS.filter(modifier => modifier.held(chord)).map(
+        modifier => (apple ? modifier.appleSpoken : modifier.other)
+      );
+      return [...modifiers, key].join("+");
+    })
+    .join(" then ");
 }

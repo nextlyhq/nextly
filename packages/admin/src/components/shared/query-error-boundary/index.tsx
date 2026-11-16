@@ -2,7 +2,7 @@
 
 import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import type React from "react";
-import { type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";
 

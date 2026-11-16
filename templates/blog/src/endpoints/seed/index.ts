@@ -1,7 +1,7 @@
 /**
  * Blog Template Seed Script
  *
- * Exports a `seed({ nextly })` function that populates demo content
+ * Exports a `seed({ nextly, config })` function that populates demo content
  * (roles, posts, categories, tags, navigation, site-settings,
  * homepage, newsletter form). Triggered from the auth-gated POST
  * route at `src/app/admin/api/seed/route.ts` — the route validates
@@ -20,7 +20,9 @@
 import fs from "fs";
 import path from "path";
 
-import type { Nextly } from "nextly";
+import type { Nextly, SingleSlug } from "nextly";
+
+import { ownPostsUnlessPublisher } from "../../access/own-posts";
 
 /**
  * Structured summary of what the seed produced. Returned to the
@@ -67,14 +69,14 @@ const TEMPLATE_ROLES = [
     slug: "editor",
     name: "Editor",
     description:
-      "Can create, edit, and publish any post. Manages categories, tags, and media.",
+      "Can create, edit, and publish any post. Manages authors, categories, tags, and media.",
     level: 50,
   },
   {
     slug: "author",
     name: "Author",
     description:
-      "Can draft and edit posts, but not publish or delete them. Reads taxonomy.",
+      "Can draft and edit posts, but not publish them; on a code-first blog only their own, which they may also delete. Reads taxonomy.",
     level: 10,
   },
 ] as const;
@@ -135,11 +137,32 @@ async function findUserByEmail(
 /**
  * The only posts permissions the author role is given. Named rather than
  * withheld, so an action a site adds later (`manage-posts`, say) is not
- * handed to authors by default. Access rules cannot tell an author's own post
- * from anyone else's, so delete or publish would reach every post (see
- * pickPermissionIdsForRoles).
+ * handed to authors by default. Publish is withheld: it would reach every
+ * post (see pickPermissionIdsForRoles). Delete is added only where Posts'
+ * delete rule limits it to the author's own posts.
  */
 const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
+
+/**
+ * Whether this install's Posts limits a delete to the posts the caller wrote:
+ * its `delete` rule is `ownPostsUnlessPublisher`. A code-first blog registers
+ * Posts with it. A visual blog registers no code collections, and the Posts
+ * its migration creates carries no rule, since the Schema Builder can't store
+ * a function: there the permission alone decides a delete, and granting it
+ * to authors would let each delete every post.
+ */
+export function postsLimitDeletesToTheirAuthor(config: {
+  readonly collections?: ReadonlyArray<{
+    readonly slug: string;
+    readonly access?: { readonly delete?: unknown };
+  }>;
+}): boolean {
+  return (config.collections ?? []).some(
+    collection =>
+      collection.slug === "posts" &&
+      collection.access?.delete === ownPostsUnlessPublisher
+  );
+}
 
 /**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
@@ -150,16 +173,18 @@ const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
  *   /admin/roles/<slug> after seeding).
  * - editor: content + media permissions.
  * - author: posts (create, read, update) + media and read-only access to
- *   the content taxonomy. No delete or publish on posts: access rules
- *   cannot tell an author's own post from anyone else's, so either
- *   permission would reach every post. An editor publishes.
+ *   the content taxonomy, and delete on posts where `authorsDeleteOwnPosts`
+ *   says Posts' rule limits it to the posts they wrote (see
+ *   postsLimitDeletesToTheirAuthor). No publish on posts: it is not limited
+ *   that way, and would reach every post. An editor publishes.
  *
  * Returns an empty array if fetching permissions fails; callers still
  * get a "at least one permission required" error from the core service
  * in that case and the role will be skipped with a warning.
  */
 export async function pickPermissionIdsForRoles(
-  nextly: Nextly
+  nextly: Nextly,
+  options: { authorsDeleteOwnPosts: boolean }
 ): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
   try {
@@ -171,6 +196,7 @@ export async function pickPermissionIdsForRoles(
         const resource = (p as { resource?: string }).resource;
         return (
           resource === "posts" ||
+          resource === "authors" ||
           resource === "categories" ||
           resource === "tags" ||
           resource === "media" ||
@@ -183,9 +209,16 @@ export async function pickPermissionIdsForRoles(
         const resource = (p as { resource?: string }).resource;
         const action = (p as { action?: string }).action;
         if (resource === "media") return true;
-        if (resource === "posts") return AUTHOR_POST_ACTIONS.has(action ?? "");
+        if (resource === "posts") {
+          return (
+            AUTHOR_POST_ACTIONS.has(action ?? "") ||
+            (options.authorsDeleteOwnPosts && action === "delete")
+          );
+        }
         if (
-          (resource === "categories" || resource === "tags") &&
+          (resource === "authors" ||
+            resource === "categories" ||
+            resource === "tags") &&
           action === "read"
         ) {
           return true;
@@ -202,7 +235,8 @@ export async function pickPermissionIdsForRoles(
 }
 
 async function seedRoles(
-  nextly: Nextly
+  nextly: Nextly,
+  options: { authorsDeleteOwnPosts: boolean }
 ): Promise<{ idsBySlug: Record<string, string>; created: number }> {
   const roleIdBySlug: Record<string, string> = {};
   let created = 0;
@@ -228,7 +262,7 @@ async function seedRoles(
   // satisfied. Requires the Direct API to forward permissionIds through
   // `data.permissionIds` (wired up in packages/nextly Direct API rbac
   // namespace).
-  const rolePermissionIds = await pickPermissionIdsForRoles(nextly);
+  const rolePermissionIds = await pickPermissionIdsForRoles(nextly, options);
   for (const role of TEMPLATE_ROLES) {
     if (roleIdBySlug[role.slug]) continue;
     const permissionIds = rolePermissionIds[role.slug] ?? [];
@@ -270,7 +304,7 @@ interface SeedMediaConfig {
   baseUrl?: string;
 }
 
-interface SeedData {
+export interface SeedData {
   // Optional. Lets the template fetch missing media from a public URL when
   // the local file is absent (e.g. user deleted it, scaffold skipped it).
   seedMedia?: SeedMediaConfig;
@@ -278,7 +312,11 @@ interface SeedData {
   // pattern). `slug`, `bio`, and `avatarUrl` are user-extension
   // scalar fields (see ../configs/codefirst.config.ts). `avatarUrl`
   // can be either a full URL or a filename; relative filenames get
-  // prefixed with `seedMedia.baseUrl` at seed time.
+  // prefixed with `seedMedia.baseUrl` at seed time. Either way the file is
+  // also uploaded into the media library as the author profile's avatar: a
+  // filename from the media folder (else `seedMedia.baseUrl`), a full URL
+  // fetched as it is. One that can't be loaded leaves the profile without an
+  // avatar and is reported in the seed's warnings.
   users: Array<{
     name: string;
     email: string;
@@ -384,17 +422,90 @@ function getMimeType(filename: string): string {
   return mimeTypes[ext] || "application/octet-stream";
 }
 
+/** Whether a seed's media value is an absolute http or https address. */
+const isAbsoluteAddress = (value: string): boolean =>
+  /^https?:\/\//i.test(value);
+
 /**
- * Try local disk first; fall back to seedMedia.baseUrl + filename if set.
- * Returns the buffer and its source, or an error descriptor if both paths fail.
+ * The file name an absolute address names, for the media record: the last
+ * segment of its path, or a neutral name when it ends in a slash.
+ */
+function fileNameOf(address: string): string {
+  try {
+    const last = new URL(address).pathname.split("/").pop() ?? "";
+    return decodeURIComponent(last) || "seed-media";
+  } catch {
+    return "seed-media";
+  }
+}
+
+type FetchedMedia =
+  | { buffer: Buffer; source: "remote"; contentType?: string }
+  | { error: "fetch-failed"; detail?: string };
+
+/**
+ * Fetch one file over the network, with a 10 second timeout per attempt: a
+ * 5xx answer is tried once more, a 4xx is final, and a network failure is
+ * tried once more. Never throws.
+ */
+async function fetchSeedMedia(url: string): Promise<FetchedMedia> {
+  const attempt = async (): Promise<Response> =>
+    fetch(url, { signal: AbortSignal.timeout(10_000) });
+  const read = async (res: Response): Promise<FetchedMedia> => {
+    const arrayBuffer = await res.arrayBuffer();
+    const contentType = res.headers.get("content-type") ?? undefined;
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      source: "remote",
+      ...(contentType ? { contentType } : {}),
+    };
+  };
+
+  try {
+    let res = await attempt();
+    if (!res.ok) {
+      // Retry once on 5xx; 4xx is permanent
+      if (res.status >= 500 && res.status < 600) {
+        res = await attempt();
+      }
+      if (!res.ok) {
+        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
+      }
+    }
+    return await read(res);
+  } catch {
+    // One network-level retry: the first failure's reason is not needed to try again.
+    try {
+      const res = await attempt();
+      if (!res.ok) {
+        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
+      }
+      return await read(res);
+    } catch (err2) {
+      return {
+        error: "fetch-failed",
+        detail: err2 instanceof Error ? err2.message : String(err2),
+      };
+    }
+  }
+}
+
+/**
+ * Load one seed media file. An absolute http or https address, which custom
+ * seed data may give, is fetched as it is. A file name is read from local
+ * disk first, then fetched from seedMedia.baseUrl + filename if that is set.
+ * Returns the buffer and its source, or an error descriptor if every path
+ * fails.
  */
 async function resolveSeedMedia(
   filename: string,
   seedMedia?: SeedMediaConfig
 ): Promise<
-  | { buffer: Buffer; source: "local" | "remote" }
+  | { buffer: Buffer; source: "local" | "remote"; contentType?: string }
   | { error: "not-found" | "fetch-failed"; detail?: string }
 > {
+  if (isAbsoluteAddress(filename)) return fetchSeedMedia(filename);
+
   // Local disk first. Co-located with this file under
   // src/endpoints/seed/media.
   const localPath = path.join(
@@ -414,42 +525,11 @@ async function resolveSeedMedia(
     return { error: "not-found" };
   }
 
-  const url = seedMedia.baseUrl.endsWith("/")
-    ? seedMedia.baseUrl + filename
-    : `${seedMedia.baseUrl}/${filename}`;
-
-  const attempt = async (): Promise<Response> =>
-    fetch(url, { signal: AbortSignal.timeout(10_000) });
-
-  try {
-    let res = await attempt();
-    if (!res.ok) {
-      // Retry once on 5xx; 4xx is permanent
-      if (res.status >= 500 && res.status < 600) {
-        res = await attempt();
-      }
-      if (!res.ok) {
-        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
-      }
-    }
-    const arrayBuffer = await res.arrayBuffer();
-    return { buffer: Buffer.from(arrayBuffer), source: "remote" };
-  } catch {
-    // One network-level retry: the first failure's reason is not needed to try again.
-    try {
-      const res = await attempt();
-      if (!res.ok) {
-        return { error: "fetch-failed", detail: `HTTP ${res.status}` };
-      }
-      const arrayBuffer = await res.arrayBuffer();
-      return { buffer: Buffer.from(arrayBuffer), source: "remote" };
-    } catch (err2) {
-      return {
-        error: "fetch-failed",
-        detail: err2 instanceof Error ? err2.message : String(err2),
-      };
-    }
-  }
+  return fetchSeedMedia(
+    seedMedia.baseUrl.endsWith("/")
+      ? seedMedia.baseUrl + filename
+      : `${seedMedia.baseUrl}/${filename}`
+  );
 }
 
 /**
@@ -468,12 +548,21 @@ async function uploadMediaFile(
     return { miss: filename, reason: resolved.error, detail: resolved.detail };
   }
 
+  // An absolute address names its file by its path; its type comes from the
+  // name's extension, else from what the server said it sent.
+  const name = isAbsoluteAddress(filename) ? fileNameOf(filename) : filename;
+  const byName = getMimeType(name);
+  const mimetype =
+    byName === "application/octet-stream" && resolved.contentType
+      ? resolved.contentType.split(";")[0].trim()
+      : byName;
+
   try {
     const media = await nextly.media.upload({
       file: {
         data: resolved.buffer,
-        name: filename,
-        mimetype: getMimeType(filename),
+        name,
+        mimetype,
         size: resolved.buffer.length,
       },
       altText,
@@ -492,15 +581,87 @@ async function uploadMediaFile(
  * Main seed function. Invoked from the auth-gated POST route at
  * `src/app/admin/api/seed/route.ts`. Receives a Nextly instance the
  * route has already initialised with `{ config }` and a verified
- * super-admin session.
+ * super-admin session, and that same config: it says whether Posts limits
+ * an author's deletes to their own posts, which decides whether the author
+ * role is given `delete-posts`.
  *
  * Schema is created via SQL migrations (boot-time auto-apply).
  * This function only populates demo content (Phase C).
  */
+/**
+ * Patch a post an earlier seed run created: its categories and tags, in case
+ * they were lost, and its byline when it has none, in case its author's
+ * profile could not be made then. A byline the post already has is kept, so
+ * a credit an editor changed since stays theirs. Sent with the version the
+ * lookup read it at, so a change to the post made since refuses the patch
+ * rather than being overwritten by it.
+ */
+export async function patchSeededPost(
+  nextly: Pick<Nextly, "update">,
+  existing: Record<string, unknown>,
+  links: { categories: unknown[]; tags: unknown[]; byline?: string }
+): Promise<void> {
+  const rev = existing._rev;
+  const credited =
+    existing.byline !== undefined &&
+    existing.byline !== null &&
+    existing.byline !== "";
+  await nextly.update({
+    collection: "posts",
+    id: String(existing.id),
+    data: {
+      categories: links.categories.length > 0 ? links.categories : undefined,
+      tags: links.tags.length > 0 ? links.tags : undefined,
+      ...(links.byline && !credited ? { byline: links.byline } : {}),
+      ...(typeof rev === "string" ? { _rev: rev } : {}),
+    },
+  });
+}
+
+/**
+ * Write the demo content of the site's Singles: settings, navigation and the
+ * homepage. Seed content is set whatever the Singles hold, so each write
+ * says so with `_overwrite`.
+ *
+ * A write that fails fails the seed, naming the Single: a site without its
+ * Singles' demo copy is not seeded, and the load is recorded as failed so it
+ * can be run again. Running it again is safe, since each write overwrites.
+ */
+export async function seedSingles(
+  nextly: Pick<Nextly, "updateSingle">,
+  seedData: Pick<SeedData, "siteSettings" | "navigation" | "homepage">
+): Promise<void> {
+  const write = async (slug: SingleSlug, data: Record<string, unknown>) => {
+    console.log(`  Updating ${slug}...`);
+    try {
+      await nextly.updateSingle({
+        slug,
+        data: { ...data, _overwrite: true },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`The seed could not write the ${slug} Single: ${msg}`, {
+        cause: err,
+      });
+    }
+  };
+  await write("site-settings", {
+    title: seedData.siteSettings.siteName,
+    siteName: seedData.siteSettings.siteName,
+    tagline: seedData.siteSettings.tagline,
+    siteDescription: seedData.siteSettings.siteDescription,
+    social: seedData.siteSettings.social,
+  });
+  if (seedData.navigation) await write("navigation", seedData.navigation);
+  if (seedData.homepage) await write("homepage", seedData.homepage);
+}
+
 export async function seed({
   nextly,
+  config,
 }: {
   nextly: Nextly;
+  config: Parameters<typeof postsLimitDeletesToTheirAuthor>[0];
 }): Promise<SeedResult> {
   const summary: SeedSummary = {
     rolesCreated: 0,
@@ -542,23 +703,29 @@ export async function seed({
   // Per-file failures are captured into `outcomes` for an end-of-run summary.
   console.log("  Uploading seed media...");
   const outcomes: UploadOutcome[] = [];
-  const mediaIdByFilename = new Map<string, string>();
+  // Keyed by file AND alt text: two posts may share an image, and each keeps
+  // its own alt text rather than reading the first post's title as its own.
+  const mediaIdByUpload = new Map<string, string>();
+  const uploadKey = (filename: string, altText: string) =>
+    JSON.stringify([filename, altText]);
 
   const uploadAndTrack = async (
     filename: string,
     altText: string
   ): Promise<void> => {
-    if (mediaIdByFilename.has(filename)) return; // dedupe
+    const key = uploadKey(filename, altText);
+    if (mediaIdByUpload.has(key)) return; // dedupe
     const outcome = await uploadMediaFile(nextly, filename, altText, seedMedia);
     outcomes.push(outcome);
     if ("id" in outcome) {
-      mediaIdByFilename.set(filename, outcome.id);
+      mediaIdByUpload.set(key, outcome.id);
     }
   };
 
-  // Post cover images go through the media upload path.
-  // User avatars are text URLs (resolved below) so they don't get
-  // uploaded here; they stay as raw URLs in the `avatarUrl` user field.
+  // Post cover images go through the media upload path. The avatars the
+  // author profiles show do too, but only for a profile that will hold one,
+  // decided when the profiles are made below. The users' own `avatarUrl`
+  // stays a text address (resolved below), which no page reads.
   for (const post of seedData.posts) {
     if (post.featuredImage) {
       await uploadAndTrack(post.featuredImage, post.title);
@@ -578,7 +745,9 @@ export async function seed({
 
   // Step 2a: Seed roles first so user creation can assign them.
   console.log("  Seeding roles...");
-  const rolesResult = await seedRoles(nextly);
+  const rolesResult = await seedRoles(nextly, {
+    authorsDeleteOwnPosts: postsLimitDeletesToTheirAuthor(config),
+  });
   const roleIdBySlug = rolesResult.idsBySlug;
   summary.rolesCreated = rolesResult.created;
 
@@ -642,6 +811,91 @@ export async function seed({
       summary.usersCreated++;
     }
     userIdMap[user.slug] = userId;
+  }
+
+  // Step 2c: one public author profile per seeded user, in the order the
+  // users are listed, linked to that account. A post's byline credits the
+  // profile; its `author` stays the account that owns it.
+  console.log("  Creating authors...");
+  const authorIdMap: Record<string, string> = {};
+  for (const user of seedData.users) {
+    try {
+      // Found by its account first, which stays put, then by its slug, which
+      // an editor may have changed since: a renamed profile is still this
+      // user's, and making another would be refused by the unique account.
+      const accountId = userIdMap[user.slug];
+      const lookup = async (
+        where: { account: { equals: string } } | { slug: { equals: string } }
+      ) => {
+        const result = await nextly.find({
+          collection: "authors",
+          where,
+          limit: 1,
+        });
+        return result.meta.total > 0 ? result.items[0] : undefined;
+      };
+      const found =
+        (accountId
+          ? await lookup({ account: { equals: accountId } })
+          : undefined) ?? (await lookup({ slug: { equals: user.slug } }));
+      // The avatar (a file name or an absolute address) is uploaded into the
+      // media library only for a profile that will hold it: a new one, or an
+      // existing one an earlier run left without (its avatar could not be
+      // loaded then). A profile that has one gets nothing, so a rerun adds no
+      // media.
+      const avatarMissing =
+        found === undefined ||
+        found.avatar === undefined ||
+        found.avatar === null ||
+        found.avatar === "";
+      let avatarId: string | undefined;
+      if (user.avatarUrl && avatarMissing) {
+        await uploadAndTrack(user.avatarUrl, user.name);
+        avatarId = mediaIdByUpload.get(uploadKey(user.avatarUrl, user.name));
+        // An avatar that could not be loaded leaves the profile without one
+        // (the pages draw the author's initial); the miss is also in the
+        // media warnings, and a later run tries it again.
+        if (!avatarId) {
+          console.log(
+            `  Warning: author "${user.slug}" is left without an avatar: ${user.avatarUrl} could not be loaded.`
+          );
+        }
+      }
+      if (found) {
+        authorIdMap[user.slug] = found.id as string;
+        if (avatarId) {
+          const rev = found._rev;
+          await nextly.update({
+            collection: "authors",
+            id: String(found.id),
+            data: {
+              avatar: avatarId,
+              // The version the lookup read, so a change made since refuses
+              // the patch rather than being overwritten by it.
+              ...(typeof rev === "string"
+                ? { _rev: rev }
+                : { _overwrite: true }),
+            },
+          });
+        }
+        continue;
+      }
+      const createdAuthor = await nextly.create({
+        collection: "authors",
+        data: {
+          title: user.name,
+          name: user.name,
+          slug: user.slug,
+          bio: user.bio,
+          ...(avatarId ? { avatar: avatarId } : {}),
+          ...(userIdMap[user.slug] ? { account: userIdMap[user.slug] } : {}),
+        },
+      });
+      authorIdMap[user.slug] = createdAuthor.item.id as string;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`author "${user.slug}": ${msg}`);
+    }
   }
 
   console.log("  Creating categories...");
@@ -715,6 +969,7 @@ export async function seed({
       });
 
       const authorId = userIdMap[post.author];
+      const bylineId = authorIdMap[post.author];
       const categoryIds = post.categories
         .map(slug => categoryIdMap[slug])
         .filter(Boolean);
@@ -722,24 +977,24 @@ export async function seed({
         .map(slug => tagIdMap[slug])
         .filter(Boolean);
       const featuredImageId = post.featuredImage
-        ? mediaIdByFilename.get(post.featuredImage)
+        ? mediaIdByUpload.get(uploadKey(post.featuredImage, post.title))
         : undefined;
 
       if (existing.meta.total > 0) {
         // Post already exists — patch its categories/tags in case they
-        // were lost during a prior seed run.
-        const existingId = existing.items[0].id as string;
+        // were lost during a prior seed run, and its byline if that run could
+        // not make the author's profile, so a retry ends where a first clean
+        // run does. Non-critical, so it is reported as a warning rather than
+        // stopping the seed, never dropped.
         try {
-          await nextly.update({
-            collection: "posts",
-            id: existingId,
-            data: {
-              categories: categoryIds.length > 0 ? categoryIds : undefined,
-              tags: tagIds.length > 0 ? tagIds : undefined,
-            },
+          await patchSeededPost(nextly, existing.items[0], {
+            categories: categoryIds,
+            tags: tagIds,
+            ...(bylineId ? { byline: bylineId } : {}),
           });
-        } catch {
-          // Non-critical: the post exists, just the taxonomy link is stale.
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`post "${post.slug}" patch: ${msg}`);
         }
         continue;
       }
@@ -752,6 +1007,7 @@ export async function seed({
           excerpt: post.excerpt,
           content: post.content,
           author: authorId || undefined,
+          byline: bylineId || undefined,
           categories: categoryIds.length > 0 ? categoryIds : undefined,
           tags: tagIds.length > 0 ? tagIds : undefined,
           featured: post.featured ?? false,
@@ -768,53 +1024,7 @@ export async function seed({
     }
   }
 
-  console.log("  Updating site settings...");
-  try {
-    await nextly.updateSingle({
-      slug: "site-settings",
-      data: {
-        title: seedData.siteSettings.siteName,
-        siteName: seedData.siteSettings.siteName,
-        tagline: seedData.siteSettings.tagline,
-        siteDescription: seedData.siteSettings.siteDescription,
-        social: seedData.siteSettings.social,
-      },
-    });
-  } catch {
-    console.log("  Could not update site settings (will be set up in admin).");
-  }
-
-  // Navigation single: seed default link arrays + UI toggles. Wrapped in
-  // try/catch since Single DDL may not have landed on every install path
-  if (seedData.navigation) {
-    console.log("  Updating navigation...");
-    try {
-      await nextly.updateSingle({
-        slug: "navigation",
-        data: seedData.navigation,
-      });
-    } catch {
-      console.log(
-        "  Could not update navigation (edit in admin under Singles / Navigation)."
-      );
-    }
-  }
-
-  // Homepage single: hero copy + section visibility toggles. Same
-  // try/catch rationale as navigation above.
-  if (seedData.homepage) {
-    console.log("  Updating homepage...");
-    try {
-      await nextly.updateSingle({
-        slug: "homepage",
-        data: seedData.homepage,
-      });
-    } catch {
-      console.log(
-        "  Could not update homepage (edit in admin under Singles / Homepage)."
-      );
-    }
-  }
+  await seedSingles(nextly, seedData);
 
   // Newsletter form: seed via the form-builder plugin. The frontend
   // NewsletterCta component submits to `form-submissions` referencing

@@ -46,7 +46,6 @@ import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { consoleLogger } from "../../../shared/types";
 import { pluginMigratedTableSet } from "../ownership/drop-guard";
-import { activePostgresSchema } from "../services/postgres-schema";
 
 import { currentMysqlDatabaseName } from "./database-url";
 import {
@@ -54,6 +53,8 @@ import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
+import { pushInActiveSchema } from "./pg-active-schema-push";
+import { assertSchemaLockHeld, markedForSchemaLock } from "./schema-lock";
 import { isIdempotencyError, splitStatements } from "./sql-statement-utils";
 
 // Re-exported so existing importers (v1-golden suite) keep working; the
@@ -88,7 +89,8 @@ export interface FreshPushResult {
 export async function freshPushSchema(
   dialect: FreshPushDialect,
   db: unknown,
-  schema: Record<string, unknown>
+  schema: Record<string, unknown>,
+  options: FreshPushOptions = {}
 ): Promise<FreshPushResult> {
   // Entry-point dialect guard. TS already narrows callers to the union,
   // but a runtime check makes the failure mode obvious for callers that
@@ -116,21 +118,164 @@ export async function freshPushSchema(
   // The second pass runs only after a degraded one. An ordinary push already
   // applied everything, and re-running it would be a wasted introspection on
   // every boot.
-  const first = await pushForDialect(dialect, db, schema);
-  const firstPass = await applyPushResult(dialect, db, schema, first);
-  if (!first.hints.some(h => h.hint.startsWith(DEGRADED_PASS_HINT))) {
-    return firstPass;
-  }
+  //
+  // On SQLite both passes run in one transaction, as PostgreSQL's statements
+  // do, so a push that stops part-way (killed, its connection lost, a pass it
+  // refuses) leaves nothing behind: a table rebuild stopped between its steps
+  // would otherwise leave its `__new_` table for the next run to trip on.
+  const passes = async (open?: () => void): Promise<FreshPushResult> => {
+    const first = await planForDialect(dialect, db, schema, options);
+    const firstPass = await applyPushResult(dialect, db, schema, first, open);
+    if (!isDegraded(first)) return firstPass;
 
-  const second = await pushForDialect(dialect, db, schema);
-  const secondPass = await applyPushResult(dialect, db, schema, second);
-  return {
-    hints: [...firstPass.hints, ...secondPass.hints],
-    statementsExecuted: [
-      ...firstPass.statementsExecuted,
-      ...secondPass.statementsExecuted,
-    ],
+    const second = await planForDialect(dialect, db, schema, options);
+    // A second pass that degrades again adds no column either: on a push
+    // that must not report success with columns missing, that is a refusal,
+    // and SQLite's transaction undoes the first pass with it.
+    if (options.refuseUnplannable === true && isDegraded(second)) {
+      throw new UnplannablePushError(
+        "the push degraded twice to the additive-tables-only baseline"
+      );
+    }
+    const secondPass = await applyPushResult(dialect, db, schema, second, open);
+    return {
+      hints: [...firstPass.hints, ...secondPass.hints],
+      statementsExecuted: [
+        ...firstPass.statementsExecuted,
+        ...secondPass.statementsExecuted,
+      ],
+    };
   };
+  return dialect === "sqlite"
+    ? inSqliteTransaction(db, open => passes(open))
+    : passes();
+}
+
+/** How a caller of `freshPushSchema` wants a push it cannot plan handled. */
+export interface FreshPushOptions {
+  /**
+   * Refuse, before any statement runs, a push drizzle-kit cannot plan: its
+   * rename resolver crashing on PostgreSQL, a degraded first pass on MySQL
+   * (whose introspection is scoped to the desired tables, so a degraded pass
+   * there never has the benign cause SQLite's has), or on SQLite a second
+   * pass that degrades again. Without it those fall back as before: the
+   * error on PostgreSQL, the additive-tables-only baseline elsewhere. The
+   * core upgrade sets it, since it must never report success with columns
+   * missing.
+   */
+  refuseUnplannable?: boolean;
+}
+
+/**
+ * A push drizzle-kit cannot plan, refused before any statement ran (on
+ * SQLite, with what ran undone). Its caller names what to do.
+ */
+export class UnplannablePushError extends Error {
+  override name = "UnplannablePushError";
+  constructor(readonly detail: string) {
+    super(`The schema push cannot be planned: ${detail}.`);
+  }
+}
+
+/** Whether a push result is the additive-tables-only baseline. */
+function isDegraded(result: { hints: KitHint[] }): boolean {
+  return result.hints.some(h => h.hint.startsWith(DEGRADED_PASS_HINT));
+}
+
+/**
+ * One pass's statements, refusing what `options` says cannot be planned:
+ * PostgreSQL's resolver crash, and a degraded pass on MySQL.
+ */
+async function planForDialect(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>,
+  options: FreshPushOptions
+): Promise<{ sqlStatements: string[]; hints: KitHint[] }> {
+  let result: { sqlStatements: string[]; hints: KitHint[] };
+  try {
+    result = await pushForDialect(dialect, db, schema);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (options.refuseUnplannable === true && /HintsHandler/.test(message)) {
+      throw new UnplannablePushError(message);
+    }
+    throw err;
+  }
+  if (
+    options.refuseUnplannable === true &&
+    dialect === "mysql" &&
+    isDegraded(result)
+  ) {
+    throw new UnplannablePushError(
+      "drizzle-kit's rename resolver crashed, and MySQL's fallback adds no column"
+    );
+  }
+  return result;
+}
+
+/**
+ * Run `body` in one SQLite transaction, opened by `body` before its first
+ * statement (`open`), so a push with nothing to run touches nothing. Foreign
+ * keys are off around it (the pragma does nothing inside a transaction), and
+ * checked before the commit: a rebuild that left orphaned child rows fails the
+ * push and is undone. Anything that fails, the commit included, is rolled back
+ * before foreign keys are switched on again. Exported for its tests.
+ */
+export async function inSqliteTransaction<T>(
+  db: unknown,
+  body: (open: () => void) => Promise<T>
+): Promise<T> {
+  const { sql: sqlTag } = await import("drizzle-orm");
+  const run = (q: string) =>
+    (db as { run: (q: unknown) => unknown }).run(sqlTag.raw(q));
+  let opened = false;
+  const open = () => {
+    if (opened) return;
+    run("PRAGMA foreign_keys = OFF");
+    opened = true;
+    run("BEGIN");
+  };
+  try {
+    let result: T;
+    try {
+      result = await body(open);
+      if (!opened) return result;
+      const violations = (db as { all?: (q: unknown) => unknown[] }).all?.(
+        sqlTag.raw("PRAGMA foreign_key_check")
+      );
+      if (violations && violations.length > 0) {
+        throw NextlyError.internal({
+          logContext: {
+            reason:
+              `fresh-push: PRAGMA foreign_key_check reported ` +
+              `${violations.length} violation(s) after the reconcile — a ` +
+              `table rebuild left orphaned child rows (#5782 class)`,
+          },
+        });
+      }
+      // Inside the guard too: a COMMIT that fails (SQLITE_BUSY) leaves the
+      // transaction open, and foreign keys could not be switched back on, nor
+      // the connection used again, until it is rolled back.
+      run("COMMIT");
+    } catch (err) {
+      if (opened) rollbackQuietly(run);
+      throw err;
+    }
+    return result;
+  } finally {
+    if (opened) run("PRAGMA foreign_keys = ON");
+  }
+}
+
+/** Roll back, where a failure has already ended the transaction too. */
+function rollbackQuietly(run: (q: string) => unknown): void {
+  try {
+    run("ROLLBACK");
+  } catch {
+    // The transaction is already gone (the connection closed, or SQLite
+    // rolled it back itself); there is nothing left to undo.
+  }
 }
 
 /**
@@ -144,24 +289,19 @@ async function applyPushResult(
   dialect: FreshPushDialect,
   db: unknown,
   schema: Record<string, unknown>,
-  result: { sqlStatements: string[]; hints: KitHint[] }
+  result: { sqlStatements: string[]; hints: KitHint[] },
+  /** SQLite's: opens the push's transaction before its first statement. */
+  open?: () => void
 ): Promise<FreshPushResult> {
-  const desiredTableNames = drizzleTableNames(schema);
-  const pieces = splitStatements(result.sqlStatements);
-  // Plugin-migrated tables are never dropped by push, whatever the desired
-  // set says; an unreadable registry reads as "nothing claimed".
-  const safe = filterUnsafeStatements(
-    pieces,
-    desiredTableNames,
-    await pluginMigratedTableSet(db, dialect),
-    dialect
+  // The statements to run and the ones to strip, as `planFreshPush` reports
+  // them; the stripped ones are surfaced via hints + warn below.
+  const { runnable, blocked, degraded } = await planPushResult(
+    dialect,
+    db,
+    schema,
+    result
   );
-
-  // Boot-safety: strip (never execute) destructive statements the kit
-  // emitted unexpectedly, and surface them via hints + warn. See the
-  // header comment for why this path strips where the pipeline throws.
-  const offenders = new Set(findUnexpectedDestructiveStatements(safe));
-  const runnable = safe.filter(s => !offenders.has(s));
+  const offenders = new Set(blocked);
   const hints: KitHint[] = [
     ...result.hints,
     ...[...offenders].map(statement => ({
@@ -193,12 +333,79 @@ async function applyPushResult(
   // A degraded pass cannot add a column, so an index over one it lacks is a
   // casualty of the baseline rather than a fault; the pass that follows builds
   // both in order.
-  const degraded = result.hints.some(h =>
-    h.hint.startsWith(DEGRADED_PASS_HINT)
+  const executed = await executeStatements(
+    dialect,
+    db,
+    runnable,
+    degraded,
+    open
   );
-  const executed = await executeStatements(dialect, db, runnable, degraded);
 
   return { hints, statementsExecuted: executed };
+}
+
+/** What one push pass would do, worked out without executing anything. */
+export interface FreshPushPlan {
+  /** The statements the pass runs, in order. */
+  runnable: string[];
+  /** The destructive statements it strips and never runs. */
+  blocked: string[];
+  /**
+   * Whether the pass degraded to the additive-tables-only baseline. A second
+   * pass then follows once this one has run; it is not planned here, since
+   * what it emits depends on what this one created.
+   */
+  degraded: boolean;
+}
+
+/**
+ * What a push of `schema` would run and what it would strip, read-only: the
+ * statements drizzle-kit generates against the live database, through the
+ * same filters the push applies them with (`planPushResult`). Nothing is
+ * executed. A dry run names these; the push itself runs them.
+ */
+export async function planFreshPush(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>,
+  options: FreshPushOptions = {}
+): Promise<FreshPushPlan> {
+  // Planned through the same refusal the push makes, so a plan never shows a
+  // push the run would refuse (`refuseUnplannable`) as one it would make.
+  return planPushResult(
+    dialect,
+    db,
+    schema,
+    await planForDialect(dialect, db, schema, options)
+  );
+}
+
+/**
+ * One push result filtered for safety: the one judgement of which of its
+ * statements run, for the push and for its plan alike. Plugin-migrated tables
+ * are never dropped by push, whatever the desired set says (an unreadable
+ * registry reads as "nothing claimed"); and destructive statements the kit
+ * emitted unexpectedly are stripped, never executed (boot-safety: see the
+ * header comment for why this path strips where the pipeline throws).
+ */
+async function planPushResult(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>,
+  result: { sqlStatements: string[]; hints: KitHint[] }
+): Promise<FreshPushPlan> {
+  const safe = filterUnsafeStatements(
+    splitStatements(result.sqlStatements),
+    drizzleTableNames(schema),
+    await pluginMigratedTableSet(db, dialect),
+    dialect
+  );
+  const offenders = new Set(findUnexpectedDestructiveStatements(safe));
+  return {
+    runnable: safe.filter(s => !offenders.has(s)),
+    blocked: [...offenders],
+    degraded: result.hints.some(h => h.hint.startsWith(DEGRADED_PASS_HINT)),
+  };
 }
 
 /**
@@ -231,19 +438,33 @@ async function pushForDialect(
       // before emission, so the scoping must happen at introspection time.
       // fresh-push is create-only reconcile — orphans are none of its
       // business.
-      return kit.pushSchema(schema, db, {
-        // The configured schema, for the same reason the pipeline's Phase D
-        // uses it: the adapter writes through `search_path`, so introspecting
-        // `public` would compare against a namespace nothing is in.
-        schemas: [activePostgresSchema()],
-        tables: drizzleTableNames(schema),
-      });
+      // The configured schema, for the same reason the pipeline's Phase D
+      // uses it: the adapter writes through `search_path`, so introspecting
+      // `public` would compare against a namespace nothing is in, and the
+      // desired tables must be read as that schema's too.
+      return pushInActiveSchema(schema, (active, desired) =>
+        kit.pushSchema(desired, db, {
+          schemas: [active],
+          tables: drizzleTableNames(schema),
+        })
+      );
     }
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
       const databaseName = await currentMysqlDatabaseName(db);
+      // Introspection scoped to the DESIRED tables, as PostgreSQL's is above
+      // and for the same reason: a site's `dc_*` content tables would
+      // otherwise read as dropped, pair against a table this push adds, and
+      // crash the rename resolver. The fallback below then replays the
+      // baseline, whose `ADD CONSTRAINT` for every core foreign key the
+      // database already holds fails on its duplicate name, so the first
+      // `nextly migrate` after a release that adds a core table failed on
+      // every MySQL site with content.
       return withResolverCrashFallback(
-        () => kit.pushSchema(schema, db, databaseName),
+        () =>
+          kit.pushSchema(schema, db, databaseName, {
+            tables: drizzleTableNames(schema),
+          }),
         async () =>
           kit.generateMigration(
             await kit.generateDrizzleJson({}),
@@ -265,15 +486,19 @@ async function pushForDialect(
   }
 }
 
-// The SQLite/MySQL payload entrypoints accept no tables filter, so their
+// The SQLite payload entrypoint accepts no tables filter, so its
 // introspection sees the WHOLE live database. When an upgrade adds a new
 // core table while any non-core table exists (user dc_* content, the
 // migrate lock), v1's differ pairs the "dropped" orphan against the added
 // table and its rename resolver throws `Internal error: resolver(table) was
 // called without a HintsHandler` BEFORE emitting anything (probe-verified).
-// PG avoids this via the entities filter above; here the recovery is the
-// pre-v1 applyViaGenerate shape: generate the pure-CREATE baseline from an
-// empty snapshot. That set contains no drops by construction, and the
+// PG and MySQL avoid this by scoping introspection to the desired tables
+// above, so on MySQL this is only a backstop. SQLite survives the baseline
+// because its foreign keys live inside CREATE TABLE, which is skipped for a
+// table that exists; MySQL's are separate `ADD CONSTRAINT` statements that
+// fail on an existing name, which is why MySQL must not depend on it. The
+// recovery is the pre-v1 applyViaGenerate shape: generate the pure-CREATE
+// baseline from an empty snapshot. That set contains no drops by construction, and the
 // downstream idempotency-tolerant executor skips tables that already exist,
 // so the reconcile degrades to additive-TABLES-only instead of crashing the
 // boot.
@@ -349,7 +574,9 @@ async function executeStatements(
   dialect: FreshPushDialect,
   db: unknown,
   statements: string[],
-  degraded: boolean
+  degraded: boolean,
+  /** SQLite's: opens the push's transaction (`inSqliteTransaction`). */
+  open?: () => void
 ): Promise<string[]> {
   if (statements.length === 0) return [];
   const { sql: sqlTag } = await import("drizzle-orm");
@@ -369,9 +596,15 @@ async function executeStatements(
     // existing schema are expected to emit zero statements instead.
     await (db as PgTxDb).transaction(async tx => {
       for (const stmt of statements) {
-        await tx.execute(sqlTag.raw(stmt));
+        // A run that lost the schema lock starts no further statement, and each carries the run's
+        // claim so a run taking the lock over can find and stop it.
+        await assertSchemaLockHeld();
+        await tx.execute(sqlTag.raw(markedForSchemaLock(stmt)));
         executed.push(stmt);
       }
+      // The commit is what lands the reconcile: refused, and the transaction undone, as a
+      // statement is, so a run that lost the lock while its last statement ran changes nothing.
+      await assertSchemaLockHeld();
     });
     return executed;
   }
@@ -381,44 +614,30 @@ async function executeStatements(
     // interactive pipeline toggles PRAGMA foreign_keys OFF/ON outside any
     // transaction and runs foreign_key_check after apply — this boot path
     // must not rely on the kit's INLINE pragma statements staying present
-    // and correctly ordered across RC bumps. The toggle is done here (no
-    // transaction is open on this path), and the integrity check fails the
-    // reconcile if a rebuild left orphaned child rows.
+    // and correctly ordered across RC bumps. The toggle, the transaction and
+    // the integrity check are `inSqliteTransaction`'s, around every pass.
     const run = (q: string) => (db as SqliteRunDb).run(sqlTag.raw(q));
-    run("PRAGMA foreign_keys = OFF");
-    try {
-      for (const stmt of statements) {
-        try {
-          run(stmt);
-          executed.push(stmt);
-        } catch (err) {
-          if (isIdempotencyError(err)) continue;
-          if (degraded && isIndexAwaitingItsColumn(stmt, err)) continue;
-          throw err;
-        }
+    open?.();
+    for (const stmt of statements) {
+      await assertSchemaLockHeld();
+      try {
+        run(stmt);
+        executed.push(stmt);
+      } catch (err) {
+        if (isIdempotencyError(err)) continue;
+        if (degraded && isIndexAwaitingItsColumn(stmt, err)) continue;
+        throw err;
       }
-      const violations = (db as { all?: (q: unknown) => unknown[] }).all?.(
-        sqlTag.raw("PRAGMA foreign_key_check")
-      );
-      if (violations && violations.length > 0) {
-        throw NextlyError.internal({
-          logContext: {
-            reason:
-              `fresh-push: PRAGMA foreign_key_check reported ` +
-              `${violations.length} violation(s) after the reconcile — a ` +
-              `table rebuild left orphaned child rows (#5782 class)`,
-          },
-        });
-      }
-    } finally {
-      run("PRAGMA foreign_keys = ON");
     }
     return executed;
   }
 
   for (const stmt of statements) {
+    await assertSchemaLockHeld();
     try {
-      await (db as AsyncExecuteDb).execute(sqlTag.raw(stmt));
+      await (db as AsyncExecuteDb).execute(
+        sqlTag.raw(markedForSchemaLock(stmt))
+      );
       executed.push(stmt);
     } catch (err) {
       if (isIdempotencyError(err)) continue;

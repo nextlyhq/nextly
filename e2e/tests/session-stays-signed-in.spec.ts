@@ -1,7 +1,9 @@
 /**
- * The stored session every test opens with stays signed in however long the
- * suite runs: once it is older than `SESSION_MAX_AGE_MS`, the next test is
- * handed a new one (see `support/session` and `support/test`).
+ * The dev user's stored session, which makes each spec file's account and
+ * serves whatever a spec opens from `STORAGE_STATE`, stays signed in however
+ * long the suite runs: once it is older than `SESSION_MAX_AGE_MS`, it is
+ * renewed before the next test (see `support/session` and `support/test`). And
+ * each spec file runs as an account of its own, not as the dev user.
  *
  * The server's token lives 15 minutes, and a test cannot wait that long, so a
  * session the server refuses stands in for one that has expired: the stored
@@ -15,7 +17,6 @@
 import {
   copyFileSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -23,18 +24,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { expect, request } from "@playwright/test";
+import { expect, request, type Page } from "@playwright/test";
 
 import {
   keepSessionFresh,
   SESSION_MAX_AGE_MS,
   STORAGE_STATE,
-} from "./support/session";
+} from "./support/session.mjs";
 import { test } from "./support/test";
-
-const TESTS = path.dirname(fileURLToPath(import.meta.url));
 
 /** Whether the server takes the session stored at `file` as signed in. */
 async function signedIn(baseURL: string, file: string): Promise<boolean> {
@@ -108,7 +106,7 @@ test.describe("a stored session", () => {
 });
 
 // In order: the first ages the suite's own session past its limit, and the
-// second is handed what the suite's `test` made of it before its context opened.
+// second reads what the suite's `test` made of it before that test began.
 test.describe.serial("the suite's session, past its limit", () => {
   let aged: string | undefined;
 
@@ -118,50 +116,31 @@ test.describe.serial("the suite's session, past its limit", () => {
     ageBy(STORAGE_STATE, SESSION_MAX_AGE_MS + 60_000);
   });
 
-  test("is renewed before the next test's context opens", async ({
-    context,
-    page,
-  }) => {
-    const cookies = await context.cookies();
-    const token = cookies.find(cookie => cookie.name === "nextly_session");
-    expect(token?.value).toBeDefined();
-    expect(token?.value).not.toBe(aged);
-    expect((await page.request.get("/admin/api/dashboard/layout")).ok()).toBe(
-      true
-    );
+  test("is renewed before the next test", async ({ baseURL }) => {
+    const renewed = tokenIn(STORAGE_STATE);
+    expect(renewed).toBeDefined();
+    expect(renewed).not.toBe(aged);
+    expect(await signedIn(baseURL!, STORAGE_STATE)).toBe(true);
   });
 });
 
-/** Every spec under `dir`, but the production suite's, which has its own config. */
-function specsUnder(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
-    const at = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      return entry.name === "production" ? [] : specsUnder(at);
-    }
-    return entry.name.endsWith(".spec.ts") ? [at] : [];
-  });
+/** The address of the user a page's session belongs to. */
+async function sessionEmail(page: Page): Promise<string | undefined> {
+  const answer = await page.request.get("/admin/api/auth/session");
+  expect(answer.ok(), await answer.text()).toBe(true);
+  return ((await answer.json()) as { user?: { email?: string } }).user?.email;
 }
 
-test("every spec this config runs is written with the suite's test", () => {
-  // Playwright's `test` runs without the renewal, and a spec on it is signed
-  // out once the suite has run longer than the session's token lives. Spec
-  // files are outside lint, so this is where that is held.
-  const fromPlaywright = /import\s*\{([^}]*)\}\s*from\s*"@playwright\/test"/g;
-  const onPlaywrightTest = specsUnder(TESTS).filter(file =>
-    [...readFileSync(file, "utf8").matchAll(fromPlaywright)].some(match =>
-      match[1]
-        .split(",")
-        .map(name => name.trim())
-        .some(name => /^test(\s+as\s+\w+)?$/.test(name))
-    )
-  );
-  expect(
-    onPlaywrightTest.map(file => path.relative(TESTS, file)),
-    'These specs take `test` from "@playwright/test", which runs without the ' +
-      "session renewal and is signed out once a run passes 15 minutes. In each, " +
-      'take `test` from the suite instead: import { test } from "./support/test" ' +
-      '(or "../support/test" one folder down), keeping `expect` and the types ' +
-      'from "@playwright/test".'
-  ).toEqual([]);
+// In order, so both tests are the same attempt of this file.
+test.describe.serial("a spec file's own account", () => {
+  let first: string | undefined;
+
+  test("is not the dev user", async ({ page }) => {
+    first = await sessionEmail(page);
+    expect(first).toMatch(/^spec-.+@nextly\.local$/);
+  });
+
+  test("is the same for every test in the file", async ({ page }) => {
+    expect(await sessionEmail(page)).toBe(first);
+  });
 });

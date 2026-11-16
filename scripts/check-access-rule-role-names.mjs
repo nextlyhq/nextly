@@ -497,9 +497,9 @@ if (
     }
     console.error(
       "\nDecide by the caller's permission instead: the rule is given " +
-        "`permissions` as `resource:action`, e.g. " +
+        "`permissions` as stored, `action-resource`, e.g. " +
         "`({ permissions, collection, operation }) => " +
-        "permissions.includes(`${collection}:${operation}`)`."
+        "permissions.includes(`${operation}-${collection}`)`."
     );
     process.exit(1);
   }

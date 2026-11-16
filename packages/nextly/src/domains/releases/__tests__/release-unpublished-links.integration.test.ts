@@ -16,6 +16,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -384,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "posts" as never,
         id: post,
-        data: { author: draftAuthor } as never,
+        data: { author: draftAuthor, _overwrite: true } as never,
         draft: true,
       } as never);
 
@@ -480,6 +481,10 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);
       const leaver = await seedLiveAuthor(t);
+      // A code rule only narrows the permission, so the leaver holds update
+      // and publish on authors while still able to act.
+      await grantTo(t, leaver, "update", ["authors"]);
+      await grantTo(t, leaver, "publish", ["authors"]);
       const draftAuthor = await entry(t, "authors");
       const post = await entry(t, "posts", { author: draftAuthor });
       await releaseWith(
@@ -515,6 +520,7 @@ describe.each(getConfiguredTestDialects())(
           headline: "Hi",
           featured: draftAuthor,
           status: "draft",
+          _overwrite: true,
         } as never,
       });
       const [row] = await homepageRows(t);

@@ -1,13 +1,33 @@
 import type {
-  PluginAdminWidget,
+  DeliveredAdminContribution,
+  OverridableDocumentAction,
+  PluginDocumentActionOverride,
+  AdminContributionsMeta,
+  PluginListFilterDeclaration,
   PublishedContentSource,
-  WidgetDefinition,
 } from "nextly/config";
-import type {
-  FieldStoragePrimitive,
-  FieldSurface,
-  FieldTypeCategory,
-} from "nextly/field-catalog";
+import type { PluginFieldTypeMeta } from "nextly/field-catalog";
+// The widget as the workspace payload serves it, a type only.
+import type { PublishedWidget } from "nextly/widget-result";
+
+/** What a declared action does: open a plugin component, or call its route. */
+export type DeclaredActionMeta = Extract<
+  DeliveredAdminContribution,
+  { kind: "rowAction" }
+>["action"];
+
+/**
+ * A plugin's person's-menu item as delivered: a label, an icon, and a link or
+ * an action, with the id its action's route is called with.
+ */
+export type PluginUserMenuItemMeta = {
+  id: string;
+  label: string;
+  icon: string;
+} & (
+  | { to: string; action?: undefined }
+  | { action: DeclaredActionMeta; to?: undefined }
+);
 
 export interface ResolvedBrandingColors {
   primary?: string;
@@ -44,7 +64,32 @@ export interface PluginMenuItemMeta {
    * defers to the plugin's own `placement` rather than meaning "Plugins".
    */
   section?: PluginNavSectionMeta;
+  /**
+   * The id of one of the plugin's `panel.groups`, the heading the item is
+   * listed under in its own standalone panel. The server sends only one the
+   * plugin declares.
+   */
+  group?: string;
+  /** A quiet number beside the label, shown at 0 too. */
+  count?: PluginItemCountMeta;
+  /** A pill beside the label, shown only while its number is above 0. */
+  badge?: PluginItemCountMeta;
   children?: PluginMenuItemMeta[];
+}
+
+/**
+ * What a panel item's number counts, as the server checked it: one of the
+ * plugin's own collections, by the slug the host registered it under, or one
+ * of its own attention items, by id.
+ */
+export type PluginItemCountMeta =
+  | { collection: string; where?: Record<string, unknown> }
+  | { attention: string };
+
+/** A heading of a standalone plugin's own panel. */
+export interface PluginPanelGroupMeta {
+  id: string;
+  label: string;
 }
 
 /** A plugin custom admin page, delivered via `/admin-meta`. */
@@ -60,47 +105,19 @@ export interface PluginPageMeta {
 }
 
 /**
- * A plugin dashboard widget, delivered via `/admin-meta`.
+ * A widget the registry publishes, as `/admin-meta/workspace` serializes it.
  *
- * DERIVED from the server's declaration rather than restated beside it.
- * `buildPluginAdminMeta` assigns `contributes.admin.widgets` to the meta
- * verbatim, so the two are one shape -- and while they were one shape declared
- * twice they drifted twice. First `component`: the server made it optional
- * while this kept it required, so a plugin adopting the server's shape reached
- * `PluginSlot` with `path === undefined` and rendered an empty grid cell
- * silently. Then the declarative half -- `title`, `description`, `icon`,
- * `category`, `archetype`, `defaultSize`, `minSize`, `maxSize`, `query` and
- * `link` -- which the server serializes on every contributed widget and this
- * copy never gained, so admin code reading a property that was PRESENT on the
- * wire got a type error for it.
+ * Every widget reaches the registry as a `defineWidget` declaration, whose
+ * card the server answers from the declaration's `load`. What the admin
+ * receives is the declaration's published description: its title, archetype,
+ * size, settings and the rest, and never a query of its own.
  *
- * An alias makes that a compile error at the one declaration instead of a
- * convention two files have to keep. It is reachable through `nextly/config`
- * specifically: this package's tsconfig maps the BARE `nextly` specifier to
- * `../nextly/src`, so importing from `"nextly"` shadows the package exports and
- * pulls core's whole source tree in behind internal `@nextly/*` aliases this
- * project does not declare. Subpaths are not covered by that mapping, so
- * `nextly/config` resolves through the export map to the built declaration
- * bundle, exactly as a consumer's would.
+ * It is core's `PublishedWidget`, the wire type `nextly/widget-result` derives
+ * from the function the registry publishes every widget through, rather than a
+ * shape restated here: the contract then has one declaration, and a field the
+ * server stops publishing leaves this type with it.
  */
-export type PluginWidgetMeta = PluginAdminWidget;
-
-/**
- * A widget the running app REGISTERED, as `/admin-meta/workspace` serializes it.
- *
- * A different channel from `PluginWidgetMeta` above, not a variant of it. That
- * one is DECLARED in a plugin's `contributes.admin.widgets` and is almost
- * entirely optional; this one went through `registerWidget`, whose validator
- * requires `title`, `archetype` and `defaultSize`, requires a `query` for every
- * data archetype and a `component` for `custom`, and forbids each where it does
- * not belong. So a registered widget arrives already complete, and the resolver
- * has nothing to default for it.
- *
- * Aliased from core's own declaration for the same reason `PluginWidgetMeta` is:
- * the server puts that exact object on the wire, so a second spelling here would
- * be one contract declared twice.
- */
-export type RegisteredWidgetMeta = WidgetDefinition;
+export type RegisteredWidgetMeta = PublishedWidget;
 
 /**
  * A plugin's public client configuration, served before a session exists.
@@ -127,6 +144,11 @@ export interface PluginMetadata {
    * `usePluginClientConfig` rather than searching this array by hand.
    */
   clientConfig?: Record<string, unknown>;
+  /**
+   * The plugin's admin strings, by interface language and key, declared in
+   * `contributes.translations`. On the signed-in metadata only.
+   */
+  translations?: Readonly<Record<string, Readonly<Record<string, string>>>>;
   version?: string;
   description?: string;
   /** Author shown in the plugins list; mirrors package.json by convention. */
@@ -154,6 +176,13 @@ export interface PluginMetadata {
   order?: number;
   /** Position anchor for standalone plugins (which built-in section to appear after). */
   after?: string;
+  /**
+   * Where a standalone plugin's rail item goes, as an admin address the
+   * server has already resolved and checked against what the plugin owns.
+   * Absent when the plugin names none; the rail then opens the first
+   * collection or menu item its panel lists (`standalonePluginLanding`).
+   */
+  landing?: string;
   collections: string[];
   /** Slugs of contributed singles, for the detail page's contributions view. */
   singles?: string[];
@@ -194,6 +223,11 @@ export interface PluginMetadata {
   };
   /** Declarative sidebar menu items contributed via `contributes.admin.menu`. */
   menu?: PluginMenuItemMeta[];
+  /**
+   * The headings of the plugin's own standalone panel, in the order declared
+   * (`contributes.admin.panel`); absent when it declares none.
+   */
+  panel?: { groups: PluginPanelGroupMeta[] };
   /** Custom admin pages contributed via `contributes.admin.pages`. */
   pages?: PluginPageMeta[];
   /**
@@ -202,16 +236,23 @@ export interface PluginMetadata {
    * asks for, which the settings page asks for too.
    */
   settings?: { component: string; permission?: string };
-  /** Admin header-slot component contributed via `contributes.admin.headerSlot`. */
+  /**
+   * Admin header-slot component contributed via `contributes.admin.headerSlot`,
+   * mirrored for a slot at the bar's right end only.
+   */
   headerSlot?: string;
-  /** Header customization contributed via `contributes.admin.header`. */
+  /**
+   * Header customization contributed via `contributes.admin.header`. `place`
+   * is absent for the bar's right end; `slot` is drawn at the bar or the
+   * rail's foot, `item` in the person's menu.
+   */
   header?: {
     slot?: string;
+    place?: "rail-foot" | "menu";
+    item?: PluginUserMenuItemMeta;
     hideDefaults?: boolean;
     hide?: Array<"github" | "discord" | "docs" | "notifications">;
   };
-  /** Dashboard widgets contributed via `contributes.admin.widgets`. */
-  widgets?: PluginWidgetMeta[];
   /**
    * Component rendered in the schema-builder pages (above the field list),
    * contributed via `contributes.admin.schemaBuilderSlot`. Receives `{ fields,
@@ -246,6 +287,36 @@ export interface PluginMetadata {
     )
   >;
   /**
+   * @experimental Overrides of a collection's built-in document actions,
+   * contributed via `contributes.admin.views[<slug>].documentActions`: on the
+   * slug the admin routes (rename map applied), `"hidden"` or the component
+   * the action opens instead. Present only for enabled plugins.
+   */
+  documentActions?: Array<{
+    slug: string;
+    action: OverridableDocumentAction;
+    override: PluginDocumentActionOverride;
+  }>;
+  /**
+   * @experimental Sections added to a collection's document panel, after
+   * Details, contributed via `contributes.admin.views[<slug>].panelSections`.
+   * Present only for enabled plugins.
+   */
+  panelSections?: Array<{ slug: string; title: string; component: string }>;
+  /**
+   * @experimental The collections whose document screens start with the
+   * rail's panel folded away, contributed via
+   * `contributes.admin.views[<slug>].foldedPanel`, on the slug the admin
+   * routes. Present only for enabled plugins.
+   */
+  foldedPanels?: string[];
+  /**
+   * @experimental The filters this plugin offers in the entry list's toolbar,
+   * via `contributes.admin.filters`, as they passed the boot check. Present
+   * only for enabled plugins.
+   */
+  listFilters?: PluginListFilterDeclaration[];
+  /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
    * to just that field + its condition controller (see takeoverLayout). The
@@ -253,18 +324,7 @@ export interface PluginMetadata {
    * the type opted into let each surface offer only the types meant for it
    * (see pluginFieldTypeCatalogEntries).
    */
-  fieldTypes?: Array<{
-    type: string;
-    component: string;
-    /** The primitive this type persists as; decides binding compatibility. */
-    storage: FieldStoragePrimitive;
-    layout?: "takeover";
-    label?: string;
-    description?: string;
-    icon?: string;
-    category?: FieldTypeCategory;
-    surfaces?: readonly FieldSurface[];
-  }>;
+  fieldTypes?: PluginFieldTypeMeta[];
 }
 
 export interface AdminBranding {
@@ -282,7 +342,10 @@ export interface AdminBranding {
   logoText?: string;
   favicon?: string;
   colors?: ResolvedBrandingColors;
-  /** Runtime toggle for builder-related navigation visibility. */
+  /**
+   * Whether the server offers the schema builder: never in production, and
+   * elsewhere unless `admin.branding.showBuilder` is false.
+   */
   showBuilder?: boolean;
 
   /**
@@ -307,6 +370,20 @@ export interface AdminBranding {
   plugins?: PluginMetadata[];
 
   /**
+   * Each admin place's contributions, by kind, in order, as this reader may
+   * see them: the signed-in half's every place but the login page's, the
+   * public half's the login page's alone.
+   */
+  contributions?: AdminContributionsMeta;
+
+  /**
+   * The fields a plugin's extension switch keeps off each type's pages, by
+   * `collection:<slug>` or `single:<slug>`: added by the plugin there and
+   * switched off now. Drawn nowhere; their stored values stay.
+   */
+  withheldFields?: Record<string, string[]>;
+
+  /**
    * Public client configuration, readable before a session exists.
    *
    * Deliberately NOT merged into `plugins`: a plugin declaring a public config
@@ -317,22 +394,17 @@ export interface AdminBranding {
   pluginClientConfigs?: PluginClientConfigMeta[];
 
   /**
-   * Widgets the running app registered through `registerWidget`.
-   *
-   * Beside `plugins`, never inside it: a registration is not a plugin
-   * contribution, and the two reach the dashboard grid by different routes. A
-   * widget may legitimately appear in both -- an app that declares it AND
-   * registers it -- which is why the grid dedupes by id rather than assuming
-   * the lists are disjoint.
+   * The widgets the registry publishes for this reader: core's, each plugin's
+   * `contributes.dashboard.widgets` and the site config's.
    *
    * Comes from the session-gated half alone, so its absence means the registry
-   * has not arrived rather than that the app registered nothing.
+   * has not arrived rather than that there is nothing.
    */
   widgets?: RegisteredWidgetMeta[];
 
   /**
-   * An opaque token for the audience `widgets` and each plugin's widgets were
-   * filtered for, from the session-gated half alone. The dashboard layout read
+   * An opaque token for the audience `widgets` were filtered for, from the
+   * session-gated half alone. The dashboard layout read
    * reports the same token as `audience`, and a difference means this payload
    * was built for a different reader state than the layout being drawn.
    */

@@ -4,8 +4,9 @@
  * Client-side error boundary for the frontend route group.
  *
  * Shown when a Server Component or a nested client component throws.
- * The `reset` prop re-runs the segment so transient errors (e.g. flaky
- * upstream call) can recover without a page reload.
+ * `retry` fetches the segment again and re-renders it, so a transient
+ * server failure (a flaky upstream call, a database blip) can recover
+ * without a page reload. `reset` would only re-render what already failed.
  *
  * In production, wire `console.error` to a logging service of your
  * choice (Sentry, Axiom, Datadog, etc.).
@@ -15,10 +16,10 @@ import { useEffect } from "react";
 
 export default function Error({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   useEffect(() => {
     console.error(error);
@@ -36,7 +37,7 @@ export default function Error({
         An unexpected error occurred. Please try again.
       </p>
       <button
-        onClick={reset}
+        onClick={() => retry()}
         className="mt-8 inline-flex rounded-md bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
       >
         Try again

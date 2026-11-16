@@ -13,12 +13,25 @@
  * clean slate.
  */
 import { publicApi } from "../api/publicApi";
+import { parsePasswordRule, setPasswordRule } from "../password-rule";
 
 /** What setup-status answers, as the admin reads it. */
-interface SetupStatus {
+export interface SetupStatus {
+  /**
+   * Whether the server answered. False only on the fail-safe path below, where
+   * `isSetup` and `requiresSetupToken` are defaults rather than the server's.
+   */
+  answered: boolean;
   isSetup: boolean;
   /** Whether setup needs its setup token: in production, until it is done. */
   requiresSetupToken: boolean;
+  /**
+   * Whether the app takes sign-ups (`auth.allowRegistration`), which decides
+   * whether the sign-in page offers "Sign up" and the register page its form.
+   * No unless the server says yes, as the server's own default is: an older
+   * server that does not say, and the fail-safe path, both read as no.
+   */
+  allowRegistration: boolean;
 }
 
 /**
@@ -39,25 +52,59 @@ let setupStatusCache: Promise<SetupStatus> | null = null;
 async function fetchSetupStatus(): Promise<SetupStatus> {
   try {
     const result = await publicApi.get<
-      { isSetup?: unknown; requiresSetupToken?: unknown } | undefined
+      | {
+          isSetup?: unknown;
+          requiresSetupToken?: unknown;
+          allowRegistration?: unknown;
+          passwordRule?: unknown;
+        }
+      | undefined
     >("/auth/setup-status");
+    // The password forms check by the server's rule from here on.
+    const rule = parsePasswordRule(result?.passwordRule);
+    if (rule) setPasswordRule(rule);
     // Require a strict boolean; any other shape (empty body, non-JSON,
     // schema drift) takes the same fail-safe default as the catch branch
     // below. Inlined rather than throwing into the catch -- the admin
     // package doesn't carry a NextlyError dependency, and a bare throw
     // would just be local control flow with no payload.
     return {
+      answered: typeof result?.isSetup === "boolean",
       isSetup: typeof result?.isSetup === "boolean" ? result.isSetup : true,
       requiresSetupToken: result?.requiresSetupToken !== false,
+      allowRegistration: result?.allowRegistration === true,
     };
   } catch {
-    return { isSetup: true, requiresSetupToken: true };
+    return {
+      answered: false,
+      isSetup: true,
+      requiresSetupToken: true,
+      allowRegistration: false,
+    };
   }
 }
 
 function readSetupStatus(): Promise<SetupStatus> {
-  setupStatusCache ??= fetchSetupStatus();
-  return setupStatusCache;
+  if (setupStatusCache) return setupStatusCache;
+  const pending = fetchSetupStatus().then(status => {
+    // A fail-safe default is not an answer to keep: the server may be starting,
+    // and the next reader should ask it again rather than inherit the default
+    // for the rest of the page's life.
+    if (!status.answered && setupStatusCache === pending) {
+      setupStatusCache = null;
+    }
+    return status;
+  });
+  setupStatusCache = pending;
+  return pending;
+}
+
+/**
+ * Setup status as the server gave it, with `answered: false` where it gave
+ * none, for a reader that must not mistake the fail-safe for an answer.
+ */
+export function readSetupState(): Promise<SetupStatus> {
+  return readSetupStatus();
 }
 
 /** Whether initial setup has been completed. */
@@ -77,4 +124,20 @@ export async function checkSetupTokenRequired(): Promise<boolean> {
  */
 export function resetSetupStatusCache(): void {
   setupStatusCache = null;
+  for (const listener of resetListeners) listener();
+}
+
+/** Who is told the answer was dropped, to ask again. */
+const resetListeners = new Set<() => void>();
+
+/**
+ * Calls `listener` whenever the shared answer is dropped (a retry abandoning
+ * a request the server holds, or a sign-out), so a reader still waiting on the
+ * dropped request can ask again. Returns the unsubscribe.
+ */
+export function onSetupStatusReset(listener: () => void): () => void {
+  resetListeners.add(listener);
+  return () => {
+    resetListeners.delete(listener);
+  };
 }

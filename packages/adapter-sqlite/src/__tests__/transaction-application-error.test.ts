@@ -19,6 +19,8 @@ const mockExec = vi.fn();
 const mockPrepare = vi.fn();
 const mockPragma = vi.fn();
 const mockClose = vi.fn();
+// `connect` registers the SQL functions Nextly calls on every connection.
+const mockFunction = vi.fn();
 
 const mockStatement = { run: vi.fn(), get: vi.fn(), all: vi.fn() };
 
@@ -27,6 +29,7 @@ class MockDatabase {
   exec = mockExec;
   pragma = mockPragma;
   close = mockClose;
+  function = mockFunction;
   inTransaction = false;
   constructor(_path: string, _options?: Record<string, unknown>) {}
 }

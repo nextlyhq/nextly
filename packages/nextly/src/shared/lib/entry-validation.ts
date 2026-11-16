@@ -23,9 +23,12 @@
  * - Custom `validate` functions run after built-in rules (string return =
  *   error), matching their documented contract.
  */
+import { isDeepStrictEqual } from "node:util";
+
 import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
+import { isIconIdShape } from "../../collections/fields/types/icon";
 import { isVirtualField } from "../../collections/fields/virtual";
 import {
   extractFieldGroupReferences,
@@ -33,6 +36,7 @@ import {
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
+import { numberFieldStoresFractions } from "../../domains/schema/services/field-column-descriptor";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type {
   PluginFieldType,
@@ -40,12 +44,14 @@ import type {
   PluginStoredValue,
   PluginStoredValueTarget,
 } from "../../plugins/contributions";
+import { addressableFields } from "../addressable-fields";
 
 import { detachedField } from "./detached-field";
 import { applyFieldDefaults } from "./field-defaults";
 import {
   attachFieldValidators,
   getFieldFunctions,
+  storedAtThisLevel,
 } from "./field-level-registry";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
@@ -123,6 +129,46 @@ export interface ValidateEntryOptions {
    */
   emptyIsAValue?: boolean;
   /**
+   * Whether the document was assembled from storage rather than carried by
+   * the caller — a publish merging the stored row with the caller's patch, a
+   * promoted working draft, a go-live document judged per language.
+   *
+   * Every rule still judges this document whole: that is what stops an
+   * untouched stored value from reading as missing. The whole-number rule is
+   * the one exception, because it alone binds values a CALLER writes — each
+   * value the caller carried was already judged, and refused, at its own
+   * patch gate on the way in. A stored fraction (SQLite holds 2.5 where a
+   * pre-fix write put it, MySQL's column already rounded it) rides through
+   * these views unchanged, and the column decides at the write, as it
+   * always has.
+   */
+  assembledFromStorage?: boolean;
+  /**
+   * The paths of the document that hold a value kept from the stored row
+   * because a rule denies it to this writer — `keepDeniedAtStored` puts the
+   * row's value back so a whole-written container does not clear it, and
+   * this write never carried it.
+   *
+   * The whole-number rule skips exactly these paths, on the document the
+   * gate judges and in the post-hook walk: a legacy stored fraction under a
+   * denied path is the row's own value, not this write's, so refusing the
+   * write for it would block an edit the caller is allowed to make on a
+   * value they may not see. Paths under a denied container are covered by
+   * the container's own path. Nothing else is exempt — a fraction the
+   * caller sends anywhere the rules let it through, or a hook produces
+   * outside the denied paths, is refused as before.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
+  /**
+   * A loose document whose number fields are JSON rather than a typed
+   * column — block props, form submissions, anything a plugin holds by this
+   * validator's public entry point — where a fraction is as legal as a whole
+   * and no column decides. The whole-number floor binds integer columns
+   * alone, so it is not asked here. Absent on an entry's own document, whose
+   * number fields store in typed columns the floor speaks for.
+   */
+  fractionalNumberStorage?: boolean;
+  /**
    * The entry write being validated, for the field types that judge a value
    * against stored rows. Absent where no entry write is behind the validation,
    * and then no type is handed one.
@@ -140,6 +186,21 @@ export interface ValidateEntryOptions {
   componentFields?: (slug: string) => ValidatableField[] | undefined;
   /** Set by the walk itself once it is inside a group or repeater's value. */
   insideContainer?: boolean;
+  /**
+   * Judge a top-level component's value against its own fields' rules too.
+   * A component's instance is judged when it is written, so an ordinary write
+   * leaves it to that write; a publish sets this, since a rule tightened since
+   * the instance was saved is then judged as it goes live. Needs
+   * `componentFields` to resolve the top-level components.
+   */
+  judgeComponentInstances?: boolean;
+  /**
+   * `false` leaves a component held in a group or repeater unjudged by its
+   * own fields' rules too. A publish in a language whose component rules are
+   * not enforced sets it, as it leaves `judgeComponentInstances` off; an
+   * ordinary write leaves it on, since nothing else judges such a component.
+   */
+  judgeContainedComponents?: boolean;
 }
 
 /**
@@ -155,7 +216,22 @@ export interface EntryWriteContext {
   readonly kind: PluginFieldWrite["kind"];
   readonly slug: string;
   readonly id?: string;
+  /** The language the write is judged in; see `PluginFieldWrite.locale`. */
+  readonly locale?: string;
+  /**
+   * The app's default language, so the write handed to a validator says
+   * nothing for it, however the caller spelled it: `locale` is absent for the
+   * default language on every path.
+   */
+  readonly defaultLocale?: string | null;
   readonly inTransaction: boolean;
+  /**
+   * The write's top-level payload, where it differs from the data being
+   * validated: a field-group instance is validated on its own, and a plugin
+   * validator inside it is still handed the write, as `PluginFieldValidateArgs.data`
+   * promises (its lifecycle `status` included). Absent, that is the data.
+   */
+  readonly payload?: Record<string, unknown>;
   readStored(
     allowedType: string,
     target: PluginStoredValueTarget
@@ -167,12 +243,27 @@ function fieldWriteFor(
   write: EntryWriteContext,
   type: string
 ): PluginFieldWrite {
+  // The default language is said as no language, however the caller spelled
+  // it, so validators judge it the same on every path.
+  const locale =
+    write.locale === undefined || write.locale === write.defaultLocale
+      ? undefined
+      : write.locale;
   return {
     kind: write.kind,
     slug: write.slug,
     ...(write.id === undefined ? {} : { id: write.id }),
+    ...(locale === undefined ? {} : { locale }),
     inTransaction: write.inTransaction,
-    readStored: target => write.readStored(type, target),
+    // A read that names no language reads the one the write is judged in, so
+    // every stored value a validator compares with is the same language's.
+    readStored: target =>
+      write.readStored(
+        type,
+        target.locale === undefined && locale !== undefined
+          ? { ...target, locale }
+          : target
+      ),
   };
 }
 
@@ -184,9 +275,300 @@ function rule(field: ValidatableField, key: string): unknown {
   return nested?.[key];
 }
 
-function numberRule(field: ValidatableField, key: string): number | undefined {
+/**
+ * A field's numeric rule `key`, in either spelling (on the field or under
+ * `validation`). Exported so a caller deciding whether a field can be left
+ * empty reads the same rule this validator enforces.
+ */
+export function numberRule(
+  field: ValidatableField,
+  key: string
+): number | undefined {
   const v = rule(field, key);
   return typeof v === "number" ? v : undefined;
+}
+
+/**
+ * Whether the field's number values may carry a fraction. The opt-in answer
+ * is the descriptor's own — `numberFieldStoresFractions` there owns the
+ * question, so validation and the column cannot drift. This wrapper adds
+ * what the descriptor's column question does not cover: a hasMany number
+ * stores a JSON list, but the rule follows the field's whole-number
+ * semantics, not the physical column; and a plugin-contributed type
+ * rerouted here by its storage primitive is not a `number` field at all —
+ * its primitive stores numbers as integers unconditionally, so it is never
+ * exempt.
+ */
+function fieldJudgesFractions(field: ValidatableField): boolean {
+  if (field.type !== "number") return false;
+  return numberFieldStoresFractions(field);
+}
+
+/**
+ * The issues one component instance's whole-number children raise, judged
+ * against the fields the component's slug resolves to — the same descent
+ * the contained-component pass makes, rows indexed in the path.
+ */
+function componentInstanceIssues(
+  field: ValidatableField,
+  value: unknown,
+  childPath: string,
+  componentFields: (slug: string) => ValidatableField[] | undefined,
+  storedPaths: ReadonlySet<string> | undefined,
+  storedValues: ReadonlyMap<string, unknown> | undefined
+): ValidationIssue[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  const instances: Array<[unknown, string]> = Array.isArray(value)
+    ? value.map((row, index) => [row, `${childPath}[${index}]`])
+    : [[value, childPath]];
+  const issues: ValidationIssue[] = [];
+  for (const [instance, at] of instances) {
+    if (
+      instance === null ||
+      typeof instance !== "object" ||
+      Array.isArray(instance)
+    ) {
+      continue;
+    }
+    const slug =
+      single ??
+      (many?.includes(readFieldGroupType(instance) ?? "")
+        ? readFieldGroupType(instance)
+        : undefined);
+    const own = slug ? componentFields(slug) : undefined;
+    if (!own) continue;
+    issues.push(
+      ...hookChangedWholeNumberIssues(
+        instance as Record<string, unknown>,
+        own,
+        at,
+        componentFields,
+        storedPaths,
+        storedValues
+      )
+    );
+  }
+  return issues;
+}
+
+/**
+ * The issues a whole-number field's stored value raises: one per fractional
+ * element, the hasMany list indexed in the path.
+ */
+function fractionalElementIssues(
+  field: ValidatableField,
+  value: unknown,
+  childPath: string
+): ValidationIssue[] {
+  const label = typeof field.label === "string" ? field.label : field.name;
+  const elements = field.hasMany && Array.isArray(value) ? value : [value];
+  const issues: ValidationIssue[] = [];
+  elements.forEach((element, index) => {
+    if (
+      typeof element !== "number" ||
+      Number.isNaN(element) ||
+      Number.isInteger(element)
+    ) {
+      return;
+    }
+    issues.push({
+      path: field.hasMany ? `${childPath}[${index}]` : childPath,
+      code: "INVALID_TYPE",
+      message: `${label} must be a whole number.`,
+    });
+  });
+  return issues;
+}
+
+/**
+ * Whether a path sits under one the write kept from the stored row because
+ * a rule denies it to this writer: the path itself, a leaf under a denied
+ * container, or a row of a denied list. The value there is the row's own,
+ * not this write's, so the whole-number rule leaves it to the row.
+ */
+function isStoredProvenancePath(
+  path: string,
+  stored: ReadonlySet<string> | undefined
+): boolean {
+  if (!stored || stored.size === 0) return false;
+  if (stored.has(path)) return true;
+  for (const denied of stored) {
+    if (path.startsWith(`${denied}.`) || path.startsWith(`${denied}[`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The stored value a path's comparison reads: the path's own snapshot, or
+ * the one its nearest recorded ancestor holds at that path. A restore
+ * records one snapshot at a container the rules denied whole, and a hook
+ * that edits a different child sends the walk inside it — where each
+ * unchanged descendant still compares against what the ancestor's snapshot
+ * holds, rather than against nothing and reading as this write's own.
+ */
+function storedValueAtPath(
+  path: string,
+  stored: ReadonlyMap<string, unknown> | undefined
+): unknown {
+  if (!stored) return undefined;
+  if (stored.has(path)) return stored.get(path);
+  let upto = path;
+  // Up one segment at a time — `rows[1].rating` to `rows[1]`, then `rows` —
+  // until an ancestor recorded a snapshot to read the rest of the path from.
+  for (;;) {
+    const cut = Math.max(upto.lastIndexOf("."), upto.lastIndexOf("["));
+    if (cut <= 0) return undefined;
+    upto = upto.slice(0, cut);
+    if (stored.has(upto)) {
+      return valueAlong(stored.get(upto), path.slice(upto.length));
+    }
+  }
+}
+
+/** The value `rest` (`[1].rating`, `.label`) addresses inside `root`. */
+function valueAlong(root: unknown, rest: string): unknown {
+  let value: unknown = root;
+  for (const token of rest.match(/[^.[\]]+/g) ?? []) {
+    if (value === null || typeof value !== "object") return undefined;
+    value = (value as Record<string, unknown>)[token];
+  }
+  return value;
+}
+
+/**
+ * The whole-number floor, judged over the document the write will store,
+ * after the beforeChange hooks have had their turn.
+ *
+ * The hooks run after the validation gate and may transform or set any
+ * value, so what they leave behind is a write the gate never saw: a hook
+ * that produces a fraction would reach an integer column and let the
+ * database decide — the dialect divergence the whole-number rule exists to
+ * remove. The gate, however, guarantees the document it passed was
+ * fraction-free — every fractional caller value was already refused — so
+ * without comparing anything: every fraction present after the hooks is a
+ * hook's own production, wherever it sits. Rows a hook inserted, removed or
+ * reordered change no verdict, because no row is matched against a
+ * predecessor; the walk judges the content as it stands.
+ *
+ * Only the fields whose value the gate judged as a number are judged — a
+ * `number`, or a plugin type whose storage primitive is one — and every
+ * other rule keeps its pre-hook verdict: a json field keeps whatever JSON
+ * it holds (a bare `2.5` is legal there), and fraction-capable fields
+ * (decimal, float) keep their fractions. hasMany elements are judged as
+ * values, indexed in the path. Virtual fields store nothing, so a hook
+ * writing one is not a write.
+ */
+export function hookChangedWholeNumberIssues(
+  data: Record<string, unknown>,
+  fields: ValidatableField[],
+  path = "",
+  componentFields?: (slug: string) => ValidatableField[] | undefined,
+  storedPaths?: ReadonlySet<string>,
+  storedValues?: ReadonlyMap<string, unknown>
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const byName = new Map(
+    addressableFields(fields, {
+      // An unnamed GROUP is layout: its children are stored at the level the
+      // group sits in, which is the level this map is keyed by — the same
+      // answer the data side and the hook registry give, so a hook write to
+      // such a child is found under the child's own name. An unnamed
+      // REPEATER stores its children per row, so none of them is addressable
+      // here and the container is skipped whole.
+      descendInto: container => container.type === "group",
+    })
+      .filter(field => typeof field.name === "string")
+      .map(field => [field.name as string, field as ValidatableField])
+  );
+  for (const key of Object.keys(data)) {
+    const field = byName.get(key);
+    if (!field || !isJudgedOnWrite(field)) continue;
+    const childPath = path ? `${path}.${key}` : key;
+    // A value kept from the row because a rule denies it was never this
+    // write's to judge — the caller's own values were refused at the gate.
+    // A hook, though, holds the whole document and can reach what the
+    // restore kept: what is still the row's own stays the row's, and what
+    // the hook changed there is this write's production, judged like any
+    // other. Without the values the skip is whole, as the gate judged it.
+    if (isStoredProvenancePath(childPath, storedPaths)) {
+      // Through the nearest recorded ancestor when the path's own snapshot
+      // is not there: the whole container's comparison already failed, so
+      // the walk is inside it, and an unchanged descendant of the row's own
+      // content is still the row's, not this write's production.
+      const stored = storedValueAtPath(childPath, storedValues);
+      if (storedValues === undefined || isDeepStrictEqual(data[key], stored)) {
+        continue;
+      }
+    }
+
+    // A group or repeater carries rows of child fields: the hook runner
+    // recurses into those rows and its handlers mutate them IN PLACE, so
+    // the walk descends the same way and judges the content as it stands —
+    // the fraction a handler left in a row is judged where the row sits,
+    // however the rows got there.
+    if (
+      (field.type === "group" || field.type === "repeater") &&
+      Array.isArray(field.fields)
+    ) {
+      const value = data[key];
+      const rows = Array.isArray(value)
+        ? value
+        : value !== null && typeof value === "object"
+          ? [value]
+          : [];
+      rows.forEach((row, index) => {
+        if (row === null || typeof row !== "object" || Array.isArray(row)) {
+          return;
+        }
+        issues.push(
+          ...hookChangedWholeNumberIssues(
+            row as Record<string, unknown>,
+            field.fields as ValidatableField[],
+            field.type === "repeater" ? `${childPath}[${index}]` : childPath,
+            componentFields,
+            storedPaths,
+            storedValues
+          )
+        );
+      });
+      continue;
+    }
+
+    // A component held in a container stores its value whole, and the gate
+    // judged it against the component's own fields before the hooks ran —
+    // with the resolver this walk is handed, which is absent exactly where
+    // the gate left such a component unjudged. An entry-level hook holds
+    // the whole document, so the walk descends by the same slug the gate
+    // resolved and judges the fraction where the instance stores it.
+    if (componentFields && isFieldGroupFieldType(field.type)) {
+      issues.push(
+        ...componentInstanceIssues(
+          field,
+          data[key],
+          childPath,
+          componentFields,
+          storedPaths,
+          storedValues
+        )
+      );
+      continue;
+    }
+
+    // The gate judged a value as a number only when the field's storage
+    // primitive says number — the same dispatch its own switch makes for a
+    // plugin-contributed type. Everything else (json, text, relationship,
+    // a component without a resolver) never met the whole-number rule, so
+    // a numeric-looking value there is none of this floor's business.
+    const pluginType = getFieldType(field.type);
+    const effectiveType = pluginType
+      ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
+      : field.type;
+    if (effectiveType !== "number" || fieldJudgesFractions(field)) continue;
+    issues.push(...fractionalElementIssues(field, data[key], childPath));
+  }
+  return issues;
 }
 
 /**
@@ -346,7 +728,10 @@ async function validateFieldValue(
   // required password genuinely must be set the first time.
   if (
     field.type === "password" &&
-    options.mode === "update" &&
+    // A stored instance judged as it goes live reads back without its hash,
+    // which no read returns, so its password is not judged again: whether one
+    // is stored is not known without reading a secret, and none is read.
+    (options.mode === "update" || options.judgeComponentInstances === true) &&
     (value === undefined || (typeof value === "string" && value.trim() === ""))
   ) {
     return;
@@ -369,6 +754,8 @@ async function validateFieldValue(
     (field.type === "select" || field.type === "radio");
   const emptyIsOmission =
     !options.emptyIsAValue || value === null || value === undefined;
+  // Read before the empty-value return, which a type may opt out of below.
+  const pluginType = getFieldType(field.type);
   if (
     isEmpty(value) &&
     emptyIsOmission &&
@@ -382,6 +769,24 @@ async function validateFieldValue(
         message: `${label} is required.`,
       });
     }
+    // A type that asked to judge an emptied field is handed the empty value a
+    // write SENT. Absent means untouched on an update, so it is not handed on.
+    if (
+      pluginType?.validateEmpty === true &&
+      pluginType.validate !== undefined &&
+      value !== undefined
+    ) {
+      await validatePluginFieldType(
+        pluginType.validate,
+        field,
+        value,
+        path,
+        label,
+        write,
+        options,
+        issues
+      );
+    }
     return;
   }
 
@@ -391,7 +796,6 @@ async function validateFieldValue(
   // statement of what its column holds, so the built-in rules for that
   // primitive's equivalent type are the ones that apply. Built-ins resolve to
   // themselves — a plugin cannot redefine one, so this never reroutes them.
-  const pluginType = getFieldType(field.type);
   const effectiveType = pluginType
     ? STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginType.storage]
     : field.type;
@@ -481,6 +885,26 @@ async function validateFieldValue(
       break;
     }
 
+    case "icon": {
+      // Only the id's shape ("lucide:star") is judged. Icon sets are
+      // registered at runtime, so an id from an unknown set or naming an
+      // unknown icon is stored as given and reported elsewhere, never refused.
+      if (typeof value !== "string") {
+        issues.push({
+          path,
+          code: "INVALID_TYPE",
+          message: `${label} must be an icon id.`,
+        });
+      } else if (!isIconIdShape(value)) {
+        issues.push({
+          path,
+          code: "INVALID_FORMAT",
+          message: `${label} must be an icon id such as "lucide:star".`,
+        });
+      }
+      break;
+    }
+
     case "number": {
       // A hasMany number stores an array; a scalar contradicts the schema.
       if (field.hasMany && !Array.isArray(value)) {
@@ -503,6 +927,28 @@ async function validateFieldValue(
             message: `${label} must be a number.`,
           });
           continue;
+        }
+        // A whole-number field says what it stores: a fraction is refused
+        // with the field named, before any write, on every dialect — not
+        // left to the column, where MySQL rounds it away silently,
+        // PostgreSQL answers a 500, and SQLite stores a value the schema
+        // never declared. On an assembled-from-storage document the caller's
+        // own values were already judged at their patch gate, and the stored
+        // ones were carried by nobody, so they ride unchanged. Not asked at
+        // all on a loose JSON document, whose numbers have no column to
+        // speak for them.
+        if (
+          !options.fractionalNumberStorage &&
+          !fieldJudgesFractions(field) &&
+          !options.assembledFromStorage &&
+          !isStoredProvenancePath(p, options.storedProvenancePaths) &&
+          !Number.isInteger(v)
+        ) {
+          issues.push({
+            path: p,
+            code: "INVALID_TYPE",
+            message: `${label} must be a whole number.`,
+          });
         }
         const min = numberRule(field, "min");
         const max = numberRule(field, "max");
@@ -706,7 +1152,12 @@ async function validateFieldValue(
     // normalization passes and referential checks; no scalar rules apply. A
     // component inside a container is the exception: nothing else judges it.
     default:
-      if (options.insideContainer && isFieldGroupFieldType(field.type)) {
+      if (
+        ((options.insideContainer &&
+          options.judgeContainedComponents !== false) ||
+          options.judgeComponentInstances) &&
+        isFieldGroupFieldType(field.type)
+      ) {
         await validateContainedComponents(
           field,
           value,
@@ -782,6 +1233,28 @@ function asSentence(message: string): string {
  * reported as a refusal, exactly as the per-field `validate` is, so a defective
  * plugin cannot turn a rejected write into a 500.
  */
+/**
+ * The field that found an issue whose path addresses somewhere else, as a
+ * plugin type's validator may choose: the issue is told at its path, and is
+ * judged by this field's read rules. Keyed by the issue itself, so it adds
+ * nothing to the shape a caller is handed.
+ */
+const ISSUE_ORIGINS = new WeakMap<ValidationIssue, string>();
+
+/** The path of the field that found `issue`: where it addresses, unless it was found elsewhere. */
+export function issueOrigin(issue: ValidationIssue): string {
+  return ISSUE_ORIGINS.get(issue) ?? issue.path;
+}
+
+/** Whether `issuePath` is `fieldPath` or a position under it. */
+function addressesWithin(issuePath: string, fieldPath: string): boolean {
+  return (
+    issuePath === fieldPath ||
+    issuePath.startsWith(`${fieldPath}.`) ||
+    issuePath.startsWith(`${fieldPath}[`)
+  );
+}
+
 async function validatePluginFieldType(
   validate: NonNullable<PluginFieldType["validate"]>,
   field: ValidatableField,
@@ -823,14 +1296,19 @@ async function validatePluginFieldType(
 
     if (Array.isArray(result)) {
       for (const issue of result) {
-        issues.push({
+        const told: ValidationIssue = {
           // A structured value can be wrong somewhere inside itself, so an
           // issue may address a position under this field; without one it
           // belongs to the field as a whole.
           path: issue.path ?? path,
           code: issue.code ?? "CUSTOM",
           message: asSentence(issue.message),
-        });
+        };
+        // The path is the validator's to choose, and is told as given; the
+        // field that found the issue is kept beside it, for what its caller
+        // may be told to follow that field's read rules.
+        if (!addressesWithin(told.path, path)) ISSUE_ORIGINS.set(told, path);
+        issues.push(told);
       }
       return;
     }
@@ -855,8 +1333,8 @@ async function validatePluginFieldType(
 export function hasComponentInContainer(
   fields: readonly ValidatableField[],
   /**
-   * Whether `fields` are themselves a container's: a component's own fields are, for a component
-   * placed directly in them, since its value too is reached by no write of its own.
+   * Whether `fields` are themselves a container's, so a component placed directly in them counts:
+   * a component's own fields are asked so, to have the schemas of what it holds at hand.
    */
   inContainer = false
 ): boolean {
@@ -926,17 +1404,44 @@ async function validateContainedComponents(
     // its default is not refused. Filled on a copy: validation reports, and
     // the value written is the caller's.
     const filled = { ...(instance as Record<string, unknown>) };
-    applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    // A top-level instance going live is judged as its own row stores it: a
+    // default added since it was saved was never written into it, so it does
+    // not stand in. One held in a group or repeater is stored as sent, its
+    // defaults filled only to judge it, so they are filled again here.
+    const storedRow =
+      options.judgeComponentInstances === true && !options.insideContainer;
+    if (!storedRow) {
+      applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    }
+    // Every field is judged: a component placed directly among its fields is a row of its own,
+    // read back with it, and judged in turn below as the stored row it is.
     await validateFields(
       attachFieldValidators("fieldGroup", slug, own),
       filled,
-      write,
+      // A stored row is judged as the component write judges one: a field
+      // type's validator sees the instance as the document it compares with,
+      // and no entry write, which that pass does not hand it either.
+      storedRow ? { data: filled, mode: "create" } : write,
       at,
-      // A component's value is written whole, so its required fields apply.
-      { ...options, mode: "create", insideContainer: true },
+      // A component's value is written whole, so its required fields apply. A stored row's own
+      // fields stay outside any container, so a component placed directly in it is judged as a
+      // stored row too; its groups and repeaters mark what they hold as inside one themselves.
+      {
+        ...(storedRow ? withoutEntryWrite(options) : options),
+        mode: "create",
+        insideContainer: !storedRow,
+      },
       issues
     );
   }
+}
+
+/** `options` without the entry write a plugin field type is handed. */
+function withoutEntryWrite(
+  options: ValidateEntryOptions
+): ValidateEntryOptions {
+  const { write: _entryWrite, ...rest } = options;
+  return rest;
 }
 
 async function validateFields(
@@ -948,7 +1453,22 @@ async function validateFields(
   issues: ValidationIssue[]
 ): Promise<void> {
   for (const field of fields) {
-    if (!field.name) continue;
+    if (!field.name) {
+      // A container with no name only lays fields out when its children are stored at the level it
+      // sits in (a group; a repeater's are per row): they are judged here, with this level's value,
+      // as their validators are attached here.
+      if (field.fields && storedAtThisLevel(field)) {
+        await validateFields(
+          field.fields,
+          data,
+          write,
+          basePath,
+          options,
+          issues
+        );
+      }
+      continue;
+    }
     if (!isJudgedOnWrite(field)) continue;
     const path = basePath ? `${basePath}.${field.name}` : field.name;
     // Own keys only. Field names may be camelCase, so `toString` is a legal
@@ -988,7 +1508,7 @@ export async function validateEntryData(
   await validateFields(
     fields,
     data,
-    { data, mode: options.mode },
+    { data: options.write?.payload ?? data, mode: options.mode },
     "",
     options,
     issues

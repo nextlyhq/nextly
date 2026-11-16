@@ -7,6 +7,8 @@
  */
 import type { MetadataRoute } from "next";
 
+import { FRAMEWORK_CRAWL_EXCLUSIONS } from "../../shared/crawl-exclusions";
+
 /** Options for {@link nextlyRobots}. */
 export interface NextlyRobotsOptions {
   /** Absolute sitemap URL(s) to advertise (e.g. `"https://example.com/sitemap.xml"`). */
@@ -34,23 +36,10 @@ export interface NextlyRobotsOptions {
 export function nextlyRobots(
   options: NextlyRobotsOptions = {}
 ): () => MetadataRoute.Robots {
-  // Keep the admin panel and API out of the index; a caller can disallow more.
-  // Exclude the framework roots on a path boundary, not a raw prefix: the
-  // trailing-slash form (`/admin/`) covers the whole subtree on every crawler,
-  // the `$`-anchored form (`/admin$`) pins the bare root where supported, and
-  // the `?` form (`/admin?`) covers query-bearing roots (`/admin?next=/x`).
-  // None swallows similarly-prefixed content like `/administration`, which the
-  // router does serve.
+  // Keep the admin panel and API out of the index, by the one list every
+  // robots.txt of a Nextly site reads; a caller can disallow more.
   const disallow = [
-    ...new Set([
-      "/admin/",
-      "/admin$",
-      "/admin?",
-      "/api/",
-      "/api$",
-      "/api?",
-      ...(options.disallow ?? []),
-    ]),
+    ...new Set([...FRAMEWORK_CRAWL_EXCLUSIONS, ...(options.disallow ?? [])]),
   ];
   return () => ({
     rules: {

@@ -11,8 +11,8 @@
  * (`manage`, `export`), an empty action or resource, and keys whose scope
  * carries slugs without grant rows or grants stored under slugs of their own.
  *
- * Each answer is written as the check returned it, so a rule's raw answer
- * (`null`, a truthy string) shows as itself rather than as a yes or no.
+ * Each answer is written as the check returned it, so an answer that was not
+ * a yes or no (a rule's `null`, or a truthy string) would show as itself.
  *
  * The access-control service is the real one, with each rule registered as an
  * app registers it. Only the role and permission lookups are faked, from one
@@ -176,6 +176,13 @@ const CALLERS: Record<string, Caller> = {
   "super-admin-inherited": session("admin-inherited"),
   "key-with": key([...POST_GRANTS, ...SYSTEM_GRANTS]),
   "key-without": key([]),
+  // The plain four on settings and nothing else: a retired `manage-settings`
+  // asked of it is held, at every door, as all four.
+  "key-plain-settings": key(
+    ["read", "create", "update", "delete"].map(action =>
+      grant(action, "settings")
+    )
+  ),
   "key-partial": key([
     grant("read", POSTS),
     grant("publish", POSTS),
@@ -213,6 +220,11 @@ const RULES: Record<string, Rule | undefined> = {
     throw new Error("rule failed");
   },
   "role-name": ({ roles }) => roles.includes("editor"),
+  // A filter, which allows only the entries it matches. A yes or no answers
+  // yes to it for a read alone: a write under it names no entry.
+  "returns-filter": () => ({ id: { exists: true } }) as unknown as boolean,
+  // The spelling rules were once handed, `<resource>:<operation>`. No rule
+  // is handed it any more, so this one never allows.
   "permission-spelling": ({ permissions, operation }) =>
     permissions.includes(`${POSTS}:${operation}`),
 };
@@ -320,12 +332,13 @@ describe("the caller checks' answers", () => {
         lines.push(...(await answersFor(setup, ruleName, rule)));
       }
     }
-    // POPULATION CONTROL: both answers, from both checks, and a rule's raw
-    // answer, were reached.
+    // POPULATION CONTROL: both answers, from both checks, were reached, and
+    // every answer is a yes or a no: a rule's `null` or string is not handed
+    // back as it came.
     const text = lines.join("\n");
     expect(text).toMatch(/can\([a-z]+,posts\):true/);
     expect(text).toMatch(/can\([a-z]+,posts\):false/);
-    expect(text).toMatch(/can\([a-z]+,posts\):null/);
+    expect(text).not.toMatch(/(can|holds)\([^)]*\):(?!true$|false$)/m);
     expect(text).toMatch(/holds\([a-z-]+\):true/);
     expect(text).toMatch(/holds\([a-z-]+\):false/);
     await expect(`${text}\n`).toMatchFileSnapshot(
@@ -361,6 +374,62 @@ describe("an entity that registered a rule under a system resource's name", () =
     );
     const gate = await authorizeCaller(auth, "read", "settings");
     expect("statusCode" in gate && gate.statusCode).toBe(403);
+  });
+});
+
+describe("the type-level question: may the caller act on any entry at all", () => {
+  /** Posts, every action guarded by `rule`. */
+  function postsGuardedBy(rule: Rule): void {
+    registered.rbac = serviceFor("service", rule);
+  }
+
+  /** Plain `can` and the type-level `can` for one caller and action. */
+  async function bothAnswers(
+    caller: Caller,
+    action: string
+  ): Promise<{ plain: boolean; anyEntry: boolean }> {
+    const user = { id: caller.user.id, roles: caller.user.roles };
+    return {
+      plain: await callerMayPerform(caller.scope, action, POSTS, user),
+      anyEntry: await callerMayPerform(caller.scope, action, POSTS, user, {
+        anyEntry: true,
+      }),
+    };
+  }
+
+  it("answers yes for a write a row filter limits, where plain `can` answers no", async () => {
+    postsGuardedBy(RULES["returns-filter"]);
+    // A write under a filter names no entry, so plain `can` refuses it; the
+    // type-level question counts the filter as the right held.
+    for (const caller of [CALLERS["user-with"], CALLERS["key-with"]]) {
+      expect(await bothAnswers(caller!, "update")).toEqual({
+        plain: false,
+        anyEntry: true,
+      });
+    }
+  });
+
+  it("still asks for the permission under a filter", async () => {
+    postsGuardedBy(RULES["returns-filter"]);
+    for (const caller of [CALLERS["user-without"], CALLERS["key-without"]]) {
+      expect(await bothAnswers(caller!, "update")).toEqual({
+        plain: false,
+        anyEntry: false,
+      });
+    }
+  });
+
+  it("is refused where the rule refuses, and allowed where it allows", async () => {
+    postsGuardedBy(RULES["returns-false"]);
+    expect(await bothAnswers(CALLERS["user-with"]!, "update")).toEqual({
+      plain: false,
+      anyEntry: false,
+    });
+    postsGuardedBy(RULES["returns-true"]);
+    expect(await bothAnswers(CALLERS["user-with"]!, "update")).toEqual({
+      plain: true,
+      anyEntry: true,
+    });
   });
 });
 

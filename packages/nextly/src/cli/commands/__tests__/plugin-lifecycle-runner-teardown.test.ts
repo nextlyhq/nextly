@@ -43,17 +43,83 @@ const state = vi.hoisted(() => {
 });
 const { calls, onInstall, onUninstall, registerServices } = state;
 
+// A registry write's transaction, and the schema version stored in it, are
+// the integration suite's subject (`schema-version-writers.integration.test.ts`):
+// here a registry write runs on the adapter itself, as it did before it had one.
+vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/schema-version")
+  >()),
+  writeRegistryRows: (adapter: unknown, work: (tx: unknown) => unknown) =>
+    work(adapter),
+  writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
+}));
+
+// No release has recorded the preset roles' grants on this double's database, so neither
+// command is refused for the release it runs from; the refusal and the permissions, roles and
+// grants a recorded state brings are the integration suite's subject
+// (`plugin-lifecycle-writes-its-access.integration.test.ts`), so here they write nothing.
+vi.mock(
+  "../../../domains/meta/preset-grants-release",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/meta/preset-grants-release")
+    >()),
+    readPresetGrantsRelease: async () => undefined,
+  })
+);
+vi.mock("../../../domains/schema/migrate/command-access", () => ({
+  seedAccessOnCommandConnection: async () => {},
+  orphanOwnedPermissionsOnCommandConnection: async () => {},
+}));
+
+// The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
+// through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async <T>(
+    _adapter: unknown,
+    _dialect: unknown,
+    fn: () => Promise<T>
+  ) => ({ ran: true as const, value: await fn() }),
+}));
+
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
     config: state.loadedConfig,
     appConfig: state.appConfig,
+    // The project `--cwd` named, which is not the directory the test runs in.
+    projectRoot: "/projects/site",
   }),
+}));
+
+// What other owners built on the schema is its own question, tested where
+// it is answered; here nothing has been built, so the uninstall goes ahead.
+vi.mock("../../utils/registry-resolver", () => ({
+  installRegistryResolver: () => undefined,
+}));
+vi.mock("../../../domains/schema/ownership/uninstall-dependents", () => ({
+  findUninstallDependents: () => Promise.resolve([]),
+  pluginEntities: () =>
+    Promise.resolve({
+      collectionSlugs: [],
+      collectionSlugForTable: () => null,
+      single: [],
+      fieldGroup: [],
+      extendedFields: new Map(),
+    }),
 }));
 
 vi.mock("../../utils/adapter", () => ({
   createCliAdapter: async () => ({
     dialect: "sqlite",
-    getDrizzle: () => ({}),
+    // A full uninstall forgets the plugin with three deletes; nothing here
+    // reads what they leave.
+    getDrizzle: () => ({
+      delete: () => ({ where: () => Promise.resolve() }),
+    }),
     tableExists: async () => state.migrated,
     // Each read of SQLite's schema version, so the order of the
     // uninstall's reads around the boot and the hook can be told.
@@ -81,6 +147,9 @@ vi.mock("../../../domains/schema/events/schema-events-repository", () => ({
     insertEvent() {
       return Promise.resolve("event");
     }
+    deletePluginModuleRows() {
+      return Promise.resolve();
+    }
   },
 }));
 
@@ -92,6 +161,9 @@ vi.mock(
       read() {
         return Promise.resolve([]);
       }
+      deletePluginOwner() {
+        return Promise.resolve();
+      }
     },
   })
 );
@@ -99,7 +171,6 @@ vi.mock(
 vi.mock("../../../di/register", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   registerServices: state.registerServices,
-  isServicesRegistered: () => state.alreadyRegistered,
   getInitializedPluginContext: () => ({}),
   destroyRegisteredPlugins: async () => {
     state.calls.push("destroy");
@@ -107,6 +178,9 @@ vi.mock("../../../di/register", async importOriginal => ({
   clearServices: () => {
     state.calls.push("clear");
   },
+}));
+vi.mock("../../../di/service-access", () => ({
+  isServicesRegistered: () => state.alreadyRegistered,
 }));
 
 vi.mock("../../../init/build-service-config", () => ({
@@ -145,6 +219,18 @@ beforeEach(() => {
   });
   registerServices.mockReset().mockImplementation(async () => {
     calls.push("register");
+  });
+});
+
+describe("the lifecycle hook's boot", () => {
+  // The start check judges the Next.js and React of the app the command was
+  // pointed at, not of wherever the CLI happened to run.
+  it("judges the project --cwd names", async () => {
+    await runPluginInstall("@acme/fx", {}, context);
+
+    expect(registerServices).toHaveBeenCalledWith(
+      expect.objectContaining({ appRoot: "/projects/site" })
+    );
   });
 });
 

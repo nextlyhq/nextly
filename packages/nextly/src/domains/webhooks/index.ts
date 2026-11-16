@@ -29,13 +29,12 @@ export {
 export {
   signPayload,
   buildSignatureHeaders,
-  verifySignature,
+  standardWebhooksSignature,
   WEBHOOK_ID_HEADER,
   WEBHOOK_TIMESTAMP_HEADER,
   WEBHOOK_SIGNATURE_HEADER,
   type SignInput,
   type SignHeadersInput,
-  type VerifyInput,
 } from "./signing";
 export {
   classifyResponse,
