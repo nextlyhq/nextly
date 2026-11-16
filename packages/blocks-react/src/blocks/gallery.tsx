@@ -57,8 +57,9 @@ import type { PageContext } from "../context";
 
 import { MEDIA } from "./categories";
 import {
-  CONTAINER_SUPPORTS,
   containerContentModel,
+  CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
@@ -117,7 +118,7 @@ export const gallery: BlockDefinition<ContainerProps, PageContext> =
     },
     props: {
       as: htmlTagProp(["div", "section", "article"]),
-      contained: { label: "Constrain content width", type: "checkbox" },
+      ...CONTENT_WIDTH_PROPS,
     },
     defaultProps: { as: "div", contained: false },
     example: { props: { as: "div" } },

@@ -41,7 +41,12 @@ import type { BlockRenderArgs, ListPageContext, PageContext } from "../context";
 import { LIST_ACTION_ATTRIBUTE, LIST_REF_ATTRIBUTE } from "../editor-markers";
 
 import { CONTENT } from "./categories";
-import { CONTAINER_CHILD_GAP } from "./container";
+import {
+  CONTAINER_CHILD_GAP,
+  CONTENT_WIDTH_PROPS,
+  type ContainerProps,
+  withContentWidth,
+} from "./container";
 import { withReadAhead } from "./list-batch";
 import { ListPages } from "./list-pages";
 import {
@@ -55,7 +60,8 @@ import {
 import { readNamedList } from "./named-read";
 import { readClaimOf } from "./props";
 
-export interface CollectionLoopProps {
+export interface CollectionLoopProps
+  extends Pick<ContainerProps, "contained" | "contentWidth"> {
   /** The collection queried, or the collection a related source's entries are in. */
   collection?: string;
   /** How many entries at most: 1 to 100. */
@@ -393,10 +399,12 @@ export async function renderCollectionLoop({
   props,
   node,
   renderSlot,
-  className,
+  className: ownClassName,
   partClass,
   ctx,
 }: BlockRenderArgs<CollectionLoopProps>): Promise<ReactElement> {
+  // Boxed or full width, as every container is.
+  const className = withContentWidth(ownClassName, props);
   // An author asked to design what visitors see when nothing matches: the
   // empty state alone, with nothing read. Only where an author is looking.
   if (
@@ -730,8 +738,9 @@ export const collectionLoop: BlockDefinition<CollectionLoopProps, PageContext> =
         display: "listNamedQuery",
       },
       paginate: { label: "Split into pages", type: "checkbox" },
+      ...CONTENT_WIDTH_PROPS,
     },
-    defaultProps: { limit: 10 },
+    defaultProps: { limit: 10, contained: false },
     example: { props: { collection: "posts", limit: 3 } },
     slots: {
       // The template repeated per entry, structurally editable.
