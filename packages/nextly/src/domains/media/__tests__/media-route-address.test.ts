@@ -45,6 +45,16 @@ describe("mediaIdOfRouteAddress", () => {
       expect(mediaIdOfRouteAddress(url)).toBeUndefined();
     }
   });
+
+  it("reads only the address's path, never a route inside its query or fragment", () => {
+    for (const url of [
+      `/search?next=/api/media/${ID}/raw`,
+      `https://example.com/login?return=/admin/api/media/${ID}`,
+      `/page#/api/media/${ID}/raw`,
+    ]) {
+      expect(mediaIdOfRouteAddress(url)).toBeUndefined();
+    }
+  });
 });
 
 describe("mediaIdOfCopySource", () => {

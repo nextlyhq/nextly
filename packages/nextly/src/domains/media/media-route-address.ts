@@ -19,7 +19,13 @@
 const MEDIA_ROUTE =
   /\/api\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=[/?#]|$)/i;
 
-/** The id of the media item `url` names by its route, or `undefined`. */
+/**
+ * The id of the media item `url` names by its route, or `undefined`. Only
+ * the address's path is read: a media route that appears in its query or
+ * fragment (`/search?next=/api/media/<id>/raw`) names no item, since the
+ * address itself goes somewhere else.
+ */
 export function mediaIdOfRouteAddress(url: string): string | undefined {
-  return MEDIA_ROUTE.exec(url)?.[1];
+  const path = url.split(/[?#]/, 1)[0] ?? "";
+  return MEDIA_ROUTE.exec(path)?.[1];
 }
