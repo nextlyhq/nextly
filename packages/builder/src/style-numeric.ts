@@ -269,7 +269,10 @@ function accepts(
  */
 export function unitChoicesFor(leaf: StyleLeaf): readonly string[] {
   if (leaf.kind !== "dimension") return [];
-  return UNIT_CANDIDATES.filter(unit => accepts(leaf, `1${unit}`));
+  const candidates = SCREEN_HEIGHT_PROPERTIES.has(leaf.cssProperty)
+    ? SCREEN_HEIGHT_CANDIDATES
+    : UNIT_CANDIDATES;
+  return candidates.filter(unit => accepts(leaf, `1${unit}`));
 }
 
 /**
@@ -282,6 +285,34 @@ export function unitChoicesFor(leaf: StyleLeaf): readonly string[] {
  * scroll costs every author to serve a few.
  */
 const UNIT_CANDIDATES: readonly string[] = ["px", "rem", "em", "vw", "vh", "%"];
+
+/**
+ * The properties a screen's own height is offered on: the small, dynamic and
+ * large viewport heights, after `vh`.
+ *
+ * On a phone `100vh` is the height with the browser's toolbar hidden, so a
+ * block sized by it runs under the toolbar while it shows. `svh` is the
+ * height with it showing (what Full screen writes), `lvh` with it hidden and
+ * `dvh` follows it as it moves. Only on the heights, where that matters; on
+ * any other length they are typeable, and the menu stays short.
+ */
+const SCREEN_HEIGHT_PROPERTIES: ReadonlySet<string> = new Set([
+  "height",
+  "min-height",
+  "max-height",
+]);
+
+const SCREEN_HEIGHT_CANDIDATES: readonly string[] = [
+  "px",
+  "rem",
+  "em",
+  "vw",
+  "vh",
+  "svh",
+  "dvh",
+  "lvh",
+  "%",
+];
 
 /**
  * The same value carrying a different unit, or `undefined` when the swap would

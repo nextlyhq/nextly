@@ -781,7 +781,8 @@ describe.each(getConfiguredTestDialects())(
      * at the moment the other write would land in a real race.
      */
     describe("batch writes inside a transaction", () => {
-      const ONE_AT_A_TIME = "delete or unpublish Layouts one at a time";
+      const ONE_AT_A_TIME =
+        "delete or unpublish header & footer sets one at a time";
 
       it("refuses a batch delete of the default and changes nothing", async () => {
         const t = await boot();
