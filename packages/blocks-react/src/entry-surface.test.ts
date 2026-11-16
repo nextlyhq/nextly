@@ -130,6 +130,7 @@ const SOURCE_MODULES: ReadonlyArray<{
       "narrowForOwnSize",
       "narrowToWidth",
       "rootImageSlot",
+      "siteSizesBlocks",
       "sizesFor",
     ],
   },

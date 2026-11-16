@@ -247,13 +247,16 @@ test("a phone and a desktop draw copies, never the upload", async ({
       expect(drawnBackground).toContain(
         new URL(preloaded[0]?.href ?? "").pathname
       );
-      // The Image block's copy is no wider than twice its slot.
-      const drawn = await visitor
+      // The copy the Image block downloaded is no wider than twice its slot.
+      // Read from the address the browser chose, since a width-descriptor
+      // srcset reports `naturalWidth` corrected by `sizes`, not the file's.
+      const chosen = await visitor
         .locator("img")
-        .evaluate(img => (img as HTMLImageElement).naturalWidth);
-      expect(drawn).toBeGreaterThan(0);
-      expect(drawn).toBeLessThanOrEqual(device.slot * 2);
-      expect(drawn).toBeLessThan(UPLOAD.width);
+        .evaluate(img => (img as HTMLImageElement).currentSrc);
+      const copyWidth = Number(/\/copy\/(\d+)/.exec(chosen)?.[1]);
+      expect(copyWidth, `chosen: ${chosen}`).toBeGreaterThan(0);
+      expect(copyWidth).toBeLessThanOrEqual(device.slot * 2);
+      expect(copyWidth).toBeLessThan(UPLOAD.width);
       // Both drawn from copies, together still smaller than the one upload.
       expect(total).toBeLessThan(originalBytes);
     } finally {
