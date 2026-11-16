@@ -34,6 +34,9 @@ test.describe.configure({ mode: "serial" });
 
 const ENTRIES = "/admin/api/collections/block-pages/entries";
 
+/** Whether the suite runs against a production build rather than `next dev`. */
+const PRODUCTION = process.env.E2E_SERVER === "production";
+
 const PUBLISHED_SLUG = "dogfood";
 const DRAFT_SLUG = "dogfood-draft";
 
@@ -335,15 +338,20 @@ test("an unpublished entry is not served", async ({ page }) => {
   // Under Cache Components the public route renders an unlisted path on its
   // first request and streams its static shell before it reads the entry, so
   // that status is 200 by the time it knows the entry is not published. The
-  // route answers a miss through the SEO plugin's `notFoundLogged`, which
-  // reads the request so that each miss is decided, and logged, per request:
-  // Next keeps no render of it, and a later request is answered the same
-  // way, in a production build as under `next dev`. Every request gets the
-  // not-found page marked `noindex`, and none of the draft's content.
-  for (const request of ["first", "second"]) {
+  // route is public, so Next keeps the not-found render and answers later
+  // requests with a 404. Its miss goes through the SEO plugin's
+  // `notFoundLogged`, which reads the request only where Next renders for
+  // one, so the kept render stays a 404. Every request gets the not-found
+  // page marked `noindex`, and none of the draft's content.
+  for (const [request, status] of [
+    ["first", 200],
+    // Next keeps the render only in a production build: under `next dev`
+    // nothing is kept, so every request renders it afresh and answers 200.
+    ["second", PRODUCTION ? 404 : 200],
+  ] as const) {
     const response = await page.request.get(`/blocks/${DRAFT_SLUG}`);
     const html = await response.text();
-    expect(response.status(), `${request} request`).toBe(200);
+    expect(response.status(), `${request} request`).toBe(status);
     expect(html, `${request} request`).toMatch(
       /<meta[^>]+name="robots"[^>]+content="noindex"/
     );
