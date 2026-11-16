@@ -481,6 +481,80 @@ describe.each(getConfiguredTestDialects())(
         expect(await row(t, busy)).toMatchObject({ title: "Busy, edited" });
       });
 
+      it("stops when the seed is given a header while the pass runs, leaving the pages it had not reached", async () => {
+        const t = await boot();
+        const seed = await seedOf(t);
+        const ids: string[] = [];
+        await asAnOlderRelease(t, async () => {
+          ids.push(await page(t, "First", { layout: seed, status: "draft" }));
+          ids.push(await page(t, "Second", { layout: seed, status: "draft" }));
+        });
+        const header = await t.nextly.create({
+          collection: "components",
+          data: {
+            title: "Late header",
+            slug: "late-header",
+            content: {
+              formatVersion: 1,
+              kind: "component",
+              nodes: [
+                {
+                  id: "h",
+                  type: "core/heading",
+                  version: 1,
+                  props: { text: "Site", level: 2 },
+                },
+              ],
+            },
+            status: "published",
+          },
+          overrideAccess: true,
+        });
+        const real = parts().rewrite;
+        let filled = false;
+        // An author publishes a header into the seed once the first page's
+        // rewrite is under way: from then on its pages chose a real set.
+        const racing: EmptySeedParts["rewrite"] = async request => {
+          const done = await real(request);
+          if (!filled) {
+            filled = true;
+            const seedRow = await t.nextly.findByID({
+              collection: LAYOUTS_SLUG,
+              id: seed,
+              depth: 0,
+              overrideAccess: true,
+            });
+            await t.nextly.update({
+              collection: LAYOUTS_SLUG,
+              id: seed,
+              data: {
+                areas: [{ area: "header", component: String(header.item.id) }],
+                status: "published",
+                _rev: (seedRow as { _rev?: unknown } | null)?._rev,
+              },
+              overrideAccess: true,
+            });
+          }
+          return done;
+        };
+
+        const outcome = await move(t, racing);
+
+        expect(outcome).toEqual({ kind: "pass", moved: 1, finished: false });
+        const layouts = await Promise.all(
+          ids.map(async id => relationId((await row(t, id))?.layout))
+        );
+        // One page moved before the header landed; the other keeps the seed.
+        expect(layouts.filter(id => id === null)).toHaveLength(1);
+        expect(layouts.filter(id => id === seed)).toHaveLength(1);
+        // The next pass finds a seed with a header: the move is done.
+        expect(await move(t)).toEqual({
+          kind: "pass",
+          moved: 0,
+          finished: true,
+        });
+      });
+
       it("leaves the pages of a seed someone is filling, and records the move as done", async () => {
         const t = await boot();
         const seed = await seedOf(t);

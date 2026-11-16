@@ -53,7 +53,11 @@ import {
 } from "@nextlyhq/plugin-sdk/schema";
 
 import { documentVersionOf } from "../document-version";
-import { scanLayoutReferences } from "../layout-removal/layout-references";
+import {
+  confirmedGone,
+  scanLayoutReferences,
+  unlessGone,
+} from "../layout-removal/layout-references";
 import { siteOptions } from "../schema/tables";
 import { readSiteOption } from "../site-option-read";
 
@@ -278,21 +282,29 @@ async function movePagesOffSeed(
   });
   let moved = 0;
   let refused = 0;
+  let seedFilled = false;
   for (const page of scan.references) {
+    // Asked again before each page: someone may give the seed a header or
+    // footer while the pass runs, and its pages then name a real set.
+    if (!(await namesEmptySeed(deps.nextly, deps.slugs, seed))) {
+      seedFilled = true;
+      break;
+    }
     const outcome = await movePageOffSeed(deps, page.id, seed);
     if (outcome === "moved") moved += 1;
     if (outcome === "refused") refused += 1;
   }
   if (moved > 0) deps.warn(movedLine(moved), { seededLayout: seed, moved });
-  const complete = scan.complete && refused === 0;
+  const complete = scan.complete && refused === 0 && !seedFilled;
   if (!complete) {
     deps.warn(
       "[page-builder] the move of pages off the empty seeded header & footer set did not finish; the next jobs pass carries on",
       {
         seededLayout: seed,
         moved,
-        savedMeanwhile: refused,
+        notMovedYet: refused,
         unread: scan.unread.length,
+        seedFilled,
       }
     );
   }
@@ -318,7 +330,9 @@ async function finish(
 /**
  * Rewrite page `pageId`'s `layout` from `seed` to no set, on every copy that
  * names it; a copy naming another set keeps that choice. `refused` for a page
- * saved since it was read, which a later pass reads again.
+ * saved since it was read, or one that is still there but could not be read,
+ * which a later pass reads again; `unchanged` for one deleted since the scan
+ * listed it.
  */
 export async function movePageOffSeed(
   deps: Pick<EmptySeedMoveDeps, "nextly" | "pagesSlug" | "emptySeed">,
@@ -327,18 +341,25 @@ export async function movePageOffSeed(
 ): Promise<"moved" | "unchanged" | "refused"> {
   let current: unknown;
   try {
-    current = await deps.nextly.findByID({
-      collection: deps.pagesSlug,
-      id: pageId,
-      draft: true,
-      depth: 0,
-      overrideAccess: true,
-    });
+    // A not-found answer can come from the page's own read hooks, about
+    // something the page relates to, so it is taken as gone only once a
+    // listing confirms the page itself is absent.
+    current = await unlessGone(
+      deps.nextly.findByID({
+        collection: deps.pagesSlug,
+        id: pageId,
+        draft: true,
+        depth: 0,
+        overrideAccess: true,
+      }),
+      () => confirmedGone(deps.nextly, deps.pagesSlug, pageId)
+    );
   } catch (error) {
-    // Deleted since the scan listed it: nothing left to move.
-    if (NextlyError.isCode(error, "NOT_FOUND")) return "unchanged";
+    // Still there, and unreadable for now: left for a later pass.
+    if (NextlyError.isCode(error, "NOT_FOUND")) return "refused";
     throw error;
   }
+  if (current === null) return "unchanged";
   const version = documentVersionOf(current);
   if (version === undefined) return "refused";
   try {
