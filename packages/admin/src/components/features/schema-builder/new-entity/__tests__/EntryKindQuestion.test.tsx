@@ -5,8 +5,9 @@
  * they have on that background. The accent fill is a colour a brand can set to
  * anything, so neither card is drawn on it, chosen or hovered.
  *
- * The contrast itself is measured in the browser, in both colour schemes, by
- * the create dialog's end-to-end accessibility test; jsdom paints nothing.
+ * jsdom paints nothing, so this holds only which classes draw the cards. The
+ * contrast itself is measured in the browser, in both colour schemes, by
+ * `e2e/tests/schema-builder-new-entity-dialog.spec.ts`.
  */
 import { screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
