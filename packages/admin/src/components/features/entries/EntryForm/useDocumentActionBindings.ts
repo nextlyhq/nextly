@@ -363,6 +363,12 @@ export interface DocumentActionBindings {
    * `saveState` stops saying while a store runs or after one failed.
    */
   dirty: boolean;
+  /**
+   * What a failed write the document depends on (a site-wide Design change)
+   * says, or null: what a surface naming each action's failure on its own
+   * control reads while `saveState` still reports a failed Publish.
+   */
+  writeFailure: string | null;
   /** Where the document is in its life, for a surface that says so itself. */
   lifecycle: DocumentLifecycle;
   /**
@@ -821,6 +827,10 @@ export function useDocumentActionBindings({
     storingAction: gate.storingAction,
     failedAction: failedActionOf(saveState, gate.lastStore, keep.refusal),
     dirty: isDirty,
+    writeFailure:
+      gate.trackedFailure === null
+        ? null
+        : trackedFailureMessage(gate.trackedFailure),
     lifecycle: {
       hasStatus,
       draftsEnabled,
@@ -1384,7 +1394,7 @@ function deriveSaveState({
     // that made it can do. The message says where.
     return {
       kind: "failed",
-      message: `${trackedFailure.label} wasn't saved: ${trackedFailure.message} Make that change again where you made it, and this page can then be saved.`,
+      message: trackedFailureMessage(trackedFailure),
     };
   }
   if (isDirty) return { kind: "unsaved" };
@@ -1392,6 +1402,14 @@ function deriveSaveState({
     kind: "saved",
     at: lastStore.kind === "stored" ? lastStore.at : null,
   };
+}
+
+/** What a failed write the document depends on says, naming the change. */
+function trackedFailureMessage(failure: {
+  label: string;
+  message: string;
+}): string {
+  return `${failure.label} wasn't saved: ${failure.message} Make that change again where you made it, and this page can then be saved.`;
 }
 
 /** A built-in action's performer, as `builtInPerformers` returns each. */

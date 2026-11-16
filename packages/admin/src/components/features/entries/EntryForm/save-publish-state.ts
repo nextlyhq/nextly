@@ -36,6 +36,11 @@ export interface SaveButtonInput {
   /** Whether a tracked write the document depends on is on its way. */
   writesPending: boolean;
   /**
+   * What a failed write the document depends on says, or null. Read where
+   * the reported failure is a Publish's, which would otherwise hide it.
+   */
+  writeFailure: string | null;
+  /**
    * Whether changes from the author's last visit wait to be saved, kept by
    * Save while the document is otherwise untouched.
    */
@@ -87,16 +92,16 @@ function savedTooltip(savedAt: Date | null): string {
  */
 export function saveButtonView(input: SaveButtonInput): SaveButtonView {
   const { saveState } = input;
-  const publishing = input.storingAction === "publish";
-  if (saveState.kind === "saving" && (!publishing || input.writesPending)) {
+  if (saveState.kind === "saving" && savingTheWork(input)) {
     return { kind: "saving", label: "Saving…" };
   }
-  if (saveState.kind === "failed" && input.failedAction !== "publish") {
+  const reason = failedSave(input);
+  if (reason !== null) {
     return {
       kind: "retry",
       label: "Retry save",
-      tooltip: `Not saved: ${saveState.message}`,
-      reason: saveState.message,
+      tooltip: `Not saved: ${reason}`,
+      reason,
     };
   }
   if (input.pendingRecovery && !input.dirty) {
@@ -110,6 +115,28 @@ export function saveButtonView(input: SaveButtonInput): SaveButtonView {
     label: "Saved",
     tooltip: savedTooltip(input.savedAt),
   };
+}
+
+/**
+ * Whether what is under way stores the work: a Save, a write the page
+ * depends on, or a Save keeping changes from the last visit while it checks
+ * them. Not a Publish (Publish says so), and not a write of the status alone
+ * such as Unpublish, which stores none of the work.
+ */
+function savingTheWork(input: SaveButtonInput): boolean {
+  if (input.writesPending || input.storingAction === "save") return true;
+  return input.storingAction === null && input.pendingRecovery;
+}
+
+/**
+ * Why the last save failed, or null: the save state's own failure, or,
+ * where that is a failed Publish's, a failed write the page depends on.
+ */
+function failedSave(input: SaveButtonInput): string | null {
+  const { saveState } = input;
+  if (saveState.kind !== "failed") return null;
+  if (input.failedAction !== "publish") return saveState.message;
+  return input.writeFailure;
 }
 
 /** A publication set for later: when the soonest one goes live. */
@@ -152,11 +179,15 @@ function momentText(at: Date): string {
 }
 
 /**
- * Whether the Publish button is drawn: a collection with a lifecycle that
- * keeps drafts, for a person who may publish. Elsewhere Save leads alone.
+ * Whether the Publish button is drawn: a collection with a lifecycle, for a
+ * person who may publish, where publishing is its own act: always where the
+ * collection keeps drafts, and on a page not yet live where it doesn't (its
+ * Save there would never put it live). Elsewhere Save leads alone: on a live
+ * page of a collection without drafts, saving is publishing.
  */
 export function publishShown(lifecycle: DocumentLifecycle): boolean {
-  return lifecycle.hasStatus && lifecycle.draftsEnabled && lifecycle.canPublish;
+  if (!lifecycle.hasStatus || !lifecycle.canPublish) return false;
+  return lifecycle.draftsEnabled || lifecycle.status === "draft";
 }
 
 /**

@@ -188,6 +188,7 @@ function HostedSaveAndPublish({
     failedAction: hosted.failedAction,
     dirty: hosted.dirty,
     writesPending: hosted.writesPending,
+    writeFailure: hosted.writeFailure,
     pendingRecovery: hosted.keepsOffer,
     savedAt:
       (saveState.kind === "saved" ? saveState.at : null) ??
@@ -210,7 +211,10 @@ function HostedSaveAndPublish({
   const canSave =
     hosted.bindings.save !== undefined &&
     hosted.actions.some(action => action.id === "save");
-  const held = saveHeld(hosted);
+  // Held while Publish stores the work, which it says itself.
+  const held =
+    hosted.storingAction === "publish" ? PUBLISHING_REASON : saveHeld(hosted);
+  const publishHeld = publishReason(hosted);
 
   const runSave = () => {
     void (saveState.kind === "failed" && saveState.retry !== undefined
@@ -243,7 +247,7 @@ function HostedSaveAndPublish({
   const hasRows = options.length + danger.length > 0;
   const saveLeads = !withPublish;
   const saveArrow =
-    saveLeads && hasRows ? (
+    canSave && saveLeads && hasRows ? (
       <ActionOptionsMenu
         options={options}
         dangerOptions={danger}
@@ -304,13 +308,19 @@ function HostedSaveAndPublish({
         </div>
         {publish === null ? null : (
           <div className="flex items-center" data-publish-split="">
-            <WithTooltip tooltip={tooltipOf(publish)}>
+            <WithTooltip
+              tooltip={
+                publishActs(publish) && publishHeld !== undefined
+                  ? publishHeld
+                  : tooltipOf(publish)
+              }
+            >
               <PublishButton
                 view={publish}
                 onPress={() => {
                   void hosted.publishLatest?.();
                 }}
-                reason={publishReason(hosted)}
+                reason={publishHeld}
                 joined={hasRows}
               />
             </WithTooltip>
@@ -320,6 +330,9 @@ function HostedSaveAndPublish({
                 dangerOptions={danger}
                 optionsLabel={PUBLISH_OPTIONS_LABEL}
                 menuClassName={COMPACT_MENU_CLASS}
+                triggerClassName={
+                  publishQuiet(publish) ? ARROW_QUIET : undefined
+                }
               />
             ) : null}
           </div>
@@ -387,6 +400,23 @@ function saveHeld(hosted: DocumentActionBindings): string | undefined {
 
 /** The reason the model holds a store with while another runs. */
 const SAVING_REASON = "Saving…";
+
+/** Why Save is held while Publish stores the work. */
+const PUBLISHING_REASON = "Publishing…";
+
+/** Whether Publish's state is one a press acts on. */
+function publishActs(view: PublishButtonView): boolean {
+  return view.kind === "publish" || view.kind === "publish-changes";
+}
+
+/**
+ * Whether Publish's state is quiet: the live page matches, or a publication
+ * is set for later. Drawn without its fill, as "✓ Saved" is, so a page with
+ * nothing to publish doesn't look like it has.
+ */
+function publishQuiet(view: PublishButtonView): boolean {
+  return view.kind === "published" || view.kind === "scheduled";
+}
 
 /** What the failure the save state reports says, in the pair's notice. */
 function failureOf(hosted: DocumentActionBindings): Failure | null {
@@ -534,13 +564,15 @@ const PublishButton = forwardRef<
   { view, onPress, reason, joined, onClick, ...trigger },
   ref
 ) {
-  const acts = view.kind === "publish" || view.kind === "publish-changes";
+  const acts = publishActs(view);
   const held = acts && reason !== undefined;
+  const quiet = publishQuiet(view);
   return (
     <Button
       ref={ref}
       type="button"
       size="sm"
+      variant={quiet ? "outline" : "default"}
       data-action="publish"
       data-primary="true"
       data-state-kind={view.kind}
@@ -551,6 +583,7 @@ const PublishButton = forwardRef<
       className={cn(
         "gap-1.5",
         INERT,
+        quiet && "text-muted-foreground hover:bg-transparent",
         joined && "rounded-r-none",
         trigger.className
       )}
@@ -587,6 +620,11 @@ function FailureNotice({
   const identity =
     failure === null ? null : `${failure.title}\u0000${failure.reason}`;
   const [dismissed, setDismissed] = useState<string | null>(null);
+  // Over once the failure is: the same failure again is a new one, and its
+  // notice opens again.
+  useEffect(() => {
+    if (identity === null) setDismissed(null);
+  }, [identity]);
   const open = identity !== null && identity !== dismissed;
   return (
     <Popover
@@ -654,6 +692,14 @@ function PairLiveRegions({
 
   const saveKind = save.kind;
   const publishKind = publish?.kind ?? null;
+  // A publish under way, until the live page is read back as matching: the
+  // editor may read the published row a render after the publish settles.
+  const publishing = useRef(false);
+  const failed = failure !== null;
+  useEffect(() => {
+    if (publishKind === "publishing") publishing.current = true;
+    if (failed) publishing.current = false;
+  }, [publishKind, failed]);
   useEffect(() => {
     const last = before.current;
     before.current = { save: saveKind, publish: publishKind };
@@ -662,7 +708,8 @@ function PairLiveRegions({
       if (saveKind === "offered") say(LAST_VISIT_NOTICE);
       return;
     }
-    if (publishKind === "published" && last.publish === "publishing") {
+    if (publishKind === "published" && publishing.current) {
+      publishing.current = false;
       say("Published");
     } else if (saveKind === "saved" && last.save !== "saved") {
       say("Saved");

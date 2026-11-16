@@ -26,6 +26,7 @@ function saveInput(over: Partial<SaveButtonInput> = {}): SaveButtonInput {
     failedAction: null,
     dirty: false,
     writesPending: false,
+    writeFailure: null,
     pendingRecovery: false,
     savedAt,
     ...over,
@@ -93,6 +94,32 @@ describe("the Save button, first match wins", () => {
     });
   });
 
+  it("does not read Saving… for a write of the status alone, such as Unpublish", () => {
+    expect(
+      saveButtonView(saveInput({ saveState: { kind: "saving" } })).kind
+    ).toBe("saved");
+    expect(
+      saveButtonView(
+        saveInput({ saveState: { kind: "saving" }, pendingRecovery: true })
+      ).kind
+    ).toBe("saving");
+  });
+
+  it("2. reads Retry save for a failed Design write that followed a failed publish", () => {
+    expect(
+      saveButtonView(
+        saveInput({
+          saveState: { kind: "failed", message: "Offline." },
+          failedAction: "publish",
+          writeFailure: "Site colours wasn't saved: offline.",
+        })
+      )
+    ).toMatchObject({
+      kind: "retry",
+      reason: "Site colours wasn't saved: offline.",
+    });
+  });
+
   it("2. reads Retry save after a failed Design write too", () => {
     expect(
       saveButtonView(
@@ -154,9 +181,9 @@ describe("the Save button, first match wins", () => {
   });
 
   it("5. says the work is saved without an age where none is known", () => {
-    expect(saveButtonView(saveInput({ savedAt: null })).tooltip).toBe(
-      "Your changes are saved"
-    );
+    expect(saveButtonView(saveInput({ savedAt: null }))).toMatchObject({
+      tooltip: "Your changes are saved",
+    });
   });
 });
 
@@ -297,7 +324,12 @@ describe("the Publish button, first match wins", () => {
   it("is shown only where the collection keeps drafts and the person may publish", () => {
     expect(publishShown(life())).toBe(true);
     expect(publishShown(life({ canPublish: false }))).toBe(false);
+    // Without drafts, saving a live page publishes it, so Save leads alone;
+    // a page not yet live keeps its way to go live.
     expect(publishShown(life({ draftsEnabled: false }))).toBe(false);
+    expect(publishShown(life({ draftsEnabled: false, status: "draft" }))).toBe(
+      true
+    );
     expect(publishShown(life({ hasStatus: false }))).toBe(false);
   });
 });

@@ -9,7 +9,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement, ReactNode } from "react";
+import { useEffect, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act, createTestQueryClient } from "@admin/__tests__/utils";
@@ -30,6 +30,7 @@ import {
   useRecoveryOfferHost,
   type HostedRecoveryOffer,
 } from "../RecoveryOfferContext";
+import { useTrackedWrite } from "../useDocumentActionHooks";
 import type {
   DocumentActionBindingsInput,
   PendingRecovery,
@@ -267,6 +268,105 @@ describe("what holds them", () => {
   });
 });
 
+describe("what the model says along the way", () => {
+  function Writes({ write }: { write: Promise<unknown> }): null {
+    const track = useTrackedWrite();
+    useEffect(() => {
+      track("Site colours", write);
+    }, [track, write]);
+    return null;
+  }
+
+  it("a Design write on its way keeps Save at Saving…, and Publish waits for it", async () => {
+    let land: () => void = () => undefined;
+    const write = new Promise<void>(resolve => {
+      land = resolve;
+    });
+    const onPublish = vi.fn(async () => ok);
+    render(
+      <Providers>
+        <DocumentActionsHost
+          input={input({
+            entry: { ...livePage, _isWorkingDraft: true },
+            onPublish,
+          })}
+        >
+          <Writes write={write} />
+          <DocumentSaveAndPublish />
+        </DocumentActionsHost>
+      </Providers>
+    );
+    await waitFor(() => expect(saveButton()?.textContent).toBe("Saving…"));
+    await userEvent.click(publishButton() as HTMLButtonElement);
+    await waitFor(() =>
+      expect(publishButton()?.textContent).toBe("Publishing…")
+    );
+    expect(saveButton()?.textContent).toBe("Saving…");
+    expect(onPublish).not.toHaveBeenCalled();
+    await act(async () => {
+      land();
+    });
+    await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(1));
+  });
+
+  it("says Published politely once a publish lands", async () => {
+    const onPublish = vi.fn(async () => ok);
+    const { redraw } = drawn({
+      entry: { ...livePage, _isWorkingDraft: true },
+      onPublish,
+    });
+    await userEvent.click(publishButton() as HTMLButtonElement);
+    await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(1));
+    // The editor reads the published row back.
+    redraw({ entry: livePage, onPublish });
+    await waitFor(() => expect(politely().textContent).toBe("Published"));
+  });
+
+  it("an Unpublish under way doesn't read Saving… on Save", () => {
+    drawn({ isSubmitting: true });
+    expect(saveButton()?.textContent).toBe("Saved");
+  });
+
+  it("draws Published and Scheduled quiet, without Publish's fill", () => {
+    drawn();
+    expect(publishButton()?.className).toContain("text-muted-foreground");
+  });
+
+  it("says why a held Publish waits, in its tooltip", async () => {
+    drawn({ isDirty: true, documentLocked: true });
+    await userEvent.tab();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(publishButton());
+    expect(
+      (await screen.findAllByText("This document is being edited elsewhere"))
+        .length
+    ).toBeGreaterThan(0);
+  });
+
+  it("a draft page of a collection without drafts keeps Publish", () => {
+    drawn({ draftsEnabled: false, entry: draftPage });
+    expect(publishButton()?.textContent).toBe("Publish");
+  });
+
+  it("opens the notice again when the same failure comes back after Retry", async () => {
+    const onSaveWorkingDraft = vi.fn(async () => ({
+      ok: false as const,
+      reason: "failed" as const,
+      message: "Offline.",
+    }));
+    drawn({ isDirty: true, onSaveWorkingDraft });
+    await userEvent.click(saveButton() as HTMLButtonElement);
+    const notice = await screen.findByTestId("document-save-publish-notice");
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Retry" })
+    );
+    await waitFor(() => expect(onSaveWorkingDraft).toHaveBeenCalledTimes(2));
+    expect(
+      await screen.findByTestId("document-save-publish-notice")
+    ).toBeTruthy();
+  });
+});
+
 describe("Save alone, where Publish isn't offered", () => {
   it("leads alone where the person may not publish", () => {
     can.mockImplementation(permission => !permission.startsWith("publish-"));
@@ -321,7 +421,9 @@ describe("the quiet states, by keyboard", () => {
     expect(politely().getAttribute("aria-live")).toBe("polite");
   });
 
-  it("⌘S with work to save saves it, and says nothing about nothing", async () => {
+  it("⌘S with work to save leaves it to the document's own Save shortcut, saying nothing about nothing", async () => {
+    // The editor's Save shortcut (DocumentSaveShortcuts) saves it; that one
+    // is drawn by the editor, not here.
     const onSaveWorkingDraft = vi.fn(async () => ok);
     drawn({ isDirty: true, onSaveWorkingDraft });
     act(() => {
