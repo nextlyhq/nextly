@@ -81,6 +81,14 @@ const nextConfig: NextConfig = {
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  // Source maps for the browser's chunks, written only when a build is made
+  // for the admin bundle report (`NEXTLY_BROWSER_SOURCE_MAPS=1`): the report
+  // names the modules each chunk holds through them. Off otherwise, since
+  // they add to the build's time and size.
+  ...(process.env.NEXTLY_BROWSER_SOURCE_MAPS === "1"
+    ? { productionBrowserSourceMaps: true }
+    : {}),
+
   // The browser suite's own server turns Next.js's development indicator off.
   // In development the indicator's button is injected into every document the
   // app serves, the canvas's frame included, so a keyboard walk through the

@@ -602,9 +602,13 @@ function buildSingleRoute<TNode>(
       // and show the wrong document.
       overrideAccess: trusted || draft,
       // Widened only for a granted draft, so a Single that has never been
-      // published resolves at all. Left alone otherwise: widening it for every
-      // read would serve unpublished content to ordinary visitors.
-      ...(draft ? { draft: true, status: "all" as const } : {}),
+      // published resolves at all. Bounded to published otherwise, said
+      // rather than left to the posture: a trusted read that names no status
+      // is unbounded, and would serve unpublished content, and a language's
+      // draft values, to ordinary visitors.
+      ...(draft
+        ? { draft: true, status: "all" as const }
+        : { status: "published" as const }),
       // The document stays trusted so the working draft appears at all; the
       // FIELDS are judged as the person who granted it. Named beside `user`
       // rather than folded into it, because that identity is a redaction basis
