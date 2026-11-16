@@ -126,11 +126,8 @@ import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
-import {
-  useBlockActionsContext,
-  useDepthMoveActions,
-} from "./keyboard-actions";
-import { useSelectionActions } from "./selection-actions";
+import { useBlockActionsContext, type BlockActions } from "./keyboard-actions";
+import { useSelectionVerbs } from "./selection-actions";
 
 /**
  * The wrapper's style, hoisted so it is one object rather than one per render.
@@ -175,39 +172,6 @@ export function BlockContextMenu({
   // verbs to offer.
   const { selectedId } = editor;
   const selectedIds = editor.selection.ids;
-
-  // The same question the bar asks, asked once. Both surfaces need the whole
-  // selection judged by the host's own rules, and asking it in two places is
-  // how one of them came to ask something narrower.
-  const actions = useSelectionActions(editor);
-  const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
-
-  /*
-   * Move in and Move out, after Move down: the menu's way to every move a
-   * Layers drag makes, for an author who does not drag. Run through the same
-   * verb as Alt+ArrowRight and Alt+ArrowLeft, which judges the move by the
-   * placement rule and the locks and says why when it refuses.
-   */
-  // Judged by the provider with the position function the move verb runs,
-  // component definitions included, so an item is offered exactly when
-  // pressing it would move.
-  const depth = useDepthMoveActions();
-  const entries = React.useMemo(
-    () =>
-      actions.flatMap(action => {
-        const own = { ...action, run: run[action.id] };
-        return action.id !== "move-down"
-          ? [own]
-          : [
-              own,
-              ...depth.map(move => ({
-                ...move,
-                run: () => verbs.move(move.direction),
-              })),
-            ];
-      }),
-    [actions, run, verbs, depth]
-  );
 
   const select = editor.select;
   /*
@@ -295,37 +259,87 @@ export function BlockContextMenu({
       */}
       {selectedId === null ? null : (
         <ContextMenuContent aria-label="Block actions">
-          {entries.map((action, index) => (
-            <React.Fragment key={action.id}>
-              {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
-                <ContextMenuSeparator />
-              ) : null}
-              <ContextMenuItem
-                disabled={!action.enabled}
-                // Stacked once there is a reason, so the explanation sits under
-                // the verb rather than running on from it.
-                className={
-                  action.reason === undefined
-                    ? undefined
-                    : "flex-col items-start gap-0.5"
-                }
-                onSelect={() => {
-                  action.run();
-                }}
-              >
-                <span>{action.label}</span>
-                {action.reason === undefined ? null : (
-                  // Part of the item's own content, so it is both on screen and
-                  // in the name the item is announced by. Nothing here stays
-                  // hoverable or focusable once disabled, so an explanation
-                  // carried outside the content would reach nobody.
-                  <span className="text-xs opacity-80">{action.reason}</span>
-                )}
-              </ContextMenuItem>
-            </React.Fragment>
-          ))}
+          <BlockMenuItems editor={editor} verbs={verbs} />
         </ContextMenuContent>
       )}
     </ContextMenu>
+  );
+}
+
+/**
+ * The menu's items, drawn only while it is open: so the locks are asked about
+ * its verbs when it opens, and never merely because a block was selected.
+ */
+function BlockMenuItems({
+  editor,
+  verbs,
+}: {
+  editor: EditorState;
+  verbs: BlockActions;
+}): React.JSX.Element {
+  // The same question the bar asks, asked once, with the locks asked too:
+  // the author is about to choose between these, so each is dimmed with the
+  // lock's reason where a lock refuses it.
+  const { actions, depthMoves } = useSelectionVerbs(editor, true);
+  const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
+
+  /*
+   * Move in and Move out, after Move down: the menu's way to every move a
+   * Layers drag makes, for an author who does not drag. Run through the same
+   * verb as Alt+ArrowRight and Alt+ArrowLeft, which judges the move by the
+   * placement rule and the locks and says why when it refuses. Judged by the
+   * provider with the position function the move verb runs, component
+   * definitions included, so an item is offered exactly when pressing it
+   * would move.
+   */
+  const entries = React.useMemo(
+    () =>
+      actions.flatMap(action => {
+        const own = { ...action, run: run[action.id] };
+        return action.id !== "move-down"
+          ? [own]
+          : [
+              own,
+              ...depthMoves.map(move => ({
+                ...move,
+                run: () => verbs.move(move.direction),
+              })),
+            ];
+      }),
+    [actions, run, verbs, depthMoves]
+  );
+
+  return (
+    <>
+      {entries.map((action, index) => (
+        <React.Fragment key={action.id}>
+          {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
+            <ContextMenuSeparator />
+          ) : null}
+          <ContextMenuItem
+            disabled={!action.enabled}
+            // Stacked once there is a reason, so the explanation sits under
+            // the verb rather than running on from it.
+            className={
+              action.reason === undefined
+                ? undefined
+                : "flex-col items-start gap-0.5"
+            }
+            onSelect={() => {
+              action.run();
+            }}
+          >
+            <span>{action.label}</span>
+            {action.reason === undefined ? null : (
+              // Part of the item's own content, so it is both on screen and
+              // in the name the item is announced by. Nothing here stays
+              // hoverable or focusable once disabled, so an explanation
+              // carried outside the content would reach nobody.
+              <span className="text-xs opacity-80">{action.reason}</span>
+            )}
+          </ContextMenuItem>
+        </React.Fragment>
+      ))}
+    </>
   );
 }

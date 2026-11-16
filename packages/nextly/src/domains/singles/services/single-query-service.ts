@@ -183,6 +183,7 @@ import {
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { partsCreated } from "../../versions/changed-parts";
 import {
   attachDocumentVersions,
   chainCoversVersion,
@@ -2990,6 +2991,9 @@ export class SingleQueryService extends BaseService {
             // Tagged with the default locale when the snapshot carries seeded
             // translatable defaults; null for a non-localized single (main row only).
             locale: seedLocale,
+            // The shared row the Single begins with, and the language its
+            // seeded translatable defaults went into.
+            changedParts: partsCreated(seedLocale),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
           // Seed the default-locale companion with the localized defaults in the
