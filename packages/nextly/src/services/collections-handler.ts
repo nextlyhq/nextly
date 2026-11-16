@@ -1014,6 +1014,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** Whole-document fallback; see `CollectionEntryService.getEntry`. */
     wholeDocumentFallback?: boolean;
+    /** Attach `_details`; see `CollectionQueryService.getEntry`. */
+    details?: boolean;
   }) {
     return this.entryService.getEntry(params);
   }
