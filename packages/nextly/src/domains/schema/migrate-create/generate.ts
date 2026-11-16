@@ -1145,10 +1145,15 @@ export async function generateMigration(
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
   const inverseOps = withCyclicForeignKeysSplit(
-    restoredNullable(
-      buildInverseOperations(operations, previousSnapshot),
-      fieldJoinsPlans
-    ),
+    restoredNullable(buildInverseOperations(operations, previousSnapshot), [
+      ...fieldJoinsPlans.flatMap(({ plan }) =>
+        plan.spec.columns.map(c => ({
+          table: plan.spec.mainTable,
+          column: c.name,
+        }))
+      ),
+      ...(args.valueMoves ?? []),
+    ]),
     args.dialect,
     desiredSnapshot.tables
   );
@@ -1185,6 +1190,11 @@ export async function generateMigration(
     downSqlStatements.unshift(...added.down.first);
     downSqlStatements.push(...added.down.last);
   }
+  // A column whose field moved into a group comes back nullable on the way down, its values
+  // copied back from the group last: it is made required again once they are in.
+  downSqlStatements.push(
+    ...movedBackRequired(args.valueMoves ?? [], args.dialect, previousSnapshot)
+  );
 
   // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
   //     which the diff above does not reach: its guards lead the file, before any DDL, and its
@@ -2931,7 +2941,7 @@ function planFieldsJoiningTranslation(
               ?.companion === true,
           restoreRequired: requiredAgain(
             c.tableName,
-            joining,
+            joining.map(({ column }) => column.name),
             prevMain,
             dialect,
             previousSnapshot
@@ -2950,13 +2960,13 @@ function planFieldsJoiningTranslation(
  */
 function requiredAgain(
   tableName: string,
-  joining: readonly LeavingField[],
+  columns: readonly string[],
   prevMain: TableSpec | undefined,
   dialect: SupportedDialect,
   previousSnapshot: NextlySchemaSnapshot
 ): string[] {
-  const ops: Operation[] = joining.flatMap(({ column }) => {
-    const before = prevMain?.columns.find(c => c.name === column.name);
+  const ops: Operation[] = columns.flatMap(name => {
+    const before = prevMain?.columns.find(c => c.name === name);
     if (!before || before.nullable) return [];
     return [
       dialect === "mysql"
@@ -2991,26 +3001,47 @@ function requiredAgain(
 }
 
 /**
- * The main migration's DOWN with each joining field's column re-added nullable: on the way down
- * it runs before the `joins` file's DOWN copies the default language's values back, so a
- * required column added there would refuse every existing row. The `joins` DOWN makes it
- * required again once the values are in (`requiredAgain`).
+ * The main migration's DOWN with each column whose values are copied back after it is re-added
+ * made nullable: a joining field's, which the `joins` file's DOWN fills with the default
+ * language's values, and a field moved into a group, which the file's own DOWN fills from the
+ * group last. Added required, the column would refuse every existing row. Each is made required
+ * again once the values are in (`requiredAgain`).
  */
 function restoredNullable(
   inverse: Operation[],
-  joins: readonly FieldJoinsEntry[]
+  refilled: readonly { table: string; column?: string }[]
 ): Operation[] {
-  const joining = new Set(
-    joins.flatMap(({ plan }) =>
-      plan.spec.columns.map(c => `${plan.spec.mainTable}::${c.name}`)
-    )
-  );
+  const keys = new Set(refilled.map(r => `${r.table}::${r.column ?? ""}`));
   return inverse.map(op =>
     op.type === "add_column" &&
-    joining.has(`${op.tableName}::${op.column.name}`) &&
+    keys.has(`${op.tableName}::${op.column.name}`) &&
     !op.column.nullable
       ? { ...op, column: { ...op.column, nullable: true } }
       : op
+  );
+}
+
+/**
+ * The DOWN's statements making each column a move into a group dropped required again, as the
+ * previous snapshot had it, once its values are copied back from the group (`requiredAgain`).
+ */
+function movedBackRequired(
+  moves: readonly { table: string; column: string }[],
+  dialect: SupportedDialect,
+  previousSnapshot: NextlySchemaSnapshot
+): string[] {
+  const byTable = new Map<string, string[]>();
+  for (const { table, column } of moves) {
+    byTable.set(table, [...(byTable.get(table) ?? []), column]);
+  }
+  return [...byTable].flatMap(([table, columns]) =>
+    requiredAgain(
+      table,
+      columns,
+      previousSnapshot.tables.find(t => t.name === table),
+      dialect,
+      previousSnapshot
+    )
   );
 }
 

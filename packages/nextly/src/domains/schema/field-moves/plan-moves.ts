@@ -20,6 +20,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   classifyFieldKind,
+  fieldProducesColumn,
   fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
@@ -57,10 +58,11 @@ function refused(request: FieldMoveRequest, message: string): NextlyError {
   });
 }
 
-/** The columns a field list keeps on its row. */
+/** The columns a field list keeps on its row: a field that makes none (a virtual group) has none. */
 function rowColumns(fields: readonly FieldDefinition[]): Set<string> {
   return new Set(
     fieldsStoredOnRow(fields)
+      .filter(field => fieldProducesColumn(field))
       .map(field => (field as { name?: unknown }).name)
       .filter((name): name is string => typeof name === "string")
       .map(toSnakeCase)

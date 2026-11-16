@@ -24,6 +24,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { migrateCore } from "../../../../cli/commands/migrate";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+} from "../../../../cli/commands/migrate-down";
 import { createLogger } from "../../../../cli/utils/logger";
 import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import {
@@ -41,6 +45,9 @@ import {
   NO_CONSENT,
   resolveDataLossConsent,
 } from "../../migrate/data-loss-consent";
+import { marksNoTransaction } from "../../migrate/split-sql";
+import { parseSqlSections } from "../../migrate/sql-sections";
+import { withMigrateLock } from "../../pipeline/locks";
 
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
@@ -243,6 +250,38 @@ async function migrateFolder(
   clearRegistryRowCache();
 }
 
+/** `nextly migrate:down` of the newest migration on `t`'s database, reading the files the saves wrote. */
+async function migrateDown(t: TestNextly): Promise<void> {
+  const adapter = t.adapter as unknown as DrizzleAdapter;
+  const migrationsDir = join(basePath, "migrations");
+  await migrateDownCore({
+    ...(await downDatabaseDeps({
+      adapter,
+      dialect: adapter.getCapabilities().dialect,
+      migrationsDir,
+    })),
+    nodeEnv: "test",
+    logger: createLogger({ quiet: true }),
+    options: {
+      step: 1,
+      consent: resolveDataLossConsent({ flag: true, env: {} }),
+      yes: true,
+      dryRun: false,
+    },
+    fileExists: () => Promise.resolve(true),
+    readDownSql: async filename => {
+      const name = filename.endsWith(".sql") ? filename : `${filename}.sql`;
+      const content = await readFile(join(migrationsDir, name), "utf-8");
+      return {
+        sql: parseSqlSections(content).downSql,
+        transaction: !marksNoTransaction(content),
+      };
+    },
+    withLock: withMigrateLock,
+  } as Parameters<typeof migrateDownCore>[0]);
+  clearRegistryRowCache();
+}
+
 describe.each(getConfiguredTestDialects())(
   "a field moved into or out of a group keeps every value (%s)",
   dialect => {
@@ -337,6 +376,45 @@ describe.each(getConfiguredTestDialects())(
 
       await save(t, OUTSIDE, OUT);
       await expectEachOutOfTheGroup(t, before);
+    });
+
+    it("undoes a required field's move with nextly migrate:down, its column required again with every value", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text", required: true };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      for (const [title, text] of [
+        ["One", "First"],
+        ["Two", "Second"],
+      ] as const) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title, slug: title.toLowerCase(), summary: text },
+        });
+      }
+      const required = async () =>
+        (
+          await readTableDefinition(
+            statement => run(t, statement),
+            dialect,
+            TABLE
+          )
+        ).columns.find(column => column.name === "summary")?.nullable;
+      expect(await required()).toBe(false);
+      await save(
+        t,
+        [group("meta", [NOTE, summary])],
+        [{ from: ["summary"], to: ["meta", "summary"] }]
+      );
+
+      // The column comes back nullable, takes its values from the group, then is required again.
+      await migrateDown(t);
+
+      const rows = await run<{ summary: string }>(
+        t,
+        `SELECT ${q("summary")} AS summary FROM ${q(TABLE)} ORDER BY ${q("slug")}`
+      );
+      expect(rows.map(row => row.summary)).toEqual(["First", "Second"]);
+      expect(await required()).toBe(false);
     });
 
     it("from one group to another, whose columns both stand, in a file of its own", async () => {

@@ -100,9 +100,9 @@ export function placeOf(
   let level = fields;
   const containers: FieldDefinition[] = [];
   for (const [at, segment] of path.entries()) {
-    const found = (addressableFields(level) as unknown as FieldDefinition[]).find(
-      field => nameOf(field) === segment
-    );
+    const found = (
+      addressableFields(level) as unknown as FieldDefinition[]
+    ).find(field => nameOf(field) === segment);
     if (!found) return null;
     if (at === path.length - 1) {
       const [outermost, ...inner] = [...containers, found];
@@ -110,7 +110,11 @@ export function placeOf(
       const place: StoragePlace =
         containers.length === 0
           ? { kind: "column", column }
-          : { kind: "json", column, keys: [...inner].map(each => nameOf(each) ?? "") };
+          : {
+              kind: "json",
+              column,
+              keys: [...inner].map(each => nameOf(each) ?? ""),
+            };
       return { field: found, containers, place };
     }
     containers.push(found);
@@ -216,10 +220,7 @@ export function checkMove(
 
 /** The refusal of a field whose storage changes with the move, or that has no column to move. */
 function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
-  if (
-    from.field.type !== to.field.type ||
-    !sameStorage(from.field, to.field)
-  ) {
+  if (from.field.type !== to.field.type || !sameStorage(from.field, to.field)) {
     return refuse(
       "type-changed",
       `${label(to.field)} is moved and changes type, or how its values are stored, in the same save. Move it and make that change in separate saves.`
@@ -283,6 +284,18 @@ function valuesRefusal(
     return refuse(
       "unique",
       `${label(to.field)} cannot be moved into the group ${label(to.containers[0])}: a group keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own.`
+    );
+  }
+  // Out of a group into a unique column: the column's uniqueness stands before the copy brings
+  // the values that would have to meet it, so the field is moved first and made unique after.
+  if (
+    from.place.kind === "json" &&
+    to.place.kind === "column" &&
+    builderColumnIsUnique(to.field)
+  ) {
+    return refuse(
+      "unique",
+      `${label(to.field)} cannot be moved out of the group ${label(from.containers[0])} as a unique field: its values arrive after the uniqueness is set. Move it first, then make it unique as a change of its own.`
     );
   }
   const perLanguage = keptPerLanguage(from, entity);
