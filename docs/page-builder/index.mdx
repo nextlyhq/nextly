@@ -538,7 +538,9 @@ A preview link opens on the page's own address and shows the draft of the one en
 names. Opening the link turns on Next.js's draft mode, and only a request in draft mode
 asks `previewDraftGate()`. Next.js renders those requests on demand and never caches
 them, so every other visitor keeps getting the published page from the cache. The route
-reads the database during `next build`.
+reads the database during `next build`, so run `nextly plugins install` before the first
+build: against a database without the plugin's tables, the build stops and names the
+command.
 
 A page is served as `createBlocksPage` serves it. An entry is drawn with its
 collection's published template, reading the entry as a visitor would, and takes
