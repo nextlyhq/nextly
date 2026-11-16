@@ -109,10 +109,11 @@ describe("the content-width rule", () => {
     );
     expect(css).toContain(".nx-pb-page :where(*){--nx-contain-inset:0px}");
     expect(css).toContain(
-      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2);padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset))}"
+      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2);padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset));margin-inline:auto}"
     );
+    // The box is never narrowed. Its auto margin is 0 while it fills the box
+    // it is laid out in, and centres it only when an author sized it.
     expect(css).not.toContain("max-width");
-    expect(css).not.toContain("margin-inline");
   });
 
   it("sets the inset on a contained element after the reset that zeroes it", () => {

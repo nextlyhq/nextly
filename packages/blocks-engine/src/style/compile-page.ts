@@ -1374,10 +1374,23 @@ function takesContainInset(value: string): boolean {
  * other way to combine two values of one property, so the combination is
  * written into each value that might replace the containment's own.
  *
+ * **A block sized by its author is not inset.** The inset is worked out from
+ * the width of the box the container is laid out in, since a padding's `100%`
+ * means that box and CSS cannot name an element's own width there. A contained
+ * block whose `width` or `max-width` is set is narrower than that box, so the
+ * same rule that sizes it sets the inset to `0px`: the site sheet's
+ * `margin-inline: auto` then centres it, and its content fills it within the
+ * gutter. In the same rule, so it holds at the breakpoints and states that set
+ * the size and nowhere else. A `width: auto` or `max-width: none` sizes
+ * nothing, so it leaves the inset alone.
+ *
  * Only the emitted rule carries it: the trace records the value as it was set.
  */
-function withContainInset(declarations: readonly Declaration[]): Declaration[] {
-  return declarations.map(declaration =>
+function withContainInset(
+  declarations: readonly Declaration[],
+  onRoot: boolean
+): Declaration[] {
+  const padded = declarations.map(declaration =>
     INLINE_PADDING.has(declaration.property) &&
     takesContainInset(declaration.value)
       ? {
@@ -1386,6 +1399,22 @@ function withContainInset(declarations: readonly Declaration[]): Declaration[] {
         }
       : declaration
   );
+  return onRoot && declarations.some(sizesTheBlock)
+    ? [...padded, { property: CONTAIN_INSET_PROPERTY, value: "0px" }]
+    : padded;
+}
+
+/** The properties that size a block narrower than the box it is laid out in. */
+const BLOCK_SIZE = new Set(["width", "max-width"]);
+
+/** Values of those properties that size nothing. */
+const UNSIZED = new Set(["auto", "none"]);
+
+/** Whether a declaration gives a block a width of its own. */
+function sizesTheBlock(declaration: Declaration): boolean {
+  if (!BLOCK_SIZE.has(declaration.property)) return false;
+  const value = declaration.value.trim().toLowerCase();
+  return !UNSIZED.has(value) && !CSS_WIDE_KEYWORDS.has(value);
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -1521,7 +1550,10 @@ function envelopeRules(
             (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
               : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
-          declarations: withContainInset(rule.declarations),
+          declarations: withContainInset(
+            rule.declarations,
+            rule.descendant === ""
+          ),
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can

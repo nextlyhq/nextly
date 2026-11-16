@@ -2414,6 +2414,38 @@ describe("inline padding and a contained container's inset", () => {
     expect(out).not.toMatch(/padding-inline-start: \d/);
   });
 
+  it("sets no inset on a block its author sized, in the rule that sizes it", () => {
+    // The inset is measured from the box the block is laid out in, so a block
+    // narrower than that box would be padded far past its own content edge.
+    // The rule that gives it a width says its inset is nothing; the site
+    // sheet's auto margin then centres it, as before containment padded in.
+    const RESET = "--nx-contain-inset: 0px";
+    for (const size of [{ width: "600px" }, { maxWidth: "40rem" }]) {
+      const out = css(doc([node("n1", { base: { base: size } })]));
+      expect(out).toContain(RESET);
+    }
+    // A Mobile-only width resets the inset on Mobile and nowhere else.
+    const mobile = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { padding: { blockStart: "1rem" } },
+            mobile: { width: "300px" },
+          },
+        }),
+      ])
+    );
+    expect(mobile.split(RESET)).toHaveLength(2);
+    expect(mobile.indexOf(RESET)).toBeGreaterThan(mobile.indexOf("@media"));
+    expect(mobile.indexOf("@media")).toBeGreaterThan(-1);
+    // A width that sizes nothing leaves the inset alone.
+    for (const size of [{ width: "auto" }, { maxWidth: "none" }]) {
+      expect(css(doc([node("n1", { base: { base: size } })]))).not.toContain(
+        RESET
+      );
+    }
+  });
+
   it("records the value as it was set in the trace, not the wrapped one", () => {
     // The inspector names a value and where it came from. The inset is how
     // containment combines with it, not a value anyone set.

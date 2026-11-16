@@ -319,7 +319,10 @@ function emitContentWidth(
     // After the reset and at its weight, so a contained element takes this.
     // `100%` resolves where the property is used, in the element's own
     // padding, so it is the width of the box the container is laid out in.
-    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2);padding-inline:max(var(${gutter}, 0px), var(${inset}))}`,
+    // `margin-inline: auto` is 0 on a block that fills that box, and centres
+    // one an author sized, whose inset the page compile sets to 0px; an
+    // author's own margin outweighs it.
+    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2);padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
   ].join("\n");
 }
 

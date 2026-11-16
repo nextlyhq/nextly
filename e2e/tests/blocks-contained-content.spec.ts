@@ -106,6 +106,20 @@ const DOCUMENT = {
       [text("25", "Free box")],
       { padding: { inlineStart: "40px" } }
     ),
+    container(
+      "26",
+      "core/box",
+      { as: "div", contained: true },
+      [text("27", "Sized box")],
+      { width: "600px" }
+    ),
+    container(
+      "28",
+      "core/box",
+      { as: "div", contained: true },
+      [text("29", "Sized box at start")],
+      { width: "600px", margin: { inlineStart: "0" } }
+    ),
   ],
 };
 
@@ -285,6 +299,22 @@ test("a contained Box and Card are banded the same way, and a free Box is unchan
   const free = await placed(page, "Free box");
   near(free.band.left, 0);
   near(free.text.left, 40);
+});
+
+test("a contained block its author sized is centred at that size, its content whole", async ({
+  page,
+}) => {
+  const { pageWidth, gutter } = await open(page, WIDE);
+  const sized = await placed(page, "Sized box");
+  near(sized.band.width, 600);
+  near(sized.band.left, (pageWidth - 600) / 2);
+  // No inset inside it: only the gutter, as the least space at each side.
+  near(sized.text.left, sized.band.left + gutter);
+  near(sized.text.width, 600 - 2 * gutter);
+  // An author's own margin outweighs the centring.
+  const atStart = await placed(page, "Sized box at start");
+  near(atStart.band.left, 0);
+  near(atStart.band.width, 600);
 });
 
 test("the inset follows the writing direction", async ({ page }) => {
