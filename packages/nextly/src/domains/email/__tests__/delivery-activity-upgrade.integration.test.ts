@@ -19,6 +19,10 @@ import {
 } from "../../../__tests__/helpers/migrate-core";
 
 const TEMPLATE_INDEX = "email_deliveries_template_idx";
+const QUEUE_INDEXES = {
+  email_queue_created_idx: ["created_at", "id"],
+  email_queue_template_idx: ["template_slug", "created_at"],
+};
 const DELIVERY_ID = "00000000-0000-4000-8000-0000000000d1";
 const QUEUED_ID = "00000000-0000-4000-8000-0000000000q1";
 
@@ -29,6 +33,13 @@ async function removeActivitySchema(fresh: FreshDatabase): Promise<void> {
       ? `DROP INDEX ${TEMPLATE_INDEX} ON email_deliveries`
       : `DROP INDEX ${TEMPLATE_INDEX}`
   );
+  for (const index of Object.keys(QUEUE_INDEXES)) {
+    await fresh.exec(
+      fresh.dialect === "mysql"
+        ? `DROP INDEX ${index} ON email_queue`
+        : `DROP INDEX ${index}`
+    );
+  }
   await fresh.exec(`ALTER TABLE email_queue DROP COLUMN template_slug`);
 }
 
@@ -50,7 +61,7 @@ afterAll(remove);
 describe.each(availableDialects())(
   "the Activity reads' schema on an existing database (%s)",
   dialect => {
-    it("adds the template index and the queued template column in place, keeping the rows", async () => {
+    it("adds the template index, the queued template column and its indexes in place, keeping the rows", async () => {
       await withFreshDatabase(dialect, "nextly_eda_existing", async fresh => {
         await migrateFresh(fresh, NO_MIGRATIONS);
         await removeActivitySchema(fresh);
@@ -71,6 +82,11 @@ describe.each(availableDialects())(
           await fresh.indexColumnsOf("email_deliveries", TEMPLATE_INDEX)
         ).toEqual(["template_slug", "status", "created_at"]);
         expect(await fresh.columnsOf("email_queue")).toContain("template_slug");
+        for (const [index, columns] of Object.entries(QUEUE_INDEXES)) {
+          expect(await fresh.indexColumnsOf("email_queue", index)).toEqual(
+            columns
+          );
+        }
 
         // The rows are untouched, and the older queued email has no
         // template recorded.

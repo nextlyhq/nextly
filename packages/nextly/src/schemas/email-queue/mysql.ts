@@ -37,5 +37,7 @@ export const emailQueueMysql = mysqlTable(
   t => [
     index("email_queue_state_idx").on(t.state, t.settledAt),
     index("email_queue_principal_idx").on(t.principalKind, t.principalId),
+    index("email_queue_created_idx").on(t.createdAt, t.id),
+    index("email_queue_template_idx").on(t.templateSlug, t.createdAt),
   ]
 );

@@ -26,7 +26,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
@@ -126,6 +126,7 @@ interface EmailDeliveryRow {
   attemptCount: number;
   error: string | null;
   messageId: string | null;
+  principalKind: string | null;
   createdAt: Date;
 }
 
@@ -149,6 +150,8 @@ export interface EmailDeliveryRecord {
   attemptCount: number;
   error: string | null;
   messageId: string | null;
+  /** Whether the send named a plugin-defined person as this recipient. */
+  namedPerson: boolean;
   createdAt: Date;
 }
 
@@ -177,6 +180,7 @@ function toDeliveryRecord(row: EmailDeliveryRow): EmailDeliveryRecord {
     attemptCount: row.attemptCount,
     error: row.error,
     messageId: row.messageId,
+    namedPerson: row.principalKind !== null,
     createdAt: row.createdAt,
   };
 }
@@ -187,6 +191,18 @@ export interface ListDeliveriesOptions {
   recipient?: string;
   status?: EmailDeliveryStatus;
   providerId?: string;
+  /** A provider's registered type, whether or not it is still stored. */
+  providerType?: string;
+  templateSlug?: string;
+  /** Recorded at or after. */
+  from?: Date;
+  /** Recorded at or before. */
+  to?: Date;
+  /**
+   * Only records after this one in the listing's order, newest first: the
+   * last record of the page before, by its time and id.
+   */
+  before?: { createdAt: Date; id: string };
   limit?: number;
 }
 
@@ -894,6 +910,29 @@ export class EmailDeliveryService extends BaseService {
         : undefined,
       options.providerId !== undefined
         ? eq(this.deliveries.providerId, options.providerId)
+        : undefined,
+      options.providerType !== undefined
+        ? eq(this.deliveries.providerType, options.providerType)
+        : undefined,
+      options.templateSlug !== undefined
+        ? eq(this.deliveries.templateSlug, options.templateSlug)
+        : undefined,
+      options.from !== undefined
+        ? gte(this.deliveries.createdAt, options.from)
+        : undefined,
+      options.to !== undefined
+        ? lte(this.deliveries.createdAt, options.to)
+        : undefined,
+      // After the cursor in the listing's own order, so a page never repeats
+      // or skips a record that shares its time with the one before.
+      options.before !== undefined
+        ? or(
+            lt(this.deliveries.createdAt, options.before.createdAt),
+            and(
+              eq(this.deliveries.createdAt, options.before.createdAt),
+              lt(this.deliveries.id, options.before.id)
+            )
+          )
         : undefined,
     ].filter(filter => filter !== undefined);
 

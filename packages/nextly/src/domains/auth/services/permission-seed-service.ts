@@ -509,8 +509,7 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     slug: "read-email-deliveries",
     action: "read",
     resource: "email-deliveries",
-    description:
-      "Permission to see the email delivery log and queued email, and to search them by an exact address",
+    description: "Permission to see the email delivery log and queued email",
   },
   {
     name: "Manage Email Deliveries",

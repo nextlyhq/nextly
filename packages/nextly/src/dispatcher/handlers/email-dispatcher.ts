@@ -25,6 +25,7 @@ import {
   respondAction,
   respondData,
   respondDoc,
+  respondList,
   respondMutation,
 } from "../../api/response-shapes";
 import { withErrorHandler } from "../../api/with-error-handler";
@@ -38,6 +39,7 @@ import { EmailDeliveryActivity } from "../../domains/email/delivery-activity";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { sendOutcomeMessage } from "../../domains/email/send-outcome";
+import type { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
 import {
   applyOwnerUpdateSchema,
@@ -692,7 +694,7 @@ const DELIVERY_FILTER_KEYS = [
   "providerType",
   "from",
   "to",
-  "cursor",
+  "before",
   "limit",
 ] as const;
 const QUEUED_FILTER_KEYS = [
@@ -700,7 +702,7 @@ const QUEUED_FILTER_KEYS = [
   "template",
   "from",
   "to",
-  "cursor",
+  "before",
   "limit",
 ] as const;
 
@@ -722,14 +724,18 @@ const EMAIL_DELIVERY_READS: Record<
   string,
   (activity: EmailDeliveryActivity, query: URLSearchParams) => Promise<Response>
 > = {
-  listDeliveries: async (activity, query) =>
-    respondData({
-      ...(await activity.listDeliveries(queryOf(query, DELIVERY_FILTER_KEYS))),
-    }),
-  listQueuedEmails: async (activity, query) =>
-    respondData({
-      ...(await activity.listQueuedEmails(queryOf(query, QUEUED_FILTER_KEYS))),
-    }),
+  listDeliveries: async (activity, query) => {
+    const { items, meta } = await activity.listDeliveries(
+      queryOf(query, DELIVERY_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
+  listQueuedEmails: async (activity, query) => {
+    const { items, meta } = await activity.listQueuedEmails(
+      queryOf(query, QUEUED_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
   // `?slug=a&slug=b` names the templates; none names every template sent.
   lastSentByTemplate: async (activity, query) => {
     const slugs = query.getAll("slug");
@@ -772,7 +778,10 @@ export function handleEmailDeliveryRequest(
       });
     }
     return read(
-      new EmailDeliveryActivity(adapter),
+      new EmailDeliveryActivity(
+        adapter,
+        container.get<EmailDeliveryService>("emailDeliveryService")
+      ),
       new URL(request.url).searchParams
     );
   })(req);
