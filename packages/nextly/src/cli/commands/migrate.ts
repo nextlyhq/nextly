@@ -182,6 +182,11 @@ import {
   previewRequiredColumns,
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
+import {
+  appliedSnapshotsOf,
+  databaseBehindError,
+  missingFromDatabase,
+} from "../../domains/schema/migrate/database-behind-migrations";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
@@ -198,6 +203,7 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
 import {
+  coreTableNames,
   mergeContributions,
   narrowToContributions,
 } from "../../domains/schema/migrate-create/app-stream";
@@ -223,7 +229,10 @@ import {
   createOwnerRegistry,
   ownerRecordKey,
 } from "../../domains/schema/ownership/owner-registry";
-import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
+import {
+  introspectLiveSnapshot,
+  liveColumnNames,
+} from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -747,6 +756,8 @@ export async function runMigrate(
         // refused, never run as written.
         refuseUnrecognisedBuilderFiles: true,
         refuseUnwrittenChanges: refuseUnwritten,
+        // A database that lacks what its applied migrations made is never reported up to date.
+        refuseDatabaseBehind: true,
         knownJunctions: resolvedSchema.knownJunctions,
         declared,
         // What the core upgrade deletes is judged with the files' deletions,
@@ -2592,6 +2603,9 @@ export async function migrateCore(
   // write. Asked once, since what it compares is the configuration and the
   // folder, which no other run changes.
   await deps.refuseUnwrittenChanges?.();
+  // And a database that lacks what its applied migrations made, read-only;
+  // asked again under the lock, below.
+  await refuseDatabaseBehindLedger(deps);
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
   // stands then, accepting only what was agreed here.
@@ -2866,6 +2880,9 @@ export async function migrateCore(
           command: deps.lockCommand ?? "nextly migrate",
         }
       );
+      // The ledger as no other run changes it now: what it says applied is
+      // still in the database, before Phase 1's first write.
+      await refuseDatabaseBehindLedger(deps);
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -3143,6 +3160,54 @@ function firstRunSteps(
  * Each app migration in run order, with whether the ledger records it applied
  * and what its snapshot says of the registry (`snapshotMetadataOf`).
  */
+/**
+ * Refuses, reading only, where the database lacks a table or column the newest
+ * applied app snapshot records (`MigrateCoreDeps.refuseDatabaseBehind`).
+ * Nextly's own tables are left to the core reconcile, which brings them to
+ * this release whatever a snapshot froze of them.
+ */
+async function refuseDatabaseBehindLedger(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (deps.refuseDatabaseBehind !== true) return;
+  const applied = new Set(
+    (
+      await listMigrationFiles(
+        deps.adapter,
+        deps.db,
+        deps.dialect,
+        deps.migrationsDir,
+        deps.logger,
+        deps.declared
+      )
+    )
+      .filter(entry => entry.applied)
+      .map(entry => entry.file.name)
+  );
+  if (applied.size === 0) return;
+  const core = coreTableNames(deps.dialect);
+  const snapshots = (
+    await appliedSnapshotsOf(deps.migrationsDir, sql =>
+      Promise.resolve(applied.has(sql.replace(/\.sql$/, "")))
+    )
+  ).map(({ migration, snapshot }) => ({
+    migration,
+    snapshot: {
+      ...snapshot,
+      tables: snapshot.tables.filter(table => !core.has(table.name)),
+    },
+  }));
+  const newest = snapshots.at(-1);
+  if (newest === undefined || newest.snapshot.tables.length === 0) return;
+  const live = await liveColumnNames(
+    deps.db,
+    deps.dialect,
+    newest.snapshot.tables.map(table => table.name)
+  );
+  const refusal = databaseBehindError(missingFromDatabase(snapshots, live));
+  if (refusal !== undefined) throw refusal;
+}
+
 async function appMigrationStandings(
   deps: MigrateCoreDeps
 ): Promise<AppMigrationStanding[]> {

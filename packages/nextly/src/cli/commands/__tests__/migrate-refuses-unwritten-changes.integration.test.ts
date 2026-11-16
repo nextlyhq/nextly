@@ -54,6 +54,7 @@ vi.mock("../../utils/config-loader", async importOriginal => ({
 
 const SLUG = "uw_posts";
 const TABLE = `dc_${SLUG}`;
+const TAGS = "uw_tags";
 const PLUGIN = "@acme/uw-forms";
 
 let dir: string;
@@ -172,7 +173,7 @@ function errorText(error: unknown): string {
  */
 async function migrate(
   config: unknown,
-  options: { dryRun?: boolean } = {}
+  options: { dryRun?: boolean; acceptDataLoss?: boolean } = {}
 ): Promise<{ code: number | undefined; said: string }> {
   loaded.config = config;
   const { context, said } = command();
@@ -373,6 +374,64 @@ describe.each(getConfiguredTestDialects())(
       await migrateCreate(builderOnly, "create_notes");
       expect((await migrate(builderOnly)).code).toBeUndefined();
       const again = await migrate(builderOnly);
+      expect(again.code, again.said).toBeUndefined();
+      expect(again.said).toContain(UP_TO_DATE);
+    });
+
+    it("a table and a column its applied migrations made, dropped by hand: names both and the migration that made each", async () => {
+      const both = (fields: Field[]) =>
+        defineConfig({
+          collections: [
+            defineCollection({ slug: SLUG, fields }),
+            defineCollection({ slug: TAGS, fields: [text({ name: "label" })] }),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      await migrateCreate(both([TITLE]), "create_posts");
+      await migrateCreate(both([TITLE, BODY]), "add_body");
+      expect((await migrate(both([TITLE, BODY]))).code).toBeUndefined();
+      const db = instance!.adapter as unknown as {
+        executeQuery(sql: string): Promise<unknown>;
+      };
+      const q = dialect === "mysql" ? "`" : '"';
+      await db.executeQuery(`DROP TABLE ${q}dc_${TAGS}${q}`);
+      await db.executeQuery(`ALTER TABLE ${q}${TABLE}${q} DROP COLUMN ${q}body${q}`);
+
+      const run = await migrate(both([TITLE, BODY]));
+
+      expect(run.code).toBe(1);
+      expect(run.said).toMatch(
+        new RegExp(`- table dc_${TAGS} \\(created by \\d+_\\d+_\\d+_create_posts\\)`)
+      );
+      expect(run.said).toMatch(
+        new RegExp(`- column ${TABLE}\\.body \\(created by \\d+_\\d+_\\d+_add_body\\)`)
+      );
+      expect(run.said).toContain("no longer matches its ledger");
+      expect(run.said).not.toContain(UP_TO_DATE);
+      // Nothing was changed: the column stays dropped, nothing re-created it.
+      expect((await columns(instance!, dialect))?.has("body")).toBe(false);
+    });
+
+    it("a table and a column a later migration dropped, with consent, are not missing", async () => {
+      const both = (fields: Field[], tags: boolean) =>
+        defineConfig({
+          collections: [
+            defineCollection({ slug: SLUG, fields }),
+            ...(tags
+              ? [defineCollection({ slug: TAGS, fields: [text({ name: "label" })] })]
+              : []),
+          ],
+          db: { migrationsDir: "./migrations" },
+        });
+      await migrateCreate(both([TITLE, BODY], true), "create_both");
+      expect((await migrate(both([TITLE, BODY], true))).code).toBeUndefined();
+      await migrateCreate(both([TITLE], false), "drop_them", {
+        acceptDataLoss: true,
+      });
+      const dropped = await migrate(both([TITLE], false), { acceptDataLoss: true });
+      expect(dropped.code, dropped.said).toBeUndefined();
+
+      const again = await migrate(both([TITLE], false));
       expect(again.code, again.said).toBeUndefined();
       expect(again.said).toContain(UP_TO_DATE);
     });
