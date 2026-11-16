@@ -179,6 +179,29 @@ describe("checkMove", () => {
     ).toMatchObject({ ok: false, reason: "type-changed" });
   });
 
+  it("refuses a move into or out of a group that stores nothing", () => {
+    const before = [text("title"), group("meta", [], { virtual: true })];
+    const after = [group("meta", [text("title")], { virtual: true })];
+    expect(
+      checkMove(before, after, { from: ["title"], to: ["meta", "title"] })
+    ).toMatchObject({ ok: false, reason: "no-column" });
+    expect(
+      checkMove(after, before, { from: ["meta", "title"], to: ["title"] })
+    ).toMatchObject({ ok: false, reason: "no-column" });
+  });
+
+  it("refuses a move that stays inside repeating rows, whose column holds a list of rows", () => {
+    const rows = (fields: FieldDefinition[]) =>
+      ({ name: "items", label: "Items", type: "repeater", fields }) as unknown as FieldDefinition;
+    expect(
+      checkMove(
+        [rows([text("title"), group("meta", [])])],
+        [rows([group("meta", [text("title")])])],
+        { from: ["items", "title"], to: ["items", "meta", "title"] }
+      )
+    ).toMatchObject({ ok: false, reason: "within-repeater" });
+  });
+
   it("judges a container that kept its name but changed type as one the field leaves", () => {
     const rows = { name: "box", type: "repeater", fields: [text("title")] } as unknown as FieldDefinition;
     const boxGroup = group("box", [group("meta", [text("title")])]);
