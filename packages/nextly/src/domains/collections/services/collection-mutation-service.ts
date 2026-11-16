@@ -100,8 +100,8 @@ import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
-  refuseUndeclaredWriteKeys,
   stripImmutableSystemFields,
+  writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
 import {
@@ -15945,8 +15945,9 @@ export class CollectionMutationService extends BaseService {
       );
       // A key that is no field, system column or write option has nowhere to go but a column of
       // its name: refused here, with access judged and before any hook, rather than left to fail
-      // in the database.
-      refuseUndeclaredWriteKeys(body, "collection", fields);
+      // in the database. The keys a read adds are taken off, so a document sent back as it was
+      // read still saves.
+      body = writableBodyOf(body, "collection", fields);
 
       // A version below the one the entry already held when it was read is
       // certainly out of date, since a counter only goes up: refused here,

@@ -21,6 +21,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 
 /** What a refusal says, read off whatever the call threw. */
 function refusalOf(promise: Promise<unknown>): Promise<{
@@ -62,13 +63,25 @@ describeEachDialect("a save accepts only what it may carry", dialect => {
           localized: true,
           status: true,
           versions: { drafts: true },
-          fields: [text({ name: "title" })],
+          fields: [
+            text({ name: "title" }),
+            // No caller judged by the rules may change it.
+            text({ name: "secretNote", access: { update: () => false } }),
+          ],
         }),
       ],
       collections: [
         defineCollection({
           slug: "posts",
           status: true,
+          fields: [text({ name: "title" })],
+        }),
+        // Translated, with drafts: its editor read carries the read's own keys.
+        defineCollection({
+          slug: "notes",
+          localized: true,
+          status: true,
+          versions: { drafts: true },
           fields: [text({ name: "title" })],
         }),
       ],
@@ -164,6 +177,73 @@ describeEachDialect("a save accepts only what it may carry", dialect => {
       t!.nextly.updateSingle({
         slug: "site",
         data: { ...read, title: "Hello again", _overwrite: true },
+      } as never)
+    );
+
+    expect(saved.data).toBe("accepted");
+  });
+
+  // A field is named as it is declared. Its column's spelling is no second name for it: field
+  // rules, validation and hooks look a field up by its name, so a value under the column's name
+  // would pass them by.
+  it("refuses a field sent under its column's name, and stores nothing of it", async () => {
+    await boot();
+    const editor = await userWhoMay(t!, "editor", "update", ["site"]);
+    await grantTo(t!, editor, "read", ["site"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.updateSingle({
+        slug: "site",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: { title: "Hello", secret_note: "set", _overwrite: true },
+      } as never)
+    );
+    const stored = (await t!.nextly.findSingle({ slug: "site" } as never)) as {
+      secretNote?: unknown;
+    };
+
+    expect(refusal.code).toBe("VALIDATION_ERROR");
+    expect(refusal.data).toContain("secret_note");
+    expect(stored.secretNote ?? null).toBe(null);
+  });
+
+  // An editor's read carries keys of its own (the translation overview, whether it shows a pending
+  // change): sent back whole with a change, it still saves.
+  it("accepts an editor's read of a translated entry sent back whole with a change", async () => {
+    await boot();
+    const created = await t!.nextly.create({
+      collection: "notes",
+      locale: "en",
+      data: { title: "Hello", status: "published" },
+    } as never);
+    const id = String((created as { item: { id: unknown } }).item.id);
+    await t!.nextly.update({
+      collection: "notes",
+      id,
+      locale: "en",
+      data: { title: "Hello again", _overwrite: true },
+    } as never);
+    const read = await (
+      t!.getService("collectionsHandler") as CollectionsHandler
+    ).getEntry({
+      collectionName: "notes",
+      entryId: id,
+      locale: "en",
+      translationStatus: true,
+      includeWorkingDraft: true,
+      overrideAccess: true,
+    });
+    const document = read.data as Record<string, unknown>;
+    expect(document._translations).toBeDefined();
+    expect(document._isWorkingDraft).toBe(true);
+
+    const saved = await refusalOf(
+      t!.nextly.update({
+        collection: "notes",
+        id,
+        locale: "en",
+        data: { ...document, title: "Hello once more", _overwrite: true },
       } as never)
     );
 

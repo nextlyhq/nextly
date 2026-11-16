@@ -49,8 +49,8 @@ import { resolveRequestFacts } from "../../../hooks/request-facts";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
-  refuseUndeclaredWriteKeys,
   stripImmutableSystemFields,
+  writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
 import {
@@ -2401,8 +2401,9 @@ export class SingleMutationService extends BaseService {
       );
       // A key that is no field, system column or write option has nowhere to go but a column of
       // its name, on the Single's row or a language's: refused here, with access judged and
-      // before any hook, rather than written or left to fail in the database.
-      refuseUndeclaredWriteKeys(data, "single", singleMeta.fields);
+      // before any hook, rather than written or left to fail in the database. The keys a read
+      // adds are taken off, so a document sent back as it was read still saves.
+      data = writableBodyOf(data, "single", singleMeta.fields);
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The

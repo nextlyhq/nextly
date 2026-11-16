@@ -24,6 +24,7 @@
  */
 
 import { isVirtualField } from "../collections/fields/virtual";
+import { TRANSLATION_OVERVIEW_KEY } from "../domains/i18n/companion-join";
 import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../errors";
 import { addressableFields } from "../shared/addressable-fields";
@@ -275,14 +276,25 @@ function keptInOwnTable(
 }
 
 /**
+ * The keys a read adds to a document of its own (the translation overview, whether the document
+ * shown is a pending change, whether the shared part holds one). A client sending back what it
+ * read sends them too; a write accepts them and stores none.
+ */
+const READ_RESPONSE_KEYS: ReadonlySet<string> = new Set([
+  TRANSLATION_OVERVIEW_KEY,
+  "_isWorkingDraft",
+  "_sharedChangesPending",
+]);
+
+/**
  * The keys of a write's body that name nothing a write of that entity may carry: no declared
- * field (by its name or its column's), no system column of the entity, and none of the keys that
- * say how to write (`_rev`, `_overwrite`, `_restoredFrom`).
+ * field under its declared name, no system column of the entity, none of the keys that say how
+ * to write (`_rev`, `_overwrite`, `_restoredFrom`) and none a read adds.
  *
  * Such a key has nowhere to go but a column of the same name: on the entity's own row, where a
  * name that is no column fails the statement, or on a language's row, where it would be stored.
- * A document as a read hands it out carries only its fields and system columns, so a client
- * sending back what it read names none.
+ * A field's column name is no second name for it: field rules, validation and hooks look a field
+ * up by its declared name, so a value under its column's name would pass them by.
  */
 export function undeclaredWriteKeys(
   data: Record<string, unknown>,
@@ -295,33 +307,38 @@ export function undeclaredWriteKeys(
     DOCUMENT_VERSION_KEY,
     DOCUMENT_OVERWRITE_KEY,
     DOCUMENT_RESTORED_FROM_KEY,
+    ...READ_RESPONSE_KEYS,
   ]);
   for (const field of addressableFields(fields)) {
-    if (typeof field.name !== "string") continue;
-    allowed.add(field.name);
-    allowed.add(toSnakeCase(field.name));
+    if (typeof field.name === "string") allowed.add(field.name);
   }
   return Object.keys(data).filter(key => !allowed.has(key));
 }
 
 /**
- * Refuses a write whose body names a key it may not carry ({@link undeclaredWriteKeys}), with one
- * validation issue per key. Called once the write's access has been judged and before any hook
- * runs, so nothing of such a key is ever written.
+ * A write's body as the write handles it: refused, with one validation issue per key, where it
+ * names a key it may not carry ({@link undeclaredWriteKeys}); otherwise without the keys a read
+ * adds, which say nothing about what to write. Called once the write's access has been judged and
+ * before any hook runs, so nothing of a refused key is ever written.
  */
-export function refuseUndeclaredWriteKeys(
+export function writableBodyOf(
   data: Record<string, unknown>,
   entity: WritableEntityKind,
   fields: unknown
-): void {
+): Record<string, unknown> {
   const keys = undeclaredWriteKeys(data, entity, fields);
-  if (keys.length === 0) return;
-  const kind = entity === "single" ? "Single" : "collection";
-  throw NextlyError.validation({
-    errors: keys.map(key => ({
-      path: key,
-      code: "UNKNOWN_FIELD",
-      message: `"${key}" is not a field of this ${kind}, so a save cannot set it.`,
-    })),
-  });
+  if (keys.length > 0) {
+    const kind = entity === "single" ? "Single" : "collection";
+    throw NextlyError.validation({
+      errors: keys.map(key => ({
+        path: key,
+        code: "UNKNOWN_FIELD",
+        message: `"${key}" is not a field of this ${kind}, so a save cannot set it.`,
+      })),
+    });
+  }
+  if (!Object.keys(data).some(key => READ_RESPONSE_KEYS.has(key))) return data;
+  return Object.fromEntries(
+    Object.entries(data).filter(([key]) => !READ_RESPONSE_KEYS.has(key))
+  );
 }
