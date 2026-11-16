@@ -83,6 +83,8 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `builder-fonts`: its stand-in font catalogue is plain http on localhost,
  *   which only a development server may reach; a production server rightly
  *   refuses it.
+ * - `admin-hydration`: React reports invalid nesting in a development build
+ *   only. The spec also watches the document itself, which holds anywhere.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -100,6 +102,7 @@ const DEV_SPECS = [
   "**/builder-canvas-embed.spec.ts",
   "**/removed-from-code-singles-list.spec.ts",
   "**/builder-fonts.spec.ts",
+  "**/admin-hydration.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
