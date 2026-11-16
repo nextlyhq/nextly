@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * Where a hidden block's tag is drawn, asserted against the sheet that draws
  * it.
@@ -16,9 +18,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module hidden-tag-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 const TAG = '.nx-canvas-mark[data-mark="selected"][data-hidden]';

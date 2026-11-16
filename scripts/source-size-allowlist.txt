@@ -65,7 +65,6 @@ packages/builder/src/shared-styles-panel.tsx 1643
 
 packages/builder/src/style-inspector-panel.tsx 7077
 
-packages/builder/src/styles/builder-chrome.css 12065
 
 packages/plugin-page-builder/src/address-claims/entry-claims-hook.ts 1576
 
