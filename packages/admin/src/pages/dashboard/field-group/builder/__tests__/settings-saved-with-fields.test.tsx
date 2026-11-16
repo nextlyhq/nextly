@@ -165,3 +165,43 @@ describe("a field group's settings saved with a field change", () => {
     expect(updates).not.toHaveProperty("fields");
   });
 });
+
+describe("a field group's settings saved on their own", () => {
+  it("are reviewed first, then saved without a schema apply", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <FieldGroupBuilderEditPage params={{ slug: "hero" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-heading");
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    await user.type(within(settings).getByLabelText("Description"), "Top");
+    await user.click(within(settings).getByRole("button", { name: "Save" }));
+
+    await user.click(screen.getByRole("button", { name: /^save/i }));
+    const review = await screen.findByRole("alertdialog");
+    expect(
+      within(review).getByRole("heading", {
+        name: "Save the settings of the field group hero?",
+      })
+    ).toBeInTheDocument();
+    expect(
+      within(within(review).getByRole("list", { name: "Settings" }))
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Description: none → Top"]);
+    // Nothing is written until the review is confirmed.
+    expect(updateFieldGroup).not.toHaveBeenCalled();
+
+    await user.click(within(review).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateFieldGroup).toHaveBeenCalledTimes(1));
+    expect(updateFieldGroup.mock.calls[0][0].updates).toEqual(
+      expect.objectContaining({ description: "Top" })
+    );
+    expect(applied).toHaveLength(0);
+  });
+});
