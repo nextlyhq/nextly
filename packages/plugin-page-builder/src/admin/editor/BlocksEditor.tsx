@@ -599,6 +599,7 @@ function servicesFor(
       ...pickerPreviewServices({
         passages,
         canvas: binding.canvas,
+        entryCollection,
         userId,
         formatLocale,
         locale,

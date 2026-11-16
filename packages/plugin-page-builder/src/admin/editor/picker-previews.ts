@@ -26,6 +26,11 @@ export interface PickerPreviewTerms {
   readonly passages: OpenPassages;
   /** The entry the canvas is drawn as, which the zone and related lists read. */
   readonly canvas: DocumentIdentity | null;
+  /**
+   * The collection a related list reads the canvas's entry in, as the canvas
+   * decides it (`listEntryCollectionOf`): none for a component or a Single.
+   */
+  readonly entryCollection: string | null | undefined;
   readonly userId: string | null;
   /** The language the canvas's render formats bound values in. */
   readonly formatLocale: string | undefined;
@@ -48,6 +53,7 @@ export interface PickerPreviewTerms {
 export function pickerPreviewServices({
   passages,
   canvas,
+  entryCollection,
   userId,
   formatLocale,
   locale,
@@ -55,8 +61,10 @@ export function pickerPreviewServices({
   ContentServices,
   "bindingLocale" | "readSiteTimeZone" | "readListSample"
 > {
+  // The entry exactly as the canvas's page context takes it, so a list of
+  // related entries samples the rows the canvas draws.
   const entry = {
-    entryCollection: canvas?.kind === "collection" ? canvas.slug : undefined,
+    entryCollection: entryCollection ?? undefined,
     entryId: canvas?.kind === "collection" ? canvas.documentId : undefined,
   };
   return {

@@ -262,6 +262,17 @@ function sourceName(source: PickerSource): string {
 }
 
 /**
+ * A source's group in the picker, by which source it is rather than where it
+ * is listed: the list item's group, drawn once the list's fields are read,
+ * then moves no other group's options, so a search or an option the author
+ * is on keeps its place.
+ */
+function groupOf(source: PickerSource): string {
+  const at = source.binding;
+  return at.source === "single" ? `single:${at.sourceKey}` : at.source;
+}
+
+/**
  * The fields of `sources` that fit `prop`, one step into a relation or a
  * group, in the order the picker lists them. A relation or group whose own
  * value does not fit is not offered itself, only what is inside it. A value
@@ -283,8 +294,8 @@ function fittingOptions(
       ? entryLink?.writable === true && field.public
       : prop.name !== entryLink?.id && fits(field, prop);
   const options: FieldOption[] = [];
-  sources.forEach((source, index) => {
-    const group = String(index);
+  sources.forEach(source => {
+    const group = groupOf(source);
     for (const field of source.fields) {
       const label = choiceLabel(field);
       if (offered(field)) {
@@ -540,9 +551,9 @@ function BindingPicker({
         label={`Fields for ${name}`}
         searchLabel="Find a field"
         noMatch="No field matches."
-        groups={sources.flatMap((source, index) =>
-          offering.has(String(index))
-            ? [{ group: String(index), heading: sourceName(source) }]
+        groups={sources.flatMap(source =>
+          offering.has(groupOf(source))
+            ? [{ group: groupOf(source), heading: sourceName(source) }]
             : []
         )}
         renderChoice={choice => <OptionRow option={choice} />}

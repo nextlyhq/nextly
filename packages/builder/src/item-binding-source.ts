@@ -127,12 +127,16 @@ export function useListItem(
   const listed = useLoopCollections(
     outer === undefined ? undefined : services?.listLoopCollections
   );
+  const query =
+    outer === undefined ? undefined : readListQuery(outer.props).query;
+  // The site's named queries only for a list fed by one: a collection's list
+  // has no need of them, and their read is retried while it fails.
   const customs = useCustomSources(
-    outer === undefined ? undefined : services?.listCustomSources
+    query?.namedQuery === undefined ? undefined : services?.listCustomSources
   );
   if (outer === undefined) return undefined;
   const { found, fields } = listItems(
-    readListQuery(outer.props).query,
+    query,
     listed?.kind === "ready" ? listed.collections : [],
     customs
   );
