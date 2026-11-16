@@ -27,9 +27,9 @@ const PAGES: StartingFieldChoice = {
 
 /** The card (its label) that holds the radio named `name`. */
 function cardOf(name: string): HTMLElement {
-  const card = screen.getByRole("radio", { name: new RegExp(name) }).closest(
-    "label"
-  );
+  const card = screen
+    .getByRole("radio", { name: new RegExp(name) })
+    .closest("label");
   if (!card) throw new Error(`no card holds ${name}`);
   return card;
 }
@@ -51,7 +51,9 @@ describe("EntryKindQuestion", () => {
     const chosen = cardOf(STANDARD_FIELDS.label);
     const other = cardOf(PAGES.label);
 
-    expect(screen.getByRole("radio", { name: /Standard fields/ })).toBeChecked();
+    expect(
+      screen.getByRole("radio", { name: /Standard fields/ })
+    ).toBeChecked();
     expect(chosen).toHaveClass("border-primary", "bg-primary/5");
     expect(other).not.toHaveClass("border-primary");
     expect(drawsOnAccent(chosen)).toBe(false);
