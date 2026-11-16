@@ -71,8 +71,29 @@ import {
 
 import { useCanvasEntryIdentity } from "./canvas-entry";
 
-/** How long the page must stay unchanged before it is counted again. */
-const COUNT_AFTER_MS = 600;
+/**
+ * How long the page must stay unchanged before it is counted again. A count
+ * draws the whole page on the main thread, so it waits for the author to
+ * stop working rather than competing with what they are doing.
+ */
+const COUNT_AFTER_MS = 2000;
+
+/**
+ * The longest a count, once the page has rested, waits for the browser to be
+ * idle: past it, the count is made anyway, so a page kept busy by something
+ * other than the author is still counted.
+ */
+const IDLE_WITHIN_MS = 1000;
+
+/** Run `run` when the browser is next idle, or at once where it cannot say. */
+function whenIdle(run: () => void): () => void {
+  if (typeof requestIdleCallback === "function") {
+    const handle = requestIdleCallback(run, { timeout: IDLE_WITHIN_MS });
+    return () => cancelIdleCallback(handle);
+  }
+  run();
+  return () => undefined;
+}
 
 /**
  * Draw a page to nowhere, every async block settled. A count given up on
@@ -225,13 +246,6 @@ function routeBindings(
 }
 
 /**
- * The longest a count waits for the page to stop changing, from the first
- * change it waits on: a page whose inputs change more often than
- * {@link COUNT_AFTER_MS} is still counted, rather than put off for good.
- */
-const COUNT_WITHIN_MS = 3000;
-
-/**
  * How long a count may take before the meter says it could not be made: a
  * read that never answers (a stalled request, a block that never settles)
  * would otherwise leave it counting for good. A count of a page at its
@@ -253,15 +267,6 @@ interface PageReads {
   readonly report: PageReadReport | undefined;
   /** Given when the latest count could not be made: counts again now. */
   readonly retry: (() => void) | undefined;
-}
-
-/**
- * How long a count waits now, a change having been made: the moment the
- * page is given to settle, but never past {@link COUNT_WITHIN_MS} from the
- * first change it has waited on (`since`).
- */
-function countWait(since: number, now: number): number {
-  return Math.min(COUNT_AFTER_MS, Math.max(0, since + COUNT_WITHIN_MS - now));
 }
 
 /**
@@ -287,17 +292,18 @@ type MakeCount = (signal: AbortSignal) => Promise<PageReadReport>;
 /**
  * When the page's counts are made, and what the meter is told of them.
  *
- * - **A change waits.** A count is made {@link COUNT_AFTER_MS} after the
- *   page last changed, and never more than {@link COUNT_WITHIN_MS} after the
- *   first change it waited on.
- * - **One count at a time.** A change made while a count is being made is
- *   remembered, and exactly one count is made with the latest inputs once
- *   that one answers. Counts started over one another would each be
- *   overtaken before it answered, and the meter would wait on them all.
- * - **One deadline per wait.** From the first change the meter waits on, it
- *   is told a count or a failure within {@link COUNT_GIVES_UP_MS}, however
- *   the page goes on changing: a read that never answers would otherwise
- *   leave it counting for good.
+ * - **A count waits for the author to rest.** It is made once the page has
+ *   gone {@link COUNT_AFTER_MS} without a change, when the browser is next
+ *   idle. A page that keeps changing is not counted until it rests: a count
+ *   draws the whole page on the main thread, and while the author works that
+ *   draw would compete with them.
+ * - **An edit stops a count being made.** A change made while a count is
+ *   being made aborts it, since its answer would already be out of date, and
+ *   the count waits for the page to rest again. So at most one count is ever
+ *   being made.
+ * - **A count has its while.** From when a count begins, the meter is told
+ *   a count or a failure within {@link COUNT_GIVES_UP_MS}: a read that never
+ *   answers would otherwise leave it counting for good.
  * - **A count given up on stops the counting.** The meter says the count
  *   could not be made, and no count is made again until Retry, which aborts
  *   the one given up on: one started after each deadline would leave a
@@ -305,20 +311,20 @@ type MakeCount = (signal: AbortSignal) => Promise<PageReadReport>;
  *   the count given up on answer after all, its answer is told if the page
  *   has not changed since it began.
  * - **A failure is said.** A count that fails is told as one that could not
- *   be made; one asked for by a change made meanwhile is still made, and the
- *   meter reads as counting while it is.
+ *   be made.
  */
 class CountScheduler {
   private make: MakeCount | undefined;
   private waitTimer: ReturnType<typeof setTimeout> | undefined;
-  private waitingSince: number | undefined;
+  /** Stops the wait for the browser to be idle, while one is in hand. */
+  private cancelIdle: (() => void) | undefined;
   /** The count being made, by its number; 0 when none is. */
   private inFlight = 0;
   /** What aborts the latest count begun. */
   private controller: AbortController | undefined;
-  /** The page changed since the latest count began. */
+  /** The page changed since the count given up on began. */
   private changedSince = false;
-  /** The deadline of the wait in hand; `undefined` when none is. */
+  /** The deadline of the count being made; `undefined` when none is. */
   private deadline: ReturnType<typeof setTimeout> | undefined;
   /** A count was given up on: nothing is counted until Retry. */
   private stopped = false;
@@ -338,13 +344,12 @@ class CountScheduler {
   /** The page changed: `make` counts it as it is now. */
   changed(make: MakeCount): void {
     this.make = make;
-    if (this.stopped || this.inFlight !== 0) {
+    if (this.stopped) {
       this.changedSince = true;
-      if (this.stopped) return;
+      return;
     }
-    this.awaitAnswer();
-    if (this.inFlight !== 0) return;
-    this.wait(countWait(this.since(), Date.now()));
+    if (this.inFlight !== 0) this.stopCount();
+    this.wait(COUNT_AFTER_MS);
   }
 
   /**
@@ -352,46 +357,50 @@ class CountScheduler {
    * being made, one given up on among them, is aborted.
    */
   retry(): void {
-    this.controller?.abort();
+    this.stopCount();
     this.stopped = false;
-    this.inFlight = 0;
+    this.changedSince = false;
     this.show(NOT_COUNTED);
-    this.awaitAnswer();
     this.wait(0);
   }
 
   dispose(): void {
     this.disposed = true;
-    clearTimeout(this.waitTimer);
+    this.stopWaiting();
     clearTimeout(this.deadline);
     this.controller?.abort();
   }
 
-  private since(): number {
-    this.waitingSince ??= Date.now();
-    return this.waitingSince;
-  }
-
-  private wait(ms: number): void {
-    clearTimeout(this.waitTimer);
-    this.waitTimer = setTimeout(() => this.start(), ms);
-  }
-
-  private awaitAnswer(): void {
-    this.deadline ??= setTimeout(() => this.giveUp(), COUNT_GIVES_UP_MS);
-  }
-
-  private answered(): void {
+  /** Abort the count being made, if one is; its answer is not told. */
+  private stopCount(): void {
+    this.controller?.abort();
+    this.inFlight = 0;
     clearTimeout(this.deadline);
     this.deadline = undefined;
   }
 
+  private stopWaiting(): void {
+    clearTimeout(this.waitTimer);
+    this.waitTimer = undefined;
+    this.cancelIdle?.();
+    this.cancelIdle = undefined;
+  }
+
+  /** Count once `ms` pass with no change, when the browser is next idle. */
+  private wait(ms: number): void {
+    this.stopWaiting();
+    this.waitTimer = setTimeout(() => {
+      this.waitTimer = undefined;
+      this.cancelIdle = whenIdle(() => {
+        this.cancelIdle = undefined;
+        this.start();
+      });
+    }, ms);
+  }
+
   private start(): void {
     const make = this.make;
-    this.waitTimer = undefined;
-    this.waitingSince = undefined;
-    this.changedSince = false;
-    if (make === undefined) return;
+    if (make === undefined || this.disposed) return;
     // A failure said is no longer the meter's to say once another count is
     // under way: it reads as counting. A count shown stays shown, so the
     // meter does not blink while it is counted again.
@@ -399,7 +408,9 @@ class CountScheduler {
     this.counts += 1;
     const count = this.counts;
     this.inFlight = count;
+    this.changedSince = false;
     this.controller = new AbortController();
+    this.deadline = setTimeout(() => this.giveUp(), COUNT_GIVES_UP_MS);
     make(this.controller.signal).then(
       report => this.settle(count, { report, failed: false }),
       () => this.settle(count, FAILED)
@@ -418,9 +429,9 @@ class CountScheduler {
     }
     if (this.inFlight !== count) return;
     this.inFlight = 0;
-    this.answered();
+    clearTimeout(this.deadline);
+    this.deadline = undefined;
     this.show(shown);
-    this.next();
   }
 
   private giveUp(): void {
@@ -428,17 +439,8 @@ class CountScheduler {
     if (this.disposed) return;
     this.stopped = true;
     this.inFlight = 0;
-    clearTimeout(this.waitTimer);
-    this.waitTimer = undefined;
-    this.waitingSince = undefined;
+    this.stopWaiting();
     this.show(FAILED);
-  }
-
-  /** The one count the changes made meanwhile ask for, made now. */
-  private next(): void {
-    if (!this.changedSince) return;
-    this.awaitAnswer();
-    this.start();
   }
 }
 

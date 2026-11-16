@@ -3,11 +3,14 @@
 /**
  * When the editor's meter counts a page, and what it says when it cannot.
  *
- * The count is made a moment after the page last changed. Two ways it could
- * never land are held here: a count that fails, which must be said with a
- * way to count again rather than left "Counting reads"; and an editor that
- * renders more often than the moment, which must not put the count off. A
- * count that never answers is a failed one too, once it has had its while. The
+ * The count is made once the page has gone two seconds without a change,
+ * when the browser is idle, and an edit stops a count being made: a count
+ * draws the whole page, which must not compete with an author at work. Two
+ * ways a count could never land are held here: a count that fails, which
+ * must be said with a way to count again rather than left "Counting reads";
+ * and an editor that renders with nothing changed, which must not put the
+ * count off. A count that never answers is a failed one too, once it has had
+ * its while from when it began. The
  * form's identity is a new object on every call, as the admin's own hook
  * answers it, so a render of the editor reaches the meter as new inputs.
  *
@@ -167,7 +170,7 @@ describe("a count that could not be made", () => {
       />
     );
     expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
-    await wait(600);
+    await wait(2000);
     await settle();
     expect(countWithStages).toHaveBeenCalledTimes(1);
     // Said, in the meter's place, its name and its tooltip the same words.
@@ -205,7 +208,7 @@ describe("a count that never answers", () => {
         regions={NO_REGIONS}
       />
     );
-    await wait(600);
+    await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
     // Still counting well into its while: a slow count is not a failed one.
     await wait(15_000);
@@ -242,20 +245,21 @@ describe("an editor that renders more often than the count waits", () => {
         />
       );
     }
+    await wait(1400);
     await settle();
-    // 600 ms after the page was drawn, once.
+    // Two seconds after the page was drawn, once.
     expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
   });
 
-  it("has its page counted within three seconds when its inputs are new each render", async () => {
+  it("has its page counted only once its inputs stop changing, and then at once", async () => {
     countWithStages.mockResolvedValue(counted);
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
       <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
-    // What the canvas draws with, a new object every 200 ms: each a change
-    // the count waits on, never 600 ms apart.
+    // What the canvas draws with, a new object every 200 ms for three
+    // seconds: an author at work, so nothing is drawn to count meanwhile.
     for (let step = 0; step < 15; step += 1) {
       await wait(200);
       view.rerender(
@@ -266,9 +270,41 @@ describe("an editor that renders more often than the count waits", () => {
         />
       );
     }
+    expect(countWithStages).not.toHaveBeenCalled();
+    // Two seconds after the last change, counted once.
+    await wait(2000);
     await settle();
-    expect(countWithStages).toHaveBeenCalled();
+    expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+  });
+
+  it("waits for the browser to be idle once the page has rested", async () => {
+    countWithStages.mockResolvedValue(counted);
+    const idle: Array<() => void> = [];
+    const asked = vi.fn((run: () => void) => {
+      idle.push(run);
+      return idle.length;
+    });
+    vi.stubGlobal("requestIdleCallback", asked);
+    vi.stubGlobal("cancelIdleCallback", () => undefined);
+    try {
+      render(
+        <PageReadMeter
+          editor={editor}
+          drawnWith={drawnWith}
+          regions={NO_REGIONS}
+        />
+      );
+      await wait(2000);
+      // Rested, the count is handed to the browser's idle time, not made.
+      expect(asked).toHaveBeenCalledTimes(1);
+      expect(countWithStages).not.toHaveBeenCalled();
+      act(() => idle[0]?.());
+      await settle();
+      expect(countWithStages).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -296,40 +332,56 @@ describe("a page changing all the while its counts are slow", () => {
     };
   }
 
-  it("makes one count at a time, and shows the first that answers", async () => {
-    let making = 0;
-    let most = 0;
+  it("counts nothing while the page keeps changing, however long", async () => {
+    countWithStages.mockResolvedValue(counted);
+    await changingMeter()(20_000);
+    expect(countWithStages).not.toHaveBeenCalled();
+    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    // Once it rests, the count is made.
+    await wait(2000);
+    await settle();
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+  });
+
+  it("stops a count being made when the page changes, and counts again once it rests", async () => {
+    // Each count draws the page, held as a draw is while it renders, and
+    // answers five seconds after it begins.
     countWithStages.mockImplementation(
-      () =>
+      ({ draw }: { draw: (element: React.ReactElement) => Promise<void> }) =>
         new Promise<PageReadReport>(resolve => {
-          making += 1;
-          most = Math.max(most, making);
-          // Each count takes five seconds.
-          setTimeout(() => {
-            making -= 1;
-            resolve(counted);
-          }, 5000);
+          draw(<div />).catch(() => undefined);
+          setTimeout(() => resolve(counted), 5000);
         })
     );
     const changeFor = changingMeter();
-    await changeFor(8000);
-    // Started at three seconds, the cap on the wait, it answers at eight.
+    await wait(2000);
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(draws).toHaveLength(1));
+    // The author goes on working a second into the count: its draw stops.
+    await changeFor(1000);
+    expect(draws[0]?.signal?.aborted).toBe(true);
+    // Not counted again until the page has rested two seconds.
+    await wait(1999);
+    expect(countWithStages).toHaveBeenCalledTimes(1);
+    await wait(1);
+    expect(countWithStages).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(draws).toHaveLength(2));
+    expect(draws[1]?.signal?.aborted).toBe(false);
+    await wait(5000);
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
-    await changeFor(12_000);
-    // The count shown stays shown while the next ones are made.
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
-    expect(most).toBe(1);
-    // One count, then one after each answer for the changes made meanwhile.
-    expect(countWithStages.mock.calls.length).toBeLessThanOrEqual(6);
   });
 
-  it("says the count could not be made within twenty seconds of the first change, when none answers", async () => {
+  it("says the count could not be made twenty seconds after it began, when it never answers", async () => {
     countWithStages.mockImplementation(
       () => new Promise<PageReadReport>(() => undefined)
     );
-    await changingMeter()(19_900);
-    // One count, waited on rather than started over.
+    // Changing for five seconds, then resting: the count begins at seven,
+    // and its twenty seconds count from there, not from the first change.
+    await changingMeter()(5000);
+    await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
+    await wait(19_900);
     expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
     await wait(100);
     expect(meter().getAttribute("aria-label")).toBe(
@@ -342,8 +394,8 @@ describe("a page changing all the while its counts are slow", () => {
       () => new Promise<PageReadReport>(() => undefined)
     );
     const changeFor = changingMeter();
-    await changeFor(5000);
-    // The count, begun at three seconds, drawing the page: the draw it was
+    await wait(2000);
+    // The count, begun at two seconds, drawing the page: the draw it was
     // handed, begun and held, as one whose block never settles is.
     const [[givenUp]] = countWithStages.mock.calls as [
       [{ draw: (element: React.ReactElement) => Promise<void> }],
@@ -354,7 +406,7 @@ describe("a page changing all the while its counts are slow", () => {
     // Once the renderer has loaded and the draw has begun.
     await vi.waitFor(() => expect(draws).toHaveLength(1));
     expect(draws[0]?.ended).toBe("drawing");
-    await changeFor(15_000);
+    await wait(20_000);
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
     );
@@ -398,12 +450,13 @@ describe("a count given up on that answers after all", () => {
         regions={NO_REGIONS}
       />
     );
-    await wait(20_000);
+    // Begun at two seconds, given up on at twenty-two.
+    await wait(22_000);
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
     );
-    // Begun at 600 ms, it answers at 25.6 s.
-    await wait(5600);
+    // It answers at twenty-seven, the page unchanged since it began.
+    await wait(5000);
     expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
   });
 
@@ -413,12 +466,13 @@ describe("a count given up on that answers after all", () => {
     const view = render(
       <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
-    await wait(1000);
-    // A change after the count began, at 600 ms.
+    // Begun at two seconds and given up on at twenty-two.
+    await wait(22_000);
+    // A change after the count began, before its answer at twenty-seven.
     view.rerender(
       <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
-    await wait(30_000);
+    await wait(10_000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(meter().getAttribute("aria-label")).toBe(
       "Couldn't count page reads. Retry"
@@ -470,7 +524,7 @@ describe("the count's request to the bindings route", () => {
         regions={NO_REGIONS}
       />
     );
-    await wait(600);
+    await wait(2000);
     // The count's bindings read, its request held by the route.
     const reading = readBindingsOf(0)({ documents: [bound] }, 500);
     const ended = vi.fn();
@@ -496,14 +550,19 @@ describe("the count's request to the bindings route", () => {
   });
 });
 
-describe("a count that fails after the page changed", () => {
-  it("reads as counting, not failed, while the count the change asked for is made", async () => {
+describe("a count stopped by a change that then fails", () => {
+  it("reads as counting, not failed, while the count after the change is made", async () => {
     countWithStages
+      // Drawing the page until the change stops it, and failing then.
       .mockImplementationOnce(
-        () =>
-          new Promise<PageReadReport>((_resolve, reject) => {
-            setTimeout(() => reject(new Error("refused")), 1000);
-          })
+        async ({
+          draw,
+        }: {
+          draw: (element: React.ReactElement) => Promise<void>;
+        }) => {
+          await draw(<div />);
+          return counted;
+        }
       )
       .mockImplementationOnce(
         () =>
@@ -515,13 +574,16 @@ describe("a count that fails after the page changed", () => {
     const view = render(
       <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
-    await wait(800);
-    // Changed while the first count, begun at 600 ms, is being made.
+    await wait(2000);
+    await vi.waitFor(() => expect(draws).toHaveLength(1));
+    // Changed while the first count, begun at two seconds, is being made:
+    // it is stopped, and its failure is not the meter's to say.
     view.rerender(
       <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
-    // It fails at 1.6 s, and the count the change asked for begins.
-    await wait(800);
+    await settle();
+    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(2);
     expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
     await wait(1000);
