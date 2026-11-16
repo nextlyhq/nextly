@@ -110,6 +110,7 @@ import {
   resolvePublishTransition,
   selectPublicationTransition,
   stripUndefinedStatus,
+  unknownStatusRefusal,
 } from "../../../lib/status-transition";
 import {
   buildEntryRevalidationIntent,
@@ -461,6 +462,7 @@ import {
   releaseWorkflowPinsOnPublish,
   withdrawApprovalsOnSave,
 } from "../../workflows/approval-follows-content";
+import { workflowAttachedTo } from "../../workflows/registry";
 import {
   closeReviewOnDiscard,
   removeDeletedDocumentReviewStates,
@@ -7902,6 +7904,22 @@ export class CollectionMutationService extends BaseService {
    * where the cause is much harder to read.
    */
   /**
+   * Refuses a write whose status the collection's workflow cannot place: under a workflow only
+   * "draft" and "published" are statuses, and anything else would be stored past it. A collection
+   * with no workflow stores any value, as before.
+   */
+  private refuseUnknownStatus(
+    collectionName: string,
+    data: Readonly<Record<string, unknown>>
+  ): void {
+    const refusal = unknownStatusRefusal(
+      data,
+      workflowAttachedTo("collection", collectionName) !== undefined
+    );
+    if (refusal) throw refusal;
+  }
+
+  /**
    * Everything a CREATE does to its payload between the last hook and the
    * write, and the three things it takes OUT of it.
    *
@@ -8811,6 +8829,10 @@ export class CollectionMutationService extends BaseService {
       // A beforeChange hook runs after validation and can also set `slug`;
       // re-sanitize once more so the stored value stays URL-safe.
       await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
+
+      // After every hook: a status the workflow cannot place is refused before anything is
+      // stored, trusted code included.
+      this.refuseUnknownStatus(params.collectionName, finalData);
 
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(finalData, fields);
@@ -15975,6 +15997,9 @@ export class CollectionMutationService extends BaseService {
       // the transition classification and the write, so the write payload and the
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
+      // A status the workflow cannot place is refused here, after every hook and before the
+      // transition gate a trusted write skips, so trusted code is held to it too.
+      this.refuseUnknownStatus(params.collectionName, finalData);
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or
@@ -20760,6 +20785,10 @@ export class CollectionMutationService extends BaseService {
       // leaves an unstorable slug path as given for this one to refuse.
       await this.reSanitizeSlug(finalData, isSlugTaken, params.collectionName);
 
+      // After every hook: a status the workflow cannot place is refused before anything is
+      // stored, trusted code included.
+      this.refuseUnknownStatus(params.collectionName, finalData);
+
       const { manyToManyFields, manyToManyData, componentFieldData } =
         await this.prepareCreateWritePayload(
           finalData,
@@ -21680,6 +21709,9 @@ export class CollectionMutationService extends BaseService {
       // the transition classification and the write, so the write payload and the
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
+      // A status the workflow cannot place is refused here, after every hook and before the
+      // transition gate a trusted write skips, so trusted code is held to it too.
+      this.refuseUnknownStatus(params.collectionName, finalData);
 
       // A row its own gate judged as a publish or an unpublish in place of
       // update that a hook made an edit, naming a field or dropping the

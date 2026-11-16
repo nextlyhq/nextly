@@ -290,17 +290,24 @@ async function gateIssues(
     ...judged.chosen.map(locale => ({ kind: "language" as const, locale })),
     ...(judged.sharedPart ? [{ kind: "shared" as const }] : []),
   ];
+  const { state } = judged.reads;
   const held = await engines.gate.refusals({
-    collection: engines.collection,
+    scope: { kind: "collection", slug: engines.collection },
     entryId: judged.id,
     direction: judged.direction,
     parts,
+    live: {
+      languages: [...state.languages]
+        .filter(([, language]) => language.live)
+        .map(([locale]) => locale),
+      shared: state.sharedLive,
+    },
     caller: engines.caller,
   });
-  return held.map(({ part, message }) =>
+  return held.map(({ part, code, message }) =>
     part.kind === "shared"
-      ? { path: SHARED_PATH, code: "HELD", message }
-      : { path: part.locale, code: "HELD", locale: part.locale, message }
+      ? { path: SHARED_PATH, code, message }
+      : { path: part.locale, code, locale: part.locale, message }
   );
 }
 

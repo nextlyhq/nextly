@@ -354,8 +354,12 @@ export function workflowEventKind(kind: WorkflowStepKind | "assign"): string {
   return WORKFLOW_CONTENT_EVENT_KINDS[kind].name;
 }
 
-/** Whether `stage` allows publishing. */
-function allowsPublish(workflow: Workflow, stage: string): boolean {
+/**
+ * Whether `stage` allows publishing: the one answer a step into it and a publish from it share.
+ *
+ * @experimental
+ */
+export function allowsPublish(workflow: Workflow, stage: string): boolean {
   return workflow.stages.some(
     candidate => candidate.name === stage && candidate.allowsPublish
   );
@@ -587,7 +591,12 @@ const seenRevision = (
   part: string | null
 ): number | undefined => seen.find(entry => entry.part === part)?.revision;
 
-function staleRefusal(parts: (string | null)[]): NextlyError {
+/**
+ * The refusal of a move whose parts changed since they were judged: a step's, or a publish's.
+ *
+ * @experimental
+ */
+export function staleRefusal(parts: (string | null)[]): NextlyError {
   const data: WorkflowRefusalPublicData = { reason: "stale", parts };
   return NextlyError.conflict({
     reason: "state",
