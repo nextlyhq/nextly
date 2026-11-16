@@ -91,16 +91,6 @@ function fieldReadOnlyReason(
 }
 
 /**
- * Whether a field belongs to code or a plugin by its own markers: one that
- * cannot change, and that no other field moves past either, since that would
- * change its place too. The move rule asks this of a drag's two ends and of a
- * one-step move's neighbour.
- */
-export function ownedElsewhere(field: BuilderField): boolean {
-  return fieldReadOnlyReason(field, null) !== null;
-}
-
-/**
  * The read-only reason of a field placed under `ancestors` (outermost first)
  * in an entity that may itself be read-only: the rule above, applied down the
  * chain, so a field inside an owned container is read-only as the outline
