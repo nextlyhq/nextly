@@ -10,7 +10,6 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   DynamicCollectionSchemaService,
@@ -304,29 +303,24 @@ describe.each(DIALECTS)(
     });
 
     it("never fills the row with a relationship's stated id, which may name no row", () => {
-      const add = () =>
-        added(
-          field({
-            name: "featured",
-            type: "relationship",
-            relationTo: "posts",
-            required: true,
-            defaultValue: "row-that-is-not-there",
-          })
-        );
+      const sql = added(
+        field({
+          name: "featured",
+          type: "relationship",
+          relationTo: "posts",
+          required: true,
+          defaultValue: "row-that-is-not-there",
+        })
+      );
 
-      // Refused as a required column with nothing to fill it, as before a default was read here.
-      let codes: string[] = [];
-      try {
-        add();
-      } catch (error) {
-        if (!(error instanceof NextlyError)) throw error;
-        const data = error.publicData as
-          | { errors?: { code?: string }[] }
-          | undefined;
-        codes = (data?.errors ?? []).map(e => String(e.code));
-      }
-      expect(codes).toEqual(["REQUIRED_COLUMN_NEEDS_BACKFILL"]);
+      // A Single's relationship column accepts no value, required or not
+      // (`getSingleRowColumnDescriptor`): its one entry is created on its first read with nothing
+      // chosen. So adding a required one asks no fill and refuses nothing, and the stated id, which
+      // may name no row, is written nowhere.
+      const lines = about(sql, "featured");
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.join(";")).not.toContain("row-that-is-not-there");
+      expect(lines.join(";")).not.toMatch(/NOT NULL/i);
     });
 
     it("fills the row for a contributed type with its type's own value, not the stated one", () => {
