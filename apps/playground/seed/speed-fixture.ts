@@ -67,12 +67,12 @@ export type SpeedFixturePage = keyof typeof SPEED_FIXTURE_BLOCKS;
 export const SPEED_FIXTURE_IDS = {
   heading: "speed-hero-heading",
   lead: "speed-hero-lead",
-  /** Four blocks in the large page's first view, for the quick clicks. */
+  /** Four wide blocks in the large page's first view, for the quick clicks. */
   quick: [
     "speed-hero-heading",
     "speed-hero-lead",
-    "speed-hero-start",
-    "speed-hero-demo",
+    "speed-hero-image",
+    "speed-logos-line",
   ],
 } as const;
 

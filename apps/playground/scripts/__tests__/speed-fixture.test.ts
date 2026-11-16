@@ -85,14 +85,18 @@ describe("the speed fixture", () => {
     });
   });
 
-  it.each([
+  const documents: ReadonlyArray<readonly [string, BlockDocument]> = [
     ["the header", speedHeaderDocument(MEDIA)],
     ["the footer", speedFooterDocument(MEDIA)],
     ["the card", speedCardDocument(MEDIA)],
     ...PAGES.map(which => [`the ${which} page`, page(which)] as const),
-  ])("%s passes the engine's strict validation", (_, document) => {
-    expect(errorsOf(document)).toEqual([]);
-  });
+  ];
+  it.each(documents)(
+    "%s passes the engine's strict validation",
+    (_, document) => {
+      expect(errorsOf(document)).toEqual([]);
+    }
+  );
 
   it.each(PAGES)("the %s page names each block once", which => {
     const ids = blocksIn(page(which).nodes).map(node => node.id);

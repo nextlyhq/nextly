@@ -8,7 +8,8 @@
  *   insert;
  * - the site's stylesheet compiled again, per selection and hover;
  * - the page drawn again, per selection and hover;
- * - the whole document walked by the engine's size check, per selection;
+ * - the whole document walked by the engine's safety measurement, per
+ *   selection;
  * - a trial insert run to decide the Add panel's tiles, when it opens.
  *
  * The editor is the real one (`useEditorState`) driving the real canvas,
@@ -27,6 +28,8 @@
 import {
   clearBlocks,
   COMPONENT_INSTANCE_TYPE,
+  documentWork,
+  measureBytes,
   registerBlocks,
   type BlockDocument,
   type BlockNode,
@@ -310,18 +313,14 @@ describe("the work one selection, hover or insert costs on the canvas", () => {
 });
 
 /**
- * Whole-document walks: the engine's size check probes every object of the
- * document it measures, starting at the document itself, so a probe whose
- * subject is a page document is one walk of that page.
+ * Whole-document walks: the engine counts each full safety measurement of a
+ * document (`documentWork`), the walk that probes every object for a value
+ * the writer refuses. A reading before and after an action costs it.
  */
-function pageWalks(probe: { mock: { contexts: unknown[] } }): number {
-  return probe.mock.contexts.filter(
-    subject =>
-      typeof subject === "object" &&
-      subject !== null &&
-      (subject as { kind?: unknown }).kind === "page" &&
-      Array.isArray((subject as { nodes?: unknown }).nodes)
-  ).length;
+function walksDuring(action: () => void): number {
+  const before = documentWork().walks;
+  action();
+  return documentWork().walks - before;
 }
 
 /** The editor and its keyboard layer, which answers what a selection may do. */
@@ -336,30 +335,19 @@ function KeyboardHost(): React.JSX.Element {
 }
 
 describe("the whole-document walks one selection costs", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("the counter sees a walk: an insert measures the page", () => {
-    render(<KeyboardHost />);
-    const probe = vi.spyOn(BigInt.prototype, "valueOf");
-    act(() => {
-      editor().apply({
-        kind: "insert",
-        node: text("inserted", "Inserted"),
-        at: { index: 0 },
-      });
-    });
-    expect(pageWalks(probe)).toBeGreaterThan(0);
+  it("the counter sees a walk: a full measurement of the page is one", () => {
+    expect(walksDuring(() => measureBytes(PAGE, 1_000_000))).toBe(1);
   });
 
   it("a selection walks the whole document: budget none (known miss)", () => {
     render(<KeyboardHost />);
     act(() => editor().select("block-1"));
-    const probe = vi.spyOn(BigInt.prototype, "valueOf");
-    act(() => editor().select("block-7"));
+    const walks = walksDuring(() => {
+      act(() => editor().select("block-7"));
+    });
+    // The control: the selection reached the keyboard layer's editor.
     expect(editor().selectedId).toBe("block-7");
-    expectKnownMiss(pageWalks(probe));
+    expectKnownMiss(walks);
   });
 });
 
@@ -402,7 +390,7 @@ describe("the trial inserts opening the Add panel costs", () => {
     const trials = { count: 0 };
     const view = openAddPanel(trials);
     trials.count = 0;
-    fireEvent.click(view.getByRole("option", { name: "Text", exact: true }));
+    fireEvent.click(view.getByRole("option", { name: "Text" }));
     expect(trials.count).toBeGreaterThan(0);
   });
 
@@ -410,9 +398,7 @@ describe("the trial inserts opening the Add panel costs", () => {
     const trials = { count: 0 };
     const view = openAddPanel(trials);
     // The control: the panel is open, offering the registered block.
-    expect(
-      view.getByRole("option", { name: "Text", exact: true })
-    ).toBeTruthy();
+    expect(view.getByRole("option", { name: "Text" })).toBeTruthy();
     expectKnownMiss(trials.count);
   });
 });

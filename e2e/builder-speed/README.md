@@ -26,6 +26,19 @@ a running server whose database already holds the fixture, signing in as
 by default); without it, it starts its own server on `BUILDER_SPEED_PORT`
 (3104) with a fresh SQLite database.
 
+## Files
+
+- `measure.mjs`: the command, which runs each group of measures and judges
+  them;
+- `budgets.mjs` and `expected-failures.mjs`: the budgets, and today's known
+  misses, one line each;
+- `report.mjs`: the judgement and the table (its unit test is
+  `scripts/builder-speed-report.test.mjs`);
+- `editing.mjs` and `session.mjs`: the measures themselves;
+- `browser.mjs`, `page-agent.mjs`, `server.mjs` and `config.mjs`: the timing
+  probe and browser helpers, what runs inside the page, the server it starts,
+  and its settings.
+
 ## The pages it measures
 
 `apps/playground/seed/speed-fixture.ts`, seeded by
