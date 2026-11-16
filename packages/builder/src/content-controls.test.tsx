@@ -197,7 +197,12 @@ describe("what an author reads", () => {
                 article: "Article",
                 aside: "Aside",
               },
-              showOptionValue: true,
+              code: {
+                div: "div",
+                section: "section",
+                article: "article",
+                aside: "aside",
+              },
             },
           },
           render: () => null,

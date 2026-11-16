@@ -306,7 +306,9 @@ export function blockSupports<S extends BlockSupports>(
 export type {
   AnyBlockDefinition,
   InferBlockProps,
+  PropGroup,
   PropSchema,
+  StyleSectionKey,
   SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 

@@ -28,7 +28,11 @@
  * @module content-controls
  */
 
-import { ITEM_SCHEMA_MAX_DEPTH, optionLabel } from "@nextlyhq/blocks-engine";
+import {
+  ITEM_SCHEMA_MAX_DEPTH,
+  optionLabel,
+  type PropSchema,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   IconField,
@@ -390,11 +394,13 @@ function SelectControl({
           {prop.options.map((option, index) => (
             <SelectItem key={option} value={option}>
               {labels[index]}
-              {/* The value itself, muted, where the block asks for it: an
+              {/* What the choice writes, muted, where the block says: an
                   HTML tag reads as words, with the tag still there. */}
-              {prop.schema.showOptionValue === true &&
-              labels[index] !== option ? (
-                <span className="nx-inspector__option-value">{option}</span>
+              {optionCode(prop.schema, option) !== undefined &&
+              labels[index] !== optionCode(prop.schema, option) ? (
+                <span className="nx-inspector__option-value">
+                  {optionCode(prop.schema, option)}
+                </span>
               ) : null}
             </SelectItem>
           ))}
@@ -796,4 +802,16 @@ const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
  */
 export function contentControlFor(type: string): ContentControl | undefined {
   return hasContentControl(type) ? CONTROLS[type] : undefined;
+}
+
+/**
+ * What one of a select's choices writes to the page, as the block declares it
+ * in its `code`, one string per option value. `undefined` where it declares
+ * none for that choice.
+ */
+function optionCode(schema: PropSchema, option: string): string | undefined {
+  const code = schema.code;
+  if (code === null || typeof code !== "object") return undefined;
+  const written = (code as Readonly<Record<string, unknown>>)[option];
+  return typeof written === "string" && written !== "" ? written : undefined;
 }

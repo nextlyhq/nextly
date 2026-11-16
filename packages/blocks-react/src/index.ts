@@ -461,6 +461,8 @@ export type {
   NamedClass,
   NodeStyles,
   NodeVisibility,
+  // The tab a prop names, reachable from `PropSchema`.
+  PropGroup,
   PropSchema,
   RemotePattern,
   RemotePatternInput,
