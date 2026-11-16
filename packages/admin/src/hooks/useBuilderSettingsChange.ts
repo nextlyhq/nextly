@@ -16,6 +16,7 @@ import { useCallback } from "react";
 
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { toast } from "@admin/components/ui";
 import { settingChanges } from "@admin/lib/builder/settings-changes";
 import {
@@ -23,7 +24,6 @@ import {
   type UnsavedEntity,
   useUnsavedAddressesBesides,
 } from "@admin/lib/builder/unsaved-entities";
-import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { replaceTo } from "@admin/lib/navigation";
 import type { PendingAddress } from "@admin/services/addressCheckApi";
 
