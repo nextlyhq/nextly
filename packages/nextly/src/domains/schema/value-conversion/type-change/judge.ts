@@ -209,12 +209,16 @@ const NEVER_HELD: Partial<Record<Family, readonly Family[]>> = {
 function neverHeld(from: FieldTypeOnDialect, to: FieldTypeOnDialect): boolean {
   const source = from.family === "list" && from.item ? from.item : from;
   if (source.family === "json") return false;
-  if (NEVER_HELD[source.family]?.includes(to.family) === true) return true;
-  return to.family === "list" && to.item !== undefined && source !== from
-    ? neverHeld(source, to.item)
-    : to.family === "list" && to.item !== undefined
-      ? NEVER_HELD[source.family]?.includes(to.item.family) === true
-      : false;
+  const targetItem = to.family === "list" ? to.item : undefined;
+  return (
+    neverReaches(source.family, to.family) ||
+    (targetItem !== undefined && neverReaches(source.family, targetItem.family))
+  );
+}
+
+/** Whether no value of the family `from` could ever be one of the family `to` (rule 3). */
+function neverReaches(from: Family, to: Family): boolean {
+  return NEVER_HELD[from]?.includes(to) === true;
 }
 
 /**
@@ -277,23 +281,27 @@ function judgeAs(
   if (to.family === "json") return judgeIntoJson(to, value);
   if (to.family === "list") return judgeIntoList(to, value, fromJson);
   if (value.kind === "list") return judgeListIntoOne(to, value, fromJson);
-  switch (to.family) {
-    case "text":
-    case "email":
-    case "choice":
-      return judgeIntoText(to, value);
-    case "richText":
-      return judgeIntoRichText(to, value);
-    case "number":
-      return judgeIntoNumber(to, value, fromJson);
-    case "checkbox":
-      return judgeIntoCheckbox(value);
-    case "date":
-      return judgeIntoDate(to, value, fromJson);
-    default:
-      return { outcome: "blocked", reason: "kind-never-held" };
-  }
+  const judge = INTO_FAMILY[to.family];
+  return judge === undefined
+    ? { outcome: "blocked", reason: "kind-never-held" }
+    : judge(to, value, fromJson);
 }
+
+/** How one value that is no list becomes a value of each family that holds one value. */
+const INTO_FAMILY: Partial<
+  Record<
+    Family,
+    (to: FieldTypeOnDialect, value: OldValue, fromJson: boolean) => ValueVerdict
+  >
+> = {
+  text: (to, value) => judgeIntoText(to, value),
+  email: (to, value) => judgeIntoText(to, value),
+  choice: (to, value) => judgeIntoText(to, value),
+  richText: (to, value) => judgeIntoRichText(to, value),
+  number: (to, value, fromJson) => judgeIntoNumber(to, value, fromJson),
+  checkbox: (_to, value) => judgeIntoCheckbox(value),
+  date: (to, value, fromJson) => judgeIntoDate(to, value, fromJson),
+};
 
 /** A JSON value, judged by its kind (rule 8). */
 function judgeJson(to: FieldTypeOnDialect, value: unknown): ValueVerdict {
@@ -348,42 +356,61 @@ function judgeIntoList(
   fromJson: boolean
 ): ValueVerdict {
   const item = to.item;
-  if (item === undefined)
+  if (item === undefined) {
     return { outcome: "blocked", reason: "kind-never-held" };
-  if (value.kind === "list") {
-    const verdicts = value.items.map(each => judgeAs(item, each, fromJson));
-    // An empty item is no item a typed list holds: its validator refuses a null in the list.
-    if (
-      verdicts.some(
-        v =>
-          v.outcome === "lost" ||
-          v.outcome === "blocked" ||
-          v.reason === "empty"
-      )
-    ) {
-      return { outcome: "blocked", reason: "item-not-held" };
-    }
-    const readsAs = listWriting(item, verdicts);
-    // The whole list is written to its column, which bounds it where the column is text.
-    if (!holdsText(to.textBound, readsAs)) {
-      return { outcome: "blocked", reason: "too-long" };
-    }
-    return verdicts.every(v => v.outcome === "kept")
-      ? { outcome: "kept", reason: "same-value", readsAs }
-      : { outcome: "changed", reason: "new-form", readsAs };
   }
+  if (value.kind === "list") return listIntoList(to, item, value, fromJson);
   if (value.kind === "document") return { outcome: "lost", reason: "object" };
+  return oneIntoList(to, item, value, fromJson);
+}
+
+/** A list judged item by item, never cut: every item held, or the list blocked (rule 5). */
+function listIntoList(
+  to: FieldTypeOnDialect,
+  item: FieldTypeOnDialect,
+  value: Extract<OldValue, { kind: "list" }>,
+  fromJson: boolean
+): ValueVerdict {
+  const verdicts = value.items.map(each => judgeAs(item, each, fromJson));
+  if (verdicts.some(itemNotHeld)) {
+    return { outcome: "blocked", reason: "item-not-held" };
+  }
+  const readsAs = listWriting(item, verdicts);
+  // The whole list is written to its column, which bounds it where the column is text.
+  if (!holdsText(to.textBound, readsAs)) {
+    return { outcome: "blocked", reason: "too-long" };
+  }
+  return verdicts.every(v => v.outcome === "kept")
+    ? { outcome: "kept", reason: "same-value", readsAs }
+    : { outcome: "changed", reason: "new-form", readsAs };
+}
+
+/**
+ * Whether a list's item is one the list cannot hold: lost, blocked, or empty, since a typed list's
+ * validator refuses a null in it.
+ */
+function itemNotHeld(verdict: ValueVerdict): boolean {
+  return (
+    verdict.outcome === "lost" ||
+    verdict.outcome === "blocked" ||
+    verdict.reason === "empty"
+  );
+}
+
+/** One value becoming a one-item list: changed at best, never kept (rule 5). */
+function oneIntoList(
+  to: FieldTypeOnDialect,
+  item: FieldTypeOnDialect,
+  value: OldValue,
+  fromJson: boolean
+): ValueVerdict {
   const one = judgeAs(item, value, fromJson);
   if (one.outcome === "lost" || one.outcome === "blocked") return one;
   const writing = listWriting(item, [one]);
   if (!holdsText(to.textBound, writing)) {
     return { outcome: "blocked", reason: "too-long" };
   }
-  return {
-    outcome: "changed",
-    reason: "new-form",
-    readsAs: writing,
-  };
+  return { outcome: "changed", reason: "new-form", readsAs: writing };
 }
 
 /**
@@ -423,25 +450,8 @@ function judgeListIntoOne(
 /** Into Text, Email or Choice: a string, judged by what the column holds and the type's rule. */
 function judgeIntoText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
   switch (value.kind) {
-    case "text": {
-      // Longer than the column holds is blocked whatever else the value is: holding it would cut it.
-      if (!holdsText(to.textBound, value.text)) {
-        return { outcome: "blocked", reason: "too-long" };
-      }
-      if (to.family === "email" && !EMAIL_RE.test(value.text)) {
-        return { outcome: "lost", reason: "not-an-email" };
-      }
-      // Membership is asked only where options are declared, as the field's validator asks it.
-      const options = to.options ?? [];
-      if (
-        to.family === "choice" &&
-        options.length > 0 &&
-        !options.includes(value.text)
-      ) {
-        return { outcome: "lost", reason: "not-an-option" };
-      }
-      return { outcome: "kept", reason: "same-value", readsAs: value.text };
-    }
+    case "text":
+      return textInto(to, value.text);
     case "document":
       return to.family === "text"
         ? textWriting(to, stableJson(value.value))
@@ -451,6 +461,34 @@ function judgeIntoText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
         judgeIntoText(to, { kind: "text", text: textOf(value) })
       );
   }
+}
+
+/** A string into Text, Email or Choice: the column first, then the type's own rule. */
+function textInto(to: FieldTypeOnDialect, text: string): ValueVerdict {
+  // Longer than the column holds is blocked whatever else the value is: holding it would cut it.
+  if (!holdsText(to.textBound, text)) {
+    return { outcome: "blocked", reason: "too-long" };
+  }
+  const refused = refusedByType(to, text);
+  return refused === null
+    ? { outcome: "kept", reason: "same-value", readsAs: text }
+    : { outcome: "lost", reason: refused };
+}
+
+/**
+ * Why an Email or a Choice refuses a string: the email field's rule, or the option values, which
+ * are asked only where options are declared, as the field's validator asks them.
+ */
+function refusedByType(
+  to: FieldTypeOnDialect,
+  text: string
+): "not-an-email" | "not-an-option" | null {
+  if (to.family === "email") return EMAIL_RE.test(text) ? null : "not-an-email";
+  const options = to.options ?? [];
+  if (to.family === "choice" && options.length > 0 && !options.includes(text)) {
+    return "not-an-option";
+  }
+  return null;
 }
 
 /** A document or an object written as its JSON to Text: changed, blocked where too long. */
@@ -514,26 +552,8 @@ function numberInto(
   number: ReadNumber,
   fits: "kept" | "changed"
 ): ValueVerdict {
-  if (number.finite === "beyond") {
-    return {
-      outcome: "blocked",
-      reason: number.large ? "out-of-range" : "rounded",
-    };
-  }
-  if (!number.finite) {
-    // A number field's validator refuses NaN, and a whole-number field's any non-finite number,
-    // whatever the column holds.
-    if (number.value === "NaN" || format.kind === "integer") {
-      return { outcome: "lost", reason: "non-finite" };
-    }
-    return holdsNonFinite(format, dialect, number.value)
-      ? {
-          outcome: fits,
-          reason: fits === "kept" ? "same-value" : "new-form",
-          readsAs: number.value,
-        }
-      : { outcome: "lost", reason: "non-finite" };
-  }
+  if (number.finite === "beyond") return beyondVerdict(number);
+  if (!number.finite) return nonFiniteInto(format, dialect, number.value, fits);
   const held = holdsNumber(format, dialect, number.value);
   if (held !== "exactly") {
     return {
@@ -541,10 +561,44 @@ function numberInto(
       reason: held === "rounded" ? "rounded" : "out-of-range",
     };
   }
+  return heldAs(fits, decimalWriting(number.value));
+}
+
+/** A number past every column: blocked, as out of range or, for a tiny one, as rounded. */
+function beyondVerdict(
+  number: Extract<ReadNumber, { finite: "beyond" }>
+): ValueVerdict {
+  return {
+    outcome: "blocked",
+    reason: number.large ? "out-of-range" : "rounded",
+  };
+}
+
+/**
+ * A non-finite number into a number field. Its validator refuses NaN, and a whole-number field's
+ * any non-finite number, whatever the column holds; otherwise the column decides (rule 6).
+ */
+function nonFiniteInto(
+  format: NumberFormat,
+  dialect: FieldTypeOnDialect["dialect"],
+  value: "NaN" | "Infinity" | "-Infinity",
+  fits: "kept" | "changed"
+): ValueVerdict {
+  const refused =
+    value === "NaN" ||
+    format.kind === "integer" ||
+    !holdsNonFinite(format, dialect, value);
+  return refused
+    ? { outcome: "lost", reason: "non-finite" }
+    : heldAs(fits, value);
+}
+
+/** A value the new type holds, kept or changed by its kind, reading back as `readsAs`. */
+function heldAs(fits: "kept" | "changed", readsAs: string): ValueVerdict {
   return {
     outcome: fits,
     reason: fits === "kept" ? "same-value" : "new-form",
-    readsAs: decimalWriting(number.value),
+    readsAs,
   };
 }
 
@@ -570,17 +624,32 @@ function columnHolds(
 ): "exactly" | "rounded" | "out of range" {
   switch (format.kind) {
     case "integer":
-      if (value.fraction !== "") return "rounded";
-      return fitsInteger(value, format.bits) ? "exactly" : "out of range";
+      return wholeNumberHolds(value, number =>
+        fitsInteger(number, format.bits) ? "exactly" : "out of range"
+      );
     case "double":
-      return fitsDouble(value) ? "exactly" : "rounded";
+      return doubleHolds(value);
     case "decimal":
       return fitsDecimal(value, format.precision, format.scale);
     case "json":
       // A JSON number is read back as a JavaScript number, and a whole-number list holds no fraction.
-      if (format.whole && value.fraction !== "") return "rounded";
-      return fitsDouble(value) ? "exactly" : "rounded";
+      return format.whole
+        ? wholeNumberHolds(value, doubleHolds)
+        : doubleHolds(value);
   }
+}
+
+/** A whole number's fit: a fraction is held only rounded; a whole one as `fit` says. */
+function wholeNumberHolds(
+  value: ExactDecimal,
+  fit: (value: ExactDecimal) => "exactly" | "rounded" | "out of range"
+): "exactly" | "rounded" | "out of range" {
+  return value.fraction !== "" ? "rounded" : fit(value);
+}
+
+/** Whether a double, which reads a number back as a JavaScript number, holds it exactly. */
+function doubleHolds(value: ExactDecimal): "exactly" | "rounded" {
+  return fitsDouble(value) ? "exactly" : "rounded";
 }
 
 /**
@@ -611,25 +680,31 @@ function judgeIntoCheckbox(value: OldValue): ValueVerdict {
         reason: "same-value",
         readsAs: String(value.value),
       };
-    case "text": {
-      const lower = value.text.toLowerCase();
-      if (lower === "true" || lower === "1") return changedBoolean(true);
-      if (lower === "false" || lower === "0") return changedBoolean(false);
-      return { outcome: "lost", reason: "not-a-boolean" };
-    }
-    case "number": {
-      const writing = numberWriting(value.number);
-      if (writing === "1") return changedBoolean(true);
-      if (writing === "0") return changedBoolean(false);
-      return { outcome: "lost", reason: "not-a-boolean" };
-    }
+    case "text":
+      return booleanFromWriting(value.text.toLowerCase());
+    case "number":
+      return booleanFromWriting(numberWriting(value.number));
     default:
       return { outcome: "lost", reason: "kind-never-held" };
   }
 }
 
-function changedBoolean(value: boolean): ValueVerdict {
-  return { outcome: "changed", reason: "new-form", readsAs: String(value) };
+/** The writings a checkbox reads as a boolean: `true`, `false`, `1` and `0`. */
+const BOOLEAN_WRITINGS: Readonly<Record<string, boolean>> = {
+  true: true,
+  "1": true,
+  false: false,
+  "0": false,
+};
+
+/** A writing (a text in lower case, or a number's) as the boolean it names, changed; else lost. */
+function booleanFromWriting(writing: string): ValueVerdict {
+  const value = Object.hasOwn(BOOLEAN_WRITINGS, writing)
+    ? BOOLEAN_WRITINGS[writing]
+    : undefined;
+  return value === undefined
+    ? { outcome: "lost", reason: "not-a-boolean" }
+    : { outcome: "changed", reason: "new-form", readsAs: String(value) };
 }
 
 /** Into Date: an ISO 8601 date-time naming its offset, held exactly (rules 1 and 7). */
@@ -738,12 +813,7 @@ function jsonVerdict(value: OldValue): ValueVerdict {
  * which JSON cannot hold (rule 6).
  */
 function numberAsJson(number: ReadNumber): ValueVerdict {
-  if (number.finite === "beyond") {
-    return {
-      outcome: "blocked",
-      reason: number.large ? "out-of-range" : "rounded",
-    };
-  }
+  if (number.finite === "beyond") return beyondVerdict(number);
   if (!number.finite) return { outcome: "lost", reason: "non-finite" };
   return fitsDouble(number.value)
     ? {
@@ -798,24 +868,30 @@ function writingOf(value: OldValue): string {
  */
 function jsonWritingOf(value: OldValue): string {
   switch (value.kind) {
-    case "empty":
-      return "null";
-    case "text":
-      return JSON.stringify(value.text);
-    case "number":
-      return value.number.finite === true
-        ? decimalWriting(value.number.value)
-        : "null";
-    case "boolean":
-      return String(value.value);
-    case "date":
-      return JSON.stringify(instantWriting(value.date));
     case "list":
       return `[${value.items.map(jsonWritingOf).join(",")}]`;
     case "json":
     case "document":
       return stableJson(value.value);
+    default:
+      return scalarJsonWriting(value);
   }
+}
+
+/** One value that is no list and no JSON, as JSON: `null`, a number, a boolean, or a string. */
+function scalarJsonWriting(
+  value: Exclude<OldValue, { kind: "list" | "json" | "document" }>
+): string {
+  if (value.kind === "empty") return "null";
+  if (value.kind === "number") {
+    return value.number.finite === true
+      ? decimalWriting(value.number.value)
+      : "null";
+  }
+  // A boolean is written bare; a text, or a date's ISO writing, as a JSON string.
+  return value.kind === "boolean"
+    ? String(value.value)
+    : JSON.stringify(textOf(value));
 }
 
 /** JSON with every object's keys in order, so two values that parse alike have one writing. */
