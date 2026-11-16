@@ -318,6 +318,78 @@ describe("which values it reports", () => {
     expect(labels(container)).toEqual(["16", "24"]);
   });
 
+  describe("a margin the browser works out rather than one that was set", () => {
+    /*
+     * `getComputedStyle` answers margins with the USED value, so a block
+     * centred by `auto` margins reports pixels there, and the canvas labelled
+     * them "32" while the panel showed the margins as unset. Typed OM's
+     * computed map keeps the keyword; jsdom has none, so each case supplies
+     * one for the selected block, keyed by property, the way a browser that
+     * has it answers.
+     */
+    function stubComputedMap(byProperty: Record<string, string>) {
+      Object.defineProperty(Element.prototype, "computedStyleMap", {
+        configurable: true,
+        value(this: Element) {
+          const own = this.getAttribute(NODE_ID_ATTRIBUTE) === "a";
+          return {
+            get: (property: string) =>
+              own && property in byProperty
+                ? { toString: () => byProperty[property] }
+                : { toString: () => "0px" },
+          };
+        },
+      });
+    }
+
+    afterEach(() => {
+      Reflect.deleteProperty(Element.prototype, "computedStyleMap");
+    });
+
+    it("labels a margin an author set", () => {
+      stubComputedMap({ "margin-top": "16px" });
+      stubComputedStyle({ a: { marginTop: "16px" } });
+      const { container } = mount(editorOf("a"));
+      expect(bandSides(container)).toEqual(["margin-top"]);
+      expect(labels(container)).toEqual(["16"]);
+    });
+
+    it("labels a margin a block default set", () => {
+      // A default reaches the computed value as a length like any other, and
+      // the panel names it with its source, so the canvas names it too.
+      stubComputedMap({ "margin-bottom": "1em" });
+      stubComputedStyle({ a: { marginBottom: "16px" } });
+      const { container } = mount(editorOf("a"));
+      expect(bandSides(container)).toEqual(["margin-bottom"]);
+      expect(labels(container)).toEqual(["16"]);
+    });
+
+    it("draws no band and no number for an auto margin", () => {
+      stubComputedMap({
+        "margin-top": "16px",
+        "margin-left": "auto",
+        "margin-right": "auto",
+      });
+      stubComputedStyle({
+        a: { marginTop: "16px", marginLeft: "32px", marginRight: "32px" },
+      });
+      const { container } = mount(editorOf("a"));
+      // The set margin beside them is still drawn: only `auto` is left out.
+      expect(bandSides(container)).toEqual(["margin-top"]);
+      expect(labels(container)).toEqual(["16"]);
+    });
+
+    it("draws the same margins as set where the browser has no computed map", () => {
+      // The control: without the map nothing tells `auto` from a set value,
+      // and the bands describe the space as before.
+      stubComputedStyle({
+        a: { marginLeft: "32px", marginRight: "32px" },
+      });
+      const { container } = mount(editorOf("a"));
+      expect(bandSides(container)).toEqual(["margin-right", "margin-left"]);
+    });
+  });
+
   it("reads the PHYSICAL longhand rather than the logical one", () => {
     /*
      * The separating property for the whole design. The catalog stores spacing

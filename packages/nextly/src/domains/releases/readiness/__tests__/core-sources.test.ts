@@ -18,6 +18,7 @@ import {
   CORE_OTHER_RELEASE_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_RELEASE_CHECK_SOURCES,
+  CORE_REMOVED_FROM_CODE_SOURCE,
   CORE_REQUIRED_FIELDS_SOURCE,
   registerCoreReleaseCheckSources,
   registeredReleaseCheckSources,
@@ -446,6 +447,137 @@ describe("core.other-release", () => {
         s => s.key
       )
     ).toEqual(["core.other-release"]);
+  });
+});
+
+describe("core.removed-from-code", () => {
+  it("reports every document of a collection or Single removed from code, naming it, and no other", async () => {
+    // Removed: the `old-posts` collection and the `banner` Single. A
+    // collection and a Single of the same slugs' kind that are declared are
+    // the controls. Locale-scoped and authorless members are reported too:
+    // nobody can write to a removed entity.
+    const removed = new Set(["collection:old-posts", "single:banner"]);
+    const removedFromCode = vi.fn(
+      async (scope: { scopeKind: string; scopeSlug: string }) =>
+        removed.has(`${scope.scopeKind}:${scope.scopeSlug}`)
+    );
+    const found = await run(
+      CORE_REMOVED_FROM_CODE_SOURCE,
+      [
+        member("kept"),
+        member("old", { scopeSlug: "old-posts" }),
+        member("old-down", { scopeSlug: "old-posts", action: "unpublish" }),
+        member("old-de", { scopeSlug: "old-posts", locale: "de" }),
+        member("old-authorless", { scopeSlug: "old-posts", createdBy: null }),
+        member("banner", { scopeKind: "single", scopeSlug: "banner" }),
+        member("kept-single", { scopeKind: "single", scopeSlug: "header" }),
+        // The same slug in the other registry is a different entity.
+        member("posts-single", { scopeKind: "single", scopeSlug: "old-posts" }),
+      ],
+      { removedFromCode }
+    );
+    const of = (kind: string, slug: string) => ({ kind, slug });
+    expect(found).toEqual([
+      {
+        memberId: "old",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "old-down",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "old-de",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "old-authorless",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("collection", "old-posts"),
+      },
+      {
+        memberId: "banner",
+        code: "ENTITY_REMOVED_FROM_CODE",
+        detail: of("single", "banner"),
+      },
+    ]);
+    // Once per scope: five scopes, five questions.
+    expect(removedFromCode).toHaveBeenCalledTimes(5);
+  });
+
+  it("is the only problem asked about a removed entity's documents, whose tables may be gone", async () => {
+    // Every read of a document's own tables fails for `old-posts`, as it does
+    // once its tables are dropped; `posts` is declared, and its document is
+    // gone, so `core.exists` still reports that one.
+    const gone = (scope: { scopeSlug: string }) => {
+      if (scope.scopeSlug === "old-posts") throw new Error("no such table");
+    };
+    const over = {
+      removedFromCode: async (scope: { scopeSlug: string }) =>
+        scope.scopeSlug === "old-posts",
+      existing: async (refs: readonly { scopeSlug: string }[]) => {
+        refs.forEach(gone);
+        return new Set<string>();
+      },
+      mayPerform: async (
+        _user: unknown,
+        scope: { scopeSlug: string },
+        _action: unknown,
+        entryIds: readonly string[]
+      ) => {
+        gone(scope);
+        return new Set(entryIds);
+      },
+      declaresLifecycle: async (scope: { scopeSlug: string }) => {
+        gone(scope);
+        return true;
+      },
+      companionLacksLifecycle: async (scope: { scopeSlug: string }) => {
+        gone(scope);
+        return false;
+      },
+      heldDraftLocales: async (
+        scope: { scopeSlug: string },
+        entryIds: readonly string[]
+      ) => {
+        gone(scope);
+        return new Map(entryIds.map(id => [id, [] as string[]]));
+      },
+      publishProblems: async (
+        scope: { scopeSlug: string },
+        entryIds: readonly string[]
+      ) => {
+        gone(scope);
+        return new Map(entryIds.map(id => [id, []]));
+      },
+    } as Parameters<typeof reads>[0];
+    const members = [
+      member("old", { scopeSlug: "old-posts" }),
+      member("post", { scopeSlug: "posts" }),
+    ];
+    for (const source of [
+      CORE_PERMISSION_SOURCE,
+      CORE_LIFECYCLE_SOURCE,
+      CORE_COMPANION_STATUS_SOURCE,
+      CORE_HELD_DRAFTS_SOURCE,
+      CORE_REQUIRED_FIELDS_SOURCE,
+    ]) {
+      expect(await run(source, members, over), source.key).toEqual([]);
+    }
+    expect(await run(CORE_EXISTS_SOURCE, members, over)).toEqual([
+      { memberId: "post", code: "DOCUMENT_GONE" },
+    ]);
+  });
+
+  it("is a hard source of core's, checked after the document's existence", () => {
+    const keys = CORE_RELEASE_CHECK_SOURCES.map(s => s.key);
+    expect(CORE_REMOVED_FROM_CODE_SOURCE.severity).toBe("hard");
+    expect(keys.indexOf("core.removed-from-code")).toBe(
+      keys.indexOf("core.exists") + 1
+    );
   });
 });
 
