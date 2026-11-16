@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { parseApiError } from "@admin/lib/api/parseApiError";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
@@ -92,6 +93,8 @@ type Overrides = {
   onApplied?: (fields: FieldDefinition[]) => void | Promise<void>;
   /** The settings the preview and the apply are sent with, read at each render. */
   previewedWith?: () => unknown;
+  /** The entity's settings changed since the save, read at each render. */
+  settingChanges?: () => readonly SettingChange[];
 };
 
 function setup(overrides: Overrides = {}) {
@@ -117,6 +120,7 @@ function setup(overrides: Overrides = {}) {
       onNoChanges,
       onApplied,
       previewedWith: overrides.previewedWith?.(),
+      settingChanges: overrides.settingChanges?.() ?? [],
     })
   );
 
@@ -180,7 +184,7 @@ describe("handleSave", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("persists settings and asks nothing when there is no schema change", async () => {
+  it("asks nothing when neither the schema nor a setting changed", async () => {
     const { result, confirmation, onNoChanges } = setup({
       previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
     });
@@ -461,5 +465,69 @@ describe("confirmApply", () => {
     expect(applyFn).not.toHaveBeenCalled();
     expect(startRestart).not.toHaveBeenCalled();
     expect(confirmation.beginApply).not.toHaveBeenCalled();
+  });
+});
+
+// A change of the entity's settings alone is a pending change like a field's,
+// so it is reviewed before it is saved: the review lists it, and only its
+// confirmation saves it.
+describe("a settings-only save", () => {
+  const RENAMED: SettingChange = {
+    key: "singularName",
+    label: "name",
+    from: "Post",
+    to: "Article",
+  };
+
+  it("is put in front of the user, and saved only once confirmed", async () => {
+    const unchanged = preview({ hasChanges: false });
+    const confirmation = confirmationStub(unchanged);
+    const { result, onNoChanges, applyFn } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(unchanged)),
+      settingChanges: () => [RENAMED],
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(unchanged)
+    );
+    expect(onNoChanges).not.toHaveBeenCalled();
+
+    await act(async () => result.current.confirmApply({}, []));
+    expect(onNoChanges).toHaveBeenCalledWith(FIELDS);
+    // No schema change, so nothing is applied and nothing restarts.
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(startRestart).not.toHaveBeenCalled();
+    expect(confirmation.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves nothing when a setting changed after it was reviewed", async () => {
+    const unchanged = preview({ hasChanges: false });
+    const confirmation = confirmationStub(unchanged);
+    let changes: SettingChange[] = [RENAMED];
+    const { result, rerender, onNoChanges } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(unchanged)),
+      settingChanges: () => changes,
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(unchanged)
+    );
+
+    changes = [{ ...RENAMED, to: "Story" }];
+    rerender();
+    await act(async () => result.current.confirmApply({}, []));
+
+    expect(onNoChanges).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith(
+      "The fields or settings changed after the preview. Save again to review what changes."
+    );
   });
 });
