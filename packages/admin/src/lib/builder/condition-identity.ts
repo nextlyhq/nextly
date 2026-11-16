@@ -167,3 +167,46 @@ export function brokenConditions(
   walk(fields);
   return broken;
 }
+
+/**
+ * `fields` once `fieldId`'s rename is followed: every condition that read the field by
+ * `previousName` reads it by its new name. Called after the field has its new name, so the
+ * rename and the conditions it carries are one change, and one undo.
+ *
+ * Only the conditions the entry form evaluates against the renamed field are followed: those on
+ * the fields beside it on its level (`findFieldPlacement`), as `brokenConditionOf` judges them. A
+ * condition elsewhere naming the same name reads another field, and the field's own condition is
+ * not one that reads it. Returns `fields` itself when no condition follows.
+ */
+export function followRename(
+  fields: BuilderField[],
+  fieldId: string,
+  previousName: string
+): BuilderField[] {
+  const placement = findFieldPlacement(fields, fieldId);
+  if (!placement || placement.field.name === previousName) return fields;
+  // Matched by identity: those very fields, whatever else in the tree shares an id with one.
+  const readers = new Set(
+    placement.siblings.filter(
+      each => each.admin?.condition?.field === previousName
+    )
+  );
+  if (readers.size === 0) return fields;
+  const name = placement.field.name;
+  const follow = (list: BuilderField[]): BuilderField[] =>
+    list.map(each => {
+      const condition = each.admin?.condition;
+      const next =
+        readers.has(each) && condition
+          ? {
+              ...each,
+              admin: {
+                ...each.admin,
+                condition: { ...condition, field: name },
+              },
+            }
+          : each;
+      return next.fields ? { ...next, fields: follow(next.fields) } : next;
+    });
+  return follow(fields);
+}

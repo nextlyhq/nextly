@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-import { brokenConditions } from "../condition-identity";
+import { brokenConditions, followRename } from "../condition-identity";
 
 function field(name: string, extra: Partial<BuilderField> = {}): BuilderField {
   return {
@@ -147,5 +147,142 @@ describe("a condition that still reads its source", () => {
       }),
     ];
     expect(brokenConditions(fields).size).toBe(0);
+  });
+});
+
+/**
+ * A rename carries the conditions that read the field with it: every condition on the renamed
+ * field's level (the fields the entry form reads beside it, through containers with no name) that
+ * names its old name names the new one, in the same change. A condition on another level that
+ * happens to read the same name reads another field, and stays.
+ */
+describe("a condition following a rename", () => {
+  /** `fields` with `id`'s name set to `name`, as a rename leaves them before conditions follow. */
+  const renamed = (
+    fields: BuilderField[],
+    id: string,
+    name: string
+  ): BuilderField[] =>
+    fields.map(each =>
+      each.id === id
+        ? { ...each, name }
+        : each.fields
+          ? { ...each, fields: renamed(each.fields, id, name) }
+          : each
+    );
+  const conditionOf = (fields: readonly BuilderField[], id: string) => {
+    const walk = (list: readonly BuilderField[]): string | undefined => {
+      for (const each of list) {
+        if (each.id === id) return each.admin?.condition?.field;
+        const below = each.fields ? walk(each.fields) : undefined;
+        if (below !== undefined) return below;
+      }
+      return undefined;
+    };
+    return walk(fields);
+  };
+
+  it("rewrites a condition on its level that reads the old name", () => {
+    const fields = renamed(
+      [field("summary"), gated("teaser", "summary")],
+      "f-summary",
+      "abstract"
+    );
+    const next = followRename(fields, "f-summary", "summary");
+    expect(conditionOf(next, "f-teaser")).toBe("abstract");
+    // The rest of the condition is as it was.
+    expect(next.find(each => each.id === "f-teaser")?.admin?.condition).toEqual(
+      { field: "abstract", operator: "equals", value: "yes" }
+    );
+    expect(brokenConditions(next).size).toBe(0);
+  });
+
+  it("rewrites one read through a group with no name, either way", () => {
+    const layout = (fields: BuilderField[]) =>
+      field("", { label: "Layout", type: "group", fields });
+    // The gated field inside a layout group, its source beside the group.
+    const inside = renamed(
+      [field("summary"), layout([gated("teaser", "summary")])],
+      "f-summary",
+      "abstract"
+    );
+    expect(
+      conditionOf(followRename(inside, "f-summary", "summary"), "f-teaser")
+    ).toBe("abstract");
+    // The source inside a layout group, the gated field beside it.
+    const outside = renamed(
+      [layout([field("summary")]), gated("teaser", "summary")],
+      "f-summary",
+      "abstract"
+    );
+    expect(
+      conditionOf(followRename(outside, "f-summary", "summary"), "f-teaser")
+    ).toBe("abstract");
+  });
+
+  it("leaves a condition on another level that reads the same name", () => {
+    const fields = renamed(
+      [
+        field("summary"),
+        field("details", {
+          type: "group",
+          fields: [
+            field("summary", { id: "f-inner" }),
+            gated("note", "summary"),
+          ],
+        }),
+      ],
+      "f-summary",
+      "abstract"
+    );
+    const next = followRename(fields, "f-summary", "summary");
+    // `note` reads the group's own `summary`, which kept its name.
+    expect(conditionOf(next, "f-note")).toBe("summary");
+  });
+
+  it("rewrites within a named group, for a field renamed inside it", () => {
+    const fields = renamed(
+      [
+        gated("teaser", "summary"),
+        field("details", {
+          type: "group",
+          fields: [
+            field("summary", { id: "f-inner" }),
+            gated("note", "summary"),
+          ],
+        }),
+      ],
+      "f-inner",
+      "abstract"
+    );
+    const next = followRename(fields, "f-inner", "summary");
+    expect(conditionOf(next, "f-note")).toBe("abstract");
+    // The top level's `teaser` reads no field named summary now; it is not this rename's to follow.
+    expect(conditionOf(next, "f-teaser")).toBe("summary");
+  });
+
+  it("leaves the renamed field's own condition alone", () => {
+    const fields = renamed(
+      [
+        field("summary", {
+          admin: { condition: { field: "summary", operator: "isNotEmpty" } },
+        }),
+      ],
+      "f-summary",
+      "abstract"
+    );
+    expect(
+      conditionOf(followRename(fields, "f-summary", "summary"), "f-summary")
+    ).toBe("summary");
+  });
+
+  it("returns the fields themselves when no condition reads the old name", () => {
+    const fields = renamed(
+      [field("summary"), gated("teaser", "body")],
+      "f-summary",
+      "abstract"
+    );
+    expect(followRename(fields, "f-summary", "summary")).toBe(fields);
+    expect(followRename(fields, "f-missing", "summary")).toBe(fields);
   });
 });
