@@ -2,7 +2,8 @@
 
 /**
  * A part of the plugin's admin whose code is fetched when it is first drawn:
- * what it shows while the code arrives, that it then draws the part with the
+ * that it draws nothing while the code arrives (an admin section whose body is
+ * empty stays hidden), that it then draws the part with the
  * props it was given, that a failed fetch says so and fetches again when
  * asked, and that a part already fetched is drawn at once, without a second
  * fetch.
@@ -38,19 +39,17 @@ describe("lazyPart", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it("says it is loading, then draws the part with its props", async () => {
+  it("draws nothing while the code arrives, then the part with its props", async () => {
     const fetch = deferred<typeof Greeting>();
     const Part = lazyPart(() => fetch.promise);
 
-    render(<Part name="Ada" />);
+    const { container } = render(<Part name="Ada" />);
 
-    expect(screen.getByRole("status").textContent).toBe("Loading");
-    expect(screen.queryByText("Hello, Ada")).toBeNull();
+    expect(container.innerHTML).toBe("");
 
     fetch.resolve(Greeting);
 
     expect(await screen.findByText("Hello, Ada")).toBeTruthy();
-    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("says a failed fetch failed, and fetches again when asked", async () => {

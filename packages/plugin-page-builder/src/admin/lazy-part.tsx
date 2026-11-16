@@ -24,11 +24,13 @@ import { Button } from "@nextlyhq/ui";
 import {
   useEffect,
   useState,
-  type ComponentProps,
   type ComponentType,
   type JSX,
   type ReactNode,
 } from "react";
+
+/** The props the wrapper passes through, untouched, to the part it draws. */
+type PassedProps = Record<string, unknown>;
 
 /**
  * A component drawing the part `load` fetches, with the props it is given.
@@ -40,19 +42,19 @@ import {
  * receives, so a host that imports it keeps the part's own type, a generic
  * signature included.
  */
-export function lazyPart<Part extends ComponentType<never>>(
+export function lazyPart<Part extends (props: never) => ReactNode>(
   load: () => Promise<Part>
 ): Part {
-  type P = ComponentProps<Part>;
-  let loaded: ComponentType<P> | null = null;
-  let pending: Promise<ComponentType<P>> | null = null;
+  let loaded: ComponentType<PassedProps> | null = null;
+  let pending: Promise<ComponentType<PassedProps>> | null = null;
 
-  function fetchPart(): Promise<ComponentType<P>> {
+  function fetchPart(): Promise<ComponentType<PassedProps>> {
     pending ??= load().then(
       fetched => {
-        // A component taking the props `Part` declares, which is what `P`
-        // names; the checker cannot follow that through a generic `Part`.
-        const part = fetched as ComponentType<P>;
+        // Drawn only with the props a caller handed the wrapper, which are
+        // `Part`'s own (the wrapper is typed as `Part`); the checker cannot
+        // follow that through a generic signature.
+        const part = fetched as unknown as ComponentType<PassedProps>;
         loaded = part;
         return part;
       },
@@ -64,11 +66,11 @@ export function lazyPart<Part extends ComponentType<never>>(
     return pending;
   }
 
-  function LazyPart(props: P): ReactNode {
+  function LazyPart(props: PassedProps): ReactNode {
     // Held as `{ part }`: a component is a function, which `useState` would
     // call as an initialiser or an updater.
     const [state, setState] = useState<
-      { part: ComponentType<P> } | "loading" | "failed"
+      { part: ComponentType<PassedProps> } | "loading" | "failed"
     >(() => (loaded ? { part: loaded } : "loading"));
 
     // Fetches while the part is loading: on the first draw, and again after
@@ -96,24 +98,27 @@ export function lazyPart<Part extends ComponentType<never>>(
     if (state === "failed") {
       return <PartLoadError onRetry={() => setState("loading")} />;
     }
-    return <PartLoading />;
+    // Nothing while the code is on its way: an admin surface that hides a
+    // section with an empty body keeps it hidden, and a part that arrives
+    // quickly does not flash a loading mark.
+    return null;
   }
 
   // The wrapper takes `Part`'s props and draws `Part` with them, so it stands
-  // for `Part`; the checker cannot relate a function of `P` to a generic one.
+  // for `Part`; the checker cannot relate it to a generic signature.
   return LazyPart as unknown as Part;
 }
 
 /**
- * While the part's code is on its way: said to assistive technology, and
- * drawn as nothing, so a part that arrives quickly does not flash a loading
- * mark. The screen around it is the admin's and stays drawn.
+ * A part's fetch, joined with the editor's stylesheet.
+ *
+ * For the parts that draw the builder's own controls or the plugin's `nx-pb-`
+ * classes, which the sheet styles. Fetched with them rather than imported by
+ * the admin entry, so a screen that draws none of them never downloads it.
  */
-function PartLoading(): JSX.Element {
-  return (
-    <span role="status" aria-live="polite" className="sr-only">
-      Loading
-    </span>
+export function withEditorStylesheet<Part>(part: Promise<Part>): Promise<Part> {
+  return Promise.all([import("./editor-stylesheet"), part]).then(
+    ([, loaded]) => loaded
   );
 }
 

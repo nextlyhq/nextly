@@ -42,6 +42,7 @@ vi.mock(
   "@nextlyhq/blocks-react/blocks",
   recorded("@nextlyhq/blocks-react/blocks")
 );
+vi.mock("@nextlyhq/blocks-react/next", recorded("@nextlyhq/blocks-react/next"));
 vi.mock("css-tree", recorded("css-tree"));
 vi.mock("parse5", recorded("parse5"));
 vi.mock("../styles/editor.css", () => {
@@ -81,6 +82,7 @@ const HEAVY = [
   "@nextlyhq/blocks-engine",
   "@nextlyhq/blocks-react",
   "@nextlyhq/blocks-react/blocks",
+  "@nextlyhq/blocks-react/next",
   "css-tree",
   "parse5",
   "editor.css",
@@ -88,12 +90,18 @@ const HEAVY = [
 
 // One import for the whole file: a module imported once is not imported
 // again, so a second import would record nothing and pass either way.
+// With the entry, the parts a screen that is not the builder's may draw at
+// once: the header's delete tools for a host's own component store (every
+// admin page) and the dashboard's card. Each is fetched on first draw, so
+// what they load reaches those screens too.
 beforeAll(async () => {
   await import("./index");
+  await import("./DeleteComponentAction");
+  await import("./bindings-report/BindingsToFixCard");
 });
 
-describe("the admin entry", () => {
-  it("loads no part of the editor, the block engine or the editor stylesheet", () => {
+describe("the admin entry, and the parts drawn on screens other than the builder's", () => {
+  it("load no part of the editor, the block engine or the editor stylesheet", () => {
     expect(HEAVY.filter(name => imported.has(name))).toEqual([]);
   });
 

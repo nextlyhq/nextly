@@ -55,7 +55,7 @@ import type {
 import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
-import { lazyPart } from "./lazy-part";
+import { lazyPart, withEditorStylesheet } from "./lazy-part";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
 import type { TemplateAddressField as TemplateAddressFieldPart } from "./TemplateAddressField";
@@ -68,26 +68,13 @@ import type { TransferImport as TransferImportPart } from "./transfer-import";
 
 /*
  * Every part below is registered now and fetched when a screen first draws
- * it (`lazyPart`). The app's generated component map imports this entry with
- * the admin's first load, so anything imported here eagerly is downloaded on
- * every admin screen, the sign-in page included. What stays eager is the
- * registration: the specifiers, the list column and the row actions.
+ * it (`lazyPart`), the editor's stylesheet with the parts it styles. The
+ * app's generated component map imports this entry with the admin's first
+ * load, so anything imported here eagerly is downloaded on every admin
+ * screen, the sign-in page included, and an app reaches the stylesheet
+ * through this entry alone. What stays eager is the registration: the
+ * specifiers, the list column and the row actions.
  */
-
-/**
- * A part fetched together with the editor's stylesheet.
- *
- * The parts that draw the builder's own controls, or the plugin's `nx-pb-`
- * classes, are styled by it. Fetched with them rather than imported here, so
- * a screen that draws none of them never downloads it. An app reaches the
- * sheet through this entry alone: configuring the plugin is enough, and an app
- * that still imports the sheet by hand loads the same file, once.
- */
-function withEditorStylesheet<Part>(part: Promise<Part>): Promise<Part> {
-  return Promise.all([import("./editor-stylesheet"), part]).then(
-    ([, loaded]) => loaded
-  );
-}
 
 const BindingsToFixCard: typeof BindingsToFixCardPart = lazyPart(() =>
   import("./bindings-report/BindingsToFixCard").then(m => m.BindingsToFixCard)
@@ -102,21 +89,14 @@ const BlocksSummary: typeof BlocksSummaryPart = lazyPart(() =>
   import("./BlocksSummary").then(m => m.BlocksSummary)
 );
 const ComponentListTools: typeof ComponentListToolsPart = lazyPart(() =>
-  withEditorStylesheet(import("./DeleteComponentAction")).then(
-    m => m.ComponentListTools
-  )
+  import("./DeleteComponentAction").then(m => m.ComponentListTools)
 );
 const ComponentStoreDeleteHost: typeof ComponentStoreDeleteHostPart = lazyPart(
-  () =>
-    withEditorStylesheet(import("./DeleteComponentAction")).then(
-      m => m.ComponentStoreDeleteHost
-    )
+  () => import("./DeleteComponentAction").then(m => m.ComponentStoreDeleteHost)
 );
 const DeleteComponentReplacement: typeof DeleteComponentReplacementPart =
   lazyPart(() =>
-    withEditorStylesheet(import("./DeleteComponentAction")).then(
-      m => m.DeleteComponentReplacement
-    )
+    import("./DeleteComponentAction").then(m => m.DeleteComponentReplacement)
   );
 const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
   import("./EntryDesignSection").then(m => m.EntryDesignSection)

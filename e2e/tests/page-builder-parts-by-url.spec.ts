@@ -113,6 +113,9 @@ test.describe("the page builder's parts, opened by their address", () => {
   }) => {
     await gotoAdmin(page, "/");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // The parts the dashboard draws fetch their code after it shows: once the
+    // network is quiet, anything they brought is on the page.
+    await page.waitForLoadState("networkidle");
 
     expect(await hasRuleFor(page, EDITOR_RULE)).toBe(false);
   });
