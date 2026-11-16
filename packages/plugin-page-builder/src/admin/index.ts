@@ -42,43 +42,114 @@ import {
   TEMPLATE_OWN_DESIGNS_COMPONENT,
 } from "../builder-view";
 import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
-/*
- * The editor's stylesheet, loaded by whatever loads this entry.
- *
- * An app reaches this module through the component map `nextly generate:types`
- * writes, which imports it wherever the plugin is configured. Importing the
- * sheet here is what makes "configure the plugin" enough: before, every app
- * also had to import it in its admin page by hand, and one that missed the step
- * got an unstyled builder with no error. An app that still imports it by hand
- * loads the same file, which its bundler includes once.
- *
- * Relative, and kept external by the build (`tsdown.config.ts`): the sheet is
- * copied into `dist/styles` rather than bundled, so `dist/admin/index.js`
- * reaches the shipped file by the same relative path this source file uses.
- */
-import "../styles/editor.css";
 
-import { BindingsToFixCard } from "./bindings-report/BindingsToFixCard";
-import { BindingsToFixPage } from "./bindings-report/BindingsToFixPage";
-import { BlocksField } from "./BlocksField";
-import { BlocksSummary } from "./BlocksSummary";
-import {
-  ComponentListTools,
-  ComponentStoreDeleteHost,
-  DeleteComponentReplacement,
+import type { BindingsToFixCard as BindingsToFixCardPart } from "./bindings-report/BindingsToFixCard";
+import type { BindingsToFixPage as BindingsToFixPagePart } from "./bindings-report/BindingsToFixPage";
+import type { BlocksField as BlocksFieldPart } from "./BlocksField";
+import type { BlocksSummary as BlocksSummaryPart } from "./BlocksSummary";
+import type {
+  ComponentListTools as ComponentListToolsPart,
+  ComponentStoreDeleteHost as ComponentStoreDeleteHostPart,
+  DeleteComponentReplacement as DeleteComponentReplacementPart,
 } from "./DeleteComponentAction";
-import { PageBuilderView } from "./editor/PageBuilderView";
+import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
-import { EntryDesignSection } from "./EntryDesignSection";
-import { PageBuilderOverview } from "./overview/PageBuilderOverview";
-import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
-import { TemplateAddressField } from "./TemplateAddressField";
-import { TemplateCollectionField } from "./TemplateCollectionField";
-import { TemplateDeleteAction } from "./TemplateDeleteAction";
-import { TemplateDesignDetails } from "./TemplateDesignDetails";
-import { TemplateOwnDesigns } from "./TemplateOwnDesigns";
+import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
+import { lazyPart } from "./lazy-part";
+import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
+import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
+import type { TemplateAddressField as TemplateAddressFieldPart } from "./TemplateAddressField";
+import type { TemplateCollectionField as TemplateCollectionFieldPart } from "./TemplateCollectionField";
+import type { TemplateDeleteAction as TemplateDeleteActionPart } from "./TemplateDeleteAction";
+import type { TemplateDesignDetails as TemplateDesignDetailsPart } from "./TemplateDesignDetails";
+import type { TemplateOwnDesigns as TemplateOwnDesignsPart } from "./TemplateOwnDesigns";
 import { registerExportActions } from "./transfer-export-action";
-import { TransferImport } from "./transfer-import";
+import type { TransferImport as TransferImportPart } from "./transfer-import";
+
+/*
+ * Every part below is registered now and fetched when a screen first draws
+ * it (`lazyPart`). The app's generated component map imports this entry with
+ * the admin's first load, so anything imported here eagerly is downloaded on
+ * every admin screen, the sign-in page included. What stays eager is the
+ * registration: the specifiers, the list column and the row actions.
+ */
+
+/**
+ * A part fetched together with the editor's stylesheet.
+ *
+ * The parts that draw the builder's own controls, or the plugin's `nx-pb-`
+ * classes, are styled by it. Fetched with them rather than imported here, so
+ * a screen that draws none of them never downloads it. An app reaches the
+ * sheet through this entry alone: configuring the plugin is enough, and an app
+ * that still imports the sheet by hand loads the same file, once.
+ */
+function withEditorStylesheet<Part>(part: Promise<Part>): Promise<Part> {
+  return Promise.all([import("./editor-stylesheet"), part]).then(
+    ([, loaded]) => loaded
+  );
+}
+
+const BindingsToFixCard: typeof BindingsToFixCardPart = lazyPart(() =>
+  import("./bindings-report/BindingsToFixCard").then(m => m.BindingsToFixCard)
+);
+const BindingsToFixPage: typeof BindingsToFixPagePart = lazyPart(() =>
+  import("./bindings-report/BindingsToFixPage").then(m => m.BindingsToFixPage)
+);
+const BlocksField: typeof BlocksFieldPart = lazyPart(() =>
+  withEditorStylesheet(import("./BlocksField")).then(m => m.BlocksField)
+);
+const BlocksSummary: typeof BlocksSummaryPart = lazyPart(() =>
+  import("./BlocksSummary").then(m => m.BlocksSummary)
+);
+const ComponentListTools: typeof ComponentListToolsPart = lazyPart(() =>
+  withEditorStylesheet(import("./DeleteComponentAction")).then(
+    m => m.ComponentListTools
+  )
+);
+const ComponentStoreDeleteHost: typeof ComponentStoreDeleteHostPart = lazyPart(
+  () =>
+    withEditorStylesheet(import("./DeleteComponentAction")).then(
+      m => m.ComponentStoreDeleteHost
+    )
+);
+const DeleteComponentReplacement: typeof DeleteComponentReplacementPart =
+  lazyPart(() =>
+    withEditorStylesheet(import("./DeleteComponentAction")).then(
+      m => m.DeleteComponentReplacement
+    )
+  );
+const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
+  import("./EntryDesignSection").then(m => m.EntryDesignSection)
+);
+const PageBuilderOverview: typeof PageBuilderOverviewPart = lazyPart(() =>
+  import("./overview/PageBuilderOverview").then(m => m.PageBuilderOverview)
+);
+const PageBuilderView: typeof PageBuilderViewPart = lazyPart(() =>
+  withEditorStylesheet(import("./editor/PageBuilderView")).then(
+    m => m.PageBuilderView
+  )
+);
+const RemoveLayoutToolbarSlot: typeof RemoveLayoutToolbarSlotPart = lazyPart(
+  () => import("./RemoveLayoutAction").then(m => m.RemoveLayoutToolbarSlot)
+);
+const TemplateAddressField: typeof TemplateAddressFieldPart = lazyPart(() =>
+  import("./TemplateAddressField").then(m => m.TemplateAddressField)
+);
+const TemplateCollectionField: typeof TemplateCollectionFieldPart = lazyPart(
+  () => import("./TemplateCollectionField").then(m => m.TemplateCollectionField)
+);
+const TemplateDeleteAction: typeof TemplateDeleteActionPart = lazyPart(() =>
+  import("./TemplateDeleteAction").then(m => m.TemplateDeleteAction)
+);
+const TemplateDesignDetails: typeof TemplateDesignDetailsPart = lazyPart(() =>
+  import("./TemplateDesignDetails").then(m => m.TemplateDesignDetails)
+);
+const TemplateOwnDesigns: typeof TemplateOwnDesignsPart = lazyPart(() =>
+  import("./TemplateOwnDesigns").then(m => m.TemplateOwnDesigns)
+);
+const TransferImport: typeof TransferImportPart = lazyPart(() =>
+  withEditorStylesheet(import("./transfer-import")).then(m => m.TransferImport)
+);
 
 /**
  * The blocks field's editor-form control.
@@ -184,7 +255,7 @@ export {
  * modules plugins declared (`editorEntry`, `editor.component`). Not for a
  * plugin to call: the map is what knows every declared path.
  */
-export { registerBlockEditorModules } from "./contributed-blocks";
-export type { BlockEditorModules } from "./contributed-blocks";
+export { registerBlockEditorModules } from "./block-editor-modules";
+export type { BlockEditorModules } from "./block-editor-modules";
 export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";
