@@ -1404,21 +1404,18 @@ function useKeepOfferedChanges({
     setRefusal(null);
     setPhase("checking");
     const pressedIn = scopeNow.current;
+    const samePage = () => scopeNow.current === pressedIn;
+    // Written only to the page it was asked for, and over no newer edit.
     const outcome = await offer
-      .restoreChecked(() => !dirtyNow.current)
+      .restoreChecked(() => samePage() && !dirtyNow.current)
       .catch((): KeepOutcome => "unchecked");
     // Moved to another document or language meanwhile: whatever the answer,
     // it is about the one left behind, so nothing is saved or said here.
-    if (scopeNow.current !== pressedIn) {
-      return {
-        ok: false,
-        reason: "refused",
-        message: "Nothing was saved: the page on screen changed first.",
-        reported: true,
-      };
-    }
-    // Edited while it was checked: that edit is what Save stores.
-    if (outcome === "edited") {
+    if (!samePage()) return pageChanged();
+    // Edited while it was checked, and nothing restored over it: that edit
+    // is what Save stores, as it would be had it come before the press.
+    if (outcome === "edited" || (outcome !== "restored" && dirtyNow.current)) {
+      if (outcome === "changed") offer.dismiss();
       return (latest.current.save ?? unavailableSave)();
     }
     if (outcome !== "restored") {
@@ -1435,6 +1432,8 @@ function useKeepOfferedChanges({
       landed.current = resolve;
       setPhase("landing");
     });
+    // The page may have changed while the restore was drawn, too.
+    if (!samePage()) return pageChanged();
     return (latest.current.save ?? unavailableSave)();
   };
 
@@ -1463,6 +1462,16 @@ function runLatest(
   id: string
 ): Promise<DocumentActionOutcome> {
   return latest.current.run?.(id) ?? unavailableSave();
+}
+
+/** A keeping Save whose page changed before it could store anything. */
+function pageChanged(): Promise<DocumentActionOutcome> {
+  return Promise.resolve({
+    ok: false,
+    reason: "refused",
+    message: "Nothing was saved: the page on screen changed first.",
+    reported: true,
+  });
 }
 
 /** A Save that has nothing to run: refused, in words the author can act on. */
