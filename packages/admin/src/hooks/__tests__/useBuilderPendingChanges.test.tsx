@@ -485,3 +485,19 @@ describe("builder pending changes: settings changed before the fields they are s
     expect(result.current.state.pending.canUndo).toBe(false);
   });
 });
+
+describe("builder pending changes: pinning a settings-only save", () => {
+  it("leaves nothing to undo whichever order the save pins in", () => {
+    const { result } = setup();
+    const renamed = { ...settingsOf(entity), singularName: "Article" };
+    act(() => result.current.state.setSettings(renamed));
+    // Both taken from the render the save started in, as a save's callbacks are.
+    const { pinSettings, pinFields } = result.current.state;
+    act(() => {
+      pinSettings(renamed);
+      pinFields();
+    });
+    expect(result.current.state.unsavedCount).toBe(0);
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+});
