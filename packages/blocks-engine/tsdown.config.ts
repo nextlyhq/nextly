@@ -6,7 +6,12 @@ import { metafile } from "../../scripts/tsdown-metafile.mjs";
 // stay importable from Node scripts, edge runtimes, and the browser alike, so
 // it bundles nothing and targets plain ESM.
 export default defineConfig({
-  entry: ["src/index.ts", "src/format.ts", "src/contrast.ts"],
+  entry: [
+    "src/index.ts",
+    "src/format.ts",
+    "src/contrast.ts",
+    "src/named-query.ts",
+  ],
   format: ["esm"],
   // Declarations without a type check: `check-types` is the type check.
   // oxc writes the declarations from the source's own annotations

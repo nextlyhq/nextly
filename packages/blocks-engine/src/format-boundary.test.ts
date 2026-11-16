@@ -16,8 +16,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * The narrow entry points' whole value is what they do NOT reach: `./format`
- * and `./contrast`, each a slice of the engine a consumer can load alone.
+ * The narrow entry points' whole value is what they do NOT reach: `./format`,
+ * `./contrast` and `./named-query`, each a slice of the engine a consumer can
+ * load alone.
  *
  * It exists so a consumer that needs the document format's vocabulary — a
  * generator, a schema publisher, an agent — does not also load the validator,
@@ -78,10 +79,15 @@ const METAFILE = join(DIST, "metafile-esm.json");
 const CHILD_TIMEOUT_MS = 60_000;
 /**
  * The entry points that exist to reach less than the root: the format's
- * vocabulary, and the colour contrast math (core checks contrast on every
- * admin screen, where the engine's CSS parser has no business).
+ * vocabulary, the colour contrast math (core checks contrast on every admin
+ * screen, where the engine's CSS parser has no business), and named queries
+ * (which a block-contributing plugin reaches through the plugin SDK).
  */
-const NARROW_ENTRIES = ["format.mjs", "contrast.mjs"] as const;
+const NARROW_ENTRIES = [
+  "format.mjs",
+  "contrast.mjs",
+  "named-query.mjs",
+] as const;
 const ROOT_ENTRY = "index.mjs";
 
 /** What running one entry point in a child process reported. */
@@ -413,6 +419,26 @@ describe("the walk over that graph", () => {
       "deferred-pkg",
       "eager-pkg",
     ]);
+  });
+});
+
+describe("a narrow entry and the root", () => {
+  it("hand out the same named-query functions, so there is one registry", async () => {
+    // `named-query.ts` keeps the process's registry of named queries. A build
+    // that copied it into the narrow entry would give a plugin registering
+    // through the SDK a registry the renderer, reading through the root,
+    // never sees.
+    const root = (await import(pathToFileURL(join(DIST, ROOT_ENTRY)).href)) as {
+      defineNamedQuery: unknown;
+      param: unknown;
+    };
+    const narrow = (await import(
+      pathToFileURL(join(DIST, "named-query.mjs")).href
+    )) as { defineNamedQuery: unknown; param: unknown };
+
+    expect(narrow.defineNamedQuery).toBeTypeOf("function");
+    expect(narrow.defineNamedQuery).toBe(root.defineNamedQuery);
+    expect(narrow.param).toBe(root.param);
   });
 });
 

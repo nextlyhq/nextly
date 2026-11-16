@@ -12,9 +12,10 @@
  *
  * - the sign-in page and the dashboard: the page builder's code there is its
  *   registration alone, at most `REGISTRATION_BUDGET_KB` gzipped, and holds no
- *   module of the builder editor, of the block engine beyond its contrast
- *   entry (core checks colours with that, on every screen), or of the
- *   engine's CSS parser; the editor stylesheet is not among the stylesheets
+ *   module of the builder editor, of the block engine beyond its narrow
+ *   entries (core checks colours with `./contrast` on every screen, and a
+ *   block-contributing plugin reaches `./named-query` through the plugin
+ *   SDK), or of the engine's CSS parser; the editor stylesheet is not among the stylesheets
  *   every admin screen links;
  * - the dashboard with the plugin's parts it draws without a click (the
  *   Bindings to fix card, the header's delete tools): held to the same
@@ -71,7 +72,7 @@ const ADMIN_PAGES = "packages/admin/src/";
  * The screens, each by the modules whose loaders run on the way to it: the
  * admin's route, then the plugin's parts on that route. An `editorFree`
  * screen is held to `REGISTRATION_BUDGET_KB` with no module of the builder
- * editor, of the block engine beyond its contrast entry, or of the CSS parser.
+ * editor, of the block engine beyond its narrow entries, or of the CSS parser.
  */
 export const SCREENS = [
   {
@@ -121,21 +122,21 @@ export const GROUPS = [
       /^packages\/(plugin-page-builder|builder|blocks-react)\//.test(source),
   },
   {
-    // Measured, not budgeted: its contrast entry is on every screen, as core's
-    // colour helpers check contrast with it.
+    // Measured, not budgeted: its narrow entries may be on every screen (see
+    // the next group, which is judged).
     name: "block engine",
     matches: source => source.startsWith("packages/blocks-engine/"),
   },
   {
-    // Judged on a screen that draws no part: the engine less its contrast
-    // entry and the modules that entry reads, as source or as built (the
-    // entry, and the chunk it shares with the root, are named after it).
-    name: "block engine beyond its contrast entry",
+    // Judged on a screen that draws no part: the engine less its narrow
+    // entries and the modules they read, as source or as built (each entry,
+    // and the chunks it shares with the root, are named after it). Core
+    // checks colours with `./contrast` on every screen, and a plugin that
+    // contributes blocks reaches `./named-query` through the plugin SDK.
+    name: "block engine beyond its narrow entries",
     matches: source =>
       source.startsWith("packages/blocks-engine/") &&
-      !/^packages\/blocks-engine\/(src\/(contrast|style\/contrast|style\/css-identifier)\.ts|dist\/contrast(-[\w-]+)?\.mjs)$/.test(
-        source
-      ),
+      !NARROW_ENGINE_SOURCES.test(source),
   },
   {
     name: "builder editor",
@@ -173,6 +174,15 @@ export const GROUPS = [
       ),
   },
 ];
+
+/**
+ * The block engine's narrow entries and every module they read, as the
+ * build's source maps name them: `./contrast` (with `style/contrast` and
+ * `style/css-identifier`) and `./named-query` (with the four dependency-free
+ * modules it reads), or their built files.
+ */
+const NARROW_ENGINE_SOURCES =
+  /^packages\/blocks-engine\/(src\/(contrast|style\/contrast|style\/css-identifier|named-query|calendar-day|field-name|issue-text|plain-record)\.ts|dist\/(contrast|named-query)(-[\w-]+)?\.mjs)$/;
 
 /** The editor stylesheet, as the build's CSS source maps name it. */
 const EDITOR_STYLESHEET =
@@ -294,7 +304,7 @@ function editorFreeBreaches(screen) {
   }
   for (const group of [
     "builder editor",
-    "block engine beyond its contrast entry",
+    "block engine beyond its narrow entries",
     "CSS parser",
   ]) {
     const sources = screen.groups[group].sources;

@@ -35,7 +35,7 @@ function screen(name, groups = {}, fetchable = [EDITOR_SHEET]) {
     groups: {
       "page builder": empty,
       "block engine": empty,
-      "block engine beyond its contrast entry": empty,
+      "block engine beyond its narrow entries": empty,
       "builder editor": empty,
       "CSS parser": empty,
       "site-code section": empty,
@@ -112,12 +112,12 @@ describe("breaches", () => {
     ]);
   });
 
-  it("names block engine code beyond its contrast entry on a screen that draws no part", () => {
+  it("names block engine code beyond its narrow entries on a screen that draws no part", () => {
     expect(
       breaches(
         [
           screen("dashboard", {
-            "block engine beyond its contrast entry": {
+            "block engine beyond its narrow entries": {
               gzippedBytes: 1,
               sources: ["packages/blocks-engine/src/document.ts"],
             },
@@ -126,7 +126,7 @@ describe("breaches", () => {
         []
       )
     ).toEqual([
-      "dashboard: holds the block engine beyond its contrast entry (1 modules, e.g. packages/blocks-engine/src/document.ts)",
+      "dashboard: holds the block engine beyond its narrow entries (1 modules, e.g. packages/blocks-engine/src/document.ts)",
     ]);
   });
 
@@ -280,18 +280,24 @@ describe("sourceLengths", () => {
   });
 });
 
-describe("the block engine beyond its contrast entry", () => {
+describe("the block engine beyond its narrow entries", () => {
   const group = GROUPS.find(
-    candidate => candidate.name === "block engine beyond its contrast entry"
+    candidate => candidate.name === "block engine beyond its narrow entries"
   );
 
-  it("leaves out the contrast entry and the modules it reads, as source or as built", () => {
+  it("leaves out the narrow entries and the modules they read, as source or as built", () => {
     for (const source of [
       "packages/blocks-engine/src/contrast.ts",
       "packages/blocks-engine/src/style/contrast.ts",
       "packages/blocks-engine/src/style/css-identifier.ts",
       "packages/blocks-engine/dist/contrast.mjs",
       "packages/blocks-engine/dist/contrast-CTtMvkyT.mjs",
+      "packages/blocks-engine/src/named-query.ts",
+      "packages/blocks-engine/src/plain-record.ts",
+      "packages/blocks-engine/src/calendar-day.ts",
+      "packages/blocks-engine/src/field-name.ts",
+      "packages/blocks-engine/src/issue-text.ts",
+      "packages/blocks-engine/dist/named-query.mjs",
     ]) {
       expect(group?.matches(source), source).toBe(false);
     }
