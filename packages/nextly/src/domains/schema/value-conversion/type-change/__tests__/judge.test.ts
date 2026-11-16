@@ -45,9 +45,11 @@ const date = (iso: string): OldValue => {
 };
 const empty: OldValue = { kind: "empty" };
 
-const options = (...values: string[]) => ({
-  options: values.map(value => ({ label: value, value })),
-});
+// The options as the Builder stores a select's or a radio's choices.
+const options = (...values: string[]) =>
+  ({
+    options: values.map(value => ({ label: value, value })),
+  }) as unknown as Partial<FieldDefinition>;
 const float = { options: { format: "float" } } as Partial<FieldDefinition>;
 const decimal = { dbType: "decimal" } as Partial<FieldDefinition>;
 const longEnough = "x".repeat(300);
@@ -64,109 +66,577 @@ interface Case {
 
 const CASES: Case[] = [
   // Rule 4: empty values stay empty, kept, under every pair.
-  { name: "a null to a number", from: ["text"], to: ["number"], value: empty, outcome: "kept" },
-  { name: "a JSON null to a list", from: ["json"], to: ["chips"], value: json(null), outcome: "kept" },
-  { name: "a JSON [] to text", from: ["json"], to: ["text"], value: json([]), outcome: "kept" },
-  { name: "an empty list to a text", from: ["chips"], to: ["text"], value: list(), outcome: "kept" },
+  {
+    name: "a null to a number",
+    from: ["text"],
+    to: ["number"],
+    value: empty,
+    outcome: "kept",
+  },
+  {
+    name: "a JSON null to a list",
+    from: ["json"],
+    to: ["chips"],
+    value: json(null),
+    outcome: "kept",
+  },
+  {
+    name: "a JSON [] to text",
+    from: ["json"],
+    to: ["text"],
+    value: json([]),
+    outcome: "kept",
+  },
+  {
+    name: "an empty list to a text",
+    from: ["chips"],
+    to: ["text"],
+    value: list(),
+    outcome: "kept",
+  },
 
   // Text, Email, Choice to Text.
-  { name: "an email to text", from: ["email"], to: ["text"], value: text("a@b.io"), outcome: "kept", readsAs: "a@b.io" },
+  {
+    name: "an email to text",
+    from: ["email"],
+    to: ["text"],
+    value: text("a@b.io"),
+    outcome: "kept",
+    readsAs: "a@b.io",
+  },
   // A short text is a varchar(255) on PostgreSQL and MySQL, and unbounded text on SQLite.
-  { name: "a textarea value over 255 characters to a short text", from: ["textarea"], to: ["text", { options: { variant: "short" } } as Partial<FieldDefinition>], value: text(longEnough), outcome: { postgresql: "blocked", mysql: "blocked", sqlite: "kept" } },
-  { name: "a textarea value over 255 characters to a text", from: ["textarea"], to: ["text"], value: text(longEnough), outcome: "kept" },
+  {
+    name: "a textarea value over 255 characters to a short text",
+    from: ["textarea"],
+    to: ["text", { options: { variant: "short" } } as Partial<FieldDefinition>],
+    value: text(longEnough),
+    outcome: { postgresql: "blocked", mysql: "blocked", sqlite: "kept" },
+  },
+  {
+    name: "a textarea value over 255 characters to a text",
+    from: ["textarea"],
+    to: ["text"],
+    value: text(longEnough),
+    outcome: "kept",
+  },
 
   // To Email.
-  { name: "a text the email rule accepts", from: ["text"], to: ["email"], value: text("a@b.io"), outcome: "kept" },
-  { name: "a text the email rule refuses", from: ["text"], to: ["email"], value: text("not an email"), outcome: "lost" },
-  { name: "a textarea value over 255 characters to an email", from: ["textarea"], to: ["email"], value: text(longEnough), outcome: { postgresql: "lost", mysql: "blocked", sqlite: "lost" } },
+  {
+    name: "a text the email rule accepts",
+    from: ["text"],
+    to: ["email"],
+    value: text("a@b.io"),
+    outcome: "kept",
+  },
+  {
+    name: "a text the email rule refuses",
+    from: ["text"],
+    to: ["email"],
+    value: text("not an email"),
+    outcome: "lost",
+  },
+  {
+    name: "a textarea value over 255 characters to an email",
+    from: ["textarea"],
+    to: ["email"],
+    value: text(longEnough),
+    outcome: { postgresql: "lost", mysql: "blocked", sqlite: "lost" },
+  },
 
   // To Choice.
-  { name: "a text that is an option", from: ["text"], to: ["radio", options("red", "blue")], value: text("red"), outcome: "kept" },
-  { name: "a text that is no option", from: ["text"], to: ["radio", options("red", "blue")], value: text("green"), outcome: "lost" },
-  { name: "a textarea value over 255 characters to a choice", from: ["textarea"], to: ["select", options(longEnough)], value: text(longEnough), outcome: { postgresql: "kept", mysql: "blocked", sqlite: "kept" } },
+  {
+    name: "a text that is an option",
+    from: ["text"],
+    to: ["radio", options("red", "blue")],
+    value: text("red"),
+    outcome: "kept",
+  },
+  {
+    name: "a text that is no option",
+    from: ["text"],
+    to: ["radio", options("red", "blue")],
+    value: text("green"),
+    outcome: "lost",
+  },
+  {
+    name: "a textarea value over 255 characters to a choice",
+    from: ["textarea"],
+    to: ["select", options(longEnough)],
+    value: text(longEnough),
+    outcome: { postgresql: "kept", mysql: "blocked", sqlite: "kept" },
+  },
 
   // To Rich text: one paragraph per line, changed.
-  { name: "a text to rich text", from: ["text"], to: ["richText"], value: text("one\ntwo"), outcome: "changed" },
+  {
+    name: "a text to rich text",
+    from: ["text"],
+    to: ["richText"],
+    value: text("one\ntwo"),
+    outcome: "changed",
+  },
 
   // To Number (rule 2: "01" reads back as 1, changed).
-  { name: "\"01\" to a whole number", from: ["text"], to: ["number"], value: text("01"), outcome: "changed", readsAs: "1" },
-  { name: "\"1.50\" to a float", from: ["text"], to: ["number", float], value: text("1.50"), outcome: "changed", readsAs: "1.5" },
-  { name: "a fraction text to a whole number", from: ["text"], to: ["number"], value: text("1.5"), outcome: "blocked" },
-  { name: "a text that is not a number", from: ["text"], to: ["number"], value: text("abc"), outcome: "lost" },
-  { name: "an empty string to a number", from: ["text"], to: ["number"], value: text(""), outcome: "lost" },
-  { name: "a text beyond 32 bits to a whole number", from: ["text"], to: ["number"], value: text("3000000000"), outcome: { postgresql: "blocked", mysql: "blocked", sqlite: "changed" } },
-  { name: "a text Infinity to a float", from: ["text"], to: ["number", float], value: text("Infinity"), outcome: { postgresql: "changed", mysql: "lost", sqlite: "changed" } },
-  { name: "a text Infinity to a decimal", from: ["text"], to: ["number", decimal], value: text("infinity"), outcome: { postgresql: "lost", mysql: "lost", sqlite: "changed" } },
+  {
+    name: '"01" to a whole number',
+    from: ["text"],
+    to: ["number"],
+    value: text("01"),
+    outcome: "changed",
+    readsAs: "1",
+  },
+  {
+    name: '"1.50" to a float',
+    from: ["text"],
+    to: ["number", float],
+    value: text("1.50"),
+    outcome: "changed",
+    readsAs: "1.5",
+  },
+  {
+    name: "a fraction text to a whole number",
+    from: ["text"],
+    to: ["number"],
+    value: text("1.5"),
+    outcome: "blocked",
+  },
+  {
+    name: "a text that is not a number",
+    from: ["text"],
+    to: ["number"],
+    value: text("abc"),
+    outcome: "lost",
+  },
+  {
+    name: "an empty string to a number",
+    from: ["text"],
+    to: ["number"],
+    value: text(""),
+    outcome: "lost",
+  },
+  {
+    name: "a text beyond 32 bits to a whole number",
+    from: ["text"],
+    to: ["number"],
+    value: text("3000000000"),
+    outcome: { postgresql: "blocked", mysql: "blocked", sqlite: "changed" },
+  },
+  {
+    name: "a text Infinity to a float",
+    from: ["text"],
+    to: ["number", float],
+    value: text("Infinity"),
+    outcome: { postgresql: "changed", mysql: "lost", sqlite: "changed" },
+  },
+  {
+    name: "a text Infinity to a decimal",
+    from: ["text"],
+    to: ["number", decimal],
+    value: text("infinity"),
+    outcome: { postgresql: "lost", mysql: "lost", sqlite: "changed" },
+  },
 
   // To Checkbox.
-  { name: "a text TRUE to a checkbox", from: ["text"], to: ["checkbox"], value: text("TRUE"), outcome: "changed", readsAs: "true" },
-  { name: "a text 0 to a checkbox", from: ["text"], to: ["checkbox"], value: text("0"), outcome: "changed", readsAs: "false" },
-  { name: "a text yes to a checkbox", from: ["text"], to: ["checkbox"], value: text("yes"), outcome: "lost" },
+  {
+    name: "a text TRUE to a checkbox",
+    from: ["text"],
+    to: ["checkbox"],
+    value: text("TRUE"),
+    outcome: "changed",
+    readsAs: "true",
+  },
+  {
+    name: "a text 0 to a checkbox",
+    from: ["text"],
+    to: ["checkbox"],
+    value: text("0"),
+    outcome: "changed",
+    readsAs: "false",
+  },
+  {
+    name: "a text yes to a checkbox",
+    from: ["text"],
+    to: ["checkbox"],
+    value: text("yes"),
+    outcome: "lost",
+  },
 
   // To Date (rule 7).
-  { name: "a date-time with an offset to a date", from: ["text"], to: ["date"], value: text("2026-01-02T03:04:05+02:00"), outcome: "changed", readsAs: "2026-01-02T01:04:05Z" },
-  { name: "a date-only text to a date", from: ["text"], to: ["date"], value: text("2026-01-02"), outcome: "blocked" },
-  { name: "a date-time with no offset to a date", from: ["text"], to: ["date"], value: text("2026-01-02T03:04:05"), outcome: "blocked" },
-  { name: "a date-time with milliseconds to a date", from: ["text"], to: ["date"], value: text("2026-01-02T03:04:05.250Z"), outcome: { postgresql: "changed", mysql: "blocked", sqlite: "blocked" } },
-  { name: "a date-time past 2038 to a date", from: ["text"], to: ["date"], value: text("2040-01-01T00:00:00Z"), outcome: { postgresql: "changed", mysql: "blocked", sqlite: "changed" } },
-  { name: "a text that is no date", from: ["text"], to: ["date"], value: text("tomorrow"), outcome: "lost" },
-  { name: "a day that does not exist", from: ["text"], to: ["date"], value: text("2026-02-30T00:00:00Z"), outcome: "lost" },
+  {
+    name: "a date-time with an offset to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-01-02T03:04:05+02:00"),
+    outcome: "changed",
+    readsAs: "2026-01-02T01:04:05Z",
+  },
+  {
+    name: "a date-only text to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-01-02"),
+    outcome: "blocked",
+  },
+  {
+    name: "a date-time with no offset to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-01-02T03:04:05"),
+    outcome: "blocked",
+  },
+  {
+    name: "a date-time with milliseconds to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-01-02T03:04:05.250Z"),
+    outcome: { postgresql: "changed", mysql: "blocked", sqlite: "blocked" },
+  },
+  {
+    name: "a date-time past 2038 to a date",
+    from: ["text"],
+    to: ["date"],
+    value: text("2040-01-01T00:00:00Z"),
+    outcome: { postgresql: "changed", mysql: "blocked", sqlite: "changed" },
+  },
+  {
+    name: "a text that is no date",
+    from: ["text"],
+    to: ["date"],
+    value: text("tomorrow"),
+    outcome: "lost",
+  },
+  {
+    name: "a day that does not exist",
+    from: ["text"],
+    to: ["date"],
+    value: text("2026-02-30T00:00:00Z"),
+    outcome: "lost",
+  },
 
   // To JSON and to List.
-  { name: "a text to JSON (kept as a JSON string)", from: ["text"], to: ["json"], value: text("hello"), outcome: "kept" },
-  { name: "a text to a list of text", from: ["text"], to: ["chips"], value: text("a"), outcome: "changed", readsAs: '["a"]' },
-  { name: "a text that is no number to a list of numbers", from: ["text"], to: ["number", { hasMany: true }], value: text("abc"), outcome: "lost" },
+  {
+    name: "a text to JSON (kept as a JSON string)",
+    from: ["text"],
+    to: ["json"],
+    value: text("hello"),
+    outcome: "kept",
+  },
+  {
+    name: "a text to a list of text",
+    from: ["text"],
+    to: ["chips"],
+    value: text("a"),
+    outcome: "changed",
+    readsAs: '["a"]',
+  },
+  {
+    name: "a text that is no number to a list of numbers",
+    from: ["text"],
+    to: ["number", { hasMany: true }],
+    value: text("abc"),
+    outcome: "lost",
+  },
 
   // Rich text.
-  { name: "rich text to JSON", from: ["richText"], to: ["json"], value: { kind: "document", value: { root: { type: "root", children: [] } } }, outcome: "kept" },
-  { name: "rich text to text", from: ["richText"], to: ["text"], value: { kind: "document", value: { root: { type: "root", children: [] } } }, outcome: "changed" },
-  { name: "rich text to a number", from: ["richText"], to: ["number"], value: { kind: "document", value: { root: { type: "root", children: [] } } }, outcome: "blocked" },
+  {
+    name: "rich text to JSON",
+    from: ["richText"],
+    to: ["json"],
+    value: {
+      kind: "document",
+      value: { root: { type: "root", children: [] } },
+    },
+    outcome: "kept",
+  },
+  {
+    name: "rich text to text",
+    from: ["richText"],
+    to: ["text"],
+    value: {
+      kind: "document",
+      value: { root: { type: "root", children: [] } },
+    },
+    outcome: "changed",
+  },
+  {
+    name: "rich text to a number",
+    from: ["richText"],
+    to: ["number"],
+    value: {
+      kind: "document",
+      value: { root: { type: "root", children: [] } },
+    },
+    outcome: "blocked",
+  },
 
   // Number.
-  { name: "a number to text", from: ["number", float], to: ["text"], value: num("1.25"), outcome: "changed", readsAs: "1.25" },
-  { name: "a whole number to a float", from: ["number"], to: ["number", float], value: num("7"), outcome: "kept" },
-  { name: "a fraction to a whole number", from: ["number", float], to: ["number"], value: num("1.5"), outcome: "blocked" },
-  { name: "a whole number beyond what a double holds exactly", from: ["number", decimal], to: ["number", float], value: num("9007199254740993"), outcome: "blocked" },
-  { name: "a float with more digits than a decimal's scale", from: ["number", float], to: ["number", decimal], value: num("1.255"), outcome: "blocked" },
-  { name: "a number 1 to a checkbox", from: ["number"], to: ["checkbox"], value: num("1"), outcome: "changed" },
-  { name: "a number 2 to a checkbox", from: ["number"], to: ["checkbox"], value: num("2"), outcome: "lost" },
-  { name: "a NaN to JSON", from: ["number", float], to: ["json"], value: num("NaN"), outcome: "lost" },
-  { name: "an Infinity to text", from: ["number", float], to: ["text"], value: num("Infinity"), outcome: "changed", readsAs: "Infinity" },
-  { name: "a number to a list of numbers", from: ["number"], to: ["number", { hasMany: true }], value: num("3"), outcome: "changed" },
+  {
+    name: "a number to text",
+    from: ["number", float],
+    to: ["text"],
+    value: num("1.25"),
+    outcome: "changed",
+    readsAs: "1.25",
+  },
+  {
+    name: "a whole number to a float",
+    from: ["number"],
+    to: ["number", float],
+    value: num("7"),
+    outcome: "kept",
+  },
+  {
+    name: "a fraction to a whole number",
+    from: ["number", float],
+    to: ["number"],
+    value: num("1.5"),
+    outcome: "blocked",
+  },
+  {
+    name: "a whole number beyond what a double holds exactly",
+    from: ["number", decimal],
+    to: ["number", float],
+    value: num("9007199254740993"),
+    outcome: "blocked",
+  },
+  {
+    name: "a float with more digits than a decimal's scale",
+    from: ["number", float],
+    to: ["number", decimal],
+    value: num("1.255"),
+    outcome: "blocked",
+  },
+  {
+    name: "a number 1 to a checkbox",
+    from: ["number"],
+    to: ["checkbox"],
+    value: num("1"),
+    outcome: "changed",
+  },
+  {
+    name: "a number 2 to a checkbox",
+    from: ["number"],
+    to: ["checkbox"],
+    value: num("2"),
+    outcome: "lost",
+  },
+  {
+    name: "a NaN to JSON",
+    from: ["number", float],
+    to: ["json"],
+    value: num("NaN"),
+    outcome: "lost",
+  },
+  {
+    name: "an Infinity to text",
+    from: ["number", float],
+    to: ["text"],
+    value: num("Infinity"),
+    outcome: "changed",
+    readsAs: "Infinity",
+  },
+  {
+    name: "a number to a list of numbers",
+    from: ["number"],
+    to: ["number", { hasMany: true }],
+    value: num("3"),
+    outcome: "changed",
+  },
 
   // Checkbox.
-  { name: "a checkbox to text", from: ["checkbox"], to: ["text"], value: bool(true), outcome: "changed", readsAs: "true" },
-  { name: "a checkbox to a number", from: ["checkbox"], to: ["number"], value: bool(false), outcome: "changed", readsAs: "0" },
-  { name: "a checkbox to JSON", from: ["checkbox"], to: ["json"], value: bool(true), outcome: "kept" },
-  { name: "a checkbox to rich text", from: ["checkbox"], to: ["richText"], value: bool(true), outcome: "changed" },
-  { name: "a checkbox to a list of options holding it", from: ["checkbox"], to: ["select", { hasMany: true, ...options("true", "false") }], value: bool(true), outcome: "changed" },
-  { name: "a checkbox to a list of options not holding it", from: ["checkbox"], to: ["select", { hasMany: true, ...options("yes") }], value: bool(true), outcome: "lost" },
-  { name: "a checkbox to a list (never kept)", from: ["checkbox"], to: ["chips"], value: bool(true), outcome: "changed" },
+  {
+    name: "a checkbox to text",
+    from: ["checkbox"],
+    to: ["text"],
+    value: bool(true),
+    outcome: "changed",
+    readsAs: "true",
+  },
+  {
+    name: "a checkbox to a number",
+    from: ["checkbox"],
+    to: ["number"],
+    value: bool(false),
+    outcome: "changed",
+    readsAs: "0",
+  },
+  {
+    name: "a checkbox to JSON",
+    from: ["checkbox"],
+    to: ["json"],
+    value: bool(true),
+    outcome: "kept",
+  },
+  {
+    name: "a checkbox to rich text",
+    from: ["checkbox"],
+    to: ["richText"],
+    value: bool(true),
+    outcome: "changed",
+  },
+  {
+    name: "a checkbox to a list of options holding it",
+    from: ["checkbox"],
+    to: ["select", { hasMany: true, ...options("true", "false") }],
+    value: bool(true),
+    outcome: "changed",
+  },
+  {
+    name: "a checkbox to a list of options not holding it",
+    from: ["checkbox"],
+    to: ["select", { hasMany: true, ...options("yes") }],
+    value: bool(true),
+    outcome: "lost",
+  },
+  {
+    name: "a checkbox to a list (never kept)",
+    from: ["checkbox"],
+    to: ["chips"],
+    value: bool(true),
+    outcome: "changed",
+  },
 
   // Date.
-  { name: "a date to text", from: ["date"], to: ["text"], value: date("2026-01-02T03:04:05Z"), outcome: "changed", readsAs: "2026-01-02T03:04:05Z" },
-  { name: "a date to JSON", from: ["date"], to: ["json"], value: date("2026-01-02T03:04:05Z"), outcome: "changed" },
-  { name: "a date to a list of options not holding it", from: ["date"], to: ["select", { hasMany: true, ...options("x") }], value: date("2026-01-02T03:04:05Z"), outcome: "lost" },
+  {
+    name: "a date to text",
+    from: ["date"],
+    to: ["text"],
+    value: date("2026-01-02T03:04:05Z"),
+    outcome: "changed",
+    readsAs: "2026-01-02T03:04:05Z",
+  },
+  {
+    name: "a date to JSON",
+    from: ["date"],
+    to: ["json"],
+    value: date("2026-01-02T03:04:05Z"),
+    outcome: "changed",
+  },
+  {
+    name: "a date to a list of options not holding it",
+    from: ["date"],
+    to: ["select", { hasMany: true, ...options("x") }],
+    value: date("2026-01-02T03:04:05Z"),
+    outcome: "lost",
+  },
 
   // JSON (rule 8).
-  { name: "a JSON true to a number", from: ["json"], to: ["number"], value: json(true), outcome: "changed", readsAs: "1" },
-  { name: "a JSON true to a checkbox", from: ["json"], to: ["checkbox"], value: json(true), outcome: "kept" },
-  { name: "a JSON [true] to a checkbox", from: ["json"], to: ["checkbox"], value: json([true]), outcome: "changed" },
-  { name: "a JSON number to a date", from: ["json"], to: ["date"], value: json(5), outcome: "lost" },
-  { name: "a JSON 1.5 to a whole number", from: ["json"], to: ["number"], value: json(1.5), outcome: "blocked" },
-  { name: "a JSON [\"x\"] to a number", from: ["json"], to: ["number"], value: json(["x"]), outcome: "blocked" },
-  { name: "a JSON object to text", from: ["json"], to: ["text"], value: json({ b: 1, a: 2 }), outcome: "changed", readsAs: '{"a":2,"b":1}' },
-  { name: "a JSON object to a number", from: ["json"], to: ["number"], value: json({ a: 1 }), outcome: "lost" },
-  { name: "a JSON document to rich text", from: ["json"], to: ["richText"], value: json({ root: { type: "root", children: [] } }), outcome: "kept" },
-  { name: "a JSON string to email", from: ["json"], to: ["email"], value: json("a@b.io"), outcome: "kept" },
+  {
+    name: "a JSON true to a number",
+    from: ["json"],
+    to: ["number"],
+    value: json(true),
+    outcome: "changed",
+    readsAs: "1",
+  },
+  {
+    name: "a JSON true to a checkbox",
+    from: ["json"],
+    to: ["checkbox"],
+    value: json(true),
+    outcome: "kept",
+  },
+  {
+    name: "a JSON [true] to a checkbox",
+    from: ["json"],
+    to: ["checkbox"],
+    value: json([true]),
+    outcome: "changed",
+  },
+  {
+    name: "a JSON number to a date",
+    from: ["json"],
+    to: ["date"],
+    value: json(5),
+    outcome: "lost",
+  },
+  {
+    name: "a JSON 1.5 to a whole number",
+    from: ["json"],
+    to: ["number"],
+    value: json(1.5),
+    outcome: "blocked",
+  },
+  {
+    name: 'a JSON ["x"] to a number',
+    from: ["json"],
+    to: ["number"],
+    value: json(["x"]),
+    outcome: "blocked",
+  },
+  {
+    name: "a JSON object to text",
+    from: ["json"],
+    to: ["text"],
+    value: json({ b: 1, a: 2 }),
+    outcome: "changed",
+    readsAs: '{"a":2,"b":1}',
+  },
+  {
+    name: "a JSON object to a number",
+    from: ["json"],
+    to: ["number"],
+    value: json({ a: 1 }),
+    outcome: "lost",
+  },
+  {
+    name: "a JSON document to rich text",
+    from: ["json"],
+    to: ["richText"],
+    value: json({ root: { type: "root", children: [] } }),
+    outcome: "kept",
+  },
+  {
+    name: "a JSON string to email",
+    from: ["json"],
+    to: ["email"],
+    value: json("a@b.io"),
+    outcome: "kept",
+  },
 
   // Lists (rule 5).
-  { name: "a one-item list to a text", from: ["chips"], to: ["text"], value: list(text("a")), outcome: "changed", readsAs: "a" },
-  { name: "a list of several items to a text", from: ["chips"], to: ["text"], value: list(text("a"), text("b")), outcome: "blocked" },
-  { name: "a one-item list holding no number to a number", from: ["chips"], to: ["number"], value: list(text("x")), outcome: "blocked" },
-  { name: "a list to JSON", from: ["chips"], to: ["json"], value: list(text("a")), outcome: "kept" },
-  { name: "a list of text to a list of numbers, every item a number", from: ["chips"], to: ["number", { hasMany: true }], value: list(text("1"), text("2")), outcome: "changed" },
-  { name: "a list of text to a list of numbers, one item not", from: ["chips"], to: ["number", { hasMany: true }], value: list(text("1"), text("x")), outcome: "blocked" },
+  {
+    name: "a one-item list to a text",
+    from: ["chips"],
+    to: ["text"],
+    value: list(text("a")),
+    outcome: "changed",
+    readsAs: "a",
+  },
+  {
+    name: "a list of several items to a text",
+    from: ["chips"],
+    to: ["text"],
+    value: list(text("a"), text("b")),
+    outcome: "blocked",
+  },
+  {
+    name: "a one-item list holding no number to a number",
+    from: ["chips"],
+    to: ["number"],
+    value: list(text("x")),
+    outcome: "blocked",
+  },
+  {
+    name: "a list to JSON",
+    from: ["chips"],
+    to: ["json"],
+    value: list(text("a")),
+    outcome: "kept",
+  },
+  {
+    name: "a list of text to a list of numbers, every item a number",
+    from: ["chips"],
+    to: ["number", { hasMany: true }],
+    value: list(text("1"), text("2")),
+    outcome: "changed",
+  },
+  {
+    name: "a list of text to a list of numbers, one item not",
+    from: ["chips"],
+    to: ["number", { hasMany: true }],
+    value: list(text("1"), text("x")),
+    outcome: "blocked",
+  },
 ];
 
 describe("a stored value's outcome when its field's type changes", () => {
@@ -182,7 +652,11 @@ describe("a stored value's outcome when its field's type changes", () => {
           const expected =
             typeof c.outcome === "string" ? c.outcome : c.outcome[dialect];
           expect(verdict.outcome).toBe(expected);
-          if (c.readsAs !== undefined && expected !== "lost" && expected !== "blocked") {
+          if (
+            c.readsAs !== undefined &&
+            expected !== "lost" &&
+            expected !== "blocked"
+          ) {
             expect(verdict.readsAs).toBe(c.readsAs);
           }
         });
@@ -192,8 +666,17 @@ describe("a stored value's outcome when its field's type changes", () => {
 });
 
 describe("pairs blocked whatever their values hold (rule 3, and the pairs no rule converts)", () => {
-  const blocked: [string, string, Partial<FieldDefinition>?, Partial<FieldDefinition>?][] = [
-    ["relationship", "text", { relationTo: "people" } as Partial<FieldDefinition>],
+  const blocked: [
+    string,
+    string,
+    Partial<FieldDefinition>?,
+    Partial<FieldDefinition>?,
+  ][] = [
+    [
+      "relationship",
+      "text",
+      { relationTo: "people" } as Partial<FieldDefinition>,
+    ],
     ["group", "json"],
     ["password", "text"],
     ["text", "password"],
@@ -206,24 +689,38 @@ describe("pairs blocked whatever their values hold (rule 3, and the pairs no rul
   for (const [from, to, fromExtra, toExtra] of blocked) {
     it(`blocks ${from} to ${to}${toExtra?.hasMany ? " list" : ""}`, () => {
       expect(
-        pairBlocked(typeOf("postgresql", from, fromExtra), typeOf("postgresql", to, toExtra))
+        pairBlocked(
+          typeOf("postgresql", from, fromExtra),
+          typeOf("postgresql", to, toExtra)
+        )
       ).not.toBeNull();
     });
   }
 
   it("blocks a relationship to another target, and keeps one to the same target from one to several", () => {
-    const one = typeOf("postgresql", "relationship", { relationTo: "people" } as Partial<FieldDefinition>);
-    const other = typeOf("postgresql", "relationship", { relationTo: "teams" } as Partial<FieldDefinition>);
-    const several = typeOf("postgresql", "relationship", { relationTo: "people", hasMany: true } as Partial<FieldDefinition>);
+    const one = typeOf("postgresql", "relationship", {
+      relationTo: "people",
+    } as Partial<FieldDefinition>);
+    const other = typeOf("postgresql", "relationship", {
+      relationTo: "teams",
+    } as Partial<FieldDefinition>);
+    const several = typeOf("postgresql", "relationship", {
+      relationTo: "people",
+      hasMany: true,
+    } as Partial<FieldDefinition>);
     expect(pairBlocked(one, other)).toBe("relationship");
     expect(pairBlocked(one, several)).toBeNull();
     expect(judgeValue(one, several, text("p1")).outcome).toBe("changed");
-    expect(judgeValue(several, one, list(text("p1"), text("p2"))).outcome).toBe("blocked");
+    expect(judgeValue(several, one, list(text("p1"), text("p2"))).outcome).toBe(
+      "blocked"
+    );
   });
 
   it("leaves JSON to any family to its values (rule 8), never blocking the pair", () => {
     for (const to of ["date", "number", "checkbox", "email", "chips"]) {
-      expect(pairBlocked(typeOf("mysql", "json"), typeOf("mysql", to))).toBeNull();
+      expect(
+        pairBlocked(typeOf("mysql", "json"), typeOf("mysql", to))
+      ).toBeNull();
     }
   });
 });

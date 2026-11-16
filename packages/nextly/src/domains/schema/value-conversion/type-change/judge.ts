@@ -139,7 +139,8 @@ export function pairBlocked(
 ): PairBlockReason | null {
   if (from.family === "unloaded" || to.family === "unloaded") return "unloaded";
   if (from.family === "password" || to.family === "password") return "password";
-  if (from.family === "container" || to.family === "container") return "container";
+  if (from.family === "container" || to.family === "container")
+    return "container";
   if (from.family === "relationship" || to.family === "relationship") {
     return from.family === to.family &&
       from.relation !== undefined &&
@@ -154,7 +155,10 @@ export function pairBlocked(
   return neverHeld(from, to) ? "never-held" : null;
 }
 
-function sameTargets(from: FieldTypeOnDialect, to: FieldTypeOnDialect): boolean {
+function sameTargets(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): boolean {
   const a = from.relation;
   const b = to.relation;
   return (
@@ -217,8 +221,13 @@ function judgeRelation(
   }
   if (value.kind === "list") {
     if (value.items.length === 0) return { outcome: "kept", reason: "empty" };
-    if (value.items.length > 1) return { outcome: "blocked", reason: "several-items" };
-    return { outcome: "changed", reason: "new-form", readsAs: writingOf(value.items[0]) };
+    if (value.items.length > 1)
+      return { outcome: "blocked", reason: "several-items" };
+    return {
+      outcome: "changed",
+      reason: "new-form",
+      readsAs: writingOf(value.items[0]),
+    };
   }
   return {
     outcome: "changed",
@@ -264,13 +273,21 @@ function judgeAs(
 function judgeJson(to: FieldTypeOnDialect, value: unknown): ValueVerdict {
   if (value === null) return { outcome: "kept", reason: "empty" };
   if (to.family === "json") {
-    return { outcome: "kept", reason: "same-value", readsAs: stableJson(value) };
+    return {
+      outcome: "kept",
+      reason: "same-value",
+      readsAs: stableJson(value),
+    };
   }
   const kind = kindOfJson(value);
   if (kind === null) return { outcome: "lost", reason: "kind-never-held" };
   if (kind.kind === "document") {
     if (to.family === "richText" && isEditorDocument(value)) {
-      return { outcome: "kept", reason: "same-value", readsAs: stableJson(value) };
+      return {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: stableJson(value),
+      };
     }
     if (to.family === "text") return textWriting(to, stableJson(value));
     return { outcome: "lost", reason: "object" };
@@ -287,7 +304,10 @@ function kindOfJson(value: unknown): OldValue | null {
   }
   if (typeof value === "boolean") return { kind: "boolean", value };
   if (Array.isArray(value)) {
-    return { kind: "list", items: value.map(item => ({ kind: "json", value: item })) };
+    return {
+      kind: "list",
+      items: value.map(item => ({ kind: "json", value: item })),
+    };
   }
   if (typeof value === "object" && value !== null) {
     return { kind: "document", value };
@@ -302,7 +322,8 @@ function judgeIntoList(
   fromJson: boolean
 ): ValueVerdict {
   const item = to.item;
-  if (item === undefined) return { outcome: "blocked", reason: "kind-never-held" };
+  if (item === undefined)
+    return { outcome: "blocked", reason: "kind-never-held" };
   if (value.kind === "list") {
     const verdicts = value.items.map(each => judgeAs(item, each, fromJson));
     if (verdicts.some(v => v.outcome === "lost" || v.outcome === "blocked")) {
@@ -330,7 +351,8 @@ function judgeListIntoOne(
   fromJson: boolean
 ): ValueVerdict {
   if (value.items.length === 0) return { outcome: "kept", reason: "empty" };
-  if (value.items.length > 1) return { outcome: "blocked", reason: "several-items" };
+  if (value.items.length > 1)
+    return { outcome: "blocked", reason: "several-items" };
   const one = judgeAs(to, value.items[0], fromJson);
   if (one.outcome === "lost" || one.outcome === "blocked") {
     return { outcome: "blocked", reason: "item-not-held" };
@@ -359,7 +381,9 @@ function judgeIntoText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
         ? textWriting(to, stableJson(value.value))
         : { outcome: "blocked", reason: "kind-never-held" };
     default:
-      return changedTo(judgeIntoText(to, { kind: "text", text: textOf(value) }));
+      return changedTo(
+        judgeIntoText(to, { kind: "text", text: textOf(value) })
+      );
   }
 }
 
@@ -371,9 +395,16 @@ function textWriting(to: FieldTypeOnDialect, writing: string): ValueVerdict {
 }
 
 /** Into Rich text: a document holding the text, one paragraph per line. */
-function judgeIntoRichText(to: FieldTypeOnDialect, value: OldValue): ValueVerdict {
+function judgeIntoRichText(
+  to: FieldTypeOnDialect,
+  value: OldValue
+): ValueVerdict {
   if (value.kind === "document") {
-    return { outcome: "kept", reason: "same-value", readsAs: stableJson(value.value) };
+    return {
+      outcome: "kept",
+      reason: "same-value",
+      readsAs: stableJson(value.value),
+    };
   }
   const writing = JSON.stringify(documentOfText(textOf(value)));
   return holdsText(to.textBound, writing)
@@ -419,12 +450,19 @@ function numberInto(
 ): ValueVerdict {
   if (!number.finite) {
     return holdsNonFinite(format, dialect, number.value)
-      ? { outcome: fits, reason: fits === "kept" ? "same-value" : "new-form", readsAs: number.value }
+      ? {
+          outcome: fits,
+          reason: fits === "kept" ? "same-value" : "new-form",
+          readsAs: number.value,
+        }
       : { outcome: "lost", reason: "non-finite" };
   }
   const held = holdsNumber(format, number.value);
   if (held !== "exactly") {
-    return { outcome: "blocked", reason: held === "rounded" ? "rounded" : "out-of-range" };
+    return {
+      outcome: "blocked",
+      reason: held === "rounded" ? "rounded" : "out-of-range",
+    };
   }
   return {
     outcome: fits,
@@ -470,7 +508,11 @@ export function holdsNonFinite(
 function judgeIntoCheckbox(value: OldValue): ValueVerdict {
   switch (value.kind) {
     case "boolean":
-      return { outcome: "kept", reason: "same-value", readsAs: String(value.value) };
+      return {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: String(value.value),
+      };
     case "text": {
       const lower = value.text.toLowerCase();
       if (lower === "true" || lower === "1") return changedBoolean(true);
@@ -523,7 +565,8 @@ function instantInto(
   }
   if (
     column.range !== undefined &&
-    (instant.seconds < column.range.first || instant.seconds > column.range.last)
+    (instant.seconds < column.range.first ||
+      instant.seconds > column.range.last)
   ) {
     return { outcome: "blocked", reason: "out-of-range" };
   }
@@ -538,13 +581,25 @@ function instantInto(
 function judgeIntoJson(value: OldValue): ValueVerdict {
   switch (value.kind) {
     case "text":
-      return { outcome: "kept", reason: "same-value", readsAs: JSON.stringify(value.text) };
+      return {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: JSON.stringify(value.text),
+      };
     case "number":
       return value.number.finite
-        ? { outcome: "kept", reason: "same-value", readsAs: decimalWriting(value.number.value) }
+        ? {
+            outcome: "kept",
+            reason: "same-value",
+            readsAs: decimalWriting(value.number.value),
+          }
         : { outcome: "lost", reason: "non-finite" };
     case "boolean":
-      return { outcome: "kept", reason: "same-value", readsAs: String(value.value) };
+      return {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: String(value.value),
+      };
     case "date":
       return {
         outcome: "changed",
@@ -552,9 +607,17 @@ function judgeIntoJson(value: OldValue): ValueVerdict {
         readsAs: JSON.stringify(instantWriting(value.date)),
       };
     case "document":
-      return { outcome: "kept", reason: "same-value", readsAs: stableJson(value.value) };
+      return {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: stableJson(value.value),
+      };
     default:
-      return { outcome: "kept", reason: "same-value", readsAs: writingOf(value) };
+      return {
+        outcome: "kept",
+        reason: "same-value",
+        readsAs: writingOf(value),
+      };
   }
 }
 
@@ -666,8 +729,12 @@ function offsetOf(offset: string): number | null {
 
 /** An instant's ISO 8601 writing in UTC, with `Z`, keeping every digit of its second. */
 export function instantWriting(instant: Instant): string {
-  const whole = new Date(instant.seconds * 1000).toISOString().replace(/\.\d{3}Z$/, "");
-  return instant.fraction === "" ? `${whole}Z` : `${whole}.${instant.fraction}Z`;
+  const whole = new Date(instant.seconds * 1000)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "");
+  return instant.fraction === ""
+    ? `${whole}Z`
+    : `${whole}.${instant.fraction}Z`;
 }
 
 /** The class a change takes from its values: the worst decides (safe, lossy, blocked). */

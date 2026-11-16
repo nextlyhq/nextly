@@ -94,11 +94,6 @@ export function numberWriting(value: ReadNumber): string {
   return value.finite ? decimalWriting(value.value) : value.value;
 }
 
-/** Whether two numbers are one value: the same digits, or the same non-finite number. */
-export function sameNumber(a: ReadNumber, b: ReadNumber): boolean {
-  return numberWriting(a) === numberWriting(b);
-}
-
 /** Whether a whole number fits a signed integer of `bits` bits. */
 export function fitsInteger(value: ExactDecimal, bits: 32 | 64): boolean {
   if (value.fraction !== "") return false;

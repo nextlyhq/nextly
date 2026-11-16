@@ -93,70 +93,110 @@ export function fieldTypeOnDialect(
   dialect: SupportedDialect,
   builtBy: ColumnOrigin
 ): FieldTypeOnDialect {
-  const base = { dialect, type: field.type };
-  switch (field.type) {
-    case "text":
-    case "textarea":
-    case "code":
-      return { ...base, family: "text", ...textColumn(field, dialect, builtBy) };
-    case "email":
-      return {
-        ...base,
-        family: "email",
-        ...textColumn(field, dialect, builtBy),
-      };
-    case "radio":
-      return { ...base, family: "choice", ...choiceColumn(field, dialect, builtBy) };
-    case "select":
-      return field.hasMany === true
-        ? {
-            ...base,
-            family: "list",
-            item: {
-              ...base,
-              family: "choice",
-              options: selectOptionValues(field),
-            },
-          }
-        : { ...base, family: "choice", ...choiceColumn(field, dialect, builtBy) };
-    case "richText":
-      return {
-        ...base,
-        family: "richText",
-        ...textColumn(field, dialect, builtBy),
-      };
-    case "number":
-      return field.hasMany === true
-        ? {
-            ...base,
-            family: "list",
-            // A list keeps its numbers as JSON, which holds any finite double.
-            item: { ...base, family: "number", number: { kind: "double" } },
-          }
-        : { ...base, family: "number", number: numberFormat(field, dialect, builtBy) };
-    case "checkbox":
-      return { ...base, family: "checkbox" };
-    case "date":
-      return { ...base, family: "date", date: DATE_COLUMNS[dialect] };
-    case "json":
-      return { ...base, family: "json" };
-    case "chips":
-      // A chip is a text item of a JSON list, which bounds none.
-      return { ...base, family: "list", item: { ...base, family: "text" } };
-    case "relationship":
-    case "upload":
-      return { ...base, family: "relationship", relation: relationOf(field) };
-    case "password":
-      return { ...base, family: "password" };
-    case "group":
-    case "repeater":
-    case "component":
-    case "blocks":
-      return { ...base, family: "container" };
-    default:
-      return pluginType(field, dialect, builtBy);
-  }
+  const read = BY_TYPE[field.type] ?? pluginType;
+  return read(field, dialect, builtBy);
 }
+
+/** How one field type reads on a database. */
+type TypeReader = (
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+) => FieldTypeOnDialect;
+
+/** The base every reading starts from: the database, and the field's type name. */
+const baseOf = (field: FieldDefinition, dialect: SupportedDialect) => ({
+  dialect,
+  type: field.type,
+});
+
+/** A family whose column bounds its text: Text, Email, Rich text. */
+const bounded =
+  (family: "text" | "email" | "richText"): TypeReader =>
+  (field, dialect, builtBy) => ({
+    ...baseOf(field, dialect),
+    family,
+    ...textColumn(field, dialect, builtBy),
+  });
+
+/** A family the rules read with nothing more than the family. */
+const plain =
+  (family: Family): TypeReader =>
+  (field, dialect) => ({ ...baseOf(field, dialect), family });
+
+/** The built-in field types, each read as its family and what its column holds. */
+const BY_TYPE: Partial<Record<string, TypeReader>> = {
+  text: bounded("text"),
+  textarea: bounded("text"),
+  code: bounded("text"),
+  email: bounded("email"),
+  richText: bounded("richText"),
+  radio: (field, dialect, builtBy) => ({
+    ...baseOf(field, dialect),
+    family: "choice",
+    ...choiceColumn(field, dialect, builtBy),
+  }),
+  select: (field, dialect, builtBy) =>
+    field.hasMany === true
+      ? {
+          ...baseOf(field, dialect),
+          family: "list",
+          item: {
+            ...baseOf(field, dialect),
+            family: "choice",
+            options: selectOptionValues(field),
+          },
+        }
+      : {
+          ...baseOf(field, dialect),
+          family: "choice",
+          ...choiceColumn(field, dialect, builtBy),
+        },
+  number: (field, dialect, builtBy) =>
+    field.hasMany === true
+      ? {
+          ...baseOf(field, dialect),
+          family: "list",
+          // A list keeps its numbers as JSON, which holds any finite double.
+          item: {
+            ...baseOf(field, dialect),
+            family: "number",
+            number: { kind: "double" },
+          },
+        }
+      : {
+          ...baseOf(field, dialect),
+          family: "number",
+          number: numberFormat(field, dialect, builtBy),
+        },
+  checkbox: plain("checkbox"),
+  date: (field, dialect) => ({
+    ...baseOf(field, dialect),
+    family: "date",
+    date: DATE_COLUMNS[dialect],
+  }),
+  json: plain("json"),
+  // A chip is a text item of a JSON list, which bounds none.
+  chips: (field, dialect) => ({
+    ...baseOf(field, dialect),
+    family: "list",
+    item: { ...baseOf(field, dialect), family: "text" },
+  }),
+  relationship: (field, dialect) => ({
+    ...baseOf(field, dialect),
+    family: "relationship",
+    relation: relationOf(field),
+  }),
+  upload: (field, dialect) => ({
+    ...baseOf(field, dialect),
+    family: "relationship",
+    relation: relationOf(field),
+  }),
+  password: plain("password"),
+  group: plain("container"),
+  repeater: plain("container"),
+  component: plain("container"),
+};
 
 /**
  * What each database's date column keeps. PostgreSQL's `timestamp` keeps microseconds over a span
@@ -185,7 +225,7 @@ function textColumn(
  * How much a text column of `type` holds: `varchar(n)` holds n characters on every database, and
  * MySQL's `text` holds 65,535 bytes. PostgreSQL's and SQLite's `text` bound nothing.
  */
-export function textBoundOf(
+function textBoundOf(
   type: string,
   dialect: SupportedDialect
 ): TextBound | undefined {
@@ -262,7 +302,11 @@ function pluginType(
   switch (declared.storage) {
     case "text":
     case "longText":
-      return { ...base, family: "text", ...textColumn(field, dialect, builtBy) };
+      return {
+        ...base,
+        family: "text",
+        ...textColumn(field, dialect, builtBy),
+      };
     case "number":
       return {
         ...base,
