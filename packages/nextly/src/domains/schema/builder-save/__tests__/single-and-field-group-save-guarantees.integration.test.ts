@@ -461,6 +461,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         const kind = KINDS[1];
         await kind.create([text("heading")]);
+        const appliedBefore = await appliedFiles(t);
         // The first registry write after the file is the settings save's own row.
         const failOnce = vi
           .spyOn(SingleRegistryService.prototype, "updateSingle")
@@ -470,15 +471,11 @@ describe.each(getConfiguredTestDialects())(
           kind.change(t, [text("heading"), text("body")])
         ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
         failOnce.mockRestore();
-        // The file ran and is recorded applied; the row still describes the Single as it was.
+        // The file ran, and is recorded applied: the column is there, and the ledger counts it.
         expect(await columns(t, kind.table)).toContain("body");
-        expect(
-          (await kind.row(t))?.fields?.map(
-            field => (field as { name: string }).name
-          )
-        ).toEqual(["heading"]);
+        expect(await appliedFiles(t)).toHaveLength(appliedBefore.length + 1);
 
-        // The same save again: nothing left for the table, and the row is written.
+        // The same save again: the row is written, and nothing is left for the migrate commands.
         await kind.change(t, [text("heading"), text("body")]);
         expect(
           (await kind.row(t))?.fields?.map(
