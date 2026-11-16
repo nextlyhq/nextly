@@ -70,6 +70,67 @@ function ruleJudges(op: ChangeColumnTypeOp): boolean {
   return op.conversion === undefined || op.conversion === "referenceList";
 }
 
+/**
+ * Adds one ruled type change to what it belongs with; false for one the rule did not judge, which
+ * the classifier offers as before.
+ */
+function collectRuled(
+  ruled: RuledTypeChange,
+  into: {
+    events: ClassifierEvent[];
+    safeConversions: SafeConversion[];
+    blocked: JudgedConversion[];
+  }
+): boolean {
+  switch (ruled.kind) {
+    case "safe":
+      into.safeConversions.push(ruled.safe);
+      return true;
+    case "event":
+      into.events.push(ruled.event);
+      return true;
+    case "blocked":
+      into.blocked.push(ruled.blocked);
+      return true;
+    case "unjudged":
+      return false;
+  }
+}
+
+/**
+ * The classification of `events`, and, where the rule judged type changes, the safe ones. Every
+ * blocked conversion is refused at once, before any prompt and any statement, so the owner sees all
+ * of them in one run rather than one per try.
+ *
+ * Level rules:
+ *   - "interactive" when any event has user-resolved choices (NOT NULL kinds + destructive_drop)
+ *   - "destructive" when only type_change events (warning-only)
+ *   - "safe" when no events
+ */
+function classificationOf(
+  events: ClassifierEvent[],
+  ruled:
+    | {
+        safeConversions: SafeConversion[];
+        blocked: JudgedConversion[];
+        nextStep: string | undefined;
+      }
+    | undefined
+): ClassificationResult {
+  if (ruled !== undefined && ruled.blocked.length > 0) {
+    throw conversionRefusal(ruled.blocked, ruled.nextStep ?? "apply again");
+  }
+  const hasInteractive = events.some(e => e.kind !== "type_change");
+  const level: ClassificationLevel = hasInteractive
+    ? "interactive"
+    : events.length > 0
+      ? "destructive"
+      : "safe";
+  return ruled === undefined
+    ? { level, events }
+    : { level, events, safeConversions: ruled.safeConversions };
+}
+
 /** What one type change judged by the rule adds to the classification. */
 type RuledTypeChange =
   | { kind: "unjudged" }
@@ -144,70 +205,12 @@ export class RealClassifier implements Classifier {
           });
         }
       } else if (op.type === "change_column_type") {
-        // F6 type-change detection. Widenings (varchar(50) -> varchar(255),
-        // smallint -> bigint, etc.) are provably safe and skip the warning.
-        // Everything else surfaces a per-dialect warning so silent coercion
-        // (MySQL/SQLite) and hard-failure (PG without USING) are loud.
-        const widening = isWideningChange(op.fromType, op.toType, args.dialect);
-        // Judged by the repair command's rule where the caller gives it. A widening is judged too:
-        // on SQLite a value its old column kept as text can stay unreadable in the new one. One the
-        // rule has no conversion for stays a widening, made without a word as before.
-        const ruled =
-          args.judgeConversion !== undefined && ruleJudges(op)
-            ? await this.judgeTypeChange(op, args.judgeConversion, {
-                ...args,
-                widening,
-              })
-            : { kind: "unjudged" as const };
-        if (ruled.kind === "safe") {
-          safeConversions.push(ruled.safe);
-          continue;
-        }
-        if (ruled.kind === "event") {
-          events.push(ruled.event);
-          continue;
-        }
-        if (ruled.kind === "blocked") {
-          blocked.push(ruled.blocked);
-          continue;
-        }
-        // A string narrowed to varchar(N) is judged by its data: lossless when no stored value is
-        // longer than N, so it needs no confirmation; otherwise every way of running it loses or
-        // refuses data (MySQL cuts the value short without strict mode and fails with it), so the
-        // apply stops here, before any DDL, and names what does not fit.
-        const limit = stringNarrowingLimit(
-          op.fromType,
-          op.toType,
-          args.dialect
-        );
-        if (limit !== null && args.countLongerThan !== undefined) {
-          const longer = await args.countLongerThan(
-            op.tableName,
-            op.columnName,
-            limit
-          );
-          if (longer === 0) continue;
-          throw narrowingRefusal({
-            tableName: op.tableName,
-            columnName: op.columnName,
-            fromType: op.fromType,
-            toType: op.toType,
-            limit,
-            longer,
-          });
-        }
-        if (typeChangeAsks(op, widening)) {
-          events.push({
-            id: formatEventId("type_change", op.tableName, op.columnName),
-            kind: "type_change",
-            tableName: op.tableName,
-            columnName: op.columnName,
-            fromType: op.fromType,
-            toType: op.toType,
-            isWidening: false,
-            perDialectWarning: buildPerDialectWarning(op.fromType, op.toType),
-          });
-        }
+        // F6 type-change detection (`classifyTypeChange`).
+        await this.classifyTypeChange(op, args, {
+          events,
+          safeConversions,
+          blocked,
+        });
       } else if (
         op.type === "add_column" &&
         op.column.nullable === false &&
@@ -272,26 +275,77 @@ export class RealClassifier implements Classifier {
       }
     }
 
-    // Every blocked conversion is refused at once, before any prompt and any statement, so the
-    // owner sees all of them in one run rather than one per try.
-    if (blocked.length > 0) {
-      throw conversionRefusal(blocked, args.nextStep ?? "apply again");
-    }
+    return classificationOf(
+      events,
+      args.judgeConversion === undefined
+        ? undefined
+        : { safeConversions, blocked, nextStep: args.nextStep }
+    );
+  }
 
-    // Level rules:
-    //   - "interactive" when any event has user-resolved choices
-    //     (NOT NULL kinds + destructive_drop)
-    //   - "destructive" when only type_change events (warning-only)
-    //   - "safe" when no events
-    const hasInteractive = events.some(e => e.kind !== "type_change");
-    const level: ClassificationLevel = hasInteractive
-      ? "interactive"
-      : events.length > 0
-        ? "destructive"
-        : "safe";
-    return args.judgeConversion === undefined
-      ? { level, events }
-      : { level, events, safeConversions };
+  /**
+   * One type change, added to what it belongs with. Widenings (varchar(50) -> varchar(255),
+   * smallint -> bigint, etc.) are provably safe and skip the warning. Everything else surfaces a
+   * per-dialect warning so silent coercion (MySQL/SQLite) and hard-failure (PG without USING) are
+   * loud, unless the repair command's rule judges it first.
+   */
+  private async classifyTypeChange(
+    op: ChangeColumnTypeOp,
+    args: Parameters<RealClassifier["classify"]>[0],
+    into: {
+      events: ClassifierEvent[];
+      safeConversions: SafeConversion[];
+      blocked: JudgedConversion[];
+    }
+  ): Promise<void> {
+    const { events } = into;
+    const widening = isWideningChange(op.fromType, op.toType, args.dialect);
+    // Judged by the repair command's rule where the caller gives it. A widening is judged too:
+    // on SQLite a value its old column kept as text can stay unreadable in the new one. One the
+    // rule has no conversion for stays a widening, made without a word as before.
+    const ruled =
+      args.judgeConversion !== undefined && ruleJudges(op)
+        ? await this.judgeTypeChange(op, args.judgeConversion, {
+            ...args,
+            widening,
+          })
+        : { kind: "unjudged" as const };
+    if (collectRuled(ruled, into)) {
+      return;
+    }
+    // A string narrowed to varchar(N) is judged by its data: lossless when no stored value is
+    // longer than N, so it needs no confirmation; otherwise every way of running it loses or
+    // refuses data (MySQL cuts the value short without strict mode and fails with it), so the
+    // apply stops here, before any DDL, and names what does not fit.
+    const limit = stringNarrowingLimit(op.fromType, op.toType, args.dialect);
+    if (limit !== null && args.countLongerThan !== undefined) {
+      const longer = await args.countLongerThan(
+        op.tableName,
+        op.columnName,
+        limit
+      );
+      if (longer === 0) return;
+      throw narrowingRefusal({
+        tableName: op.tableName,
+        columnName: op.columnName,
+        fromType: op.fromType,
+        toType: op.toType,
+        limit,
+        longer,
+      });
+    }
+    if (typeChangeAsks(op, widening)) {
+      events.push({
+        id: formatEventId("type_change", op.tableName, op.columnName),
+        kind: "type_change",
+        tableName: op.tableName,
+        columnName: op.columnName,
+        fromType: op.fromType,
+        toType: op.toType,
+        isWidening: false,
+        perDialectWarning: buildPerDialectWarning(op.fromType, op.toType),
+      });
+    }
   }
 
   /**

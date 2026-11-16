@@ -107,6 +107,45 @@ function warningOf(event: TypeChangeEvent): string {
   return { postgresql: pg, mysql, sqlite }[event.dialect];
 }
 
+/**
+ * A type change's note: what the database being changed does with the pair and, for a pair the
+ * conversion rule has no conversion for, how many rows hold a value it would touch.
+ */
+function typeChangeNote(event: TypeChangeEvent): [body: string, title: string] {
+  const held =
+    event.rowsHoldingValue === undefined
+      ? []
+      : [
+          event.rowsHoldingValue === 1
+            ? "1 row holds a value."
+            : `${String(event.rowsHoldingValue)} rows hold a value.`,
+        ];
+  return [
+    [warningOf(event), ...held].join("\n"),
+    `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`,
+  ];
+}
+
+/** `result`, with the lossy type changes whose values to clear where there are any. */
+function withClearing<T extends object>(
+  result: T,
+  clearing: readonly string[] | undefined
+): T & { clearing?: string[] } {
+  return clearing === undefined || clearing.length === 0
+    ? result
+    : { ...result, clearing: [...clearing] };
+}
+
+/**
+ * Whether the data-loss consent alone can decide an event without a terminal: a drop, a column
+ * made required (refused by the push, counting its rows), or a lossy type change.
+ */
+function consentDecides(event: ClassifierEvent): boolean {
+  return (
+    isDrop(event) || makesColumnRequired(event) || isLossyTypeChange(event)
+  );
+}
+
 /** "t.c: from -> to is <class>: <reasons with their rows>.", in the repair report's words. */
 function describeLossy(event: LossyTypeChange): string {
   return `${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType} is ${describeClassed(event.lossy.judgement)}.`;
@@ -338,21 +377,18 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       //
       // A lossy type change is the consent's to judge too: cleared under the consent naming its
       // column, refused, naming its rows, without one.
-      if (
-        candidates.length === 0 &&
-        events.every(
-          e => isDrop(e) || makesColumnRequired(e) || isLossyTypeChange(e)
-        )
-      ) {
+      if (candidates.length === 0 && events.every(consentDecides)) {
         const clearing =
           (await this.judgeLossyTypeChanges(events, false)) ?? [];
-        return {
-          confirmedRenames: [],
-          resolutions:
-            (await this.judgeDrops(events.filter(isDrop), false)) ?? [],
-          ...(clearing.length > 0 ? { clearing } : {}),
-          proceed: true,
-        };
+        return withClearing(
+          {
+            confirmedRenames: [],
+            resolutions:
+              (await this.judgeDrops(events.filter(isDrop), false)) ?? [],
+            proceed: true,
+          },
+          clearing
+        );
       }
       // Build an actionable error message covering both renames and
       // F5/F6 events so users know what they would have been asked.
@@ -431,14 +467,14 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       )
     );
 
-    return {
-      confirmedRenames: renameResult.confirmedRenames,
-      resolutions: eventResult.resolutions,
-      ...(eventResult.clearing !== undefined
-        ? { clearing: eventResult.clearing }
-        : {}),
-      proceed: eventResult.proceed,
-    };
+    return withClearing(
+      {
+        confirmedRenames: renameResult.confirmedRenames,
+        resolutions: eventResult.resolutions,
+        proceed: eventResult.proceed,
+      },
+      eventResult.clearing
+    );
   }
 
   // Walk classifier events in order. NOT-NULL kinds get a multi-step
@@ -480,23 +516,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     const clearing = await this.judgeLossyTypeChanges(others, true);
     if (clearing === null) return { resolutions, proceed: false };
 
-    for (const event of others) {
-      if (isLossyTypeChange(event)) continue;
+    // A lossy type change was decided above, by its consent or its own question.
+    for (const event of others.filter(e => !isLossyTypeChange(e))) {
       if (event.kind === "type_change") {
-        // What the database being changed does with the pair, and, for a pair the conversion
-        // rule has no conversion for, how many rows hold a value it would touch. Then Y/N.
-        const held =
-          event.rowsHoldingValue === undefined
-            ? []
-            : [
-                event.rowsHoldingValue === 1
-                  ? "1 row holds a value."
-                  : `${String(event.rowsHoldingValue)} rows hold a value.`,
-              ];
-        clack.note(
-          [warningOf(event), ...held].join("\n"),
-          `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`
-        );
+        // What the database does with the pair (`typeChangeNote`), then Y/N.
+        clack.note(...typeChangeNote(event));
         const proceed = await answeredOrClosed(
           await clack.confirm({
             message: `Proceed with type change on ${event.tableName}.${event.columnName}?`,
@@ -586,11 +610,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }
 
     clack.outro("Resolutions confirmed");
-    return {
-      resolutions,
-      proceed: true,
-      ...(clearing.length > 0 ? { clearing } : {}),
-    };
+    return withClearing({ resolutions, proceed: true }, clearing);
   }
 
   // Walks candidates in a shrinking-pool pattern:

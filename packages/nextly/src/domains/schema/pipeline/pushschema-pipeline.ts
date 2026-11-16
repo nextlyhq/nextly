@@ -79,8 +79,8 @@ import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
 import {
+  asLateValueFailure,
   convertingColumns,
-  lateValueFailure,
   type ConvertingColumn,
 } from "./classifier/conversion-refusal";
 import {
@@ -89,7 +89,10 @@ import {
   countRows as countRowsHelper,
   querySqlRows,
 } from "./classifier/count-helpers";
-import { typeChangeJudge } from "./classifier/judge-type-change";
+import {
+  typeChangeJudge,
+  type TypeChangeJudge,
+} from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
@@ -186,7 +189,11 @@ import type {
 import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
-import type { ClassifierEvent, Resolution } from "./resolution/types";
+import type {
+  ClassificationResult,
+  ClassifierEvent,
+  Resolution,
+} from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
 import { assertSchemaLockHeld, schemaLockConfirmedUntil } from "./schema-lock";
 import {
@@ -775,7 +782,7 @@ export class PushSchemaPipeline {
     nextStep?: string;
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
-    const nextStep = args.nextStep ?? "save nextly.config.ts again";
+    const nextStep = nextStepOf(args);
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -1136,18 +1143,13 @@ export class PushSchemaPipeline {
           dialect,
           // `db:sync` and the development push judge each type change by the repair command's
           // rule, from the rows the live column holds. A Schema Builder save offers it as before.
-          ...(source === "code"
-            ? {
-                judgeConversion: typeChangeJudge({
-                  db,
-                  dialect,
-                  live: liveSnapshot,
-                  expected: snapshotBeforeRenames,
-                  schema: desired,
-                }),
-                nextStep,
-              }
-            : {}),
+          ...conversionRuleFor(source, nextStep, {
+            db,
+            dialect,
+            live: liveSnapshot,
+            expected: snapshotBeforeRenames,
+            schema: desired,
+          }),
         });
 
         // Drops that have a rename candidate are resolved by the
@@ -1188,13 +1190,9 @@ export class PushSchemaPipeline {
         // ahead only where its clearing was consented to, which the dispatcher has answered.
         converting = convertingColumns(
           classificationResult,
-          dispatchResult.clearing ?? []
+          dispatchResult.clearing
         );
-        for (const safe of classificationResult.safeConversions ?? []) {
-          consoleLogger.info(
-            `[Nextly schema] ${safe.tableName}.${safe.columnName}: ${safe.fromType} -> ${safe.toType}, safe (rows checked: ${String(safe.rowsChecked)}).`
-          );
-        }
+        reportSafeConversions(classificationResult);
 
         // F5 PR 4: patch desired.collections inline for make_optional
         // resolutions BEFORE building drizzleSchema, so pushSchema sees the
@@ -2246,7 +2244,7 @@ export class PushSchemaPipeline {
         summary,
       };
     } catch (caught) {
-      const err = lateValueFailure(caught, converting, nextStep) ?? caught;
+      const err = asLateValueFailure(caught, converting, nextStep);
       const code = this.classifyErrorCode(err);
       // A refused precondition carries its subject in the payload, not in the message: the
       // validation factory sets a deliberately generic public message. Reading `err.message` here
@@ -2773,6 +2771,37 @@ async function refuseKitRebuildsLosingConstraints(
       ],
       logContext: { table: spec.name, lost },
     });
+  }
+}
+
+/**
+ * The step that tries a refused type change again, which a code-first apply's refusals end with:
+ * the caller's (`db:sync` says "run db:sync again"), else the development push's.
+ */
+function nextStepOf(args: { nextStep?: string }): string {
+  return args.nextStep ?? "save nextly.config.ts again";
+}
+
+/**
+ * The repair command's rule for the classifier, for a code-first apply (`db:sync`, the development
+ * push); nothing for a Schema Builder save, which offers a type change as before.
+ */
+function conversionRuleFor(
+  source: "ui" | "code",
+  nextStep: string,
+  bound: Parameters<typeof typeChangeJudge>[0]
+): { judgeConversion?: TypeChangeJudge; nextStep?: string } {
+  return source === "code"
+    ? { judgeConversion: typeChangeJudge(bound), nextStep }
+    : {};
+}
+
+/** Each type change judged safe, said as the apply makes it: no one was asked about it. */
+function reportSafeConversions(classification: ClassificationResult): void {
+  for (const safe of classification.safeConversions ?? []) {
+    consoleLogger.info(
+      `[Nextly schema] ${safe.tableName}.${safe.columnName}: ${safe.fromType} -> ${safe.toType}, safe (rows checked: ${String(safe.rowsChecked)}).`
+    );
   }
 }
 

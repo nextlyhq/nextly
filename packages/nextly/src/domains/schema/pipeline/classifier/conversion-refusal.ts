@@ -126,14 +126,14 @@ function isValueRefusal(err: unknown): boolean {
  * The failure of an apply whose statement the database refused over a value, where the apply was
  * converting columns it judged: a value written after the judgement, which no check before the
  * statement could see. Named by its columns and the step that checks them again, rather than as
- * the database's own error. Null for any other failure, which keeps its own report.
+ * the database's own error. Any other failure is returned as it is, keeping its own report.
  */
-export function lateValueFailure(
+export function asLateValueFailure(
   err: unknown,
   converting: readonly ConvertingColumn[],
   nextStep: string
-): NextlyError | null {
-  if (converting.length === 0 || !isValueRefusal(err)) return null;
+): unknown {
+  if (converting.length === 0 || !isValueRefusal(err)) return err;
   return NextlyError.validation({
     errors: converting.map(column => ({
       path: `schema.${column.tableName}.${column.columnName}`,
@@ -153,7 +153,7 @@ export function lateValueFailure(
  */
 export function convertingColumns(
   classification: ClassificationResult,
-  clearing: readonly string[]
+  clearing: readonly string[] | undefined
 ): ConvertingColumn[] {
   const cleared = new Set(clearing);
   return [
