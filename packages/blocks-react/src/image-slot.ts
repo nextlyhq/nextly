@@ -80,6 +80,12 @@ export interface ImageSlot {
    * that sets its own gap leaves its columns' images the row's full width.
    */
   readonly columnsDivide?: boolean;
+  /**
+   * Whether the site's named classes or block defaults set a width or a
+   * minimum width. Where they do, a block may be drawn wider than its own
+   * styles say, so no block narrows the slot by its own size.
+   */
+  readonly siteSizesBlocks?: boolean;
 }
 
 /** The slot of a block at the top of a page: each device's whole width. */
@@ -241,7 +247,12 @@ export function imageSizingFor(
    * Whether the site's gap between columns is the default. Left out, it is
    * not known, and columns divide no slot.
    */
-  defaultColumnGap = false
+  defaultColumnGap = false,
+  /**
+   * Whether the site's named classes or block defaults size blocks
+   * ({@link siteSizesBlocks}); where they do, no block narrows by its size.
+   */
+  sizedBySite = false
 ): {
   imageCopies?: ImageCopies;
   imageSlot?: ImageSlot;
@@ -251,11 +262,49 @@ export function imageSizingFor(
   const firstBlockId = nodes[0]?.id;
   return {
     imageCopies,
-    imageSlot: defaultColumnGap
-      ? { ...rootImageSlot(breakpoints), columnsDivide: true }
-      : rootImageSlot(breakpoints),
+    imageSlot: {
+      ...rootImageSlot(breakpoints),
+      ...(defaultColumnGap ? { columnsDivide: true } : {}),
+      ...(sizedBySite ? { siteSizesBlocks: true } : {}),
+    },
     ...(firstBlockId === undefined ? {} : { firstBlockId }),
   };
+}
+
+/** The size properties a site's class or block default can widen a block by. */
+const WIDENING = ["width", "minWidth"] as const;
+
+/** Whether one stored style envelope sets a width, or a minimum above none. */
+function setsWidth(styles: unknown): boolean {
+  return Object.values(recordOf(styles) ?? {}).some(byPoint =>
+    Object.values(recordOf(byPoint) ?? {}).some(stored => {
+      const values = recordOf(stored) ?? {};
+      return WIDENING.some(property => {
+        const value = values[property];
+        return value !== undefined && value !== 0 && value !== "0";
+      });
+    })
+  );
+}
+
+/**
+ * Whether a site's named classes or edited block defaults set a width or a
+ * minimum width anywhere, any of which can draw a block wider than its own
+ * styles say. Read from what the site's sheet is compiled from.
+ */
+export function siteSizesBlocks(
+  site:
+    | {
+        readonly classes?: readonly { readonly styles?: unknown }[];
+        readonly blockBases?: Readonly<Record<string, unknown>>;
+      }
+    | undefined
+): boolean {
+  if (site === undefined) return false;
+  return (
+    (site.classes ?? []).some(named => setsWidth(named.styles)) ||
+    Object.values(site.blockBases ?? {}).some(setsWidth)
+  );
 }
 
 /** The token a row of columns spaces its columns by. */
@@ -311,7 +360,14 @@ export function narrowForOwnSize(slot: ImageSlot, styles: unknown): ImageSlot {
       const own = lengthIn(base.width, device.width) ?? device.width;
       const cap =
         lengthIn(base.maxWidth, device.width) ?? Number.POSITIVE_INFINITY;
-      return { ...device, width: Math.min(own, cap) };
+      const sized = Math.min(own, cap);
+      // Where a class or a block default of the site's could draw the block
+      // wider than its own styles say, its own size may only widen the slot.
+      return {
+        ...device,
+        width:
+          slot.siteSizesBlocks === true ? Math.max(device.width, sized) : sized,
+      };
     }),
   };
 }

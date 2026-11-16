@@ -10,6 +10,7 @@ import {
   sizesFor,
   hasDefaultColumnGap,
   imageSizingFor,
+  siteSizesBlocks,
 } from "./image-slot";
 
 const BREAKPOINTS = {
@@ -234,5 +235,74 @@ describe("a site's gap between columns", () => {
     expect(
       imageSizingFor(async () => [], undefined, []).imageSlot?.columnsDivide
     ).toBeUndefined();
+  });
+});
+
+describe("a site's classes and block defaults that size blocks", () => {
+  it("are found where a class or a block default sets a width or a minimum", () => {
+    expect(siteSizesBlocks(undefined)).toBe(false);
+    expect(siteSizesBlocks({ classes: [], blockBases: {} })).toBe(false);
+    expect(
+      siteSizesBlocks({
+        classes: [{ styles: { base: { base: { minWidth: "1000px" } } } }],
+      })
+    ).toBe(true);
+    expect(
+      siteSizesBlocks({
+        blockBases: { "core/box": { hover: { tablet: { width: "40rem" } } } },
+      })
+    ).toBe(true);
+  });
+
+  it("are not found for a maximum, or a minimum of nothing, which never widen", () => {
+    expect(
+      siteSizesBlocks({
+        classes: [{ styles: { base: { base: { maxWidth: "600px" } } } }],
+        blockBases: { "core/column": { base: { base: { minWidth: 0 } } } },
+      })
+    ).toBe(false);
+  });
+
+  it("leave a block's own width unjudged, so its children keep the full slot", () => {
+    // A container set to 300px that a class draws at 1000px: its children
+    // must not be handed 300.
+    const ctx = {
+      imageSlot: {
+        ...rootImageSlot(BREAKPOINTS),
+        columnsDivide: true,
+        siteSizesBlocks: true,
+      },
+    };
+    const box = childImageContext(ctx, {
+      id: "box",
+      type: "core/box",
+      styles: { base: { base: { width: "300px" } } },
+      classes: ["wide"],
+    });
+    expect(box?.imageSlot?.devices.map(d => d.width)).toEqual([
+      1920, 1024, 640,
+    ]);
+    // Without such a class the same box narrows its children as before.
+    const plain = childImageContext(
+      { imageSlot: rootImageSlot(BREAKPOINTS) },
+      {
+        id: "box",
+        type: "core/box",
+        styles: { base: { base: { width: "300px" } } },
+      }
+    );
+    expect(plain?.imageSlot?.devices.map(d => d.width)).toEqual([
+      300, 300, 300,
+    ]);
+  });
+
+  it("still let a block's own width widen the slot", () => {
+    // A 1000px Image is drawn at 1000 whatever a class does; only narrowing
+    // by its own size is given up.
+    const slot = { ...rootImageSlot(BREAKPOINTS), siteSizesBlocks: true };
+    const wide = { base: { base: { width: "1000px" } } };
+    expect(narrowForOwnSize(slot, wide).devices.map(d => d.width)).toEqual([
+      1920, 1024, 1000,
+    ]);
   });
 });
