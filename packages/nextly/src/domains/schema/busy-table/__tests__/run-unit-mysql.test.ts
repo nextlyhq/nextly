@@ -162,19 +162,29 @@ describe("runMigrationStatements on MySQL after a schema statement's implicit co
     ["after the unit's last statement", undefined],
     ["where a try resumes past every statement", 2],
   ] as const)(
-    "turns autocommit on for the ledger write %s, and gives the session its default back",
+    "turns autocommit on for the ledger write %s, and gives the session back the value it had",
     async (_case, from) => {
       // On a server whose sessions start with autocommit off, the first ledger write would open
-      // a transaction of its own, and the writes would commit together after all.
+      // a transaction of its own, and the writes would commit together after all. The session's
+      // own value is kept and put back, not the server's default: a session of the adapter's own
+      // runs with autocommit on whatever the server's default, and a session at 0 stays at 0.
       const events = await sentAroundLedger(
         ["DROP TABLE two", "DROP TABLE one"],
         from
       );
       const ledger = events.indexOf("ledger");
-      expect(events.slice(0, ledger)).toContain("SET SESSION autocommit = 1");
-      expect(events.slice(ledger)).toContain(
-        "SET SESSION autocommit = DEFAULT"
+      const before = events.slice(0, ledger);
+      const saved = before.indexOf(
+        "SET @nextly_ledger_autocommit = @@SESSION.autocommit"
       );
+      expect(saved).toBeGreaterThanOrEqual(0);
+      expect(before.indexOf("SET SESSION autocommit = 1")).toBeGreaterThan(
+        saved
+      );
+      expect(events.slice(ledger)).toContain(
+        "SET SESSION autocommit = @nextly_ledger_autocommit"
+      );
+      expect(events).not.toContain("SET SESSION autocommit = DEFAULT");
     }
   );
 

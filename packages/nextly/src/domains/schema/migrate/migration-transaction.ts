@@ -645,7 +645,10 @@ async function reopenAfterMysqlImplicitCommit(
  * Outside the unit's transaction (`outside`, MySQL only) each ledger write must commit on its own,
  * and a server whose sessions start with autocommit off would open a transaction at the first of
  * them instead, and commit the writes together after all. Autocommit is turned on for the write and
- * the session's default given back after it, so the pooled connection is left as it was found.
+ * the session's own value put back after it, kept in a user variable since `execute` returns no
+ * rows: not the server's default, which a pooled connection starts at but a session of the
+ * adapter's own does not (it runs with autocommit on, `withSession`). The connection is left as it
+ * was found.
  */
 async function writeLedgerInTry(
   tx: MigrationTransaction,
@@ -663,11 +666,12 @@ async function writeLedgerInTry(
     await write();
     return;
   }
+  await tx.execute("SET @nextly_ledger_autocommit = @@SESSION.autocommit");
   await tx.execute("SET SESSION autocommit = 1");
   try {
     await write();
   } finally {
-    await tx.execute("SET SESSION autocommit = DEFAULT");
+    await tx.execute("SET SESSION autocommit = @nextly_ledger_autocommit");
   }
 }
 
