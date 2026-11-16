@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
 /**
  * How a style field lays out, asserted against the sheet that decides it.
  *
@@ -19,9 +21,8 @@ import { describe, expect, it } from "vitest";
  *
  * @module style-field-layout-styles.test
  */
-const CHROME = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /**

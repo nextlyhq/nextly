@@ -294,6 +294,10 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
       context.fieldIsUnique(field) && context.uniquenessIsIndexable(field, col);
+    // A relationship unique by its cardinality alone keeps the plain index it has always had
+    // beside its unique one: every one-to-one made before its uniqueness was declared carries it,
+    // and dropping it would plan an operation for a column that is already unique.
+    const keepsPlainIndex = !uniqueIsIndexable || field.unique !== true;
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -301,7 +305,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
         columns: [col],
         unique: true,
       });
-    } else if (
+    }
+    if (
+      keepsPlainIndex &&
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)
     ) {

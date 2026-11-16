@@ -101,7 +101,12 @@ import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
 } from "./diff/introspect-live";
-import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
+import type {
+  DropIndexOp,
+  Operation,
+  NextlySchemaSnapshot,
+  TableSpec,
+} from "./diff/types";
 import { refuseEnumNarrowingsOverRows } from "./enum-narrowing-refusal";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
@@ -131,6 +136,7 @@ import {
   liveUniqueConstraintsToKeep,
   renamesOf,
   uniqueColumnsToKeep,
+  withoutUniquesAlreadyEnforced,
 } from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import {
@@ -138,6 +144,11 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
+import {
+  keyIndexDropsHeldForUnique,
+  uniqueCreatedBeforeKeyIndexDrop,
+  withHeldKeyIndexDrops,
+} from "./mysql-unique-before-key-index";
 import { pushInActiveSchema } from "./pg-active-schema-push";
 import {
   assertLiveCounts,
@@ -1030,7 +1041,13 @@ export class PushSchemaPipeline {
         // operations here, so the confirmation, the refusals and the apply read one set, as the
         // preview does (`relationSwitches`).
         const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
-        const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+        // Less the unique indexes a column already has, which SQLite's snapshot cannot show: an
+        // inline constraint is backed by an index the snapshot leaves out
+        // (`withoutUniquesAlreadyEnforced`).
+        const diffed = await withoutUniquesAlreadyEnforced(
+          diffSnapshots(liveWithShapes, snapshotBeforeRenames),
+          { db, dialect, live: liveSnapshot }
+        );
         const switches = await relationSwitches({
           db,
           dialect,
@@ -1383,6 +1400,8 @@ export class PushSchemaPipeline {
 
         // The lifted foreign keys a failed MySQL apply has to add back (`kitRouteConstraintStatements`).
         let liftedKeysOwed: string[] = [];
+        // The key indexes the pre-resolution pass leaves to the batch (`keyIndexDropsHeldForUnique`).
+        let heldKeyIndexDrops: DropIndexOp[] = [];
         const runApply = async (tx: unknown): Promise<number> => {
           // Route: fast in-memory DDL emission for the common Builder op set
           // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
@@ -1491,6 +1510,14 @@ export class PushSchemaPipeline {
           const preResExecutor =
             this.testHooks._executePreResolutionOverride ??
             executePreResolutionOps;
+          // On MySQL, a key's plain index that a unique one replaces is dropped in the apply's batch,
+          // after that unique index is created, rather than here ahead of every create
+          // (`keyIndexDropsHeldForUnique`).
+          heldKeyIndexDrops = keyIndexDropsHeldForUnique(
+            resolvedOps,
+            dialect,
+            liveSnapshot.tables
+          );
           // From here until the batch that adds them back, the keys lifted for a MySQL type change may
           // be dropped, and MySQL commits the drop as it runs.
           liftedKeysOwed = constraints.liftRestores;
@@ -1507,7 +1534,12 @@ export class PushSchemaPipeline {
             nextIsSchema = schemaAt(0);
             const preResolved = await preResExecutor(
               tx,
-              withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
+              withoutSqliteDropsLeftToRebuild(
+                resolvedOps.filter(
+                  op => !heldKeyIndexDrops.some(held => held === op)
+                ),
+                dialect
+              ),
               dialect,
               leading,
               () => {
@@ -1954,11 +1986,20 @@ export class PushSchemaPipeline {
             useFastPath ? [] : resolvedOps
           );
           try {
-            await executor.executeStatements(tx, [
-              ...safe,
-              ...restore,
-              ...constraints.after,
-            ]);
+            // On MySQL a unique index replacing a key's plain index is created before that index
+            // is dropped: the kit's drop comes ahead of the restored create, and MySQL refuses to
+            // drop the last index a foreign key can use (`uniqueCreatedBeforeKeyIndexDrop`).
+            await executor.executeStatements(
+              tx,
+              uniqueCreatedBeforeKeyIndexDrop(
+                withHeldKeyIndexDrops(
+                  [...safe, ...restore, ...constraints.after],
+                  heldKeyIndexDrops
+                ),
+                dialect,
+                liveSnapshot.tables
+              )
+            );
             liftedKeysOwed = [];
           } catch (err) {
             throw new DdlExecutionError(

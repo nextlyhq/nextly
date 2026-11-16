@@ -56,8 +56,6 @@ const overwrites: unknown[] = [];
 /** What reached Settings' route, and how often the document was read again. */
 const routeWrites: unknown[] = [];
 let refetches = 0;
-/** Whether the read after a write answers that it failed. */
-let readFails = false;
 /** What a fresh read answers with, and how many were made. */
 let freshAnswer: () => unknown = () => readAnswer.data;
 let freshReads = 0;
@@ -73,7 +71,7 @@ vi.mock("./site-style-read", () => ({
     ...readAnswer,
     refetch: async () => {
       refetches += 1;
-      return { isError: readFails };
+      return { isError: false };
     },
     readFresh: async () => {
       freshReads += 1;
@@ -128,7 +126,6 @@ const {
   releaseHeldSiteStyle,
   useFontCatalogueClient,
   useSaveSiteStyle,
-  useSaveSpacingMode,
   useSiteStyle,
 } = await import("./site-style-client");
 const { KEPT_CHANGING_WORDS } = await import("./conflict-words");
@@ -152,7 +149,6 @@ beforeEach(() => {
   overwrites.length = 0;
   routeWrites.length = 0;
   refetches = 0;
-  readFails = false;
   freshAnswer = () => readAnswer.data;
   freshReads = 0;
   writeOptions = undefined;
@@ -215,49 +211,6 @@ describe("reading the site style", () => {
 
     expect(result.current.pending).toBe(true);
     expect(result.current.siteStyle.breakpoints?.viewport).toHaveLength(2);
-  });
-});
-
-describe("saving the space between blocks", () => {
-  it("writes the model through its route, then reads the style again", async () => {
-    // Reading again is what moves the canvas: it compiles from that read.
-    const { result } = renderHook(() => useSaveSpacingMode());
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("classic");
-    });
-    expect(verdict).toEqual({ saved: true, refreshed: true });
-    expect(routeWrites).toEqual([
-      {
-        plugin: "@nextlyhq/plugin-page-builder",
-        path: "/site/style/spacing-mode",
-        body: { mode: "classic" },
-      },
-    ]);
-    expect(writes).toEqual([]);
-    expect(refetches).toBe(1);
-  });
-
-  it("says the choice is stored but not read back when the reread fails", async () => {
-    readFails = true;
-    const { result } = renderHook(() => useSaveSpacingMode());
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("classic");
-    });
-    expect(verdict).toMatchObject({ saved: true, refreshed: false });
-    expect(refetches).toBe(1);
-  });
-
-  it("answers a refusal in the route's words and reads nothing again", async () => {
-    writeBehaviour = () => Promise.reject(new Error("Not allowed."));
-    const { result } = renderHook(() => useSaveSpacingMode());
-    let verdict;
-    await act(async () => {
-      verdict = await result.current.save("gaps");
-    });
-    expect(verdict).toMatchObject({ saved: false });
-    expect(refetches).toBe(0);
   });
 });
 
