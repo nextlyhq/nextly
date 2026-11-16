@@ -106,9 +106,13 @@ function labelOf(actions: readonly ToolbarAction[], id: ToolbarActionId) {
   return actions.find(action => action.id === id)?.label;
 }
 
+/** The palette over both selections' verbs, each verb once, as it lists them. */
 function paletteOf(actions: readonly ToolbarAction[]) {
+  const once = actions.filter(
+    (action, at) => actions.findIndex(each => each.id === action.id) === at
+  );
   return builderCommands({
-    actions: actions.map(action => ({ ...action, enabled: true })),
+    actions: once.map(action => ({ ...action, enabled: true })),
     verbs,
     undo: () => {},
     redo: () => {},
