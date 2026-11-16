@@ -26,7 +26,10 @@ import {
   rowRemovedFromCode,
 } from "../dynamic-collections/services/removed-from-code-writes";
 
-import { stopReleasesHoldingOrThrow } from "./early-stop";
+import {
+  stopReleasesHoldingOrThrow,
+  type EarlyStopOptions,
+} from "./early-stop";
 import type { ReleaseCheckScope } from "./readiness/check-sources";
 import type { ReleaseRecheckTarget } from "./release-recheck";
 
@@ -78,17 +81,28 @@ export async function removedEntityScopes(): Promise<ReleaseCheckScope[]> {
  * stopped is no longer scheduled, so a later pass finds no member to check,
  * and stops and tells nothing twice.
  *
+ * `outOfTime` bounds it for a caller with a deadline: the early stop judges
+ * releases only while it answers no, at least one each call, and stops those
+ * it judged; the rest stay scheduled for the next call, which does not find
+ * the ones already stopped, so each call advances.
+ *
  * A failure reaches the caller, which reports it as this step's.
  * `removedScopes` and `stop` are the reads above, injected so the step is
  * testable without a booted runtime.
  */
 export async function stopReleasesOfRemovedEntities(
-  deps: {
+  deps: EarlyStopOptions & {
     removedScopes?: () => Promise<readonly ReleaseCheckScope[]>;
-    stop?: (target: ReleaseRecheckTarget) => Promise<void>;
+    stop?: (
+      target: ReleaseRecheckTarget,
+      options: EarlyStopOptions
+    ) => Promise<void>;
   } = {}
 ): Promise<void> {
   const removed = await (deps.removedScopes ?? removedEntityScopes)();
   if (removed.length === 0) return;
-  await (deps.stop ?? stopReleasesHoldingOrThrow)({ scopes: [...removed] });
+  await (deps.stop ?? stopReleasesHoldingOrThrow)(
+    { scopes: [...removed] },
+    { outOfTime: deps.outOfTime }
+  );
 }

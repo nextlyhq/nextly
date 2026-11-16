@@ -40,8 +40,11 @@
  * server's start writes nothing. Stopped now, before its time, its owner is
  * told at once instead of at its time; and stopped before anything due runs,
  * a due one is stopped whole rather than part-applied. First, too, so an
- * overdue release it stops is not also reported overdue. Contained like the
- * overdue notices: a failure is logged, and never stops the due releases.
+ * overdue release it stops is not also reported overdue. Bounded to half of
+ * what is left of the pass, so however many releases it finds, the due ones
+ * still have time to run; what it did not reach, the next pass does. Contained
+ * like the overdue notices: a failure is logged, and never stops the due
+ * releases.
  *
  * @module domains/releases/releases-drain-job
  */
@@ -94,16 +97,25 @@ export function createReleasesDrainJob(deps: {
     sweep: true,
     handler: async (_input, context) => {
       const startedAt = Date.now();
+      // ONE origin for both sides of the pass's `now() >= deadline` test.
+      // `context.now` is the instant the runner is treating as now and does
+      // not advance during the pass, so elapsed time comes from the real clock
+      // offset by the difference: a virtual clock stays authoritative for WHEN
+      // the pass thinks it is, without making the budget unmeasurable.
+      const passNow = () =>
+        new Date(context.now.getTime() + (Date.now() - startedAt));
       const repository = new ReleasesRepository(deps.db);
-      await stopReleasesOfRemovedEntitiesContained();
+      // Half of what is left of the pass, on the pass's own clock: the other
+      // half is kept for running what is due, whatever the stop finds.
+      const stopBy =
+        context.now.getTime() +
+        (context.deadline.getTime() - context.now.getTime()) / 2;
+      await stopReleasesOfRemovedEntitiesContained(
+        () => passNow().getTime() >= stopBy
+      );
       await tellOverdueOwners(repository, context.now);
       const result = await applyDueReleases({
-        // ONE origin for both sides of the pass's `now() >= deadline` test.
-        // `context.now` is the instant the runner is treating as now and does
-        // not advance during the pass, so elapsed time comes from the real clock
-        // offset by the difference: a virtual clock stays authoritative for WHEN
-        // the pass thinks it is, without making the budget unmeasurable.
-        now: () => new Date(context.now.getTime() + (Date.now() - startedAt)),
+        now: passNow,
         // The runner's own deadline, passed through. It needs no arithmetic:
         // `runJobs` derives it and `context.now` from one clock, and the clock
         // above is anchored to `context.now`, so the two sides already share an
@@ -134,9 +146,11 @@ export function createReleasesDrainJob(deps: {
  * code, logging rather than throwing a failure: the pass still runs what is
  * due, and the next pass asks again.
  */
-async function stopReleasesOfRemovedEntitiesContained(): Promise<void> {
+async function stopReleasesOfRemovedEntitiesContained(
+  outOfTime: () => boolean
+): Promise<void> {
   try {
-    await stopReleasesOfRemovedEntities();
+    await stopReleasesOfRemovedEntities({ outOfTime });
   } catch (error) {
     getNextlyLogger().warn({
       kind: "release-removed-entity-stop-failed",

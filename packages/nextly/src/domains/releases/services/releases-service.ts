@@ -2898,12 +2898,28 @@ export class ReleasesService {
    * the event's own write has committed and opens one transaction per
    * release it stops, never inside another.
    */
-  async stopOnHardProblems(target: ReleaseRecheckTarget): Promise<string[]> {
+  async stopOnHardProblems(
+    target: ReleaseRecheckTarget,
+    options: {
+      /**
+       * Whether the caller's time is up, for a caller with a deadline of its
+       * own (the release engine's pass, which must leave time for what is
+       * due). Asked before judging each release after the first, so every
+       * call judges at least one and a caller that keeps running out of time
+       * still advances; the releases judged so far are stopped, and those not
+       * yet judged stay scheduled for the caller's next call.
+       */
+      outOfTime?: () => boolean;
+    } = {}
+  ): Promise<string[]> {
     const now = new Date();
     const failing: Array<BlockRequest & { revision: number }> = [];
     const affected = await this.deps.repository.scheduledMembersFor(target);
+    let judged = 0;
     for (const { release, members } of affected) {
       if (release.scheduledAt === null) continue;
+      if (judged > 0 && options.outOfTime?.()) break;
+      judged += 1;
       if ((await this.hardProblems(release, members)).length === 0) continue;
       failing.push({
         id: release.id,

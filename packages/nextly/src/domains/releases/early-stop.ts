@@ -27,9 +27,20 @@ import type {
   ReleaseRecheckTarget,
 } from "./release-recheck";
 
+/**
+ * How long a caller with a deadline of its own lets the stop run:
+ * `outOfTime` is asked before each release after the first is judged.
+ */
+export interface EarlyStopOptions {
+  outOfTime?: () => boolean;
+}
+
 /** The part of the releases service this calls. */
 interface EarlyStop {
-  stopOnHardProblems(target: ReleaseRecheckTarget): Promise<unknown>;
+  stopOnHardProblems(
+    target: ReleaseRecheckTarget,
+    options?: EarlyStopOptions
+  ): Promise<unknown>;
 }
 
 /** The document a release's own run is writing, while it writes it. */
@@ -103,12 +114,15 @@ export async function stopReleasesHolding(
  * logged as that pass's step, and the pass goes on.
  */
 export async function stopReleasesHoldingOrThrow(
-  target: ReleaseRecheckTarget
+  target: ReleaseRecheckTarget,
+  options: EarlyStopOptions = {}
 ): Promise<void> {
   // A release's own run decides what its own write stops, and a boot without
   // releases has nothing scheduled to stop.
   const named = apartFromRunWrite(target, releaseRun.getStore());
   if (named === null) return;
   if (!container.has("releasesService")) return;
-  await container.get<EarlyStop>("releasesService").stopOnHardProblems(named);
+  await container
+    .get<EarlyStop>("releasesService")
+    .stopOnHardProblems(named, options);
 }

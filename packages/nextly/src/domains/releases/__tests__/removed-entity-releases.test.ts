@@ -77,17 +77,23 @@ describe("stopReleasesOfRemovedEntities", () => {
     { scopeKind: "single", scopeSlug: "banner" },
   ];
 
-  it("hands the early stop exactly the removed entities", async () => {
-    const stop = vi.fn(async (_target: ReleaseRecheckTarget) => {});
+  it("hands the early stop exactly the removed entities, and the caller's deadline", async () => {
+    const stop = vi.fn(
+      async (_target: ReleaseRecheckTarget, _options: unknown) => {}
+    );
+    const outOfTime = () => false;
     await stopReleasesOfRemovedEntities({
       removedScopes: async () => removed,
       stop,
+      outOfTime,
     });
-    expect(stop.mock.calls).toEqual([[{ scopes: removed }]]);
+    expect(stop.mock.calls).toEqual([[{ scopes: removed }, { outOfTime }]]);
   });
 
   it("asks nothing of the early stop when none is removed", async () => {
-    const stop = vi.fn(async (_target: ReleaseRecheckTarget) => {});
+    const stop = vi.fn(
+      async (_target: ReleaseRecheckTarget, _options: unknown) => {}
+    );
     await stopReleasesOfRemovedEntities({
       removedScopes: async () => [],
       stop,
@@ -118,7 +124,10 @@ describe("the releases drain job", () => {
   });
 
   /** The job, with the pass and the stop replaced by recorders. */
-  async function drainJob() {
+  async function drainJob(
+    now = new Date("2026-06-01T12:00:00.000Z"),
+    msLeftInPass = 10_000
+  ) {
     vi.resetModules();
     vi.doMock("../apply-due-releases", () => ({ applyDueReleases: applyMock }));
     vi.doMock("../removed-entity-releases", () => ({
@@ -146,14 +155,13 @@ describe("the releases drain job", () => {
         outcomes.push(result);
       },
     });
-    const now = new Date("2026-06-01T12:00:00.000Z");
     await job.handler(null as never, {
       jobId: "releases-drain-1",
       attempt: 1,
       user: null,
       now,
       content: {} as never,
-      deadline: new Date(now.getTime() + 10_000),
+      deadline: new Date(now.getTime() + msLeftInPass),
     });
     return { outcomes };
   }
@@ -174,5 +182,29 @@ describe("the releases drain job", () => {
     const { outcomes } = await drainJob();
     expect(order).toEqual(["stop-removed", "apply"]);
     expect(outcomes).toHaveLength(1);
+  });
+
+  it("gives the stop half of what is left of the pass, on the pass's own clock", async () => {
+    vi.useFakeTimers();
+    try {
+      // The runner's clock is years from wall time, as `runJobs` may give it:
+      // the budget must be measured on the pass's clock, not on wall time.
+      vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+      let outOfTime: (() => boolean) | undefined;
+      stopRemovedMock.mockImplementation(
+        async (options: { outOfTime?: () => boolean }) => {
+          outOfTime = options.outOfTime;
+        }
+      );
+      await drainJob(new Date("2020-01-01T00:00:00.000Z"), 8_000);
+      if (outOfTime === undefined) throw new Error("no deadline was given");
+      expect(outOfTime()).toBe(false);
+      vi.advanceTimersByTime(3_999);
+      expect(outOfTime()).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(outOfTime()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
