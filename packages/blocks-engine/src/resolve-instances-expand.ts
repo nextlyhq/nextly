@@ -510,7 +510,7 @@ function readSuppliedDefinition(
  * it were.
  *
  * A structural check is not the discrimination. `DefinitionsById` is keyed to
- * `BlockDocument`, so a page, a region or a template satisfies "has a nodes
+ * `BlockDocument`, so a page, a pattern or a template satisfies "has a nodes
  * array" and would be inlined as though it were a component — content from
  * another document appearing inside this one, with its exposed properties and
  * slots meaning nothing. The kind is what the engine already publishes an

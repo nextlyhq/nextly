@@ -77,7 +77,9 @@ describe("a node's own styles", () => {
         }),
       ])
     );
-    expect(out).toContain("padding-inline-start: 2rem");
+    expect(out).toContain(
+      "padding-inline-start: max(2rem, var(--nx-contain-inset, 0px))"
+    );
     expect(out).toContain("padding-block-end: 1rem");
     expect(out).not.toContain("padding-left");
   });
@@ -716,7 +718,9 @@ describe("the compiler does not trust that validation ran", () => {
       ]),
       CTX
     );
-    expect(result.css).toContain("padding-inline-start: 2rem");
+    expect(result.css).toContain(
+      "padding-inline-start: max(2rem, var(--nx-contain-inset, 0px))"
+    );
     expect(result.css).not.toContain("padding-block-start");
   });
 
@@ -2269,5 +2273,348 @@ describe("the overlay's two properties", () => {
     expect(
       css(doc([node("n1", { base: { base: { color: "#fff" } } })]))
     ).not.toContain("--nx-pb-overlay");
+  });
+});
+
+describe("inline padding and a contained container's inset", () => {
+  const INSET = "var(--nx-contain-inset, 0px)";
+
+  it("writes a node's inline padding as at least the inset, on both sides", () => {
+    // The site sheet sets the inset on a contained element and to 0px on every
+    // other one. Written this way, an author's 200px widens a contained
+    // container's inset and its 0 drops the gutter, but neither takes the
+    // content past the content width; on any other element the padding is the
+    // value as set.
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: {
+              padding: {
+                inlineStart: "200px",
+                inlineEnd: "0",
+                blockStart: "1rem",
+              },
+            },
+          },
+        }),
+      ])
+    );
+    expect(out).toContain(`padding-inline-start: max(200px, ${INSET})`);
+    expect(out).toContain(`padding-inline-end: max(0px, ${INSET})`);
+    // The block axis is never inset: containment is about width only.
+    expect(out).toContain("padding-block-start: 1rem;");
+  });
+
+  it("gives a unitless zero a unit inside the max()", () => {
+    // `0` is a length on its own, but inside `max()` it is a number, and a
+    // number beside a length makes the whole declaration invalid: the padding
+    // would fall to nothing and the content reach the page edge.
+    for (const zero of ["0", "0.0", "-0", "+0", ".0"]) {
+      const out = css(
+        doc([
+          node("n1", {
+            base: { base: { padding: { inlineStart: zero, inlineEnd: zero } } },
+          }),
+        ])
+      );
+      expect(out).toContain(`padding-inline-start: max(0px, ${INSET})`);
+      expect(out).toContain(`padding-inline-end: max(0px, ${INSET})`);
+    }
+  });
+
+  it("gives a zero written with spaces around it a unit too", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { padding: { inlineStart: " 0 ", inlineEnd: "\t0.0 " } },
+          },
+        }),
+      ])
+    );
+    expect(out).toContain(`padding-inline-start: max(0px, ${INSET})`);
+    expect(out).toContain(`padding-inline-end: max(0px, ${INSET})`);
+  });
+
+  it("writes a CSS-wide keyword as it is, since max() cannot take one", () => {
+    // `max(inherit, ...)` is invalid, which would break the keyword on every
+    // block, contained or not. A keyword is the author's explicit word on the
+    // cascade, so it is left to mean what it means.
+    for (const keyword of [
+      "inherit",
+      "initial",
+      "unset",
+      "revert",
+      "revert-layer",
+    ]) {
+      const out = css(
+        doc([
+          node("n1", {
+            base: {
+              base: {
+                padding: {
+                  inlineStart: keyword,
+                  inlineEnd: ` ${keyword.toUpperCase()} `,
+                },
+              },
+            },
+          }),
+        ])
+      );
+      expect(out).not.toContain("max(");
+      expect(out).toMatch(
+        new RegExp(`padding-inline-start: ${keyword}\\b`, "i")
+      );
+      expect(out).toMatch(
+        new RegExp(`padding-inline-end: \\s*${keyword}\\b`, "i")
+      );
+    }
+  });
+
+  it("writes a block-type default and a named class the same way", () => {
+    // A Section's default gutter is a block-type default, and a class can set
+    // padding too. Either would replace the containment if it were written as
+    // a bare value, because both outweigh the site sheet's own rule.
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      blockBases: {
+        "core/box": {
+          base: {
+            base: { padding: { inlineStart: { $token: "space.gutter" } } },
+          },
+        },
+      },
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "card",
+          orderIndex: 0,
+          styles: { base: { base: { padding: { inlineEnd: "3rem" } } } },
+        },
+      ],
+    } as unknown as StyleCompileContext);
+    expect(out).toContain(
+      `padding-inline-start: max(var(--site-space-gutter), ${INSET})`
+    );
+    expect(out).toContain(`padding-inline-end: max(3rem, ${INSET})`);
+  });
+
+  it("wraps the value at every breakpoint and state", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: { mobile: { padding: { inlineStart: "1rem" } } },
+          hover: { base: { padding: { inlineStart: "2rem" } } },
+        }),
+      ])
+    );
+    expect(out).toContain(`padding-inline-start: max(1rem, ${INSET})`);
+    expect(out).toContain(`padding-inline-start: max(2rem, ${INSET})`);
+    expect(out).not.toMatch(/padding-inline-start: \d/);
+  });
+
+  it("flags a block its author sized, in the rule that sizes it", () => {
+    // The inset is measured from the box the block is laid out in, so a block
+    // narrower than that box would be padded far past its own content edge.
+    // The rule that gives it a width flags it; the site sheet multiplies the
+    // inset away and its auto margin centres the block, as before containment
+    // padded in.
+    const WIDTH_SET = "--nx-sized-width: 1";
+    const MAX_SET = "--nx-sized-max-width: 1";
+    expect(
+      css(doc([node("n1", { base: { base: { width: "600px" } } })]))
+    ).toContain(WIDTH_SET);
+    expect(
+      css(doc([node("n1", { base: { base: { maxWidth: "40rem" } } })]))
+    ).toContain(MAX_SET);
+    // A Mobile-only width flags the block on Mobile and nowhere else.
+    const mobile = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { padding: { blockStart: "1rem" } },
+            mobile: { width: "300px" },
+          },
+        }),
+      ])
+    );
+    expect(mobile.split(WIDTH_SET)).toHaveLength(2);
+    expect(mobile.indexOf("@media")).toBeGreaterThan(-1);
+    expect(mobile.indexOf(WIDTH_SET)).toBeGreaterThan(mobile.indexOf("@media"));
+    // A width that sizes nothing clears its own flag, so an override back to
+    // `auto` brings the inset back where it applies.
+    const hover = css(
+      doc([
+        node("n1", {
+          base: { base: { width: "600px" } },
+          hover: { base: { width: "auto" } },
+        }),
+      ])
+    );
+    expect(hover).toContain(WIDTH_SET);
+    expect(hover).toMatch(/:hover[^{]*\{[^}]*--nx-sized-width: 0/);
+    expect(
+      css(doc([node("n1", { base: { base: { maxWidth: "none" } } })]))
+    ).toContain("--nx-sized-max-width: 0");
+    // Neither property is inherited, so `initial`, `unset` and the reverts
+    // remove a size as `auto` does. Only `inherit` takes a size it cannot
+    // know, so it leaves the flag to the cascade.
+    for (const keyword of ["initial", "unset", "revert", "revert-layer"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { width: keyword } } })]))
+      ).toContain("--nx-sized-width: 0");
+    }
+    expect(
+      css(doc([node("n1", { base: { base: { width: "inherit" } } })]))
+    ).not.toContain("--nx-sized-width");
+  });
+
+  it("flags the children of a block that lays them out in a flex row", () => {
+    // A padding's `100%` is the flex container's width, not the item's, so a
+    // contained block laid out as a flex item would be inset from a box far
+    // wider than its own. The rule that makes its parent a flex container
+    // flags the parent's children; the site sheet then treats a contained one
+    // as a sized block: centred, not inset.
+    const ITEM = "--nx-sized-item";
+    for (const display of ["flex", "inline-flex"]) {
+      const out = css(doc([node("n1", { base: { base: { display } } })]));
+      expect(out).toMatch(
+        new RegExp(`\\.nx-pb-[a-z0-9]+ > \\* \\{ ${ITEM}: 1 \\}`)
+      );
+    }
+    // A grid item's percentages resolve against its own grid area, so its
+    // inset is already measured from its own width: no flag.
+    for (const display of ["grid", "inline-grid"]) {
+      const out = css(doc([node("n1", { base: { base: { display } } })]));
+      expect(out).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    }
+    // Any other layout clears it, so an override back to block brings the
+    // inset back to the children it applies to.
+    const block = css(
+      doc([
+        node("n1", {
+          base: { base: { display: "flex" }, mobile: { display: "block" } },
+        }),
+      ])
+    );
+    expect(block).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 1 \\}`));
+    const media = block.indexOf("@media");
+    expect(media).toBeGreaterThan(-1);
+    expect(block.slice(media)).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    // A block-type default flags at a default's weight, like the rest.
+    const byDefault = css(doc([node("n1")]), {
+      ...CTX,
+      blockBases: { "core/box": { base: { base: { display: "flex" } } } },
+    } as unknown as StyleCompileContext);
+    expect(byDefault).toMatch(
+      new RegExp(`:where\\(\\.nx-bt-core--box > \\*\\) \\{ ${ITEM}: 1 \\}`)
+    );
+    // `initial`, `unset` and the reverts give no row either; only `inherit`
+    // takes a layout no rule here can know.
+    for (const keyword of ["initial", "unset", "revert", "revert-layer"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { display: keyword } } })]))
+      ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    }
+    // `inherit` takes a layout no rule here can know, so it clears the flag:
+    // the inset is then never lost, at the most an item over-padded.
+    expect(
+      css(doc([node("n1", { base: { base: { display: "inherit" } } })]))
+    ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    // A block that sets no layout flags nothing.
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(ITEM);
+  });
+
+  it("flags the children of a flex column, whose items fill its width", () => {
+    // In a column, a flex item stretches across the whole width the inset is
+    // measured from, so a contained one keeps its inset: the direction sets a
+    // flag of its own on the children, which the site sheet reads beside the
+    // item flag.
+    const COLUMN = "--nx-column-flow";
+    for (const flexDirection of ["column", "column-reverse"]) {
+      expect(
+        css(
+          doc([
+            node("n1", { base: { base: { display: "flex", flexDirection } } }),
+          ])
+        )
+      ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
+    }
+    // `inherit` takes a direction no rule here can know, so it is read as a
+    // column: the inset is then never lost. The other keywords resolve to
+    // the initial `row`.
+    expect(
+      css(
+        doc([
+          node("n1", {
+            base: { base: { display: "flex", flexDirection: "inherit" } },
+          }),
+        ])
+      )
+    ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
+    for (const flexDirection of ["row", "row-reverse", "initial", "unset"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { flexDirection } } })]))
+      ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 0`));
+    }
+    expect(
+      css(doc([node("n1", { base: { base: { display: "flex" } } })]))
+    ).not.toContain(COLUMN);
+  });
+
+  it("flags a block taken out of the flow by its own position", () => {
+    // An absolutely or fixed positioned child of a row is not a flex
+    // item, so the item flag must not hold for it. Its own position sets a
+    // flag of its own, in the rule that sets the position; the site sheet
+    // reads the item flag only where this one is 0.
+    const FLOW = "--nx-out-of-flow";
+    const at = (type: string) =>
+      css(doc([node("n1", { base: { base: { position: { type } } } })]));
+    for (const type of ["absolute", "fixed"]) {
+      expect(at(type)).toContain(`${FLOW}: 1`);
+    }
+    for (const type of ["relative", "static", "sticky"]) {
+      expect(at(type)).toContain(`${FLOW}: 0`);
+    }
+    // A block that sets no position flags nothing.
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(FLOW);
+  });
+
+  it("records the value as it was set in the trace, not the wrapped one", () => {
+    // The inspector names a value and where it came from. The inset is how
+    // containment combines with it, not a value anyone set.
+    const { trace } = compilePageCss(
+      doc([
+        node("n1", { base: { base: { padding: { inlineStart: "2rem" } } } }),
+      ]),
+      { ...CTX, trace: true } as StyleCompileContext
+    );
+    expect(trace).toBeDefined();
+    expect(
+      trace?.find(entry => entry.property === "padding-inline-start")?.value
+    ).toBe("2rem");
+  });
+
+  it("leaves every other property as it was written", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: {
+              margin: { inlineStart: "2rem" },
+              padding: { blockEnd: "1rem" },
+            },
+          },
+        }),
+      ])
+    );
+    expect(out).toContain("margin-inline-start: 2rem");
+    expect(out).toContain("padding-block-end: 1rem");
+    expect(out).not.toContain("--nx-contain-inset");
   });
 });

@@ -429,7 +429,8 @@ function LastVisitChip({
       offer={offer}
       notice={LAST_VISIT_NOTICE}
       lead="You made them"
-      leave={{ label: "Discard", run: offer.dismiss }}
+      // Discard lasts: the point is emptied, so no later session offers it.
+      leave={{ label: "Discard", run: offer.discard }}
       take={{ label: "Save", ...save }}
     />
   );

@@ -261,7 +261,11 @@ export { useReportUnsavedWork } from "@nextlyhq/admin/kit/document";
  *   same leading action, the same reasons one cannot run — with `run(id)`,
  *   which does what that action's control does and resolves to what it came
  *   to, and `saveState`, the one answer to whether the work is stored. Null
- *   outside a document editor.
+ *   outside a document editor. `saveWithoutPublishing` runs Save the same
+ *   way, and is undefined wherever that Save is not offered or would publish,
+ *   for a surface that must never publish, such as a preview that saves
+ *   first. `useDocumentPreview().open(before)` runs such a step once its tab
+ *   is claimed, and opens nothing when the step answers false.
  * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing

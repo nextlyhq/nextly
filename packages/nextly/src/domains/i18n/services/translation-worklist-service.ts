@@ -165,7 +165,9 @@ export {
 
 /** One document's outstanding work in one language. */
 export interface TranslationWorkRow {
-  /** The collection's slug, which is also how the row is opened. */
+  /** What the row is: a collection entry, or a Single (one document, opened at its own route). */
+  kind: "collection" | "single";
+  /** The collection's or Single's slug, which is also how the row is opened. */
   collection: string;
   /** Its plural label, because the row is read by a person, not a route. */
   collectionLabel: string;
@@ -409,6 +411,47 @@ export function notConsultedSources(
  * nested inside `and`, and a filter written the other way is silently ignored
  * — it would return every entry and read as "nothing outstanding".
  */
+/**
+ * Whether a Single's language is in `state`, read from the Single's translation overview
+ * (`LocaleTranslationMeta`), whose `translated` and `stale` are the ones its own badge shows. A
+ * Single is one document, so it is judged from its overview rather than through a list filter.
+ */
+export function singleLanguageInState(
+  meta: { translated?: boolean; status?: string; stale?: boolean } | undefined,
+  state: TranslationFilterState,
+  isDefaultLocale: boolean
+): boolean {
+  switch (state) {
+    case "missing":
+      // Nothing is missing in the default language: it is the source.
+      return !isDefaultLocale && meta?.translated !== true;
+    case "translated":
+      return meta?.translated === true;
+    case "draft":
+    case "published":
+      return meta?.translated === true && meta.status === state;
+    case "stale":
+      return meta?.stale === true;
+    default:
+      return false;
+  }
+}
+
+/** Runs `work` over `items` a bounded number at a time, answers in order. */
+export async function inBoundedBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  work: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let start = 0; start < items.length; start += size) {
+    out.push(
+      ...(await Promise.all(items.slice(start, start + size).map(work)))
+    );
+  }
+  return out;
+}
+
 export function translatedFilter(
   locale: string,
   state: TranslationFilterState

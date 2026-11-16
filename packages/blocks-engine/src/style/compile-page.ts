@@ -47,6 +47,7 @@ import { isConditionGated } from "../visibility";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { childGapForms } from "./child-gap";
+import { childFlagRule, withContainInset } from "./contain-inset";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -1442,8 +1443,19 @@ function envelopeRules(
             (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
               : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
-          declarations: rule.declarations,
+          declarations: withContainInset(
+            rule.declarations,
+            rule.descendant === ""
+          ),
         });
+        // The flag for the block's children; not traced, as no one set it.
+        const flags = childFlagRule(
+          rule,
+          `${selector}${stateSelectors[state]} > *`,
+          weightlessAnchor,
+          context.atRule
+        );
+        if (flags !== undefined) rules.push(flags);
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
