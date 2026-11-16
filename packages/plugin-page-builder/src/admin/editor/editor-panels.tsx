@@ -296,7 +296,7 @@ type PanelRequests = {
 };
 
 /** A place a canvas "+" chose: inside a container, or right after a block. */
-export type InsertPlaceRequest =
+type InsertPlaceRequest =
   | { readonly inside: string }
   | { readonly after: string };
 

@@ -12,6 +12,7 @@ import {
   locateNode,
   type AnyBlockDefinition,
   type BlockDocument,
+  type BlockNode,
   type PlacementTarget,
 } from "@nextlyhq/blocks-engine";
 
@@ -172,38 +173,56 @@ function explicitCandidates(
   document: BlockDocument,
   at: OpPosition
 ): InsertionCandidate[] {
-  const parent =
-    at.parentId === undefined
-      ? undefined
-      : findNode(document.nodes, at.parentId);
-  if (at.parentId !== undefined && parent === undefined) return [];
-  const held =
-    parent === undefined
-      ? document.nodes
-      : (parent.slots?.[at.slot ?? ""] ?? []);
-  const target: PlacementTarget =
-    parent === undefined
-      ? { kind: "root" }
-      : { kind: "slot", parentType: parent.type, slot: at.slot ?? "" };
+  const region = regionAt(document, at);
+  if (region === undefined) return [];
+  const { held, target, containerId } = region;
   const before = held[at.index]?.id;
   const after = at.index > 0 ? held[at.index - 1]?.id : undefined;
-  if (before === undefined) {
-    if (after !== undefined) {
-      return [{ kind: "after-ancestor", at, target, afterId: after }];
-    }
-    return parent === undefined
-      ? [{ kind: "document-end", at, target }]
-      : [{ kind: "inside", at, target, insideId: parent.id }];
+  if (before !== undefined) {
+    return [
+      {
+        kind: "between",
+        at,
+        target,
+        ...(after === undefined ? {} : { afterId: after }),
+        beforeId: before,
+      },
+    ];
   }
-  return [
-    {
-      kind: "between",
-      at,
-      target,
-      ...(after === undefined ? {} : { afterId: after }),
-      beforeId: before,
-    },
-  ];
+  if (after !== undefined) {
+    return [{ kind: "after-ancestor", at, target, afterId: after }];
+  }
+  return containerId === undefined
+    ? [{ kind: "document-end", at, target }]
+    : [{ kind: "inside", at, target, insideId: containerId }];
+}
+
+/**
+ * The region a position is in: the blocks it holds, the target it implies,
+ * and the container it belongs to (none at the page's top level). None when
+ * that container is gone.
+ */
+function regionAt(
+  document: BlockDocument,
+  at: OpPosition
+):
+  | {
+      readonly held: readonly BlockNode[];
+      readonly target: PlacementTarget;
+      readonly containerId?: string;
+    }
+  | undefined {
+  if (at.parentId === undefined) {
+    return { held: document.nodes, target: { kind: "root" } };
+  }
+  const parent = findNode(document.nodes, at.parentId);
+  if (parent === undefined) return undefined;
+  const slot = at.slot ?? "";
+  return {
+    held: parent.slots?.[slot] ?? [],
+    target: { kind: "slot", parentType: parent.type, slot },
+    containerId: parent.id,
+  };
 }
 
 /** The end of a container's region the author chose to add into, if it has one. */
@@ -300,11 +319,7 @@ export function entryRoles(
   catalog: readonly InsertEntry[],
   definitions: readonly AnyBlockDefinition[] | undefined
 ): ReadonlyMap<string, EntryRole> {
-  const byName = new Map<string, AnyBlockDefinition>();
-  for (const definition of allBlocks()) byName.set(definition.name, definition);
-  for (const definition of definitions ?? []) {
-    byName.set(definition.name, definition);
-  }
+  const byName = definitionsByName(definitions);
   const isLayout = (type: string): boolean => {
     const definition = byName.get(type);
     return (
@@ -330,4 +345,21 @@ function roleOf(
   }
   if (entry.blockName === SECTION_BLOCK) return "band";
   return isLayout(entry.blockName) ? "layout" : "content";
+}
+
+/**
+ * Every registered block definition by name, with the supplied ones written
+ * second, so they WIN for a name in both: the palette offered that
+ * definition, so the insert must build, and place, that block. Read ONCE, so
+ * one reading answers every lookup of a catalogue's build.
+ */
+export function definitionsByName(
+  definitions: readonly AnyBlockDefinition[] | undefined
+): ReadonlyMap<string, AnyBlockDefinition> {
+  const byName = new Map<string, AnyBlockDefinition>();
+  for (const definition of allBlocks()) byName.set(definition.name, definition);
+  for (const definition of definitions ?? []) {
+    byName.set(definition.name, definition);
+  }
+  return byName;
 }

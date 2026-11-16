@@ -171,23 +171,19 @@ function tierOf(tab: PanelTab): LibraryTier {
 }
 
 export function InsertPanel({
-  editor,
-  definitions,
-  patterns,
-  components,
-  componentDefinitions,
   library,
-  nesting,
   categoryOrder,
   blockOrder,
-  onInsert,
   beginInsertDrag,
-  inside,
-  after,
   renderPreview,
   // A canvas press to answer, handed to the line that answers it.
-  ...summons
+  summoned,
+  onSummoned,
+  // What it offers, and where: the sources the offers are judged from.
+  ...offerInputs
 }: InsertPanelProps): React.JSX.Element {
+  const { editor, nesting, onInsert } = offerInputs;
+  const summons = { summoned, onSummoned };
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
   const [tab, setTab] = React.useState<PanelTab>("blocks");
@@ -219,17 +215,7 @@ export function InsertPanel({
   // What can be added, where, and the act of adding it: shared with the
   // editor's search, so a row there and a tile here are one answer.
   const { catalog, rest, announcement, offers, blockSource, insert } =
-    useInsertOffers({
-      editor,
-      definitions,
-      patterns,
-      components,
-      componentDefinitions,
-      nesting,
-      inside,
-      after,
-      onInsert,
-    });
+    useInsertOffers(offerInputs);
   // The field a dragged Entry content block draws, as a click places it,
   // and whether it can be known yet.
   const blocksFields = usePreviewedCollection()?.blocksFields;
