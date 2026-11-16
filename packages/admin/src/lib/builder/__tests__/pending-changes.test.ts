@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
+import { followRename } from "../condition-identity";
 import { pendingChanges, rowMarks } from "../pending-changes";
 
 const text = (id: string, overrides: Partial<BuilderField> = {}) =>
@@ -297,5 +298,43 @@ describe("row marks", () => {
     for (const id of ["address", "street", "city", "zip"]) {
       expect([...(marks.get(id) ?? [])]).toEqual(["deleted"]);
     }
+  });
+});
+
+// A rename carries the conditions that read the field (`followRename`), so the condition it
+// rewrites is part of the rename: one change, not a rename and a changed field beside it.
+describe("a rename and the conditions it carries", () => {
+  const gated = (id: string, source: string) =>
+    text(id, {
+      admin: { condition: { field: source, operator: "isNotEmpty" } },
+    });
+  const before = [text("summary"), gated("teaser", "summary")];
+  /** `before` with `summary` renamed to `abstract` and its readers followed. */
+  const renamed = () =>
+    followRename(
+      [text("summary", { name: "abstract" }), gated("teaser", "summary")],
+      "summary",
+      "summary"
+    );
+
+  it("counts the condition it rewrites as part of the rename", () => {
+    expect(summary(before, renamed())).toEqual(["renamed summary"]);
+  });
+
+  it("still counts a condition changed by hand beside a rename", () => {
+    const fields = renamed().map(each =>
+      each.id === "teaser"
+        ? {
+            ...each,
+            admin: {
+              condition: { field: "abstract", operator: "isEmpty" as const },
+            },
+          }
+        : each
+    );
+    expect(summary(before, fields)).toEqual([
+      "renamed summary",
+      "settings teaser",
+    ]);
   });
 });
