@@ -131,6 +131,22 @@ of a published Layout.
 Inside a batch write the check can't run safely, so deleting or unpublishing a component
 there is refused. Delete or unpublish it on its own instead.
 
+### A Layout can't name a component that doesn't exist
+
+Saving a Layout whose area names a component that doesn't exist is refused with
+`400 VALIDATION_ERROR`, on that area's row, for example "The footer names a component
+that doesn't exist. Choose another component for the footer." Nothing is stored.
+
+A Layout save that adds a component while that component is being deleted is refused
+too, and so is one racing the delete: a save and a delete made at the same moment never
+leave a Layout naming a component that is gone.
+
+A Layout stored before these checks may still name a component that was removed some
+other way. Pages draw that area empty, with no error, and the Layout's next save of its
+areas drops the row. The other areas are kept, and a save that fails changes nothing. A
+save inside a batch write keeps the row, because the check can't read safely there; the
+Layout's next save on its own drops it.
+
 ## Removing a Layout
 
 Delete or unpublish a Layout with **Remove Layout…**, in the bar at the top of the Layout's
