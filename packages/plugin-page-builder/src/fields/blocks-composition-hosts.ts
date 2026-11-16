@@ -209,7 +209,16 @@ type Tally = ReturnType<typeof hostTally>;
  * thousand unreadable pages is one warning an operator can read, and a host a
  * publish breaks in both forms is one host.
  */
-export function hostTally(componentId: string, setup: CompositionSetup) {
+export function hostTally(
+  componentId: string,
+  setup: CompositionSetup
+): {
+  host(host: HostRef, reason: string): void;
+  incomplete(reason: string): void;
+  broke(host: HostRef, fault: HostFault): void;
+  stillBroken(host: HostRef, fault: HostFault): void;
+  flush(report: Report): void;
+} {
   const unjudged = new Set<string>();
   let listIncomplete = false;
   const reasons = new Set<string>();
