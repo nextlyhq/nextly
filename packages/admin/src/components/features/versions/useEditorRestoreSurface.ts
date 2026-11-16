@@ -43,11 +43,12 @@ export function useFormRestore<T extends FieldValues>(
   useEffect(() => {
     let defaults: unknown = form.formState.defaultValues;
     // A reset announces what is dirty after it; new default values are what
-    // tell it from an edit.
+    // tell it from an edit. They are read from what the reset announces: the
+    // form's own state still holds the ones from its last render.
     return form.subscribe({
       formState: { isDirty: true, dirtyFields: true },
       callback: state => {
-        const now: unknown = form.formState.defaultValues;
+        const now: unknown = state.defaultValues;
         if (now === defaults) return;
         defaults = now;
         restore.formReset(
