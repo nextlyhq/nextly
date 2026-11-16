@@ -722,6 +722,95 @@ describe("a rename the Builder made", () => {
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
 
+  // A required field keeps its values through the rename, so the new column needs no default: the
+  // preview's prompt for it (made before the pair was answered) is not the person's to answer, and
+  // answering it "optional" would drop the field's Required.
+  it("asks nothing about a required field's new column, and sends no answer for it", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf({
+          ...renaming,
+          classification: "interactive",
+          interactiveFields: [
+            {
+              name: "abstract",
+              reason: "new_required_no_default",
+              tableRowCount: 3,
+              options: ["provide_default", "mark_nullable", "cancel"],
+            },
+          ],
+        })}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        draftRenames={[
+          { label: "Summary", previousName: "summary", name: "abstract" },
+        ]}
+      />
+    );
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledWith({}, expect.any(Array));
+  });
+
+  // A new name that keeps the column (`metaTitle` to `meta_title`) moves no value, though the
+  // preview, by name, lists one field removed and another added: shown as the rename it is, with
+  // nothing deleted and no removal to confirm.
+  it("shows a rename that keeps its column as one, with nothing deleted", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(
+          preview({
+            hasDestructiveChanges: true,
+            classification: "destructive",
+            changes: {
+              added: [
+                {
+                  name: "meta_title",
+                  type: "text",
+                  required: false,
+                  hasDefault: false,
+                  classification: "safe",
+                },
+              ],
+              removed: [
+                {
+                  name: "metaTitle",
+                  type: "text",
+                  rowCount: 3,
+                  classification: "destructive",
+                },
+              ],
+              changed: [],
+              unchanged: [],
+            },
+          })
+        )}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        draftRenames={[
+          {
+            label: "Meta title",
+            previousName: "metaTitle",
+            name: "meta_title",
+          },
+        ]}
+      />
+    );
+    expect(
+      screen.getByText(/renamed to/i).closest("li, p, div")
+    ).toHaveTextContent(/metaTitle.*renamed to.*meta_title.*values are kept/is);
+    expect(screen.queryByText("removed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/data loss/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledWith({}, []);
+  });
+
   // The control: without the Builder's rename, the same preview asks, and shows the removal.
   it("still asks about the pair when the Builder did not rename the field", () => {
     renderDialogs(renaming);

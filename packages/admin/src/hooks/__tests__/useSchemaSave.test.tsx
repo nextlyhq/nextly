@@ -648,6 +648,30 @@ describe("a rename the Builder made", () => {
     ).toEqual(["body->abstract:drop_and_add", "summary->abstract:rename"]);
   });
 
+  // Two fields that trade names (through a third name on the way) leave the same columns, so the
+  // preview sees no change. Saving the definitions then would put each field's label and settings
+  // on the other's values, so the save stops as for any rename the preview does not offer.
+  it("saves nothing for a swap of names the preview sees as no change", async () => {
+    const confirmation = confirmationStub();
+    const { result, onNoChanges } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      draftRenames: [
+        rename("summary", "abstract"),
+        rename("abstract", "summary"),
+      ],
+    });
+
+    await act(async () => result.current.handleSave());
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(toastError.mock.calls[0][0]).toContain(
+      "Summary was renamed from summary to abstract"
+    );
+    expect(onNoChanges).not.toHaveBeenCalled();
+    expect(confirmation.request).not.toHaveBeenCalled();
+  });
+
   it("needs no pair when the new name keeps the column", async () => {
     const confirmation = confirmationStub();
     const { result } = setup({
