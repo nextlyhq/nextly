@@ -617,6 +617,142 @@ export function formatReport(result, { json = false } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Screens of an application's production build
+// ---------------------------------------------------------------------------
+
+/**
+ * What each admin screen of an APPLICATION downloads, and how much of it is
+ * the code of the groups asked about, read from the application's production
+ * build.
+ *
+ * The report above measures this package's own build, and so cannot see the
+ * pages a plugin contributes: they reach the admin through the application's
+ * generated component map, which its bundler alone resolves. This reads that
+ * bundler's output instead: `output` is what `readOutput` (in
+ * `check-consumer-bundle.mjs`) makes of a Turbopack build with browser source
+ * maps, each chunk's module factories with the sources they map to and the
+ * loaders an `import()` became.
+ *
+ * A screen is the admin page's first load plus what opening it fetches:
+ * `opens` lists, in order, the modules whose loaders run on the way to it (the
+ * admin's route, then a plugin's part on that route), each a pattern over the
+ * sources a loader's target maps to. Each loader is looked for among the
+ * chunks already reached, as the browser can only run a loader it has
+ * downloaded. A pattern no reached loader runs throws: a screen measured
+ * without the code that draws it would read as small, which is the wrong way
+ * to be wrong.
+ *
+ * A group's bytes are its share of each chunk's gzipped size, by how much of
+ * the chunk's code its sources account for (`sourceLength`, from the chunk's
+ * source map; gzip does not split exactly). Its `sources` name every matching
+ * module the chunk's factories hold, so a group expected to be absent is
+ * judged by name, not by a size near zero.
+ */
+export function measureScreens({ output, route, screens, groups }) {
+  const firstLoad = output.firstLoads.get(route);
+  if (!firstLoad || firstLoad.length === 0) {
+    throw new Error(`the build names no first load for ${route}`);
+  }
+  const byId = new Map();
+  for (const chunk of output.chunks.values()) {
+    for (const factory of chunk.factories) {
+      for (const id of factory.ids) byId.set(id, factory);
+    }
+  }
+  return screens.map(screen => {
+    const names = new Set(firstLoad);
+    for (const opener of screen.opens) {
+      const fetched = loadersIn(output, names).filter(loader =>
+        [...(byId.get(loader.target)?.sources ?? [])].some(source =>
+          opener.test(source)
+        )
+      );
+      if (fetched.length === 0) {
+        throw new Error(
+          `${screen.name}: no loader in the chunks reached so far runs a module matching ${opener}`
+        );
+      }
+      for (const loader of fetched) {
+        for (const name of loader.chunks) names.add(name);
+      }
+    }
+    return { name: screen.name, ...screenSize(output, names, groups) };
+  });
+}
+
+/** The loaders registered in the named chunks. */
+function loadersIn(output, names) {
+  return [...names].flatMap(name =>
+    (output.chunks.get(name)?.factories ?? [])
+      .map(factory => factory.loader)
+      .filter(Boolean)
+  );
+}
+
+/**
+ * A screen's chunks, their gzipped size, and each group's part of it.
+ *
+ * A group's part of a chunk is its share of the chunk's code, by
+ * `sourceLength`: how much of the chunk's code (in characters) each source
+ * accounts for, which the reader derives from the chunk's source map. A share
+ * by whole module factories would overstate a group, since a bundler merges
+ * several packages' modules into one factory.
+ */
+function screenSize(output, names, groups) {
+  const parts = Object.fromEntries(
+    groups.map(group => [group.name, { gzippedBytes: 0, sources: new Set() }])
+  );
+  let gzippedBytes = 0;
+  for (const name of names) {
+    const chunk = output.chunks.get(name);
+    if (!chunk) throw new Error(`a screen names ${name}, which the build does not hold`);
+    const zipped = gzipSync(chunk.code).length;
+    gzippedBytes += zipped;
+    if (chunk.code.length === 0) continue;
+    for (const group of groups) {
+      let length = 0;
+      for (const [source, sourceLength] of chunk.sourceLength) {
+        if (group.matches(source)) length += sourceLength;
+      }
+      parts[group.name].gzippedBytes += (zipped * length) / chunk.code.length;
+      for (const source of chunk.sources) {
+        if (group.matches(source)) parts[group.name].sources.add(source);
+      }
+    }
+  }
+  return {
+    chunks: [...names].sort(),
+    gzippedBytes,
+    groups: Object.fromEntries(
+      Object.entries(parts).map(([group, part]) => [
+        group,
+        {
+          gzippedBytes: Math.round(part.gzippedBytes),
+          sources: [...part.sources].sort(),
+        },
+      ])
+    ),
+  };
+}
+
+/** The screens as a table a person reads, with each group's size. */
+export function formatScreens(measured, { title }) {
+  const lines = [title, "=".repeat(72)];
+  for (const screen of measured) {
+    lines.push(
+      `${screen.name}: ${screen.chunks.length} chunks, ${formatKB(screen.gzippedBytes)} KB gzip`
+    );
+    for (const [group, part] of Object.entries(screen.groups)) {
+      lines.push(
+        `  ${group.padEnd(28)} ${`${formatKB(part.gzippedBytes)} KB gzip`.padStart(16)}  ${part.sources.length} modules`
+      );
+    }
+  }
+  lines.push("=".repeat(72));
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
 // CLI Execution
 // ---------------------------------------------------------------------------
 
