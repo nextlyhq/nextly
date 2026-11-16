@@ -22,6 +22,44 @@ type SourceDemand = NonNullable<BindingDemand["entry"]>;
 /** Where the canvas reads its binding sources, under this plugin's namespace. */
 export const CANVAS_BINDINGS_ROUTE_PATH = "/canvas-bindings";
 
+/**
+ * Where the canvas asks whether the sources it reads have changed, under
+ * this plugin's namespace.
+ */
+export const CANVAS_SOURCES_CHANGED_ROUTE_PATH = "/canvas-sources/changed";
+
+/**
+ * What the change check asks about: the sources a bindings ask reads, by
+ * name only. Derived from that ask ({@link sourcesChangedAskOf}), so the
+ * check always names exactly what the canvas reads.
+ */
+export interface CanvasSourcesChangedRequest {
+  readonly source: CanvasBindingsRequest["source"];
+  /** The Singles the page's bindings read. */
+  readonly singles: readonly string[];
+  /** The collections the page's lists draw. */
+  readonly lists: readonly string[];
+}
+
+/**
+ * When the sources last changed, as one opaque mark: a different mark means
+ * something the canvas reads was saved, added or removed since.
+ */
+export interface CanvasSourcesChangedResponse {
+  readonly stamp: string;
+}
+
+/** The change check's ask for the sources `request` reads. */
+export function sourcesChangedAskOf(
+  request: CanvasBindingsRequest
+): CanvasSourcesChangedRequest {
+  return {
+    source: request.source,
+    singles: Object.keys(request.demand.singles).sort(),
+    lists: [...request.lists].sort(),
+  };
+}
+
 /** What one source is read for, as JSON carries it. */
 export interface CanvasSourceDemand {
   readonly fields: readonly string[];

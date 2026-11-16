@@ -25,6 +25,7 @@ import {
 } from "../bindings-report/scan";
 import { bindingReportStore } from "../bindings-report/store";
 import { canvasBindingsRoute } from "../canvas-bindings-route";
+import { canvasSourcesChangedRoute } from "../canvas-sources-changed-route";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
@@ -267,6 +268,7 @@ export function routesForBindings(
   readonly namedQueries: PluginRoute;
   readonly listEntries: PluginRoute;
   readonly canvasBindings: PluginRoute;
+  readonly canvasSourcesChanged: PluginRoute;
   readonly bindingFields: PluginRoute;
   readonly unbindPlan: PluginRoute;
   readonly bindingsToFix: PluginRoute;
@@ -290,6 +292,9 @@ export function routesForBindings(
     // The canvas's bound props: the entry being edited, the Singles its
     // bindings read and the site settings, read as the author asking.
     canvasBindings: canvasBindingsRoute(),
+    // Whether what the canvas reads has changed since it read it: the
+    // editor's change check, read as the author asking.
+    canvasSourcesChanged: canvasSourcesChangedRoute(),
     // The fields the inspector's picker offers a binding, as the author
     // asking may read them, each marked by whether visitors may.
     bindingFields: bindingFieldsRoute(),
