@@ -227,7 +227,7 @@ const counted = (problems: readonly Problem[]) =>
 
 test("the SEO issues card draws the problem list by kind", async ({ page }) => {
   const stamp = Date.now().toString(36);
-  const title = `SEO e2e card ${stamp} ${"t".repeat(60)}`;
+  const title = `SEO e2e card ${stamp} ${"W".repeat(40)}`;
   await writePage(title, `seo-e2e-card-${stamp}`);
   const list = counted(await listNaming(admin, title));
   expect(list.some(problem => problem.kind === "longTitle")).toBe(true);
@@ -269,7 +269,7 @@ test("its count is a Needs attention line linked to the problem list", async ({
 }) => {
   const stamp = Date.now().toString(36);
   // A title longer than Google shows, a notice the line leaves to the list.
-  const title = `SEO e2e attention ${stamp} ${"t".repeat(60)}`;
+  const title = `SEO e2e attention ${stamp} ${"W".repeat(40)}`;
   await writePage(title, `seo-e2e-attention-${stamp}`);
   await listNaming(page.request, title);
   // The errors and warnings, as the SEO section's Overview counts them for
@@ -332,7 +332,7 @@ test("a reader who may not read the pages is offered neither the card nor the li
   // is not available, and is shown no line at all, not even its label, while
   // the pages hold problems the super-admin is shown.
   const stamp = Date.now().toString(36);
-  const title = `SEO e2e unseen ${stamp} ${"t".repeat(60)}`;
+  const title = `SEO e2e unseen ${stamp} ${"W".repeat(40)}`;
   await writePage(title, `seo-e2e-unseen-${stamp}`);
   await listNaming(admin, title);
   expect((await seoLineFor(admin))?.count ?? 0).toBeGreaterThan(0);

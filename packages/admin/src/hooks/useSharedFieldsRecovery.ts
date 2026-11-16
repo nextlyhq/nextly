@@ -30,7 +30,7 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
 import { RecoverySaveRefused } from "@admin/components/features/entries/EntryForm/useRefusedForm";
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 import { fieldLabel, humanizeFieldName } from "@admin/lib/field-label";

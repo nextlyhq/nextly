@@ -22,22 +22,17 @@ import { useId, type ReactNode, type Ref } from "react";
 
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
-import {
-  characters,
-  DESCRIPTION_LIMIT,
-  TITLE_LIMIT,
-  type SeoProblem,
-} from "../tab/problems";
+import type { SearchText, SeoProblem } from "../tab/problems";
 
 import { AdvancedSection } from "./advanced";
 import {
-  CharacterCount,
   Chip,
   EmptyUses,
   inSentence,
   LinkAction,
   Note,
   SourceRow,
+  WidthMeter,
   type SourceNames,
 } from "./parts";
 import { PreviewCard } from "./previews";
@@ -93,7 +88,11 @@ export interface SeoPanelProps {
 }
 
 /** The values whose problems the Advanced section holds. */
-const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
+const ADVANCED_VALUES: readonly string[] = [
+  "structuredData",
+  "image",
+  "display",
+];
 
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;
@@ -131,11 +130,10 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
       />
       <PageTextField
         label="Title on Google"
-        help="The blue link people click in Google's results. Google shows about 60 characters."
+        help="The blue link people click in Google's results. Google shows about 600 px of it, about 60 characters."
         typed={typedText(values.metaTitle)}
         used={answer?.title}
         automatic={answers?.automatic.title}
-        limit={TITLE_LIMIT}
         value="title"
         names={names}
         problem={problems.find(p => p.value === "title")}
@@ -150,7 +148,6 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
         typed={typedText(values.metaDescription)}
         used={answer?.description}
         automatic={answers?.automatic.description}
-        limit={DESCRIPTION_LIMIT}
         value="description"
         names={names}
         problem={problems.find(p => p.value === "description")}
@@ -332,9 +329,8 @@ export interface SeoTextFieldProps {
   value: string;
   /** The placeholder: the value used while nothing is typed. */
   placeholder: string;
-  /** How long the value used is, in characters. */
-  count: number;
-  limit: number;
+  /** The value used, measured as Google draws it: typed, or automatic. */
+  measure: { kind: SearchText; text: string };
   /** The line under the field saying where the value comes from, by its id. */
   source: (id: string) => ReactNode;
   error?: string | undefined;
@@ -344,8 +340,7 @@ export interface SeoTextFieldProps {
   maxLength?: number;
   /**
    * Drawn as the SEO tab draws its two fields: "· optional" after the label,
-   * the sentence read out but not shown, and no count, since the problems
-   * above the fields say when a value is too long.
+   * and the sentence read out but not shown.
    */
   quiet?: boolean;
   inputRef?: Ref<HTMLInputElement>;
@@ -362,7 +357,9 @@ function controlProps(
   error: string | undefined,
   onChange: (next: string | null) => void
 ) {
-  const described = [`${id}-help`, `${id}-source`];
+  // The width under the field is read out with it, so a person who cannot
+  // see the bar hears whether Google cuts the value.
+  const described = [`${id}-help`, `${id}-width`, `${id}-source`];
   if (error !== undefined) described.push(`${id}-error`);
   return {
     id,
@@ -439,8 +436,7 @@ export function SeoTextField({
   help,
   value,
   placeholder,
-  count,
-  limit,
+  measure,
   source,
   error,
   writable,
@@ -455,10 +451,7 @@ export function SeoTextField({
   const limited = maxLength === undefined ? {} : { maxLength };
   return (
     <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-2.5">
-        <FieldLabel id={id} label={label} optional={quiet} />
-        {quiet ? null : <CharacterCount count={count} limit={limit} />}
-      </div>
+      <FieldLabel id={id} label={label} optional={quiet} />
       <p id={`${id}-help`} className={helpClass(quiet)}>
         {help}
       </p>
@@ -467,6 +460,8 @@ export function SeoTextField({
       ) : (
         <Input {...field} {...limited} ref={inputRef} />
       )}
+      {/* How wide the value in use draws on Google, under what is typed. */}
+      <WidthMeter id={`${id}-width`} kind={measure.kind} text={measure.text} />
       {source(`${id}-source`)}
       <FieldError id={`${id}-error`} error={error} />
     </div>
@@ -483,7 +478,6 @@ function PageTextField({
   typed,
   used,
   automatic,
-  limit,
   value,
   names,
   problem,
@@ -497,7 +491,6 @@ function PageTextField({
   typed: string;
   used: Sourced<string> | undefined;
   automatic: Sourced<string> | undefined;
-  limit: number;
   value: "title" | "description";
   names: SourceNames;
   problem: SeoProblem | undefined;
@@ -512,9 +505,8 @@ function PageTextField({
       help={help}
       value={typed}
       placeholder={automatic?.value ?? ""}
-      // Counted as the problems are, so an emoji counts once.
-      count={used === undefined ? 0 : characters(used.value)}
-      limit={limit}
+      // Measured as the problems are, the value in use, typed or automatic.
+      measure={{ kind: value, text: used?.value ?? "" }}
       error={error}
       writable={writable}
       multiline={multiline}

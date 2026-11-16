@@ -135,7 +135,11 @@ vi.mock("../../utils/config-loader", () => ({
         {
           name: "@acme/fx",
           version: "1.0.0",
-          contributes: { schema: { migrations: state.migrations } },
+          // The prefix its modules' tables (`fx__…`) were created under: a
+          // plugin whose prefix differs from its recorded tables' is refused.
+          contributes: {
+            schema: { prefix: "fx", migrations: state.migrations },
+          },
         },
       ],
     },

@@ -168,3 +168,32 @@ export const PAGE_NOT_SAVED = "This page couldn't be saved. Try again.";
  */
 export const MOVE_STOPPED =
   "Moving stopped, so the Layout was not removed. Pages already moved stay on the site default.";
+
+/** Why a move left a page that kept being saved while it was moved. */
+export const PAGE_KEPT_CHANGING =
+  "This page kept changing while it was being moved. Try again when nobody is editing it.";
+
+/**
+ * Why a page moved off a Layout, as its history keeps it beside the Page
+ * Builder's name: the Layout by the title it had, and what is happening to it.
+ */
+export function movedOffLayoutReason(
+  title: string,
+  action: "delete" | "unpublish"
+): string {
+  const named = title.trim() === "" ? "Its Layout" : `Layout "${title}"`;
+  const going = action === "delete" ? "deleted" : "unpublished";
+  return `${named} is being ${going}, so this page was moved to the site default.`;
+}
+
+/**
+ * What a finished move says about published pages whose live copy still names
+ * the Layout: changing a live copy needs the right to publish the page, so
+ * where the person lacks it only the draft moved. They show the site default
+ * until someone who may publish them chooses another Layout.
+ */
+export function liveCopiesLeftSentence(count: number): string {
+  return count === 1
+    ? "The published version of 1 page still names this Layout, because changing it needs permission to publish it. Visitors see the site default's header and footer there until someone who can publish it chooses another Layout."
+    : `The published versions of ${String(count)} pages still name this Layout, because changing them needs permission to publish them. Visitors see the site default's header and footer there until someone who can publish them chooses another Layout.`;
+}

@@ -135,6 +135,62 @@ describe("the map and its list, written together", () => {
   });
 });
 
+describe("the pair in an app without the admin", () => {
+  // The stubs declare the components' module and nothing of the admin's, as an app that never
+  // installed `@nextlyhq/admin` resolves nothing of it.
+  const WITHOUT_ADMIN = `
+declare module "@acme/shop/admin" {
+  export const A: unknown;
+  export const B: unknown;
+}
+`;
+
+  it("compiles and loads, importing nothing of the admin, empty or not", () => {
+    for (const plugins of [[], [shop]]) {
+      const bare = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      const bareList = buildComponentPathsModule(plugins);
+      expect(compileErrorsWith(bare, bareList, WITHOUT_ADMIN)).toEqual([]);
+      const listed =
+        plugins.length === 0
+          ? []
+          : ["@acme/shop/admin#A", "@acme/shop/admin#B"];
+      // Loaded with no admin module to give it: a require of one would read undefined and throw.
+      const register = vi.fn();
+      const { code } = transformSync(bare, {
+        loader: "ts",
+        format: "cjs",
+        target: "es2022",
+      });
+      const modules: Record<string, unknown> = {
+        "@acme/shop/admin": { A: "A", B: "B" },
+        "./plugin-admin-components.generated": {
+          registeredComponentPaths: listed,
+        },
+      };
+      const required: string[] = [];
+      const module = { exports: {} as Record<string, unknown> };
+      new Function("require", "module", "exports", code)(
+        (name: string) => {
+          required.push(name);
+          return modules[name];
+        },
+        module,
+        module.exports
+      );
+      expect(required).not.toContain("@nextlyhq/admin");
+      expect(register).not.toHaveBeenCalled();
+      expect(module.exports.registeredComponentPaths).toEqual(listed);
+    }
+  });
+});
+
 describe("a pair edited by hand", () => {
   // One path taken out of each side in turn: the list naming less than the
   // map registers, and the map registering less than the list names.

@@ -172,18 +172,60 @@ describe("relation edges on a table a hook rebuilt", () => {
   });
 
   it("refuse a hook that removed the column an edge joins on", async () => {
-    const declared = await declaration("postgresql");
-    const refused = await build("postgresql", [
-      rebuilding("postgresql", declared, columns =>
-        columns.filter(c => c.name !== "customer_id")
-      ),
+    // A relation with no foreign key under it: where a key stands on the
+    // column, the key is the element refused (after-drizzle-foreign-keys).
+    const visits = defineTable(
+      "app_visits",
+      { id: col.id(), customerId: col.varchar(36) },
+      {
+        relations: [
+          {
+            name: "customer",
+            kind: "one",
+            targetTable: "app_customers",
+            fromColumn: "customerId",
+          },
+        ],
+      }
+    );
+    const withVisits = (afterDrizzle: Parameters<typeof build>[1]) =>
+      buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" },
+          extend: [
+            ({ schema }) => {
+              schema.addTable(customers);
+              schema.addTable(visits);
+            },
+          ],
+        },
+        afterDrizzle,
+      });
+    const declared = (await withVisits([])).tables.find(
+      t => t.name === "app_visits"
+    )!;
+    const refused = await withVisits([
+      () => ({
+        app_visits: toDrizzleTable(
+          {
+            ...declared,
+            columns: declared.columns.filter(c => c.name !== "customer_id"),
+          },
+          "postgresql"
+        ),
+      }),
     ]).catch((error: unknown) => error);
 
     const errors =
       (refused as { publicData?: { errors?: { message?: string }[] } })
         ?.publicData?.errors ?? [];
     expect(errors.map(e => e.message).join(" ")).toMatch(
-      /customer_id.*app_orders\.customer/
+      /customer_id.*app_visits\.customer/
     );
   });
 

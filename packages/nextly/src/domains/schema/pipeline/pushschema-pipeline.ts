@@ -66,6 +66,14 @@ import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
 } from "../ownership/drop-guard";
+import {
+  describeKept,
+  keptElements,
+  pushElementOwners,
+  refuseChangesToKeptElements,
+  refuseRebuildsLosingKeptElements,
+  withKeptElements,
+} from "../ownership/kept-elements";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
@@ -103,8 +111,10 @@ import {
   findUnexpectedDestructiveStatements,
   getDrizzleTableName,
   isDrizzleTable,
+  rebuiltTableNames,
   stripKitDropsOfDeclaredConstraints,
   stripKitDropsOfDeclaredIndexes,
+  stripKitDropsOfKeptColumns,
   stripKitDropsOfLiveUniqueConstraints,
 } from "./filter-unsafe-statements";
 import { indexRestoreStatements } from "./index-restore";
@@ -953,8 +963,39 @@ export class PushSchemaPipeline {
         // The entities' tables with what hooks contributed to them, then the
         // extension's own tables: built by the one function the schema preview
         // also builds from, so the preview shows what this apply will do.
-        const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
+        const { snapshot: configuredSnapshot, fieldGroupTypeColumns } =
           buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
+
+        // Who added each element to a table another owner declared, recorded
+        // as `nextly migrate` records it, and the elements a plugin no longer
+        // configured added: kept as the database has them, so neither the diff
+        // nor drizzle-kit plans their drop (`kept-elements.ts`). A plugin
+        // removed from the configuration keeps what it added to other owners'
+        // tables, as it keeps its own tables.
+        const elementOwners = await pushElementOwners({
+          db,
+          dialect,
+          schema: extensions,
+          managedTables: managedTableNames,
+          live: liveSnapshot,
+          record: true,
+        });
+        const kept = elementOwners
+          ? keptElements({
+              rows: elementOwners.rows,
+              declaring: elementOwners.declaring,
+              live: liveSnapshot,
+              desired: configuredSnapshot,
+            })
+          : [];
+        if (kept.length > 0) {
+          consoleLogger.info(`[Nextly schema] ${describeKept(kept)}.`);
+        }
+        const snapshotBeforeRenames = withKeptElements(
+          configuredSnapshot,
+          liveSnapshot,
+          kept
+        );
 
         // The live columns given the shape each relation's recorded field stored: a switch the
         // column's type does not show is planned from it (`withRecordedShapes`).
@@ -988,6 +1029,18 @@ export class PushSchemaPipeline {
             ? excludeLockedTableOps(allOperations, desired)
             : { kept: allOperations, skipped: [] as Operation[] };
         logSkippedLockedOps(skippedLockedOps);
+
+        // What the plan would still change of a removed plugin's element is
+        // refused here, before any prompt and before anything runs.
+        if (elementOwners) {
+          refuseChangesToKeptElements({
+            operations,
+            rows: elementOwners.rows,
+            declaring: elementOwners.declaring,
+            kept,
+            live: liveSnapshot,
+          });
+        }
 
         // A field this apply makes translated still has its value on the main table, which the diff
         // drops: the value moves to the default language's companion row first. Planned here, from
@@ -1344,6 +1397,10 @@ export class PushSchemaPipeline {
               rebuildLosses,
               desiredSnapshot.tables
             );
+            // The runtime tables drizzle-kit rebuilds from are the
+            // configuration's, which has no kept column, key or check, so a
+            // rebuild of a table holding one would lose it.
+            refuseRebuildsLosingKeptElements(approvedRebuilds, kept);
           }
 
           // Pre-cleanup's refusals, asked before the first statement below: on
@@ -1654,7 +1711,37 @@ export class PushSchemaPipeline {
                   `apply changes nothing on that table, so the table stays as it is.`
               );
             }
-            emittedStatements = copyOnly.kept;
+            // The columns kept for a plugin no longer configured, which the
+            // kit's runtime tables do not declare: its drop of one is left
+            // out, and a SQLite rebuild of a table holding one (or a kept key
+            // or check) is refused before it runs, since the rebuilt table
+            // would come back without it.
+            const keptColumns = stripKitDropsOfKeptColumns(
+              copyOnly.kept,
+              kept.filter(element => element.kind === "column")
+            );
+            if (dialect === "sqlite") {
+              // Not a locked table's: a UI save discards every statement
+              // on one below, its rebuild included, so that rebuild loses
+              // nothing.
+              refuseRebuildsLosingKeptElements(
+                rebuiltTableNames(keptColumns.kept),
+                kept,
+                new Set(
+                  (source === "ui" ? [...lockedTableNames(desired)] : []).map(
+                    table => table.toLowerCase()
+                  )
+                )
+              );
+            }
+            if (keptColumns.strippedCount > 0) {
+              consoleLogger.debug(
+                `[Nextly schema] Kept ${keptColumns.strippedCount} column(s) ` +
+                  `drizzle-kit emitted a drop for (added by a plugin that is no ` +
+                  `longer configured).`
+              );
+            }
+            emittedStatements = keptColumns.kept;
             if (keptUniques.strippedCount > 0) {
               consoleLogger.debug(
                 `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +

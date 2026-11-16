@@ -110,6 +110,47 @@ describe("DataTableView", () => {
     expect(link).toHaveAttribute("href", "/admin/users/1");
   });
 
+  it("heads each card with the primary column, wherever it stands", () => {
+    // A column a plugin puts first, such as the page builder's Design
+    // column, must not take the card's title from the entry's own.
+    const withDesign: NextlyColumn<Row>[] = [
+      { name: "design", header: "Design", accessor: () => "Template" },
+      ...columns,
+    ];
+    render(
+      <DataTableView
+        columns={withDesign}
+        rows={rows}
+        primaryColumn="name"
+        rowHref={row => `/admin/users/${row.id}`}
+      />
+    );
+    const cards = document.querySelector<HTMLElement>("[data-view='cards']");
+    if (!cards) throw new Error("card view not rendered");
+    const card = within(cards).getAllByRole("heading")[0];
+    expect(within(card).getByRole("link")).toHaveAccessibleName("Ada");
+    // The column it moved past is still shown in the card, under its label.
+    expect(within(cards).getAllByText("Design")[0]).toBeInTheDocument();
+  });
+
+  it("heads each card with the first shown column where the primary one is hidden on a phone", () => {
+    render(
+      <DataTableView
+        columns={[
+          { name: "name", header: "Name", hideOnMobile: true },
+          ...columns.slice(1),
+        ]}
+        rows={rows}
+        primaryColumn="name"
+        rowHref={row => `/admin/users/${row.id}`}
+      />
+    );
+    const cards = document.querySelector<HTMLElement>("[data-view='cards']");
+    if (!cards) throw new Error("card view not rendered");
+    const card = within(cards).getAllByRole("heading")[0];
+    expect(within(card).getByRole("link")).toHaveAccessibleName("admin");
+  });
+
   it("runs onRowClick as a side-effect instead of navigating", async () => {
     const openDialog = vi.fn();
     const user = userEvent.setup();

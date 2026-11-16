@@ -278,6 +278,83 @@ function principalOptionProblem(route: PluginRoute): string | null {
   return null;
 }
 
+/**
+ * Whether a route says what reaching it takes: a permission, that it is
+ * public, a plugin's kind of person, that its handler judges each caller
+ * (`checksAccess: true`), or that it acts only on its caller (`siteWide:
+ * false`). The one question the dispatcher, the startup warning and
+ * `undeclaredPluginRoutes` all ask.
+ */
+export function routeDeclaresAccess(route: PluginRoute): boolean {
+  return declarationsOf(route).length > 0;
+}
+
+/** The declarations of what reaching a route takes that `route` makes. */
+function declarationsOf(route: PluginRoute): string[] {
+  const made: string[] = [];
+  if (route.requiredPermission !== undefined) made.push("requiredPermission");
+  if (route.public === true) made.push("public");
+  if (route.principal !== undefined) made.push("principal");
+  if (route.checksAccess === true) made.push("checksAccess");
+  if (route.siteWide === false) made.push("siteWide");
+  return made;
+}
+
+/**
+ * Why a route's `siteWide` or `checksAccess` cannot be served, or null when
+ * it can or the route has neither. Each takes one value only, and beside
+ * another declaration it would contradict what that one says the route takes.
+ */
+function declarationOptionProblem(route: PluginRoute): string | null {
+  const { siteWide, checksAccess } = route as {
+    siteWide?: unknown;
+    checksAccess?: unknown;
+  };
+  if (siteWide !== undefined && siteWide !== false) {
+    return `siteWide only takes false, not ${JSON.stringify(siteWide)}; a route that acts on the site declares requiredPermission or checksAccess instead`;
+  }
+  if (checksAccess !== undefined && checksAccess !== true) {
+    return `checksAccess only takes true, not ${JSON.stringify(checksAccess)}`;
+  }
+  const own = declarationsOf(route).filter(
+    made => made === "siteWide" || made === "checksAccess"
+  );
+  if (own.length > 0 && declarationsOf(route).length > 1) {
+    return `${own[0]} cannot be combined with ${declarationsOf(route)
+      .filter(made => made !== own[0])
+      .join(", ")}; declare the one that says what the route takes`;
+  }
+  return null;
+}
+
+/**
+ * One warning naming every route a staff session or API key can reach that
+ * declares nothing: each is refused for every caller until it does.
+ */
+export function undeclaredRouteWarning(
+  routes: ReadonlyArray<{
+    pluginName: string;
+    fullPath: string;
+    route: PluginRoute;
+  }>
+): string | null {
+  const undeclared = routes.filter(entry => !routeDeclaresAccess(entry.route));
+  if (undeclared.length === 0) return null;
+  const named = undeclared
+    .map(
+      entry => `"${entry.pluginName}" ${entry.route.method} ${entry.fullPath}`
+    )
+    .join(", ");
+  return (
+    `[nextly] ${String(undeclared.length)} plugin route(s) declare none of ` +
+    "requiredPermission, public, principal, checksAccess: true or siteWide: " +
+    `false, and are refused for every caller until they do: ${named}. Declare ` +
+    "the permission a route needs, checksAccess: true where its handler judges " +
+    "each caller, or siteWide: false where it acts only on its caller's own " +
+    "record or only reads."
+  );
+}
+
 /** Why a route's declared options are invalid, or null when they are fine. */
 /**
  * Why a route's `limitKey` cannot be used, or null when it can.
@@ -316,6 +393,8 @@ export function validateRouteOptions(route: PluginRoute): string | null {
   }
   const principalProblem = principalOptionProblem(route);
   if (principalProblem !== null) return principalProblem;
+  const declarationProblem = declarationOptionProblem(route);
+  if (declarationProblem !== null) return declarationProblem;
   const limitKeyProblem = limitKeyOptionProblem(route);
   if (limitKeyProblem !== null) return limitKeyProblem;
   // The union is a TYPESCRIPT guarantee, and an unchecked JavaScript plugin

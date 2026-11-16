@@ -137,9 +137,12 @@ export async function freeDocumentAt(
 }
 
 /**
- * Each file's account, by file, retry attempt and seat. A worker is a
- * process of its own and runs a file's tests in order, so this module's map
+ * Each file's account, by file, retry attempt, repeat and seat. A worker is
+ * a process of its own and runs a file's tests in order, so this module's map
  * is per worker and enough to hand every test in a file the same account.
+ * Each `--repeat-each` repeat of a file has an account of its own, as a
+ * separate run would: through one account, the repeats spent the per-person
+ * request budget of a single run several times over within its minute.
  */
 const fileAccounts = new Map<string, Promise<StorageState>>();
 
@@ -151,10 +154,10 @@ const fileAccounts = new Map<string, Promise<StorageState>>();
  */
 export function fileAccount(
   baseURL: string,
-  testInfo: Pick<TestInfo, "file" | "retry">,
+  testInfo: Pick<TestInfo, "file" | "retry" | "repeatEachIndex">,
   seat = 0
 ): Promise<StorageState> {
-  const key = `${testInfo.file}#${testInfo.retry}#${seat}`;
+  const key = `${testInfo.file}#${testInfo.retry}#${testInfo.repeatEachIndex}#${seat}`;
   let made = fileAccounts.get(key);
   if (!made) {
     const documents =

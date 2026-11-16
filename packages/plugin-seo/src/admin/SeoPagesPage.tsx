@@ -47,7 +47,13 @@ import {
   type ReactNode,
 } from "react";
 
-import { ADDRESSES_ROUTE_PATH, type SiteAddress } from "../code-pages/contract";
+import {
+  ADDRESSES_ROUTE_PATH,
+  BUILD_ROUTE_PATH,
+  type BuildStatusBody,
+  type SiteAddress,
+  type UnreadableBuild,
+} from "../code-pages/contract";
 import { IMPORT_PAGE_HREF } from "../overview/contract";
 import { receivedHrefFor } from "../received/contract";
 import { newRedirectHref } from "../redirects/contract";
@@ -59,6 +65,7 @@ import type { PageEdits } from "./pages-edit";
 import { PagesEditor } from "./pages-editor";
 import {
   entryHref,
+  linksText,
   problemsByPage,
   shownPages,
   statusOf,
@@ -82,6 +89,16 @@ interface AddressesBody {
 type Mode = "view" | "edit";
 
 /** The mode the screen's own address asks for. */
+/**
+ * The status the address opens the list on (`?status=seo-off`, as the
+ * Overview links to it), else every status; only read as the screen opens.
+ */
+function statusInAddress(): PagesFilter["status"] {
+  if (typeof window === "undefined") return "all";
+  const named = new URLSearchParams(window.location.search).get("status");
+  return STATUS_ORDER.find(each => each === named) ?? "all";
+}
+
 function modeInAddress(): Mode {
   if (typeof window === "undefined") return "view";
   return new URLSearchParams(window.location.search).get("mode") === "edit"
@@ -107,9 +124,25 @@ const STATUS_BADGE: Record<PageStatus, BadgeProps["variant"]> = {
   warning: "warning",
   notice: "info",
   "not-connected": "warning",
+  unconfirmed: "outline",
   hidden: "outline",
+  "seo-off": "outline",
   unknown: "outline",
 };
+
+/**
+ * What the server could not read of the build's list of declared addresses,
+ * where it could not: what a page listed as unconfirmed is explained by.
+ */
+function useUnreadableBuild(): UnreadableBuild | undefined {
+  const build = usePluginRoute<BuildStatusBody>({
+    plugin: SEO_PLUGIN_NAME,
+    path: BUILD_ROUTE_PATH,
+    // A new deploy can change it: read afresh each visit.
+    staleTime: 0,
+  });
+  return build.data?.unreadable;
+}
 
 /** The pages, the problem list they are judged by, and what a read says. */
 function usePages(filter: PagesFilter) {
@@ -164,6 +197,38 @@ function usePages(filter: PagesFilter) {
   };
 }
 
+/** What the server found wrong with the build file, as the banner says it. */
+const BUILD_PROBLEM: Record<UnreadableBuild["problem"], string> = {
+  missing: "is missing on this server",
+  unreadable: "couldn't be read on this server",
+  "no-routes": "lists no pages on this server",
+};
+
+/**
+ * The banner saying the server couldn't read the build's list of the
+ * addresses routes with a variable part declare, naming the file, and what
+ * that means for the list and for what search engines are given.
+ */
+function UnreadableBuildBanner({
+  build,
+}: {
+  build: UnreadableBuild;
+}): JSX.Element {
+  return (
+    <Alert variant="warning" className="mb-4">
+      <AlertDescription>
+        <code className="font-mono break-all">{build.file}</code>{" "}
+        {BUILD_PROBLEM[build.problem]}, so the pages your routes with a variable
+        part declare can&apos;t be confirmed. The ones those routes recorded
+        when they last rendered are listed as{" "}
+        <b className="font-semibold">Unconfirmed</b>, and the sitemap, llms.txt
+        and plain-text copies leave them out until the file is deployed with the
+        rest of the build.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /** The header's actions: Import, in View mode, and the mode. */
 function ModeActions({
   mode,
@@ -198,17 +263,18 @@ function ModeActions({
 /** The Pages screen, as the admin mounts it. */
 export function SeoPagesPage(): JSX.Element {
   const [mode, setMode] = useState<Mode>(modeInAddress);
-  const [filter, setFilter] = useState<PagesFilter>({
+  const [filter, setFilter] = useState<PagesFilter>(() => ({
     query: "",
     type: "all",
-    status: "all",
-  });
+    status: statusInAddress(),
+  }));
   // Kept here, not in Edit mode, so a look at View mode and back keeps them.
   const [edits, setEdits] = useState<PageEdits>({});
   // A save on its way holds the mode, so its boxes stay locked until it ends.
   const [saving, setSaving] = useState(false);
   useLeaveWarning(Object.keys(edits).length > 0);
   const pages = usePages(filter);
+  const unreadable = useUnreadableBuild();
   const filters = (
     <TypeAndStatus items={pages.items} filter={filter} onFilter={setFilter} />
   );
@@ -219,6 +285,9 @@ export function SeoPagesPage(): JSX.Element {
         description={DESCRIPTION[mode]}
         actions={<ModeActions mode={mode} saving={saving} onMode={setMode} />}
       />
+      {unreadable === undefined ? null : (
+        <UnreadableBuildBanner build={unreadable} />
+      )}
       {pages.problemsFailed === null ? null : (
         <Alert variant="warning" className="mb-4">
           <AlertDescription>{pages.problemsFailed}</AlertDescription>
@@ -241,6 +310,7 @@ export function SeoPagesPage(): JSX.Element {
             filter.status !== "all"
           }
           statusFor={item => statusOf(item, pages.byPage)}
+          linksFor={item => linksText(item, pages.byPage)}
         />
       ) : (
         <PagesEditor
@@ -351,7 +421,11 @@ function actionsFor(
     {
       id: "edit-seo",
       label: "Edit SEO",
-      isVisible: () => entry !== undefined || item.seo !== undefined,
+      // Nothing to edit where the type's SEO is off: its pages have no SEO
+      // tab while it is.
+      isVisible: () =>
+        item.standing !== "seo-off" &&
+        (entry !== undefined || item.seo !== undefined),
       onSelect: () =>
         entry === undefined
           ? openPanel(item)
@@ -392,6 +466,7 @@ function PagesList({
   failure,
   filtered,
   statusFor,
+  linksFor,
 }: {
   shown: SiteAddress[];
   search: ListSearch;
@@ -400,13 +475,17 @@ function PagesList({
   failure: string | null;
   filtered: boolean;
   statusFor: (item: SiteAddress) => PageStatus;
+  linksFor: (item: SiteAddress) => string;
 }): JSX.Element {
   const [open, setOpen] = useState<SiteAddress | null>(null);
   // Closes the panel of `path`, and only it: a save that finishes after
   // another page's panel was opened leaves that one open.
   const openNow = useRef(open);
   openNow.current = open;
-  const columns = useMemo(() => pageColumns(statusFor), [statusFor]);
+  const columns = useMemo(
+    () => pageColumns(statusFor, linksFor),
+    [statusFor, linksFor]
+  );
   const host =
     shown
       .map(item => {
@@ -465,9 +544,13 @@ function PagesList({
   );
 }
 
-/** The list's columns: the page, its title and description, its status. */
+/**
+ * The list's columns: the page, its title and description, how many pages
+ * link to it and it links to, and its status.
+ */
 function pageColumns(
-  statusFor: (item: SiteAddress) => PageStatus
+  statusFor: (item: SiteAddress) => PageStatus,
+  linksFor: (item: SiteAddress) => string
 ): NextlyColumn<SiteAddress>[] {
   return [
     {
@@ -489,16 +572,26 @@ function pageColumns(
     {
       name: "title",
       header: "Title in search",
-      cell: ({ row }) => (
-        <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
-          <span className="truncate" title={row.title}>
-            {row.title ?? "—"}
-          </span>
-          <span className="truncate text-xs text-muted-foreground">
-            {titleSourceText(row)}
-          </span>
-        </div>
-      ),
+      cell: ({ row }) =>
+        // A type with SEO off gets nothing from the plugin: its route
+        // serves only what its own code sets.
+        row.standing === "seo-off" ? (
+          <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
+            <span className="truncate">Set by the page&apos;s own code</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {row.from} has SEO off
+            </span>
+          </div>
+        ) : (
+          <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
+            <span className="truncate" title={row.title}>
+              {row.title ?? "—"}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">
+              {titleSourceText(row)}
+            </span>
+          </div>
+        ),
     },
     {
       name: "description",
@@ -510,6 +603,17 @@ function pageColumns(
           title={row.description}
         >
           {row.description ?? "—"}
+        </span>
+      ),
+    },
+    {
+      name: "links",
+      header: "Links",
+      hideOnMobile: true,
+      width: 120,
+      cell: ({ row }) => (
+        <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+          {linksFor(row)}
         </span>
       ),
     },

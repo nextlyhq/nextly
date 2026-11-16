@@ -55,6 +55,7 @@ import {
   type StyleTraceEntry,
   type StyleValue,
   previewContainerName,
+  tokenRef,
 } from "@nextlyhq/blocks-engine";
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
@@ -777,7 +778,19 @@ function StyleInspectorBody({
           })}
         >
           <CanvasTokenModeProvider value={tokenMode}>
-            <div className="nx-style-inspector" data-style-target={target.kind}>
+            {/*
+             * Spell-check off for the tab's fields: they hold numbers,
+             * lengths, colours and keywords, which a spell-checker marks as
+             * misspelt with the same red line an error would show. Set once
+             * here because the attribute is inherited by every field inside,
+             * including the ones other components draw and any added later.
+             * The Content tab is a different element and keeps its own.
+             */}
+            <div
+              className="nx-style-inspector"
+              data-style-target={target.kind}
+              spellCheck={false}
+            >
               {showReadOnlyReason ? (
                 <ReadOnlyNote target={target} reason={readOnlyReason} />
               ) : null}
@@ -3095,7 +3108,9 @@ export function pickedReference(
   picked: string,
   times: number | undefined
 ): { $token: string; times?: number } {
-  return { $token: picked, ...(times === undefined ? {} : { times }) };
+  // Built by the engine's one constructor, which a reader of stored text
+  // derives the reference's spelling from.
+  return tokenRef(picked, times);
 }
 
 function HeldVariable({
@@ -3506,6 +3521,8 @@ function LengthOrNumberField({
       id={id}
       value={draft}
       placeholder={hint}
+      // A value, not words: no list of earlier entries over the field.
+      autoComplete="off"
       aria-describedby={describedBy}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
@@ -5039,6 +5056,10 @@ function ColourPicker({
       <PopoverContent
         align="end"
         className="nx-style-inspector__picker"
+        // Off here as well as on the tab: the picker is drawn outside the tab,
+        // so its hex field does not inherit the tab's setting, and a colour
+        // code is no more a word than a length is.
+        spellCheck={false}
         // The list takes focus itself, on its search or on its entries; with
         // no list, the first control, Custom colour, takes it as usual.
         onOpenAutoFocus={event => {
@@ -6784,6 +6805,8 @@ function TextField({
       // A side of the spacing box is narrow: its whole value is in its
       // tooltip, for one the cell cannot show.
       title={sideTitle(compact, draft)}
+      // A value, not words: no list of earlier entries over the field.
+      autoComplete="off"
       aria-describedby={describedBy}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per

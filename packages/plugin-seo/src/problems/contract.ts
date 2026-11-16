@@ -11,9 +11,9 @@
  */
 import { SEO_ADMIN_SLUG, SETTINGS_PAGE_HREF } from "../settings/contract";
 
-// The limits the title and description are checked against, from the one
-// check the SEO tab and the list share, named in the kinds' explanations.
-import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "./text-checks";
+// The widths the title and description are checked against, from the one
+// measure the SEO tab and the list share, named in the kinds' explanations.
+import { SEARCH_TEXT } from "./text-width";
 
 /** Where the list is read, under the plugin's routes. */
 export const PROBLEMS_ROUTE_PATH = "/problems";
@@ -31,8 +31,11 @@ export type ProblemKind =
   | "connection"
   | "noAddress"
   | "redirectChain"
+  | "datesToday"
   | "languageCode"
   | "notListed"
+  | "robotsBlocked"
+  | "dropDatePassed"
   | "noTitle"
   | "noDescription"
   | "sharedTitle"
@@ -41,6 +44,7 @@ export type ProblemKind =
   | "longDescription"
   | "canonical"
   | "brokenLink"
+  | "orphanPage"
   | "shareImage"
   | "imageAlt"
   | "structuredData";
@@ -76,6 +80,12 @@ export const KIND_TEXT: Readonly<
       "Each extra hop slows the visit, and search engines may stop following before the end.",
     siteWide: true,
   },
+  datesToday: {
+    title: "Sitemap dates that keep matching the day they're checked",
+    explain:
+      "Search engines may stop trusting the site's dates when most pages say they changed on the day they're read.",
+    siteWide: true,
+  },
   languageCode: {
     title: "Language search engines can't name",
     explain:
@@ -86,6 +96,18 @@ export const KIND_TEXT: Readonly<
     title: "Page left out of the sitemap",
     explain:
       "The page has no official address, so search engines aren't told about it.",
+    siteWide: false,
+  },
+  robotsBlocked: {
+    title: "Page in the sitemap that robots.txt blocks",
+    explain:
+      "The sitemap lists the page for search engines, but robots.txt asks them not to read it, so what was set for it doesn't reach search. To keep a page out of search, use Hide from search; robots.txt only stops crawling.",
+    siteWide: false,
+  },
+  dropDatePassed: {
+    title: "Page past its date to drop from search",
+    explain:
+      "The page is still published, but it is now hidden from search, and Google may already have dropped it. Remove the date to bring it back.",
     siteWide: false,
   },
   noAddress: {
@@ -118,12 +140,12 @@ export const KIND_TEXT: Readonly<
   },
   longTitle: {
     title: "Title longer than Google shows",
-    explain: `Google shows about ${TITLE_LIMIT} characters of a title and cuts the rest to fit the screen. The title is saved and served as it is; put what matters first.`,
+    explain: `Google shows about ${SEARCH_TEXT.title.width} px of a title, measured in its own font, and cuts the rest to fit the screen: narrow letters fit more, wide capitals fewer. The title is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   longDescription: {
     title: "Description longer than Google shows",
-    explain: `Google shows about ${DESCRIPTION_LIMIT} characters of a description and cuts the rest. The description is saved and served as it is; put what matters first.`,
+    explain: `Google shows about ${SEARCH_TEXT.description.width} px of a description, about two lines, and cuts the rest. The description is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   canonical: {
@@ -135,6 +157,12 @@ export const KIND_TEXT: Readonly<
   brokenLink: {
     title: "Broken internal link",
     explain: "A link on your site points to a page that doesn't exist.",
+    siteWide: false,
+  },
+  orphanPage: {
+    title: "Page no other page links to",
+    explain:
+      "Search engines and visitors find pages by following links, so a page nothing links to is found only through the sitemap. Link to it from a related page. Links in your site's code, such as its menu and footer, aren't seen by this check.",
     siteWide: false,
   },
   shareImage: {
@@ -179,13 +207,17 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   productionAddress: "error",
   noAddress: "error",
   proxyNotWired: "error",
+  robotsBlocked: "error",
   noTitle: "error",
   canonical: "error",
   connection: "warning",
   redirectChain: "warning",
+  datesToday: "warning",
   languageCode: "warning",
   notListed: "warning",
+  dropDatePassed: "warning",
   brokenLink: "warning",
+  orphanPage: "notice",
   noDescription: "warning",
   sharedTitle: "warning",
   sharedDescription: "warning",
@@ -245,14 +277,18 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "proxyNotWired",
   "connection",
   "redirectChain",
+  "datesToday",
   "languageCode",
   "notListed",
+  "robotsBlocked",
+  "dropDatePassed",
   "noTitle",
   "sharedTitle",
   "canonical",
   "brokenLink",
   "noDescription",
   "sharedDescription",
+  "orphanPage",
   "longTitle",
   "longDescription",
   "shareImage",
@@ -340,7 +376,12 @@ export function seoTabIdOf(kind: "collection" | "single"): string {
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
 
 /** The SEO settings' tabs a fix can land on. */
-export type SettingsTab = "general" | "types" | "brand" | "connections";
+export type SettingsTab =
+  | "general"
+  | "types"
+  | "brand"
+  | "crawlers"
+  | "connections";
 
 /**
  * Where a problem is fixed:
@@ -408,6 +449,11 @@ export interface CheckedPage {
   type: string;
   id: string;
   locale?: string;
+  /**
+   * How many other pages' content links to it, and how many pages it links
+   * to; absent until a check has read its links.
+   */
+  links?: { inbound: number; outbound: number };
 }
 
 /** What the list's routes answer. */
