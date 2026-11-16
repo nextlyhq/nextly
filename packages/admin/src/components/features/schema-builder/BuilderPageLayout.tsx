@@ -320,6 +320,7 @@ function FieldListRegion({
   onActiveChange,
   onDuplicateField,
   pending,
+  settings,
   openFieldGroup,
 }: Pick<
   Props,
@@ -333,6 +334,7 @@ function FieldListRegion({
   | "onActiveChange"
   | "onDuplicateField"
   | "pending"
+  | "settings"
 > & {
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
@@ -357,6 +359,8 @@ function FieldListRegion({
     locked,
     fields: builder.fields,
     saved: pending.saved,
+    // As the pending settings set it: the save judges names with Draft/Published as it will be.
+    lifecycleEnabled: settings.status === true,
     outline,
     fieldGroups,
   });
@@ -374,7 +378,8 @@ function FieldListRegion({
     duplicate: fieldId =>
       onDuplicateField(fieldId, {
         heldNames: moveContext.heldNames,
-        topLevelReservesNames: moveContext.topLevelReservesNames,
+        surface: moveContext.surface,
+        lifecycleEnabled: moveContext.lifecycleEnabled,
       }),
     remove: fieldId => {
       builder.handleFieldDelete(fieldId);

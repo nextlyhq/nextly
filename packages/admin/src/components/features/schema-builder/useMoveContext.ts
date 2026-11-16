@@ -2,8 +2,9 @@
 
 /**
  * What the move rule needs to know about the entity being edited, beyond its
- * fields: whether it is read-only, whether its top level reserves built-in
- * names, the names its pending deletes still hold, the field groups it uses
+ * fields: whether it is read-only, the kind of entity and whether its
+ * Draft/Published is on (which the save's field-name rule asks of a name that
+ * arrives somewhere new), the names its pending deletes still hold, the field groups it uses
  * with every place using each, and which field a field group's own row
  * stands for.
  */
@@ -18,6 +19,7 @@ import {
   savedContainerIdsFrom,
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
+import { nameSurfaceOf } from "@admin/lib/builder/field-name-check";
 import { heldNamesOf } from "@admin/lib/builder/move-words";
 import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
 import {
@@ -52,6 +54,7 @@ export function useMoveContext({
   locked,
   fields,
   saved,
+  lifecycleEnabled,
   outline,
   fieldGroups,
 }: {
@@ -60,6 +63,8 @@ export function useMoveContext({
   fields: readonly BuilderField[];
   /** The fields as last saved: where a pending delete still holds its name. */
   saved: readonly BuilderField[];
+  /** Whether Draft/Published is on, as stored or as the pending settings set it. */
+  lifecycleEnabled: boolean;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
 }): MoveContext {
@@ -93,8 +98,9 @@ export function useMoveContext({
   return {
     entityReadOnly: locked,
     // A field group's fields sit inside whatever uses it, never beside an
-    // entity's built-in columns.
-    topLevelReservesNames: config.kind !== "field-group",
+    // entity's built-in columns; the rule knows each kind's.
+    surface: nameSurfaceOf(config.kind),
+    lifecycleEnabled,
     heldNames,
     savedContainerIdsOf,
     excludedTypes: pickerExcludedTypes(config),

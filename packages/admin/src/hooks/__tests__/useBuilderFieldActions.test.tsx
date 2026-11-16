@@ -182,7 +182,7 @@ describe("handleDuplicateField", () => {
 
     result.current.handleDuplicateField("field_body", {
       heldNames: new Map([["", ["body_2"]]]),
-      topLevelReservesNames: true,
+      surface: "collection",
     });
     expect(builder.fields[1].name).toBe("body_3");
   });
