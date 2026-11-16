@@ -602,7 +602,7 @@ async function warnOfRetiredAccessRules(
  * `access_rules` column, which nothing else names and which look enforced
  * while they are not, and the translations tables of translated entities, for
  * a date column an earlier release made with a time zone, which reads shifted
- * on a server not in UTC until `nextly migrate` converts it. Every other report
+ * on a server not in UTC until `nextly upgrade` converts it. Every other report
  * here is a development start's.
  */
 async function runCoreSchemaChecks(
@@ -624,7 +624,7 @@ async function runCoreSchemaChecks(
       ])
     );
     // Translated date columns an earlier release made with a time zone: named, never converted,
-    // since a production start changes no column's type; `nextly migrate` converts them.
+    // since a production start changes no column's type; `nextly upgrade` converts them.
     const { convertZonedDateCompanions } = await import(
       "../domains/i18n/runtime/zoned-date-companions"
     );

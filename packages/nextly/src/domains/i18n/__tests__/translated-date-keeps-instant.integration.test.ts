@@ -13,9 +13,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ensureLocalizedCompanions } from "../../../cli/commands/dev-build";
-import { createLogger } from "../../../cli/utils/logger";
-import { defineConfig } from "../../../config";
+import type { UpgradeStepContext } from "../../../cli/commands/upgrade-step";
+import {
+  convertZonedDates,
+  zonedDatesToConvert,
+} from "../../../cli/commands/upgrade-steps/zoned-dates";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
   createTestNextly,
@@ -251,9 +253,9 @@ describe.runIf(CASES.length > 0).each(CASES)(
     });
 
     // A collection made in the Schema Builder is in the registry, not the config, and `nextly
-    // migrate` converts its translations table too.
+    // upgrade` converts its translations table too.
     it.runIf(dialect === "postgresql")(
-      "converts a Builder collection's date column made with a time zone through nextly migrate",
+      "converts a Builder collection's date column made with a time zone through nextly upgrade",
       async () => {
         await bootIn();
         await createPosts(true);
@@ -265,24 +267,18 @@ describe.runIf(CASES.length > 0).each(CASES)(
         expect(
           (await readThroughSql(COMPANION, `_parent = '${id}'`)).type
         ).toBe("timestamp with time zone");
-        vi.stubEnv("NODE_ENV", "production");
+        const context = {
+          adapter: current!.adapter,
+          db: (current!.adapter as unknown as DrizzleAdapter).getDrizzle(),
+          dialect,
+          options: {},
+          log: () => undefined,
+          warn: () => undefined,
+        } as unknown as UpgradeStepContext;
 
-        // `nextly migrate`'s translations pass, over a config that declares no collection.
-        await ensureLocalizedCompanions(
-          defineConfig({
-            localization: { locales: ["en", "es"], defaultLocale: "en" },
-          }),
-          current!.adapter as unknown as Parameters<
-            typeof ensureLocalizedCompanions
-          >[1],
-          {
-            logger: createLogger({ quiet: true }),
-            options: {},
-            cwd: process.cwd(),
-          } as unknown as Parameters<typeof ensureLocalizedCompanions>[2],
-          "afterApply",
-          { supervised: true }
-        );
+        // The upgrade's step, counted and run as `nextly upgrade` runs it.
+        expect(await zonedDatesToConvert(context)).toBe(1);
+        expect(await convertZonedDates(context)).toBe(1);
 
         expect(
           await readThroughSql(
@@ -291,6 +287,7 @@ describe.runIf(CASES.length > 0).each(CASES)(
           )
         ).toEqual({ type: companionType, wall: AT.late.wall });
         expect(await readThroughNextly(id)).toBe(AT.late.iso);
+        expect(await zonedDatesToConvert(context)).toBe(0);
       }
     );
 

@@ -29,6 +29,11 @@ import {
   syncComponents,
   syncSingles,
 } from "../dev-build";
+import type { UpgradeStepContext } from "../upgrade-step";
+import {
+  convertZonedDates,
+  zonedDatesToConvert,
+} from "../upgrade-steps/zoned-dates";
 import { openSyncTarget, type SyncTarget } from "./helpers/sync-target";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -168,6 +173,27 @@ async function runMigratePass(
   return logged;
 }
 
+/** The `nextly upgrade` step, as the upgrade runs it: counted, then run when it has work. */
+async function runUpgradeStep(): Promise<{
+  pending: number;
+  converted: number;
+  logged: string[];
+}> {
+  if (!target) throw new Error("no sync target");
+  const logged: string[] = [];
+  const context = {
+    adapter: target.adapter,
+    db: target.adapter.getDrizzle(),
+    dialect: "postgresql" as const,
+    options: {},
+    log: (message: string) => logged.push(message),
+    warn: (message: string) => logged.push(message),
+  } as unknown as UpgradeStepContext;
+  const pending = await zonedDatesToConvert(context);
+  const converted = pending > 0 ? await convertZonedDates(context) : 0;
+  return { pending, converted, logged };
+}
+
 /** `published` in `table`: its type, and each row's value as the database spells it. */
 async function published(
   table: string,
@@ -236,29 +262,47 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       expect((await published(MAIN, "id")).values).toEqual(VALUES);
     });
 
-    it("converts a date column made with a time zone through nextly migrate, then plans nothing", async () => {
+    // `nextly migrate` runs while instances of the earlier release may still write: it converts
+    // nothing, and names the column and `nextly upgrade`.
+    it("leaves it through nextly migrate, naming nextly upgrade", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
       await runSync(configOf(true));
       await madeTheOldWay();
 
-      const first = await runMigratePass(configOf(true));
+      const logged = await runMigratePass(configOf(true));
 
+      expect((await published(COMPANION, "_parent")).type).toBe(
+        "timestamp with time zone"
+      );
+      expect(logged.warnings.join("\n")).toMatch(
+        new RegExp(`${COMPANION}\\.published.*nextly upgrade`)
+      );
+    });
+
+    it("converts it through nextly upgrade, which then plans nothing", async () => {
+      await openIn(zone);
+      await runSync(configOf(false));
+      await insertMainRows();
+      await runSync(configOf(true));
+      await madeTheOldWay();
+
+      const first = await runUpgradeStep();
+
+      expect(first).toMatchObject({ pending: 1, converted: 1 });
+      expect(first.logged.join("\n")).toMatch(
+        new RegExp(`${COMPANION}\\.published.*${zone}`)
+      );
       expect(await published(COMPANION, "_parent")).toEqual({
         type: "timestamp without time zone",
         values: VALUES,
       });
-      expect(first.notices.join("\n")).toMatch(
-        new RegExp(`${COMPANION}\\.published.*${zone}`)
-      );
 
-      const again = await runMigratePass(configOf(true));
-
-      expect(again).toEqual({ warnings: [], notices: [] });
-      expect(await published(COMPANION, "_parent")).toEqual({
-        type: "timestamp without time zone",
-        values: VALUES,
+      expect(await runUpgradeStep()).toEqual({
+        pending: 0,
+        converted: 0,
+        logged: [],
       });
     });
 
@@ -306,7 +350,7 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       expect(shown.r1).toBe(VALUES.r1);
       expect(shown.r2).not.toBe(VALUES.r2);
 
-      await runMigratePass(configOf(true));
+      await runUpgradeStep();
 
       expect(await published(COMPANION, "_parent")).toEqual({
         type: "timestamp without time zone",
@@ -315,7 +359,7 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
     });
 
     // Through the start's own check, the one a production server runs as it boots.
-    it("leaves it on an unattended production start, saying once that nextly migrate converts it", async () => {
+    it("leaves it on an unattended production start, saying once that nextly upgrade converts it", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
@@ -344,14 +388,14 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       expect(
         warnings.filter(
           w =>
-            w.includes(`${COMPANION}.published`) && w.includes("nextly migrate")
+            w.includes(`${COMPANION}.published`) && w.includes("nextly upgrade")
         )
       ).toHaveLength(1);
     });
 
-    // A run that refuses a translations column converts no date: the conversion follows only a
-    // translations pass that refused nothing.
-    it("converts nothing when nextly migrate's translations pass refuses", async () => {
+    // A development sync that refuses a translations column converts no date: the conversion
+    // follows only a translations pass that refused nothing.
+    it("converts nothing when the development sync's translations pass refuses", async () => {
       await openIn(zone);
       await runSync(configOf(false));
       await insertMainRows();
@@ -374,7 +418,7 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
         ],
       });
 
-      const refused = await runMigratePass(withCode).then(
+      const refused = await runSync(withCode).then(
         () => undefined,
         (error: unknown) => error
       );

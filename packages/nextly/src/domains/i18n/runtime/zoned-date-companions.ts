@@ -3,9 +3,12 @@
  * (`zonedDateColumns`), in the translations table of every translated entity the registry holds:
  * collections, Singles and field groups, made in the Schema Builder or declared in config alike.
  *
- * An attended run converts them: the development sync, `next dev`'s reload and `nextly migrate`,
- * each once its own translations pass refused nothing. An unattended production start never
- * changes a column's type; it names each such column once and what converts it.
+ * `nextly upgrade` converts them, once the release serves every instance: an instance of an earlier
+ * release still running writes a date in a non-default language as its own local time, which a
+ * converted column keeps as given. The development sync and `next dev`'s reload, where no earlier
+ * instance runs, convert them too, each once its own translations pass refused nothing. `nextly
+ * migrate` and a production start change no column's type; they name each such column once, and
+ * `nextly upgrade`.
  *
  * Each column is found from its field's definition, never from its type alone, so a column given a
  * time zone by hand that no translated date field describes is left as it is.
@@ -91,19 +94,76 @@ function entitiesOf(
     }));
 }
 
+/** One translated date column an earlier release made with a time zone. */
+export interface ZonedDateColumn {
+  table: string;
+  column: string;
+  /** The type the column takes: its field's own, as the main table's. */
+  type: string;
+}
+
+/** Every translated date column an earlier release made with a time zone, read only. */
+export async function findZonedDateColumns(
+  adapter: DrizzleAdapter
+): Promise<ZonedDateColumn[]> {
+  if (adapter.getCapabilities().dialect !== "postgresql") return [];
+  const found: ZonedDateColumn[] = [];
+  for (const entity of await translatedEntities(adapter)) {
+    const live = await liveCompanionColumns(adapter, entity.tableName);
+    if (live.length === 0) continue;
+    const table = `${entity.tableName}_locales`;
+    for (const { column, type } of zonedDateColumns({
+      fields: entity.fields,
+      live,
+      dialect: "postgresql",
+      builtBy: entity.builtBy,
+    })) {
+      found.push({ table, column, type });
+    }
+  }
+  return found;
+}
+
 /**
- * Converts, or names, each translated date column an earlier release made with a time zone.
+ * Converts each of `columns` to its field's own type and answers how many it converted.
  *
  * Converting reads each value in this connection's time zone (`AT TIME ZONE
  * current_setting('TimeZone')`), which keeps each date as Nextly showed it: a value moved into the
  * translations table by turning translation on had been stored read in that zone, and Nextly reads
  * the column as the wall clock that zone renders. Each column is one statement that commits on its
- * own; a failure stops the pass, and the next run converts the rest.
+ * own; a failure stops here, and the next run converts the rest.
+ */
+export async function convertZonedDateColumns(
+  adapter: DrizzleAdapter,
+  columns: readonly ZonedDateColumn[],
+  onNotice?: (message: string) => void
+): Promise<number> {
+  const q = (name: string) => quoteIdent(name, "postgresql");
+  for (const { table, column, type } of columns) {
+    await adapter.executeQuery(
+      `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} TYPE ${type} USING ${q(column)} AT TIME ZONE current_setting('TimeZone')`
+    );
+    const [setting] = (await adapter.executeQuery(
+      "SELECT current_setting('TimeZone') AS zone"
+    )) as { zone?: string }[];
+    onNotice?.(
+      `Converted ${table}.${column} from a date with a time zone to ${type}, reading each ` +
+        `value in this connection's time zone (${setting?.zone ?? "unknown"}), so each date ` +
+        `keeps the value Nextly showed.`
+    );
+  }
+  return columns.length;
+}
+
+/**
+ * Converts, or names once, each translated date column an earlier release made with a time zone:
+ * converted where no instance of an earlier release can be writing (`convert`), named with `nextly
+ * upgrade` where one may be.
  */
 export async function convertZonedDateCompanions(
   adapter: DrizzleAdapter,
   options: {
-    /** Whether to convert; an unattended production start only names the columns. */
+    /** Whether to convert; otherwise each column is named once. */
     convert: boolean;
     /** Told of a column converted, and the zone its values were read in. */
     onNotice?: (message: string) => void;
@@ -111,35 +171,11 @@ export async function convertZonedDateCompanions(
     onWarning?: (message: string) => void;
   }
 ): Promise<void> {
-  if (adapter.getCapabilities().dialect !== "postgresql") return;
-  const q = (name: string) => quoteIdent(name, "postgresql");
-  for (const entity of await translatedEntities(adapter)) {
-    const live = await liveCompanionColumns(adapter, entity.tableName);
-    if (live.length === 0) continue;
-    const table = `${entity.tableName}_locales`;
-    const zoned = zonedDateColumns({
-      fields: entity.fields,
-      live,
-      dialect: "postgresql",
-      builtBy: entity.builtBy,
-    });
-    if (!options.convert) {
-      warnOnce(adapter, table, zoned, options.onWarning);
-      continue;
-    }
-    for (const { column, type } of zoned) {
-      await adapter.executeQuery(
-        `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} TYPE ${type} USING ${q(column)} AT TIME ZONE current_setting('TimeZone')`
-      );
-      const [setting] = (await adapter.executeQuery(
-        "SELECT current_setting('TimeZone') AS zone"
-      )) as { zone?: string }[];
-      options.onNotice?.(
-        `Converted ${table}.${column} from a date with a time zone to ${type}, reading each ` +
-          `value in this connection's time zone (${setting?.zone ?? "unknown"}), so each date ` +
-          `keeps the value Nextly showed.`
-      );
-    }
+  const columns = await findZonedDateColumns(adapter);
+  if (options.convert) {
+    await convertZonedDateColumns(adapter, columns, options.onNotice);
+  } else {
+    warnOnce(adapter, columns, options.onWarning);
   }
 }
 
@@ -149,20 +185,20 @@ const warnedOf = new WeakMap<object, Set<string>>();
 /** Names each column once per database handle, and what converts it. */
 function warnOnce(
   adapter: object,
-  table: string,
-  zoned: readonly { column: string }[],
+  columns: readonly ZonedDateColumn[],
   onWarning?: (message: string) => void
 ): void {
   const warned = warnedOf.get(adapter) ?? new Set<string>();
   warnedOf.set(adapter, warned);
-  for (const { column } of zoned) {
+  for (const { table, column } of columns) {
     const name = `${table}.${column}`;
     if (warned.has(name)) continue;
     warned.add(name);
     onWarning?.(
       `${name} is a date column with a time zone, as an earlier release made it: on a server ` +
         `whose time zone is not UTC its dates are stored shifted by that zone. Run \`nextly ` +
-        `migrate\`, in the time zone the app runs in, to convert it.`
+        `upgrade\` once this release serves every instance, in the time zone the app runs in, ` +
+        `to convert it.`
     );
   }
 }
