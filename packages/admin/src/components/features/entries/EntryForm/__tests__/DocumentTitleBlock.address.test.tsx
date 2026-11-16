@@ -171,6 +171,26 @@ describe("DocumentTitleBlock — the address chip", () => {
     expect(screen.queryByTestId("document-address")).not.toBeInTheDocument();
   });
 
+  it("offers no edit where the slug fills no part of the address", () => {
+    // An address the entry's own address field gives, or a template that
+    // names another field: editing the slug would not change it.
+    render(<Harness address={{ site: PAGE.site, path: "/go/home-page" }} />);
+    expect(chip()).toHaveTextContent("ridgeline.com/go/home-page");
+    expect(
+      within(chip()).getByRole("button", { name: "Copy address" })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit address" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers edit where the slug fills a part of the address", () => {
+    render(<Harness address={PAGE} />);
+    expect(
+      within(chip()).getByRole("button", { name: "Edit address" })
+    ).toBeInTheDocument();
+  });
+
   it("shows the address read-only with no edit button when it is locked", () => {
     render(<Harness locked address={PAGE} />);
     expect(screen.getByText("homepage")).toBeInTheDocument();

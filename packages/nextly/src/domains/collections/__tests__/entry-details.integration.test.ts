@@ -42,6 +42,8 @@ const ORIGIN = "http://localhost";
 const NOTES = "notes";
 /** Read only by those holding its read permission; no public address. */
 const LEDGER = "ledger";
+/** Translated: its title is saved per language, its code is shared. */
+const GUIDES = "guides";
 
 type Doc = Record<string, unknown>;
 
@@ -55,6 +57,7 @@ describe.each(getConfiguredTestDialects())(
     let anaKey: string;
     let noteId: string;
     let ledgerId: string;
+    let guideId: string;
 
     async function session(user: { id: string; roleId: string }) {
       const token = await signAccessToken(
@@ -116,7 +119,16 @@ describe.each(getConfiguredTestDialects())(
             slug: LEDGER,
             fields: [text({ name: "title" }), text({ name: "slug" })],
           }),
+          defineCollection({
+            slug: GUIDES,
+            localized: true,
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "code", localized: false }),
+            ],
+          }),
         ],
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
       });
       // Permissions, and the Public role's read of `notes`, whose rule
       // answers a visitor yes.
@@ -159,7 +171,7 @@ describe.each(getConfiguredTestDialects())(
         ).item.id;
         return { id, roleId };
       };
-      const writes = [NOTES, LEDGER].flatMap(slug => [
+      const writes = [NOTES, LEDGER, GUIDES].flatMap(slug => [
         `create-${slug}`,
         `read-${slug}`,
         `update-${slug}`,
@@ -199,6 +211,15 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(ledger.status).toBeLessThan(300);
       ledgerId = String(((await ledger.json()) as { item?: Doc }).item?.id);
+
+      const guide = await send(
+        await session(ana),
+        "POST",
+        `collections/${GUIDES}/entries`,
+        { title: "Start here", code: "g-1" }
+      );
+      expect(guide.status, await guide.clone().text()).toBeLessThan(300);
+      guideId = String(((await guide.json()) as { item?: Doc }).item?.id);
 
       const keys = t.getService("apiKeyService") as unknown as ApiKeyService;
       anaKey = (
@@ -261,6 +282,33 @@ describe.each(getConfiguredTestDialects())(
         address: null,
         createdBy: { kind: "person", name: "ana" },
       });
+    });
+
+    it("names who saved only the translated fields, in the default language read without one", async () => {
+      // Ben saves the title alone, in the default language the editor opens
+      // without naming one: only the language's row records the change. A
+      // moment later than the create, as a database may keep change times
+      // to the second, and a tie goes to the document's own row.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      const saved = await send(
+        await session(ben),
+        "PATCH",
+        `collections/${GUIDES}/entries/${guideId}`,
+        { title: "Start here first", _overwrite: true }
+      );
+      expect(saved.status, await saved.clone().text()).toBeLessThan(300);
+      const { doc } = await read(
+        await session(ana),
+        `collections/${GUIDES}/entries/${guideId}?details=1`
+      );
+      expect(detailsOf(doc)).toMatchObject({
+        createdBy: { kind: "person", name: "ana" },
+        updatedBy: { kind: "person", name: "ben" },
+      });
+      const changedAt = Date.parse(String(detailsOf(doc)?.updatedAt));
+      expect(changedAt).toBeGreaterThanOrEqual(
+        Date.parse(String(doc.createdAt))
+      );
     });
 
     it("names a person as their account names them now, and as nobody once it is gone", async () => {

@@ -22,12 +22,14 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getService } from "../../di";
 import { container } from "../../di/container";
+import type { NextlyServiceConfig } from "../../di/register";
 import type { StaleVersionPublicData } from "../../errors/public-data";
 import { ContentEventsRepository } from "../content-events/repository";
 import type { CompanionIntrospectAdapter } from "../i18n/runtime/companion-io";
 import { isCompanionReady } from "../i18n/runtime/companion-readiness";
 
 import { peopleById } from "./author-hydration";
+import { versionLanguagesFor } from "./document-revision";
 import { documentShape } from "./recovery-point-changes";
 import {
   lastChangerOf,
@@ -59,7 +61,10 @@ export interface DocumentChangersArgs {
   scopeKind: "collection" | "single";
   slug: string;
   entryId: string;
-  /** The language read; null for a document that keeps none. */
+  /**
+   * The language read; null where the read names none, which is the site's
+   * default language on a document that keeps translations.
+   */
   locale: string | null;
 }
 
@@ -113,19 +118,25 @@ async function lastChange(
   const adapter = getService("adapter") as unknown as RevisionReader &
     CompanionIntrospectAdapter;
   const languagesTable = `${shape.table}_locales`;
-  const locale =
-    shape.localized &&
-    args.locale !== null &&
-    (await isCompanionReady(adapter, languagesTable))
-      ? args.locale
-      : null;
+  // The languages a read in this language names, as its version does: the
+  // site's default where the read names none, so a save of translated
+  // fields alone, which moves only that language's row, is still seen.
+  const locales =
+    shape.localized && (await isCompanionReady(adapter, languagesTable))
+      ? versionLanguagesFor({
+          localized: true,
+          localization:
+            container.get<NextlyServiceConfig>("config")?.localization,
+          locale: args.locale ?? undefined,
+        })
+      : undefined;
   const state = await readDocumentRevision(poolRevisionReader(adapter), {
     dialect: adapter.dialect,
     table: shape.table,
     id: args.entryId,
-    ...(locale === null
+    ...(locales === undefined || locales.length === 0
       ? {}
-      : { languages: { table: languagesTable, locales: [locale] } }),
+      : { languages: { table: languagesTable, locales } }),
   });
   if (!state) return NO_CHANGE;
   const changer = lastChangerOf([

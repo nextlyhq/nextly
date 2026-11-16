@@ -74,9 +74,12 @@ export function DocumentAddressChip({
   });
   if (!text) return null;
 
-  // Editable only where there is a slug and nothing holds it read-only; a
-  // claim arriving mid-edit closes the input, as read-only wins.
-  const editable = slug !== undefined && slug.locked !== true;
+  // Editable only where the slug is what fills a part of the address (an
+  // address the entry's own field or another field gives would not change),
+  // and nothing holds it read-only; a claim arriving mid-edit closes the
+  // input, as read-only wins.
+  const editable =
+    slug !== undefined && slug.locked !== true && text.slug !== undefined;
   const editing = editable && edit.editing;
   return (
     <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
