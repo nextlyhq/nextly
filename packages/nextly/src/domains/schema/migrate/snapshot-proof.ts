@@ -256,11 +256,19 @@ function tableRenamesOf(
   if (!cursor.accept("ALTER", "TABLE")) return undefined;
   cursor.acceptCondition();
   if (dialect === "postgresql") cursor.accept("ONLY");
+  const pair = alterTableRename(cursor);
+  return pair === undefined ? undefined : [pair];
+}
+
+/** After `ALTER TABLE`'s prefix: `a RENAME TO|AS b`, as the whole statement, or undefined. */
+function alterTableRename(
+  cursor: StatementCursor
+): [string, string] | undefined {
   const from = cursor.name();
   if (from === undefined || !cursor.accept("RENAME")) return undefined;
   if (!cursor.accept("TO")) cursor.accept("AS");
   const to = cursor.name();
-  return to !== undefined && cursor.done() ? [[from, to]] : undefined;
+  return to !== undefined && cursor.done() ? [from, to] : undefined;
 }
 
 /** `a TO b[, c TO d]`, the whole rest of the statement, or undefined. */
