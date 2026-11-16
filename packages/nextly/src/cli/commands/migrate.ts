@@ -635,11 +635,11 @@ export async function runMigrate(
       logger: { warn: m => logger.warn(m) },
     });
 
-    // The configuration holding a change no migration records ends the run here, a dry run's too,
+    // The configuration holding a change no migration records ends the run, a dry run's too,
     // naming each one, before the lock or anything else changes the database: the run would
     // otherwise report a database as up to date that the configuration is ahead of.
-    try {
-      await refuseUnwrittenChanges({
+    const refuseUnwritten = () =>
+      refuseUnwrittenChanges({
         config: configResult.config,
         ...(configResult.deferredExtends === undefined
           ? {}
@@ -654,11 +654,13 @@ export async function runMigrate(
           debug: m => logger.debug(m),
         },
       });
-    } catch (error) {
-      fail(error);
-    }
 
     if (options.dryRun) {
+      try {
+        await refuseUnwritten();
+      } catch (error) {
+        fail(error);
+      }
       await previewMigrate({
         adapter,
         db,
@@ -744,6 +746,7 @@ export async function runMigrate(
         // A file with a Builder name the signature does not recognise is
         // refused, never run as written.
         refuseUnrecognisedBuilderFiles: true,
+        refuseUnwrittenChanges: refuseUnwritten,
         knownJunctions: resolvedSchema.knownJunctions,
         declared,
         // What the core upgrade deletes is judged with the files' deletions,
@@ -1278,6 +1281,17 @@ export interface MigrateCoreDeps {
   refuseUnrecognisedBuilderFiles?: boolean;
   /** The unrecognised-file refusal; injected for tests (`refuseUnrecognisedBuilderFiles`). */
   refuseUnrecognisedBuilderFilesFn?: typeof refuseUnrecognisedBuilderFiles;
+  /**
+   * Refuse, reading only, a configuration that holds a change no migration
+   * records (`refuse-unwritten-changes.ts`): asked after the history checks,
+   * so a folder that is itself wrong is named first, and before the lock and
+   * anything else changes the database.
+   *
+   * `nextly migrate` and the production boot pass it. The development boot
+   * does not: there the configuration is ahead of the migrations by design,
+   * and its own push brings the database to it.
+   */
+  refuseUnwrittenChanges?: () => Promise<void>;
 }
 
 export interface MigrateCoreResult {
@@ -2563,6 +2577,11 @@ export async function migrateCore(
   // refused with nothing changed, since nothing would record the registry
   // after it. Asked again under the lock, below.
   await refuseMigrationsOutOfOrder(deps);
+  // Once the folder and the ledger are known sound: a configuration ahead of
+  // its migrations is refused, naming each change, before the lock or any
+  // write. Asked once, since what it compares is the configuration and the
+  // folder, which no other run changes.
+  await deps.refuseUnwrittenChanges?.();
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
   // stands then, accepting only what was agreed here.

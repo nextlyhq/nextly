@@ -161,7 +161,11 @@ function settingsDifferences(
 
 /**
  * The app's and the plugins' permissions added or removed: against the newest
- * snapshot's record, or, where it predates the record, the live permissions.
+ * snapshot's record, or, where there is no snapshot or it predates the
+ * record, the live permissions. No snapshot says nothing about permissions
+ * either: a site's first run records the ones it finds, as it does over an
+ * earlier version's snapshot, and the tables a real site declares are named
+ * as added in any case.
  */
 function permissionDifferences(
   declared: PermissionRecord,
@@ -169,12 +173,10 @@ function permissionDifferences(
   recorded: RecordedInDatabase | undefined
 ): Extract<PermissionChange, { kind: "owner" }>[] {
   const previous =
-    latest === null
-      ? null
-      : (latest.data.permissions ??
-        (recorded?.permissions === undefined
-          ? undefined
-          : { ...recorded.permissions, collections: {}, singles: {} }));
+    latest?.data.permissions ??
+    (recorded?.permissions === undefined
+      ? undefined
+      : { ...recorded.permissions, collections: {}, singles: {} });
   // Over a snapshot that predates the record and a database that records none
   // yet, there is nothing to compare: `permissionChanges` names that "recorded".
   if (previous === undefined) return [];
@@ -325,9 +327,9 @@ export async function unwrittenChangesOf(
   };
   const latest = inputs.latest;
   const predatesRecord =
-    latest !== null &&
-    (latest.data.entities === undefined ||
-      latest.data.permissions === undefined);
+    latest === null ||
+    latest.data.entities === undefined ||
+    latest.data.permissions === undefined;
   return compareWithNewestSnapshot({
     entities,
     appStream: inputs.appStream,
