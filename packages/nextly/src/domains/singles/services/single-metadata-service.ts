@@ -1138,11 +1138,26 @@ export class SingleMetadataService {
     const adapter = this.adapter;
     // Without an adapter there is no table to change, and the service's path reports that.
     if (!adapter) return true;
-    const [{ pushCarriesValues }, { introspectLiveSnapshot }] =
-      await Promise.all([
-        import("../../schema/builder-save/push-carries-values"),
-        import("../../schema/pipeline/diff/introspect-live"),
-      ]);
+    const [
+      { pushCarriesValues },
+      { introspectLiveSnapshot },
+      { tableHasRows },
+      { DynamicCollectionSchemaService },
+      { toSnakeCase },
+    ] = await Promise.all([
+      import("../../schema/builder-save/push-carries-values"),
+      import("../../schema/pipeline/diff/introspect-live"),
+      import("../../schema/pipeline/live-table-facts"),
+      import(
+        "../../dynamic-collections/services/dynamic-collection-schema-service"
+      ),
+      import("../../schema/field-rules"),
+    ]);
+    const schemaService = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    );
+    const dialect = adapter.getCapabilities().dialect;
     return pushCarriesValues({
       oldFields: before,
       newFields: after,
@@ -1153,12 +1168,20 @@ export class SingleMetadataService {
       renamed,
       liveTable: async () =>
         (
-          await introspectLiveSnapshot(
-            adapter.getDrizzle(),
-            adapter.getCapabilities().dialect,
-            [input.existing.tableName]
-          )
+          await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+            input.existing.tableName,
+          ])
         ).tables[0],
+      // A Single's one row is filled in, in the service's own statements, for a field new to its
+      // table that is required or states a default the row takes: a value the file does not carry.
+      singleRow: {
+        renamedTo: renamed ? [toSnakeCase(renamed.to)] : [],
+        fills: field =>
+          field.required === true ||
+          schemaService.singleRowFillValue(field) !== undefined,
+        holdsRow: () =>
+          tableHasRows(adapter.getDrizzle(), dialect, input.existing.tableName),
+      },
     });
   }
 
