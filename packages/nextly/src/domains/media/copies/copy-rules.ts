@@ -218,16 +218,3 @@ export function mediaCopyAddress(
 ): string {
   return `${MEDIA_ROUTE_BASE}/${item.id}/copy/${width}?v=${copyVersionOf(item.filename)}`;
 }
-
-/** A media route naming an item by its id, anywhere in an address. */
-const MEDIA_ROUTE =
-  /\/api\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=[/?#]|$)/i;
-
-/**
- * The media item an address names through the media routes, or `undefined`.
- * Any other address, an image on another site or a file's own storage URL,
- * names no item a copy can be made of.
- */
-export function mediaIdOfCopyableAddress(url: string): string | undefined {
-  return MEDIA_ROUTE.exec(url)?.[1];
-}

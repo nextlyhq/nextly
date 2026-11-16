@@ -13,7 +13,6 @@ import {
   copyVersionOf,
   MEDIA_COPY_WIDTHS,
   mediaCopyAddress,
-  mediaIdOfCopyableAddress,
   nearestMediaCopyWidth,
   negotiateCopyFormat,
   parseCopyWidth,
@@ -254,23 +253,5 @@ describe("the address a copy is asked for at", () => {
   it("changes version when the original's file changes", () => {
     expect(copyVersionOf("media/a.jpg")).not.toBe(copyVersionOf("media/b.jpg"));
     expect(copyVersionOf("media/a.jpg")).toMatch(/^[0-9a-f]{12}$/);
-  });
-
-  it("finds the item a media library address names", () => {
-    expect(mediaIdOfCopyableAddress(`/api/media/${item.id}/raw`)).toBe(item.id);
-    expect(
-      mediaIdOfCopyableAddress(`https://example.com/api/media/${item.id}`)
-    ).toBe(item.id);
-  });
-
-  it("finds no item in an address outside the media library", () => {
-    for (const url of [
-      "https://images.example.com/photo.jpg",
-      "/uploads/2026/11/photo.jpg",
-      "/api/media/not-an-id/raw",
-      "",
-    ]) {
-      expect(mediaIdOfCopyableAddress(url)).toBeUndefined();
-    }
   });
 });

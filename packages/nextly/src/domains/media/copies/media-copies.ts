@@ -32,12 +32,12 @@ import {
 } from "../../../storage/read-stored-media";
 import { getMediaStorage } from "../../../storage/storage";
 import type { IStorageAdapter } from "../../../storage/types";
+import { mediaIdOfRouteAddress } from "../media-route-address";
 
 import {
   copyFormatsOf,
   copyPathOf,
   mediaCopyAddress,
-  mediaIdOfCopyableAddress,
   nearestMediaCopyWidth,
   negotiateCopyFormat,
   type CopyFormat,
@@ -87,7 +87,7 @@ export type MediaCopySource = { id: string } | { url: string };
 export function mediaIdOfCopySource(
   source: MediaCopySource
 ): string | undefined {
-  return "id" in source ? source.id : mediaIdOfCopyableAddress(source.url);
+  return "id" in source ? source.id : mediaIdOfRouteAddress(source.url);
 }
 
 /** What making and finding copies needs. */
