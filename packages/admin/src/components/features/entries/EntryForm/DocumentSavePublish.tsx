@@ -76,7 +76,10 @@ import {
   type ScheduledPublish,
 } from "./save-publish-state";
 import { LastVisitChip, RecoveryOfferChip } from "./SaveStateIndicator";
-import type { DocumentActionBindings } from "./useDocumentActionBindings";
+import {
+  NOTHING_CHANGED_REASON,
+  type DocumentActionBindings,
+} from "./useDocumentActionBindings";
 
 /**
  * The soonest publication of this document set for later, from the
@@ -202,6 +205,12 @@ function HostedSaveAndPublish({
       })
     : null;
   const failure = failureOf(hosted);
+  // Absent where this person may not change the document: nothing then
+  // claims to save it.
+  const canSave =
+    hosted.bindings.save !== undefined &&
+    hosted.actions.some(action => action.id === "save");
+  const held = saveHeld(hosted);
 
   const runSave = () => {
     void (saveState.kind === "failed" && saveState.retry !== undefined
@@ -219,7 +228,7 @@ function HostedSaveAndPublish({
         ctrl: true,
         action: () => setNothingToSave(count => count + 1),
         description: "Save",
-        when: () => save.kind === "saved",
+        when: () => canSave && save.kind === "saved",
         whenTyping: true,
       },
     ],
@@ -260,7 +269,7 @@ function HostedSaveAndPublish({
           <RecoveryOfferChip label="Earlier changes" offer={offer} />
         ) : null}
         <div className="flex items-center">
-          {save.kind === "offered" && offer !== null ? (
+          {!canSave ? null : save.kind === "offered" && offer !== null ? (
             <LastVisitChip
               label={save.label}
               offer={offer}
@@ -281,11 +290,12 @@ function HostedSaveAndPublish({
               }
             />
           ) : (
-            <WithTooltip tooltip={tooltipOf(save)}>
+            <WithTooltip tooltip={held ?? tooltipOf(save)}>
               <SaveButton
                 view={save}
                 leads={saveLeads}
                 joined={saveArrow !== null}
+                held={held}
                 onPress={runSave}
               />
             </WithTooltip>
@@ -362,11 +372,30 @@ function publishReason(hosted: DocumentActionBindings): string | undefined {
 /** Why Publish is held where nothing here can publish the page. */
 const CANT_PUBLISH = "This page can't be published from here.";
 
+/**
+ * Why Save can't run now, where it could otherwise: a colleague's lock,
+ * errors on the page. Not "nothing has changed" or a store under way, which
+ * its own states ("✓ Saved", "Saving…") already say.
+ */
+function saveHeld(hosted: DocumentActionBindings): string | undefined {
+  const reason = hosted.bindings.save?.disabledReason;
+  if (reason === NOTHING_CHANGED_REASON || reason === SAVING_REASON) {
+    return undefined;
+  }
+  return reason;
+}
+
+/** The reason the model holds a store with while another runs. */
+const SAVING_REASON = "Saving…";
+
 /** What the failure the save state reports says, in the pair's notice. */
 function failureOf(hosted: DocumentActionBindings): Failure | null {
   const { saveState } = hosted;
   if (saveState.kind !== "failed") return null;
-  const { retry } = saveState;
+  // A failed publish is tried again as Publish runs it: the publish of a
+  // live page's edits is not an action `run` offers by name.
+  const retry =
+    hosted.failedAction === "publish" ? hosted.publishLatest : saveState.retry;
   return {
     title: hosted.failedAction === "publish" ? "Not published" : "Not saved",
     reason: saveState.message,
@@ -420,14 +449,19 @@ const SaveButton = forwardRef<
     leads: boolean;
     /** Whether an arrow is joined to it. */
     joined: boolean;
+    /** Why it can't save now, where it otherwise would. */
+    held?: string | undefined;
     onPress?: () => void;
   } & ComponentPropsWithoutRef<"button">
 >(function SaveButton(
-  { view, leads, joined, onPress, onClick, ...trigger },
+  { view, leads, joined, held, onPress, onClick, ...trigger },
   ref
 ) {
+  // Changes from the last visit still open their offer while Save is held:
+  // Discard stays the author's, and the offer's Save says why it waits.
   const acts =
-    view.kind === "save" || view.kind === "retry" || view.kind === "offered";
+    view.kind === "offered" ||
+    ((view.kind === "save" || view.kind === "retry") && held === undefined);
   const quiet = view.kind === "saved" || view.kind === "saving";
   return (
     <Button
@@ -440,6 +474,9 @@ const SaveButton = forwardRef<
       {...trigger}
       aria-disabled={acts ? undefined : true}
       aria-busy={view.kind === "saving" ? true : undefined}
+      {...(held === undefined || view.kind === "offered"
+        ? {}
+        : { "aria-description": held })}
       className={cn(
         "gap-1.5",
         INERT,

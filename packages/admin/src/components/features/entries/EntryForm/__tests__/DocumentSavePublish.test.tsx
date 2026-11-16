@@ -97,6 +97,7 @@ function input(
     collectionSlug: "pages",
     onSaveDraft: vi.fn(async () => ok),
     onSaveWorkingDraft: vi.fn(async () => ok),
+    onSaveChanges: vi.fn(async () => ok),
     onPublish: vi.fn(async () => ok),
     onUnpublish: vi.fn(async () => ok),
     ...over,
@@ -214,6 +215,55 @@ describe("Save and Publish say the page's state themselves", () => {
     expect(
       await screen.findByRole("menuitem", { name: "Unpublish" })
     ).toBeTruthy();
+  });
+});
+
+describe("what holds them", () => {
+  it("a colleague's lock holds Save and Publish over unsaved work, saying why, and nothing is stored", async () => {
+    const onSaveWorkingDraft = vi.fn(async () => ok);
+    const onPublish = vi.fn(async () => ok);
+    drawn({
+      isDirty: true,
+      documentLocked: true,
+      onSaveWorkingDraft,
+      onPublish,
+    });
+    expect(saveButton()?.textContent).toBe("Save");
+    expect(saveButton()?.getAttribute("aria-disabled")).toBe("true");
+    expect(saveButton()?.getAttribute("aria-description")).toBe(
+      "This document is being edited elsewhere"
+    );
+    expect(publishButton()?.getAttribute("aria-disabled")).toBe("true");
+    await userEvent.click(saveButton() as HTMLButtonElement);
+    await userEvent.click(publishButton() as HTMLButtonElement);
+    expect(onSaveWorkingDraft).not.toHaveBeenCalled();
+    expect(onPublish).not.toHaveBeenCalled();
+  });
+
+  it("draws no Save for someone who may not change the page, and nothing claims to save", () => {
+    drawn({ entry: draftPage, canEdit: false });
+    expect(saveButton()).toBeNull();
+    // A reader who may publish still finds Publish.
+    expect(publishButton()?.textContent).toBe("Publish");
+  });
+
+  it("tries a failed publish of a live page's edits again as Publish ran it", async () => {
+    const onPublish = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        reason: "failed",
+        message: "Offline.",
+      })
+      .mockResolvedValue(ok);
+    drawn({ isDirty: true, onPublish });
+    await userEvent.click(publishButton() as HTMLButtonElement);
+    const notice = await screen.findByTestId("document-save-publish-notice");
+    expect(within(notice).getByText("Not published")).toBeTruthy();
+    await userEvent.click(
+      within(notice).getByRole("button", { name: "Retry" })
+    );
+    await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(2));
   });
 });
 
