@@ -565,6 +565,14 @@ expectTypeOf<adminEntry.SchemaTemplate>().toMatchTypeOf<{
 expectTypeOf<adminEntry.SchemaTemplateField["fields"]>().toEqualTypeOf<
   readonly adminEntry.SchemaTemplateField[] | undefined
 >();
+// A link may name several collections, and a field several field groups, as
+// the Builder's own fields may.
+expectTypeOf<adminEntry.SchemaTemplateField["relationTo"]>().toEqualTypeOf<
+  string | readonly string[] | undefined
+>();
+expectTypeOf<adminEntry.SchemaTemplateField["components"]>().toEqualTypeOf<
+  readonly string[] | undefined
+>();
 // A plugin's own field type carries its settings, as the Builder stores them.
 expectTypeOf<adminEntry.SchemaTemplateField["pluginOptions"]>().toEqualTypeOf<
   Readonly<Record<string, unknown>> | undefined

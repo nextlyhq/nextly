@@ -19,7 +19,9 @@
  *   no field group), the check a field typed into the Builder meets.
  *
  * Every rule a field breaks is named. A field left out is not judged, nor
- * anything inside it. What a template needs (a collection a link points at, a
+ * anything inside it. Fields are left out by key (their positions, outermost
+ * first, `2.0`), never by name, since two siblings may share a name and
+ * leaving one out must keep the other. What a template needs (a collection a link points at, a
  * field group a field uses) is read from the fields it would add.
  *
  * @module lib/builder/template-check
@@ -57,6 +59,8 @@ export type TemplateRule =
 export interface TemplateFailure {
   /** The field's place, names joined by dots: `call_to_action.label`. */
   path: string;
+  /** The field's key: its positions, outermost first, `2.0`. */
+  key: string;
   label: string;
   rule: TemplateRule;
   message: string;
@@ -69,6 +73,8 @@ export interface TemplateNeed {
   slug: string;
   /** The field needing it. */
   path: string;
+  /** That field's key, by which it is left out. */
+  key: string;
 }
 
 /** What a template is checked against. */
@@ -82,7 +88,7 @@ export interface TemplateCheckContext {
   installedTypes?: ReadonlySet<string>;
   /** Whether the new entity's drafts are on; off when absent. */
   lifecycleEnabled?: boolean;
-  /** The paths of the fields left out. */
+  /** The keys of the fields left out. */
   leftOut?: ReadonlySet<string>;
 }
 
@@ -99,6 +105,7 @@ const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
 interface Placed {
   field: SchemaTemplateField;
   path: string;
+  key: string;
   label: string;
   nested: boolean;
 }
@@ -126,6 +133,7 @@ function nameFailure(
     problem.kind === "spelling" || problem.kind === "column-too-long";
   return {
     path: each.path,
+    key: each.key,
     label: each.label,
     rule: invalid ? "invalid-name" : "reserved-name",
     message: invalid
@@ -144,6 +152,7 @@ function clashFailures(
     if (found.has(each)) return;
     found.set(each, {
       path: each.path,
+      key: each.key,
       label: each.label,
       rule: "name-clash",
       message: `${each.label} has ${CLASH_WORDS[kind]} as ${other} beside it.`,
@@ -178,6 +187,7 @@ function typeFailure(
     BUILT_IN_FIELD_TYPES.has(type) || (ctx.installedTypes?.has(type) ?? false);
   return {
     path: each.path,
+    key: each.key,
     label: each.label,
     rule: known ? "type-not-offered" : "plugin-type-missing",
     message: known
@@ -191,6 +201,7 @@ function placeFailure(each: Placed): TemplateFailure | null {
   if (!each.nested || !builderColumnIsUnique(each.field)) return null;
   return {
     path: each.path,
+    key: each.key,
     label: each.label,
     rule: "unique-in-container",
     message: `${each.label} is unique, and a group or repeating rows keep their values in one JSON value, which cannot be kept unique.`,
@@ -203,31 +214,63 @@ function placeFailure(each: Placed): TemplateFailure | null {
  * left to the name rule, which already names it.
  */
 function preflightFailure(each: Placed): TemplateFailure | null {
-  const { fields: _inside, options, ...rest } = each.field;
+  const {
+    fields: _inside,
+    options,
+    relationTo,
+    components,
+    ...rest
+  } = each.field;
+  // The stored shape takes plain arrays, so the declaration's are copied.
   const builderField = convertToBuilderField(
-    { ...rest, options: options?.map(option => ({ ...option })) },
+    {
+      ...rest,
+      options: options?.map(option => ({ ...option })),
+      ...(relationTo === undefined
+        ? {}
+        : {
+            relationTo:
+              typeof relationTo === "string" ? relationTo : [...relationTo],
+          }),
+      ...(components ? { components: [...components] } : {}),
+    },
     each.path
   );
   const error = builderFieldErrors([builderField]).get(builderField.id);
   if (!error || error.kind === "unnamed") return null;
   return {
     path: each.path,
+    key: each.key,
     label: each.label,
     rule: "incomplete",
     message: `${each.label}: ${error.message}.`,
   };
 }
 
-/** What one field needs to exist. */
-function needOf(each: Placed): TemplateNeed | null {
+/** Every entity one field needs to exist: each collection it may link to, each field group it may use. */
+function needsOf(each: Placed): TemplateNeed[] {
   const { field } = each;
+  const need = (kind: TemplateNeed["kind"], slug: string): TemplateNeed => ({
+    kind,
+    slug,
+    path: each.path,
+    key: each.key,
+  });
   if (field.type === "relationship" && field.relationTo) {
-    return { kind: "collection", slug: field.relationTo, path: each.path };
+    const targets =
+      typeof field.relationTo === "string"
+        ? [field.relationTo]
+        : field.relationTo;
+    return targets.map(slug => need("collection", slug));
   }
-  if (isFieldGroupFieldType(field.type) && field.component) {
-    return { kind: "fieldGroup", slug: field.component, path: each.path };
+  if (isFieldGroupFieldType(field.type)) {
+    const groups = [
+      ...(field.component ? [field.component] : []),
+      ...(field.components ?? []),
+    ];
+    return groups.map(slug => need("fieldGroup", slug));
   }
-  return null;
+  return [];
 }
 
 /** Each rule `template`'s fields break, and what they need. */
@@ -240,17 +283,18 @@ export function checkTemplate(
   const leftOut = ctx.leftOut ?? new Set<string>();
   const walk = (
     list: readonly SchemaTemplateField[],
-    parentPath: string | null
+    parent: { path: string; key: string } | null
   ): void => {
     const level: Placed[] = list
-      .map(field => ({
+      .map((field, at) => ({
         field,
-        path: parentPath ? `${parentPath}.${field.name}` : field.name,
+        path: parent ? `${parent.path}.${field.name}` : field.name,
+        key: parent ? `${parent.key}.${at}` : String(at),
         label: field.label || field.name,
-        nested: parentPath !== null,
+        nested: parent !== null,
       }))
-      .filter(each => !leftOut.has(each.path));
-    const clashes = clashFailures(level, parentPath === null);
+      .filter(each => !leftOut.has(each.key));
+    const clashes = clashFailures(level, parent === null);
     for (const each of level) {
       const found = [
         nameFailure(each, template.kind, ctx),
@@ -260,10 +304,9 @@ export function checkTemplate(
         preflightFailure(each),
       ];
       for (const failure of found) if (failure) failures.push(failure);
-      const need = needOf(each);
-      if (need) needs.push(need);
+      needs.push(...needsOf(each));
       if (CONTAINER_TYPES.has(each.field.type) && each.field.fields) {
-        walk(each.field.fields, each.path);
+        walk(each.field.fields, each);
       }
     }
   };

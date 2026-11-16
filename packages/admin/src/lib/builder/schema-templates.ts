@@ -39,12 +39,14 @@ export interface SchemaTemplateField {
   defaultValue?: string | number | boolean;
   /** A dropdown's or radio group's choices. */
   options?: readonly { label: string; value: string }[];
-  /** A link to entries: the collection it links to. */
-  relationTo?: string;
+  /** A link to entries: the collection it links to, or each it may. */
+  relationTo?: string | readonly string[];
   /** A link to entries holding several. */
   hasMany?: boolean;
   /** A field using a field group: the field group's address. */
   component?: string;
+  /** A field using one of several field groups: each address it may use. */
+  components?: readonly string[];
   /** A group's or repeating rows' own fields. */
   fields?: readonly SchemaTemplateField[];
   /**

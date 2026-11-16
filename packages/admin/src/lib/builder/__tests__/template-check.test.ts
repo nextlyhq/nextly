@@ -221,13 +221,45 @@ describe("leaving a field out", () => {
     expect(
       checkTemplate(template(fields), {
         ...ctx,
-        leftOut: new Set(["Summary", "meta"]),
+        // By each field's key, its position: Summary is second, meta third.
+        leftOut: new Set(["1", "2"]),
+      }).failures
+    ).toEqual([]);
+  });
+});
+
+describe("leaving out one of two fields of the very same name", () => {
+  it("keeps the other, which then clashes with nothing", () => {
+    const fields: SchemaTemplateField[] = [text("summary"), text("summary")];
+    const result = checkTemplate(template(fields), offered("collection"));
+    expect(result.failures.map(each => each.key)).toEqual(["0", "1"]);
+    expect(
+      checkTemplate(template(fields), {
+        ...offered("collection"),
+        leftOut: new Set(["1"]),
       }).failures
     ).toEqual([]);
   });
 });
 
 describe("what a template needs", () => {
+  it("every collection a link may point at, and every field group a field may use", () => {
+    const fields: SchemaTemplateField[] = [
+      { name: "related", type: "relationship", relationTo: ["posts", "pages"] },
+      { name: "sections", type: "component", components: ["hero", "cta"] },
+    ];
+    expect(
+      checkTemplate(template(fields), offered("collection")).needs.map(
+        need => `${need.kind} ${need.slug} ${need.path}`
+      )
+    ).toEqual([
+      "collection posts related",
+      "collection pages related",
+      "fieldGroup hero sections",
+      "fieldGroup cta sections",
+    ]);
+  });
+
   it("each collection a link points at and each field group a field uses", () => {
     const fields: SchemaTemplateField[] = [
       { name: "author", type: "relationship", relationTo: "authors" },
@@ -242,16 +274,23 @@ describe("what a template needs", () => {
     ];
     const result = checkTemplate(template(fields), offered("collection"));
     expect(result.needs).toEqual([
-      { kind: "collection", slug: "authors", path: "author" },
-      { kind: "fieldGroup", slug: "seo", path: "seo" },
-      { kind: "collection", slug: "people", path: "credits.person" },
+      { kind: "collection", slug: "authors", path: "author", key: "0" },
+      { kind: "fieldGroup", slug: "seo", path: "seo", key: "1" },
+      {
+        kind: "collection",
+        slug: "people",
+        path: "credits.person",
+        key: "2.0",
+      },
     ]);
     // A field left out needs nothing.
     expect(
       checkTemplate(template(fields), {
         ...offered("collection"),
-        leftOut: new Set(["seo", "credits"]),
+        leftOut: new Set(["1", "2"]),
       }).needs
-    ).toEqual([{ kind: "collection", slug: "authors", path: "author" }]);
+    ).toEqual([
+      { kind: "collection", slug: "authors", path: "author", key: "0" },
+    ]);
   });
 });
