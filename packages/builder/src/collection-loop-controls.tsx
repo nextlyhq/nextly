@@ -119,8 +119,11 @@ export function useLoopCollections(
     readonly asked: Promise<readonly LoopCollection[]>;
     readonly answer: LoopCollections;
   }>();
+  // What this frame could show at once: a read that settles after the frame
+  // is still followed below, however soon it settles.
+  const shownAtOnce = asked === undefined ? undefined : settled.get(asked);
   React.useEffect(() => {
-    if (asked === undefined || settled.has(asked)) return;
+    if (asked === undefined || shownAtOnce !== undefined) return;
     let live = true;
     asked.then(
       collections => {
@@ -133,13 +136,11 @@ export function useLoopCollections(
     return () => {
       live = false;
     };
-  }, [asked]);
+  }, [asked, shownAtOnce]);
   if (asked === undefined) return undefined;
   // The answer for THIS read only, so a host swapped mid-mount never shows
   // the previous host's collections.
-  return (
-    settled.get(asked) ?? (found?.asked === asked ? found.answer : LOADING)
-  );
+  return shownAtOnce ?? (found?.asked === asked ? found.answer : LOADING);
 }
 
 /** A stored text value, trimmed, or `undefined` for anything else or nothing. */

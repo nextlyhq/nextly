@@ -106,7 +106,17 @@ export function noteSchemaVersion(res: Response): void {
   // Every move is told, this tab's own applies included, to whoever keeps
   // something the schema decides.
   if (stored !== undefined && version !== stored) {
-    for (const listener of [...schemaListeners]) listener(version);
+    for (const listener of [...schemaListeners]) {
+      // A listener that throws never fails the request that told it: the
+      // error is reported on its own.
+      try {
+        listener(version);
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
+    }
   }
 }
 

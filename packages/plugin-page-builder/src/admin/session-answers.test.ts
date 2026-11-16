@@ -253,15 +253,39 @@ describe("a schema change reads again", () => {
     expect(readsOf("/loop-collections")).toBe(2);
   });
 
-  it("keeps an answer whose read crossed the change, labelled with the new version", async () => {
+  it("does not keep a read the schema moved under, whichever response said so", async () => {
+    const { loopCollectionsIn } = await freshClients();
+    let answer: (body: unknown) => void = () => {};
+    sdk.readPluginRoute.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          answer = resolve;
+        })
+    );
+    const first = loopCollectionsIn("en", "author-a")();
+    // Another request learns of the move while the read is on its way; the
+    // read then answers with the old schema's collections.
+    schemaMovesTo(8);
+    answer({ items: [collection("salaries")], meta: {} });
+    await first;
+    routeAnswers(["posts"]);
+    expect(await slugsOf(loopCollectionsIn("en", "author-a"))).toEqual([
+      "posts",
+    ]);
+    expect(readsOf("/loop-collections")).toBe(2);
+  });
+
+  it("does not keep a read whose own answer says the schema moved", async () => {
     const { loopCollectionsIn } = await freshClients();
     sdk.readPluginRoute.mockImplementationOnce(() => {
-      // The response that carries the answer announces the new version.
       schemaMovesTo(8);
       return Promise.resolve({ items: [collection("posts")], meta: {} });
     });
     await loopCollectionsIn("en", "author-a")();
+    routeAnswers(["posts"]);
     await loopCollectionsIn("en", "author-a")();
-    expect(readsOf("/loop-collections")).toBe(1);
+    await loopCollectionsIn("en", "author-a")();
+    // Read once more, then kept under the new version.
+    expect(readsOf("/loop-collections")).toBe(2);
   });
 });

@@ -68,6 +68,35 @@ describe("onSchemaChange", () => {
     stop();
   });
 
+  it("a listener that throws fails neither the note nor the others", async () => {
+    const reported = new Promise<unknown>(resolve => {
+      const original = globalThis.queueMicrotask;
+      vi.stubGlobal("queueMicrotask", (task: () => void) => {
+        original(() => {
+          try {
+            task();
+          } catch (error) {
+            resolve(error);
+          }
+        });
+      });
+    });
+    const told = vi.fn();
+    const stopThrowing = onSchemaChange(() => {
+      throw new Error("a listener broke");
+    });
+    const stop = onSchemaChange(told);
+    noteSchemaVersion(announcing("4"));
+    expect(() => noteSchemaVersion(announcing("5"))).not.toThrow();
+    expect(schemaVersion()).toBe(5);
+    expect(told).toHaveBeenCalledExactlyOnceWith(5);
+    // The error is still reported, on its own.
+    expect(await reported).toEqual(new Error("a listener broke"));
+    vi.unstubAllGlobals();
+    stopThrowing();
+    stop();
+  });
+
   it("tells nothing once stopped", () => {
     const told = vi.fn();
     const stop = onSchemaChange(told);

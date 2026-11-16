@@ -12,9 +12,11 @@
  *   and nothing is kept while the person is not known, so one author's
  *   answer is never handed to the next person on the same tab.
  * - **Per schema version.** Each answer is labelled with the schema version
- *   it arrived under, and is good only while the version is the same; a
+ *   it was asked under, and is good only while the version is the same; a
  *   collection created, renamed or removed moves it, and the next ask reads
- *   again. Kept answers are also let go as the move is told.
+ *   again. A read the version moved under is not kept, and kept answers are
+ *   let go as the move is told. The admin learns of a move made elsewhere
+ *   (another tab, a code-first change) with its next request.
  * - **Never a failure.** A read that fails is dropped, so the next ask reads
  *   again; a read still on its way is shared by everyone asking meanwhile.
  *
@@ -25,11 +27,10 @@
  */
 import { onSchemaChange, schemaVersion } from "@nextlyhq/plugin-sdk/admin";
 
-/** One answer: the read, and the schema version it arrived under. */
+/** One answer: the read, and the schema version it was asked under. */
 interface Kept {
   readonly read: Promise<unknown>;
-  /** Set once the read has answered; until then it is on its way. */
-  arrived?: { readonly version: number | undefined };
+  readonly version: number | undefined;
 }
 
 /** Every kept answer, by what it answers. */
@@ -39,12 +40,10 @@ let keptFor: string | null = null;
 /** Stops the schema listener, while one is set. */
 let stopListening: (() => void) | undefined;
 
-/** Let go of every arrived answer the schema version no longer matches. */
+/** Let go of every answer, on its way or not, asked under another version. */
 function dropOutdated(version: number | undefined): void {
   for (const [key, entry] of kept) {
-    if (entry.arrived !== undefined && entry.arrived.version !== version) {
-      kept.delete(key);
-    }
+    if (entry.version !== version) kept.delete(key);
   }
 }
 
@@ -72,26 +71,22 @@ export function sessionAnswer<T>(
   }
   // Nobody known: an answer kept under no one could reach whoever is next.
   if (userId === null) return ask();
+  const version = schemaVersion();
   const held = kept.get(key);
-  if (
-    held !== undefined &&
-    (held.arrived === undefined || held.arrived.version === schemaVersion())
-  ) {
+  if (held !== undefined && held.version === version) {
     return held.read as Promise<T>;
   }
   stopListening ??= onSchemaChange(dropOutdated);
   const read = ask();
-  const entry: Kept = { read };
+  const entry: Kept = { read, version };
   kept.set(key, entry);
-  read.then(
-    () => {
-      // The version the answer's own response noted, so a change the
-      // read crossed labels it with the new one.
-      entry.arrived = { version: schemaVersion() };
-    },
-    () => {
-      if (kept.get(key) === entry) kept.delete(key);
-    }
-  );
+  const drop = () => {
+    if (kept.get(key) === entry) kept.delete(key);
+  };
+  read.then(() => {
+    // A read the schema moved under may hold the old schema's answer, so it
+    // is not kept: the next ask reads again.
+    if (schemaVersion() !== version) drop();
+  }, drop);
   return read;
 }
