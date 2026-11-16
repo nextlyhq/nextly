@@ -291,7 +291,7 @@ export function buildLocalizedFieldCondition(
     column: field.column,
     localeChain: [...chain],
     statusValues: ctx.statusValues,
-    structured: field.structured,
+    nonText: field.nonText,
   });
   if (op === "IS NULL") return sql`${shown} IS NULL`;
   // An empty list excludes nothing, whatever the reader is shown.

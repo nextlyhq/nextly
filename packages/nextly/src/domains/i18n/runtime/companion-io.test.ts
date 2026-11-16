@@ -52,31 +52,39 @@ describe("buildCompanionSchema", () => {
     });
   });
 
-  // A translatable column that stores JSON is never blank text, and the
-  // non-blank test must not compare it with '' (PostgreSQL parses that as
-  // JSON and fails the query). It is marked where the dialect stores JSON,
-  // and only there: SQLite keeps it as text.
+  // Only a text column can hold an empty string. A translated number,
+  // checkbox, date or JSON column is never blank, and the non-blank test and
+  // the fallback expression must not compare it with '': PostgreSQL refuses
+  // the comparison, and MySQL coerces it, reading 0 or false as blank. Each
+  // is marked on every dialect that stores it as other than text; SQLite
+  // keeps JSON as text.
   it.each([
-    { dialect: "postgresql" as const, structured: true },
-    { dialect: "mysql" as const, structured: true },
-    { dialect: "sqlite" as const, structured: false },
+    { dialect: "postgresql" as const, json: true },
+    { dialect: "mysql" as const, json: true },
+    { dialect: "sqlite" as const, json: false },
   ])(
-    "marks a JSON column structured on $dialect: $structured",
-    ({ dialect, structured }) => {
+    "marks every column but a text one as not text on $dialect",
+    ({ dialect, json }) => {
       const schema = buildCompanionSchema({
         slug: "data",
         tableName: "dc_data",
         fields: [
           { name: "title", type: "text" },
+          { name: "rank", type: "number", localized: true },
+          { name: "featured", type: "checkbox", localized: true },
+          { name: "launch", type: "date", localized: true },
           { name: "meta", type: "json", localized: true },
         ],
         dialect,
       });
       const byName = new Map(
-        schema!.localizedFields.map(field => [field.name, field.structured])
+        schema!.localizedFields.map(field => [field.name, field.nonText])
       );
-      expect(byName.get("meta") === true).toBe(structured);
       expect(byName.get("title")).toBeUndefined();
+      expect(byName.get("rank")).toBe(true);
+      expect(byName.get("featured")).toBe(true);
+      expect(byName.get("launch")).toBe(true);
+      expect(byName.get("meta") === true).toBe(json);
     }
   );
 

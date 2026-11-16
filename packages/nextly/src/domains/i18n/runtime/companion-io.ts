@@ -149,26 +149,27 @@ export function localizedFieldRefs(
 }
 
 /**
- * `fields` with each one whose companion column stores JSON on this dialect
- * marked `structured`, read off the companion table built for them: such a
- * value is never blank text, and comparing it with an empty string makes
- * PostgreSQL parse `''` as JSON and fail the query.
+ * `fields` with each one whose companion column does not store text on this
+ * dialect marked `nonText`, read off the companion table built for them: a
+ * number, a boolean, a date or JSON is never blank text, and comparing such a
+ * column with an empty string fails the query on PostgreSQL and is coerced on
+ * MySQL, where it can read `0` or `false` as blank.
  */
-export function markStructuredFields(
+export function markNonTextFields(
   fields: readonly LocalizedFieldRef[],
   table: unknown
 ): LocalizedFieldRef[] {
-  const jsonColumns = new Set(
+  const nonText = new Set(
     isTable(table)
       ? Object.values(getTableColumns(table))
-          // Drizzle spells a JSON column's data type with "json" among its
-          // words ("object json" on PostgreSQL and MySQL).
-          .filter(column => column.dataType.split(" ").includes("json"))
+          // Drizzle spells a text column's data type `string` alone; a
+          // decimal is `string numeric`, and every other type names its own.
+          .filter(column => column.dataType !== "string")
           .map(column => column.name)
       : []
   );
   return fields.map(field =>
-    jsonColumns.has(field.column) ? { ...field, structured: true } : field
+    nonText.has(field.column) ? { ...field, nonText: true } : field
   );
 }
 
@@ -244,7 +245,7 @@ function companionSchemaOf(args: {
   return {
     table: companion.table,
     companionTableName: companion.companionTableName,
-    localizedFields: markStructuredFields(localizedFields, companion.table),
+    localizedFields: markNonTextFields(localizedFields, companion.table),
     hasStatus: args.status === true,
     hasUpdatedAt: true,
   };

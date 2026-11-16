@@ -13,6 +13,7 @@ import {
   defineSingle,
   group,
   json,
+  number,
   password,
   relationship,
   text,
@@ -113,6 +114,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               }) => !(data?.flag === "private" && locale === "es"),
             },
           }),
+          // A translated number: a value that is not text in any language.
+          number({ name: "rank", localized: true }),
           // Shared, with a value hidden from every reader by its own rule.
           group({
             name: "settings",
@@ -1098,6 +1101,33 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
       expect(counted.total).toBe(1);
+    }, 90_000);
+
+    // A filter on a translated number judges the number shown, 0 included:
+    // a value that is not text is never blank, so it is never compared with
+    // an empty string on its way through the fallback chain.
+    it("filters a translated number on the value shown, zero included", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: { title: "One", rank: 5, status: "published" },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: { title: "Uno", rank: 0, status: "published", _overwrite: true },
+      });
+      const ids = async (query: string) => {
+        const listed = await restGet(["collections", DATA, "entries"], query);
+        expect(listed.status, JSON.stringify(listed.json)).toBe(200);
+        return (listed.json.items as { id: string }[]).map(item => item.id);
+      };
+      // Spanish shows its own 0, not English's 5.
+      expect(await ids("?locale=es&where[rank][equals]=0")).toEqual([id]);
+      expect(await ids("?locale=es&where[rank][equals]=5")).toEqual([]);
     }, 90_000);
 
     // Every language's structured values beside a read are the field's own

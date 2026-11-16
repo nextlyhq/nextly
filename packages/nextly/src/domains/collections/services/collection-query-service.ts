@@ -2416,9 +2416,17 @@ export class CollectionQueryService extends BaseService {
     });
     if (releaseCondition) conditions.push(releaseCondition);
     // In the requested language too, by the same public states and the same
-    // due releases, so the two bounds cannot disagree about a document.
+    // due releases, so the two bounds cannot disagree about a document. Only
+    // once the translations table is there: before its migration a document's
+    // one status is the only publication there is, and the read keeps its
+    // main-table values rather than querying a table that does not exist.
     const inLanguage = publishedInLanguageCondition({
-      companion,
+      companion:
+        companion &&
+        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+          "ready"
+          ? companion
+          : null,
       statusFilter,
       revealed: decisions.reveal,
       localeChain,
@@ -3848,8 +3856,8 @@ export class CollectionQueryService extends BaseService {
                 column: named.column,
                 localeChain,
                 statusValues: localizedCtx?.statusValues, // don't sort by draft translations
-                structured: companion.localizedFields.some(
-                  field => field.column === named.column && field.structured
+                nonText: companion.localizedFields.some(
+                  field => field.column === named.column && field.nonText
                 ),
               }),
               // A missing translation reads as NULL.
@@ -5385,10 +5393,18 @@ export class CollectionQueryService extends BaseService {
             this.logger
           )
         : undefined;
+      // Whether the translations table is there to read: the language test
+      // and the joined read below both ask it of the table, once.
+      const companionReady =
+        companion !== null &&
+        companion !== undefined &&
+        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+          "ready";
       // A public read in a language the entry is not published in finds no
-      // entry, as a list in that language leaves it out.
+      // entry, as a list in that language leaves it out. Only once the
+      // translations table is there, as the list's test is.
       const inLanguageCondition = publishedInLanguageCondition({
-        companion,
+        companion: companionReady ? companion : null,
         statusFilter,
         revealed: decisions.reveal,
         localeChain,
@@ -5419,8 +5435,7 @@ export class CollectionQueryService extends BaseService {
           localization: this.localization,
           locale: params.locale,
         }) &&
-        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
-          "ready"
+        companionReady
           ? localeChain
           : null;
       let entry: Record<string, unknown> | undefined;
