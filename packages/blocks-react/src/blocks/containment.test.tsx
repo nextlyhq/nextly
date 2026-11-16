@@ -9,6 +9,7 @@
  * node to every flow, flex and grid layout, and the padding would land on the
  * wrong box.
  */
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -54,7 +55,7 @@ function drawn(
       partClass: () => "",
       ctx: {} as PageContext,
       renderSlot: () => <span>child</span>,
-    })
+    }) as ReactElement
   );
 }
 
