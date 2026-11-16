@@ -189,29 +189,43 @@ export function narrowEngineSources(packageJson, metafile) {
   if (packageJson?.exports === undefined || outputs === undefined) {
     return new Set();
   }
-  const entries = Object.entries(packageJson.exports)
+  const reached = reachedOutputs(
+    narrowEntryFiles(packageJson.exports),
+    outputs
+  );
+  return new Set(
+    [...reached].flatMap(file => [
+      `${ENGINE}/${file}`,
+      ...Object.keys(outputs[file]?.inputs ?? {}).map(
+        input => `${ENGINE}/${input}`
+      ),
+    ])
+  );
+}
+
+/** The built file of each subpath export other than the root. */
+function narrowEntryFiles(exports) {
+  return Object.entries(exports)
     .filter(([subpath]) => subpath !== ".")
     .map(([, target]) => target?.import ?? target?.default)
     .filter(target => typeof target === "string")
     .map(target => target.replace(/^\.\//, ""));
+}
+
+/** Every built file the `entries` reach through the metafile's own edges. */
+function reachedOutputs(entries, outputs) {
   const reached = new Set();
   const queue = [...entries];
   while (queue.length > 0) {
     const file = queue.pop();
     if (file === undefined || reached.has(file)) continue;
     reached.add(file);
-    for (const edge of outputs[file]?.imports ?? []) {
-      if (edge.external !== true) queue.push(edge.path);
-    }
+    const local = (outputs[file]?.imports ?? []).filter(
+      edge => edge.external !== true
+    );
+    queue.push(...local.map(edge => edge.path));
   }
-  const sources = new Set();
-  for (const file of reached) {
-    sources.add(`${ENGINE}/${file}`);
-    for (const input of Object.keys(outputs[file]?.inputs ?? {})) {
-      sources.add(`${ENGINE}/${input}`);
-    }
-  }
-  return sources;
+  return reached;
 }
 
 /** Reads the engine's package and its build's metafile, if there is one. */
