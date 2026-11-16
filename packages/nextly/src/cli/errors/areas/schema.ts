@@ -11,7 +11,7 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { contextString, sentences } from "../messages";
+import { asSentence, contextString, sentences } from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -100,9 +100,10 @@ function leftoverRefusal(error: NextlyError): CliErrorParts {
   const why = (next === undefined ? rest : rest.slice(0, -1)).join(" ");
   return {
     what: colon === -1 ? message : `${message.slice(0, colon)}.`,
-    why:
-      why ||
-      "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
+    // Capitalised: after the colon a refusal may go on with "the view …" or "the shared …".
+    why: why
+      ? asSentence(why)
+      : "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
     next: next ?? "Drop or rename the tables it names, then retry the create.",
   };
 }

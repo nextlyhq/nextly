@@ -30,7 +30,7 @@ Then run the create again.
 
 ```text
 ✗ Creating the Single "home" was refused.
-  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
-  Next: Drop or rename those tables, then retry the create.
+  Why:  The shared field-group table "comp_hero" (2 rows) holds rows whose `_parent_table` is "single_home", which nothing registered owns.
+  Next: Delete the field-group rows "single_home" left in that table: those whose `_parent_table` is "single_home" and every row nested beneath them, keeping the table and other entities' rows, then retry the create.
   Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)
 ```
