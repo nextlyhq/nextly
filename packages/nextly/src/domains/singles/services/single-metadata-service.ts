@@ -87,6 +87,7 @@ import {
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
 import type {
   BuilderSaveSetup,
+  CollectionSave,
   CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
@@ -1035,6 +1036,31 @@ export class SingleMetadataService {
       leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
     const entityWith = (fields: FieldDefinition[]) =>
       singleEntity({ ...existing, ...updateData, fields });
+    const save = {
+      kind: "single" as const,
+      slug: input.slug,
+      previous: await previousEntity(deps, "single", input.slug, stored),
+      entity: entityWith(planned),
+      change: "update" as const,
+      ...(rename ? { renamedFields: [rename] } : {}),
+      ...(await entityRelations(
+        deps.adapter,
+        this.logger,
+        existing.tableName,
+        before,
+        after
+      )),
+    };
+    // Where the save carries no values across its change, its own migration file applies it in
+    // development, as the Builder dialog's save does: run as `nextly migrate` runs one, in tries over
+    // a busy table and on SQLite with foreign keys off. A save that carries values keeps the
+    // service's own statements, which move them.
+    if (
+      deps.applies &&
+      !(await this.carriesValues(input, before, after, rename))
+    ) {
+      return this.writeUpdateByFile(deps, input, plan, save);
+    }
     // Held in an object, as the step below sets it from inside the writer.
     const ran: {
       outcome?: Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>;
@@ -1063,25 +1089,7 @@ export class SingleMetadataService {
       return ran.outcome?.status === "failed" ? "partly-applied" : undefined;
     };
     try {
-      await writeEntitySave(
-        deps,
-        {
-          kind: "single",
-          slug: input.slug,
-          previous: await previousEntity(deps, "single", input.slug, stored),
-          entity: entityWith(planned),
-          change: "update",
-          ...(rename ? { renamedFields: [rename] } : {}),
-          ...(await entityRelations(
-            deps.adapter,
-            this.logger,
-            existing.tableName,
-            before,
-            after
-          )),
-        },
-        applyAndRecord
-      );
+      await writeEntitySave(deps, save, applyAndRecord);
     } catch (error) {
       if (ran.result === undefined) throw error;
       this.logger.error(
@@ -1113,6 +1121,83 @@ export class SingleMetadataService {
       }
     }
     return ran.result as UpdateSingleSchemaResult;
+  }
+
+  /**
+   * Whether this save carries values across its change, which the service's own statements do and
+   * the migration file does not (`pushCarriesValues`): translation turned on or off, its
+   * per-language Draft/Published turned on or off, a field joining or leaving translation, or a
+   * change reaching a relation's storage. Asked before the save writes anything.
+   */
+  private async carriesValues(
+    input: UpdateSingleSchemaInput,
+    before: FieldDefinition[],
+    after: FieldDefinition[],
+    renamed: { from: string; to: string } | undefined
+  ): Promise<boolean> {
+    const adapter = this.adapter;
+    // Without an adapter there is no table to change, and the service's path reports that.
+    if (!adapter) return true;
+    const [{ pushCarriesValues }, { introspectLiveSnapshot }] =
+      await Promise.all([
+        import("../../schema/builder-save/push-carries-values"),
+        import("../../schema/pipeline/diff/introspect-live"),
+      ]);
+    return pushCarriesValues({
+      oldFields: before,
+      newFields: after,
+      wasStored: input.wasLocalized,
+      isStored: input.isLocalized,
+      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
+      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
+      renamed,
+      liveTable: async () =>
+        (
+          await introspectLiveSnapshot(
+            adapter.getDrizzle(),
+            adapter.getCapabilities().dialect,
+            [input.existing.tableName]
+          )
+        ).tables[0],
+    });
+  }
+
+  /**
+   * An update whose own migration file the writer runs, in development, and records applied; then
+   * the rest of the update follows the table as the file left it (`applyUpdateDdl` past its main
+   * migration: the companion, the runtime shape, the status), and the registry row is written.
+   *
+   * A row that cannot be written after the file has applied is logged and thrown as an internal
+   * error, the file left recorded applied: the database stands as the file says, so the same save
+   * tried again plans nothing for the table and writes the row.
+   */
+  private async writeUpdateByFile(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan | null,
+    save: CollectionSave
+  ): Promise<UpdateSingleSchemaResult> {
+    const { writeEntitySave } = await loadEntitySave();
+    // `apply` does not run where the writer runs the file itself.
+    await writeEntitySave(deps, save, () => Promise.resolve(undefined), {
+      runsFile: true,
+    });
+    const outcome = plan
+      ? await this.applyUpdateDdl(input, plan, false, "file")
+      : undefined;
+    try {
+      return await this.recordUpdate(input, outcome);
+    } catch (error) {
+      this.logger.error(
+        `[Singles] The update of "${input.slug}" ran its migration file, but its registry row could not be written: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { slug: input.slug, step: "registry-row-after-file" },
+      });
+    }
   }
 
   /**
@@ -2284,7 +2369,12 @@ export class SingleMetadataService {
      * Leave the Required and Unique settings of fields leaving translation to the caller, which
      * applies them as a step of their own (`applyLeavingStep`): the fields are bound without them.
      */
-    deferLeaving = false
+    deferLeaving = false,
+    /**
+     * Where the main table's change came from: the plan's own statements, or the save's migration
+     * file, which the writer has already run, so only what follows it is done here.
+     */
+    main: "statements" | "file" = "statements"
   ): Promise<{
     status: SingleMigrationStatus | undefined;
     /** The leaving settings refused, so the fields are recorded without them; else empty. */
@@ -2320,13 +2410,15 @@ export class SingleMetadataService {
 
     // Before the try below, which records what it catches: a refusal here has changed nothing
     // the registry should describe, so it fails the save.
-    await this.applyMainMigrationOrUndo(
-      adapter,
-      input.slug,
-      tableName,
-      plan,
-      undoRename
-    );
+    if (main === "statements") {
+      await this.applyMainMigrationOrUndo(
+        adapter,
+        input.slug,
+        tableName,
+        plan,
+        undoRename
+      );
+    }
 
     try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
