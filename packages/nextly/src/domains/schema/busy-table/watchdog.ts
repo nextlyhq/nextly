@@ -26,7 +26,7 @@ import { sessionNumberOf } from "./ended-waiting";
 import type { TryWatchdog } from "./types";
 import {
   openWatchConnection,
-  poolCanSpareOne,
+  poolHasFreeConnection,
   type WatchConnection,
 } from "./watch-connection";
 
@@ -111,6 +111,8 @@ export interface PreparedTryWatchdog extends TryWatchdog {
    * statement it saw waiting is still the one running, so it can never end a later one.
    */
   moveTo(statement: number): void;
+  /** How long the session has been seen waiting for locks so far, in milliseconds. */
+  waited(): number;
 }
 
 /**
@@ -142,6 +144,7 @@ export function prepareTryWatchdog(
       watch: () => undefined,
       idle: () => Promise.resolve(),
       moveTo: () => undefined,
+      waited: () => 0,
     };
   }
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
@@ -166,9 +169,6 @@ export function prepareTryWatchdog(
   // closed by `stop`. Until it opens, nothing is asked.
   let asking: Promise<WatchConnection> | undefined;
   let closing: Promise<void> | undefined;
-  // Whether the holder read, which goes through the adapter's pool, can be answered while the
-  // watched session holds a connection of that pool.
-  const holderReadable = poolCanSpareOne(adapter, dialect);
 
   /**
    * Whether the session is waiting for a lock now. On MySQL a wait the process list does not word
@@ -201,9 +201,10 @@ export function prepareTryWatchdog(
     seen: number
   ): Promise<void> {
     const stillThere = () => !stopped && current === seen;
-    // What holds the table is read before the cancel, where the pool it is read through can
-    // answer now; a failed read leaves the cancel to go on.
-    if (holderReadable) {
+    // What holds the table is read before the cancel, where the pool it is read through has a
+    // connection free now (`poolHasFreeConnection`), so the read cannot queue behind other work
+    // and hold the cancel back; a failed read leaves the cancel to go on.
+    if (poolHasFreeConnection(adapter, dialect)) {
       await options.beforeCancel?.(String(target)).catch(() => undefined);
     }
     if (!stillThere()) return;
@@ -230,6 +231,8 @@ export function prepareTryWatchdog(
     const seen = current;
     const waiting = await waitingNow(connection, target);
     const now = performance.now();
+    // The runner moved on while this asked: what it saw was the earlier statement's, not this one's.
+    if (current !== seen) return;
     if (!waiting) {
       lastSeenWaitingAt = undefined;
       return;
@@ -275,7 +278,14 @@ export function prepareTryWatchdog(
     idle: () => cancelling,
     moveTo(statement) {
       current = statement;
+      // The earlier statement, last seen waiting, waited until it ended now: that time counts. A
+      // sighting of it is not this one's, so the next sighting starts counting afresh.
+      if (lastSeenWaitingAt !== undefined) {
+        waitedMs += performance.now() - lastSeenWaitingAt;
+      }
+      lastSeenWaitingAt = undefined;
     },
+    waited: () => waitedMs,
     async stop() {
       stopped = true;
       given(undefined);

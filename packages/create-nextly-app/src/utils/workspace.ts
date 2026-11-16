@@ -23,10 +23,24 @@ const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
 export async function lockfileManager(
   dir: string
 ): Promise<PackageManager | undefined> {
+  return (await lockfileManagers(dir))[0];
+}
+
+/**
+ * Every manager a lockfile in `dir` names, in the order above: more than one
+ * when a stale lockfile was left beside the one in use.
+ */
+export async function lockfileManagers(dir: string): Promise<PackageManager[]> {
+  const found: PackageManager[] = [];
   for (const [lockfile, manager] of LOCKFILES) {
-    if (await fs.pathExists(path.join(dir, lockfile))) return manager;
+    if (
+      !found.includes(manager) &&
+      (await fs.pathExists(path.join(dir, lockfile)))
+    ) {
+      found.push(manager);
+    }
   }
-  return undefined;
+  return found;
 }
 
 export interface WorkspaceRoot {
