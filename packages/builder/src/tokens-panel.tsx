@@ -889,7 +889,7 @@ const ADDS: Readonly<
     ],
   },
   fonts: {
-    label: "Add a font or weight",
+    label: "Add font or weight variable",
     empty: "No font or weight variables yet.",
     options: [
       ["fontFamily", "Font"],

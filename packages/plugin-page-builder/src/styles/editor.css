@@ -820,8 +820,9 @@
   font-variant-numeric: tabular-nums;
   color: var(--nx-muted-foreground);
 }
-/* A group another panel fills (the site's fonts under Type) sits in the
-   tab's flow as the variable groups do. */
-.nx-pb-design__group {
-  padding: 0 0.75rem;
+/* A group another panel fills (the site's fonts under Type): its heading
+   lines up with the variable groups' headings, and the panel inside keeps
+   its own padding, so its rows take the same width as theirs. */
+.nx-pb-design__group > .nx-vars__group-head {
+  padding: 0.5rem 0.75rem 0;
 }
