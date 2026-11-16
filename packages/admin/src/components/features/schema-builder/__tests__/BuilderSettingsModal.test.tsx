@@ -423,7 +423,7 @@ describe("BuilderSettingsModal — the address", () => {
       "field group",
       componentConfig,
       3,
-      "Fixed once saved: the fields that use this field group refer to it by this address. Used in 3 places.",
+      "Fixed once saved: the fields that use this field group refer to it by this address. Used in 3 places you can read.",
     ],
   ] as const)(
     "a saved collection's, Single's and field group's address is fixed (%s)",

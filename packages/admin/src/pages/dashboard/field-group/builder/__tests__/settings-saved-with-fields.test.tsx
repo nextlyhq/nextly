@@ -100,13 +100,19 @@ beforeEach(() => {
                   entitySlug: "pages",
                   fieldPath: "hero",
                 },
+                // A second placement in the same collection: still one place.
+                {
+                  entityType: "collection",
+                  entitySlug: "pages",
+                  fieldPath: "footer",
+                },
                 {
                   entityType: "single",
                   entitySlug: "home",
                   fieldPath: "banner",
                 },
               ],
-              meta: { total: 2 },
+              meta: { total: 3 },
             },
             200
           )
@@ -251,7 +257,7 @@ describe("a saved field group's address", () => {
     expect(address).toHaveAttribute("readonly");
     await waitFor(() =>
       expect(address).toHaveAccessibleDescription(
-        "Fixed once saved: the fields that use this field group refer to it by this address. Used in 2 places."
+        "Fixed once saved: the fields that use this field group refer to it by this address. Used in 2 places you can read."
       )
     );
   });
