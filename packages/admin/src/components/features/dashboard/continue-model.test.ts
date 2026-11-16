@@ -4,7 +4,14 @@
  * pinned, which tab the settings name, and the empty text per tab.
  */
 import type { CoreListWidgetData } from "nextly/core-widget-data";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
+import { documentAddress } from "@admin/lib/navigation/document-address";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 
 import {
   CHANGED,
@@ -13,6 +20,14 @@ import {
   continueRows,
   continueTab,
 } from "./continue-model";
+
+/** The shared rule with no collection known: every row opens its form. */
+const formAddress: DocumentAddressOf = (document, options = {}) =>
+  documentAddress(document, undefined, {
+    canUpdate: true,
+    defaultLocale: "en",
+    ...options,
+  });
 
 /** One row of the card's data, as JSON carries it. */
 type Row = CoreListWidgetData["items"][number];
@@ -41,7 +56,7 @@ function row(overrides: Row = {}): Row {
 
 describe("a Continue row", () => {
   it("names its document, links to it in the language it was saved in, and says who saved it", () => {
-    expect(continueRowFrom(row({ locale: "fr" }))).toEqual({
+    expect(continueRowFrom(row({ locale: "fr" }), formAddress)).toEqual({
       key: "save-1",
       title: "Doc 1",
       collection: "posts",
@@ -68,7 +83,8 @@ describe("a Continue row", () => {
         entryId: "",
         userId: null,
         pinned: true,
-      })
+      }),
+      formAddress
     );
     expect(single?.href).toBe("/admin/singles/home");
     expect(single?.collection).toBeUndefined();
@@ -81,31 +97,40 @@ describe("a Continue row", () => {
   });
 
   it("labels a held draft as Changed before its status", () => {
-    expect(continueRowFrom(row({ pendingChanges: true }))?.status).toBe(
-      CHANGED
-    );
-    expect(continueRowFrom(row({ status: "scheduled" }))?.status).toBe(
-      "Scheduled"
-    );
+    expect(
+      continueRowFrom(row({ pendingChanges: true }), formAddress)?.status
+    ).toBe(CHANGED);
+    expect(
+      continueRowFrom(row({ status: "scheduled" }), formAddress)?.status
+    ).toBe("Scheduled");
   });
 
   it("is left out without a title, never named by its id", () => {
     // 🔴 The source titles every document the reader may read; a row without
     // one is not drawn under a stand-in.
-    expect(continueRowFrom(row({ entryTitle: null }))).toBeUndefined();
-    expect(continueRowFrom(row({ entryTitle: "" }))).toBeUndefined();
+    expect(
+      continueRowFrom(row({ entryTitle: null }), formAddress)
+    ).toBeUndefined();
+    expect(
+      continueRowFrom(row({ entryTitle: "" }), formAddress)
+    ).toBeUndefined();
     // An entry's row without its id cannot link, and is left out too.
-    expect(continueRowFrom(row({ entryId: null }))).toBeUndefined();
+    expect(
+      continueRowFrom(row({ entryId: null }), formAddress)
+    ).toBeUndefined();
   });
 
   it("keeps the answer's order, leaving out what it cannot read", () => {
-    const rows = continueRows({
-      items: [
-        row({ id: "pin-a", entryTitle: "A", pinned: true }),
-        row({ id: "broken", entryTitle: null }),
-        row({ id: "save-b", entryTitle: "B" }),
-      ],
-    });
+    const rows = continueRows(
+      {
+        items: [
+          row({ id: "pin-a", entryTitle: "A", pinned: true }),
+          row({ id: "broken", entryTitle: null }),
+          row({ id: "save-b", entryTitle: "B" }),
+        ],
+      },
+      formAddress
+    );
     expect(rows.map(each => each.key)).toEqual(["pin-a", "save-b"]);
   });
 });
@@ -128,5 +153,42 @@ describe("the card's tab and empty text", () => {
     expect(
       continueEmpty("team", { ...empty, window: { days: 90 } }).title
     ).toBe("No edits by others in the last 90 days");
+  });
+});
+
+describe("where a Continue row opens", () => {
+  afterEach(() => clearDocumentViews());
+
+  // The shared rule over one collection whose main field is a view's field
+  // type, as the card's hook reads it from the admin's list of collections.
+  const pageAddress: DocumentAddressOf = (document, options = {}) =>
+    documentAddress(
+      document,
+      {
+        fields: [
+          { name: "title", type: "text" },
+          { name: "content", type: "blocks" },
+        ],
+      },
+      { canUpdate: true, defaultLocale: "en", ...options }
+    );
+
+  it("opens where every other link to the document opens", () => {
+    registerDocumentViews([
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder#View",
+        opensFirst: "mainField",
+      },
+    ]);
+    expect(
+      continueRowFrom(row({ collection: "pages" }), pageAddress)?.href
+    ).toBe("/admin/collections/pages/doc-1/builder?field=content");
+    // Saved in another language: the form, in that language.
+    expect(
+      continueRowFrom(row({ collection: "pages", locale: "fr" }), pageAddress)
+        ?.href
+    ).toBe("/admin/collections/pages/doc-1?locale=fr");
   });
 });
