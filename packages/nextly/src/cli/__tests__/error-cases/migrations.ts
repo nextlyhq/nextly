@@ -50,6 +50,7 @@ import {
   resolveModeRequired,
   schemaChangeWithoutMigration,
   settingsChangeWithoutMigration,
+  databaseBehindMigrations,
   snapshotWithoutMigration,
 } from "../../errors/areas/migrations";
 import { requireConsented } from "../../utils/data-loss-consent";
@@ -511,6 +512,11 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  DATABASE_BEHIND_MIGRATIONS: () =>
+    databaseBehindMigrations(2, [
+      "- table dc_posts (created by 20261116_120000_000_create_posts)",
+      "- column dc_tags.label (created by 20261116_120000_001_add_label)",
+    ]),
   // The runner's own check, run for real on a file that holds a statement no transaction can.
   REFUSED_STATEMENT: () => {
     try {
