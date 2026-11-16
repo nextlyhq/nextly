@@ -2064,8 +2064,8 @@ function pushReasonOf(args: {
   const ask = async (): Promise<PushReason> => {
     if (args.wasLocalized || args.isLocalized) return "translated";
     const reaches = await reachesRelationStorage({
-      before: args.before as FieldDefinition[],
-      after: args.after as FieldDefinition[],
+      before: args.before,
+      after: args.after,
       liveTable: async () =>
         (
           await introspectLiveSnapshot(
