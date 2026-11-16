@@ -2,8 +2,8 @@
 // write: a save that carries values across its change keeps the push.
 import { describe, expect, it, vi } from "vitest";
 
-import type { TableSpec } from "../../../domains/schema/pipeline/diff/types";
-import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { TableSpec } from "../../pipeline/diff/types";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { pushCarriesValues } from "../push-carries-values";
 
 const field = (name: string, extra: Record<string, unknown> = {}) =>
