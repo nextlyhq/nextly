@@ -13,12 +13,12 @@
  *
  * Three functions in `validation-node` carry `fallow-ignore-next-line
  * complexity`: `validateClasses`, `validateStyleEnvelope` and
- * `validateVisibility`. They moved there byte for byte when this module was
- * split into parts, and their scores were inherited, so ungated, while they
- * sat here. The audit calls them new only because their file is new, and the
- * health baseline is generated from `main`, never from a branch. Suppressed
- * inline, one by one, as `ops.ts` does for its relocated functions: a new
- * complex function added to any part still gets caught.
+ * `validateVisibility`. They moved there unchanged, apart from an `export`,
+ * when this module was split into parts, and their scores were inherited, so
+ * ungated, while they sat here. The audit calls them new only because their
+ * file is new, and the health baseline is generated from `main`, never from a
+ * branch. Suppressed inline, one by one, as `ops.ts` does for its relocated
+ * functions: a new complex function added to any part still gets caught.
  */
 import { bindingSchemaIssues } from "./binding-schema-issues";
 import type { BlockDocument } from "./document";

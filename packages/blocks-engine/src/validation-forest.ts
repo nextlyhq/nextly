@@ -1,7 +1,8 @@
 /**
  * Reading a document's envelope and walking its forest: the root reading,
  * the queue every node is checked from, where a block may sit (nesting,
- * placement and locked slots), and the breakpoint ids a document uses.
+ * placement and locked slots), and the breakpoint ids the site's settings
+ * define.
  *
  * @module validation-forest
  */
