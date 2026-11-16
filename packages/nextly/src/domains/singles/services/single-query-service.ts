@@ -151,6 +151,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
+import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
 import {
   ALL_LOCALES_KEY,
   detachedCopy,
@@ -1614,7 +1615,14 @@ export class SingleQueryService extends BaseService {
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.
       if (options.translationStatus) {
-        await this.attachTranslationOverview(slug, singleMeta, doc);
+        // Told the read's status scope, so a language this read hides (a
+        // draft on a published read) is hidden from the overview too.
+        await this.attachTranslationOverview(
+          slug,
+          singleMeta,
+          doc,
+          statusFilter?.values
+        );
       }
 
       // Redact password hashes and the columns that never leave the server
@@ -2102,10 +2110,11 @@ export class SingleQueryService extends BaseService {
   private async attachTranslationOverview(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    statusValues?: readonly string[]
   ): Promise<void> {
     try {
-      await this.populateTranslationMeta(slug, singleMeta, doc);
+      await this.populateTranslationMeta(slug, singleMeta, doc, statusValues);
     } catch (error) {
       // Same reasoning as the overlay above: a failed overview read reaches here, and is
       // normalized rather than handed to the wire as the driver wrote it.
@@ -2124,7 +2133,9 @@ export class SingleQueryService extends BaseService {
   private async populateTranslationMeta(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    doc: Record<string, unknown>
+    doc: Record<string, unknown>,
+    /** The read's status scope: a language outside it is reported as the read sees it. */
+    statusValues?: readonly string[]
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -2155,12 +2166,29 @@ export class SingleQueryService extends BaseService {
       this.adapter,
       companion
     );
+    // Where provenance is recorded (the table is there), each language is
+    // judged by its recorded values, as on a collection.
+    const provenance = (await translationProvenancePresent(
+      this.adapter,
+      this.logger
+    ))
+      ? {
+          scopeKind: "single" as const,
+          scopeSlug: slug,
+          dialect: this.adapter.dialect,
+        }
+      : undefined;
     await populateTranslationStatus({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
       pendingChangeLocales,
+      provenance,
       localizedFields: companion.localizedFields,
       rows: [doc],
+      // Only on a Single with per-language status and a scoped read, as on a
+      // collection: a published read drops draft translations.
+      statusValues:
+        companion.hasStatus && statusValues ? statusValues : undefined,
       locales: this.localization.locales.map(l => l.code),
       defaultLocale: this.localization.defaultLocale,
       hasStatus: companion.hasStatus,
