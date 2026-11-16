@@ -15,7 +15,7 @@ import type { StyleValue } from "@nextlyhq/blocks-engine";
 import { detectApplePlatform } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { keyHint } from "./key-hint";
+import { spokenKeyHint } from "./key-hint";
 import type { SideOrientation } from "./side-orientation";
 import type { InspectedStyleProperty } from "./style-inspector";
 import { sideBoxFor } from "./style-sides";
@@ -121,8 +121,8 @@ function SideResetKeys({
   fieldId: string;
 }): React.JSX.Element | null {
   /*
-   * The key as this keyboard names it (Option on Apple, Alt elsewhere),
-   * spelled by the editor's one key-hint helper. Resolved after mounting:
+   * The key in words as this keyboard names it (Option+Delete on Apple,
+   * Alt+Backspace elsewhere): spoken text, where glyphs are skipped. Resolved after mounting:
    * a server render has no platform to ask, and a hint naming the wrong key
    * is worse than none for the moment before it is known.
    */
@@ -131,7 +131,7 @@ function SideResetKeys({
     setApple(detectApplePlatform());
   }, []);
   if (side === undefined) return null;
-  const keys = apple === null ? null : keyHint(RESET_KEYS, apple);
+  const keys = apple === null ? null : spokenKeyHint(RESET_KEYS, apple);
   return (
     <span id={sideKeysId(fieldId)} hidden>
       {keys === null ? null : `${keys} resets this side.`}

@@ -38,7 +38,6 @@ import { applyOps, type BuilderOp } from "./ops";
 import { NoticeSinkProvider } from "./builder-notices";
 import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
-import { keyHint } from "./key-hint";
 import {
   breakpointLabel,
   describedWithUnit,
@@ -5499,7 +5498,7 @@ describe("a per-side property is drawn as a box", () => {
     expect(top.getAttribute("aria-invalid")).toBeNull();
   });
 
-  it("names the key Option on a Mac, through the editor's key hints", () => {
+  it("names the key Option+Delete on a Mac, in words", () => {
     const original = Object.getOwnPropertyDescriptor(
       window.navigator,
       "platform"
@@ -5512,11 +5511,9 @@ describe("a per-side property is drawn as a box", () => {
       const { box } = mountSpacingBox(LTR);
       const top = within(box as HTMLElement).getByLabelText("Margin top");
 
-      // The same spelling the Help panel and the layer menus show.
-      expect(descriptionOf(top)).toBe(
-        `${keyHint("alt+Backspace", true)} resets this side.`
-      );
-      expect(descriptionOf(top)).toContain("⌥");
+      // In words, as a Mac keyboard labels the keys: a spoken description
+      // where glyphs like ⌥ would be skipped.
+      expect(descriptionOf(top)).toBe("Option+Delete resets this side.");
     } finally {
       if (original !== undefined) {
         Object.defineProperty(window.navigator, "platform", original);
