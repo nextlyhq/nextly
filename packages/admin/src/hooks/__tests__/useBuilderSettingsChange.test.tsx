@@ -134,4 +134,41 @@ describe("an unsaved entity's address move", () => {
     );
     expect(replaced).toHaveBeenCalledWith("/admin/builder/collections/items");
   });
+
+  it("gives up on a final check that never answers, after the live check's wait, and takes the next change", async () => {
+    vi.useFakeTimers();
+    try {
+      checkAgain.mockImplementation(() => new Promise<string | null>(() => {}));
+      const { result, setSettings } = setup();
+      act(() =>
+        result.current.onSettingsChange({
+          ...SETTINGS,
+          slug: "items",
+          description: "Shop items",
+        })
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(8000);
+      });
+      expect(toastError).toHaveBeenCalledWith(
+        "The new address could not be checked, so it was not moved. The other settings are kept."
+      );
+      expect(unsavedEntity("collection", "items")).toBeUndefined();
+      expect(setSettings).toHaveBeenLastCalledWith({
+        ...SETTINGS,
+        description: "Shop items",
+      });
+
+      // The move is over, so a later change is taken, not refused as still moving.
+      act(() =>
+        result.current.onSettingsChange({ ...SETTINGS, description: "Later" })
+      );
+      expect(setSettings).toHaveBeenLastCalledWith({
+        ...SETTINGS,
+        description: "Later",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

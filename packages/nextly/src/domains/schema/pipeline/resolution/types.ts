@@ -9,6 +9,14 @@
 // resolutions can reference an event across HTTP/SSE boundaries without
 // relying on object identity.
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import type { KeyedBy } from "../../value-conversion/read-values";
+import type {
+  ColumnConversion,
+  ConversionJudgement,
+  RowKey,
+} from "../../value-conversion/types";
 import type { ClassificationLevel } from "../pushschema-pipeline-interfaces";
 
 export type ResolutionKind =
@@ -65,6 +73,34 @@ export interface TypeChangeEvent extends BaseEvent {
   // emitted events for diagnostic logs and possible future "show widening summary" UX.
   isWidening: boolean;
   perDialectWarning: { pg: string; mysql: string; sqlite: string };
+  /** The database being changed: the prompt shows its line of `perDialectWarning`. */
+  dialect?: SupportedDialect;
+  /**
+   * How many rows hold a value, for a pair of types the conversion rule has no conversion for,
+   * which is asked about at a terminal as before, with what it would touch.
+   */
+  rowsHoldingValue?: number;
+  /**
+   * A conversion the repair command's rule judged lossy (`value-conversion/judge-column`): its
+   * reasons with their rows, how its table keys them, and every row a consent would clear.
+   */
+  lossy?: {
+    judgement: ConversionJudgement;
+    keyedBy: KeyedBy;
+    cleared: RowKey[];
+    /** The conversion judged, which the apply judges again before it clears anything. */
+    conversion: ColumnConversion;
+  };
+}
+
+/** A type change the conversion rule judged safe: it goes ahead without a question. */
+export interface SafeConversion {
+  tableName: string;
+  columnName: string;
+  fromType: string;
+  toType: string;
+  /** How many rows the column holds, every one of which keeps its value. */
+  rowsChecked: number;
 }
 
 // Emitted for every drop_column op the diff produces (one event per
@@ -87,6 +123,8 @@ export type ClassifierEvent =
 export interface ClassificationResult {
   level: ClassificationLevel;
   events: ClassifierEvent[];
+  /** The type changes judged safe, which the apply lists as it makes them. */
+  safeConversions?: SafeConversion[];
 }
 
 // Whitelisted set of kinds, used by parseEventId to validate untrusted input

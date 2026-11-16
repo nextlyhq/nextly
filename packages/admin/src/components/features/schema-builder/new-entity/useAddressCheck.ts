@@ -33,9 +33,10 @@ const CHECK_DELAY_MS = 250;
 /**
  * How long an ask may go unanswered before the address is left to the create,
  * which checks it again; a request that never settles would otherwise hold
- * Create unavailable.
+ * Create unavailable. An unsaved entity's address move waits as long for its
+ * final check.
  */
-const CHECK_TIMEOUT_MS = 8000;
+export const CHECK_TIMEOUT_MS = 8000;
 
 const NO_PENDING_CREATES: readonly PendingAddress[] = [];
 

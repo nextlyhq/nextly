@@ -2087,7 +2087,8 @@ export class CollectionRelationshipService extends BaseService {
       rows,
       statusFilter,
       access,
-      translations
+      translations,
+      revealed
     );
     // Redaction runs before any caller derives a label from a row: a label
     // copies a field's value under another key, so one taken from an unredacted
@@ -2162,7 +2163,10 @@ export class CollectionRelationshipService extends BaseService {
     statusFilter: StatusFilter | null,
     access: RelatedRowAccess,
     // The translations the rows were read with, when they came in the same statement.
-    translations: TargetTranslations | null = null
+    translations: TargetTranslations | null = null,
+    // The rows a due release reveals: their languages' rows are read whatever
+    // their status, as the release will publish them (`PopulateCompanionArgs.revealed`).
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     const localeChain = targetLocaleChain(access);
     if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
@@ -2181,6 +2185,7 @@ export class CollectionRelationshipService extends BaseService {
         localeChain: [...translations.localeChain],
         statusValues:
           companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+        revealed,
       });
       return;
     }
@@ -2194,6 +2199,7 @@ export class CollectionRelationshipService extends BaseService {
       localeChain: [...localeChain],
       statusValues:
         companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      revealed,
     });
   }
 

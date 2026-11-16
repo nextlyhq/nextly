@@ -10,10 +10,7 @@
  * the host's: the field is placed with `insertField` at the position the
  * picker was opened for, and the page saves it with every other edit.
  */
-import {
-  describeFieldTypes,
-  MOST_USED_FIELD_TYPES,
-} from "nextly/field-catalog";
+import { MOST_USED_FIELD_TYPES } from "nextly/field-catalog";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
 import { useCallback, useMemo, useState } from "react";
@@ -43,8 +40,8 @@ import {
   type FieldInsertPosition,
 } from "@admin/lib/builder/insert-field";
 import { namingLevelFor } from "@admin/lib/builder/move-rule";
+import { BUILDER_FIELD_TYPES } from "@admin/lib/builder/offered-field-types";
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
-import { UI_SCHEMA_FIELD_TYPES } from "@admin/lib/builder/ui-schema-mode";
 import {
   addUnsavedEntity,
   unsavedFieldGroupFrom,
@@ -59,11 +56,6 @@ import { NewEntityDialog } from "./new-entity/NewEntityDialog";
 import type { BuilderField } from "./types";
 
 /** The Builder's types: the catalog rows a ui-schema can store, described once. */
-const BUILDER_TYPES = describeFieldTypes<string>(
-  FIELD_TYPES_CATALOG.filter(entry =>
-    (UI_SCHEMA_FIELD_TYPES as readonly string[]).includes(entry.type)
-  )
-);
 
 /** The type that embeds a field group, as the catalog spells it. */
 const FIELD_GROUP_TYPE = FIELD_TYPES_CATALOG.find(entry =>
@@ -254,7 +246,8 @@ export function BuilderFieldPicker({
         placement={parent ? `to ${parent.label || parent.name}` : undefined}
         config={{
           surface: "entries",
-          types: BUILDER_TYPES,
+          // The Builder's own types, the list a template's are checked against.
+          types: BUILDER_FIELD_TYPES,
           exclude: pickerExcludedTypes(config),
           mostUsed: MOST_USED_FIELD_TYPES,
           // A label with nothing the name rule keeps (a label in another
