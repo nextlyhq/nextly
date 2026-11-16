@@ -47,20 +47,43 @@ function topLevelImports(file: string): string[] {
   );
 }
 
+/** `plugin.ts` and the modules it composes the plugin from, relative to `src`. */
+const PLUGIN_FILES = [
+  "plugin.ts",
+  "plugin-definition/admin.ts",
+  "plugin-definition/bindings.ts",
+  "plugin-definition/breakpoints.ts",
+  "plugin-definition/collections.ts",
+  "plugin-definition/components.ts",
+  "plugin-definition/install-context.ts",
+  "plugin-definition/layouts.ts",
+  "plugin-definition/options.ts",
+  "plugin-definition/pages.ts",
+  "plugin-definition/registry-reads.ts",
+  "plugin-definition/services.ts",
+  "plugin-definition/site-code.ts",
+  "plugin-definition/site-style.ts",
+  "plugin-definition/state.ts",
+  "plugin-definition/templates.ts",
+  "plugin-definition/usage.ts",
+];
+
 describe("what the package root pulls into a browser bundle", () => {
-  it("does not import nextly/runtime at module scope from plugin.ts", () => {
-    expect(topLevelImports("plugin.ts")).not.toContain("nextly/runtime");
+  it("does not import nextly/runtime at module scope from plugin.ts or plugin-definition/", () => {
+    for (const file of PLUGIN_FILES) {
+      expect(topLevelImports(file)).not.toContain("nextly/runtime");
+    }
   });
 
-  it("CONTROL: the reader finds the module-scope imports plugin.ts does have", () => {
+  it("CONTROL: the reader finds the module-scope imports plugin-definition/components.ts does have", () => {
     // Without this, a regex that matched nothing at all would satisfy the
     // assertion above for ever — and an import guard that cannot see any import
     // is the one failure mode that looks exactly like compliance.
-    const found = topLevelImports("plugin.ts");
+    const found = topLevelImports("plugin-definition/components.ts");
 
     expect(found).toContain("@nextlyhq/blocks-engine");
     expect(found).toContain("@nextlyhq/plugin-sdk");
-    expect(found).toContain("./library-route");
+    expect(found).toContain("../library-route");
     expect(found.length).toBeGreaterThan(10);
   });
 
@@ -69,7 +92,7 @@ describe("what the package root pulls into a browser bundle", () => {
     // `plugin.ts`, the import route and the blocks field at module scope, so
     // each loads it with `await import(...)` and imports no `node:` module.
     for (const file of [
-      "plugin.ts",
+      ...PLUGIN_FILES,
       "transfer/import-route.ts",
       "fields/blocksField.ts",
     ]) {
