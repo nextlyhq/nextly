@@ -1,0 +1,359 @@
+/**
+ * Every language's values beside a read (`translations=all`, `_allLocales`)
+ * stay behind the same guards as the document: the read rule judges each
+ * language's values, no hook is handed a value a rule withholds, and no
+ * password leaves in any language.
+ *
+ * @module domains/i18n/__tests__/every-language-values-stay-guarded.integration.test
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import {
+  defineCollection,
+  defineSingle,
+  group,
+  password,
+  text,
+} from "../../../config";
+import { createDynamicHandlers } from "../../../routeHandler";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+
+const FILTERED = "evg_filtered";
+const ECHOED = "evg_echoed";
+const GATED = "evg_gated";
+const LANGUAGE_GATED = "evg_language_gated";
+const LANGUAGES_GATED = "evg_languages_gated";
+const SITE = "evg_site";
+
+/** What collection-level read hooks were shown beside each row. */
+const besideSeen: string[] = [];
+
+/** A shared field whose read hook answers with every language's values it was shown. */
+const echo = () =>
+  text({
+    name: "echo",
+    localized: false,
+    hooks: {
+      afterRead: [
+        ({ data }: { data?: Record<string, unknown> }) =>
+          JSON.stringify(data?._allLocales ?? null),
+      ],
+    },
+  });
+
+/** A translated group whose read hook puts a password value back. */
+const vault = () =>
+  group({
+    name: "vault",
+    localized: true,
+    hooks: {
+      afterRead: [
+        ({ value }: { value: unknown }) =>
+          value !== null && typeof value === "object"
+            ? { ...(value as Record<string, unknown>), pin: "restored-pin" }
+            : value,
+      ],
+    },
+    fields: [text({ name: "label" }), password({ name: "pin" })],
+  });
+
+let current: TestNextly | undefined;
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+  besideSeen.length = 0;
+});
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    seedPublic: true,
+    collections: [
+      defineCollection({
+        slug: FILTERED,
+        localized: true,
+        status: true,
+        // Readable where the title is "Public": a filter, judged in a language.
+        access: {
+          read: () => ({ title: { equals: "Public" } }) as unknown as boolean,
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: LANGUAGE_GATED,
+        localized: true,
+        status: true,
+        // Readable in any language but Spanish, judged on the one language.
+        access: {
+          read: ({ locale }: { locale?: string }) => locale !== "es",
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: ECHOED,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        hooks: {
+          afterRead: [
+            ({ data }: { data?: Record<string, unknown> }) => {
+              besideSeen.push(JSON.stringify(data?._allLocales ?? null));
+            },
+          ],
+        },
+        fields: [
+          text({ name: "title" }),
+          // Translated, and withheld from every reader by its read rule.
+          text({ name: "note", access: { read: () => false } }),
+          echo(),
+        ],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: GATED,
+        localized: true,
+        status: true,
+        // Readable in any language but Spanish.
+        access: {
+          read: ({ locale }: { locale?: string }) => locale !== "es",
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineSingle({
+        slug: LANGUAGES_GATED,
+        localized: true,
+        status: true,
+        // Refuses a read that involves Spanish at all.
+        access: {
+          read: ({ locales }: { locales?: readonly string[] }) =>
+            !(locales ?? []).includes("es"),
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineSingle({
+        slug: SITE,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "secret", access: { read: () => false } }),
+          echo(),
+          vault(),
+        ],
+      }),
+    ],
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+  });
+  return current;
+}
+
+async function restGet(
+  path: string[],
+  query: string
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await createDynamicHandlers().GET(
+    new Request(`http://localhost/api/${path.join("/")}${query}`, {
+      headers: { origin: "http://localhost" },
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+  };
+}
+
+/** Writes and publishes an entry in English, then in Spanish. */
+async function entryInBoth(
+  t: TestNextly,
+  collection: string,
+  en: Record<string, unknown>,
+  es: Record<string, unknown>
+): Promise<string> {
+  const created = await t.nextly.create({
+    collection,
+    locale: "en",
+    data: { ...en, status: "published" },
+  });
+  const id = String(created.item.id);
+  await t.nextly.update({
+    collection,
+    id,
+    locale: "es",
+    data: { ...es, status: "published", _overwrite: true },
+  });
+  return id;
+}
+
+/** Writes and publishes a Single in English, then in Spanish. */
+async function singleInBoth(
+  t: TestNextly,
+  slug: string,
+  en: Record<string, unknown>,
+  es: Record<string, unknown>
+): Promise<void> {
+  const singles = t.getService("singleEntryService") as unknown as {
+    update(
+      slug: string,
+      data: Record<string, unknown>,
+      options: Record<string, unknown>
+    ): Promise<{ success: boolean }>;
+  };
+  for (const [locale, data] of [
+    ["en", en],
+    ["es", es],
+  ] as const) {
+    const saved = await singles.update(
+      slug,
+      { ...data, status: "published", _overwrite: true },
+      { locale, overrideAccess: true }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+  }
+}
+
+describe.each(getConfiguredTestDialects())(
+  "every language's values stay guarded (integration, %s)",
+  dialect => {
+    // A read rule answering with a filter admits a document in the language
+    // read; a language whose values the filter refuses is not shown beside it.
+    it("withholds a language's values the read rule's filter refuses", async () => {
+      const t = await boot(dialect);
+      const id = await entryInBoth(
+        t,
+        FILTERED,
+        { title: "Public" },
+        { title: "Private" }
+      );
+      // A reader the grant admits, so the filter decides what they see.
+      await userWhoMay(t, "evg-reader", "read", [FILTERED]);
+      const read = (await t.nextly.findByID({
+        collection: FILTERED,
+        id,
+        locale: "en",
+        translations: "all",
+        overrideAccess: false,
+        user: { id: "evg-reader" },
+      })) as Record<string, unknown> | null;
+      expect(read?.title).toBe("Public");
+      expect(JSON.stringify(read)).not.toContain("Private");
+    }, 90_000);
+
+    // A Single's read rule judges each language whose values a read carries.
+    it("withholds a Single's language its read rule refuses in that language", async () => {
+      const t = await boot(dialect);
+      await singleInBoth(t, GATED, { title: "Site" }, { title: "Sitio" });
+      const read = await restGet(
+        ["singles", GATED],
+        "?locale=en&translations=all"
+      );
+      expect(JSON.stringify(read.json)).not.toContain("Sitio");
+    }, 90_000);
+
+    // An entry's read rule judging the one language withholds that language.
+    it("withholds an entry's language its read rule refuses in that language", async () => {
+      const t = await boot(dialect);
+      const id = await entryInBoth(
+        t,
+        LANGUAGE_GATED,
+        { title: "Harbour" },
+        { title: "Puerto" }
+      );
+      const read = await restGet(
+        ["collections", LANGUAGE_GATED, "entries", id],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(read.json.title).toBe("Harbour");
+      expect(JSON.stringify(read.json)).not.toContain("Puerto");
+    }, 90_000);
+
+    // A Single's read rule judging every language involved refuses a read
+    // that carries one it refuses.
+    it("refuses a Single's read carrying a language its rule refuses", async () => {
+      const t = await boot(dialect);
+      await singleInBoth(
+        t,
+        LANGUAGES_GATED,
+        { title: "Site" },
+        { title: "Sitio" }
+      );
+      // English alone is readable, so the refusal below is Spanish's doing.
+      const english = await restGet(["singles", LANGUAGES_GATED], "?locale=en");
+      expect(english.status, JSON.stringify(english.json)).toBe(200);
+      const read = await restGet(
+        ["singles", LANGUAGES_GATED],
+        "?locale=en&translations=all"
+      );
+      expect(read.status).not.toBe(200);
+      expect(JSON.stringify(read.json)).not.toContain("Sitio");
+    }, 90_000);
+
+    // No hook, of the collection or of a field, is handed a language's value
+    // a field rule withholds, so none can copy it out.
+    it("hands no read hook an entry's withheld value in any language", async () => {
+      const t = await boot(dialect);
+      const id = await entryInBoth(
+        t,
+        ECHOED,
+        { title: "Harbour", note: "kept-en" },
+        { title: "Puerto", note: "kept-es" }
+      );
+      const read = await restGet(
+        ["collections", ECHOED, "entries", id],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      // Present, so the hooks ran and the read carries every language.
+      expect(read.json._allLocales).toMatchObject({
+        title: { en: "Harbour", es: "Puerto" },
+      });
+      expect(JSON.stringify(read.json)).not.toContain("kept-");
+      expect(besideSeen.join(" ")).not.toContain("kept-");
+    }, 90_000);
+
+    it("hands no read hook a Single's withheld value in any language", async () => {
+      const t = await boot(dialect);
+      await singleInBoth(
+        t,
+        SITE,
+        { title: "Site", secret: "kept-en" },
+        { title: "Sitio", secret: "kept-es" }
+      );
+      const read = await restGet(
+        ["singles", SITE],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(JSON.stringify(read.json)).toContain("Sitio");
+      expect(JSON.stringify(read.json)).not.toContain("kept-");
+    }, 90_000);
+
+    // A password a field hook puts back is cleared again in every language,
+    // as it is in the document.
+    it("clears a password a Single's read hook puts back, in every language", async () => {
+      const t = await boot(dialect);
+      await singleInBoth(
+        t,
+        SITE,
+        { title: "Site", vault: { label: "Key", pin: "en-pin-1234" } },
+        { title: "Sitio", vault: { label: "Llave", pin: "es-pin-1234" } }
+      );
+      const read = await restGet(
+        ["singles", SITE],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(JSON.stringify(read.json)).toContain("Llave");
+      expect(JSON.stringify(read.json)).not.toContain("restored-pin");
+    }, 90_000);
+  }
+);

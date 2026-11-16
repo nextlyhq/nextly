@@ -1233,6 +1233,53 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * Keep beside the Single only the languages its read gate admits in that
+   * language. A read carrying every language's values (`translations: "all"`)
+   * is admitted once for the language it reads; here the gate is asked again
+   * with each other language alone, and a language it refuses is withheld
+   * from `_allLocales`. A trusted read asks no gate, so it keeps every
+   * language.
+   */
+  private async withholdLanguagesTheGateRefuses(
+    doc: Record<string, unknown>,
+    slug: string,
+    options: GetSingleOptions
+  ): Promise<void> {
+    if (options.overrideAccess === true) return;
+    const every = valuesBesideRow(doc);
+    if (!every) return;
+    const languages = new Set<string>();
+    for (const values of Object.values(every)) {
+      if (values !== null && typeof values === "object") {
+        for (const code of Object.keys(values)) languages.add(code);
+      }
+    }
+    for (const locale of languages) {
+      const refused = await withRuleLanguage(
+        { locale, locales: [locale] },
+        () =>
+          checkSingleAccess({
+            slug,
+            operation: "read",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            routeAuthorized: options.routeAuthorized,
+            rbacAccessControlService: this.rbacAccessControlService,
+            authenticatedScope: options.authenticatedScope,
+            visitor: this.fieldRuleVisitor,
+            logger: this.logger,
+          })
+      );
+      if (!refused) continue;
+      for (const values of Object.values(every)) {
+        if (values !== null && typeof values === "object") {
+          delete (values as Record<string, unknown>)[locale];
+        }
+      }
+    }
+  }
+
+  /**
    * Field read rules on one Single document, in place: its own fields, and
    * the fields inside the field groups it holds.
    */
@@ -1240,7 +1287,9 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     slug: string,
     fields: FieldConfig[],
-    options: GetSingleOptions
+    options: GetSingleOptions,
+    /** Every language's values beside the document, kept off it until judged. */
+    besides?: unknown
   ): Promise<void> {
     // Field read access, then the field-level afterRead hooks, then field
     // read access AGAIN, sharing one redactions store: the two passes the
@@ -1324,6 +1373,7 @@ export class SingleQueryService extends BaseService {
     // the same evidence.
     const evidence = detachedCopy(doc);
     await finishFields(doc);
+    if (besides !== undefined) doc[ALL_LOCALES_KEY] = besides;
     // Every language's values beside the document go through the same
     // pipeline, asked in that language: a rule answering by value or by
     // language, and a field hook that masks a value, act on each language's
@@ -1595,6 +1645,16 @@ export class SingleQueryService extends BaseService {
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 
+      // Each language beside the Single only where its read gate admits it
+      // in that language.
+      await this.withholdLanguagesTheGateRefuses(doc, slug, options);
+      // Every language's values beside the Single are kept off it while its
+      // hooks and its own field rules run, and put back only to be judged
+      // language by language: no hook is handed a value before it is judged,
+      // so none can copy a withheld one into a field it may show.
+      const besideDoc = doc[ALL_LOCALES_KEY];
+      delete doc[ALL_LOCALES_KEY];
+
       // 8. Execute afterRead hooks
       if (
         !hooksWaived &&
@@ -1619,14 +1679,28 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      await this.judgeReadFields(doc, slug, singleMeta.fields, options);
+      await this.judgeReadFields(
+        doc,
+        slug,
+        singleMeta.fields,
+        options,
+        besideDoc
+      );
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last
       // point at which a password value or a server-only column could still be
-      // put back.
+      // put back, in the document or in any language's values beside it.
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
+        const every = valuesBesideRow(doc);
+        if (every) {
+          stripPasswordFieldValues(
+            every,
+            singleMeta.fields,
+            keyedByLanguageReach(passwordReach)
+          );
+        }
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 

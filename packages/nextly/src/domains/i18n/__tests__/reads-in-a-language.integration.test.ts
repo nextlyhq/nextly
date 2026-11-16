@@ -870,8 +870,9 @@ describe.each(getConfiguredTestDialects())(
       expect(every.blurb).toEqual({ en: "en blurb" });
     }, 90_000);
 
-    // A password inside a translated group is cleared from every language's
-    // values before any hook is shown them, as it is from the row.
+    // A password inside a translated group never reaches a read hook or the
+    // reader in any language: every language's values are kept from the
+    // hooks until judged, and cleared of passwords as the row is.
     it("clears a password in every language before a read hook sees it", async () => {
       const t = await boot(dialect);
       const created = await t.nextly.create({
@@ -906,15 +907,14 @@ describe.each(getConfiguredTestDialects())(
       expect(read._allLocales).toMatchObject({
         vault: { en: { label: "Key" }, es: { label: "Llave" } },
       });
+      // The hook ran, and was shown no language's values beside the row.
       expect(besideSeen.length).toBeGreaterThan(0);
-      for (const seen of besideSeen) {
-        const vault = (seen as Record<string, unknown> | null)?.vault as
-          | Record<string, Record<string, unknown> | null>
-          | undefined;
-        expect(vault?.en?.label).toBe("Key");
-        expect(vault?.en).not.toHaveProperty("pin");
-        expect(vault?.es).not.toHaveProperty("pin");
-      }
+      for (const seen of besideSeen) expect(seen).toBeNull();
+      const vault = (read._allLocales as Record<string, unknown>).vault as
+        | Record<string, Record<string, unknown> | null>
+        | undefined;
+      expect(vault?.en).not.toHaveProperty("pin");
+      expect(vault?.es).not.toHaveProperty("pin");
     }, 90_000);
 
     // A read carrying every language's values is judged by the read rule in

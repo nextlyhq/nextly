@@ -23,6 +23,7 @@ import {
   asc,
   desc,
   gte,
+  inArray,
   lt,
   type Column,
   type SQL,
@@ -2086,6 +2087,112 @@ export class CollectionQueryService extends BaseService {
   }
 
   /**
+   * Keep beside each row only the languages the collection's read rule admits
+   * in that language. A read carrying every language's values
+   * (`translations: "all"`) is judged once for the language it reads; here
+   * the read gate is asked again with each other language alone, and where it
+   * answers with a filter, that filter is judged on the rows in that
+   * language, one query per language for the whole page. A language the gate
+   * refuses, or whose filter a row does not match, is withheld from that
+   * row's `_allLocales`. A trusted read asks no rule, so it keeps every
+   * language.
+   */
+  private async withholdLanguagesTheReadRuleRefuses(params: {
+    collectionName: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+    rows: Record<string, unknown>[];
+    schema: DynamicSchema & { id: SQLWrapper };
+    companion: CompanionSchema | null | undefined;
+    statusFilterValues: readonly string[] | null | undefined;
+  }): Promise<void> {
+    if (params.overrideAccess === true) return;
+    const besides = params.rows
+      .map(row => ({ row, every: valuesBesideRow(row) }))
+      .filter(
+        (
+          entry
+        ): entry is {
+          row: Record<string, unknown>;
+          every: Record<string, unknown>;
+        } => entry.every !== undefined
+      );
+    const languages = new Set<string>();
+    for (const { every } of besides) {
+      for (const values of Object.values(every)) {
+        if (values !== null && typeof values === "object") {
+          for (const code of Object.keys(values)) languages.add(code);
+        }
+      }
+    }
+    const ids = besides
+      .map(({ row }) => row.id)
+      .filter(
+        (id): id is string | number =>
+          typeof id === "string" || typeof id === "number"
+      );
+    for (const locale of languages) {
+      const access = await withRuleLanguage({ locale, locales: [locale] }, () =>
+        this.filteredCollectionRead<unknown>({
+          collectionName: params.collectionName,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+        })
+      );
+      let admitted: ReadonlySet<unknown> | "every";
+      if (access.denied) {
+        admitted = new Set();
+      } else if (!access.filter || ids.length === 0) {
+        admitted = "every";
+      } else {
+        const filter = access.filter;
+        const condition = await withRuleLanguage(
+          { locale, locales: [locale] },
+          () =>
+            ruleFilterCondition(
+              {
+                collectionName: params.collectionName,
+                filter,
+                schema: params.schema,
+                localizedCtx: localizedFilterContext(
+                  params.companion ?? null,
+                  [locale],
+                  params.schema,
+                  params.statusFilterValues ?? undefined
+                ),
+              },
+              this.filterSources(),
+              this.logger
+            )
+        );
+        admitted = condition
+          ? new Set(
+              (
+                await this.db
+                  .select({ id: params.schema.id })
+                  .from(params.schema)
+                  .where(and(inArray(params.schema.id, ids), condition))
+              ).map((row: { id: unknown }) => row.id)
+            )
+          : "every";
+      }
+      if (admitted === "every") continue;
+      for (const { row, every } of besides) {
+        if (admitted.has(row.id)) continue;
+        for (const values of Object.values(every)) {
+          if (values !== null && typeof values === "object") {
+            delete (values as Record<string, unknown>)[locale];
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * In which lifecycle state this caller may see rows.
    *
    * One answer for every read path — a listing, its total, and a read by id
@@ -2921,6 +3028,18 @@ export class CollectionQueryService extends BaseService {
     // documented against the configured value.
     decodeJsonFieldValues(rows, fields, params.locale);
 
+    // Every language's values beside each row are kept off it while its hooks
+    // and its own field rules run, and put back only to be judged language by
+    // language below: no hook is handed a value before it is judged, so none
+    // can copy a withheld one into a field it may show.
+    const besideRows = new Map<unknown, unknown>();
+    for (const row of rows) {
+      if (ALL_LOCALES_KEY in row) {
+        besideRows.set(row.id, row[ALL_LOCALES_KEY]);
+        delete row[ALL_LOCALES_KEY];
+      }
+    }
+
     // (3) One state for the whole batch — see the docblock on sharing.
     const nestedState = this.relationshipService.createNestedHookState();
     const nestedAccess = {
@@ -3115,6 +3234,9 @@ export class CollectionQueryService extends BaseService {
       // on the same evidence.
       const evidence = detachedCopy(row);
       await finishFields(row);
+      if (besideRows.has(row.id)) {
+        row[ALL_LOCALES_KEY] = besideRows.get(row.id);
+      }
       // Every language's values beside the row go through the same pipeline,
       // asked in that language: a rule answering by value or by language,
       // and a field hook that masks a value, act on each language's value as
@@ -4093,6 +4215,19 @@ export class CollectionQueryService extends BaseService {
             revealed
           )
       );
+      // Each language beside a row only where the read rule admits it in
+      // that language.
+      await this.withholdLanguagesTheReadRuleRefuses({
+        collectionName: params.collectionName,
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        rows: entries,
+        schema,
+        companion,
+        statusFilterValues: statusFilter?.values ?? null,
+      });
       // A per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
@@ -5546,6 +5681,19 @@ export class CollectionQueryService extends BaseService {
             new Set<unknown>(decisions.reveal)
           )
       );
+      // Each language beside the entry only where the read rule admits it in
+      // that language.
+      await this.withholdLanguagesTheReadRuleRefuses({
+        collectionName: params.collectionName,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        rows: [entry],
+        schema,
+        companion,
+        statusFilterValues: statusFilter?.values ?? null,
+      });
       // A per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
