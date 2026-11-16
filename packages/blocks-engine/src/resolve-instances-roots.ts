@@ -36,7 +36,7 @@ import { isConditionGated } from "./visibility";
 // ---------------------------------------------------------------------------
 
 /**
- * The block types at the roots of a document as {@link resolveComponentInstances}
+ * The block types at the roots of a document as `resolveComponentInstances`
  * would compose it — read without composing it. Each type ONCE, in the order
  * it is first met.
  *

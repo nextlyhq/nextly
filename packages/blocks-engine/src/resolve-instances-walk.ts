@@ -355,6 +355,10 @@ function inlinedDefinition(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Cloning the definition under the instance's identity
+// ---------------------------------------------------------------------------
+
 /**
  * A definition's forest, re-identified under one instance.
  *

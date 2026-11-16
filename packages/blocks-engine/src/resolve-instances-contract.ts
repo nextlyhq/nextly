@@ -179,9 +179,9 @@ export interface WorkAllowance {
 
 /** How much work one resolution may do. */
 export interface ResolveComponentOptions {
-  /** Node and depth caps for the tree being built. Defaults to {@link DEFAULT_LIMITS}. */
+  /** Node and depth caps for the tree being built. Defaults to `DEFAULT_LIMITS`. */
   limits?: DocumentLimits;
-  /** Levels of component nesting allowed. Defaults to {@link MAX_COMPOSED_DEPTH}. */
+  /** Levels of component nesting allowed. Defaults to `MAX_COMPOSED_DEPTH`. */
   maxComposedDepth?: number;
   /**
    * An allowance charged for every definition entry this resolution clones or

@@ -191,8 +191,9 @@ export function surveyHost(
     if (node.type === COMPONENT_INSTANCE_TYPE) hasInstance = true;
     // A stored node wearing this pass's provenance. Noted HERE because the walk
     // is already happening: without it the composition-free fast path in
-    // `resolveComponentInstances` returns the document untouched, which is exactly the document where a
-    // false claim survives — a page with no components at all.
+    // `resolveComponentInstances` returns the document untouched, which is
+    // exactly the document where a false claim survives — a page with no
+    // components at all.
     if ("instanceOf" in node) hasStoredProvenance = true;
     return "descend";
   });

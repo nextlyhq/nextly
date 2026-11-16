@@ -25,42 +25,6 @@ import type { RetiredExposures } from "./retired-exposures";
 import { boundedOwnKeys, defineEntry, ownEntry } from "./safe-record";
 import { isConditionGated } from "./visibility";
 
-/**
- * {@link nodeIndex} under a node budget, and whether the whole forest fit.
- *
- * The unbounded form is safe where the caller has already surveyed the forest
- * under a cap — `componentReachIn` returns before its variant pass for exactly
- * that reason. It is NOT safe for a definition handed straight in: a stored or
- * imported document can carry more nodes than any limit admits, and a caller
- * that resolves one placement per node would then walk that whole forest once
- * per placement, with the read cache hiding none of it.
- */
-export function boundedNodeIndex(
-  nodes: readonly BlockNode[],
-  cap: number
-): { index: ReadonlyMap<string, BlockNode>; complete: boolean } {
-  const index = new Map<string, BlockNode>();
-  let budget = cap;
-  let truncated = false;
-  walkForest(nodes, entry => {
-    if (budget <= 0) {
-      truncated = true;
-      return "stop";
-    }
-    budget -= 1;
-    // Persisted forests reach here unvalidated, so an entry may be `null` or a
-    // primitive and reading `id` off one throws — the same guard `findNode`
-    // carries, for the same reason.
-    if (!isPlainRecord(entry.node)) return "skip";
-    const id = entry.node.id;
-    if (typeof id === "string" && !index.has(id)) {
-      index.set(id, entry.node as unknown as BlockNode);
-    }
-    return "descend";
-  });
-  return { index, complete: !truncated };
-}
-
 // ---------------------------------------------------------------------------
 // What an instance changes about the definition's nodes
 // ---------------------------------------------------------------------------
@@ -609,6 +573,42 @@ function inForce(
   // override as in force would attribute a value to the instance that nothing
   // rendered, and let it win a collision over a write that did.
   return isUsablePropPath(property.propPath) ? stored : undefined;
+}
+
+/**
+ * {@link nodeIndex} under a node budget, and whether the whole forest fit.
+ *
+ * The unbounded form is safe where the caller has already surveyed the forest
+ * under a cap — `componentReachIn` returns before its variant pass for exactly
+ * that reason. It is NOT safe for a definition handed straight in: a stored or
+ * imported document can carry more nodes than any limit admits, and a caller
+ * that resolves one placement per node would then walk that whole forest once
+ * per placement, with the read cache hiding none of it.
+ */
+export function boundedNodeIndex(
+  nodes: readonly BlockNode[],
+  cap: number
+): { index: ReadonlyMap<string, BlockNode>; complete: boolean } {
+  const index = new Map<string, BlockNode>();
+  let budget = cap;
+  let truncated = false;
+  walkForest(nodes, entry => {
+    if (budget <= 0) {
+      truncated = true;
+      return "stop";
+    }
+    budget -= 1;
+    // Persisted forests reach here unvalidated, so an entry may be `null` or a
+    // primitive and reading `id` off one throws — the same guard `findNode`
+    // carries, for the same reason.
+    if (!isPlainRecord(entry.node)) return "skip";
+    const id = entry.node.id;
+    if (typeof id === "string" && !index.has(id)) {
+      index.set(id, entry.node as unknown as BlockNode);
+    }
+    return "descend";
+  });
+  return { index, complete: !truncated };
 }
 
 /**

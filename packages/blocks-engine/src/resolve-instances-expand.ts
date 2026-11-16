@@ -42,7 +42,7 @@ export interface InstancePlacement {
   /**
    * For a nested instance in editor mode: which of ITS exposures the host
    * placement's component drives, by the host exposure's id. See
-   * {@link relayOf}.
+   * `relayOf`.
    */
   relay?: ReadonlyMap<string, PropExposure>;
 }
@@ -443,8 +443,9 @@ export function definitionFor(
  * What answering "which definition does this id name here" needs of a run.
  *
  * Named apart from {@link ResolveRun} so the roots query in
- * `resolve-instances-roots` can ask the same question with the same four refusals — cycle, composition cap,
- * missing, unreadable — without a budget, ids or a forest to compose into.
+ * `resolve-instances-roots` can ask the same question with the same four
+ * refusals — cycle, composition cap, missing, unreadable — without a budget,
+ * ids or a forest to compose into.
  * A run satisfies it as it is.
  */
 export interface DefinitionReader {

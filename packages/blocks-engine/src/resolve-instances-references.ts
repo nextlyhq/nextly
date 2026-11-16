@@ -148,7 +148,7 @@ export function componentUsageIn(
  * `reason: "cycle"` and never references the stored id at all.
  *
  * Derived by APPLYING the overrides with the resolver's own writer and reading
- * the result back, the way {@link instanceExposure} answers its question, rather
+ * the result back, the way `instanceExposure` answers its question, rather
  * than by looking for override keys that appear to name a component. Whether a
  * path lands, clobbers a string with a record, or loses to another exposure on
  * the same node is then answered by the write itself instead of by a list of
