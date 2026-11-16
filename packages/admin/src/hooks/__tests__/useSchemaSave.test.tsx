@@ -638,7 +638,7 @@ describe("a rename the Builder made", () => {
     );
 
     await waitFor(() => expect(applyFn).toHaveBeenCalledTimes(1));
-    const sent = applyFn.mock.lastCall?.[3] as {
+    const sent = (applyFn as ReturnType<typeof vi.fn>).mock.lastCall?.[3] as {
       fromColumn: string;
       toColumn: string;
       choice: string;

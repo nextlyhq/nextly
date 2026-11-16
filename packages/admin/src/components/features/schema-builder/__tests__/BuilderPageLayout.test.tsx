@@ -328,7 +328,9 @@ describe("BuilderPageLayout", () => {
       await openMenu(user);
       await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
 
-      const asked = onActiveChange.mock.calls.map(([active]) => active);
+      const asked = (onActiveChange as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([active]) => active as { kind: string; renaming?: number }
+      );
       expect(asked).toHaveLength(2);
       expect(asked[0]).toMatchObject({ kind: "edit", fieldId: "u1" });
       expect(asked[0].renaming).not.toBe(asked[1].renaming);
