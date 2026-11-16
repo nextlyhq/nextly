@@ -130,6 +130,16 @@ describe("a condition that still reads its source", () => {
     expect(brokenConditions(fields).size).toBe(0);
   });
 
+  it("a source of a type a plugin contributes, which the Builder cannot judge", () => {
+    // A plugin's scalar field: the entry form may well compare it, and nothing
+    // here knows otherwise, so its condition is not held against the save.
+    const fields = [
+      gated("teaser", "rating"),
+      field("rating", { type: "acme-rating" }),
+    ];
+    expect(brokenConditions(fields).size).toBe(0);
+  });
+
   it("a condition not yet given a source is unfinished, not broken", () => {
     const fields = [
       field("teaser", {

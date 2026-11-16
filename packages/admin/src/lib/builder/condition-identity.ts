@@ -12,6 +12,9 @@
  *
  * @module lib/builder/condition-identity
  */
+import { FIELD_TYPE_CATALOG } from "nextly/field-catalog";
+import { isFieldGroupFieldType } from "nextly/field-group-type";
+
 import type {
   BuilderField,
   FieldCondition,
@@ -58,6 +61,24 @@ export function isConditionSourceType(type: string): boolean {
   return SOURCE_TYPES.has(type);
 }
 
+/** The Builder's own field types, as the catalog describes them. */
+const BUILT_IN_TYPES: ReadonlySet<string> = new Set(
+  FIELD_TYPE_CATALOG.map(entry => entry.type)
+);
+
+/**
+ * Whether a source of this type is known to hold nothing a condition can
+ * compare: one of the Builder's own types outside the comparable ones, or a
+ * field using a field group. A type a plugin contributes is not known here,
+ * and its value may well be a plain one the entry form compares, so it is
+ * never called broken for its type: a save it held up would be refused for a
+ * condition that works.
+ */
+function cannotBeCompared(type: string): boolean {
+  if (SOURCE_TYPES.has(type)) return false;
+  return BUILT_IN_TYPES.has(type) || isFieldGroupFieldType(type);
+}
+
 /** A condition in one shape: the older `{ field, equals }` read as equality. */
 function normalized(
   condition: FieldCondition
@@ -102,7 +123,7 @@ export function brokenConditionOf(
       message: `${subject}'s condition reads ${condition.field}, which is no longer beside it. Choose another field for it, or remove the condition.`,
     };
   }
-  if (!isConditionSourceType(source.type)) {
+  if (cannotBeCompared(source.type)) {
     return {
       reason: "not-a-source",
       message: `${subject}'s condition reads ${called(source)}, which a condition cannot compare. Choose another field for it, or remove the condition.`,
