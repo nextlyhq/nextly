@@ -1,13 +1,17 @@
 /**
- * Two small parts of the variables view, kept beside it: the button a Design
- * group's heading becomes when the group folds, and the view's own search
- * box, for a view no host searches for.
+ * Small parts of the variables view, kept beside it: the button a Design
+ * group's heading becomes when the group folds, the view's own search box
+ * for a view no host searches for, what the view searches for, which groups
+ * it lists, and its scrolling body.
  *
  * @module design-group-toggle
  */
+import type { SiteTokenSet, TokenMode } from "@nextlyhq/blocks-engine";
 import { Input } from "@nextlyhq/ui";
 import { ChevronDown, Search } from "lucide-react";
 import * as React from "react";
+
+import { variableGroups, type VariableGroup } from "./tokens-studio";
 
 /**
  * A Design group's heading as the button that folds it, with how many it
@@ -77,3 +81,72 @@ export const OwnSearch: React.ForwardRefExoticComponent<
     </div>
   );
 });
+
+/**
+ * What the view searches for: the host's search where it keeps one, else
+ * the view's own, with the needle both are matched by.
+ */
+export function useViewSearch(hostSearch: string | undefined): {
+  query: string;
+  needle: string;
+  /** Whether a search is on. */
+  searching: boolean;
+  setQuery: (query: string) => void;
+  /** Empties the view's own search, as adding a variable does. */
+  clear: () => void;
+  /** Whether the view draws its own search box. */
+  own: boolean;
+} {
+  const [ownQuery, setQuery] = React.useState("");
+  const query = hostSearch ?? ownQuery;
+  const needle = query.trim().toLowerCase();
+  return {
+    query,
+    needle,
+    searching: needle !== "",
+    setQuery,
+    clear: React.useCallback(() => setQuery(""), []),
+    own: hostSearch === undefined,
+  };
+}
+
+/** The groups of the variables, narrowed to the ones this view lists. */
+export function useListedGroups(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode,
+  listed: readonly VariableGroup[] | undefined
+): ReturnType<typeof variableGroups> {
+  return React.useMemo(
+    () =>
+      tokens === undefined
+        ? []
+        : variableGroups(tokens, mode).filter(
+            group => listed === undefined || listed.includes(group.group)
+          ),
+    [tokens, mode, listed]
+  );
+}
+
+/** A data attribute's value for a flag: present and empty, or absent. */
+export function markOf(flag: boolean): "" | undefined {
+  return flag ? "" : undefined;
+}
+
+/** The view's scrolling body: its notes, the header's reports, its groups. */
+export function ViewBody({
+  notes,
+  overlays,
+  children,
+}: {
+  notes: React.ReactNode;
+  overlays: React.ReactNode;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div className="nx-vars__body">
+      {notes}
+      {overlays}
+      {children}
+    </div>
+  );
+}

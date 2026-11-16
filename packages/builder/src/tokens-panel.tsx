@@ -60,7 +60,14 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
-import { GroupToggle, OwnSearch } from "./design-group-toggle";
+import {
+  GroupToggle,
+  OwnSearch,
+  ViewBody,
+  markOf,
+  useListedGroups,
+  useViewSearch,
+} from "./design-group-toggle";
 import { isHTMLElement } from "./dom-kind";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import { useCanvasTokenModeAt } from "./prefers-dark";
@@ -71,7 +78,6 @@ import {
   labelNewVariable,
   lengthFamilyOf,
   searchVariableGroups,
-  variableGroups,
   type NewVariable,
   type VariableEntry,
   type VariableGroup,
@@ -389,11 +395,6 @@ function VariablesView({
   );
 }
 
-/** A data attribute's value for a flag: present and empty, or absent. */
-function markOf(flag: boolean): "" | undefined {
-  return flag ? "" : undefined;
-}
-
 /** What an import or export reported, drawn by the view placed to draw it. */
 function placedOverlays(
   placed: boolean,
@@ -415,70 +416,6 @@ function PlacedControls({
   return placed ? (
     <HeaderControls slot={slot}>{header.controls}</HeaderControls>
   ) : null;
-}
-
-/** The view's scrolling body: its notes, the header's reports, its groups. */
-function ViewBody({
-  notes,
-  overlays,
-  children,
-}: {
-  notes: React.ReactNode;
-  overlays: React.ReactNode;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <div className="nx-vars__body">
-      {notes}
-      {overlays}
-      {children}
-    </div>
-  );
-}
-
-/**
- * What the view searches for: the host's search where it keeps one, else
- * the view's own, with the needle both are matched by.
- */
-function useViewSearch(hostSearch: string | undefined): {
-  query: string;
-  needle: string;
-  /** Whether a search is on. */
-  searching: boolean;
-  setQuery: (query: string) => void;
-  /** Empties the view's own search, as adding a variable does. */
-  clear: () => void;
-  /** Whether the view draws its own search box. */
-  own: boolean;
-} {
-  const [ownQuery, setQuery] = React.useState("");
-  const query = hostSearch ?? ownQuery;
-  const needle = query.trim().toLowerCase();
-  return {
-    query,
-    needle,
-    searching: needle !== "",
-    setQuery,
-    clear: React.useCallback(() => setQuery(""), []),
-    own: hostSearch === undefined,
-  };
-}
-
-/** The groups of the variables, narrowed to the ones this view lists. */
-function useListedGroups(
-  tokens: SiteTokenSet | undefined,
-  mode: TokenMode,
-  listed: readonly VariableGroup[] | undefined
-): ReturnType<typeof variableGroups> {
-  return React.useMemo(
-    () =>
-      tokens === undefined
-        ? []
-        : variableGroups(tokens, mode).filter(
-            group => listed === undefined || listed.includes(group.group)
-          ),
-    [tokens, mode, listed]
-  );
 }
 
 /**
