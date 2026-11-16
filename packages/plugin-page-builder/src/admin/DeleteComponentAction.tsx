@@ -39,8 +39,23 @@ import { useEffect, useState, type JSX } from "react";
 
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
-import { DeleteComponentDialog } from "./DeleteComponentDialog";
-import { TransferImport } from "./transfer-import";
+import type { DeleteComponentDialog as DeleteComponentDialogPart } from "./DeleteComponentDialog";
+import { lazyPart, withEditorStylesheet } from "./lazy-part";
+import type { TransferImport as TransferImportPart } from "./transfer-import";
+
+/*
+ * The dialog and the import are fetched when drawn. This module registers the
+ * row action, and for a host's own component store it is drawn in the header
+ * of every admin page, so it carries none of what they bring (the builder's
+ * planner, the block engine, the editor's stylesheet) until a row's Delete
+ * component is chosen or the import is drawn.
+ */
+const DeleteComponentDialog: typeof DeleteComponentDialogPart = lazyPart(() =>
+  import("./DeleteComponentDialog").then(m => m.DeleteComponentDialog)
+);
+const TransferImport: typeof TransferImportPart = lazyPart(() =>
+  withEditorStylesheet(import("./transfer-import")).then(m => m.TransferImport)
+);
 
 /** The row action's id on the component store's list. */
 const DELETE_ROW_ACTION_ID = "page-builder-delete-component";

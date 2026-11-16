@@ -542,6 +542,33 @@ describe("LayersPanel", () => {
     expect(rows().some(text => text.includes("Title"))).toBe(false);
   });
 
+  it("shows the whole tree again, with the rows open before, once a search that matched nothing is cleared", async () => {
+    renderPanel();
+    // The author opens the Hero box: its Title row shows.
+    const hero = screen
+      .getAllByRole("treeitem")
+      .find(element => (element.textContent ?? "").includes("Hero"));
+    if (hero === undefined) throw new Error("the Hero row is missing");
+    React.act(() => {
+      fireEvent.keyDown(hero, { key: "ArrowRight" });
+    });
+    expect(rows()).toHaveLength(3);
+    const search = screen.getByLabelText("Search layers");
+
+    React.act(() => {
+      fireEvent.change(search, { target: { value: "zzz" } });
+    });
+    expect(rows()).toEqual([]);
+
+    React.act(() => {
+      fireEvent.change(search, { target: { value: "" } });
+    });
+
+    // Every row again, Hero still open, without reopening the panel.
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(rows().some(text => text.includes("Title"))).toBe(true);
+  });
+
   it("says so when nothing matches, rather than showing an empty tree", () => {
     renderPanel();
 
