@@ -120,6 +120,65 @@ const DOCUMENT = {
       [text("29", "Sized box at start")],
       { width: "600px", margin: { inlineStart: "0" } }
     ),
+    container(
+      "30",
+      "core/box",
+      { as: "div", contained: false },
+      [
+        container("31", "core/box", { as: "div", contained: true }, [
+          text("32", "Row item one"),
+        ]),
+        container("33", "core/box", { as: "div", contained: true }, [
+          text("34", "Row item two"),
+        ]),
+      ],
+      { display: "flex" }
+    ),
+    container(
+      "40",
+      "core/box",
+      { as: "div", contained: false },
+      [
+        container(
+          "41",
+          "core/box",
+          { as: "div", contained: true },
+          [text("42", "Full row item")],
+          { minWidth: "100%" }
+        ),
+      ],
+      { display: "flex" }
+    ),
+    container(
+      "43",
+      "core/box",
+      { as: "div", contained: false },
+      [
+        container(
+          "44",
+          "core/box",
+          { as: "div", contained: false },
+          [
+            container("45", "core/box", { as: "div", contained: true }, [
+              text("46", "Wrapped item one"),
+            ]),
+            container("47", "core/box", { as: "div", contained: true }, [
+              text("48", "Wrapped item two"),
+            ]),
+          ],
+          { display: "contents" }
+        ),
+      ],
+      { display: "flex" }
+    ),
+    container("35", "core/columns", { as: "div", contained: false }, [
+      container("36", "core/column", { as: "div", contained: true }, [
+        text("37", "Column item one"),
+      ]),
+      container("38", "core/column", { as: "div", contained: true }, [
+        text("39", "Column item two"),
+      ]),
+    ]),
   ],
 };
 
@@ -315,6 +374,42 @@ test("a contained block its author sized is centred at that size, its content wh
   const atStart = await placed(page, "Sized box at start");
   near(atStart.band.left, 0);
   near(atStart.band.width, 600);
+});
+
+test("a contained flex item is not inset from the row, nor a grid item from the grid", async ({
+  page,
+}) => {
+  // A padding's `100%` is the row's width, not the item's own, so an item
+  // inset from it would overflow a wide page. Treated as sized instead: only
+  // the gutter inside its own box.
+  const { pageWidth, gutter } = await open(page, { width: 2400, height: 900 });
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  for (const words of [
+    "Row item one",
+    "Row item two",
+    "Wrapped item one",
+    "Wrapped item two",
+    "Column item one",
+    "Column item two",
+  ]) {
+    const { text, band } = await placed(page, words);
+    expect(band.width).toBeLessThan(pageWidth);
+    near(text.left, band.left + gutter);
+  }
+});
+
+test("a flex item its author made fill the row keeps its inset", async ({
+  page,
+}) => {
+  const { pageWidth, inset } = await open(page, WIDE);
+  const { text, band } = await placed(page, "Full row item");
+  near(band.width, pageWidth);
+  near(text.left, inset);
 });
 
 test("the inset follows the writing direction", async ({ page }) => {

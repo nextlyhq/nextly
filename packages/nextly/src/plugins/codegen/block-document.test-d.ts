@@ -167,7 +167,7 @@ expectTypeOf<LocaleOverlayValue["src"]>().toEqualTypeOf<string | undefined>();
 // preserved untouched in forgiving mode, the same policy as an unknown block
 // type. Widening this is a format change, not an edit.
 expectTypeOf<DocumentKind>().toEqualTypeOf<
-  "page" | "pattern" | "component" | "region" | "template"
+  "page" | "pattern" | "component" | "template"
 >();
 
 // A fifth state would need an emission rule in the compiler before it could

@@ -16,13 +16,10 @@ export const EXPECTED_FAILURES = {
     "about 330 ms against 100 ms on the 150-block page: a selection still renders the editor and its page around it",
   "select-outline":
     "about 330 ms against 100 ms: the outline moves in the same render as the sidebar",
-  "select-size-ratio":
-    "about 2.2x against 2x: a selection takes about 150 ms on the 4-block page and 330 ms on the 150-block page",
   "quick-clicks-blocking":
     "about 1.2 s against 400 ms: four quick clicks are handled one after another, each a long task",
   "add-panel-insert":
     "about 470 ms against 300 ms: an insert redraws the page and its header and footer",
-  undo: "about 230 ms against 200 ms: undo redraws the page",
   "keystroke-canvas":
     "not shown until the field is left, against 100 ms: the canvas does not follow typing yet",
   "insert-hides-regions":
