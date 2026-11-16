@@ -53,6 +53,7 @@ import {
   useChangesLayoutPreference,
   type ChangesLayout,
 } from "./changes-layout";
+import { fieldPathLabel } from "./field-path";
 import { childKey, FieldDiffNode, SystemFieldsProvider } from "./FieldDiffNode";
 
 export interface VersionDiffViewProps {
@@ -233,6 +234,11 @@ export function VersionDiffView({
     changes?.byField.values() ?? []
   );
   const nav = useChangeNavigation(order);
+  // The change the position is on, named as its field is in the list.
+  const currentChange = arranged.changed[nav.position];
+  const currentChangeLabel = currentChange
+    ? fieldPathLabel(currentChange, 0)
+    : undefined;
   // Which of the body's states is drawn, decided once so the body and the
   // report below cannot disagree about it.
   const body = diff.isLoading
@@ -289,6 +295,7 @@ export function VersionDiffView({
                 changed={arranged.changed.length}
                 position={nav.position}
                 onMove={nav.move}
+                currentLabel={currentChangeLabel}
               />
             ) : null}
             <ChangesLayoutToggle
