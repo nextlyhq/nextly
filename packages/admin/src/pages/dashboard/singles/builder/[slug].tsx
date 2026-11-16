@@ -156,7 +156,7 @@ export default function SingleBuilderEditPage({
     resolver: zodResolver(singleFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -354,7 +354,9 @@ export default function SingleBuilderEditPage({
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
     confirmation,
-    getValidatedFields,
+    // Judged against the fields as last saved, so a draft that changes a
+    // saved field's storage level is refused before it can lose values.
+    getValidatedFields: () => getValidatedFields(pending.saved),
     preview: fields =>
       unsaved
         ? Promise.resolve(createPreview(fields))
@@ -440,7 +442,6 @@ export default function SingleBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}
