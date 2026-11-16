@@ -52,7 +52,6 @@ import {
 } from "@admin/hooks/useSchemaSave";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
-import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -219,7 +218,6 @@ export default function CollectionBuilderEditPage({
     toFields: getCollectionFields,
     // An unsaved collection opens with what the dialog set.
     toSettings: loaded => unsaved?.settings ?? collectionSettings(loaded, slug),
-    isDirty: settingsAreDirty,
     onLoad: loaded => {
       const { singular, plural } = collectionLabels(loaded);
       builder.form.reset({ singularName: singular, pluralName: plural });

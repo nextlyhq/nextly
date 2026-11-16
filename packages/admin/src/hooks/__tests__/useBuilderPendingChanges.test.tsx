@@ -59,7 +59,6 @@ function setup() {
       builder,
       toFields: loaded => loaded.fields,
       toSettings: settingsOf,
-      isDirty: (a, b) => !!a && !!b && a.singularName !== b.singularName,
       onLoad: () => {},
       identity: loaded => loaded.slug,
     });

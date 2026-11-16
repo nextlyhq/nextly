@@ -91,7 +91,6 @@ function Harness({ locked = false }: { locked?: boolean }) {
     builder: fieldBuilder,
     toFields: loaded => loaded.fields,
     toSettings: settingsOf,
-    isDirty: (a, b) => !!a && !!b && a.singularName !== b.singularName,
     onLoad: () => {},
     identity: loaded => loaded.slug,
   });
@@ -369,7 +368,6 @@ function LayoutHarness() {
     builder: fieldBuilder,
     toFields: loaded => loaded.fields,
     toSettings: settingsOf,
-    isDirty: (a, b) => !!a && !!b && a.singularName !== b.singularName,
     onLoad: () => {},
     identity: loaded => loaded.slug,
   });

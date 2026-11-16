@@ -33,14 +33,6 @@ function settingsOf(entity: Entity): BuilderSettingsValues {
   return { singularName: entity.name, slug: "posts", icon: "Database" };
 }
 
-function isDirty(
-  a: BuilderSettingsValues | null,
-  b: BuilderSettingsValues | null
-): boolean {
-  if (!a || !b) return false;
-  return a.singularName !== b.singularName;
-}
-
 /**
  * A stand-in for `useFieldBuilder` that holds its own fields, so the dirty
  * count can be observed against real field state rather than a mock's calls.
@@ -109,7 +101,6 @@ function setup(
         builder: builder.api,
         toFields: (loaded: Entity) => loaded.fields,
         toSettings: settingsOf,
-        isDirty,
         onLoad: () => {
           loadCount += 1;
         },

@@ -98,26 +98,6 @@ function fieldGroupSettings(fieldGroup: ApiFieldGroup): BuilderSettingsValues {
 }
 
 /**
- * Field groups compare only the settings they actually render, rather than
- * using the shared comparator: the values it also reads — status, versions,
- * retention, revalidate, webhooks — have no control on this kind's modal, so
- * they are absent on both sides and could never differ.
- */
-function fieldGroupSettingsAreDirty(
-  original: BuilderSettingsValues | null,
-  current: BuilderSettingsValues | null
-): boolean {
-  if (!original || !current) return false;
-  return (
-    original.singularName !== current.singularName ||
-    original.description !== current.description ||
-    original.icon !== current.icon ||
-    original.category !== current.category ||
-    original.i18n !== current.i18n
-  );
-}
-
-/**
  * A field group created in the dialog and not saved yet, in the shape the page
  * loads a saved one in. Nothing of it is stored, so it has no table or
  * timestamps.
@@ -195,7 +175,6 @@ export default function FieldGroupBuilderEditPage({
     toFields: loaded => loaded.fields ?? [],
     // An unsaved field group opens with what the dialog set.
     toSettings: loaded => unsaved?.settings ?? fieldGroupSettings(loaded),
-    isDirty: fieldGroupSettingsAreDirty,
     onLoad: loaded =>
       builder.form.reset({ singularName: fieldGroupName(loaded) }),
     // A saved field group is known by its slug, which an unsaved one shares;

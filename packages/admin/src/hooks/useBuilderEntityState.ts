@@ -34,7 +34,10 @@ import {
   type RowMark,
   rowMarks,
 } from "@admin/lib/builder/pending-changes";
-import { settingChanges } from "@admin/lib/builder/settings-changes";
+import {
+  type SettingChange,
+  settingChanges,
+} from "@admin/lib/builder/settings-changes";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import type { BuilderSnapshot } from "./useFieldBuilder";
@@ -47,11 +50,6 @@ export interface UseBuilderEntityStateOptions<TEntity> {
   toFields: (entity: TEntity) => FieldDefinition[];
   /** The settings the page opens with. */
   toSettings: (entity: TEntity) => BuilderSettingsValues;
-  /** Whether two settings snapshots differ enough to enable Save. */
-  isDirty: (
-    original: BuilderSettingsValues | null,
-    current: BuilderSettingsValues | null
-  ) => boolean;
   /** Run once when the entity lands — resetting the metadata form, and any
    *  seeding only this kind needs. */
   onLoad: (entity: TEntity) => void;
@@ -80,6 +78,8 @@ export interface BuilderPendingChanges {
   changes: readonly PendingChange[];
   /** Each changed field's row marks, by field id. */
   marks: ReadonlyMap<string, ReadonlySet<RowMark>>;
+  /** Each of the entity's settings changed since the save, named. */
+  settingChanges: readonly SettingChange[];
   /**
    * The fields as last saved, system rows excluded: the baseline the changes
    * are counted from, and where a pending delete is shown and still holds its
@@ -109,7 +109,7 @@ export interface BuilderEntityState {
   setSettings: (next: BuilderSettingsValues) => void;
   /** False until the entity has been read into the builder. */
   isInitialized: boolean;
-  /** Fields changed since load, plus one if any setting differs. Drives the
+  /** Fields changed since load, plus each setting changed. Drives the
    *  toolbar's Save enable state. */
   unsavedCount: number;
   /**
@@ -127,13 +127,13 @@ export interface BuilderEntityState {
 
 /** One empty list, so a page with nothing loaded keeps one baseline object. */
 const NO_FIELDS: readonly BuilderField[] = [];
+const NO_SETTING_CHANGES: readonly SettingChange[] = [];
 
 export function useBuilderEntityState<TEntity>({
   entity,
   builder,
   toFields,
   toSettings,
-  isDirty,
   onLoad,
   identity,
   unsaved = false,
@@ -197,16 +197,26 @@ export function useBuilderEntityState<TEntity>({
   // under the new one's name.
   const isInitialized = currentKey !== null && loadedKey === currentKey;
 
+  // Each changed setting, from the one comparison the count, the undo
+  // announcements and the review read.
+  const changedSettings = useMemo(
+    () =>
+      originalSettings && settings
+        ? settingChanges(originalSettings, settings)
+        : NO_SETTING_CHANGES,
+    [originalSettings, settings]
+  );
   const pending = useFieldPendingChanges(
     builder,
     originalFields,
-    originalSettings
+    originalSettings,
+    changedSettings
   );
-  // Derived from the change list, so the number shown and the changes listed
+  // Derived from the change lists, so the number shown and the changes listed
   // and marked cannot disagree.
   const unsavedCount =
     pending.changes.length +
-    (isDirty(originalSettings, settings) ? 1 : 0) +
+    changedSettings.length +
     // The create itself, for an entity the server does not have yet.
     (unsaved && isInitialized ? 1 : 0);
 
@@ -270,7 +280,8 @@ function describeSnapshotStep(
 function useFieldPendingChanges(
   builder: BuilderFieldsApi,
   saved: readonly BuilderField[] | null,
-  savedSettings: BuilderSettingsValues | null
+  savedSettings: BuilderSettingsValues | null,
+  changedSettings: readonly SettingChange[]
 ): BuilderPendingChanges {
   const { fields, resetFields, undo: undoFields, redo: redoFields } = builder;
   // The net changes from what was saved, by field identity.
@@ -305,6 +316,7 @@ function useFieldPendingChanges(
   return {
     changes,
     marks,
+    settingChanges: changedSettings,
     saved: saved ?? NO_FIELDS,
     canUndo: builder.canUndo,
     canRedo: builder.canRedo,

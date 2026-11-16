@@ -116,6 +116,7 @@ function renderLayout(
     pending: {
       changes: [],
       marks: new Map(),
+      settingChanges: [],
       saved: [],
       canUndo: false,
       canRedo: false,
