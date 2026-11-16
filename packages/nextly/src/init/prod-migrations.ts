@@ -70,6 +70,10 @@ interface MigrateCoreLike {
     knownJunctions?: ReadonlySet<string>;
     /** See `MigrateCoreDeps.refuseUnrecognisedBuilderFiles`. */
     refuseUnrecognisedBuilderFiles?: boolean;
+    /** See `MigrateCoreDeps.refuseUnwrittenChanges`. */
+    refuseUnwrittenChanges?: () => Promise<void>;
+    /** See `MigrateCoreDeps.refuseDatabaseBehind`. */
+    refuseDatabaseBehind?: boolean;
     /** See `MigrateCoreDeps.declared`. */
     declared?: {
       junctions?: ReadonlyMap<string, ReadonlySet<string>>;
@@ -397,6 +401,38 @@ async function applyBootMigrations(
     // A file with a Builder name the signature does not recognise is refused
     // here as `nextly migrate` refuses it: this boot runs the same files.
     refuseUnrecognisedBuilderFiles: true,
+    // A configuration holding a change no migration records refuses the start, naming each
+    // change, as `nextly migrate` refuses it: the start would otherwise serve a schema its
+    // migrations never made. The start is handed the schema's part of the configuration, so its
+    // permissions are not compared here.
+    refuseUnwrittenChanges: async () => {
+      const { refuseUnwrittenChanges } = await import(
+        "../domains/schema/migrate/refuse-unwritten-changes"
+      );
+      await refuseUnwrittenChanges({
+        // The whole configuration this start serves, as the CLI loads it, so
+        // the app's own permissions and its workflows are compared too.
+        config: deployConfig as unknown as Parameters<
+          typeof refuseUnwrittenChanges
+        >[0]["config"],
+        ...(args.deferredExtends === undefined
+          ? {}
+          : {
+              deferredExtends: args.deferredExtends as unknown as NonNullable<
+                Parameters<typeof refuseUnwrittenChanges>[0]["deferredExtends"]
+              >,
+            }),
+        projectRoot: process.cwd(),
+        migrationsDir: run.migrationsDir,
+        dialect: adapter.dialect,
+        adapter: adapter as unknown as Parameters<
+          typeof refuseUnwrittenChanges
+        >[0]["adapter"],
+        logger,
+      });
+    },
+    // And a database that lacks what its applied migrations made.
+    refuseDatabaseBehind: true,
     // What the declared schema names, which old Builder files are judged
     // against as `nextly migrate` judges them.
     declared,
@@ -462,6 +498,13 @@ async function applyBootMigrations(
  * build's `MIGRATION_MISSING` is not among them: see
  * {@link isOlderBuildStop}.
  */
+/** The refusals `nextly migrate` gives a schema no migration records, which refuse a start too. */
+const UNMIGRATED_SCHEMA_CODES: ReadonlySet<string> = new Set([
+  "SCHEMA_DRIFT",
+  "SETTINGS_CHANGE_WITHOUT_MIGRATION",
+  "DATABASE_BEHIND_MIGRATIONS",
+]);
+
 function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
   if (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN") return err;
@@ -472,6 +515,10 @@ function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   // table, what holds it and what to do. So is a busy-table bound set out of its range, refused
   // before anything was read or changed.
   if (err.code === "NEXTLY_TABLE_BUSY") return err;
+  // A configuration ahead of its migrations, or a database that lacks what they made, refused as
+  // itself: serving would answer from a schema the database does not hold. Each message names
+  // every change and what to run.
+  if (UNMIGRATED_SCHEMA_CODES.has(err.code)) return err;
   if (
     err.code === "INVALID_INPUT" &&
     (err.logContext as { reason?: unknown } | undefined)?.reason ===

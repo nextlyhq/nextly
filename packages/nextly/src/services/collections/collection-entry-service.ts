@@ -70,6 +70,11 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../domains/i18n/localization-source";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../domains/i18n/read-in-language";
+import { resolveLocaleChain } from "../../domains/i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { FieldSources } from "../../domains/versions/restored-from";
@@ -328,6 +333,7 @@ export class CollectionEntryService extends BaseService {
     fallbackLocale?: string | false;
     translationStatus?: boolean;
     where?: unknown;
+    translations?: "all";
   }) {
     return readLanguagesFor(
       this.localization,
@@ -380,7 +386,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.listEntries(params)
+        this.queryService.listEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -439,7 +445,7 @@ export class CollectionEntryService extends BaseService {
     return (
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
-        this.queryService.countEntries(params)
+        this.queryService.countEntries(readOfEveryLanguage(params))
       )
     );
   }
@@ -535,10 +541,35 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
     /** A grant waiving the collection's read hooks, honoured by the query service. */
     hookExemptRead?: HookExemptRead;
+    /**
+     * Whole-document fallback: where the entry is not found in the requested
+     * language, answer in the first language of its fallback chain that has
+     * it, and say which (`_locale`).
+     */
+    wholeDocumentFallback?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
   }) {
-    return withRuleLanguage(this.readLanguages(params), () =>
-      this.queryService.getEntry(params)
-    );
+    // Rules are judged in the languages the read was asked in, `locale=all`
+    // included; the query reads what that request stands for.
+    const read = (locale: string | undefined) => {
+      const inLanguage = { ...params, locale };
+      return withRuleLanguage(this.readLanguages(inLanguage), () =>
+        this.queryService.getEntry(readOfEveryLanguage(inLanguage))
+      );
+    };
+    const chain = params.wholeDocumentFallback
+      ? resolveLocaleChain(
+          this.localization,
+          params.locale,
+          params.fallbackLocale
+        )
+      : null;
+    const [first, ...rest] = chain ?? [];
+    if (first === undefined) return read(params.locale);
+    return readInFirstPublishedLanguage([first, ...rest], read);
   }
 
   /**

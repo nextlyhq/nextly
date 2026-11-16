@@ -28,6 +28,8 @@
  *   `NEXTLY_ACCEPT_DATA_LOSS` naming the table, as the command reads it.
  * - A first run with no app migration carrying the registry: the start gives
  *   its notice once, and a later `nextly migrate` gives none.
+ * - A permission the configuration declares and no migration records: the
+ *   start refuses it with the command's code.
  * - An older build, against a database a newer build migrated: the step
  *   writes nothing, a warning names the migration the build lacks, and the
  *   start goes on and serves what the database holds.
@@ -779,6 +781,44 @@ describe.each(getConfiguredTestDialects())(
       ).toHaveLength(1);
       expect(later.code, later.said).toBeUndefined();
       expect(later.said).not.toMatch(notice);
+    }, 600_000);
+
+    it("refuses a permission no migration records, as nextly migrate does", async () => {
+      // The app's own permission, declared in the configuration after its
+      // last migration was written: both paths compare the whole
+      // configuration, permissions included, with the newest snapshot.
+      const withExport = (atStart: boolean, exports: boolean) =>
+        defineConfig({
+          collections: [POSTS],
+          permissions: exports
+            ? [{ action: "export", resource: "mas-posts" }]
+            : [],
+          db: atStart
+            ? {
+                migrationsDir: join(state.dir, "migrations"),
+                runMigrationsOnBoot: true,
+              }
+            : { migrationsDir: "./migrations" },
+        });
+      const viaStart = await emptyDatabase();
+      const viaCommand = await emptyDatabase();
+      use(viaCommand);
+      await migrateCreate("initial", withExport(true, false));
+      await migrate(viaStart, withExport(false, false));
+      await migrate(viaCommand, withExport(false, false));
+
+      const command = await migrateRun(viaCommand, withExport(false, true));
+      const started = await productionStart(viaStart, withExport(true, true));
+
+      // The control: the command refuses it, naming the permission.
+      expect(command.code, command.said).not.toBeUndefined();
+      expect(command.said).toMatch(
+        /export[^\n]*mas-posts|mas-posts[^\n]*export/
+      );
+      // The start refuses it with the same code.
+      const code = (started.refusal as { code?: string } | undefined)?.code;
+      expect(code, started.logged.join("\n")).toBeDefined();
+      expect(command.said).toContain(String(code));
     }, 600_000);
 
     it("writes nothing for an older build, names the migration it lacks, and starts", async () => {
