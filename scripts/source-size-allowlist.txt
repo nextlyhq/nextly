@@ -49,7 +49,7 @@ packages/builder/src/inserter.ts 1559
 
 packages/builder/src/inspector-panel.tsx 1805
 
-packages/builder/src/keyboard-actions.tsx 1502
+packages/builder/src/keyboard-actions.tsx 1518
 
 
 packages/builder/src/shared-styles-panel.tsx 1643

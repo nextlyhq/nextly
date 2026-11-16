@@ -157,24 +157,54 @@ export function useSelectionOffer(
 /** No verbs, held as one value so an empty answer keeps its identity. */
 const NO_VERBS: readonly ToolbarAction[] = [];
 
+/** Tells whoever listens that the offer a provider shares has changed. */
+export interface OfferSignal {
+  /** Listen for changes; answers the call that stops listening. */
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly notify: () => void;
+}
+
+/** A signal with no listeners yet. */
+export function offerSignal(): OfferSignal {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: listener => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    notify: () => {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
 /**
  * The shared verbs with the locks asked, for a menu drawn outside the
  * provider (the Layers row menu, the block card's menu) while it is open.
  *
- * Read when the menu opens, and read again once the page has settled: a menu
- * opened on a block that was not selected selects it as it opens, and the
- * provider takes in the new selection after this menu has first drawn, so
- * the first reading can be the previous block's. Read again too whenever the
- * provider shares its verbs anew. Each offer answers with the same list each
- * time, so a reading that has not changed draws nothing more.
+ * Read when the menu opens, read again once the page has settled, and read
+ * again whenever the provider's offer changes, without asking the locks in
+ * between: a menu opened on a block that was not selected selects it as it
+ * opens, and the provider takes in the new selection after this menu has
+ * first drawn, and an edit, a save or new lock rules can change the answers
+ * while it stays open. Each offer answers with the same list each time, so a
+ * reading that has not changed draws nothing more.
  */
 export function useAskedSharedVerbs(
-  withLocks: (() => readonly ToolbarAction[]) | undefined
+  verbs:
+    | {
+        readonly withLocks: () => readonly ToolbarAction[];
+        readonly subscribe?: OfferSignal["subscribe"];
+      }
+    | undefined
 ): readonly ToolbarAction[] {
+  const withLocks = verbs?.withLocks;
+  const subscribe = verbs?.subscribe;
   const [asked, setAsked] = React.useState(() => withLocks?.() ?? NO_VERBS);
   React.useEffect(() => {
-    const now = withLocks?.() ?? NO_VERBS;
-    if (now !== asked) setAsked(now);
-  }, [withLocks, asked]);
+    const reread = () => setAsked(withLocks?.() ?? NO_VERBS);
+    reread();
+    return subscribe?.(reread);
+  }, [withLocks, subscribe]);
   return asked;
 }

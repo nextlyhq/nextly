@@ -20,7 +20,9 @@
 import {
   clearBlocks,
   registerBlocks,
+  registryBlockSource,
   type BlockDocument,
+  type SlotDefaultSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
@@ -328,8 +330,31 @@ const TWIN_PAGE: BlockDocument = {
   ],
 } as BlockDocument;
 
+/** The live block definitions, with the row's slot lock taken off. */
+const UNLOCKED_ROW: SlotDefaultSource = {
+  get: type => {
+    const found = registryBlockSource().get(type);
+    return type === "acme/fixed-row" && found !== undefined
+      ? {
+          ...found,
+          slots: { items: { defaultBlock: [{ type: "acme/headline" }] } },
+        }
+      : found;
+  },
+};
+
+/** Swaps the lock rules the row menu host's editor judges by. */
+let setHostLocks: (locks: SlotDefaultSource | undefined) => void = () => {};
+
 function RowMenuHost(): React.JSX.Element {
-  const state = useEditorState({ initialDocument: TWIN_PAGE });
+  const [definitions, setDefinitions] = React.useState<
+    SlotDefaultSource | undefined
+  >(undefined);
+  setHostLocks = setDefinitions;
+  const state = useEditorState({
+    initialDocument: TWIN_PAGE,
+    ...(definitions === undefined ? {} : { locks: { definitions } }),
+  });
   editorRef = state;
   const [verbs, setVerbs] = React.useState<SharedBlockVerbs | undefined>();
   return (
@@ -369,5 +394,28 @@ describe("a menu drawn outside the keyboard layer", () => {
     const item = screen.getByRole("menuitem", { name: /^Delete/ });
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(lockedSentence(editor()));
+  });
+
+  it("follows a change to the locks while it stays open", () => {
+    render(<RowMenuHost />);
+    act(() => editor().select("held"));
+    fireEvent.contextMenu(screen.getByText("Held headline"));
+    // The control: the row's lock dims Delete first.
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Delete/ })
+        .getAttribute("aria-disabled")
+    ).toBe("true");
+
+    // The lock comes off; what the menu shows before asking the locks is the
+    // same, so only the locks' answer tells the two apart.
+    act(() => setHostLocks(UNLOCKED_ROW));
+
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Delete/ })
+        .getAttribute("aria-disabled")
+    ).toBeNull();
   });
 });

@@ -54,7 +54,12 @@ import {
   unmovedAnnouncement,
 } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
-import { useSelectionOffer, type SelectionOffer } from "./selection-offer";
+import {
+  offerSignal,
+  useSelectionOffer,
+  type OfferSignal,
+  type SelectionOffer,
+} from "./selection-offer";
 import {
   isRefusal,
   selectionDeletion,
@@ -363,6 +368,8 @@ export interface SharedBlockVerbs {
   readonly actions: readonly ToolbarAction[];
   /** The same verbs with the locks asked, for a menu as it opens. */
   readonly withLocks: () => readonly ToolbarAction[];
+  /** Listen for a change to what `withLocks` would answer; optional. */
+  readonly subscribe?: OfferSignal["subscribe"];
   readonly run: (id: ToolbarActionId) => void;
 }
 
@@ -542,6 +549,10 @@ export interface BlockKeyboardActionsResult {
    * the move verb itself runs; its locks are asked only by a menu that opens.
    */
   readonly offer: SelectionOffer;
+  /** `offer.actions`, as this result has always carried it. */
+  readonly selectionActions: ToolbarAction[];
+  /** `offer.depthMoves`, as this result has always carried it. */
+  readonly depthMoves: SelectionOffer["depthMoves"];
   /**
    * Where this editor's block toolbar puts the call that finds its tab stop,
    * for Alt+F10 to focus. Held per editor rather than looked up in the
@@ -1344,6 +1355,8 @@ export function useBlockKeyboardActions({
     actions,
     nesting: nestingSource,
     offer,
+    selectionActions: offer.actions,
+    depthMoves: offer.depthMoves,
     toolbarFocus,
     canvasFrame: latestFrame,
   };
@@ -1451,10 +1464,12 @@ export function BlockKeyboardActions({
    */
   const latestVerbs = React.useRef(actions);
   const latestOffer = React.useRef(offer);
+  const [offerChanged] = React.useState(offerSignal);
   const sharedOffer = React.useRef<string | null>(null);
   useIsomorphicLayoutEffect(() => {
     latestVerbs.current = actions;
     latestOffer.current = offer;
+    offerChanged.notify();
     if (onShareVerbs === undefined) return;
     const offered = offer.actions
       .map(each => `${each.id}:${each.enabled}:${each.reason ?? ""}`)
@@ -1465,9 +1480,10 @@ export function BlockKeyboardActions({
       actions: offer.actions,
       // Through the ref, as `run`: a menu opened later asks of that moment.
       withLocks: () => latestOffer.current.withLocks().actions,
+      subscribe: offerChanged.subscribe,
       run: id => blockActionRunners(latestVerbs.current)[id](),
     });
-  }, [onShareVerbs, actions, offer]);
+  }, [onShareVerbs, actions, offer, offerChanged]);
   useIsomorphicLayoutEffect(
     () => () => {
       sharedOffer.current = null;

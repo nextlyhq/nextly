@@ -289,7 +289,7 @@ function VerbItems({
   offered: CardVerbs["actions"];
   verbs: CardVerbs | undefined;
 }): React.JSX.Element | null {
-  const all = useAskedSharedVerbs(verbs?.withLocks);
+  const all = useAskedSharedVerbs(verbs);
   if (offered.length === 0 || verbs === undefined) return null;
   const asked = all.filter(action =>
     offered.some(each => each.id === action.id)

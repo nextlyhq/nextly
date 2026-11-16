@@ -143,7 +143,7 @@ function SharedGroups({
 }: {
   verbs: SharedBlockVerbs | undefined;
 }): React.JSX.Element {
-  const shared = useAskedSharedVerbs(verbs?.withLocks);
+  const shared = useAskedSharedVerbs(verbs);
   const deletion = shared.filter(action => action.id === "delete");
   const others = shared.filter(action => action.id !== "delete");
   return (
