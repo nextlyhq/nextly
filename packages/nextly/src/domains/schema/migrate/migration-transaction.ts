@@ -772,6 +772,15 @@ async function runUnitStatements(
       withMysqlTryBackstop(tx, dialect, bound, async () => {
         await boundTransactionTry(tx, dialect, bound);
         for (const setting of settingsBefore) await tx.execute(sent(setting));
+        // A try that resumes past every statement on MySQL writes only the ledger: the try before
+        // ended in its ledger write, after the unit's statements had all committed (a try resumes
+        // at the open transaction's first statement, so none was left open). The transaction this
+        // try opened is committed first, leaving the session in autocommit, as the last statement
+        // left the try that ran it: each ledger write then commits on its own, and a stop between
+        // a rollback row and the retirement of the applied row it names keeps the rollback.
+        if (dialect === "mysql" && from > 0 && from === statements.length) {
+          await tx.execute("COMMIT");
+        }
         for (const [offset, statement] of statements.slice(from).entries()) {
           const index = from + offset;
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).

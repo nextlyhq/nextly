@@ -111,6 +111,52 @@ describe("runMigrationStatements on MySQL after a schema statement's implicit co
     const after = events.slice(events.indexOf(create) + 1);
     expect(after.slice(0, 3)).toEqual(["at 1", "settled", "START TRANSACTION"]);
   });
+
+  /** The statements a unit sends, with `ledger` where its ledger write starts. */
+  async function sentAroundLedger(
+    statements: string[],
+    from?: number
+  ): Promise<string[]> {
+    const events: string[] = [];
+    const { adapter } = mysqlAdapter({
+      failStatement: statement => {
+        events.push(statement);
+        return undefined;
+      },
+    });
+    await runMigrationStatements(
+      adapter,
+      statements,
+      unit,
+      () => {
+        events.push("ledger");
+        return Promise.resolve();
+      },
+      { tryMs: 1_000, ...(from === undefined ? {} : { from }) }
+    );
+    return events;
+  }
+
+  it("leaves the session in autocommit after the unit's last statement, so each ledger write commits on its own", async () => {
+    // A down section's rollback row and the retirement of the applied row it names: committed
+    // together, a stop between them would lose the rollback over statements that committed.
+    const events = await sentAroundLedger(["DROP TABLE two", "DROP TABLE one"]);
+    const tail = events.slice(events.indexOf("DROP TABLE one") + 1);
+    expect(tail.slice(0, tail.indexOf("ledger"))).not.toContain(
+      "START TRANSACTION"
+    );
+  });
+
+  it("commits the try's transaction before the ledger write where a try resumes past every statement", async () => {
+    // The try before ended in the ledger write, every statement committed: this one writes only
+    // the ledger, in autocommit, as the try that ran the last statement would have.
+    const events = await sentAroundLedger(
+      ["DROP TABLE two", "DROP TABLE one"],
+      2
+    );
+    expect(events).not.toContain("DROP TABLE one");
+    expect(events.slice(0, events.indexOf("ledger"))).toContain("COMMIT");
+  });
 });
 
 describe("runUnitInTries on MySQL in one transaction", () => {
