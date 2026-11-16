@@ -468,11 +468,29 @@ export async function upsertCompanionRow(
   const ph = () =>
     adapter.dialect === "postgresql" ? `$${params.length}` : "?";
 
+  // A date field's value is bound as its column stores it, the UTC wall clock, as every write
+  // through the translation table's model binds it (`fieldColumnDriverValue`). Bound as a bare
+  // `Date`, node-postgres sends the Node process's local wall clock, which a `timestamp` column
+  // keeps; mysql2 is pinned to UTC and SQLite stores epoch seconds, so only PostgreSQL differs.
+  const { fieldColumnDriverValue } = await import(
+    "../../schema/services/runtime-schema-generator"
+  );
+  const bound = (value: unknown): unknown =>
+    adapter.dialect === "postgresql" && value instanceof Date
+      ? fieldColumnDriverValue("postgresql", "timestamp", value)
+      : value;
+
   const allCols = ["_parent", "_locale", ...cols];
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withChanger[c]
+        c === "_parent"
+          ? parentId
+          : c === "_locale"
+            ? locale
+            : c === COMPANION_UPDATED_AT_COLUMN
+              ? withChanger[c]
+              : bound(withChanger[c])
       );
       return ph();
     })
