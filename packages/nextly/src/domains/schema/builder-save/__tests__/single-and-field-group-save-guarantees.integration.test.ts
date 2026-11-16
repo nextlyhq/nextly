@@ -322,7 +322,9 @@ describe.each(getConfiguredTestDialects())(
     /**
      * Everything a refused save must leave as it found it: every migration and snapshot with its
      * contents, the definition, every apply the ledger holds whatever its outcome, the table's
-     * columns, and the whole registry row.
+     * columns, and the whole registry row. An attempt that ended with nothing applied
+     * (`nothing_applied`) is left out: it records that the save changed nothing, as a busy table's
+     * stop records it on every road, and it resolves itself.
      */
     async function standing(t: TestNextly, kind: Kind) {
       return {
@@ -330,6 +332,7 @@ describe.each(getConfiguredTestDialects())(
         snapshots: contentsOf(join(migrationsDir(), "meta"), snapshotFiles()),
         definition: definitionText(),
         ledger: (await ledger(t).listFileApplies())
+          .filter(row => row.status !== "nothing_applied")
           .map(row => JSON.stringify(row))
           .sort(),
         columns: await columns(t, kind.table),
@@ -798,7 +801,13 @@ describe.each(getConfiguredTestDialects())(
           free();
           await holding.catch(() => {});
           expect(await standing(t, kind)).toEqual(before);
-        }, 30_000);
+
+          // What the stop recorded stands in no save's way: the same save, once the holder ends,
+          // goes through, and the commands find nothing left to do.
+          await kind.change(t, [text("heading"), text("body")]);
+          expect(await columns(t, kind.table)).toContain("body");
+          await nothingLeftToDo(t);
+        }, 60_000);
 
         // Known gap: on SQLite the shared schema lock stops first, as a raw SQLITE_BUSY, no tries.
         it.skipIf(dialect === "sqlite")(
