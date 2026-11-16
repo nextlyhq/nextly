@@ -211,10 +211,12 @@ export function documentToStore(
 /**
  * Whether this document holds unsaved work, from EITHER surface that writes it.
  *
- * The status pill otherwise reads the editor's `undoDepth` alone, which is its
- * own history and says nothing about the form — so an author who renamed the
- * page and touched no block was told the document was saved. Two surfaces now
- * write to one document, and the pill has to answer for both.
+ * Read by the Pages panel, which asks before leaving a page with unsaved work.
+ * The editor's `undoDepth` alone is its own history and says nothing about the
+ * form — so an author who renamed the page and touched no block would be told
+ * there was nothing to lose. Two surfaces write to one document, and this has
+ * to answer for both. (The page status pill does not read it: it reports the
+ * saved page, and the save chip reports unsaved work.)
  *
  * The blocks field is COUNTED here, and an earlier version excluded it. The
  * reasoning for excluding it was that the editor owns that field and reports
@@ -227,8 +229,8 @@ export function documentToStore(
  * blocks, leaves the editor, and opens it again before saving. Leaving commits
  * the document into the form, so the field is dirty; reopening builds a fresh
  * editor whose `undoDepth` is zero. With the field excluded, nothing was left
- * to say the document had unsaved work, and the pill read clean over blocks
- * that had never been saved.
+ * to say the document had unsaved work, and it read clean over blocks that
+ * had never been saved.
  *
  * The editor's own history is taken as an argument rather than combined at the
  * call site, so "is this document dirty" is answered in one place. It is also
