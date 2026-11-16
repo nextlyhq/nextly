@@ -45,7 +45,6 @@ import {
 } from "./block-editor-modules";
 import { PLUGIN_SOURCE } from "./editor/stored-document";
 
-export type { BlockEditorModules } from "./block-editor-modules";
 export {
   contributedInspector,
   registerBlockEditorModules,

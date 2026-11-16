@@ -268,8 +268,7 @@ function readBuildInfo(distDir) {
     if (info && typeof info.commit === "string") {
       return {
         commit: info.commit,
-        builtAt:
-          typeof info.builtAt === "string" ? info.builtAt : undefined,
+        builtAt: typeof info.builtAt === "string" ? info.builtAt : undefined,
       };
     }
   } catch {
@@ -583,8 +582,12 @@ export function formatReport(result, { json = false } = {}) {
     for (const route of result.routes) {
       // The direct visit, shell included, as the heading says and as the
       // budgets measure it; the route's own closure alone is smaller.
-      const min = `${formatKB(route.directVisit.minifiedBytes)} KB`.padStart(11);
-      const gz = `${formatKB(route.directVisit.gzippedBytes)} KB gzip`.padStart(16);
+      const min = `${formatKB(route.directVisit.minifiedBytes)} KB`.padStart(
+        11
+      );
+      const gz = `${formatKB(route.directVisit.gzippedBytes)} KB gzip`.padStart(
+        16
+      );
       const beyond = route.beyondFirstScreen.length;
       lines.push(
         `  ${route.root.padEnd(42)} ${min}  (${gz})` +
@@ -608,8 +611,9 @@ export function formatReport(result, { json = false } = {}) {
   const totMin = `${formatKB(result.totals.totalEmitted.minifiedBytes)} KB`;
   const totGz = `${formatKB(result.totals.totalEmitted.gzippedBytes)} KB`;
   lines.push(
-    `  Total Emitted JS (${result.totals.totalEmitted.count} chunks):`.padEnd(44) +
-      `${totMin.padStart(11)}  (${totGz.padStart(11)} gzip)`
+    `  Total Emitted JS (${result.totals.totalEmitted.count} chunks):`.padEnd(
+      44
+    ) + `${totMin.padStart(11)}  (${totGz.padStart(11)} gzip)`
   );
   lines.push("=".repeat(72));
 
@@ -705,20 +709,12 @@ function screenSize(output, names, groups) {
   let gzippedBytes = 0;
   for (const name of names) {
     const chunk = output.chunks.get(name);
-    if (!chunk) throw new Error(`a screen names ${name}, which the build does not hold`);
+    if (!chunk)
+      throw new Error(`a screen names ${name}, which the build does not hold`);
     const zipped = gzipSync(chunk.code).length;
     gzippedBytes += zipped;
-    if (chunk.code.length === 0) continue;
-    for (const group of groups) {
-      let length = 0;
-      for (const [source, sourceLength] of chunk.sourceLength) {
-        if (group.matches(source)) length += sourceLength;
-      }
-      parts[group.name].gzippedBytes += (zipped * length) / chunk.code.length;
-      for (const source of chunk.sources) {
-        if (group.matches(source)) parts[group.name].sources.add(source);
-      }
-    }
+    for (const group of groups)
+      addGroupShare(parts[group.name], chunk, zipped, group);
   }
   return {
     chunks: [...names].sort(),
@@ -733,6 +729,22 @@ function screenSize(output, names, groups) {
       ])
     ),
   };
+}
+
+/**
+ * Adds a group's share of one chunk to its running part: its fraction of the
+ * chunk's code times the chunk's gzipped size, and the modules it matches.
+ */
+function addGroupShare(part, chunk, zipped, group) {
+  if (chunk.code.length === 0) return;
+  let length = 0;
+  for (const [source, sourceLength] of chunk.sourceLength) {
+    if (group.matches(source)) length += sourceLength;
+  }
+  part.gzippedBytes += (zipped * length) / chunk.code.length;
+  for (const source of chunk.sources) {
+    if (group.matches(source)) part.sources.add(source);
+  }
 }
 
 /** The screens as a table a person reads, with each group's size. */
@@ -818,7 +830,11 @@ export function distStaleness(result) {
     result.buildInfo !== undefined &&
     result.buildInfo.commit !== "unversioned" &&
     result.buildInfo.commit !== result.commit;
-  return { timeStale, provenanceMismatch, stale: timeStale || provenanceMismatch };
+  return {
+    timeStale,
+    provenanceMismatch,
+    stale: timeStale || provenanceMismatch,
+  };
 }
 
 /**
@@ -845,7 +861,9 @@ if (invokedAsScript()) {
   process.exitCode = 1;
   try {
     const flags = parseArgs(process.argv.slice(2));
-    const distDir = flags.dist ? resolve(flags.dist) : resolve(PACKAGE_ROOT, "dist");
+    const distDir = flags.dist
+      ? resolve(flags.dist)
+      : resolve(PACKAGE_ROOT, "dist");
     const result = measureBundle({ distDir });
     // The report labels the bytes with the current revision; say so loudly
     // when the bytes predate it, so a stale dist cannot wear a fresh commit

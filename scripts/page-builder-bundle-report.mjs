@@ -50,7 +50,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const ADMIN_ROUTE = "/admin/[[...params]]";
 
 /** The admin page's module, as the build's client manifest keys its stylesheets. */
-const ADMIN_PAGE_MODULE = "[project]/apps/playground/src/app/admin/[[...params]]/page";
+const ADMIN_PAGE_MODULE =
+  "[project]/apps/playground/src/app/admin/[[...params]]/page";
 
 /**
  * What the page builder may weigh, gzipped, on a screen that draws none of its
@@ -120,19 +121,23 @@ export const GROUPS = [
   },
   {
     name: "icon set",
-    matches: source => source === "packages/blocks-react/src/icons/lucide-data.ts",
+    matches: source =>
+      source === "packages/blocks-react/src/icons/lucide-data.ts",
   },
   {
     name: "font studio",
     matches: source =>
-      source === "packages/plugin-page-builder/src/admin/editor/site-style-fonts.tsx",
+      source ===
+      "packages/plugin-page-builder/src/admin/editor/site-style-fonts.tsx",
   },
   {
     // Measured, not judged: the builder's own fonts panel ships inside
     // `@nextlyhq/builder/shell`, one module the editor imports whole.
     name: "builder fonts panel",
     matches: source =>
-      /^packages\/builder\/src\/(fonts-panel\.tsx|font-library\.ts)$/.test(source),
+      /^packages\/builder\/src\/(fonts-panel\.tsx|font-library\.ts)$/.test(
+        source
+      ),
   },
 ];
 
@@ -171,7 +176,10 @@ export function sourceLengths(code, map) {
   const lengths = new Map();
   segments.forEach(({ at, source }, index) => {
     const end = segments[index + 1]?.at ?? code.length;
-    const name = map.sources[source].replace(/^turbopack:\/\/\/\[project\]\//, "");
+    const name = map.sources[source].replace(
+      /^turbopack:\/\/\/\[project\]\//,
+      ""
+    );
     lengths.set(name, (lengths.get(name) ?? 0) + (end - at));
   });
   return lengths;
@@ -234,50 +242,66 @@ export function firstLoadStylesheets(nextDir) {
 
 /** Each breach of the screens' budgets, as a sentence; empty when all hold. */
 export function breaches(measured, stylesheets) {
-  const found = [];
-  for (const screen of measured) {
-    const spec = SCREENS.find(s => s.name === screen.name);
-    if (spec?.registrationOnly) {
-      const kb = screen.groups["page builder"].gzippedBytes / 1024;
-      if (kb > REGISTRATION_BUDGET_KB) {
-        found.push(
-          `${screen.name}: the page builder's code is ${kb.toFixed(1)} KB gzipped, over its budget of ${REGISTRATION_BUDGET_KB} KB`
-        );
-      }
-      for (const group of ["builder editor", "CSS parser"]) {
-        const sources = screen.groups[group].sources;
-        if (sources.length > 0) {
-          found.push(
-            `${screen.name}: holds the ${group} (${sources.length} modules, e.g. ${sources[0]})`
-          );
-        }
-      }
-    }
-    for (const group of spec?.onDemand ?? []) {
-      const sources = screen.groups[group].sources;
-      if (sources.length > 0) {
-        found.push(
-          `${screen.name}: holds the ${group} before it opens (${sources[0]})`
-        );
-      }
-    }
-    if (
-      spec?.fetchesEditorStylesheet &&
-      !screen.fetchableStylesheets.some(sheet =>
+  return [
+    ...measured.flatMap(screen => {
+      const spec = SCREENS.find(s => s.name === screen.name) ?? {};
+      return [
+        ...(spec.registrationOnly ? registrationBreaches(screen) : []),
+        ...onDemandBreaches(screen, spec.onDemand ?? []),
+        ...(spec.fetchesEditorStylesheet
+          ? stylesheetFetchBreaches(screen)
+          : []),
+      ];
+    }),
+    ...stylesheets
+      .filter(sheet =>
         sheet.sources.some(source => EDITOR_STYLESHEET.test(source))
       )
-    ) {
-      found.push(`${screen.name}: none of its chunks can fetch the editor stylesheet`);
-    }
+      .map(
+        sheet =>
+          `every admin screen links the editor stylesheet (${sheet.path}) before it renders`
+      ),
+  ];
+}
+
+/** A screen that draws none of the builder's parts: its registration alone. */
+function registrationBreaches(screen) {
+  const found = [];
+  const kb = screen.groups["page builder"].gzippedBytes / 1024;
+  if (kb > REGISTRATION_BUDGET_KB) {
+    found.push(
+      `${screen.name}: the page builder's code is ${kb.toFixed(1)} KB gzipped, over its budget of ${REGISTRATION_BUDGET_KB} KB`
+    );
   }
-  for (const sheet of stylesheets) {
-    if (sheet.sources.some(source => EDITOR_STYLESHEET.test(source))) {
+  for (const group of ["builder editor", "CSS parser"]) {
+    const sources = screen.groups[group].sources;
+    if (sources.length > 0) {
       found.push(
-        `every admin screen links the editor stylesheet (${sheet.path}) before it renders`
+        `${screen.name}: holds the ${group} (${sources.length} modules, e.g. ${sources[0]})`
       );
     }
   }
   return found;
+}
+
+/** The parts a screen fetches on demand, found in its set before they open. */
+function onDemandBreaches(screen, groups) {
+  return groups
+    .filter(group => screen.groups[group].sources.length > 0)
+    .map(
+      group =>
+        `${screen.name}: holds the ${group} before it opens (${screen.groups[group].sources[0]})`
+    );
+}
+
+/** A screen whose chunks cannot fetch the editor stylesheet it is drawn with. */
+function stylesheetFetchBreaches(screen) {
+  const fetches = screen.fetchableStylesheets.some(sheet =>
+    sheet.sources.some(source => EDITOR_STYLESHEET.test(source))
+  );
+  return fetches
+    ? []
+    : [`${screen.name}: none of its chunks can fetch the editor stylesheet`];
 }
 
 /**
@@ -358,7 +382,11 @@ function main(argv) {
     groups: GROUPS,
   }).map(screen => ({
     ...screen,
-    fetchableStylesheets: fetchableStylesheets(output, screen.chunks, allSheets),
+    fetchableStylesheets: fetchableStylesheets(
+      output,
+      screen.chunks,
+      allSheets
+    ),
   }));
   const stylesheets = firstLoadStylesheets(nextDir);
   console.log(
@@ -368,7 +396,9 @@ function main(argv) {
   );
   console.log(
     `Stylesheets every admin screen links: ${stylesheets
-      .map(sheet => `${sheet.path} (${sheet.sources.join(", ") || "no source"})`)
+      .map(
+        sheet => `${sheet.path} (${sheet.sources.join(", ") || "no source"})`
+      )
       .join("; ")}`
   );
   const json = option(argv, "--json");
@@ -394,7 +424,8 @@ function main(argv) {
 }
 
 const invokedDirectly =
-  process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
   try {
