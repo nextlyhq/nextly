@@ -50,6 +50,7 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsToWire,
   demandToWire,
+  isSourceSlug,
   sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
@@ -327,7 +328,11 @@ function boundListCollections(
 ): readonly string[] {
   if (bound === undefined) return [];
   const run = pageBindingRun(bound, locale, registeredBlocks());
-  return [...listCollectionsWhere(drawn, () => true, run, namedQueries)];
+  // A bound value that names no collection (free text in the bound field)
+  // draws nothing, and is not asked about.
+  return [...listCollectionsWhere(drawn, () => true, run, namedQueries)].filter(
+    isSourceSlug
+  );
 }
 
 /**
