@@ -15,6 +15,11 @@ import {
   surfacePointFor,
   toHex,
 } from "../lib/color";
+import {
+  formatColour,
+  parseColour,
+  type ColourFormat,
+} from "../lib/color/formats";
 import { useIsomorphicLayoutEffect } from "../lib/isomorphic-layout-effect";
 import { cn } from "../lib/utils";
 
@@ -46,7 +51,10 @@ export interface ColorSwatch<TValue = string> {
 export interface ColorPickerProps<TValue = string> {
   /** The colour shown on the surface, as hex. */
   color: string;
-  /** A colour was chosen by editing — surface, hue, alpha or the hex field. */
+  /**
+   * A colour was chosen by editing — surface, hue, alpha or the field — as hex,
+   * whichever notation it was typed in.
+   */
   onColorChange: (color: string) => void;
   /** Presets. Painted from `color`, returned by `value`. */
   swatches?: ColorSwatch<TValue>[];
@@ -62,6 +70,12 @@ export interface ColorPickerProps<TValue = string> {
    * render is unusable on a server and untestable without a DOM.
    */
   recentColors?: string[];
+  /**
+   * A recent colour was chosen. Given, the colour comes back as the host
+   * listed it, in its own notation, for the host to store as it is; absent,
+   * the picker reads it and reports it as an edit, as it does a typed one.
+   */
+  onRecentSelect?: (color: string) => void;
   /** Alpha channel. Off by default: most call sites want an opaque colour. */
   showAlpha?: boolean;
   className?: string;
@@ -85,6 +99,13 @@ function toHsva(hex: string): Hsva {
 function toHexString(hsva: Hsva, withAlpha: boolean): string {
   return toHex(hsvToRgb(hsva), withAlpha ? hsva.a : 1);
 }
+
+/** The notations the field can show, as their buttons name them. */
+const FORMATS: readonly { format: ColourFormat; label: string }[] = [
+  { format: "hex", label: "Hex" },
+  { format: "rgb", label: "RGB" },
+  { format: "hsl", label: "HSL" },
+];
 
 /** The last step of the hue strip. Kept beside the input it sizes. */
 const HUE_MAX = 359;
@@ -152,8 +173,10 @@ function isNode(value: EventTarget | null): value is Node {
 }
 
 /**
- * A colour control: a saturation square, a hue strip, optional alpha, a hex
- * field, and any presets the host supplies.
+ * A colour control: a saturation square, a hue strip, optional alpha, a field
+ * that reads hex, `rgb()` or `hsl()` and shows whichever of the three the
+ * author picks, the screen's eyedropper where the browser has one, and any
+ * presets and recent colours the host supplies. What it reports is hex.
  *
  * Deliberately knows nothing about design tokens. A swatch carries an opaque
  * `value` this component never reads and hands back untouched, so a host can
@@ -179,10 +202,17 @@ export function ColorPicker<TValue = string>({
   swatches = [],
   onSwatchSelect,
   recentColors = [],
+  onRecentSelect,
   showAlpha = false,
   className,
 }: ColorPickerProps<TValue>): React.JSX.Element {
   const fieldId = React.useId();
+  /*
+   * The notation the field shows the colour in. Only how it is SHOWN: the
+   * colour, and what the host is told, never change with it, and the field
+   * reads all three notations whichever is showing.
+   */
+  const [format, setFormat] = React.useState<ColourFormat>("hex");
   /** The picker's own subtree, for telling a press inside it from a dismissal. */
   const rootRef = React.useRef<HTMLDivElement>(null);
   /**
@@ -303,7 +333,7 @@ export function ColorPicker<TValue = string>({
     // already reported by Enter.
     if (text === null) return;
     setDraftHex(null);
-    const parsed = parseHex(text);
+    const parsed = parseColour(text);
     // An unfinishable draft is DISCARDED rather than reported. The field
     // returns to the colour that is actually stored, so what is shown and what
     // is saved agree — which they did not when a stale intermediate stood in
@@ -557,6 +587,38 @@ export function ColorPicker<TValue = string>({
 
   const handle = surfacePointFor(hsva.s, hsva.v);
   const hueOnly = toHex(hsvToRgb({ h: hsva.h, s: 1, v: 1 }));
+  // The colour as the field shows it, in the chosen notation.
+  const shownText = formatColour(
+    hsvToRgb(hsva),
+    showAlpha ? hsva.a : 1,
+    format
+  );
+  const formatLabel =
+    FORMATS.find(entry => entry.format === format)?.label ?? "Hex";
+
+  /*
+   * Switching the notation FINISHES what was typed first, as leaving the field
+   * does: the press is inside the picker, so the field's own blur declined to,
+   * and a typed colour shown in a new notation would otherwise be dropped.
+   */
+  const chooseFormat = (next: ColourFormat): void => {
+    commitDraft();
+    setFormat(next);
+  };
+
+  /*
+   * A recent colour REPLACES what was being typed. The host's own handler
+   * stores it as listed; without one it is read and reported as an edit.
+   */
+  const chooseRecent = (recent: string): void => {
+    if (onRecentSelect !== undefined) {
+      dropDraft();
+      onRecentSelect(recent);
+      return;
+    }
+    const parsed = parseColour(recent);
+    if (parsed) commit(hsvaFrom(parsed, parsed.alpha, hsva.h));
+  };
 
   const pickFromScreen = async (): Promise<void> => {
     const ctor = (window as unknown as Record<string, unknown>).EyeDropper as
@@ -721,14 +783,40 @@ export function ColorPicker<TValue = string>({
         </>
       )}
 
+      <div
+        role="group"
+        aria-label="Colour format"
+        className="bg-muted inline-flex rounded-md p-0.5"
+      >
+        {FORMATS.map(entry => (
+          <button
+            key={entry.format}
+            type="button"
+            aria-pressed={entry.format === format}
+            className={cn(
+              "text-muted-foreground hover:text-foreground focus-visible:ring-ring min-h-6 min-w-10 rounded px-2 text-xs font-medium focus-visible:ring-2 focus-visible:outline-none",
+              entry.format === format &&
+                "bg-background text-foreground shadow-sm"
+            )}
+            onClick={() => chooseFormat(entry.format)}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex items-center gap-2">
         <label className="sr-only" htmlFor={`${fieldId}-hex`}>
-          Hex colour
+          {`${formatLabel} colour`}
         </label>
         <Input
           id={`${fieldId}-hex`}
           className="font-mono"
-          value={draftHex ?? rendered}
+          // A colour code, not words: no spelling marks, no list of earlier
+          // entries over the field.
+          spellCheck={false}
+          autoComplete="off"
+          value={draftHex ?? shownText}
           /*
            * A keystroke moves the DRAFT and nothing else — not the surface, not
            * the host. Moving the surface here would also fight the re-seeding
@@ -761,7 +849,8 @@ export function ColorPicker<TValue = string>({
             type="button"
             variant="outline"
             size="icon"
-            aria-label="Pick a colour from the screen"
+            aria-label="Pick from screen"
+            title="Pick from screen"
             onClick={() => void pickFromScreen()}
           >
             <Pipette className="size-4" />
@@ -805,7 +894,7 @@ export function ColorPicker<TValue = string>({
 
       {recentColors.length > 0 && (
         <div>
-          <p className="text-muted-foreground mb-1 text-xs">Recent</p>
+          <p className="text-muted-foreground mb-1 text-xs">Recent colours</p>
           <div className="flex flex-wrap gap-1">
             {recentColors.map(recent => (
               <button
@@ -815,10 +904,7 @@ export function ColorPicker<TValue = string>({
                 aria-label={recent}
                 className="size-6 rounded border shadow-sm"
                 style={{ backgroundColor: recent }}
-                onClick={() => {
-                  const parsed = parseHex(recent);
-                  if (parsed) commit(hsvaFrom(parsed, parsed.alpha, hsva.h));
-                }}
+                onClick={() => chooseRecent(recent)}
               />
             ))}
           </div>
