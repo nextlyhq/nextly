@@ -175,7 +175,9 @@ const FULL_PERCENT = /^\+?(\d+(?:\.\d*)?|\.\d+)%$/;
 function fillsFlag(declaration: Declaration): Declaration[] {
   if (declaration.property !== "min-width") return [];
   const value = declaration.value.trim().toLowerCase();
-  if (value === "inherit") return [];
+  // `inherit` takes the parent's minimum, `auto` unless an author set one,
+  // which does not fill the row: it clears an earlier flag rather than
+  // leaving it standing.
   const percent = FULL_PERCENT.exec(value);
   const fills = percent !== null && Number(percent[1]) >= 100;
   return [{ property: FILLS_ROW_PROPERTY, value: fills ? "1" : "0" }];
@@ -217,16 +219,19 @@ function itemFlag(declarations: readonly Declaration[]): Declaration[] {
     const value = display.value.trim().toLowerCase();
     if (value === "contents") {
       // No box of its own: its children are items of the layout around it,
-      // which set this block's own flags, so they take those.
-      return [
-        { property: SIZED_ITEM_PROPERTY, value: "inherit" },
-        { property: COLUMN_FLOW_PROPERTY, value: "inherit" },
-      ];
+      // which set this block's own flags, so they take those. A direction
+      // stated in this same rule is still written below, so a breakpoint that
+      // turns the wrapper into a flex column keeps its direction's flag.
+      flags.push({ property: SIZED_ITEM_PROPERTY, value: "inherit" });
+      if (!declarations.some(d => d.property === "flex-direction")) {
+        flags.push({ property: COLUMN_FLOW_PROPERTY, value: "inherit" });
+      }
+    } else {
+      flags.push({
+        property: SIZED_ITEM_PROPERTY,
+        value: ROW_LAYOUTS.has(value) ? "1" : "0",
+      });
     }
-    flags.push({
-      property: SIZED_ITEM_PROPERTY,
-      value: ROW_LAYOUTS.has(value) ? "1" : "0",
-    });
   }
   const direction = declarations.findLast(d => d.property === "flex-direction");
   if (direction !== undefined) {

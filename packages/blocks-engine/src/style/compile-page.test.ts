@@ -2575,7 +2575,9 @@ describe("inline padding and a contained container's inset", () => {
     for (const minWidth of ["100%", "120%"]) {
       expect(at(minWidth)).toContain(`${FILLS}: 1`);
     }
-    for (const minWidth of ["50%", "300px", "0"]) {
+    // `inherit` takes the parent's minimum, which is `auto` unless an author
+    // set one, so it does not fill the row: it clears an earlier flag.
+    for (const minWidth of ["50%", "300px", "0", "inherit"]) {
       expect(at(minWidth)).toContain(`${FILLS}: 0`);
     }
     expect(
@@ -2592,6 +2594,20 @@ describe("inline padding and a contained container's inset", () => {
     );
     expect(out).toMatch(/> \* \{[^}]*--nx-sized-item: inherit[^}]*\}/);
     expect(out).toMatch(/> \* \{[^}]*--nx-column-flow: inherit[^}]*\}/);
+    // A direction stated in the same rule is kept, so a wider breakpoint that
+    // turns the wrapper into a flex column still has its direction's flag.
+    const column = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { display: "contents", flexDirection: "column" },
+            tablet: { display: "flex" },
+          },
+        }),
+      ])
+    );
+    expect(column).toMatch(/> \* \{[^}]*--nx-column-flow: 1[^}]*\}/);
+    expect(column).not.toContain("--nx-column-flow: inherit");
   });
 
   it("flags a block taken out of the flow by its own position", () => {
