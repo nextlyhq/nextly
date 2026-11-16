@@ -114,6 +114,10 @@ export function VariableEditor({
         </label>
         <Input
           id={`${id}-name`}
+          // Spell-check and earlier-entry lists off across the variable editor:
+          // its names and values are code-like words a spell-checker marks.
+          spellCheck={false}
+          autoComplete="off"
           value={name}
           onChange={event => setName(event.currentTarget.value)}
           readOnly={readOnly}
@@ -582,6 +586,9 @@ function CommitInput({
     <Input
       id={id}
       aria-label={label}
+      // A value, not prose: no red spell-check line, no earlier-entry list.
+      spellCheck={false}
+      autoComplete="off"
       aria-invalid={refusedBy === undefined ? undefined : true}
       aria-describedby={refusedBy}
       className="nx-vars-editor__mono"
@@ -671,6 +678,9 @@ function ColourValue({
         <Input
           id={id}
           className="nx-vars-editor__mono"
+          // A value, not prose: no red spell-check line, no earlier-entry list.
+          spellCheck={false}
+          autoComplete="off"
           aria-invalid={refusedBy === undefined ? undefined : true}
           aria-describedby={refusedBy}
           value={text}

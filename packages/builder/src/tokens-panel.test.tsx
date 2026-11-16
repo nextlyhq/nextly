@@ -367,6 +367,24 @@ describe("the editor beside the panel", () => {
     expect(document.activeElement).toBe(row(/^Brand/));
   });
 
+  it("spell-checks none of its fields and lists no earlier entries", async () => {
+    // A colour's fields and a size's fields are drawn by different inputs,
+    // so both kinds are opened. Every one of them holds a code-like word or a
+    // value, which a spell-checker would underline as misspelt.
+    render(<Hosted tokens={SITE} />);
+    for (const name of [/^Brand/, /^Body/]) {
+      const editor = await openEditor(name);
+      const fields = within(editor).getAllByRole("textbox");
+      expect(fields.length).toBeGreaterThan(1);
+      for (const field of fields) {
+        expect(field.getAttribute("spellcheck")).toBe("false");
+        expect(field.getAttribute("autocomplete")).toBe("off");
+      }
+      escape();
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    }
+  });
+
   it("keeps Tab inside while it is open, both ways round", async () => {
     render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Text/);

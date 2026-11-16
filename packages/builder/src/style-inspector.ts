@@ -421,6 +421,13 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   // author does not already see.
   disclosureIcon: "Icon",
   disclosurePosition: "Position",
+  // In the Background section, where "Background" already says whose it is;
+  // the whole name was cut to "Background gradi…".
+  backgroundGradient: "Gradient",
+  // A grid's tracks, named as the grid controls of other builders name them.
+  // Rows is shortened with Columns so the pair reads as one in Layout.
+  gridTemplateColumns: "Columns",
+  gridTemplateRows: "Rows",
 };
 
 /**
