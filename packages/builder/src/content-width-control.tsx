@@ -278,7 +278,13 @@ export function ContentWidthControl({
   const own = width !== undefined;
   const isHeld = held !== undefined;
   return (
-    <div className="nx-content-width" data-control="content-width">
+    // A fieldset, so a hold disables every control inside it at once: the
+    // buttons, the field, and a held variable's chip and its list.
+    <fieldset
+      className="nx-content-width"
+      data-control="content-width"
+      disabled={isHeld}
+    >
       <div className="nx-inspector__field">
         <span className="nx-inspector__field-name" id={labelId}>
           Content width
@@ -327,7 +333,7 @@ export function ContentWidthControl({
         />
       ) : null}
       <p className="nx-inspector__note">{held ?? "Same on every device"}</p>
-    </div>
+    </fieldset>
   );
 }
 

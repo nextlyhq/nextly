@@ -308,6 +308,29 @@ describe("one value on every device", () => {
   });
 });
 
+describe("held with a variable as the width", () => {
+  it("disables the variable's chip and writes nothing", () => {
+    const editor = mount(
+      [
+        node("s", "core/section", {
+          contained: true,
+          contentWidth: { $token: "content.wide" },
+        }),
+      ],
+      "s",
+      { state: "hover" }
+    );
+    const group =
+      document.querySelector<HTMLFieldSetElement>(".nx-content-width");
+    expect(group?.disabled).toBe(true);
+    for (const button of group?.querySelectorAll("button") ?? []) {
+      expect(button.matches(":disabled")).toBe(true);
+      fireEvent.click(button);
+    }
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+});
+
 describe("a typed width", () => {
   it.each([
     ["1400px", "1400px"],

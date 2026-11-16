@@ -275,6 +275,7 @@ export {
 export {
   CONTENT_WIDTH_PROP,
   CONTENT_WIDTH_PROPERTY,
+  contentWidthTokenOf,
 } from "../style/content-width";
 export {
   compileStyleValues,

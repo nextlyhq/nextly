@@ -54,6 +54,31 @@ describe("which variables a stored document uses", () => {
     });
   });
 
+  it("counts a variable a container names only as its own content width", () => {
+    const section = {
+      ...box("a"),
+      type: "core/section",
+      props: { contained: true, contentWidth: ref("content.wide") },
+    };
+    const usage = tokenUsageOf(doc([section, box("b")]), DEFAULT_LIMITS);
+    expect(usage.ids).toEqual(["content.wide"]);
+    expect(Object.fromEntries(usage.blocks)).toEqual({ "content.wide": 1 });
+  });
+
+  it("counts a container's own width once beside the same variable in its styles", () => {
+    const section = {
+      ...box("a", at({ maxWidth: ref("content.wide") })),
+      props: { contentWidth: ref("content.wide") },
+    };
+    const usage = tokenUsageOf(doc([section]), DEFAULT_LIMITS);
+    expect(Object.fromEntries(usage.blocks)).toEqual({ "content.wide": 1 });
+  });
+
+  it("CONTROL: a typed content width names no variable", () => {
+    const section = { ...box("a"), props: { contentWidth: "1400px" } };
+    expect(tokenUsageOf(doc([section]), DEFAULT_LIMITS).ids).toEqual([]);
+  });
+
   it("reads a reference nested inside a structured value", () => {
     const stored = doc([
       box(

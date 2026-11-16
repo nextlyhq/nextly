@@ -71,6 +71,30 @@ describe("collectDocumentReferences", () => {
     expect(into.components.size).toBe(0);
   });
 
+  it("reads the variable a container names as its own content width", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "pattern",
+      nodes: [
+        {
+          id: "band",
+          type: "core/section",
+          version: 1,
+          props: { contained: true, contentWidth: { $token: "content.wide" } },
+        },
+        {
+          id: "typed",
+          type: "core/section",
+          version: 1,
+          props: { contained: true, contentWidth: "1400px" },
+        },
+      ],
+    };
+    const into = emptyReferences();
+    collectDocumentReferences(document, into, { mediaProps });
+    expect(sorted(into.tokens)).toEqual(["content.wide"]);
+  });
+
   it("reads a placement's component, its image values and its own slot content, never its type", () => {
     const document: BlockDocument = {
       formatVersion: 1,

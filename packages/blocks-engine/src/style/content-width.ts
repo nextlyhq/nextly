@@ -47,6 +47,22 @@ export const CONTENT_WIDTH_PROPERTY = "--nx-content-width";
  */
 export const CONTENT_WIDTH_PROP = "contentWidth";
 
+/**
+ * The site variable a node's own content width names, or `undefined` where it
+ * names none: for every reader that tracks which variables a page uses (the
+ * usage index, an export's references, an import's remapping), so a variable
+ * used only here is never counted unused.
+ *
+ * @experimental
+ */
+export function contentWidthTokenOf(node: unknown): string | undefined {
+  if (!isPlainRecord(node)) return undefined;
+  const props: unknown = node.props;
+  if (!isPlainRecord(props)) return undefined;
+  const stored = props[CONTENT_WIDTH_PROP];
+  return isTokenRef(stored) ? stored.$token : undefined;
+}
+
 /** The CSS functions a width may be written with. */
 const WIDTH_FUNCTIONS = ["calc", "min", "max", "clamp"];
 

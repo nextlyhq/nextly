@@ -10,7 +10,11 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
-import { CONTENT_WIDTH_PROP, CONTENT_WIDTH_PROPERTY } from "./content-width";
+import {
+  CONTENT_WIDTH_PROP,
+  CONTENT_WIDTH_PROPERTY,
+  contentWidthTokenOf,
+} from "./content-width";
 import { nodeClassName, PAGE_ROOT_SELECTOR } from "./node-class";
 
 const CTX: StyleCompileContext = { breakpoints: FIXTURE_BREAKPOINTS };
@@ -133,5 +137,22 @@ describe("a container's own content width", () => {
     const result = compiled([gated]);
     expect(result.css).not.toContain(CONTENT_WIDTH_PROPERTY);
     expect(result.gated?.n1).toContain(`${CONTENT_WIDTH_PROPERTY}: 1400px`);
+  });
+});
+
+describe("the variable a container's own width names", () => {
+  it("is the token it stores", () => {
+    expect(
+      contentWidthTokenOf(section("n1", { contentWidth: { $token: "a.b" } }))
+    ).toBe("a.b");
+  });
+
+  it.each([
+    ["a typed width", section("n1", { contentWidth: "1400px" })],
+    ["no width", section("n1", {})],
+    ["props that are not a record", { id: "n1", props: "x" }],
+    ["no node at all", null],
+  ])("is none for %s", (_what, node) => {
+    expect(contentWidthTokenOf(node)).toBeUndefined();
   });
 });

@@ -100,15 +100,21 @@ export function ContentWidthFields({
   const own = rows.find(row => row.name === OWN_WIDTH_PROP);
   const boxed = (contained.value ?? contained.defaultValue) === true;
   const locked = contained.readOnly ? "Held by a lock on this area" : undefined;
+  const held = locked ?? contentWidthHeld(target, state);
+  // Refused here as well as disabled there: a control that reaches a write
+  // while held must still not change the block.
+  const write = (name: string, value: unknown) => {
+    if (held === undefined) commitSetting(editor, nodeId, name, value);
+  };
   return (
     <ContentWidthControl
       contained={boxed}
       width={storedWidthOf(own?.value)}
       tokens={tokens}
       variables={widthVariables(tokens, mode)}
-      held={locked ?? contentWidthHeld(target, state)}
-      onContained={next => commitSetting(editor, nodeId, CONTAINED_PROP, next)}
-      onWidth={next => commitSetting(editor, nodeId, OWN_WIDTH_PROP, next)}
+      held={held}
+      onContained={next => write(CONTAINED_PROP, next)}
+      onWidth={next => write(OWN_WIDTH_PROP, next)}
     />
   );
 }
