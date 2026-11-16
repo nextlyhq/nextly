@@ -1029,7 +1029,7 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
  * save is said in the live region rather than drawn dimmed on selection.
  */
 function savePressed(): string {
-  fireEvent.click(screen.getByLabelText("Save as pattern"));
+  fireEvent.click(screen.getByLabelText("Save as section…"));
   return screen.getByRole("status").textContent ?? "";
 }
 
@@ -1099,7 +1099,7 @@ describe("the rules the bar judges a save by", () => {
     mount(editor);
 
     expect(
-      screen.getByLabelText("Save as pattern").getAttribute("aria-disabled")
+      screen.getByLabelText("Save as section…").getAttribute("aria-disabled")
     ).toBeNull();
     // Pressed, it goes on to the host's form: nothing is refused.
     expect(savePressed()).toBe("");
@@ -1113,8 +1113,8 @@ describe("the rules the bar judges a save by", () => {
 
     mount(editorSpy(pair(), "a"));
 
-    const save = screen.getByLabelText("Save as pattern");
+    const save = screen.getByLabelText("Save as section…");
     expect(save.getAttribute("aria-disabled")).toBeNull();
-    expect(save.getAttribute("title")).toBe("Save as pattern");
+    expect(save.getAttribute("title")).toBe("Save as section…");
   });
 });

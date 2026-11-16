@@ -447,8 +447,13 @@ async function grantProblems(
     (await ctx.caller?.can(action, resource)) === true;
   const needs: [boolean, string, string, string][] = [
     [creates(plan, "component"), "create", slugs.component, "add components"],
-    [creates(plan, "pattern"), "create", slugs.pattern, "add patterns"],
-    [creates(plan, "layout"), "create", slugs.layout, "add Layouts"],
+    [creates(plan, "pattern"), "create", slugs.pattern, "add saved sections"],
+    [
+      creates(plan, "layout"),
+      "create",
+      slugs.layout,
+      "add header & footer sets",
+    ],
     // An item the file holds published arrives published, which is a publish.
     [
       publishes(file, plan, "component"),
@@ -460,13 +465,13 @@ async function grantProblems(
       publishes(file, plan, "pattern"),
       "publish",
       slugs.pattern,
-      "publish patterns",
+      "publish saved sections",
     ],
     [
       publishes(file, plan, "layout"),
       "publish",
       slugs.layout,
-      "publish Layouts",
+      "publish header & footer sets",
     ],
     [
       plan.classes.create.length > 0 || plan.tokens.create.length > 0,

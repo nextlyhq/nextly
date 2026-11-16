@@ -246,7 +246,7 @@ function UsesTemplate({
   return (
     <DesignCard>
       <div className="flex min-w-0 items-center gap-2">
-        <TemplateMark label="Template" />
+        <TemplateMark label="Collection template" />
         <span className="truncate text-sm font-semibold">{title}</span>
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">

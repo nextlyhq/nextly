@@ -27,7 +27,7 @@ import {
 } from "../layout-removal/words";
 
 /** What a Layout the author may not read is called, wherever it is named. */
-const UNREADABLE_LAYOUT = "A Layout you can't view";
+const UNREADABLE_LAYOUT = "A header & footer set you can't view";
 
 /** The picker's value for "use the site's default Layout". */
 export const SITE_DEFAULT_VALUE = "site-default";
@@ -149,7 +149,9 @@ function viewWithoutList(
 ): LayoutPickerView {
   // Only a refusal says the author can't view it; while the list is still
   // on its way the stored Layout is named without a claim about access.
-  const namedLabel = forbidden ? UNREADABLE_LAYOUT : "The chosen Layout";
+  const namedLabel = forbidden
+    ? UNREADABLE_LAYOUT
+    : "The chosen header & footer set";
   const options: PickerOption[] = [
     { value: SITE_DEFAULT_VALUE, label: "Site default" },
     ...(named === null || switchedOff
@@ -191,7 +193,8 @@ function storedValue(named: string | null, switchedOff: boolean): string {
  * did not return it, which happens to a Layout hidden from them and to one
  * that was deleted alike, and the answer does not say which.
  */
-const UNKNOWN_LAYOUT = "A Layout you can't view, or one that was deleted";
+const UNKNOWN_LAYOUT =
+  "A header & footer set you can't view, or one that was deleted";
 
 /**
  * The default, as the rule is asked about it, when one is set that the author
@@ -299,7 +302,7 @@ function unknownLayoutView(
     value: layoutValue(named),
     // Said plainly, without guessing which of the two it is, and with what the
     // author can do about it.
-    why: "You can't see this Layout. It may have been deleted, or you may not have access to it. Choose another Layout to change it.",
+    why: "You can't see this header & footer set. It may have been deleted, or you may not have access to it. Choose another header & footer set to change it.",
     readOnly: false,
     effective: null,
   };
@@ -317,7 +320,8 @@ function defaultWords(
 ): Pick<PickerOption, "label" | "note"> {
   if (meta.defaultUnreadable) {
     return {
-      label: "Site default (a Layout you can't view, or one that was deleted)",
+      label:
+        "Site default (a header & footer set you can't view, or one that was deleted)",
     };
   }
   const usable = items.find(item => item.id === meta.defaultLayout);
@@ -350,7 +354,7 @@ function whyNothingShows(
       ? undefined
       : byId.get(resolution.fellBackFrom);
   return fellFrom === undefined
-    ? "No header or footer: the site has no published default Layout"
+    ? "No header or footer: the site has no published default header & footer set"
     : `${fellFrom.title} (not published, so no header or footer shows)`;
 }
 
@@ -370,10 +374,10 @@ function whyLine(
   }
   // Says why this Layout applies, not only which one it is.
   if (resolution.id === UNREADABLE_DEFAULT) {
-    return "Follows the site default: a Layout you can't view, or one that was deleted.";
+    return "Follows the site default: a header & footer set you can't view, or one that was deleted.";
   }
   const title = byId.get(resolution.id)?.title ?? resolution.id;
-  return `Follows the site default, ${title}, because this page doesn't choose its own Layout.`;
+  return `Follows the site default, ${title}, because this page doesn't choose its own header & footer set.`;
 }
 
 /**

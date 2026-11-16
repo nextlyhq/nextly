@@ -100,10 +100,10 @@ describe("the Page Builder's panel", () => {
     const libraries = menu.filter(item => item.group === "library");
 
     expect(libraries.map(item => item.label)).toEqual([
-      "Patterns",
+      "Saved sections",
       "Components",
-      "Layouts",
-      "Templates",
+      "Header & footer",
+      "Collection templates",
     ]);
     expect(libraries.map(item => item.collection)).toEqual([
       PATTERNS_SLUG,
