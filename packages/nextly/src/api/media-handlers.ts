@@ -95,7 +95,13 @@ import {
 
 import { executeBulkDelete } from "./media-bulk";
 import { handleServeMediaCopy } from "./media-copy";
-import { listMediaOptionsFrom, mediaListResponse } from "./media-list";
+import {
+  listMediaOptionsFrom,
+  MEDIA_IDS_PER_READ,
+  mediaByIdsResponse,
+  mediaIdsAskedIn,
+  mediaListResponse,
+} from "./media-list";
 import { handleServeMediaBytes } from "./media-raw";
 import { readJsonBody } from "./read-json-body";
 import {
@@ -482,10 +488,26 @@ function throwUnmatchedRoute(
 // Media Operations
 // ============================================================
 
+/** The ids a read by id may name: a page of them, each a plain id. */
+const mediaIdsSchema = z
+  .array(z.string().min(1).max(64))
+  .min(1)
+  .max(MEDIA_IDS_PER_READ);
+
 async function handleListMedia(request: Request): Promise<Response> {
   const mediaService = await getMediaService();
   const { searchParams } = new URL(request.url);
   const context = createRequestContext();
+
+  // A list naming ids is answered by one read of those items, whatever their
+  // number, rather than one request per item: what a page that draws many
+  // images asks for. It passes the list's own gate, the media read one item
+  // passes too, so it reads exactly what reading each item would.
+  const asked = mediaIdsAskedIn(searchParams);
+  if (asked !== undefined) {
+    const ids = parseAtBoundary(mediaIdsSchema, asked);
+    return mediaByIdsResponse(await mediaService.findByIds(ids, context));
+  }
 
   const options: ListMediaOptions = {
     ...listMediaOptionsFrom(searchParams),
