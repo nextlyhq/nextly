@@ -169,12 +169,61 @@ describe("tables dropped", () => {
     }
   );
 
-  it("counts a table created IF NOT EXISTS as live: it may have been there", () => {
+  // A table created IF NOT EXISTS is the run's own exactly when the database does not have it:
+  // the statement makes it then, and leaves a live table of the name in place otherwise.
+  it("counts a table created IF NOT EXISTS the run's own when it was not there", () => {
     expect(
-      read("postgresql", [
-        "CREATE TABLE IF NOT EXISTS posts (id integer)",
-        "DROP TABLE posts",
-      ])
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS posts (id integer)",
+          "INSERT INTO posts (id) VALUES (1), (2)",
+          "DELETE FROM posts WHERE id = 1",
+          "UPDATE posts SET id = 3",
+          "DROP TABLE posts",
+        ],
+        { live: [] }
+      )
+    ).toEqual([]);
+  });
+
+  it("keeps a live table created IF NOT EXISTS live: what the file deletes of it is named", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS posts (id integer)",
+          "DELETE FROM posts WHERE id = 1",
+          "DROP TABLE posts",
+        ],
+        { live: ["posts"] }
+      )
+    ).toEqual([rows("posts"), table("posts")]);
+  });
+
+  it("keeps a table created IF NOT EXISTS live when whether it is there cannot be read", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS posts (id integer)",
+          "DELETE FROM posts WHERE id = 1",
+        ],
+        { live: "unreadable" }
+      )
+    ).toEqual([rows("posts")]);
+  });
+
+  it("makes nothing of a temporary table created IF NOT EXISTS", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TEMPORARY TABLE IF NOT EXISTS posts (id integer)",
+          "DROP TABLE posts",
+        ],
+        { live: [] }
+      )
     ).toEqual([table("posts")]);
   });
 

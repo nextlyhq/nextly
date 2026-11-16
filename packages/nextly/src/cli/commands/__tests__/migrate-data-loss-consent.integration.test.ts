@@ -299,6 +299,34 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     expect((await migrate()).applied).toBe(2);
   }, 180_000);
 
+  // CREATE TABLE IF NOT EXISTS makes the table only where the database does not have it, so the
+  // rows written into it are the run's own exactly then.
+  it("asks nothing for a table absent before the run, created IF NOT EXISTS and filled in the same file", async () => {
+    const fresh = `${P}_ifne`;
+    file(
+      [
+        `CREATE TABLE IF NOT EXISTS ${fresh} (id integer PRIMARY KEY, title varchar(64))`,
+        `INSERT INTO ${fresh} (id, title) VALUES (1, 'a'), (2, 'b')`,
+        `DELETE FROM ${fresh} WHERE id = 1`,
+      ],
+      []
+    );
+    expect((await migrate()).applied).toBe(1);
+  }, 180_000);
+
+  it("still refuses a removal from a live table the file creates IF NOT EXISTS, until the consent names it", async () => {
+    file(
+      [
+        `CREATE TABLE IF NOT EXISTS ${posts} (id integer PRIMARY KEY, title varchar(64), summary varchar(64))`,
+        `DELETE FROM ${posts} WHERE id = 1`,
+      ],
+      []
+    );
+    const message = await refusedUnchanged(() => migrate());
+    expect(message).toContain(posts);
+    expect((await migrate(consentFor(posts))).applied).toBe(1);
+  }, 180_000);
+
   it("names a live table an earlier file of the run renames by its live name, for what a later file deletes", async () => {
     const renamed = `${P}_renamed`;
     file([`ALTER TABLE ${posts} RENAME TO ${renamed}`], []);

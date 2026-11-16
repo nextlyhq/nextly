@@ -505,10 +505,11 @@ function readSqliteReplace(
 }
 
 /**
- * `CREATE [TEMPORARY] TABLE t`: t is the list's own from here, unless written
- * `IF NOT EXISTS`, which may leave a live table of that name in place.
- * MariaDB's `CREATE OR REPLACE TABLE t` drops t first. Any other creation
- * deletes nothing now.
+ * `CREATE [TEMPORARY] TABLE t`: t is the list's own from here. Written
+ * `IF NOT EXISTS`, it is the list's own only where the database does not have
+ * it, since the statement leaves a live table of that name in place
+ * (`create`). MariaDB's `CREATE OR REPLACE TABLE t` drops t first. Any other
+ * creation deletes nothing now.
  */
 function readCreate(cursor: StatementCursor, tokens: readonly Token[]): Step[] {
   const replacing = cursor.accept("OR", "REPLACE");
@@ -554,12 +555,15 @@ function readCreateTemporary(cursor: StatementCursor): Step[] {
 
 /**
  * `TABLE [IF NOT EXISTS] name`, after `CREATE [TEMPORARY]`: the table the
- * list makes. One created only if absent may be a live table, so it makes
- * nothing of the name.
+ * list makes. A plain one created only if absent is read as any creation: the
+ * walk keeps a table the database has, or may have, as live (`create`), so it
+ * is the list's own only where it was not there. A temporary one created only
+ * if absent makes nothing of the name, since a session's temporary table of it
+ * may already shadow the live one.
  */
 function readCreateTable(cursor: StatementCursor, temporary: boolean): Step[] {
   if (!cursor.accept("TABLE")) return [];
-  if (cursor.accept("IF", "NOT", "EXISTS")) return [];
+  if (cursor.accept("IF", "NOT", "EXISTS") && temporary) return [];
   const table = cursor.name();
   if (table === undefined) return [];
   return [
