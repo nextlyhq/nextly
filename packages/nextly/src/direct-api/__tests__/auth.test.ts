@@ -15,6 +15,9 @@ import {
   vi,
 } from "vitest";
 
+import { decodeJwt } from "jose";
+
+import { SESSION_EPOCH_CLAIM } from "../../auth/jwt/claims";
 import { hashPassword } from "../../auth/password";
 import { NextlyError } from "../../errors/nextly-error";
 import type { Nextly } from "../nextly";
@@ -51,7 +54,7 @@ describe("Direct API - Auth Operations", () => {
   });
 
   describe("login()", () => {
-    // `login` signs a 30-day session, so it signs in exactly as the login
+    // `login` signs a day-long session, so it signs in exactly as the login
     // endpoint does: the real `verifyCredentials`, over the auth router's
     // lookup and lockout dependencies. The tests decide what the stored
     // account looks like and watch what the sign-in records.
@@ -191,6 +194,145 @@ describe("Direct API - Auth Operations", () => {
       expect(await refusalOf(PASSWORD)).toMatchObject({
         code: "AUTH_INVALID_CREDENTIALS",
       });
+    });
+
+    /** The claims a signed token carries, read without verifying it. */
+    function claimsOf(token: string): Record<string, unknown> {
+      return decodeJwt(token);
+    }
+
+    it("signs a token valid for twenty-four hours", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+
+      const { token, exp } = await nextly.login({
+        email: "test@example.com",
+        password: PASSWORD,
+      });
+
+      const claims = claimsOf(token);
+      // Measured from the token's own issue time, so a slow run cannot pass
+      // a thirty-day token by reading the clock later.
+      expect(Number(claims.exp) - Number(claims.iat)).toBe(24 * 60 * 60);
+      // The expiry returned is the token's, not a second calculation.
+      expect(exp).toBe(claims.exp);
+    });
+
+    it("carries the account's roles in force", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+      mocks.directLoginDeps.fetchSessionRoles.mockResolvedValue({
+        roleIds: ["role-editor", "role-author"],
+        validUntil: undefined,
+      });
+
+      const { token } = await nextly.login({
+        email: "test@example.com",
+        password: PASSWORD,
+      });
+
+      expect(claimsOf(token).roleIds).toEqual(["role-editor", "role-author"]);
+      // Read for the account that proved its password, not some other id.
+      expect(mocks.directLoginDeps.fetchSessionRoles).toHaveBeenCalledWith(
+        "user-1"
+      );
+    });
+
+    it("ends no later than the first of its roles lapses", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+      // An hour away: well inside the token's day, so only the bound can
+      // bring the expiry this close.
+      const lapses = Date.now() + 60 * 60 * 1000;
+      mocks.directLoginDeps.fetchSessionRoles.mockResolvedValue({
+        roleIds: ["role-temporary"],
+        validUntil: lapses,
+      });
+
+      const { token, exp } = await nextly.login({
+        email: "test@example.com",
+        password: PASSWORD,
+      });
+
+      expect(Number(claimsOf(token).exp)).toBe(Math.floor(lapses / 1000));
+      expect(exp).toBe(Math.floor(lapses / 1000));
+    });
+
+    it("carries the session epoch its password check read", async () => {
+      // The epoch read with the proven hash is what ends the token when the
+      // account's sessions are ended after that read: a token signed at any
+      // other number would outlive the change or be refused at once.
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(
+        storedUser({ sessionEpoch: 7 })
+      );
+
+      const { token } = await nextly.login({
+        email: "test@example.com",
+        password: PASSWORD,
+      });
+
+      expect(claimsOf(token)[SESSION_EPOCH_CLAIM]).toBe(7);
+    });
+
+    it("records a success naming the account and how it signed in", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+
+      await nextly.login({ email: "test@example.com", password: PASSWORD });
+
+      expect(mocks.directLoginDeps.auditLog.write).toHaveBeenCalledTimes(1);
+      expect(mocks.directLoginDeps.auditLog.write).toHaveBeenCalledWith({
+        kind: "login-succeeded",
+        actorUserId: "user-1",
+        metadata: { strategy: "password", via: "direct-api" },
+      });
+    });
+
+    it("records a failure naming no account, with how it tried to sign in", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+
+      await refusalOf("wrong");
+
+      expect(mocks.directLoginDeps.auditLog.write).toHaveBeenCalledTimes(1);
+      const [event] = mocks.directLoginDeps.auditLog.write.mock.calls[0];
+      expect(event).toEqual({
+        kind: "login-failed",
+        metadata: {
+          code: "AUTH_INVALID_CREDENTIALS",
+          reason: "password-mismatch",
+          strategy: "password",
+          via: "direct-api",
+        },
+      });
+      // Neither key may be present at all, so the row names nobody.
+      expect(event).not.toHaveProperty("actorUserId");
+      expect(event).not.toHaveProperty("targetUserId");
+    });
+
+    it("records a refused account as one failure and no success", async () => {
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(
+        storedUser({ isActive: false })
+      );
+
+      await refusalOf(PASSWORD);
+
+      expect(mocks.directLoginDeps.auditLog.write.mock.calls).toEqual([
+        [expect.objectContaining({ kind: "login-failed" })],
+      ]);
+    });
+
+    it("records a failed role read as a failure and signs no token", async () => {
+      // A sign-in that cannot read the roles must not hand out a token that
+      // says the account holds none.
+      mocks.credentialDeps.findUserByEmail.mockResolvedValue(storedUser());
+      const outage = new Error("connection refused");
+      mocks.directLoginDeps.fetchSessionRoles.mockRejectedValue(outage);
+
+      expect(await refusalOf(PASSWORD)).toBe(outage);
+      expect(mocks.directLoginDeps.auditLog.write.mock.calls).toEqual([
+        [
+          expect.objectContaining({
+            kind: "login-failed",
+            metadata: expect.objectContaining({ code: "INTERNAL_ERROR" }),
+          }),
+        ],
+      ]);
     });
   });
 

@@ -63,3 +63,19 @@ export function resolveBuilderVersions(
     ...(safe !== undefined ? { maxPerDoc: safe } : {}),
   });
 }
+
+/**
+ * A resolved history setting as the Builder's definition file spells it: the
+ * on/off switch and the retention cap, the two values `resolveBuilderVersions`
+ * reads back into this config. A setting that is off, or absent, is the
+ * switch off and no cap.
+ */
+export function builderVersionsOf(
+  resolved: ResolvedVersionsConfig | boolean | null | undefined
+): { versions: boolean; versionsMaxPerDoc?: number | false } {
+  if (resolved === true) return { versions: true };
+  if (resolved === null || resolved === undefined || resolved === false) {
+    return { versions: false };
+  }
+  return { versions: true, versionsMaxPerDoc: resolved.maxPerDoc };
+}

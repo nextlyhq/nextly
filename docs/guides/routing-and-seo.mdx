@@ -618,8 +618,22 @@ export default async function AboutPage() {
 
 Ask the head and the structured data with the same arguments: they then read one cached answer.
 Each starts Nextly first where nothing in the worker has yet, as a page whose reads were all cache
-hits, or one `next build` prerenders, may be served before anything else has. A worker that
-cannot start Nextly serves the route's own metadata and logs a warning once. A new app's
+hits, or one `next build` prerenders, may be served before anything else has.
+
+When Nextly is unavailable while a page renders (its start failed, the database is busy or could
+not be reached, or a read timed out), what happens depends on where the page is rendered:
+
+| Where the page renders              | What happens                                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| A production server revalidating it | The render fails, and Next.js keeps serving the page's last good render until the next attempt |
+| A production server, first request  | The request answers with an error, and nothing is cached for the page                          |
+| `next build`                        | The build fails, so pages are never shipped without their head; the deployment before it stays |
+| `next dev`, or tests                | The route's own metadata is served, and the failure is logged                                  |
+
+A failure that would happen again on the next render is not an outage, and the route's own
+metadata is served for it everywhere, with the failure logged: an answer of the wrong shape, a
+plugin's bug, or a worker where nothing can start Nextly because the app registered no way to
+start it. That last one logs a warning once per worker. A new app's
 `src/nextly/cached-read.ts` registers how it starts Nextly with `registerNextlyStart`, which is
 what lets a page prerendered by `next build` start it; an app made before then adds the same.
 

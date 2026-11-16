@@ -7,12 +7,14 @@ description: "`nextly upgrade --reconcile-core` has a destructive change to Next
 
 `nextly upgrade --reconcile-core` has a destructive change to Nextly's own tables to confirm, and no terminal is attached to ask, so none was made.
 
-`nextly upgrade --reconcile-core` asks before each destructive change to Nextly's own tables. With no terminal attached, as in CI or a script, or with `--non-interactive` given or `CI` set, it cannot ask, so it stopped before making any change. The Why line lists the changes it would make.
+This code is retired. `nextly upgrade --reconcile-core` now judges what it deletes by the data-loss consent, as `nextly migrate` does: with no terminal it refuses unless `--accept-data-loss` covers each deletion. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change ended `--reconcile-core` with it:
+
+`nextly upgrade --reconcile-core` asked before each destructive change to Nextly's own tables. With no terminal attached, as in CI or a script, or with `--non-interactive` given or `CI` set, it cannot ask, so it stopped before making any change. The Why line lists the changes it would make.
 
 ## Fix
 
-- Check that the data in the tables and columns the Why line names is not needed.
-- Run `nextly upgrade --reconcile-core` again in a terminal and confirm each change.
+- Check that the data in the tables and columns the listing names is not needed.
+- Run `nextly upgrade --reconcile-core` again at a terminal and answer the question, or pass the consent the refusal prints, for example `--accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules`.
 
 ## Example
 

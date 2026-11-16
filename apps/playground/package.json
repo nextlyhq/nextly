@@ -1,6 +1,6 @@
 {
   "name": "playground",
-  "version": "0.1.2-alpha.19",
+  "version": "0.1.2-alpha.22",
   "description": "Nextly contributor playground (internal — not for end users)",
   "private": true,
   "scripts": {
@@ -16,7 +16,9 @@
     "plugins:install": "nextly plugins install --all",
     "dev:reset": "tsx --env-file=.env scripts/reset.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "upgrade-gate:record": "tsx upgrade-gate/record.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

@@ -27,8 +27,8 @@ vi.mock("@admin/lib/i18n/I18nProvider", () => ({
   useInterfaceLanguages: () => ["en"],
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock("@admin/components/ui", async importOriginal => ({
-  ...(await importOriginal<typeof import("@admin/components/ui")>()),
+vi.mock("@admin/components/ui/toaster", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/components/ui/toaster")>()),
   toast,
 }));
 /** The runner the entry list's declared actions use, watched. */

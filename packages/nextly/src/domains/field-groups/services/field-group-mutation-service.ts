@@ -79,6 +79,7 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import {
   containedComponentResolver,
   type ComponentFieldResolver,
@@ -96,6 +97,7 @@ import {
   readFieldGroupType,
 } from "../storage/field-group-type-key";
 
+import { registeredComponentColumns } from "./field-group-table-provisioning";
 import {
   COMPONENT_META_KEYS,
   componentFieldHasColumn,
@@ -325,7 +327,9 @@ function storedContainers(
 ): Record<string, unknown> | undefined {
   if (!row) return undefined;
   const found: Record<string, unknown> = {};
-  for (const field of fields) {
+  // A named group or repeater inside a group with no name is a column of this row too
+  // (`fieldsStoredOnRow`), so its stored value is found as one beside the group is.
+  for (const field of fieldsStoredOnRow(fields)) {
     const name = containerName(field);
     if (name === undefined) continue;
     const value = parsedColumn(row[toSnakeCase(name)]);
@@ -1178,8 +1182,7 @@ export class FieldGroupMutationService extends BaseService {
       let instanceId: string;
       if (existing.length > 0) {
         instanceId = existing[0].id;
-        const updateData = this.serializeComponentRow(main, componentFields);
-        updateData.updated_at = this.formatDateForDb();
+        const updateData = this.updatedRow(main, componentFields, tableName);
 
         await this.adapter.update(
           tableName,
@@ -1198,6 +1201,7 @@ export class FieldGroupMutationService extends BaseService {
         const row = this.buildInsertRow({
           data: main,
           componentFields,
+          tableName,
           parentId,
           parentTable,
           fieldName,
@@ -1326,8 +1330,7 @@ export class FieldGroupMutationService extends BaseService {
       let instanceId: string;
       if (existing.length > 0) {
         instanceId = existing[0].id;
-        const updateData = this.serializeComponentRow(main, componentFields);
-        updateData.updated_at = this.formatDateForDb();
+        const updateData = this.updatedRow(main, componentFields, tableName);
 
         await tx.update(tableName, updateData, this.whereEq("id", instanceId), {
           returning: ["id"],
@@ -1336,6 +1339,7 @@ export class FieldGroupMutationService extends BaseService {
         const row = this.buildInsertRow({
           data: main,
           componentFields,
+          tableName,
           parentId,
           parentTable,
           fieldName,
@@ -2165,7 +2169,8 @@ export class FieldGroupMutationService extends BaseService {
     if (existing) {
       const updateData = this.serializeComponentRow(
         split.main,
-        componentFields
+        componentFields,
+        existing.tableName
       );
       updateData[STORAGE_FORMAT.columns.order] = order;
       if (componentType !== null) {
@@ -2183,6 +2188,7 @@ export class FieldGroupMutationService extends BaseService {
       const row = this.buildInsertRow({
         data: split.main,
         componentFields,
+        tableName: params.tableName,
         ...params.parent,
         order,
         componentType,
@@ -2205,6 +2211,8 @@ export class FieldGroupMutationService extends BaseService {
   private buildInsertRow(params: {
     data: ComponentInstanceData;
     componentFields: FieldConfig[];
+    /** The table the row is inserted into. */
+    tableName: string;
     parentId: string;
     parentTable: string;
     fieldName: string;
@@ -2214,6 +2222,7 @@ export class FieldGroupMutationService extends BaseService {
     const {
       data,
       componentFields,
+      tableName,
       parentId,
       parentTable,
       fieldName,
@@ -2222,7 +2231,11 @@ export class FieldGroupMutationService extends BaseService {
     } = params;
 
     const now = this.formatDateForDb();
-    const serializedFields = this.serializeComponentRow(data, componentFields);
+    const serializedFields = this.serializeComponentRow(
+      data,
+      componentFields,
+      tableName
+    );
 
     return {
       id: crypto.randomUUID(),
@@ -2303,7 +2316,10 @@ export class FieldGroupMutationService extends BaseService {
     // localized split then copies values out of this same object into the
     // companion payload, which never reaches `serializeComponentRow` — so a
     // reference left populated here is stored there as a snapshot of the row.
-    normalizeRelationshipFields(instance, componentFields);
+    // Read through `fieldsStoredOnRow`, so a relationship inside a group with no
+    // name, whose value sits on the instance as one beside the group does, is
+    // reduced too.
+    normalizeRelationshipFields(instance, fieldsStoredOnRow(componentFields));
 
     // The components nested in this one: their schemas judge one held in a group or repeater here,
     // whose value no component write of its own reaches, and tell a seeded value from a real one.
@@ -2677,11 +2693,35 @@ export class FieldGroupMutationService extends BaseService {
     return resolving;
   }
 
+  /** An existing instance's row values for an update: its fields' columns, and when it changed. */
+  private updatedRow(
+    data: ComponentInstanceData,
+    fields: FieldConfig[],
+    tableName: string
+  ): Record<string, unknown> {
+    return {
+      ...this.serializeComponentRow(data, fields, tableName),
+      updated_at: this.formatDateForDb(),
+    };
+  }
+
   private serializeComponentRow(
     data: ComponentInstanceData,
-    fields: FieldConfig[]
+    fields: FieldConfig[],
+    /** The table the row is written to, whose registered runtime columns are read below. */
+    tableName: string
   ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
+    // The fields whose columns this row holds: those at the top, and those inside a group with no
+    // name, which only lays fields out and stores them here (`fieldsStoredOnRow`). The creator and
+    // the desired table read the same walk, so every value written has its column.
+    const rowFields = fieldsStoredOnRow(fields);
+    const topLevel = new Set<FieldConfig>(fields);
+    // A table made before the fields inside a group with no name were stored has no column for
+    // them until its next save or `nextly migrate`, and its runtime table leaves them out
+    // (`RuntimeSchemaOptions.heldColumns`). Such a field's value is left out here too, as it was
+    // before, so the write does not name a column the table lacks.
+    const registered = registeredComponentColumns(this.adapter, tableName);
 
     // Coerce date-field strings into `Date` objects before column mapping
     // so Drizzle can bind them to `timestamp` columns. JSON request bodies
@@ -2689,16 +2729,16 @@ export class FieldGroupMutationService extends BaseService {
     // throws `value.toISOString is not a function`. Covers every component
     // write path because both `buildInsertRow` and the in-place update
     // sites funnel through here.
-    coerceDateFieldsToDate(data, fields);
+    coerceDateFieldsToDate(data, rowFields);
 
     // A relationship read at depth comes back populated, and a multi-target one
     // as `{ relationTo, value: row }`. Serializing that as it arrives would
     // store a snapshot of the related row in the column, which later reads
     // would serve in place of reloading the target.
-    normalizeRelationshipFields(data, fields);
+    normalizeRelationshipFields(data, rowFields);
 
     const fieldMap = new Map<string, FieldConfig>();
-    for (const field of fields) {
+    for (const field of rowFields) {
       if ("name" in field && field.name) {
         fieldMap.set(field.name, field);
       }
@@ -2723,6 +2763,13 @@ export class FieldGroupMutationService extends BaseService {
       }
 
       const columnName = toSnakeCase(key);
+      if (
+        registered !== undefined &&
+        !topLevel.has(field) &&
+        !registered.has(columnName.toLowerCase())
+      ) {
+        continue;
+      }
 
       result[columnName] = shouldTreatAsJson(field)
         ? toJsonColumnValue(value)

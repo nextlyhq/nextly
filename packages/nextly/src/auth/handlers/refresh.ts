@@ -47,7 +47,6 @@ export interface RefreshHandlerDeps {
     ipAddress: string | null;
   } | null>;
   deleteRefreshToken: (id: string) => Promise<void>;
-  deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
   /**
    * Runs the rotation's write — the new row in, the presented row spent — in
    * one transaction under a lock on the user row (see `writeSessionRow`).
@@ -120,39 +119,25 @@ export async function handleRefresh(
       return clearAndDeny("Refresh token expired");
     }
 
-    // Enforce refresh-token UA + trusted-IP binding before honoring
-    // rotation. A hard mismatch (IP family flip or /24 / /48 prefix
-    // change) revokes every refresh token for the user, since one
-    // confirmed network mismatch suggests theft rather than benign
-    // rotation.
-    const currentUserAgent = request.headers.get("user-agent");
-    const currentIp = getTrustedClientIp(request, {
-      trustProxy: deps.trustProxy,
-      trustedProxyIps: deps.trustedProxyIps,
-    });
+    // A client whose network or browser changed since the token was issued
+    // is reported, not refused: one browser reaches a site from several
+    // addresses as a matter of course (carrier-grade NAT, several uplinks,
+    // dual-stack), and refusing ended sessions on every device within half
+    // an hour of signing in. See `refresh-binding` for why. Logged without
+    // either address, as every other auth log line leaves them out.
     const binding = evaluateRefreshBinding({
       storedUserAgent: tokenRecord.userAgent,
-      currentUserAgent,
+      currentUserAgent: request.headers.get("user-agent"),
       storedIp: tokenRecord.ipAddress,
-      currentIp,
+      currentIp: getTrustedClientIp(request, {
+        trustProxy: deps.trustProxy,
+        trustedProxyIps: deps.trustedProxyIps,
+      }),
     });
-
-    if (binding.kind === "hard") {
-      await deps.deleteRefreshToken(tokenRecord.id);
-      await deps.deleteAllRefreshTokensForUser(tokenRecord.userId);
+    if (binding.kind === "changed") {
       getNextlyLogger().warn({
-        kind: "refresh-binding-hard-fail",
-        reason: binding.reason,
-        tokenId: tokenRecord.id,
-        userId: tokenRecord.userId,
-      });
-      return clearAndDeny("Session binding mismatch");
-    }
-
-    if (binding.kind === "soft") {
-      getNextlyLogger().warn({
-        kind: "refresh-binding-soft-warn",
-        reason: binding.reason,
+        kind: "refresh-client-changed",
+        reasons: binding.reasons,
         tokenId: tokenRecord.id,
         userId: tokenRecord.userId,
       });
@@ -388,7 +373,7 @@ function denyWithoutClearing(message: string): Response {
 /**
  * A `REFRESH_FAILED` refusal that clears the session's cookies: for a session
  * that has ended — no cookie, an expired row, an account that may no longer
- * hold one, a binding mismatch.
+ * hold one.
  */
 function clearAndDeny(message: string): Response {
   const clearCookies = [

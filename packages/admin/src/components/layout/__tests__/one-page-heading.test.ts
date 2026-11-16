@@ -10,7 +10,7 @@
  * are listed below with the reason.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -72,7 +72,9 @@ const files = [
   ...sourcesUnder(join(ADMIN_SRC, "components/features")),
   ...sourcesUnder(join(ADMIN_SRC, "components/shared")),
 ].map(path => ({
-  path: relative(ADMIN_SRC, path),
+  // Written with "/" whatever the platform, as the list above is: on Windows
+  // `relative` answers with "\\", and no listed path would ever match.
+  path: relative(ADMIN_SRC, path).split(sep).join("/"),
   draws: /<h1[\s>]/.test(withoutComments(readFileSync(path, "utf8"))),
 }));
 

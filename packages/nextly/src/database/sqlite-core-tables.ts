@@ -170,6 +170,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "user_roles_user_id_idx"
       ON "user_roles" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_role_id_idx"
+      ON "user_roles" ("role_id")`,
     `CREATE INDEX IF NOT EXISTS "user_roles_expires_at_idx"
       ON "user_roles" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "role_inherits" (

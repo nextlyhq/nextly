@@ -44,7 +44,12 @@ function Frame({
   );
 }
 
-const outline = () => screen.queryByText("outline");
+/**
+ * The outline, where it is drawn: before its time it is laid out, holding its
+ * place, but not drawn, so it counts as shown only inside a revealed outline.
+ */
+const outline = () =>
+  screen.queryByText("outline")?.closest("[data-outline-shown]") ?? null;
 const line = () => screen.queryByTestId("screen-wait-line");
 const status = () => screen.queryByRole("status");
 

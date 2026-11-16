@@ -72,11 +72,16 @@ import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { assertSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
+import {
+  isVercelFunction,
+  loadVercelPoolAttacher,
+} from "@nextlyhq/adapter-drizzle/serverless";
 import type {
   PostgresAdapterConfig,
   ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
+  TransactionBounds,
   TransactionContext,
   TransactionOptions,
   SessionOptions,
@@ -203,11 +208,19 @@ const PG_ERROR_CODES: Record<string, DatabaseErrorKind> = {
   "40003": "query",
   "40P01": "deadlock",
 
+  // Class 53 - Insufficient Resources: too_many_connections. The server has
+  // no connection to give, so the connect fails; retrying it at once would
+  // only ask again for what is not there, and the connect does not retry it.
+  "53300": "connection",
+
   // Class 57 - Operator Intervention
   "57014": "timeout",
   "57P01": "connection",
   "57P02": "connection",
   "57P03": "connection",
+  // idle_session_timeout (PostgreSQL 14+): the server closed a connection the
+  // pool held idle past the server's limit.
+  "57P05": "connection",
 };
 
 /**
@@ -316,6 +329,23 @@ function sqlStateOf(error: unknown): string | undefined {
 function isSerializationFailure(error: unknown): boolean {
   const code = sqlStateOf(error);
   return code === "40001" || code === "40P01";
+}
+
+/**
+ * `@vercel/functions`' pool attaching, imported only on Vercel, at connect.
+ *
+ * An optional peer: an app outside Vercel never installs it, so the import is
+ * dynamic and its failure is a warning (`loadVercelPoolAttacher`), never a
+ * module that fails to load. The adapter is a server external package
+ * (`withNextly`'s `serverExternalPackages`), so Node resolves this at run time;
+ * the comments keep a bundler that bundles the adapter anyway from requiring
+ * the package at build time. The `db-connections` subpath loads the attaching
+ * alone, not the package's other helpers.
+ */
+function loadVercelDbConnections(): Promise<unknown> {
+  return import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ "@vercel/functions/db-connections"
+  );
 }
 
 /**
@@ -490,22 +520,37 @@ export class PostgresAdapter extends DrizzleAdapter {
       return;
     }
 
-    // Auto-detect provider from URL and apply defaults
+    // Auto-detect provider from URL and apply defaults. Inside Vercel
+    // functions the pool size and idle timeout are the serverless ones
+    // (`getProviderDefaults`), which the config still overrides field by field
+    // in `buildPoolConfig`.
     const url = this.config.url || "";
+    const serverless = isVercelFunction();
     this.detectedProvider = detectPostgresProvider(
       url,
       process.env.DB_PROVIDER
     );
-    this.providerDefaults = getProviderDefaults(this.detectedProvider);
+    this.providerDefaults = getProviderDefaults(this.detectedProvider, {
+      serverless,
+    });
 
     // Log detected provider for developer awareness
     if (this.config.logger?.info) {
       const source = process.env.DB_PROVIDER ? "(explicit)" : "(auto-detected)";
+      const pool = serverless ? ", Vercel pool defaults" : "";
       this.config.logger.info(
-        `PostgreSQL provider: ${this.detectedProvider} ${source}`,
+        `PostgreSQL provider: ${this.detectedProvider} ${source}${pool}`,
         {}
       );
     }
+
+    // On Vercel, what hands each pool built below to `attachDatabasePool`;
+    // loaded once here, so a connect that retries warns at most once.
+    const attachPool = await loadVercelPoolAttacher({
+      load: loadVercelDbConnections,
+      dialect: "PostgreSQL",
+      logger: this.config.logger,
+    });
 
     // Node.js network error codes that are safe to retry (transient failures).
     // These cover cloud databases (e.g. Neon) waking from auto-suspend, brief
@@ -542,6 +587,12 @@ export class PostgresAdapter extends DrizzleAdapter {
           }
           // Client is automatically removed from pool, no action needed
         });
+
+        // Attached as soon as it exists, as Vercel's docs say, so the smoke
+        // test's own connection is one `@vercel/functions` waits on as well:
+        // attached after it, that connection would sit idle untracked, and an
+        // instance suspended right after connecting would keep it open.
+        attachPool?.(this.pool);
 
         // Verify connection with smoke test, then check dialect version.
         // Why: F17 hard-fails at connect on unsupported PG versions (<15.0)
@@ -831,17 +882,29 @@ export class PostgresAdapter extends DrizzleAdapter {
     const pool = this.ensurePool();
     // A checkout, taken from the pool like `executeQuery`'s queries are.
     this.notePoolAccess();
+    // Read before the checkout, in the calling flow (`withTransactionBounds`).
+    const bounds = this.transactionBounds();
     const client = await pool.connect();
     // Set when the ROLLBACK failed. The client may then still be inside the
     // transaction, so it is destroyed rather than pooled: the next request
     // handed it would otherwise write into a transaction nobody commits.
     let discard: Error | true | undefined;
+    // A bounded transaction's session may be ended by the server while no
+    // statement runs on it (`idle_in_transaction_session_timeout`), and
+    // node-postgres reports that as an `error` event on the checked-out
+    // client, which has no listener while checked out: unheard, it would end
+    // the process. Heard here, the transaction's next statement fails, and
+    // the client is destroyed rather than pooled.
+    const sessionEnded = (error: Error) => {
+      discard = error;
+    };
+    if (bounds?.idleMs !== undefined) client.on("error", sessionEnded);
     const settled = await this.settleOutermost(
       {
         context: this.createTransactionContext(client),
         join: this.joinSteps(client),
         openedAt,
-        begin: () => this.beginTransaction(client, options),
+        begin: () => this.beginTransaction(client, options, bounds),
         // A transaction a failed statement aborted is not refused at COMMIT:
         // PostgreSQL rolls it back and answers with the ROLLBACK command tag,
         // raising nothing. A callback that caught its failed statement and
@@ -870,6 +933,9 @@ export class PostgresAdapter extends DrizzleAdapter {
       callback,
       options
     );
+    if (bounds?.idleMs !== undefined) {
+      client.removeListener("error", sessionEnded);
+    }
     // node-postgres destroys a client released with an error or `true`, and
     // pools one released with nothing. Released before anything held runs,
     // so an effect that opens a transaction takes one client, not two.
@@ -1282,7 +1348,8 @@ export class PostgresAdapter extends DrizzleAdapter {
    */
   private async beginTransaction(
     client: PoolClient,
-    options?: TransactionOptions
+    options?: TransactionOptions,
+    bounds?: TransactionBounds
   ): Promise<void> {
     let beginSql = "BEGIN";
 
@@ -1310,6 +1377,18 @@ export class PostgresAdapter extends DrizzleAdapter {
     // Set statement timeout if specified
     if (options?.timeoutMs) {
       await client.query(`SET LOCAL statement_timeout = ${options.timeoutMs}`);
+    }
+
+    // The scope's bounds (`withTransactionBounds`), for this transaction
+    // alone: SET LOCAL ends with it, so the pooled session keeps its own
+    // settings. Whole milliseconds, checked when the scope was entered.
+    if (bounds?.lockWaitMs !== undefined) {
+      await client.query(`SET LOCAL lock_timeout = ${bounds.lockWaitMs}`);
+    }
+    if (bounds?.idleMs !== undefined) {
+      await client.query(
+        `SET LOCAL idle_in_transaction_session_timeout = ${bounds.idleMs}`
+      );
     }
   }
 

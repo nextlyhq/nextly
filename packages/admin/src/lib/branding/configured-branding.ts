@@ -15,7 +15,7 @@
  * @module lib/branding/configured-branding
  */
 import { ADMIN_BRANDING_ELEMENT_ID } from "nextly/config";
-import { z } from "zod";
+import * as z from "zod/mini";
 
 import type { AdminBranding } from "@admin/types/branding";
 
@@ -33,12 +33,18 @@ const CONFIGURED_KEYS = [
   "favicon",
 ] as const satisfies readonly (keyof ConfiguredBranding)[];
 
-const setString = z
-  .string()
-  .transform(value => value.trim())
-  .pipe(z.string().min(1))
-  .optional()
-  .catch(undefined);
+const setString = z.catch(
+  z.optional(
+    z.pipe(
+      z.pipe(
+        z.string(),
+        z.transform(value => value.trim())
+      ),
+      z.string().check(z.minLength(1))
+    )
+  ),
+  undefined
+);
 
 const configuredBrandingSchema = z.object({
   logoUrl: setString,

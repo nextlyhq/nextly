@@ -555,11 +555,13 @@ export function useDocumentActionBindings({
   const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
   const isPublishedEditState =
     mode === "edit" && effectiveStatus === "published";
-  // A drafts-enabled published entry that has a pending working draft: the
-  // server flags the overlay read with `_isWorkingDraft`. This is Payload's
-  // "Changed" state — Publish promotes it and the status pill reflects it.
+  // A published entry that has a pending working draft: the server flags the
+  // overlay read with `_isWorkingDraft`, and overlays only a draft it holds.
+  // Read off the entry rather than the collection's `draftsEnabled`, since a
+  // collection that stopped holding drafts can still hold one saved before,
+  // which the editor must be able to see and discard (the server refuses to
+  // publish it, since it names no language).
   const hasWorkingDraft =
-    draftsEnabled &&
     (entry as { _isWorkingDraft?: boolean } | null | undefined)
       ?._isWorkingDraft === true;
   // The "Discard draft" revert is offered for a Changed document (a pending

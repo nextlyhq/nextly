@@ -18,6 +18,7 @@ import {
   within,
 } from "@testing-library/react";
 import { useState } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
@@ -28,7 +29,12 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 import { DashboardHeader } from "./DashboardHeader";
 import { HeaderTrailProvider } from "./HeaderTrail";
-import { TopBarPlace, TopBarPlacesProvider } from "./TopBarPlaces";
+import { barFolds } from "./bar-fold";
+import {
+  TopBarPlace,
+  TopBarPlacesProvider,
+  useTopBarWidth,
+} from "./TopBarPlaces";
 
 function Shell({
   children,
@@ -198,5 +204,156 @@ describe("a page's breadcrumb", () => {
     );
     expect(within(main()).getByRole("navigation")).toBeTruthy();
     expect(within(bar()).queryByRole("navigation")).toBeNull();
+  });
+});
+
+describe("the bar's width, as a page reads it", () => {
+  it("is known in the first frame drawn, before the browser paints", async () => {
+    // The bar is 400 px wide. React applies what a layout effect sets in the
+    // same task as the commit, before the browser paints; what a passive
+    // effect sets lands in a later task. The first DOM the page shows, as a
+    // mutation observer sees it at the end of that task, must already say
+    // the width.
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue(
+        DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 52 })
+      );
+    const acting = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const wasActing = acting.IS_REACT_ACT_ENVIRONMENT;
+    acting.IS_REACT_ACT_ENVIRONMENT = false;
+    function Reader() {
+      const width = useTopBarWidth();
+      return <span data-testid="bar-width">{width ?? "none"}</span>;
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      const firstDrawn = new Promise<string>(resolve => {
+        const observer = new MutationObserver(() => {
+          const shown = container.querySelector('[data-testid="bar-width"]');
+          if (shown === null) return;
+          observer.disconnect();
+          resolve(shown.textContent ?? "");
+        });
+        observer.observe(container, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      });
+      root.render(
+        <Shell>
+          <Reader />
+        </Shell>
+      );
+      expect(await firstDrawn).toBe("400");
+    } finally {
+      root.unmount();
+      container.remove();
+      acting.IS_REACT_ACT_ENVIRONMENT = wasActing;
+      rect.mockRestore();
+    }
+  });
+});
+
+describe("the bar's width, measured as its container query measures it", () => {
+  it("takes the first measurement inside the bar's padding, so a 720 px bar with 24 px padding folds from the start", () => {
+    // The measured box is 720 px with 24 px of padding either side: its content,
+    // which the observer and the outline's container query both read, is
+    // 672 px, below the fold. An observer that never answers leaves the
+    // first measurement standing alone.
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue(
+        DOMRect.fromRect({ x: 0, y: 0, width: 720, height: 52 })
+      );
+    const style = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      element =>
+        ({
+          paddingLeft: element.hasAttribute("data-bar-room") ? "24px" : "0px",
+          paddingRight: element.hasAttribute("data-bar-room") ? "24px" : "0px",
+          borderLeftWidth: "0px",
+          borderRightWidth: "0px",
+        }) as CSSStyleDeclaration
+    );
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    function Reader() {
+      const width = useTopBarWidth();
+      return (
+        <span data-testid="bar-width">
+          {width === null
+            ? "none"
+            : `${width} ${barFolds(width) ? "folded" : "open"}`}
+        </span>
+      );
+    }
+    try {
+      render(
+        <Shell>
+          <Reader />
+        </Shell>
+      );
+      expect(screen.getByTestId("bar-width").textContent).toBe("672 folded");
+    } finally {
+      vi.unstubAllGlobals();
+      style.mockRestore();
+      rect.mockRestore();
+    }
+  });
+});
+
+describe("the room a document's controls share in the bar", () => {
+  it("leaves out a plugin's header item, so the controls fold rather than run past the bar", () => {
+    // A 704 px bar holding a 224 px plugin item: the trail and the controls
+    // share what is left, 468 px, which is below the fold.
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const width =
+          this.tagName === "HEADER"
+            ? 704
+            : this.hasAttribute("data-bar-room")
+              ? 468
+              : 0;
+        return DOMRect.fromRect({ x: 0, y: 0, width, height: 52 });
+      });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    function Reader() {
+      const width = useTopBarWidth();
+      return (
+        <span data-testid="bar-width">
+          {width === null
+            ? "none"
+            : `${width} ${barFolds(width) ? "folded" : "open"}`}
+        </span>
+      );
+    }
+    try {
+      render(
+        <Shell>
+          <Reader />
+        </Shell>
+      );
+      expect(screen.getByTestId("bar-width").textContent).toBe("468 folded");
+    } finally {
+      vi.unstubAllGlobals();
+      rect.mockRestore();
+    }
   });
 });

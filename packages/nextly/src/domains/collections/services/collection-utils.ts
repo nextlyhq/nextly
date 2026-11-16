@@ -9,6 +9,7 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { isReservedPath } from "../../../runtime/routing/reserved-paths";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
@@ -523,8 +524,15 @@ export function decodeJsonFieldValues(
   }[],
   locale?: string
 ): void {
+  // The fields whose columns the row holds, those inside a group with no name among them
+  // (`fieldsStoredOnRow`). One reached through such a group is on the main row whatever it says
+  // of translation, as the declared list classifies it, so it is never read as a language map.
+  const topLevel = new Set(fields);
+  const stored = (addressableFields(fields) as unknown as typeof fields).map(
+    field => (topLevel.has(field) ? field : { ...field, localized: false })
+  );
   for (const entry of entries) {
-    for (const field of fields) {
+    for (const field of stored) {
       if (!isJsonFieldType(field.type, field)) continue;
       // Every language's values beside the row, read as stored, decode as
       // the row's own value does.

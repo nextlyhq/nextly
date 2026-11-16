@@ -12,6 +12,7 @@
 import type { JSX } from "react";
 
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
 import { BuilderFieldPicker } from "./BuilderFieldPicker";
@@ -44,6 +45,8 @@ type Props = {
   onSettingsChange: (next: BuilderSettingsValues) => void;
   /** Code-first entities render every editing affordance disabled. */
   readOnly: boolean;
+  /** A collection's stored hooks, which the settings modal shows read-only. */
+  storedHooks?: readonly StoredHookConfig[];
 };
 
 export function BuilderOverlays({
@@ -54,6 +57,7 @@ export function BuilderOverlays({
   settings,
   onSettingsChange,
   readOnly,
+  storedHooks,
 }: Props): JSX.Element {
   const close = () => onActiveChange({ kind: "none" });
 
@@ -67,6 +71,7 @@ export function BuilderOverlays({
           config={config}
           initialValues={settings}
           readOnly={readOnly}
+          storedHooks={storedHooks}
           onCancel={close}
           onSubmit={next => {
             onSettingsChange(next);

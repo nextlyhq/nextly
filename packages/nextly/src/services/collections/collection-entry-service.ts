@@ -41,7 +41,10 @@ import type { LifecycleParts } from "../../domains/collections/services/all-loca
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
-import { CollectionMutationService } from "../../domains/collections/services/collection-mutation-service";
+import {
+  CollectionMutationService,
+  type FieldRewriteCall,
+} from "../../domains/collections/services/collection-mutation-service";
 import { CollectionQueryService } from "../../domains/collections/services/collection-query-service";
 import type {
   CollectionServiceResult,
@@ -916,6 +919,27 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Rewrite one field of an entry on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: FieldRewriteCall
+  ): ReturnType<CollectionMutationService["rewriteField"]> {
+    // Judged as an update in the language it writes: a translated field's
+    // language, or every rule's default for a shared one.
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, call.request.locale),
+      () => this.mutationService.rewriteField(call)
+    );
+    // The live copy changed, so its pages revalidate and its event is
+    // delivered, as an update of it does.
+    await this.afterWriteIfRecorded(result);
+    return result;
+  }
+
+  /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
    */
@@ -1001,30 +1025,34 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
+    // The body is read once, here: the value rules below, the write's gate and the write itself
+    // all judge this copy. Read again, a body whose values change between reads (a getter, a
+    // proxy) could be judged by the value rules as one save and gated and stored as another.
+    const sent = { ...body };
     // A save that publishes is judged by the value rules a publish of chosen languages applies,
     // with the save's own values counted in the language it writes: they go live with it.
-    if (body.status === "published") {
+    if (sent.status === "published") {
       const refusal = await this.valueRuleRefusal(
         params,
         params.locale === EVERY_LOCALE
           ? "all"
           : [params.locale ?? this.localization?.defaultLocale ?? ""],
-        params.locale === EVERY_LOCALE ? undefined : body
+        params.locale === EVERY_LOCALE ? undefined : sent
       );
       if (refusal) return refusal;
     }
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
-      () => this.mutationService.updateEntry(params, body, depth)
+      () => this.mutationService.updateEntry(params, sent, depth)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
   }
 
   /**
-   * i18n M7: publish every language of an entry at once (spec §10). Refused first where a
-   * language going live breaks a value rule a publish of chosen languages applies, so the two
-   * ways of publishing every language agree.
+   * Publish every language of an entry at once. Refused first where a language going live
+   * breaks a value rule a publish of chosen languages applies, so the two ways of publishing
+   * every language agree.
    */
   async publishAllLocales(params: EveryLanguageLifecycleParams) {
     const refusal = await this.valueRuleRefusal(params, "all");

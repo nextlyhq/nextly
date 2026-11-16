@@ -542,9 +542,24 @@ function LayerRow({
       <ComponentTag node={node} />
       <EntryContentRowFact facts={view.entryContent.get(node.id)} />
       <RowFacts node={node} />
+      <NotQuotedFact node={node} />
       <RowActions node={node} view={view} />
     </span>
   );
+}
+
+/**
+ * That a block is marked never to be quoted in search: said, not drawn. The
+ * canvas tags the block on hover, and this is where a screen reader hears it.
+ */
+function NotQuotedFact({
+  node,
+}: {
+  node: LayerNode;
+}): React.JSX.Element | null {
+  return node.notQuoted === true ? (
+    <span className="nx-sr-only">Not quoted in search</span>
+  ) : null;
 }
 
 /** What is true about a block, each in words a screen reader reads. */

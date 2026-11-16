@@ -9,6 +9,9 @@ import {
   getPluginRowActions,
   getPluginBulkActions,
   clearDataTablePlugins,
+  dataTablePluginRegistrations,
+  pluginColumnsDeciding,
+  subscribeToDataTablePlugins,
 } from "./plugin-registry";
 import type { NextlyColumn } from "./types";
 
@@ -125,5 +128,77 @@ describe("data-table plugin-registry", () => {
     removeBulk();
     expect(getPluginRowActions("users")).toEqual([]);
     expect(getPluginBulkActions("users").map(a => a.id)).toEqual(["y"]);
+  });
+
+  // A provider whose columns rest on a read of its own says so, and a list
+  // holds its rows a moment for it; the property separating this from a
+  // plausible broken registry is that the lists are asked again once the
+  // read settles even when it adds no column, or a list would wait out its
+  // whole hold for every collection without one.
+  it("says a list's columns are still being decided while a provider waits on a read", async () => {
+    let answer = () => {};
+    const read = new Promise<void>(resolve => {
+      answer = resolve;
+    });
+    let out = true;
+    registerColumns("*", ctx =>
+      out && ctx.deciding !== undefined ? ctx.deciding(read) : []
+    );
+    registerColumns("posts", () => [{ name: "seo", header: "SEO" }]);
+    expect(pluginColumnsDeciding("posts")).toBe(true);
+    // Deciding adds no column of its own.
+    expect(resolvePluginColumns("posts", base).map(c => c.name)).toEqual([
+      "title",
+      "seo",
+    ]);
+
+    const before = dataTablePluginRegistrations();
+    let told = 0;
+    const stop = subscribeToDataTablePlugins(() => {
+      told += 1;
+    });
+    out = false;
+    answer();
+    await read;
+    await Promise.resolve();
+    stop();
+    // Told once, though nothing was registered, and decided now.
+    expect(told).toBe(1);
+    expect(dataTablePluginRegistrations()).not.toBe(before);
+    expect(pluginColumnsDeciding("posts")).toBe(false);
+  });
+
+  // Whether a list holds its rows and the columns it draws come from one ask
+  // of its providers, which may start a read when asked: two asks could see
+  // that read in two states. And a list drawn anew asks anew, since a
+  // provider's answer can follow time as well as the registrations (a "no
+  // column" that stands only a while): an ask kept by snapshot alone would
+  // answer a list reopened later from a stale decision.
+  it("asks a list's providers once per drawn list for its columns and whether it is deciding", () => {
+    let asked = 0;
+    registerColumns("posts", () => {
+      asked += 1;
+      return [{ name: "seo", header: "SEO" }];
+    });
+    const drawn = {};
+    expect(pluginColumnsDeciding("posts", undefined, drawn)).toBe(false);
+    resolvePluginColumns("posts", base, undefined, drawn);
+    resolvePluginColumns("posts", [...base], undefined, drawn);
+    expect(asked).toBe(1);
+    // The same list in a new snapshot asks again.
+    registerColumns("tags", () => []);
+    resolvePluginColumns("posts", base, undefined, drawn);
+    expect(asked).toBe(2);
+    // A list drawn anew, in the same snapshot, asks again.
+    resolvePluginColumns("posts", base, undefined, {});
+    expect(asked).toBe(3);
+  });
+
+  it("is deciding nothing where no provider says so, or one throws", () => {
+    registerColumns("*", () => {
+      throw new Error("broken provider");
+    });
+    registerColumns("posts", () => [{ name: "seo", header: "SEO" }]);
+    expect(pluginColumnsDeciding("posts")).toBe(false);
   });
 });

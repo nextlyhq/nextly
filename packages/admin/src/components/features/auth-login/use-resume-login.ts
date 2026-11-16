@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { ROUTES } from "@admin/constants/routes";
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { publicApi } from "@admin/lib/api/publicApi";
 import type { AuthRefusal } from "@admin/lib/auth/auth-refusal";
+import { landingAfterSignIn } from "@admin/lib/auth/return-address";
 
 /** What an interrupted sign-in left outstanding, once the page has asked. */
 export interface ResumedLogin {
@@ -394,7 +394,9 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
         return { ok: true, continues: true, passwordChangeRequired: raised };
       }
 
-      const next = result?.next ?? ROUTES.DASHBOARD;
+      // The server's destination, or the page's own landing when the login
+      // carried none (`landingAfterSignIn`).
+      const next = landingAfterSignIn(result?.next);
       navigatedRef.current = true;
       window.location.href = next;
       return { ok: true, next };

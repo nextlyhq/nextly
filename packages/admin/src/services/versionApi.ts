@@ -77,13 +77,14 @@ export type VersionScope =
 
 /**
  * Who or what history credits a version or an event to: a person, an API key
- * (by its own name), a plugin's own kind of person, a release, the system, or
- * an agent.
+ * (by its own name), a plugin's own kind of person, a plugin acting on its own
+ * behalf (by its name), a release, the system, or an agent.
  */
 export type HistoryActorKind =
   | "person"
   | "apiKey"
   | "principal"
+  | "plugin"
   | "release"
   | "system"
   | "agent";

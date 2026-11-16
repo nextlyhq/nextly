@@ -22,8 +22,9 @@ import { useFormState, useWatch } from "react-hook-form";
 import { receivedHrefFor } from "../received/contract";
 import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
-import { SEO_GROUP } from "../tab/typed";
+import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
+import type { DISPLAY_FIELDS } from "./display-rows";
 import { SeoPanel } from "./SeoPanel";
 import { useShareImages } from "./share-images";
 import { publishSeoStatus, statusKeyOf } from "./status";
@@ -80,25 +81,39 @@ function useStatusLine(
   context: DocumentTabProps["context"],
   answers: PanelAnswers | undefined,
   count: number,
-  typeLabel: string | undefined
+  typeLabel: string | undefined,
+  values: SeoPanelValues
 ): void {
   const key = statusKeyOf(context);
   const from = answers?.answer.robots.from;
+  // The page sets its own display where its typed level holds any display
+  // control: the same reading the page's head and the panel's answer make.
+  const display =
+    typedPageLevel(values).display === undefined ? "site" : "page";
   useEffect(() => {
     if (from === undefined || typeLabel === undefined) return undefined;
     publishSeoStatus(key, {
       listing: from === "type" ? "type" : from === "page" ? "page" : "listed",
       count,
       typeLabel,
+      display,
     });
     return () => publishSeoStatus(key, null);
-  }, [key, from, count, typeLabel]);
+  }, [key, from, count, typeLabel, display]);
 }
 
+/** One of the panel's values, as the document's form holds it. */
+type DocumentField = ReturnType<typeof useDocumentField>;
+
 /** Each of the panel's values, writable as the person typing it would. */
-function useSeoFields(): Record<
-  SeoPanelField,
-  ReturnType<typeof useDocumentField>
+function useSeoFields(): Record<SeoPanelField, DocumentField> {
+  return { ...usePageFields(), ...useDisplayFields() };
+}
+
+/** The values about what the page says and where it lives. */
+function usePageFields(): Record<
+  Exclude<SeoPanelField, (typeof DISPLAY_FIELDS)[number]>,
+  DocumentField
 > {
   return {
     metaTitle: useDocumentField(`${SEO_GROUP}.metaTitle`),
@@ -110,6 +125,22 @@ function useSeoFields(): Record<
     canonicalElsewhere: useDocumentField(`${SEO_GROUP}.canonicalElsewhere`),
     noindex: useDocumentField(`${SEO_GROUP}.noindex`),
     structuredDataType: useDocumentField(`${SEO_GROUP}.structuredDataType`),
+  };
+}
+
+/** The values about how search results may show the page. */
+function useDisplayFields(): Record<
+  (typeof DISPLAY_FIELDS)[number],
+  DocumentField
+> {
+  return {
+    maxImagePreview: useDocumentField(`${SEO_GROUP}.maxImagePreview`),
+    maxSnippet: useDocumentField(`${SEO_GROUP}.maxSnippet`),
+    nosnippet: useDocumentField(`${SEO_GROUP}.nosnippet`),
+    noimageindex: useDocumentField(`${SEO_GROUP}.noimageindex`),
+    unavailableAfter: useDocumentField(`${SEO_GROUP}.unavailableAfter`),
+    noarchive: useDocumentField(`${SEO_GROUP}.noarchive`),
+    nocache: useDocumentField(`${SEO_GROUP}.nocache`),
   };
 }
 
@@ -241,7 +272,7 @@ export function SeoTab({
     [levels, values, chosenImage]
   );
   const problems = useProblemsBadge(answers, levels, setBadge);
-  useStatusLine(context, answers, problems.length, levels?.typeLabel);
+  useStatusLine(context, answers, problems.length, levels?.typeLabel, values);
 
   if (target === null) return null;
   // Read-only while the document is held, and for someone who may not

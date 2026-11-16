@@ -45,6 +45,7 @@ import {
   useContext,
   useId,
   useMemo,
+  useState,
   useSyncExternalStore,
   type Context,
   type JSX,
@@ -52,6 +53,7 @@ import {
 } from "react";
 
 import { ChevronRight } from "@admin/components/icons";
+import { useRememberedListPager } from "@admin/components/shared/loading-frame/list-rows";
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -64,7 +66,16 @@ import {
   resolvePluginColumns,
   subscribeToDataTablePlugins,
   type DataTablePluginRegistrations,
+  type PluginColumnsPass,
 } from "./plugin-registry";
+import {
+  FIXED_LAYOUT_TABLE,
+  fixedColumnLayout,
+  LIST_TABLE,
+  ROW_ACTIONS_COLUMN,
+  ROW_ACTIONS_TRIGGER,
+  SELECTION_COLUMN,
+} from "./row-actions";
 import {
   isListEmpty,
   rowCountLabel,
@@ -199,6 +210,25 @@ const DEFAULT_GET_ROW_ID = (row: object): string => {
 export const HeldPluginRegistrations: Context<
   DataTablePluginRegistrations | undefined
 > = createContext<DataTablePluginRegistrations | undefined>(undefined);
+
+/**
+ * The ask of the plugins' column providers a parent of the view has already
+ * made for this list (`EntryTable`, which holds its rows while a provider is
+ * deciding), so the view draws the columns of that same ask rather than
+ * asking again. Internal, as `HeldPluginRegistrations` is.
+ */
+export const HeldPluginColumnsPass: Context<PluginColumnsPass | undefined> =
+  createContext<PluginColumnsPass | undefined>(undefined);
+
+/**
+ * This list's ask of its column providers: the one a parent holds, or one
+ * of its own, kept while the list is mounted. A list drawn anew asks anew.
+ */
+export function usePluginColumnsPass(): PluginColumnsPass {
+  const held = useContext(HeldPluginColumnsPass);
+  const [own] = useState<PluginColumnsPass>(() => ({}));
+  return held ?? own;
+}
 
 /** A subscription that is never told anything, for a snapshot held above. */
 function noSubscription(): () => void {
@@ -531,13 +561,14 @@ export function DataTableView<Row extends object>({
   // The plugins' registrations as they stand, read again when one changes, so
   // a column or action registered while this list is on screen joins it.
   const registered = useDataTablePluginRegistrations();
+  const pass = usePluginColumnsPass();
   // Merge plugin-contributed columns (and transforms) for this list, if any.
   const resolvedColumns = useMemo(
     () =>
       registryKey
-        ? resolvePluginColumns(registryKey, columns, registered)
+        ? resolvePluginColumns(registryKey, columns, registered, pass)
         : columns,
-    [registryKey, columns, registered]
+    [registryKey, columns, registered, pass]
   );
   const pluginRowActions = useMemo(
     () =>
@@ -549,6 +580,9 @@ export function DataTableView<Row extends object>({
     () => resolvedColumns.filter(c => !c.hidden),
     [resolvedColumns]
   );
+  // Laid out by the columns' widths where every column declares one, so
+  // the columns do not move as rows arrive; else by their content.
+  const fixedLayout = fixedColumnLayout(visibleColumns.map(c => c.width));
   const mobileColumns = useMemo(
     () => visibleColumns.filter(c => !c.hideOnMobile),
     [visibleColumns]
@@ -559,12 +593,16 @@ export function DataTableView<Row extends object>({
     visibleColumns.find(c => c.name === primaryColumn)?.name ??
     visibleColumns[0]?.name;
 
-  // Card-view primary/secondary split (skip synthetic select/actions columns).
+  // Card-view primary/secondary split: the card is headed by the primary
+  // column where a phone shows it, so a column put before it (a plugin's,
+  // say) never takes the card's title; else by the first shown column that
+  // is not a synthetic select/actions one.
   const cardPrimary = useMemo(
     () =>
+      mobileColumns.find(c => c.name === primaryColumn) ??
       mobileColumns.find(c => c.name !== "select" && c.name !== "actions") ??
       mobileColumns[0],
-    [mobileColumns]
+    [mobileColumns, primaryColumn]
   );
   const cardSecondary = useMemo(
     () => mobileColumns.filter(c => c.name !== cardPrimary?.name),
@@ -653,7 +691,7 @@ export function DataTableView<Row extends object>({
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon" variant="ghost" aria-label="Row actions">
+          <Button {...ROW_ACTIONS_TRIGGER} aria-label="Row actions">
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
@@ -778,7 +816,10 @@ export function DataTableView<Row extends object>({
             </TableCell>
           )}
           {selection && (
-            <TableCell className="w-10" onClick={e => e.stopPropagation()}>
+            <TableCell
+              className={SELECTION_COLUMN}
+              onClick={e => e.stopPropagation()}
+            >
               <Checkbox
                 checked={selectedSet.has(id)}
                 disabled={!selectable}
@@ -802,7 +843,7 @@ export function DataTableView<Row extends object>({
           ))}
           {hasRowActions && (
             <TableCell
-              className="w-12 text-right"
+              className={ROW_ACTIONS_COLUMN}
               onClick={e => e.stopPropagation()}
             >
               {renderRowActions(row)}
@@ -1064,6 +1105,9 @@ export function DataTableView<Row extends object>({
     typeof footer === "boolean" ||
     footer === "";
 
+  // How tall the pager stands, kept for the list's outline next time.
+  const rememberedPager = useRememberedListPager(registryKey);
+
   // The limit worth stating rather than hiding: a component that RETURNS null
   // still counts as content here, because no inspection of the node can know
   // what it renders without rendering it. That case draws an empty surface, and
@@ -1072,7 +1116,9 @@ export function DataTableView<Row extends object>({
     !footerRendersNothing || pagination !== undefined ? (
       <>
         {footer}
-        {pagination !== undefined && <Pagination {...pagination} />}
+        {pagination !== undefined && (
+          <Pagination ref={rememberedPager} {...pagination} />
+        )}
       </>
     ) : undefined;
 
@@ -1147,10 +1193,14 @@ export function DataTableView<Row extends object>({
           )}
         </div>
 
-        {/* Desktop / wide: table view */}
-        <div className="hidden @md/table:block">
+        {/* Desktop / wide: table view. Named as a table's outline names its
+            rows, so a test can hold the two to one box. */}
+        <div data-frame-part="list-rows" className="hidden @md/table:block">
           <div className="overflow-x-auto">
-            <Table aria-label={ariaLabel} className="w-full min-w-max">
+            <Table
+              aria-label={ariaLabel}
+              className={cn(LIST_TABLE, fixedLayout && FIXED_LAYOUT_TABLE)}
+            >
               <TableHeader>
                 <TableRow>
                   {rowDetail && (
@@ -1159,7 +1209,7 @@ export function DataTableView<Row extends object>({
                     </TableHead>
                   )}
                   {selection && (
-                    <TableHead className="w-10">
+                    <TableHead className={SELECTION_COLUMN}>
                       <Checkbox
                         checked={allSelected}
                         indeterminate={someSelected}
@@ -1181,6 +1231,7 @@ export function DataTableView<Row extends object>({
                           col.align === "center" && "text-center",
                           canSort && "relative cursor-pointer select-none"
                         )}
+                        style={fixedLayout ? { width: col.width } : undefined}
                         aria-sort={ariaSortOf(sorted, canSort)}
                       >
                         <HeaderLabel
@@ -1200,7 +1251,9 @@ export function DataTableView<Row extends object>({
                       </TableHead>
                     );
                   })}
-                  {hasRowActions && <TableHead className="w-12 text-right" />}
+                  {hasRowActions && (
+                    <TableHead className={ROW_ACTIONS_COLUMN} />
+                  )}
                 </TableRow>
               </TableHeader>
               {loading && rows.length === 0 ? (

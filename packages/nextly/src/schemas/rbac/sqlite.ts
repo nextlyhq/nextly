@@ -148,6 +148,10 @@ export const userRoles = sqliteTable(
   t => [
     uniqueIndex("user_roles_user_role_unique").on(t.userId, t.roleId),
     index("user_roles_user_id_idx").on(t.userId),
+    // Finding the accounts that hold a role. The last-super-admin guard makes
+    // that read inside every write it judges, under the role row's lock, so a
+    // scan there would hold the write open.
+    index("user_roles_role_id_idx").on(t.roleId),
     index("user_roles_expires_at_idx").on(t.expiresAt), // For filtering expired role assignments
   ]
 );

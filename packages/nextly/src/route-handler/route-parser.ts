@@ -603,6 +603,23 @@ function parseCollectionRoutes(
     };
   }
 
+  // POST /api/collections/schema/address-check → what creating a collection under an address
+  // would answer, asked before the create. Under the collections service, so the collection
+  // create's own permission gates it.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "checkCollectionAddress",
+      routeParams,
+    };
+  }
+
   if (id === "schema" && subresource && httpMethod === "GET") {
     // GET /api/collections/schema/course → get collection schema with enriched component fields
     routeParams.collectionName = subresource;
@@ -1558,6 +1575,23 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/schema/address-check → what creating a Single under an address would
+  // answer, asked before the create. Under the singles service, so the Single create's own
+  // permission gates it.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "checkSingleAddress",
+      routeParams,
+    };
+  }
+
   return null;
 }
 
@@ -1591,6 +1625,18 @@ function parseComponentRoutes(
       ? parseComponentSchemaRoute(subresource, subId, httpMethod, routeParams)
       : null;
   if (schemaRoute) return schemaRoute;
+
+  // POST /api/field-groups/schema/address-check → what creating a field group under an address
+  // would answer, asked before the create. A POST under this service, so it asks the permission
+  // the field-group create asks.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return componentRoute("single", "checkComponentAddress", routeParams);
+  }
 
   // GET /api/field-groups/[slug]/used-by → the fields that place the field
   // group, and what holds each. Matched before the bare slug routes below,
@@ -1875,6 +1921,10 @@ const EMAIL_TEMPLATE_OWNERSHIP_ROUTES: Record<
   compare: { httpMethod: "GET", method: "compareTemplate" },
   "apply-update": { httpMethod: "PATCH", method: "applyOwnerUpdate" },
   "undo-update": { httpMethod: "PATCH", method: "undoOwnerUpdate" },
+  // Whether a template is kept on the engine it was written for, and why;
+  // and the step that reads it as Liquid from now on.
+  engine: { httpMethod: "GET", method: "templateEngine" },
+  "read-as-liquid": { httpMethod: "PATCH", method: "readAsLiquid" },
 };
 
 /** A route's operation (which picks nothing: the HTTP method picks the permission) and service method. */
@@ -1913,11 +1963,15 @@ function emailTemplateSubresourceRoute(
       ? { operation: "single", method: "previewTemplate" }
       : undefined;
   }
-  // A test send of the saved template, to the signed-in user's own address.
-  // PATCH so the method-derived permission is `update-email-templates`.
+  // A test send, to the signed-in user's own address: PATCH sends it, so the
+  // method-derived permission is `update-email-templates`; GET says where it
+  // would go and which provider would deliver it, before anything is sent.
   if (subresource === "send-test") {
-    return httpMethod === "PATCH"
-      ? { operation: "update", method: "sendTestTemplate" }
+    if (httpMethod === "PATCH") {
+      return { operation: "update", method: "sendTestTemplate" };
+    }
+    return httpMethod === "GET"
+      ? { operation: "single", method: "testSendTarget" }
       : undefined;
   }
   // The ownership steps. Each changes the template, so each is a PATCH and
@@ -1945,7 +1999,10 @@ function emailTemplateSubresourceRoute(
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
- * - PATCH /api/email-templates/[id]/send-test → send the saved template to the signed-in user
+ * - GET /api/email-templates/[id]/send-test → where a test would go, and which provider delivers it
+ * - PATCH /api/email-templates/[id]/send-test → send a test, of the saved template or of a draft, to the signed-in user
+ * - GET /api/email-templates/[id]/engine → whether it is kept on its first engine, and why
+ * - PATCH /api/email-templates/[id]/read-as-liquid → read a kept template as Liquid from now on
  * - PATCH /api/email-templates/[id]/override → override an owned template
  * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
  * - GET /api/email-templates/[id]/compare → the owner's changes since the override

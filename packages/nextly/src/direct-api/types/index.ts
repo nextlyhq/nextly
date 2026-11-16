@@ -40,6 +40,8 @@ export type {
   FindByIDArgs,
   CreateArgs,
   UpdateArgs,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   PublishArgs,
   PublishResult,
   DeleteArgs,

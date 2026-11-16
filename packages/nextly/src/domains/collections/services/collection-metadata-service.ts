@@ -24,7 +24,6 @@ import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scop
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
-import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
@@ -34,14 +33,10 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
-import {
-  checkSaveHistory,
-  prepareCollectionSave,
-  undoThenThrow,
-  writeCollectionSave,
-  type PreparedCollectionSave,
-  type BuilderSaveSetup,
-  type CollectionSaveDeps,
+import type {
+  PreparedCollectionSave,
+  BuilderSaveSetup,
+  CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
 import { renamedFieldsOf } from "../../schema/builder-save/schema-change-save";
 import {
@@ -74,6 +69,13 @@ interface DeletedCollectionRow {
   /** Set on a code-first collection's row: its definition is the code's. */
   locked?: boolean | number | null;
 }
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a service that saves nothing never needs.
+ */
+const loadCollectionSave = () =>
+  import("../../schema/builder-save/collection-save");
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -483,6 +485,7 @@ export class CollectionMetadataService extends BaseService {
           [],
           artifacts.metadata.fields
         );
+        const { writeCollectionSave } = await loadCollectionSave();
         await writeCollectionSave(deps, {
           slug: artifacts.metadata.slug,
           previous: null,
@@ -576,6 +579,7 @@ export class CollectionMetadataService extends BaseService {
         beforeFields,
         fields
       );
+      const { writeCollectionSave } = await loadCollectionSave();
       await writeCollectionSave(
         deps,
         {
@@ -1455,19 +1459,19 @@ export class CollectionMetadataService extends BaseService {
       // is removed, when no such order exists (`collection-drop-order`). A key
       // to a renamed member references the table it kept, which the registry
       // names, so the keys are described against the registry's tables.
-      const targetTables = await collectionTablesBySlug(
-        this.adapter,
-        collections.flatMap(collection => collection.fields ?? [])
+      // The keys each table really carries, as the database reports them: a relationship the
+      // admin made now has one, one made before it was keyed has none (which orders nothing and
+      // is no cycle), and an older key points where the database says, whatever its field reads.
+      const heldKeys = await Promise.all(
+        collections.map(collection =>
+          this.collectionService.heldRelationshipKeys(collection.tableName)
+        )
       );
       const order = dropOrder(
         slugs.map((slug, index) => ({
           slug,
           tableName: collections[index].tableName,
-          keys: this.collectionService.relationshipForeignKeys(
-            collections[index].tableName,
-            collections[index].fields ?? [],
-            targetTables
-          ),
+          keys: heldKeys[index],
         }))
       );
       const ordered = order.map(index => ({
@@ -1703,6 +1707,8 @@ export class CollectionMetadataService extends BaseService {
     ordered: ReadonlyArray<{ slug: string; collection: DeletedCollectionRow }>,
     deps: CollectionSaveDeps
   ): Promise<void> {
+    const { checkSaveHistory, prepareCollectionSave, undoThenThrow } =
+      await loadCollectionSave();
     await checkSaveHistory(deps);
     // Every junction of the collections deleted together goes in the first
     // file, before any of their tables: a junction links two of them, and

@@ -33,6 +33,7 @@ import {
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
@@ -97,6 +98,8 @@ function CreateEntryPageSkeleton() {
   // side panel at the editor's own geometry.
   return (
     <EditorOutline
+      // A new entry's bar has only its verbs.
+      creating
       sideWidth={320}
       columnClassName={DOCUMENT_COLUMN_INSET}
       columnStyle={{ maxWidth: CONTENT_MEASURE_LENGTH }}
@@ -117,7 +120,18 @@ function CreateEntryPageSkeleton() {
  * @param props - Page props with route params
  * @returns Create entry page component
  */
-export default function CreateEntryPage({
+export default function CreateEntryPage(
+  props: CreateEntryPageProps
+): React.ReactElement {
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn: for
+  // every state the page draws, so here, around them all.
+  useCollectionFoldedPanel(props.params?.slug);
+  return <CreateEntryScreen {...props} />;
+}
+
+/** The page's states: its outline, a failure, or the new entry's editor. */
+function CreateEntryScreen({
   params,
 }: CreateEntryPageProps): React.ReactElement {
   const slug = params?.slug;

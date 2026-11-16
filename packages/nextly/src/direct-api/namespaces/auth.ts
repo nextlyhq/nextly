@@ -10,7 +10,8 @@
 
 import { verifyCredentials } from "../../auth/credentials/verify-credentials";
 import { buildClaims } from "../../auth/jwt/claims";
-import { signAccessToken } from "../../auth/jwt/sign";
+import { signAccessTokenWithExpiry } from "../../auth/jwt/sign";
+import { auditFailureMetadata } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
 import { emitAuthEvent } from "../../events/domain-events";
 import { env } from "../../lib/env";
@@ -26,7 +27,28 @@ import type {
   VerifyEmailArgs,
 } from "../types/index";
 
-import type { NextlyContext } from "./context";
+import type { DirectLoginDeps, NextlyContext } from "./context";
+
+/**
+ * How long a Direct API token is valid: a day.
+ *
+ * The caller is the app's own server code holding the credentials, and it can
+ * sign in again whenever it likes, so a day bounds a leaked token without
+ * having a scheduled job re-prove its password many times a day. Ending the
+ * account's sessions ends the token sooner, and the first of its roles to
+ * lapse ends it no later than that.
+ */
+const DIRECT_LOGIN_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * The strategy a Direct API login is recorded under: it proves a password.
+ * `via` says it came from server code rather than the login page, so the
+ * trail can tell the two apart.
+ */
+const DIRECT_LOGIN_AUDIT_METADATA = {
+  strategy: "password",
+  via: "direct-api",
+} as const;
 
 /**
  * Verify user credentials and return a signed JWT session token.
@@ -43,11 +65,52 @@ import type { NextlyContext } from "./context";
  * `AUTH_INVALID_CREDENTIALS` too. The endpoint answers it with the forced-change step, which a
  * server-side call cannot complete, and a token issued here would skip it.
  *
+ * Like every other sign-in, it is recorded on the audit trail, a success
+ * naming the account and a failure naming none, and its token carries the
+ * account's roles in force and ends no later than the first of them lapses.
+ *
  * Unlike the endpoint, this runs no plugin login hooks and no second-factor
  * challenge: it is for trusted server code, not for signing a person in.
  */
 export async function login(
   ctx: NextlyContext,
+  args: LoginArgs
+): Promise<LoginResult> {
+  const deps = ctx.directLoginDeps;
+  let result: LoginResult;
+  try {
+    result = await signIn(ctx, deps, args);
+  } catch (err) {
+    // Every way this sign-in ends in failure is recorded once, the same way
+    // the login endpoint records its own: no actor, so the row cannot say
+    // which account was reached, and only core-controlled values kept.
+    await deps.auditLog.write({
+      kind: "login-failed",
+      metadata: {
+        ...auditFailureMetadata(err),
+        ...DIRECT_LOGIN_AUDIT_METADATA,
+      },
+    });
+    throw err;
+  }
+  // Recorded once the token exists, so the trail never claims a sign-in that
+  // delivered nothing.
+  await deps.auditLog.write({
+    kind: "login-succeeded",
+    actorUserId: String(result.user.id),
+    metadata: { ...DIRECT_LOGIN_AUDIT_METADATA },
+  });
+  emitAuthEvent("loggedIn", {
+    userId: result.user.id,
+    email: result.user.email,
+  });
+  return result;
+}
+
+/** The sign-in itself, without its record: proves the password, signs the token. */
+async function signIn(
+  ctx: NextlyContext,
+  deps: DirectLoginDeps,
   args: LoginArgs
 ): Promise<LoginResult> {
   const verified = await verifyCredentials(
@@ -56,8 +119,8 @@ export async function login(
   );
   if (verified.mustChangePassword) {
     throw NextlyError.invalidCredentials({
-      // A plain reason, not the audit vocabulary: this call writes no
-      // audit row for the reason to be kept on.
+      // A plain reason for the operator's log. It is not in the audit
+      // vocabulary, so the failure row keeps the code and drops it.
       logContext: { userId: verified.id, reason: "must-change-password" },
     });
   }
@@ -82,30 +145,39 @@ export async function login(
     });
   }
 
-  const maxAge = 30 * 24 * 60 * 60;
-  const exp = Math.floor(Date.now() / 1000) + maxAge;
+  // The roles in force now, as every session's token takes them. Read after
+  // the password is proven, so an unknown address or a wrong password never
+  // reaches the role table.
+  const sessionRoles = await deps.fetchSessionRoles(userId);
 
   const claims = buildClaims({
     userId,
     email: user.email,
     name: user.name || "",
     image: user.image ?? null,
-    roleIds: [],
-    // Read with the password this sign-in proved. The token lives thirty
-    // days, so this is what lets a deactivation or a password set end it:
-    // every place a session is read refuses a token at an older epoch. It is
-    // the epoch read with the proven hash; a lookup that read none refused the
-    // sign-in in `verifyCredentials` before reaching here.
+    roleIds: sessionRoles.roleIds,
+    // The epoch read WITH the proven hash, never a fresh reading: a
+    // deactivation or a password set that commits after the password was
+    // checked and before this token is signed raises the epoch past this
+    // one, so every place a session is read refuses the token. A later
+    // reading would carry the raised epoch and outlive the change.
     sessionEpoch: verified.sessionEpoch,
   });
-  const token = await signAccessToken(claims, secret, maxAge);
-
-  emitAuthEvent("loggedIn", { userId: user.id, email: user.email });
+  const { token, expiresAt } = await signAccessTokenWithExpiry(
+    claims,
+    secret,
+    DIRECT_LOGIN_TOKEN_TTL_SECONDS,
+    "session",
+    // Ending no later than the first of its roles lapses: the claims are a
+    // copy of the roles, read by the stateless session checks until expiry.
+    sessionRoles.validUntil
+  );
 
   return {
     user: user,
     token,
-    exp,
+    // The token's own expiry, so the caller is never told a later one.
+    exp: Math.floor(expiresAt.getTime() / 1000),
   };
 }
 

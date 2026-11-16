@@ -151,6 +151,60 @@ export function isWideningChange(
   return false;
 }
 
+/** A fixed-point type with its precision and optional scale, as any dialect spells it. */
+const DECIMAL_RE = /^(?:decimal|numeric)\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)$/i;
+
+/**
+ * Whether a fixed-point column of `fromType` copies every value into one of `toType`: as many
+ * digits after the point, and as many before it (precision less scale). Null when either is not
+ * a fixed-point type with a stated precision, which the other rules judge.
+ */
+function decimalHoldsEveryValue(
+  fromType: string,
+  toType: string
+): boolean | null {
+  const from = DECIMAL_RE.exec(fromType.trim());
+  const to = DECIMAL_RE.exec(toType.trim());
+  if (from === null || to === null) return null;
+  const [fromPrecision, fromScale] = [Number(from[1]), Number(from[2] ?? 0)];
+  const [toPrecision, toScale] = [Number(to[1]), Number(to[2] ?? 0)];
+  return (
+    toScale >= fromScale && toPrecision - toScale >= fromPrecision - fromScale
+  );
+}
+
+/** A SQLite declared type's affinity, by SQLite's own rules, taken in their order. */
+function sqliteAffinity(type: string): string {
+  const lower = type.toLowerCase();
+  if (lower.includes("int")) return "integer";
+  if (/char|clob|text/.test(lower)) return "text";
+  if (lower.includes("blob") || lower.trim() === "") return "blob";
+  if (/real|floa|doub/.test(lower)) return "real";
+  return "numeric";
+}
+
+/**
+ * Whether copying every value of a column of `fromType` into a new column of `toType` keeps each
+ * one as it is, and within what the new type allows: a fixed-point type with no fewer digits on
+ * either side of the point (`decimalHoldsEveryValue`), or a widening (`isWideningChange`), derived
+ * from it. On SQLite a widening in place is not one across a copy unless both types have one
+ * affinity: an integer copied into REAL is stored as a floating-point number and past 2^53 loses
+ * its last digits, and a fraction copied into INTEGER or NUMERIC keeps its REAL storage, a value
+ * the new whole-number or fixed-point type refuses, as PostgreSQL and MySQL refuse that change.
+ */
+export function copiesEveryValue(
+  fromType: string,
+  toType: string,
+  dialect: SupportedDialect
+): boolean {
+  const decimal = decimalHoldsEveryValue(fromType, toType);
+  if (decimal !== null) return decimal;
+  if (!isWideningChange(fromType, toType, dialect)) return false;
+  return (
+    dialect !== "sqlite" || sqliteAffinity(fromType) === sqliteAffinity(toType)
+  );
+}
+
 /**
  * Whether a type change keeps every stored value of a string column without a check of the data:
  * `varchar(n)` to `text` or to `varchar(m)` with m >= n, and either type restated. A narrower

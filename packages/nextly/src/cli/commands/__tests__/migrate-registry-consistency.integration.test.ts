@@ -230,6 +230,7 @@ describe.each(getConfiguredTestDialects())(
           missingTables: unknown[];
           missingColumns: unknown[];
           unregistered: unknown[];
+          behindSnapshot: unknown[];
           unreadable: unknown[];
         };
       };
@@ -254,6 +255,7 @@ describe.each(getConfiguredTestDialects())(
           { kind: "collection", slug: "rc_row_lost" },
           { kind: "single", slug: "rc_single_row_lost" },
         ],
+        behindSnapshot: [],
         unreadable: [],
       });
     });
