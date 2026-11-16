@@ -14,18 +14,20 @@
  * @module plugin-composition-wiring.test
  */
 import {
-  clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
-  registerBlocks,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldType,
   PluginFieldValidateArgs,
   PluginFieldWrite,
 } from "@nextlyhq/plugin-sdk";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import {
+  BLOCK_SERVICE,
+  PAGE_BUILDER_PLUGIN,
+} from "./blocks/registration-service";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { pageBuilder } from "./plugin";
 
@@ -59,6 +61,42 @@ function initContext(renameMap: Record<string, string> = {}) {
     // is filtered too.
     dialect: "sqlite",
     db: { select: () => emptyRead, table: () => ({}) },
+  };
+}
+
+/**
+ * `ctx` with `blocks` declared by a plugin, and the page builder's own block
+ * service to register them through, so `init` fills the site's registry with
+ * them as a boot does.
+ */
+function declaring(
+  plugin: ReturnType<typeof pageBuilder>,
+  ctx: ReturnType<typeof initContext>,
+  blocks: readonly unknown[]
+) {
+  const services = plugin.contributes?.services as
+    | Record<string, (context: unknown) => unknown>
+    | undefined;
+  return {
+    ...ctx,
+    services: {
+      ...ctx.services,
+      plugins: {
+        [PAGE_BUILDER_PLUGIN]: {
+          [BLOCK_SERVICE]: services?.[BLOCK_SERVICE]?.(ctx),
+        },
+      },
+    },
+    config: {
+      plugins: [
+        {
+          name: "acme",
+          contributes: {
+            declarations: { [PAGE_BUILDER_PLUGIN]: { blocks } },
+          },
+        },
+      ],
+    },
   };
 }
 
@@ -156,10 +194,6 @@ describe("the plugin's blocks field judges composition once installed", () => {
     ).toEqual(["COMPONENT_CYCLE"]);
   });
 
-  afterEach(() => {
-    clearBlocks();
-  });
-
   it("does not compose pages against its store when component readiness is off", async () => {
     const base = {
       version: 1,
@@ -167,13 +201,10 @@ describe("the plugin's blocks field judges composition once installed", () => {
       example: { props: {} },
       render: () => null,
     };
-    registerBlocks(
-      [
-        { ...base, name: "acme/columns" },
-        { ...base, name: "acme/column", parent: ["acme/columns"] },
-      ] as never,
-      { source: "acme" }
-    );
+    const declared = [
+      { ...base, name: "acme/columns" },
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+    ];
     // Off is the setting for a renderer drawing components from its own
     // source. Composed against the store, this page would be refused: its
     // component's root is a column, which may only sit inside columns.
@@ -219,13 +250,13 @@ describe("the plugin's blocks field judges composition once installed", () => {
 
     // CONTROL: with readiness on, the same page is refused.
     const judging = pageBuilder();
-    await judging.init?.(initContext() as never);
+    await judging.init?.(declaring(judging, initContext(), declared) as never);
     expect(await codesOf(blocksType(judging), page)).toEqual([
       "restricted-at-root",
     ]);
 
     const off = pageBuilder({ componentReadiness: false });
-    await off.init?.(initContext() as never);
+    await off.init?.(declaring(off, initContext(), declared) as never);
     expect(await codesOf(blocksType(off), page)).toEqual([]);
     // A save to the store itself is still judged for a loop.
     expect(

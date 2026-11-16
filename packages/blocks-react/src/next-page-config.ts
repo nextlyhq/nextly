@@ -129,7 +129,15 @@ export interface BlocksPageConfig
    * site settings are cached under it, as every public read of the route is.
    */
   nextly?: NextlyContentReader & Partial<PublicSiteSettingsSource>;
-  /** Where block definitions come from. Defaults to the process registry. */
+  /**
+   * Where block definitions come from. Defaults to the blocks of the site
+   * the process serves, read from its page builder on each render, so a
+   * page draws its registered blocks, custom ones included, with nothing
+   * passed. A process serving two sites binds each route to its own with
+   * `blocks: blocksOf(builder)` from `@nextlyhq/plugin-page-builder`, since
+   * an instance's services are kept once per process. A resolver passed here
+   * is always the one used.
+   */
   blocks?: BlockResolver;
   /**
    * The stylesheet compiled when this entry was saved.

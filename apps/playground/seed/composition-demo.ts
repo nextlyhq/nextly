@@ -37,12 +37,14 @@
 import {
   applyOps,
   planInsertPattern,
-  registryNestingSource,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
+import { blocksOf } from "@nextlyhq/plugin-page-builder";
+
+import { pageBuilderPlugin } from "../nextly.config";
 
 /** Where the welcome page is served: `/site/welcome`, and `/welcome`. */
 const DEMO_PAGE_SLUG = "welcome";
@@ -662,7 +664,8 @@ export function welcomePageDocument(
     body,
     pattern,
     { index: 0 },
-    registryNestingSource()
+    // The site's own nesting rules, from the page builder the seed started.
+    blocksOf(pageBuilderPlugin).nestingSource()
   );
   if (plan.problem !== undefined) {
     throw new Error(

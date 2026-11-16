@@ -147,8 +147,6 @@ anything it is drawn from, refreshes it.
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
 import type {
@@ -185,7 +183,6 @@ const route = createPublicBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   styleContext: {
     breakpoints: {
       viewport: [
@@ -215,6 +212,13 @@ export default route.ContentPage;
   least a `base` breakpoint.
 </Callout>
 
+The route draws the blocks your site registered, the core set and every block a plugin adds,
+custom ones included, with nothing passed: it reads them from the page builder of the site the
+process serves. A visitor reaching a page before anyone has opened the admin sees the same
+blocks. To draw a page with a set of your own, pass it as `blocks`
+(`createBlockResolver([...coreBlocks, myBlock])` from `@nextlyhq/blocks-react`); a resolver
+passed there is always the one used.
+
 ### One process, several sites
 
 A page reads everything through the `nextly` it is given: its entry, the lists and Singles it
@@ -222,6 +226,19 @@ shows, and the site settings, the site's name, address, logo and the time zone i
 filters use. A process serving several sites, each through an instance of its own, gives each
 route its own `nextly`, and each page shows its own site. Only a route given no `nextly` reads the
 process's registered instance.
+
+Bind each of those routes to its site's blocks too, with `blocks: blocksOf(builder)` from
+`@nextlyhq/plugin-page-builder`, where `builder` is that site's `pageBuilder()`. A route given
+no `blocks` reads the blocks of the process's registered instance. The same goes for
+`loadSiteStyle`, which takes the same `blocks`. One limit remains: a plugin that adds blocks in
+code from its `init` (`blockRegistry(ctx).register`) reaches the page builder whose site started
+last, because a process keeps one set of plugin services. Blocks a plugin declares under
+`contributes.declarations` reach each site's own page builder. And while two sites run at once,
+a save is judged by the field rules of the site that started last, for the same reason: a
+process keeps one set of field types. In a production build each route holds its own copy of
+the plugin, which never starts, so `blocksOf(builder)` and `namedQueriesOf(builder)` read the
+started site's through the instance there; on a process running two sites at once, that is the
+site that started last.
 
 Give each of those routes its own `cacheScope` too, such as the site's id. Every public read a
 route makes, its site settings among them, is cached under it, and two routes over different
@@ -338,8 +355,6 @@ published page would never show them. Styles a page already held there still sav
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx, serving the breakpoints the editor saved
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
@@ -374,7 +389,6 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   siteStyles: {
     read: () => loadSiteStyle({ nextly: reader }),
     // Named so that saving the site style refreshes cached pages.

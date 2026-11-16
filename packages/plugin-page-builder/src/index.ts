@@ -32,6 +32,7 @@
 import "./settings-place-contract";
 
 export { namedQueriesOf, pageBuilder } from "./plugin";
+export { blocksOf } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export type {
   FontAddLimits,

@@ -7,8 +7,14 @@
  * site through. Also the named queries each page builder registers, for
  * `namedQueriesOf`.
  */
-import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import type { NamedQueryLookup } from "@nextlyhq/blocks-react";
+import {
+  DEFAULT_LIMITS,
+  type BlockRegistryReader,
+} from "@nextlyhq/blocks-engine";
+import {
+  offeredSiteBlocks,
+  type NamedQueryLookup,
+} from "@nextlyhq/blocks-react";
 import {
   type definePlugin,
   NextlyError,
@@ -19,6 +25,7 @@ import {
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import { hasStarted } from "../blocks/registration-service";
 import { blocksFieldReach } from "../class-usage-blocks-fields";
 import type { CommittedWriteReconciler } from "../class-usage-hook";
 import { COMPONENT_RETIRED_SLUG } from "../collections/component-retired-exposures";
@@ -32,6 +39,7 @@ import {
   type RewriteDirectApi,
   type SingleToWalk,
 } from "../host-rewrite/site";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import {
   installRemovalHolds,
   removalHoldStore,
@@ -355,6 +363,8 @@ export function rewriteInstallFor(
     },
     store: composition.store,
     limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // The site's blocks, as the composition judges them.
+    blocks: composition.blocks,
     // The plugin's own service, so a converted document's history names the
     // Page Builder beside the person who deleted the component.
     rewriteField: (request, as) =>
@@ -571,6 +581,109 @@ function singlesDeclaringBlocksIn(
   return found;
 }
 
+/** The registry each page builder this process made holds. */
+export const sitesBlocks: WeakMap<PluginDefinition, BlockRegistryReader> =
+  new WeakMap<PluginDefinition, BlockRegistryReader>();
+
+/**
+ * Where a started page builder offers its site's named queries on the
+ * instance, for a route whose copy of the page builder never started.
+ */
+export const SITE_NAMED_QUERIES_SERVICE = "site-named-queries";
+
+/**
+ * `nextly/runtime`, loaded when a route first binds itself to a page builder
+ * and held for its renders. Loaded, not imported: this entry is reachable
+ * from a browser bundle, which cannot load the runtime's graph.
+ */
+let runtime:
+  | { requireNextly(): { plugins: Record<string, Record<string, unknown>> } }
+  | undefined;
+let runtimeLoading = false;
+
+function loadRuntime(): void {
+  if (runtime !== undefined || runtimeLoading) return;
+  runtimeLoading = true;
+  void import("nextly/runtime").then(
+    loaded => {
+      runtime = loaded;
+    },
+    () => {
+      runtimeLoading = false;
+    }
+  );
+}
+
+/**
+ * The started instance's plugin services, or `undefined` before it starts
+ * (`requireNextly` refuses until then).
+ */
+function instanceServices():
+  | Record<string, Record<string, unknown>>
+  | undefined {
+  if (runtime === undefined) return undefined;
+  try {
+    return runtime.requireNextly().plugins;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The blocks the page builder `plugin` holds for its site: what a route
+ * rendering that site's pages takes as its `blocks` when one process serves
+ * several sites. A route serving the process's one site needs nothing: it
+ * reads that site's blocks itself. Refused for a plugin that is not a page
+ * builder.
+ *
+ * Read on each lookup from the page builder itself where it started in this
+ * module copy, and otherwise through the started instance: a production
+ * build bundles the plugin into each route, and the route's copy never
+ * starts. Refused, never answered empty, while no site has started, since
+ * every block would otherwise draw as an unknown one.
+ *
+ * ```ts
+ * export const builder = pageBuilder();
+ * // app/[...slug]/page.tsx
+ * createBlocksPage({ ..., blocks: blocksOf(builder) });
+ * ```
+ *
+ * @experimental Settles with the per-site block registry.
+ */
+export function blocksOf(plugin: PluginDefinition): BlockRegistryReader {
+  const own = sitesBlocks.get(plugin);
+  if (own === undefined) {
+    throw new Error(
+      "[page-builder] blocksOf() takes a page builder made with pageBuilder(); " +
+        `"${plugin.name}" is not one.`
+    );
+  }
+  loadRuntime();
+  const current = (): BlockRegistryReader => {
+    if (hasStarted(own)) return own;
+    const services = instanceServices();
+    const offered =
+      services === undefined ? undefined : offeredSiteBlocks(services);
+    if (offered !== undefined) return offered;
+    throw new Error(
+      "[page-builder] blocksOf(): this page builder's site has not started, " +
+        "so it has no blocks to read yet."
+    );
+  };
+  return {
+    get: name => current().get(name),
+    has: name => current().has(name),
+    all: () => current().all(),
+    sourceOf: name => current().sourceOf(name),
+    support: key => current().support(key),
+    supports: () => current().supports(),
+    lookup: () => current().lookup(),
+    nestingSource: () => current().nestingSource(),
+    blockSource: () => current().blockSource(),
+    migrationSource: () => current().migrationSource(),
+  };
+}
+
 /** The named queries each page builder this process made registers. */
 export const sitesQueries: WeakMap<PluginDefinition, NamedQueryLookup> =
   new WeakMap<PluginDefinition, NamedQueryLookup>();
@@ -582,6 +695,11 @@ export const sitesQueries: WeakMap<PluginDefinition, NamedQueryLookup> =
  * one process never resolve each other's queries. Nothing for a plugin that
  * is not a page builder.
  *
+ * Read from the page builder itself where it started in this module copy,
+ * and otherwise through the started instance, for the reason
+ * {@link blocksOf} gives: the queries plugins declare are added as the site
+ * starts. Before any start, the site's own queries.
+ *
  * ```ts
  * export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
  * // app/[...slug]/page.tsx
@@ -591,5 +709,30 @@ export const sitesQueries: WeakMap<PluginDefinition, NamedQueryLookup> =
  * @experimental
  */
 export function namedQueriesOf(plugin: PluginDefinition): NamedQueryLookup {
-  return sitesQueries.get(plugin) ?? { definitionOf: () => undefined };
+  const own = sitesQueries.get(plugin);
+  const blocks = sitesBlocks.get(plugin);
+  if (own === undefined || blocks === undefined) {
+    return { definitionOf: () => undefined };
+  }
+  loadRuntime();
+  return {
+    definitionOf: name => {
+      if (hasStarted(blocks)) return own.definitionOf(name);
+      const offered =
+        instanceServices()?.[PAGE_BUILDER_PLUGIN_NAME]?.[
+          SITE_NAMED_QUERIES_SERVICE
+        ];
+      return isQueryLookup(offered)
+        ? offered.definitionOf(name)
+        : own.definitionOf(name);
+    },
+  };
+}
+
+function isQueryLookup(value: unknown): value is NamedQueryLookup {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { definitionOf?: unknown }).definitionOf === "function"
+  );
 }

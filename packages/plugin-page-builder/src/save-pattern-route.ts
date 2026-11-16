@@ -68,8 +68,8 @@
 import {
   documentRefusal,
   planSaveAsPattern,
-  registryNestingSource,
   type BlockDocument,
+  type BlockRegistryReader,
   type PlanRefusal,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -181,7 +181,9 @@ export interface SavePatternRouteContext {
  */
 export async function savePattern(
   req: Request,
-  ctx: SavePatternRouteContext
+  ctx: SavePatternRouteContext,
+  /** The site's block registry, whose nesting rules the plan follows. */
+  blocks: BlockRegistryReader
 ): Promise<Response> {
   const request = await readRequest(req);
   const slug = ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG;
@@ -190,10 +192,10 @@ export async function savePattern(
     request.document,
     request.selectedIds,
     { collection: slug, fields: request.fields },
-    // The SERVER's registry, which is the one that knows every block: the
-    // declared blocks another plugin contributed are registered here and not in
-    // the browser.
-    registryNestingSource()
+    // The site's registry on the SERVER, which is the one that knows every
+    // block: the declared blocks another plugin contributed are registered
+    // here and not in the browser.
+    blocks.nestingSource()
   );
   if (plan.problem !== undefined) throw refusal(plan);
 
@@ -492,7 +494,10 @@ function malformed(path: string): NextlyError {
  * fact that it declares no permission — which is the part a reader of
  * `contributes.routes` needs to see without following a call.
  */
-export function savePatternRoute(): {
+export function savePatternRoute(
+  /** The site's block registry, whose nesting rules the plan follows. */
+  blocks: BlockRegistryReader
+): {
   method: "POST";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;
@@ -505,6 +510,6 @@ export function savePatternRoute(): {
     // `requiredPermission`, which is what keeps it callable on a site that
     // renamed the collection. See the module docblock.
     requiredPermission: ({ collection }) => collection(PATTERNS_SLUG, "create"),
-    handler: savePattern,
+    handler: (req, ctx) => savePattern(req, ctx, blocks),
   };
 }

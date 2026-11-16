@@ -7,16 +7,18 @@
  */
 import * as engine from "@nextlyhq/blocks-engine";
 import {
-  clearBlocks,
+  createBlockRegistry,
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
-  registerBlocks,
 } from "@nextlyhq/blocks-engine";
 import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { compositionIssues, type HostFinder } from "./blocks-composition";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 vi.mock("@nextlyhq/blocks-engine", async original => {
   const actual = await original<typeof engine>();
@@ -29,7 +31,7 @@ vi.mock("@nextlyhq/blocks-engine", async original => {
 const COMPONENTS = "nx_pb_components";
 
 beforeEach(() => {
-  registerBlocks(
+  blocks.register(
     [
       {
         version: 1,
@@ -44,7 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
   vi.mocked(engine.resolveComponentInstances).mockClear();
 });
 
@@ -115,6 +117,7 @@ it("charges the depth probes of each selection to the save's allowance", async (
     {
       store: { collection: COMPONENTS, field: "content" },
       limits: DEFAULT_LIMITS,
+      blocks,
       hostsOf,
       composesDocuments: true,
     }

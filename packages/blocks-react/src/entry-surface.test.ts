@@ -569,6 +569,9 @@ describe("the root entry", () => {
       "RichText",
       // The container marker. Public so an editor asks whether a block declares
       // slots instead of keeping a hardcoded list of container type names.
+      // Where the page builder offers a site's blocks, which a route given no
+      // `blocks` reads.
+      "SITE_BLOCKS_SERVICE",
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
@@ -625,6 +628,8 @@ describe("the root entry", () => {
       // Whether a recorded lookup found no field a visitor may read, so the
       // editor can say a whole source is hidden from visitors.
       "noPublicFields",
+      // The one reading of the site's blocks an instance offers.
+      "offeredSiteBlocks",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",

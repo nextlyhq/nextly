@@ -33,6 +33,11 @@ import type {
   BlocksPublicReader,
 } from "./context";
 import type { BlocksPageConfig } from "./next-page-config";
+import {
+  offeredSiteBlocks,
+  SITE_BLOCKS_SERVICE,
+  type BlockResolver,
+} from "./resolver";
 
 /**
  * The instance this route reads through.
@@ -51,6 +56,36 @@ import type { BlocksPageConfig } from "./next-page-config";
  */
 export function readerFor(config: BlocksPageConfig): NextlyContentReader {
   return config.nextly ?? requireNextly();
+}
+
+/**
+ * The blocks of the site this process serves, for a route given no `blocks`:
+ * the page builder's registry, read from the process's instance on each
+ * lookup. The route reads its entry first, which starts the site and fills
+ * its registry, so a page draws its registered blocks before any admin has
+ * opened.
+ *
+ * Read per lookup rather than captured, because a dev-server hot reload
+ * starts the site again with a new registry. Refused, never answered empty,
+ * when the instance has no page builder: every block would otherwise draw as
+ * an unknown one, on a page that looks served correctly.
+ *
+ * The process's instance, because the services an instance offers are kept
+ * once per process. A host serving two sites from one process binds each
+ * route to its site's page builder with `blocks: blocksOf(builder)`.
+ */
+export function siteBlocks(): BlockResolver {
+  return { get: type => siteRegistry().get(type) };
+}
+
+function siteRegistry(): BlockResolver {
+  const offered = offeredSiteBlocks(requireNextly().plugins);
+  if (offered !== undefined) return offered;
+  throw new Error(
+    "[blocks-react] This route has no `blocks`, and the Nextly instance has no " +
+      `page builder to read them from. Install "${SITE_BLOCKS_SERVICE.plugin}", ` +
+      "or pass `blocks` to the route."
+  );
 }
 
 /**

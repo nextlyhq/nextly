@@ -68,7 +68,7 @@ import {
   routeReadSources,
   listBatchReads,
 } from "./next-read-sources";
-import { readerFor, dataFor } from "./next-readers";
+import { readerFor, dataFor, siteBlocks } from "./next-readers";
 import { metadataValuesOf, derivePageSeo } from "./next-seo";
 import {
   effectiveLimits,
@@ -84,7 +84,6 @@ import {
 } from "./page-read-stages";
 import { PageRenderer } from "./page-renderer";
 import { pageBindingRun } from "./prepare-document";
-import { registeredBlocks } from "./resolver";
 
 /**
  * Keys the CMS sets on the row it returns.
@@ -317,7 +316,7 @@ export function blocksRouteConfig(
   // One resolver object for the route, handed to both the preparation and the
   // renderer: the renderer reuses a preparation only for the very resolver it
   // was made with.
-  const resolver = blocks ?? registeredBlocks();
+  const resolver = blocks ?? siteBlocks();
   warnOfUnknownTimeZone(config.timeZone);
   // A public route reads its images inside the cache, as it reads the rest of
   // the page, within the page's own window; an access-enforced one reads them

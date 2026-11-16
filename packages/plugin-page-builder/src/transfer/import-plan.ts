@@ -65,7 +65,6 @@ import {
   collectDocumentReferences,
   emptyReferences,
   imageExposureIds,
-  registryMediaProps,
 } from "./transfer-references";
 
 /** An item already on the site. */
@@ -100,8 +99,8 @@ export interface ImportSite {
   /** By the file's media id. */
   readonly media: ReadonlyMap<string, ExistingMedia>;
   readonly isRegistered: (type: string) => boolean;
-  /** The props a block type declares as media; the registry's by default. */
-  readonly mediaProps?: (type: string) => readonly string[];
+  /** The props a block type declares as media, by the site's registry. */
+  readonly mediaProps: (type: string) => readonly string[];
   /** Whether the caller may manage site settings, which adding a breakpoint needs. */
   readonly mayAddBreakpoints: boolean;
 }
@@ -219,10 +218,7 @@ export function planImport(
     pattern: planItems("pattern", file.patterns, site.items.pattern, ledger),
     layout: planItems("layout", file.layouts, site.items.layout, ledger),
   };
-  const references = fileReferences(
-    file,
-    site.mediaProps ?? registryMediaProps
-  );
+  const references = fileReferences(file, site.mediaProps);
   for (const id of references.danglingComponents) {
     ledger.problems.push({
       code: "MISSING_REFERENCE",

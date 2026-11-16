@@ -8,8 +8,6 @@
  *
  * @module lib/block-pages-route
  */
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { BlocksPageConfig } from "@nextlyhq/blocks-react/next";
 import {
   loadSiteStyle,
@@ -57,11 +55,6 @@ export const blockPagesRoute: BlocksPageConfig = {
   // preview token against, and a token always names a resolved locale rather
   // than a blank one.
   locale: "en",
-  // An explicit set, not the process registry. `registeredBlocks()` reads the
-  // engine's global registry, which is populated by whatever booted the
-  // editor — so a route depending on it renders the unknown-block placeholder
-  // whenever this request arrived before the admin did.
-  blocks: createBlockResolver(coreBlocks),
   // This site's named queries, a list's custom sources: the page builder's
   // own, so a list here never resolves another site's served alongside.
   namedQueries: namedQueriesOf(pageBuilderPlugin),
