@@ -79,15 +79,25 @@ test.beforeAll(async ({ playwright }, testInfo) => {
   await api.dispose();
 });
 
-test.afterAll(async ({ playwright, baseURL }) => {
+test.afterAll(async ({ playwright }, testInfo) => {
+  const baseURL = testInfo.project.use.baseURL;
+  if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
+  // A session here too, and each cleanup asserted: a silently refused
+  // teardown would leave the form and template in the shared database for
+  // every later run to trip over.
   const api: APIRequestContext = await playwright.request.newContext({
     baseURL,
+    storageState: await fileAccount(baseURL, testInfo),
   });
   if (formId) {
-    await api.delete(`/admin/api/collections/forms/entries/${formId}`);
+    const res = await api.delete(
+      `/admin/api/collections/forms/entries/${formId}`
+    );
+    await expectOk(res, "delete the form");
   }
   if (templateId) {
-    await api.delete(`/admin/api/email-templates/${templateId}`);
+    const res = await api.delete(`/admin/api/email-templates/${templateId}`);
+    await expectOk(res, "delete the template");
   }
   await api.dispose();
 });
@@ -113,7 +123,9 @@ for (const { name, width, height } of WIDTHS) {
 
       const row = table.locator("tr").filter({ hasText: TEMPLATE_NAME });
       await expect(row).toBeVisible();
-      await expect(row).toContainText(expectedReference);
+      // Visible, not merely present: the sender cell must be shown at this
+      // width, which a contains-only assertion would let hide.
+      await expect(row.getByText(expectedReference)).toBeVisible();
 
       // Open Actions menu and click Delete.
       const actionButton = row.getByRole("button", {
@@ -125,7 +137,7 @@ for (const { name, width, height } of WIDTHS) {
       // Card view on phone.
       const card = page.getByRole("article").filter({ hasText: TEMPLATE_NAME });
       await expect(card).toBeVisible();
-      await expect(card).toContainText(expectedReference);
+      await expect(card.getByText(expectedReference)).toBeVisible();
 
       const actionButton = card.getByRole("button", {
         name: `Actions for ${TEMPLATE_NAME}`,

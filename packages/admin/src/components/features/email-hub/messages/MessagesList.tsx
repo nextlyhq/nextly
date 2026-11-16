@@ -190,7 +190,7 @@ function MessagesTable({
             </th>
             <th
               scope="col"
-              className="hidden w-[28%] px-4 py-3 font-medium lg:table-cell"
+              className="hidden w-[28%] px-4 py-3 font-medium md:table-cell"
             >
               Sent when
             </th>
@@ -232,7 +232,7 @@ function MessagesTable({
                     {record.slug}
                   </div>
                 </td>
-                <td className="hidden px-4 py-3 align-top text-muted-foreground lg:table-cell">
+                <td className="hidden px-4 py-3 align-top text-muted-foreground md:table-cell">
                   <SentWhen record={record} />
                 </td>
                 <td className="px-4 py-3 align-top">

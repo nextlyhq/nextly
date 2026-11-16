@@ -54,9 +54,12 @@ export function TemplateDeleteDialog({
   onConfirm: () => void;
   isLoading: boolean;
 }): JSX.Element | null {
-  const { data: senders, isLoading: isSendersLoading } = useTemplateSenders(
-    open && template ? template.id : null
-  );
+  const {
+    data: senders,
+    isPending,
+    isFetching,
+    isError,
+  } = useTemplateSenders(open && template ? template.id : null);
 
   if (!template) return null;
 
@@ -64,6 +67,10 @@ export function TemplateDeleteDialog({
     ...(senders?.referenced ?? []),
     ...(senders?.declared ?? []),
   ];
+  // The check decides what the person is about to destroy, so deletion waits
+  // for it — loading, a background refetch of a cached answer, and a failed
+  // request alike: a silent failure must not read as permission to proceed.
+  const checking = isPending || isFetching || isError;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -76,10 +83,15 @@ export function TemplateDeleteDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {isSendersLoading ? (
+        {isPending ? (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             Checking what sends this email...
+          </p>
+        ) : isError ? (
+          <p className="text-xs text-destructive">
+            Couldn&apos;t check what sends this email. Close and try again
+            before deleting.
           </p>
         ) : affected.length > 0 ? (
           <div className="rounded-md border border-border bg-muted/60 p-3 text-xs space-y-1.5 text-foreground">
@@ -112,7 +124,7 @@ export function TemplateDeleteDialog({
           <Button
             variant="destructive"
             onClick={onConfirm}
-            disabled={isLoading}
+            disabled={isLoading || checking}
           >
             {isLoading ? (
               <>

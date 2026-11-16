@@ -675,9 +675,16 @@ export function formBuilder(
           const forms: Array<Record<string, unknown>> = [];
           const pageSize = 200;
           for (let page = 1; ; page += 1) {
+            // A stable order across pages: without one, the database owes no
+            // ordering, and a row edited between two page reads can be
+            // skipped or repeated — a referencing form the delete guard then
+            // never names, while the answer claims completeness.
             const result = await nextly.services.ownCollections.listEntries(
               formsSlug,
-              { pagination: { limit: pageSize, page } }
+              {
+                pagination: { limit: pageSize, page },
+                sort: [{ field: "id", direction: "asc" }],
+              }
             );
             forms.push(...(result.data as Array<Record<string, unknown>>));
             if (result.data.length < pageSize) break;

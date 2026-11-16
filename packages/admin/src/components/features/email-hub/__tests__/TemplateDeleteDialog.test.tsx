@@ -33,10 +33,12 @@ describe("TemplateDeleteDialog", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows checking status while senders are being fetched", () => {
+  it("holds deletion while what sends the email is still being checked", () => {
     useTemplateSenders.mockReturnValue({
       data: undefined,
-      isLoading: true,
+      isPending: true,
+      isFetching: true,
+      isError: false,
     });
 
     render(
@@ -50,6 +52,35 @@ describe("TemplateDeleteDialog", () => {
     );
 
     expect(screen.getByText("Checking what sends this email...")).toBeTruthy();
+    // The check decides what is about to be destroyed: its answer must land
+    // before the destructive act is offered.
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+  });
+
+  it("holds deletion when the check fails, and says so", () => {
+    useTemplateSenders.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isFetching: false,
+      isError: true,
+    });
+
+    render(
+      <TemplateDeleteDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        template={{ id: "t1", name: "Custom email" }}
+        onConfirm={vi.fn()}
+        isLoading={false}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        "Couldn't check what sends this email. Close and try again before deleting."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
 
   it("names the settings that will stop sending when references exist", () => {
