@@ -371,6 +371,30 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     ).toBe(1);
   }, 180_000);
 
+  it("still refuses a removal through a view the same run creates before a table of its name IF NOT EXISTS", async () => {
+    const recent = `${P}_made`;
+    file(
+      [
+        `CREATE VIEW ${recent} AS SELECT id, title FROM ${posts}`,
+        ...(dialect === "sqlite"
+          ? [
+              `CREATE TRIGGER ${recent}_delete INSTEAD OF DELETE ON ${recent} BEGIN DELETE FROM ${posts} WHERE id = OLD.id; END`,
+            ]
+          : []),
+        `CREATE TABLE IF NOT EXISTS ${recent} (id integer PRIMARY KEY, title varchar(64))`,
+        `DELETE FROM ${recent} WHERE id = 1`,
+      ],
+      []
+    );
+    const message = await refusedUnchanged(() => migrate());
+    // On SQLite the trigger the file defines makes the DELETE one the run's own code may run, so
+    // the refusal quotes the statement as written.
+    expect(message.toLowerCase()).toContain(recent);
+    expect(
+      (await migrate(resolveDataLossConsent({ flag: true, env: {} }))).applied
+    ).toBe(1);
+  }, 180_000);
+
   it("names a live table an earlier file of the run renames by its live name, for what a later file deletes", async () => {
     const renamed = `${P}_renamed`;
     file([`ALTER TABLE ${posts} RENAME TO ${renamed}`], []);

@@ -199,6 +199,8 @@ type Step =
       /** Written `IF NOT EXISTS`: it makes the table only where the name is free. */
       ifNotExists?: boolean;
     }
+  /** A relation other than a table (a view, a sequence, an index) the list makes or renames onto `table`. */
+  | { kind: "hold"; table: string }
   /** A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP TEMPORARY). */
   | { kind: "drop"; table: string; temporary?: boolean }
   | { kind: "add-column"; table: string; column: string }
@@ -423,12 +425,77 @@ function readStatement(statement: string, dialect: SupportedDialect): Step[] {
   const first = cursor.peek();
   if (typeof first !== "string") return unreadIfDeleting(tokens);
   if (CODE_WORDS.has(first)) return [unread(tokens)];
+  const held = nameHeldBy(tokens);
+  if (held !== undefined) return [{ kind: "hold", table: held }];
   const read =
     readDefinition(cursor, tokens, dialect) ??
     readData(cursor, tokens, dialect, first);
   if (read !== null) return read;
   if (NEVER_DELETING.has(first)) return [];
   return unreadIfDeleting(tokens);
+}
+
+/** The kinds of relation besides a table whose name a table cannot then take. */
+const HOLDING_KINDS = new Set(["VIEW", "SEQUENCE", "INDEX"]);
+/** Words after CREATE that settle it makes none of `HOLDING_KINDS`. */
+const NOT_HOLDING = new Set([
+  "TABLE",
+  "FUNCTION",
+  "PROCEDURE",
+  "TRIGGER",
+  "TYPE",
+  "SCHEMA",
+  "DATABASE",
+  "AS",
+  "ON",
+  "(",
+]);
+
+/**
+ * The name a view, a sequence or an index the statement makes, or renames another onto, takes:
+ * `CREATE [OR REPLACE] [MATERIALIZED] VIEW | SEQUENCE | [UNIQUE] INDEX [CONCURRENTLY]
+ * [IF NOT EXISTS] name`, and `ALTER [MATERIALIZED] VIEW | SEQUENCE | INDEX … RENAME TO name`.
+ * A `CREATE TABLE IF NOT EXISTS` of it later in the run then makes nothing. A schema-qualified
+ * name holds its unqualified part, which a later unqualified create may mean. Undefined for any
+ * other statement, a table's own definition (an index it names inline) included.
+ */
+function nameHeldBy(tokens: readonly Token[]): string | undefined {
+  const nameAt = (from: number): string | undefined => {
+    const cursor = new StatementCursor(tokens.slice(from));
+    cursor.accept("CONCURRENTLY");
+    cursor.acceptCondition();
+    if (cursor.isWord("ON")) return undefined;
+    const start = cursor.at;
+    const plain = cursor.name();
+    if (plain !== undefined) return plain;
+    cursor.at = start;
+    return cursor.qualifiedName()?.name;
+  };
+  if (tokens[0] === "CREATE") {
+    const at = tokens.findIndex(
+      (token, i) =>
+        i > 0 &&
+        typeof token === "string" &&
+        (HOLDING_KINDS.has(token) || NOT_HOLDING.has(token))
+    );
+    const kind = tokens[at];
+    if (at === -1 || typeof kind !== "string" || !HOLDING_KINDS.has(kind)) {
+      return undefined;
+    }
+    return nameAt(at + 1);
+  }
+  const altered = tokens[1];
+  if (
+    tokens[0] === "ALTER" &&
+    typeof altered === "string" &&
+    (HOLDING_KINDS.has(altered) || altered === "MATERIALIZED")
+  ) {
+    const to = tokens.findIndex(
+      (token, i) => token === "RENAME" && tokens[i + 1] === "TO"
+    );
+    return to === -1 ? undefined : nameAt(to + 2);
+  }
+  return undefined;
 }
 
 /** A statement on a table's or a type's definition: CREATE, DROP, ALTER; null for any other. */
@@ -1616,6 +1683,8 @@ class FileWalk {
   private readonly madeColumns = new Map<string, Set<string>>();
   /** Each temporary table's name, with what the name reached before it. */
   private readonly shadowed = new Map<string, string | null | undefined>();
+  /** Names a view, a sequence or an index the list made or renamed onto holds from then on. */
+  private readonly held = new Set<string>();
   /** Per table, the tables the list made its descendants. */
   private readonly attached = new Map<string, Set<string>>();
   /** The functions the list defines, by the last part of their names; `*` for one it cannot name. */
@@ -1725,6 +1794,9 @@ class FileWalk {
       case "inherit":
         this.inherit(step.parent, step.child);
         return true;
+      case "hold":
+        this.held.add(step.table);
+        return true;
       default:
         return false;
     }
@@ -1778,10 +1850,12 @@ class FileWalk {
   }
 
   private create(table: string, temporary: boolean, ifNotExists = false): void {
-    // Made only where the name is free at this point of the run: a live table the run renamed
-    // onto it, a relation of any kind holding it before the run, or one not known to be absent
+    // Made only where the name is free at this point of the run: a view, sequence or index the
+    // run made or renamed onto it, a live table the run renamed onto it, a relation of any kind
+    // holding it before the run, or one not known to be absent
     // leaves the statement a no-op, and what holds the name stays what it was.
     if (ifNotExists) {
+      if (this.held.has(table)) return;
       const now = this.origins.get(table);
       if (typeof now === "string") return;
       if (

@@ -265,6 +265,51 @@ describe("tables dropped", () => {
     ).toEqual([rows("recent")]);
   });
 
+  // A relation the run itself creates earlier holds the name just as one there before the run.
+  it.each([
+    ["a view", "CREATE VIEW recent AS SELECT id FROM posts"],
+    [
+      "a replaced view",
+      "CREATE OR REPLACE VIEW recent AS SELECT id FROM posts",
+    ],
+    [
+      "a materialized view",
+      "CREATE MATERIALIZED VIEW recent AS SELECT id FROM posts",
+    ],
+    ["a sequence", "CREATE SEQUENCE IF NOT EXISTS recent"],
+    ["an index", "CREATE UNIQUE INDEX CONCURRENTLY recent ON posts (id)"],
+    ["a view renamed onto it", "ALTER VIEW older RENAME TO recent"],
+  ])(
+    "keeps a name %s the run made earlier live, when the file creates a table of it IF NOT EXISTS",
+    (_what, earlier) => {
+      expect(
+        read(
+          "postgresql",
+          [
+            earlier,
+            "CREATE TABLE IF NOT EXISTS recent (id integer)",
+            "DELETE FROM recent WHERE id = 1",
+          ],
+          { live: ["posts"] }
+        )
+      ).toEqual([rows("recent")]);
+    }
+  );
+
+  it("counts a table whose own definition names an index the run's own, as its name is free", () => {
+    expect(
+      read(
+        "mysql",
+        [
+          "CREATE TABLE IF NOT EXISTS fresh (id integer, INDEX recent (id))",
+          "INSERT INTO fresh (id) VALUES (1)",
+          "DELETE FROM fresh WHERE id = 1",
+        ],
+        { live: [] }
+      )
+    ).toEqual([]);
+  });
+
   it("makes nothing of a temporary table created IF NOT EXISTS", () => {
     expect(
       read(
