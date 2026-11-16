@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { head, BlobNotFoundError, BlobAccessError } from "@vercel/blob";
+import { head, put, BlobNotFoundError, BlobAccessError } from "@vercel/blob";
 import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 
 import { NextlyError } from "nextly/errors";
@@ -414,5 +414,42 @@ describe("VercelBlobStorageAdapter client uploads", () => {
       collections: { media: { clientUploads: true } },
     });
     expect(adapter.getInfo().supportsClientUploads).toBe(false);
+  });
+});
+
+describe("VercelBlobStorageAdapter.uploadAt", () => {
+  const adapter = new VercelBlobStorageAdapter({
+    token: "vercel_blob_rw_test_dummy_token_for_unit_tests",
+    collections: { media: true },
+  });
+  const original = "https://test.public.blob.vercel-storage.com/media/photo-Ab12.jpg";
+
+  it("writes at the blob the key names, with no random suffix, so its URL is the key", async () => {
+    const key = `${original}.w640.webp`;
+    vi.mocked(put).mockClear();
+
+    const result = await adapter.uploadAt(key, Buffer.from("copy"), {
+      mimeType: "image/webp",
+    });
+
+    expect(vi.mocked(put)).toHaveBeenCalledTimes(1);
+    const [pathname, , options] = vi.mocked(put).mock.calls[0];
+    expect(pathname).toBe("media/photo-Ab12.jpg.w640.webp");
+    expect(options).toMatchObject({
+      contentType: "image/webp",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+    });
+    expect(result).toEqual({ url: key, path: key });
+  });
+
+  it("refuses a key that is not one of this store's blob URLs", async () => {
+    vi.mocked(put).mockClear();
+    await expect(
+      adapter.uploadAt("media/photo.jpg.w640.webp", Buffer.from("x"), {
+        mimeType: "image/webp",
+      })
+    ).rejects.toThrow();
+    expect(vi.mocked(put)).not.toHaveBeenCalled();
   });
 });
