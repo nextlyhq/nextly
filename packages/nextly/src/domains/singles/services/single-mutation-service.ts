@@ -58,6 +58,7 @@ import {
   isLifecycleStatus,
   resolvePublishTransition,
   stripUndefinedStatus,
+  unknownStatusRefusal,
 } from "../../../lib/status-transition";
 import {
   buildSingleRevalidationIntent,
@@ -320,6 +321,7 @@ import {
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
+import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
 import type {
   SingleDocument,
@@ -3077,6 +3079,13 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
+      // Under a workflow, a status it cannot place is refused after every hook, trusted code
+      // included; a Single with none stores any value, as before.
+      const unknownStatus = unknownStatusRefusal(
+        currentData,
+        workflowAttachedTo("single", slug) !== undefined
+      );
+      if (unknownStatus) throw unknownStatus;
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or

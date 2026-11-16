@@ -348,6 +348,24 @@ export function deletePartReviewState(
   });
 }
 
+/**
+ * Removes one part's review state if its revision is still `expectedRevision`. False, removing
+ * nothing, when someone wrote the row since or it is gone.
+ */
+export async function deletePartReviewStateAt(
+  db: ReviewStatesDb,
+  part: ReviewPart,
+  expectedRevision: number
+): Promise<boolean> {
+  const removed = await db.delete(REVIEW_STATES_TABLE, {
+    and: [
+      { column: "partKey", op: "=", value: reviewStateKey(part) },
+      { column: "revision", op: "=", value: expectedRevision },
+    ],
+  });
+  return removed > 0;
+}
+
 /** Removes the review state of every part of a document. */
 export function deleteDocumentReviewStates(
   db: ReviewStatesDb,

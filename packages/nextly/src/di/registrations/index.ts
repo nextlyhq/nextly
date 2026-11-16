@@ -23,5 +23,6 @@ export { registerVersionServices } from "./register-versions";
 export { registerWebhookServices } from "./register-webhooks";
 export { registerWorkflowComparisonBaselines } from "./register-workflow-baselines";
 export { registerWorkflowNoticeKinds } from "./register-workflow-notices";
+export { registerWorkflowPublishGate } from "./register-workflow-publish-gate";
 export { resetWidgetRegistries } from "./register-widgets";
 export type { RegistrationContext } from "./types";
