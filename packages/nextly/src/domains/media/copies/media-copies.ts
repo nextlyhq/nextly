@@ -262,7 +262,7 @@ export async function copyBytesOf(
   // one original are made one after another, and each asks again, once its
   // turn comes, what the one before it may have learned or kept.
   const made = copyInTurn(key, () =>
-    oneAtATimeFor(item.filename, async () => {
+    oneAtATimeFor(item.filename, async (): Promise<ServedCopy> => {
       if (rememberedAsNoCopy(item, key)) return ORIGINAL;
       const keptMeanwhile = await readOrNull(
         storage,
