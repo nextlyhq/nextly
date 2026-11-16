@@ -693,7 +693,14 @@ function ColourValue({
           aria-invalid={refusedBy === undefined && !invalid ? undefined : true}
           aria-describedby={refusedBy}
           value={text}
-          onChange={event => setText(event.currentTarget.value)}
+          onChange={event => {
+            setText(event.currentTarget.value);
+            // Typing takes over from a picker gesture: its colour is no
+            // longer shown, and closing the picker writes nothing over the
+            // typed text.
+            draft.current = null;
+            setShown(null);
+          }}
           readOnly={readOnly}
           onBlur={event => {
             const next = event.currentTarget.value.trim();
@@ -738,10 +745,14 @@ const NO_COLOUR = "#ffffff";
  * what the swatch paints, and whether the text is no colour at all.
  *
  * The swatch follows what is typed, so a value that is not a colour shows as
- * one at once, rather than as the last colour or as black. A colour the picker
- * cannot read (`oklch()`, a variable, a named colour) is still one: the swatch
- * paints it as written, and only text no browser reads as a colour is marked
- * invalid, said so in the swatch button's name.
+ * one at once, rather than as the last colour or as black. It is painted only
+ * with a colour resolved here (`colourHexOf`), as every swatch is: `var()`,
+ * `currentcolor` or `inherit` painted in the panel would take the panel's
+ * colours rather than the site's. A colour the browser reads but this package
+ * cannot resolve (`oklch()`, a named colour, a variable) leaves the swatch
+ * empty and unmarked; only text no browser reads as a colour is marked
+ * invalid, and said so in the swatch button's name. While a picker gesture is
+ * under way, the picker's colour is what is shown, and the text is not judged.
  */
 function colourFieldState(
   typed: string,
@@ -754,12 +765,16 @@ function colourFieldState(
   said: string;
 } {
   const current = typed === "" ? value : typed;
-  const hex = shown ?? colourHexOf(current, undefined);
-  const readable = hex !== undefined || isCssColour(current);
-  const invalid = !readable && typed !== "";
+  const resolved = colourHexOf(current, undefined);
+  const invalid =
+    shown === null &&
+    typed !== "" &&
+    resolved === undefined &&
+    !isCssColour(current);
+  const hex = shown ?? resolved;
   return {
     hex,
-    paint: hex ?? (readable ? current : undefined),
+    paint: hex,
     invalid,
     said: invalid ? " (not a valid colour)" : "",
   };
