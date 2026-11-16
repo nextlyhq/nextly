@@ -26,6 +26,10 @@
  * a fourth pass under their own configuration, which runs only the guard that
  * reads call sites of the Tabs a scaffolded project depends on.
  *
+ * After the passes, it runs the Page Builder's source size check
+ * (scripts/check-source-size.mjs), which reads line counts rather than syntax
+ * and so is not an oxlint rule.
+ *
  * Usage: `pnpm lint` (through scripts/bounded.mjs); any further arguments, such
  * as `--fix`, go to every pass.
  */
@@ -34,6 +38,8 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { main as checkSourceSize } from "./check-source-size.mjs";
 
 /** The repository's lint configuration. */
 export const CONFIG = "oxlint.config.mjs";
@@ -94,12 +100,18 @@ function runPass(args) {
   return status === 0;
 }
 
-function main(extra) {
-  // Every pass runs even after one fails, so a single run reports everything.
-  const results = everyPass(extra).map(runPass);
-  process.exitCode = results.every(Boolean) ? 0 : 1;
+/**
+ * Runs every pass and then the size check, and returns the exit code: 0 when
+ * all of them passed. Every step runs even after one fails, so a single run
+ * reports everything. `run` and `sizeCheck` are the real ones unless a test
+ * hands in its own.
+ */
+export function lint(extra = [], run = runPass, sizeCheck = checkSourceSize) {
+  const results = everyPass(extra).map(run);
+  results.push(sizeCheck() === 0);
+  return results.every(Boolean) ? 0 : 1;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2));
+  process.exitCode = lint(process.argv.slice(2));
 }
