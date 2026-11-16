@@ -15,6 +15,7 @@ import {
   AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
 } from "../../schemas/audit/widths";
 import { EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH } from "../../schemas/email-deliveries/widths";
+import { TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH } from "../../schemas/translation-provenance/table-name";
 import type { PluginDefinition } from "../plugin-context";
 import { pluginAdminSlug } from "../plugin-slug";
 import { resolutionError } from "../resolution-error";
@@ -72,7 +73,9 @@ export const PRINCIPAL_KIND_MAX_LENGTH = Math.min(
   AUDIT_ACTOR_KIND_LENGTH,
   AUDIT_ACTOR_PRINCIPAL_KIND_LENGTH,
   AUDIT_TARGET_PRINCIPAL_KIND_LENGTH,
-  EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH
+  EMAIL_DELIVERY_PRINCIPAL_KIND_LENGTH,
+  // Where a translated value's provenance keeps who wrote it.
+  TRANSLATION_PROVENANCE_PRINCIPAL_KIND_LENGTH
 );
 
 const ATTRIBUTE_TYPES: ReadonlySet<string> = new Set<PrincipalAttributeType>([
