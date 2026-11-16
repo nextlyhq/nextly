@@ -37,21 +37,20 @@ const f = (field: Record<string, unknown>) =>
 
 const TABLE = "dc_rr_posts";
 
-/** A repeater, held as text before 0.0.2-alpha.67, and a required relationship, created NOT NULL. */
-const FIELDS: FieldDefinition[] = [
+const fieldsWithAuthor = (required: boolean): FieldDefinition[] => [
   f({ name: "title", type: "text" }),
   f({
     name: "links",
     type: "repeater",
     fields: [{ name: "url", type: "text" }],
   }),
-  f({
-    name: "author",
-    type: "relationship",
-    relationTo: "users",
-    required: true,
-  }),
+  f({ name: "author", type: "relationship", relationTo: "users", required }),
 ];
+
+/** A repeater, held as text before 0.0.2-alpha.67, and a relationship that is now optional. */
+const FIELDS = fieldsWithAuthor(false);
+/** The same table as it was created, while the relationship was required: `author` NOT NULL. */
+const CREATED_FIELDS = fieldsWithAuthor(true);
 
 /** Fields whose columns the current generator creates exactly as their descriptors name them. */
 const MATCHING_FIELDS: FieldDefinition[] = [f({ name: "title", type: "text" })];
@@ -176,7 +175,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("a dry run changes nothing", async () => {
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       await insertRows(ROWS);
       const before = await fingerprint();
 
@@ -194,7 +193,7 @@ describe.each(getConfiguredTestDialects())(
     describe("shows the statements and the rewrite for a type change and a NOT NULL drop", () => {
       /** Each column's record from a legacy table holding ROWS rows. */
       async function legacyRecords() {
-        await createTable(FIELDS, true);
+        await createTable(CREATED_FIELDS, true);
         await insertRows(ROWS);
         return (await report()).result?.records ?? [];
       }
@@ -239,7 +238,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("counts a table's rows once for all the columns whose conversion rewrites it", async () => {
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       await insertRows(ROWS);
       // The handle the report reads through, with each row count it sends counted.
       let counts = 0;
@@ -275,7 +274,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("reports while the schema lock is held by another process", async () => {
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       await insertRows(1);
 
       const free = await report();
@@ -311,6 +310,120 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("names a schema change that was running as the scan started, though it ends before the scan does", async () => {
+      await createTable(FIELDS, true);
+      await insertRows(1);
+      let endChange: () => void = () => {};
+      const changeEnds = new Promise<void>(resolve => {
+        endChange = resolve;
+      });
+      let changeHeld: () => void = () => {};
+      const held = new Promise<void>(resolve => {
+        changeHeld = resolve;
+      });
+      const change = withSchemaLock(
+        {
+          adapter: handle.adapter,
+          command: "nextly migrate",
+          whenHeld: "refuse",
+        },
+        async () => {
+          changeHeld();
+          await changeEnds;
+        }
+      );
+      await held;
+      const document = await dryRunReport({
+        adapter: handle.adapter,
+        dialect,
+        // The scan's first read: the other change ends here, before the tables are read.
+        entities: async () => {
+          endChange();
+          const ended = await change;
+          if (!ended.ran) throw new Error("the test could not take the lock");
+          return [entity(FIELDS)];
+        },
+        nextlyVersion: "test",
+      });
+      expect(document.result?.schemaLock.state).toBe("held");
+      expect(document.result?.schemaLock.holder).toContain("`nextly migrate`");
+      expect(document.warnings).toEqual([
+        expect.objectContaining({
+          code: "NEXTLY_REPAIR_COLUMNS_SCHEMA_CHANGE_RUNNING",
+        }),
+      ]);
+    });
+
+    it("names a schema change that starts while the unfinished conversions are read", async () => {
+      // Only MySQL reads unfinished conversions; the other change starts as that read begins,
+      // the scan's last read, so the report must read the lock after it.
+      if (dialect !== "mysql") return;
+      await createTable(FIELDS, true);
+      await insertRows(1);
+      const adapter = handle.adapter;
+      let release: () => void = () => {};
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let change: Promise<unknown> | undefined;
+      const startChange = async () => {
+        let held: () => void = () => {};
+        const isHeld = new Promise<void>(resolve => {
+          held = resolve;
+        });
+        change = withSchemaLock(
+          { adapter, command: "nextly migrate", whenHeld: "refuse" },
+          async () => {
+            held();
+            await released;
+          }
+        );
+        await isHeld;
+      };
+      const drizzle = adapter.getDrizzle() as {
+        execute: (query: unknown) => Promise<unknown>;
+      };
+      const watched = new Proxy(drizzle, {
+        get(target, key, receiver) {
+          if (key !== "execute") return Reflect.get(target, key, receiver);
+          return async (query: unknown) => {
+            if (
+              change === undefined &&
+              JSON.stringify(query).includes("nextly_column_repairs")
+            ) {
+              await startChange();
+            }
+            return target.execute(query);
+          };
+        },
+      });
+      const scanned = new Proxy(adapter, {
+        get(target, key) {
+          if (key === "getDrizzle") return () => watched;
+          const value: unknown = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      try {
+        const document = await dryRunReport({
+          adapter: scanned,
+          dialect,
+          entities: [entity(FIELDS)],
+          nextlyVersion: "test",
+        });
+        expect(change).toBeDefined();
+        expect(document.result?.schemaLock.state).toBe("held");
+        expect(document.warnings).toEqual([
+          expect.objectContaining({
+            code: "NEXTLY_REPAIR_COLUMNS_SCHEMA_CHANGE_RUNNING",
+          }),
+        ]);
+      } finally {
+        release();
+        await change;
+      }
+    });
+
     it("exit codes for no difference, differences remaining and could not run", async () => {
       await createTable(MATCHING_FIELDS, false);
       const none = await report(MATCHING_FIELDS);
@@ -318,7 +431,7 @@ describe.each(getConfiguredTestDialects())(
       expect(none).toMatchObject({ ok: true, exitCode: 0 });
 
       await run(`DROP TABLE IF EXISTS ${q(TABLE)}`);
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       const remain = await report();
       expect(remain).toMatchObject({ ok: false, exitCode: 2 });
 

@@ -44,6 +44,7 @@
  * @module ops
  */
 
+import { byteCapRefusal } from "./byte-cap";
 import {
   type BlockDocument,
   type BlockNode,
@@ -60,16 +61,16 @@ import {
   type LayersLockBreak,
 } from "./layers-lock";
 import {
-  countNodes,
   DEFAULT_LIMITS,
+  editorForestShape,
   ForestTooLargeError,
   MAX_VALUE_PARTS,
   treeDepth,
   type DocumentLimits,
 } from "./limits";
-import { measureBytes } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import { isUsableSlotName } from "./registry";
+import { keptList } from "./structural-sharing";
 // The engine's own predicate, so a slot name is judged the same way at a
 // block's declaration and on every op that carries one. Two gates answering
 // differently is how a name a position could not use gets in through a subtree.
@@ -160,6 +161,7 @@ const NODE_FIELDS: {
   name: { holds: isString, optional: true },
   customCss: { holds: isString, optional: true },
   cssId: { holds: isString, optional: true },
+  nosnippet: { holds: isBoolean, optional: true },
   attributes: { holds: isStringRecord, optional: true },
   migrationFailed: { holds: isBoolean, optional: true },
   origin: { holds: isBlockOrigin, optional: true },
@@ -189,6 +191,7 @@ const PATCH_FIELDS: { readonly [K in keyof Required<NodePatch>]: true } = {
   name: true,
   customCss: true,
   cssId: true,
+  nosnippet: true,
   attributes: true,
   migrationFailed: true,
   // Patchable, like `migrationFailed`, rather than sealed. Provenance is a
@@ -2021,20 +2024,20 @@ function assertFitsCaps(
   // against a freshly measured original made the original's cost proportional
   // to the number of offending nodes, so lowering `maxDepth` under a broad
   // document turned a linear edit into a quadratic one.
-  const depth = measured(() => treeDepth(result.nodes), verb);
+  const depth = measured(() => editorForestShape(result.nodes).depth, verb);
   if (
     depth > limits.maxDepth &&
-    depth > measured(() => treeDepth(before.nodes), verb)
+    depth > measured(() => editorForestShape(before.nodes).depth, verb)
   ) {
     throw new OpError(
       `${verb}: this would leave the document nested ${String(depth)} ` +
         `levels deep, past the ${String(limits.maxDepth)} it may hold.`
     );
   }
-  const total = measured(() => countNodes(result.nodes), verb);
+  const total = measured(() => editorForestShape(result.nodes).count, verb);
   if (
     total > limits.maxNodes &&
-    total > measured(() => countNodes(before.nodes), verb)
+    total > measured(() => editorForestShape(before.nodes).count, verb)
   ) {
     throw new OpError(
       `${verb}: this would leave the document holding ${String(total)} nodes, ` +
@@ -2042,52 +2045,10 @@ function assertFitsCaps(
         `apply and then fail to save.`
     );
   }
-  // Size as well as count. A single large string passes a node count and still
-  // puts the document past what the engine will store, with the same result:
-  // the edit applies, enters history, and every save afterwards is refused.
-  //
-  // COUNTED rather than produced. `documentBytes` answers by building the JSON
-  // string and then a UTF-8 buffer of it, so deciding "is this too big" would
-  // first allocate two copies of the thing being called too big — and an op
-  // carrying a value far past the cap could exhaust the editor before the
-  // refusal it earns. The engine's `measureBytes` walks and counts, stopping
-  // as soon as the answer is settled, and the validator already decides this
-  // question with it.
-  //
-  // The ceiling is what makes one bounded pass decisive. The rule is that an
-  // edit is refused when it crosses the cap or worsens an existing overage —
-  // equivalently, when the result is larger than both the cap and the document
-  // it started from. So the ceiling is the larger of the two, and the common
-  // case never pays for measuring `before` in full: a document already inside
-  // the cap settles it, and only one already over the cap needs its exact size,
-  // which is the repair case a site creates by lowering its own limit.
-  const startingSize = measureBytes(before, limits.maxBytes);
-  const ceiling = startingSize.exceeded
-    ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
-    : limits.maxBytes;
-  const size = measureBytes(result, ceiling);
-  // Unstorable and too large are different verdicts, and the message says which.
-  // A cyclic document, or one holding `undefined`, a function or a `Date`,
-  // cannot be written at any size — reporting that as an overage would tell an
-  // author their two-node page had outgrown a two-megabyte cap and send them
-  // deleting content that was never the problem.
-  //
-  // `exceeded` covers BOTH, which is why the refusal is one branch rather than
-  // two: a caller asking only whether the document fits still refuses one that
-  // has no stored form. Reading a separate flag for that is fail-open, and was
-  // measured to be — it silently stopped this guard refusing cyclic documents
-  // until a second check was added by hand.
-  if (size.exceeded) {
-    throw new OpError(
-      size.reason === "unwritable"
-        ? `${verb}: this would leave the document holding a value that cannot ` +
-          `be stored — a cycle, or something JSON does not preserve. The ` +
-          `edit would apply and then fail to save.`
-        : `${verb}: this would leave the document over ${String(ceiling)} ` +
-          `bytes, past the ${String(limits.maxBytes)} it may hold. The edit ` +
-          `would apply and then fail to save.`
-    );
-  }
+  // Size as well as count, asked of `byte-cap`, which answers from the sizes
+  // kept for each part and falls back to the full measurement.
+  const bytes = byteCapRefusal(before, result, limits.maxBytes, verb);
+  if (bytes !== undefined) throw new OpError(bytes);
 }
 
 /**
@@ -2241,11 +2202,14 @@ function rebuild(
   return nodes.map(node => {
     const mapped = fn(node);
     if (mapped.slots === undefined) return mapped;
+    // What did not change keeps its identity (see `structural-sharing`).
+    let changed = mapped !== node;
     const slots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(mapped.slots)) {
-      slots[name] = rebuild(children, fn);
+      slots[name] = keptList(rebuild(children, fn), children);
+      if (slots[name] !== children) changed = true;
     }
-    return { ...mapped, slots };
+    return changed ? { ...mapped, slots } : mapped;
   });
 }
 
@@ -3179,7 +3143,9 @@ function assertDocumentIdentity(document: BlockDocument): void {
  * same objects, and so are envelope fields like `settings`, because the engine's
  * tree primitives are persistent and `withNodes` spreads. Mutating the old
  * document therefore changes the new one, with no op recorded and nothing for
- * history or autosave to see.
+ * history or autosave to see. The cap check relies on it too: the size, count
+ * and depth of each part are kept against the part (`kept-sizes`), so a part
+ * changed in place after a check is judged as it was when first measured.
  *
  * Stated rather than prevented, deliberately. Detaching the result would mean
  * deep-copying the whole document on every edit — work proportional to the
@@ -3247,7 +3213,7 @@ export function applyOp(
   // helper reaches it first. This is deliberately NOT `limits.maxDepth`: that
   // is a product rule a site may relax, and this is a machine one nothing can.
   assertWalkable(
-    measured(() => treeDepth(nodes), "this document"),
+    measured(() => editorForestShape(nodes).depth, "this document"),
     "this document"
   );
 

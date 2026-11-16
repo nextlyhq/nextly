@@ -43,12 +43,6 @@ import {
 /** What the step names itself as in its report. */
 const STEP = "Letting go of earlier one-to-one uniqueness";
 
-/** The registry statuses whose definition has reached the database. */
-const REACHED_THE_DATABASE: ReadonlySet<string> = new Set([
-  "applied",
-  "synced",
-]);
-
 /** What the step needs: the database, and how to run a statement on it and say what it did. */
 export interface EarlierInlineUniquesDeps {
   db: unknown;
@@ -112,7 +106,7 @@ function releasedColumns(
   dialect: SupportedDialect
 ): Map<string, string> | undefined {
   if (registered.source !== "ui") return undefined;
-  if (!REACHED_THE_DATABASE.has(registered.migrationStatus)) return undefined;
+  if (!registered.definitionApplied) return undefined;
   const translated = new Set(
     resolveLocalizedFieldNames(registered.fields, registered.localized)
   );

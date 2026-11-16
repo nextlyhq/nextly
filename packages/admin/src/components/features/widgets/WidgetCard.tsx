@@ -460,7 +460,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
 
               <WidgetCardFooter
                 inert={customizing}
-                holdsLine={state.kind === "loading"}
+                // A checklist hands its footer nothing, so its loading state
+                // holds no line the drawn card would then give back.
+                holdsLine={
+                  state.kind === "loading" && props.skeleton !== "checklist"
+                }
                 slotRef={setFooterSlot}
               />
             </Card>

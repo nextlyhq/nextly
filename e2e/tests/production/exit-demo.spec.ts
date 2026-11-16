@@ -3,6 +3,7 @@ import { expect } from "@playwright/test";
 import { test } from "../support/visible";
 
 import { CACHE_COMPONENTS } from "../support/cache-components";
+import { signInWithTheForm } from "../support/production-sign-in";
 
 /**
  * Phase 3's exit demo: a page built in the builder, served to a visitor from a
@@ -33,16 +34,7 @@ test.describe("the production exit demo", () => {
     // 1. Sign in through the real form. Asserting the landing state first,
     //    because a failed sign-in leaves a page that still renders and every
     //    later assertion would fail for the wrong reason.
-    await page.goto("/admin");
-    await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-    // By ROLE, not by label: `getByLabel(/password/i)` also matches the "Show
-    // password" toggle beside the input, and a locator that resolves to two
-    // elements fails on strict mode rather than on anything about the product.
-    await page
-      .getByRole("textbox", { name: /password/i })
-      .fill(DEV_USER.password);
-    await page.getByRole("button", { name: /sign in|log in/i }).click();
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    await signInWithTheForm(page, "", DEV_USER);
 
     // 2. Author a page THROUGH THE API the editor writes with, rather than by
     //    inserting rows: the claim is about what the product serves for content

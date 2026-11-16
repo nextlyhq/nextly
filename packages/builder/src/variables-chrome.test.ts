@@ -3,12 +3,14 @@
  * size, and its type-size pair lays out in columns.
  */
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const CHROME = readFileSync(
-  new URL("./styles/builder-chrome.css", import.meta.url),
-  "utf8"
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 /** The body of the one rule with exactly this selector. */

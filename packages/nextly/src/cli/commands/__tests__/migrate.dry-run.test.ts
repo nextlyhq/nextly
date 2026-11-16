@@ -3,13 +3,15 @@
  * plugins' pending modules first, then the app's files, under one `--step`
  * budget, without writing anything.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import { loadDialectTables } from "../../../database/dialect-tables";
+import { NextlyError } from "../../../errors/nextly-error";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import {
   migrationChecksum,
@@ -119,6 +121,56 @@ describe("migrate --dry-run", () => {
       "  • 20260101_000000_000_init.sql",
       // The file's UP section, as `migrate:down --dry-run` prints a rollback's SQL.
       "    UP, as written in the file:\nSELECT 1;",
+    ]);
+  });
+
+  it("lists what the core upgrade would delete, before the migrations, with the consent it needs", async () => {
+    testDb.sqlite.exec(
+      "ALTER TABLE dynamic_collections ADD COLUMN access_rules text"
+    );
+
+    await preview();
+
+    expect(lines.slice(0, 3)).toEqual([
+      "Pending: 3 migrations",
+      "  • Nextly's own tables (core upgrade)",
+      expect.stringMatching(
+        /deletes data: column dynamic_collections\.access_rules.*A real run needs --accept-data-loss=dynamic_collections\.access_rules/
+      ),
+    ]);
+  });
+
+  it("names the refusal a real run makes when the core push cannot be planned", async () => {
+    await previewMigrate({
+      adapter: testDb.adapter as unknown as Parameters<
+        typeof previewMigrate
+      >[0]["adapter"],
+      db: testDb.db,
+      dialect: "sqlite",
+      migrationsDir: dir,
+      plugins,
+      planCoreReconcileFn: () =>
+        Promise.resolve({
+          statements: [],
+          degraded: false,
+          deletions: [],
+          retiredDrops: [],
+          unsupported:
+            "This version of Nextly cannot bring users up to date from this database in one step, so it changed nothing.",
+        }),
+      logger: {
+        info: (message: string) => lines.push(message),
+        keyValue: (key: string, value: string) =>
+          lines.push(`${key}: ${value}`),
+        newline: () => {},
+        warn: (message: string) => lines.push(message),
+        debug: () => {},
+      } as unknown as Parameters<typeof previewMigrate>[0]["logger"],
+    });
+
+    expect(lines.slice(1, 3)).toEqual([
+      "  • Nextly's own tables (core upgrade)",
+      "    ✖ a real run would refuse before applying anything: This version of Nextly cannot bring users up to date from this database in one step, so it changed nothing.",
     ]);
   });
 
@@ -321,5 +373,145 @@ describe("migrate --dry-run", () => {
     expect(await testDb.adapter.tableExists("nextly_schema_events")).toBe(
       false
     );
+  });
+
+  it("refuses during dry run when a pending app migration snapshot declares a check the server cannot enforce", async () => {
+    const metaDir = join(dir, "meta");
+    mkdirSync(metaDir, { recursive: true });
+    writeFileSync(
+      join(metaDir, "20260101_000000_000_init.snapshot.json"),
+      JSON.stringify({
+        version: 1,
+        migrationHash: "a".repeat(64),
+        dialect: "mysql",
+        snapshot: {
+          tables: [
+            {
+              name: "tickets",
+              columns: [{ name: "id", type: "varchar(32)", nullable: false }],
+              indexes: [],
+              checks: [{ name: "ck_tickets_score", sql: "score >= 0" }],
+            },
+          ],
+        },
+      })
+    );
+    await loadDialectTables("mysql");
+    await expect(
+      previewMigrate({
+        adapter: testDb.adapter as unknown as Parameters<
+          typeof previewMigrate
+        >[0]["adapter"],
+        db: testDb.db,
+        dialect: "mysql",
+        migrationsDir: dir,
+        plugins: [],
+        logger: {
+          info: () => {},
+          warn: () => {},
+          debug: () => {},
+          error: () => {},
+          success: () => {},
+          newline: () => {},
+          keyValue: () => {},
+        } as unknown as Parameters<typeof previewMigrate>[0]["logger"],
+        serverConstructs: {
+          enforcesCheckConstraints: false,
+          functionalIndexes: true,
+          serverVersion: "8.0.14",
+        },
+      })
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(NextlyError.isValidation(error)).toBe(true);
+      const data = (error as NextlyError).publicData as {
+        errors?: { message: string }[];
+      };
+      expect(data.errors?.[0]?.message).toContain("MySQL enforces from 8.0.16");
+      return true;
+    });
+  });
+  /**
+   * A dry run against a server that accepts a CHECK without enforcing it. The
+   * judgement reads only the server's capabilities; a run that gets past it
+   * goes on to read the test database, so it names the database's dialect.
+   */
+  const previewOnUnenforcingServer = (dialect: "mysql" | "sqlite" = "mysql") =>
+    previewMigrate({
+      adapter: testDb.adapter as unknown as Parameters<
+        typeof previewMigrate
+      >[0]["adapter"],
+      db: testDb.db,
+      dialect,
+      migrationsDir: dir,
+      plugins: [],
+      logger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+        success: () => {},
+        newline: () => {},
+        keyValue: () => {},
+      } as unknown as Parameters<typeof previewMigrate>[0]["logger"],
+      serverConstructs: {
+        enforcesCheckConstraints: false,
+        functionalIndexes: true,
+        serverVersion: "8.0.14",
+      },
+    });
+
+  it("refuses a hand-written app file with no snapshot whose statements add a CHECK", async () => {
+    // No snapshot pairs this file, so the only account of what it adds is the
+    // SQL that would run.
+    writeFileSync(
+      join(dir, "20260102_000000_000_scores.sql"),
+      "-- UP\nALTER TABLE `tickets` ADD CONSTRAINT `ck_score` CHECK (`score` >= 0);"
+    );
+    await loadDialectTables("mysql");
+    await expect(previewOnUnenforcingServer()).rejects.toSatisfy(
+      (error: unknown) => {
+        expect(JSON.stringify((error as NextlyError).publicData)).toContain(
+          'scores.sql\\" adds a CHECK'
+        );
+        return true;
+      }
+    );
+  });
+
+  it("does not refuse an app file for the owner's check in its copy of a plugin's table", async () => {
+    // The app's snapshot freezes the plugin's whole table beside the column
+    // the app contributed; the check on it is the plugin's, not the file's.
+    const metaDir = join(dir, "meta");
+    mkdirSync(metaDir, { recursive: true });
+    writeFileSync(
+      join(metaDir, "20260101_000000_000_init.snapshot.json"),
+      JSON.stringify({
+        version: 1,
+        migrationHash: "a".repeat(64),
+        dialect: "sqlite",
+        snapshot: {
+          tables: [
+            {
+              name: "acme__items",
+              columns: [
+                { name: "id", type: "varchar(32)", nullable: false },
+                { name: "app_note", type: "text", nullable: true },
+              ],
+              indexes: [],
+              checks: [{ name: "ck_acme__items_state", sql: "state <> ''" }],
+            },
+          ],
+        },
+        contributions: {
+          acme__items: {
+            columns: ["app_note"],
+            indexes: [],
+            foreignKeys: [],
+            checks: [],
+          },
+        },
+      })
+    );
+    await expect(previewOnUnenforcingServer("sqlite")).resolves.toBeUndefined();
   });
 });

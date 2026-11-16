@@ -42,5 +42,11 @@ export async function removeRegistryRow(
     clearRegistryRowCache();
     return;
   }
-  await deleteEntityRegistryRow(scope.tx, kind, slug, scope.tables);
+  await deleteEntityRegistryRow(
+    scope.tx,
+    kind,
+    slug,
+    scope.tables,
+    scope.view.getCapabilities().dialect
+  );
 }

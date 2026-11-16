@@ -34,11 +34,11 @@ import { getTableName } from "../../collections/services/collection-utils";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
   fieldGroupRowMoves,
-  keepsFieldGroupRows,
-  removedAndAddedFieldGroups,
+  fieldGroupRenamePairs,
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { builderColumnIsUnique } from "../../schema/field-rules";
 import type {
   ForeignKeySpec,
   ReferentialAction,
@@ -57,6 +57,8 @@ import {
   junctionTableNameFor,
   junctionTablesOf,
   usesJunctionTable,
+  asSingleRowColumnField,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   relationshipStoresJson,
@@ -88,6 +90,11 @@ import type { CollectionTables } from "./collection-tables";
 // checks a file against them too.
 import { dropFileHeader, dropFileLabel } from "./drop-file-name";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+import {
+  STATED_TEXT_TYPES,
+  statedDefaultFits,
+  statedMoment,
+} from "./stated-default";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
 type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
@@ -139,23 +146,26 @@ function sameJunctionColumns(a: JunctionShape, b: JunctionShape): boolean {
 }
 
 /**
- * Refuse a save that renames more than one of something whose data moves with
- * the rename. A wrong pairing migrates the wrong rows, so the author renames
- * one per save; the refusal names both sides so they can see what to split.
+ * The one rename a save holds among `pairs`, or null when it holds none. A save that renames more
+ * than one of something whose data moves with the rename is refused: a wrong pairing migrates the
+ * wrong rows, so the author renames one per save, and the refusal names both sides so they can see
+ * what to split.
  */
-function refuseAmbiguousRename(args: {
-  code: string;
-  /** Plural, for the count: "field groups". */
-  what: string;
-  /** What each rename moves: "the group's existing rows to the new field name". */
-  moves: string;
-  /** Singular, for the instruction: "field group". */
-  one: string;
-  oldOnly: FieldDefinition[];
-  newOnly: FieldDefinition[];
-}): void {
-  const { oldOnly, newOnly } = args;
-  if (oldOnly.length <= 1 && newOnly.length <= 1) return;
+function onlyRename(
+  pairs: Array<{ from: FieldDefinition; to: FieldDefinition }>,
+  args: {
+    code: string;
+    /** Plural, for the count: "field groups". */
+    what: string;
+    /** What each rename moves: "the group's existing rows to the new field name". */
+    moves: string;
+    /** Singular, for the instruction: "field group". */
+    one: string;
+  }
+): { from: FieldDefinition; to: FieldDefinition } | null {
+  if (pairs.length <= 1) return pairs[0] ?? null;
+  const oldOnly = [...new Set(pairs.map(p => p.from))];
+  const newOnly = [...new Set(pairs.map(p => p.to))];
   throw NextlyError.validation({
     errors: [
       {
@@ -201,22 +211,10 @@ const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
   emitAfterColumnWork: false,
 };
 
-/**
- * Whether a Builder field's column is unique.
- *
- * A one-to-one relationship is unique by its cardinality, not by anything the author ticks, so
- * the flag alone does not decide it. Asked in one place because the answer has to be the same
- * whether the column arrives with its table or is added to one that already exists (a table
- * that gained its one-to-one by an edit was not enforcing the cardinality it declared), and
- * whether a later save keeps the constraint its table holds.
- */
-export function builderColumnIsUnique(field: FieldDefinition): boolean {
-  return (
-    field.unique === true ||
-    (field.type === "relationship" &&
-      field.options?.relationType === "oneToOne")
-  );
-}
+// Whether a Builder field's column is unique: the browser-safe field rules'
+// answer, which the Builder's move rule asks too. Re-exported for this
+// module's callers; used here as before.
+export { builderColumnIsUnique };
 
 /**
  * Field types whose value is a structured object or array, stored in the
@@ -592,12 +590,14 @@ export class DynamicCollectionSchemaService {
         options?.uniqueColumns?.get(before) ??
         undefined;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
-      // index of its own to drop. Where the live table was read, it decides: a one-to-one an
-      // earlier release added by an edit was given no unique index at all, and SQLite's inline
-      // one has no name a statement can drop, so a generated name would drop what is not there.
+      // index of its own to drop. Where the live table was read, it decides for a field unique by
+      // being one-to-one alone: an earlier release made such a one-to-one without any unique index,
+      // and SQLite's inline one has no name a statement can drop, so a generated name would drop
+      // what is not there. A field marked Unique always had its index made under that name, which
+      // a file still waiting to run may create, so its drop stays.
       if (
         live === undefined &&
-        (options?.uniqueColumns !== undefined ||
+        ((options?.uniqueColumns !== undefined && previous.unique !== true) ||
           this.plannedUniqueIndexName(tableName, previous) === null)
       )
         continue;
@@ -1083,6 +1083,141 @@ export class DynamicCollectionSchemaService {
     );
   }
 
+  /**
+   * Whether a field's default is written onto its column. Not for a Single's table: a Single's
+   * field defaults are the application's, applied when its document is written, as a collection's
+   * are wherever a Builder save is written as a migration, and as the schema a migration is
+   * written from describes the column. A collection's table made here, where no such writer is
+   * set up, keeps them as it always has.
+   */
+  private fieldDefaultsAreColumns(isSingle: boolean | undefined): boolean {
+    return isSingle !== true;
+  }
+
+  /**
+   * A column added to a table holding rows, filled with `fill` and left with no default.
+   * PostgreSQL and MySQL take the value as the column's default for the one statement that adds
+   * it, then drop the default. SQLite can drop no default, so there the column is added open and
+   * filled; a required one is handed to the caller's rebuild to be made NOT NULL
+   * (`onSqliteNullability`).
+   */
+  private fillThenDropDefault(
+    tableName: string,
+    columnName: string,
+    type: string,
+    fill: string,
+    required: boolean,
+    onSqliteNullability:
+      | ((column: string, required: boolean) => void)
+      | undefined
+  ): string[] {
+    const table = this.quoteIdentifier(tableName);
+    const column = this.quoteIdentifier(columnName);
+    if (this.dialect === "sqlite") {
+      if (required) onSqliteNullability?.(columnName, true);
+      return [
+        `ALTER TABLE ${table} ADD COLUMN ${column} ${type};`,
+        `UPDATE ${table} SET ${column} = ${fill};`,
+      ];
+    }
+    // MySQL takes no literal default on a TEXT or BLOB column, which a Single's text field is
+    // there, but takes an expression in parentheses on any column, and the default is dropped
+    // straight after.
+    const given = this.dialect === "mysql" ? `(${fill})` : fill;
+    return [
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${type}${required ? " NOT NULL" : ""} DEFAULT ${given};`,
+      `ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT;`,
+    ];
+  }
+
+  /**
+   * The SQL value a Single's existing row is filled with when a required field is added: the
+   * default the field states (`default`, or `defaultValue` as code and the Schema Builder spell
+   * it), where that value can be written as a literal of the column's own form; otherwise the
+   * type's empty, as before a default was read here (`requiredColumnBackfill`).
+   *
+   * Only built-in types whose value needs no check beyond its form are taken:
+   * - text kinds as text, which MySQL gets as a hex literal (`quoteExpressionSqlDefault`), since
+   *   there a backslash escapes the quote after it and a doubled quote alone could end the
+   *   literal early;
+   * - a number that is finite, a checkbox's boolean, a JSON value, and a date as the moment it
+   *   names, in the form the dialect stores (`storedDateValue`), never a JavaScript date string.
+   * A relationship's or upload's id may name no row, and the statements adding the column would
+   * already be applied when the foreign key refuses it; a contributed type's value is that type's
+   * to validate; a password is only ever stored as a hash; a function default is the
+   * application's to work out per document. None of these are taken.
+   */
+  private singleRowFill(field: FieldDefinition): string | null {
+    return (
+      this.statedFill(field)?.literal ??
+      this.requiredColumnBackfill({ ...field, default: undefined })
+    );
+  }
+
+  /**
+   * The stated default a Single's existing row is filled with when this field is added,
+   * as the application would write it, or `undefined` where the row takes its type's empty
+   * instead. The value `singleRowFill` writes, for the precondition that judges it against the
+   * field's own rules before any statement runs.
+   */
+  singleRowFillValue(field: FieldDefinition): unknown {
+    return this.statedFill(field)?.value;
+  }
+
+  /** The stated default `singleRowFill` takes, with its SQL literal; null where none is taken. */
+  private statedFill(
+    field: FieldDefinition
+  ): { value: unknown; literal: string } | null {
+    const stated =
+      field.default !== undefined
+        ? field.default
+        : (field as { defaultValue?: unknown }).defaultValue;
+    if (stated === undefined || stated === null) return null;
+    const literal = this.statedFillLiteral(field, stated);
+    return literal === null ? null : { value: stated, literal };
+  }
+
+  /**
+   * `stated` as the SQL literal `statedFill` takes, or null where it is not taken: whether it is
+   * taken is `statedDefaultFits`, the one answer the first document's default is held to as well.
+   */
+  private statedFillLiteral(
+    field: FieldDefinition,
+    stated: unknown
+  ): string | null {
+    if (!statedDefaultFits(field, stated)) return null;
+    if (STATED_TEXT_TYPES.has(field.type)) {
+      return quoteExpressionSqlDefault(String(stated), this.dialect);
+    }
+    switch (field.type) {
+      case "number":
+        return String(stated);
+      case "checkbox":
+        return this.formatDefaultValue(stated, "checkbox");
+      case "json":
+        // Serialized whatever it is, as the first document's write does, so the string "hello"
+        // is stored as `"hello"` and not as the bare text `hello`, which is no JSON.
+        return this.formatDefaultValue(JSON.stringify(stated), "json");
+      case "date":
+        return this.statedDateLiteral(stated);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * A stated date as the moment it names, in the form the dialect stores it (`storedDateValue`):
+   * epoch seconds on SQLite, an ISO moment elsewhere, which holds no quote.
+   */
+  private statedDateLiteral(stated: unknown): string | null {
+    const at = statedMoment(stated);
+    if (at === null) return null;
+    const stored = storedDateValue(at, this.dialect);
+    return typeof stored === "number"
+      ? String(stored)
+      : quotedSqlString(stored);
+  }
+
   private requiredColumnBackfill(field: FieldDefinition): string | null {
     const literal =
       field.default !== undefined
@@ -1181,20 +1316,24 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string {
+    // The fields whose columns sit on this row, as its table stores them (`rowColumnFields`).
+    const stored = this.rowColumnFields(tableName, fields, _options);
     // Refuse an unusable decimal shape before any of it becomes SQL.
-    this.assertDecimalDimensions(fields);
+    this.assertDecimalDimensions(stored);
+    // A Single's field defaults are the application's (`fieldDefaultsAreColumns`).
+    const columnDefaults = this.fieldDefaultsAreColumns(_options?.isSingle);
 
     const constraints: string[] = [];
     const checks: string[] = [];
     const junctionTables: string[] = [];
 
     // i18n: drop translatable fields from the main table when localized (they go to
-    // the companion). Uses the shared classifier so main/companion agree on the split.
-    const mainFields = _options?.localized
-      ? fields.filter(
-          f => !resolveLocalizedFieldNames([f], true).includes(f.name)
-        )
-      : fields;
+    // the companion). Uses the shared classifier so main/companion agree on the split, over the
+    // declared list as the companion reads it: a field inside a group with no name stays here.
+    const translated = _options?.localized
+      ? new Set(resolveLocalizedFieldNames(fields, true))
+      : new Set<string>();
+    const mainFields = stored.filter(f => !translated.has(f.name));
 
     const columns = mainFields
       .map(f => {
@@ -1218,7 +1357,7 @@ export class DynamicCollectionSchemaService {
             : "";
 
         const defaultVal =
-          f.default !== undefined && f.default !== null
+          columnDefaults && f.default !== undefined && f.default !== null
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
@@ -1271,7 +1410,7 @@ export class DynamicCollectionSchemaService {
     // `Title` means the same column, and comparing the raw name would inject the system one beside
     // it — two columns of the same name, which no dialect will create.
     const declaresColumn = (column: string) =>
-      fields.some(
+      stored.some(
         f =>
           typeof f.name === "string" &&
           toSnakeCase(f.name) === column &&
@@ -1442,8 +1581,8 @@ ${allColumnDefs.join(",\n")}
    */
   generateAlterTableMigration(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
     options?: {
       /**
        * Previous Draft/Published flag — pass `existing.status === true` so
@@ -1574,10 +1713,37 @@ ${allColumnDefs.join(",\n")}
        * from its slug, as before any collection could be renamed.
        */
       targetTables?: CollectionTables;
+      /** The table is a Single's, whose field defaults are the application's (`fieldDefaultsAreColumns`). */
+      isSingle?: boolean;
     }
   ): string {
+    // The fields whose columns sit on the row before and after, those inside a group with no name
+    // among them, as the creating SQL reads them (`fieldsStoredOnRow`): the group has no name to
+    // pair or to name a column by, and the fields it holds are columns that stay where they are.
+    const oldFields = fieldsStoredOnRow(declaredOldFields);
+    const newFields = fieldsStoredOnRow(declaredNewFields);
+    // A Single's columns before and after, as its table stores them.
+    const singleOld = this.singleRowFields(
+      tableName,
+      oldFields,
+      options?.isSingle
+    );
+    const singleNew = this.singleRowFields(
+      tableName,
+      newFields,
+      options?.isSingle
+    );
+    if (singleOld || singleNew) {
+      return this.generateAlterTableMigration(
+        tableName,
+        singleOld ?? oldFields,
+        singleNew ?? newFields,
+        options
+      );
+    }
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
+    const columnDefaults = this.fieldDefaultsAreColumns(options?.isSingle);
 
     // A precondition, so it runs before a single statement is written. Making a
     // column NOT NULL while a row still holds a null is refused by the server,
@@ -1757,9 +1923,24 @@ ${allColumnDefs.join(",\n")}
         // accepted by all three. With rows, the value has to come from the author, so the
         // edit is refused and names the order that works.
         let defaultVal = "";
-        if (field.required || field.default !== undefined) {
-          const backfill = this.requiredColumnBackfill(field);
-          if (backfill !== null) {
+        // A Single's existing row is filled with the same value, given once and then taken away
+        // (`fillThenDropDefault`); a field's own default is never kept on its column.
+        let fillThenDrop: string | null = null;
+        // An optional field of a Single is filled too where it states a default that is taken
+        // (`singleRowFillValue`), as a column default would have filled it: the entry already
+        // there gets the field's default, not NULL.
+        const statesDefault = columnDefaults
+          ? field.default !== undefined
+          : this.singleRowFillValue(field) !== undefined;
+        if (field.required || statesDefault) {
+          // A Single's existing row takes the default the field states where it can be written
+          // safely (`singleRowFill`); a collection's reads `default` alone, as it always has.
+          const backfill = columnDefaults
+            ? this.requiredColumnBackfill(field)
+            : this.singleRowFill(field);
+          if (backfill !== null && !columnDefaults) {
+            fillThenDrop = backfill;
+          } else if (backfill !== null) {
             defaultVal = `DEFAULT ${backfill}`;
           } else if (field.required && options?.tableHasRows !== false) {
             throw NextlyError.validation({
@@ -1788,9 +1969,22 @@ ${allColumnDefs.join(",\n")}
         if (this.columnIsUnique(field) && !this.uniquenessCanBeAnIndex(type)) {
           throw this.uniquenessNotEnforceable(tableName, field);
         }
-        statements.push(
-          `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
-        );
+        if (fillThenDrop !== null) {
+          statements.push(
+            ...this.fillThenDropDefault(
+              tableName,
+              addColName,
+              type,
+              fillThenDrop,
+              field.required === true,
+              options?.onSqliteNullability
+            )
+          );
+        } else {
+          statements.push(
+            `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
+          );
+        }
 
         // SQLite doesn't support adding constraints separately via ALTER TABLE
         // Foreign keys and unique constraints must be defined at table creation
@@ -2034,7 +2228,8 @@ ${allColumnDefs.join(",\n")}
         previous,
         field,
         options?.foreignKeysByColumn,
-        options?.targetTables
+        options?.targetTables,
+        columnDefaults
       );
       (change.emitAfterColumnWork
         ? fkActionsAfterColumns
@@ -2050,7 +2245,7 @@ ${allColumnDefs.join(",\n")}
         newFields,
         previousDefinitionOf
       )) {
-        if (field.required !== oldField.required) {
+        if (this.nullabilityChanged(oldField, field)) {
           options?.onSqliteNullability?.(
             toSnakeCase(field.name),
             field.required === true
@@ -2062,24 +2257,11 @@ ${allColumnDefs.join(",\n")}
         newFields,
         previousDefinitionOf
       )) {
-        // Requiredness is asked SEPARATELY from `isFieldModified`, because for
-        // one kind of field the two disagree. `getColumnDescriptor` reports a
-        // relationship as nullable whatever its `required` says — the column
-        // it describes is the key's, and a key is described by its constraint
-        // — so a relationship's requiredness toggle left both descriptors
-        // identical, this branch was never entered, and the column stayed as
-        // the CREATE made it. A link turned optional therefore kept a NOT NULL
-        // column while its foreign key moved to `SET NULL`: MySQL rejects that
-        // pairing outright, and PostgreSQL accepts it and fails later, on the
-        // first delete, in production.
-        //
-        // Kept out of `isFieldModified` itself, which answers whether the
-        // column's STORAGE changed and whose `true` drives a type rewrite. The
-        // rewrite is still gated on `columnChanged` below, so a field that
-        // arrives here only because its requiredness moved restates
-        // nullability and nothing else.
-        const requirednessChanged = field.required !== oldField.required;
-        if (this.isFieldModified(oldField, field) || requirednessChanged) {
+        // `isFieldModified` answers true for a nullability change too, a relationship's included:
+        // the descriptor's `nullable` follows `required`. The type rewrite below stays gated on
+        // `columnChanged`, so a field that arrives here only because its requiredness moved
+        // restates nullability and nothing else.
+        if (this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
           // The descriptor decides the target column, the same answer the comparison above used to
           // decide there was a change at all. Asking a different renderer here is what let a field
@@ -2124,7 +2306,7 @@ ${allColumnDefs.join(",\n")}
               : before.dialectType !== described.dialectType ||
                 before.kind !== described.kind ||
                 before.name !== described.name;
-          const nullabilityChanged = field.required !== oldField.required;
+          const nullabilityChanged = this.nullabilityChanged(oldField, field);
 
           if (this.dialect === "mysql") {
             // MySQL restates the WHOLE definition, so everything the column carries travels with
@@ -2165,7 +2347,13 @@ ${allColumnDefs.join(",\n")}
                     field
                   ));
               statements.push(
-                this.modifyColumnSql(tableName, alterCol, field, restated)
+                this.modifyColumnSql(
+                  tableName,
+                  alterCol,
+                  field,
+                  restated,
+                  columnDefaults
+                )
               );
             }
           } else if (!columnChanged) {
@@ -2211,13 +2399,16 @@ ${allColumnDefs.join(",\n")}
     }
 
     // A field kept whose `unique` flag changed: its index, which neither the column rewrite above
-    // nor the add and remove loops create or drop.
+    // nor the add and remove loops create or drop. A field whose storage moved (a many-to-many
+    // become a one-to-one) is left out: the add path writes its column with its index.
     statements.push(
       ...this.uniquenessToggleStatements(
         tableName,
         newFields.flatMap(field => {
           const previous = previousDefinitionOf(field);
-          return previous ? [{ previous, field }] : [];
+          return previous && !this.storageClassChanged(previous, field)
+            ? [{ previous, field }]
+            : [];
         }),
         options
       )
@@ -2233,8 +2424,9 @@ ${allColumnDefs.join(",\n")}
     statements.push(
       ...this.junctionLifecycle(
         tableName,
-        options?.junctionFields?.old ?? oldFields,
-        options?.junctionFields?.new ?? newFields,
+        // The declared lists, as the creating SQL reads its junctions from the declared fields.
+        options?.junctionFields?.old ?? declaredOldFields,
+        options?.junctionFields?.new ?? declaredNewFields,
         options?.targetTables
       )
     );
@@ -2261,6 +2453,23 @@ ${allColumnDefs.join(",\n")}
    * `unique` and `index` are compared separately because they are not properties of the column's
    * shape. Two columns can be identical and differ in whether an index covers them.
    */
+  /**
+   * Whether the column moves between NOT NULL and nullable: the descriptor's answer, the one the
+   * CREATE and a migration plan from. A relationship's column follows `required` like any other,
+   * and a link turned optional must lose its NOT NULL as its foreign key moves to `SET NULL`,
+   * which MySQL refuses beside NOT NULL and PostgreSQL accepts and fails on at the first delete.
+   */
+  private nullabilityChanged(
+    oldField: FieldDefinition,
+    newField: FieldDefinition
+  ): boolean {
+    const before = getColumnDescriptor(oldField, this.dialect, "collection");
+    const after = getColumnDescriptor(newField, this.dialect, "collection");
+    return (
+      before !== null && after !== null && before.nullable !== after.nullable
+    );
+  }
+
   isFieldModified(
     oldField: FieldDefinition,
     newField: FieldDefinition
@@ -2306,7 +2515,8 @@ ${allColumnDefs.join(",\n")}
     oldField: FieldDefinition,
     newField: FieldDefinition,
     liveForeignKeys?: ReadonlyMap<string, readonly string[]>,
-    targetTables?: CollectionTables
+    targetTables?: CollectionTables,
+    columnDefaults = true
   ): ReferentialActionChange {
     // Only a relationship that carries a key has actions to change: one stored as JSON, a
     // many-to-many, or one whose target has no table never had a constraint to replace.
@@ -2453,7 +2663,7 @@ ${allColumnDefs.join(",\n")}
     // pass existed carries whatever `CREATE TABLE` gave the column and nothing
     // has moved it since — so an optional relationship can be sitting on a
     // NOT NULL column right now, both definitions agreeing it is optional and
-    // `requirednessChanged` therefore false. Installing `SET NULL` against
+    // the column pass therefore stating nothing. Installing `SET NULL` against
     // that is refused by MySQL after the drop has auto-committed, and accepted
     // by PostgreSQL until the first delete.
     //
@@ -2461,10 +2671,18 @@ ${allColumnDefs.join(",\n")}
     // already stating it: relaxing a column that already accepts nulls is a
     // no-op both dialects accept, so this costs an idempotent statement and
     // repairs the databases the old behaviour left behind.
-    const columnPassStatesNullability = oldField.required !== newField.required;
+    const columnPassStatesNullability = this.nullabilityChanged(
+      oldField,
+      newField
+    );
     if (installsSetNull && !columnPassStatesNullability) {
       statements.unshift(
-        this.relaxColumnForSetNull(tableName, columnName, newField)
+        this.relaxColumnForSetNull(
+          tableName,
+          columnName,
+          newField,
+          columnDefaults
+        )
       );
     }
 
@@ -2485,7 +2703,8 @@ ${allColumnDefs.join(",\n")}
   private relaxColumnForSetNull(
     tableName: string,
     columnName: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    columnDefaults = true
   ): string {
     if (this.dialect === "mysql") {
       // The type asked for is THIS generator's — the one that created the
@@ -2502,7 +2721,8 @@ ${allColumnDefs.join(",\n")}
           field.options,
           field.validation,
           field
-        )
+        ),
+        columnDefaults
       );
     }
     return `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(columnName)} DROP NOT NULL;`;
@@ -2522,11 +2742,12 @@ ${allColumnDefs.join(",\n")}
     tableName: string,
     columnName: string,
     field: FieldDefinition,
-    type: string
+    type: string,
+    columnDefaults = true
   ): string {
     const nullability = field.required ? " NOT NULL" : " NULL";
     const defaultClause =
-      field.default !== undefined && field.default !== null
+      columnDefaults && field.default !== undefined && field.default !== null
         ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
         : "";
     return `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(columnName)} ${type}${nullability}${defaultClause};`;
@@ -2558,7 +2779,14 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = renameCandidates(oldFields, newFields);
+    // Paired over the fields whose columns sit on the row (`fieldsStoredOnRow`), as the alter
+    // reads them: a field renamed inside a group with no name renames a column of this row, and
+    // every caller (the alter, the save's preconditions, the retry after a part-made rename) asks
+    // here, so they agree on it. Over the declared lists the unnamed group matched itself and hid it.
+    const { oldOnly, newOnly } = renameCandidates(
+      fieldsStoredOnRow(oldFields),
+      fieldsStoredOnRow(newFields)
+    );
 
     if (oldOnly.length === 0 || newOnly.length === 0) {
       // Pure add or pure drop — not a rename candidate.
@@ -2640,18 +2868,12 @@ ${allColumnDefs.join(",\n")}
         .filter(to => this.sameRelationTarget(from, to))
         .map(to => ({ from, to }))
     );
-    if (pairs.length === 0) return null;
-    if (pairs.length > 1) {
-      refuseAmbiguousRename({
-        code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
-        what: "many-to-many fields",
-        moves: "the field's links to the new name",
-        one: "many-to-many field",
-        oldOnly: [...new Set(pairs.map(p => p.from))],
-        newOnly: [...new Set(pairs.map(p => p.to))],
-      });
-    }
-    return pairs[0];
+    return onlyRename(pairs, {
+      code: "MANY_TO_MANY_RENAME_AMBIGUOUS",
+      what: "many-to-many fields",
+      moves: "the field's links to the new name",
+      one: "many-to-many field",
+    });
   }
 
   /**
@@ -2679,25 +2901,14 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = removedAndAddedFieldGroups(
-      oldFields,
-      newFields
-    );
-    if (oldOnly.length === 0 || newOnly.length === 0) return null;
-    refuseAmbiguousRename({
+    // The pairs that may be one field renamed (`fieldGroupRenamePairs`), which `migrate:create`
+    // asks about too: incompatible combinations never count toward the refusal below.
+    return onlyRename(fieldGroupRenamePairs(oldFields, newFields), {
       code: "FIELD_GROUP_RENAME_AMBIGUOUS",
       what: "field groups",
       moves: "the group's existing rows to the new field name",
       one: "field group",
-      oldOnly,
-      newOnly,
     });
-
-    const from = oldOnly[0];
-    const to = newOnly[0];
-    // The same rows under either name (`keepsFieldGroupRows`), which `migrate:create` asks too.
-    if (!keepsFieldGroupRows(from, to)) return null;
-    return { from, to };
   }
 
   /**
@@ -2790,7 +3001,9 @@ ${allColumnDefs.join(",\n")}
       indexNames.add(indexNameForColumn(tableName, column));
       indexColumns.set(indexNameForColumn(tableName, column), [column]);
     }
-    for (const field of fields) {
+    // The fields whose columns sit on the row, those inside a group with no name among them
+    // (`fieldsStoredOnRow`): the creating SQL indexes and keys them as it does the rest.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
       // Asked through the statement builder, not through `columnIsIndexed` alone. Wanting an
@@ -2847,7 +3060,9 @@ ${allColumnDefs.join(",\n")}
    */
   plannedColumnTypes(fields: FieldDefinition[]): Map<string, string> {
     const types = new Map<string, string>();
-    for (const field of fields) {
+    // Every column of the row, those of the fields inside a group with no name among them
+    // (`fieldsStoredOnRow`), as the creating SQL makes them.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       types.set(toSnakeCase(field.name), this.newColumnType(field));
     }
@@ -3349,6 +3564,37 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     );
   }
 
+  /**
+   * Refuse a junction move whose destination name the database already holds, before anything is
+   * generated: a collection's save and a Single's both ask it, since only the save can ask the
+   * database (`junctionMoves`).
+   *
+   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
+   */
+  async refuseJunctionMovesOntoLiveTables(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    tableExists: (table: string) => Promise<boolean>
+  ): Promise<void> {
+    for (const move of this.junctionMoves(tableName, oldFields, newFields)) {
+      if (!(await tableExists(move.to.table))) continue;
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "fields",
+            code: "JUNCTION_TABLE_IN_USE",
+            message:
+              `Junction table "${move.from.table}" cannot move to ` +
+              `"${move.to.table}": a table of that name already exists in the ` +
+              `database. Choose another name, or drop that table first.`,
+          },
+        ],
+        logContext: { from: move.from.table, to: move.to.table },
+      });
+    }
+  }
+
   /** Every junction table a field list names, by name. */
   private junctionTables(
     tableName: string,
@@ -3688,6 +3934,37 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     return "integer";
   }
 
+  /** The fields whose columns sit on a table's row, as the table stores them. */
+  private rowColumnFields(
+    tableName: string,
+    fields: FieldDefinition[],
+    options?: { isSingle?: boolean }
+  ): FieldDefinition[] {
+    // Those inside a group with no name are stored where it sits, as the runtime table and the
+    // desired schema read them (`fieldsStoredOnRow`): handed the group itself, column naming read
+    // its missing name and stopped. A Single's, those included, in its table's shape.
+    const stored = fieldsStoredOnRow(fields);
+    return this.singleRowFields(tableName, stored, options?.isSingle) ?? stored;
+  }
+
+  /**
+   * A Single's fields as its table stores them (`asSingleRowColumnField`): a required relationship
+   * or upload naming one entry gets a column that accepts NULL, because the Single's one entry is
+   * created on its first read with nothing chosen. Null when the table is not a Single's, or no
+   * field changes, so the caller goes on with the list it has.
+   */
+  private singleRowFields(
+    tableName: string,
+    fields: FieldDefinition[],
+    isSingle?: boolean
+  ): FieldDefinition[] | null {
+    if (isSingle !== true && !tableName.startsWith("single_")) return null;
+    const shaped = fields.map(field =>
+      asSingleRowColumnField(field, "collection")
+    );
+    return shaped.some((field, i) => field !== fields[i]) ? shaped : null;
+  }
+
   /**
    * Refuse decimal dimensions that cannot safely become part of a type.
    *
@@ -3878,7 +4155,7 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       type === "select" ||
       type === "radio"
     ) {
-      return `'${String(value)}'`;
+      return quotedSqlString(value);
     }
 
     // Handle checkbox (SQLite uses 0/1, PostgreSQL uses TRUE/FALSE)
@@ -3905,7 +4182,7 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
         const timestamp = new Date(value).getTime() / 1000;
         return String(Math.floor(timestamp));
       }
-      return `'${String(value)}'`;
+      return quotedSqlString(value);
     }
 
     // Handle numeric types (no quotes)
@@ -3956,4 +4233,13 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     };
     return actionMap[action.toLowerCase()] || "NO ACTION";
   }
+}
+
+/**
+ * A value as an SQL string literal: in single quotes, each quote inside doubled, which every
+ * supported dialect reads back as one quote. A value holding an apostrophe ("Editor's pick")
+ * otherwise ends the literal early and the statement is refused.
+ */
+function quotedSqlString(value: unknown): string {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }

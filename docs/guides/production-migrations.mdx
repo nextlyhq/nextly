@@ -43,7 +43,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`, `--removed <file>` (record an applied migration's file removed on purpose; it stays applied); `--file-missing` (with `--rolled-back`, say the file is gone from the folder, so it is not read); `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished); `--dry-run` (run the same checks and name the ledger rows it would record, recording none).
 - `nextly migrate:fresh` -- `--accept-data-loss` (skip confirmation; `-f, --force` still works for one release, with a notice, and `--yes` is refused), `--seed` (run seeders after migrations), `--dry-run` (name every table it would drop and each migration it would run again, needing no consent and dropping nothing).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations, going on through the files that move a field between translated and shared when the step would end inside them), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
-- `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--target-table-name <name>` (use another name for the events table when one of that name already exists), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--force-unlock`, `--dry-run` (count each step's pending work, all taken before any step runs, and name what a run would refuse, with no backup question and no lock; with `--reconcile-core`, name each statement the reconcile would run and each drop it would leave in place).
+- `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--target-table-name <name>` (use another name for the events table when one of that name already exists), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--accept-data-loss [targets]` (with `--reconcile-core`: the consent for what it deletes from Nextly's own tables), `--force-unlock`, `--dry-run` (count each step's pending work, all taken before any step runs, and name what a run would refuse, with no backup question and no lock; with `--reconcile-core`, name each statement the reconcile would run, each column it would delete, and the consent a run with nobody to ask needs).
 - `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
 ### A migration that deletes data
@@ -85,7 +85,13 @@ over.
   rename writes an `UPDATE` that moves those rows to the new name, for that collection, Single or
   field group only, and its reverse in the `DOWN`. Both run in the migration's transaction. A
   removed and an added field group are asked about only when they hold the same groups (in any
-  order) and are both repeatable or both not.
+  order) and are both repeatable or both not. A field group whose name is taken in the same
+  change by a different field (a field of another kind, such as the SEO plugin's `seo` group
+  added where your own `seo` field group was, or a field group holding other groups) counts as
+  removed, so its rename is still asked about. A rename onto a name whose old field group shares
+  a group with the new one is not offered, because that field's rows still sit under the name in
+  the shared table (two fields exchanging names is the common case): rename through a new name,
+  one migration at a time.
 
 ```sql
 -- UP
@@ -557,6 +563,10 @@ the database:
 - on SQLite, the database file's journal mode;
 - after the start, the built-in email templates and, on SQLite, a one-time repair of timestamps
   an older release stored as text;
+- which plugins take part in keeping public addresses unique, in one `nextly_meta` row, written
+  only when a start runs with another set of them than the last: a count there only ever goes
+  up, and tells those plugins to check their records again (see
+  [Unique public addresses](/docs/plugins/public-addresses));
 - whatever a plugin's own start-up code writes.
 
 A development start (`next dev`) is unchanged: it keeps the registry, the permissions and the
@@ -1024,41 +1034,61 @@ Run it in your PR CI to catch mistakes before they reach production.
 | `DATABASE_URL`                      | All commands                                                                                                    | Target database. Required (except SQLite, which falls back to `file:./data/nextly.db`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `NEXTLY_APPLIED_BY`                 | `migrate`                                                                                                       | No effect today: the column exists on `nextly_schema_events` but the runner does not write it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `NEXTLY_ACCEPT_DATA_LOSS=1`         | `migrate`, `db:sync`, `migrate:fresh`, `prune`, `webhooks:prune`, `permissions:cleanup`, `i18n:restore --purge` | Acknowledge destructive changes (drops, type narrowings, deleted rows) without an interactive prompt, as `--accept-data-loss` does. Required for CI runs of destructive migrations.                                                                                                                                                                                                                                                                                                                                                                              |
-| `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`   | `migrate`                                                                                                       | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it.                                                                                                                                                                                                                                                                                                                                                       |
+| `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`   | `migrate`, `upgrade --reconcile-core`                                                                           | Deprecated. Covers what a core upgrade deletes from Nextly's **own** tables, as `--accept-data-loss` without targets would for them, and prints a notice. Use `--accept-data-loss` naming the columns instead; see [When `migrate` refuses a destructive core change](#when-migrate-refuses-a-destructive-core-change).                                                                                                                                                                                                                                          |
 | `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate`                                                                                                       | Drop the retired `accounts`, `sessions` and `user_permission_cache` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone, but an Auth.js adapter's table has the same shape as `accounts` or `sessions`, so check a table is not another app's before setting it. `user_permission_cache` held permission answers that are now recomputed from roles, so it is dropped even when it holds rows; the drop is logged. Drop it once every instance runs this release, since an earlier release reads it. |
 | `NEXTLY_DROP_NONEMPTY_RETIRED=1`    | `migrate`                                                                                                       | With the flag above, also drop a retired `accounts` or `sessions` table that still holds rows. Without it such a table is kept, with a warning, and the rest of the run goes ahead.                                                                                                                                                                                                                                                                                                                                                                              |
 | `NEXTLY_ERASE_RETIRED_AUTH_TABLES`  | Runtime                                                                                                         | The retired tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created either table, so unset, the rows stay and the startup warning says so.                                                                                                                                                                                                                             |
 
 ## When `migrate` refuses a destructive core change
 
-`nextly migrate` stops rather than run an operation that could lose data from Nextly's own
-tables, reporting `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. The refusal **names every operation it
-refused** — the list you see is the whole list, not a sample — so you can judge them one at
-a time.
+Before your migrations, `nextly migrate` brings Nextly's own tables up to date. When that
+deletes data, it takes the same consent as everything else that deletes data
+(`--accept-data-loss`, or `NEXTLY_ACCEPT_DATA_LOSS`), listed with your files' deletions under
+the heading "Nextly's own tables (core upgrade)". Without consent it refuses before changing
+anything, reporting `NEXTLY_CORE_DESTRUCTIVE_REFUSED`, and **names every column it would
+delete**, with its count where the database can be read, and the consent that covers the run.
+At a terminal it lists them and asks once.
 
-| Operation                                        | Verdict                                                                 |
-| ------------------------------------------------ | ----------------------------------------------------------------------- |
-| A widening, e.g. `varchar(20)` → `varchar(255)`  | **Safe.** Nothing that fits today stops fitting                         |
-| A narrowing, e.g. `varchar(255)` → `varchar(20)` | **Safe only if you have measured the longest stored value** and it fits |
-| A dropped column, or any other type change       | **Stop.** Work out what happens to the existing values first            |
+What a core upgrade deletes:
 
-Two independent facts make a widening safe: the direction, and knowing what the column
-holds. A narrowing gives you the first only, so go and look:
+| Change                                                                                | What to do                                                                                                   |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| A **retired column**: one a core table still has that this release no longer declares | Check its values are not needed, then consent naming it. The upgrade drops it after everything else is added |
+| A type that changes, e.g. `varchar(255)` → `varchar(20)`                              | **Safe only if you have measured the longest stored value** and it fits                                      |
+| A column that becomes required                                                        | Check no row holds `NULL` in it                                                                              |
+
+A column the upgrade adds is never a deletion and needs no consent.
+
+**Retired core columns.** `access_rules` on `dynamic_collections` and `dynamic_singles` held
+the stored access rules that 0.0.2-alpha.66 stopped enforcing. Express any rule you still need
+as code-defined `access` first (each start names the tables that still hold rules), then:
+
+```bash
+nextly migrate --accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules
+```
+
+or, in a deploy step, set `NEXTLY_ACCEPT_DATA_LOSS` to the same list. Both columns are dropped
+once the rest of the upgrade has applied; the next `nextly migrate` needs no consent.
+`NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` still covers Nextly's own tables, with a notice that it is
+deprecated; a consent naming targets is safer, because it covers only what you named.
+
+For a type change, measure before you consent:
 
 ```sql
 SELECT max(length(your_column)) FROM your_table;
 ```
 
-Then, and only then:
+**An upgrade stopped part-way** (killed, its connection lost, or out of tries for a busy
+table) is finished by the next `nextly migrate`, which plans from Nextly's tables as the
+database holds them. On PostgreSQL and SQLite the upgrade runs in one transaction, so a stop
+leaves nothing; on MySQL each statement commits as it runs, and the next run adds what is
+still missing.
 
-```bash
-NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 nextly migrate
-```
-
-<Callout type="warn">
-  The flag disables the refusal for **every** operation in that run, not just
-  the one you judged safe. Read the whole list before setting it.
-</Callout>
+**An upgrade this release cannot make in one step**, from a database much older than it,
+stops before its first statement with `NEXTLY_CORE_UPGRADE_UNSUPPORTED`, naming the tables and
+the release to migrate with first (`npx nextly@0.0.2-alpha.65 migrate`). After an upgrade,
+`nextly migrate` checks every core table has every column this release declares, and stops
+with `NEXTLY_CORE_UPGRADE_INCOMPLETE`, naming what is missing, rather than report success.
 
 ## Clearing passwords stored as typed
 
@@ -1116,6 +1146,65 @@ What the people affected see: signing in with a password is refused with the sam
 as a wrong password, as it already was. They set a new password with **Forgot password**,
 or an administrator sets one for them.
 
+## Upgrades while old instances still run
+
+Nextly assumes the old and the new release of your site run side by side for a while during
+every deploy. A rolling update starts new instances before it stops old ones; a serverless
+host can keep an older deployment answering for hours (Vercel's Skew Protection pins a
+visitor to the deployment they started on); a gradual rollout sends some requests to each.
+`nextly migrate` runs before the new code serves, so for that window **the database is
+ahead of some of the code reading and writing it**. Everything below follows from that.
+
+### What a release that changes your data promises
+
+- **It only adds, then later removes.** A release that changes how something is stored
+  first adds the new place (a table, a column) beside the old one and starts using it, while
+  the old place stays as it was. This is the expand step of what is often called
+  expand/contract, or parallel change. Old instances keep working against the old place,
+  because nothing they read or write has gone.
+- **It takes in what the old release wrote during the overlap.** A release that moves data
+  does not rely on a single copy at start. Old instances may write the old place after the
+  move, so the new release checks the old place again at later starts and takes in, or
+  repairs from, anything written there since. The SEO plugin's move of its address record
+  and not-found log works this way; [its page](/docs/plugins/seo) describes what a site
+  sees.
+- **It removes the old place only behind a recorded marker, never by date.** Once a move has
+  taken in everything, the release records a "drained" marker in the database, together
+  with what the old place looked like at that moment. A later release, at least two
+  releases after the one that moved the data, may stop using the old place, and only on a
+  database where that marker is recorded and the old place still looks as the marker
+  says. If the marker is missing, or an older instance wrote to the old place after it,
+  that release will refuse to start with a message naming the release to install (and
+  start once) first, rather than lose what the old place held.
+- **It never drops your data by itself.** An old place a release no longer uses stays in
+  the database. You remove it when you choose: `nextly prune` lists what it would drop, and
+  `nextly prune --accept-data-loss` drops it.
+- **Its release notes name every move.** Each release that moves data says what moves, what
+  you may see while old instances still run, and when the old place can go.
+
+### What to do as a site owner
+
+Nothing special during the deploy itself. Let the rollout finish as usual: the new release
+catches up at its next start, and a long-running instance looks again a while after it
+starts.
+
+- Do not drop an old table or collection by hand because a release stopped writing to it.
+  Wait for the release notes to say it can go, then use `nextly prune`.
+- Do not skip past a release whose notes say it is a required step. Install it, start the
+  app once, then upgrade further.
+- Keep deploys short where you can. The overlap is repaired after the fact, not prevented:
+  while both releases serve, each one keeps its own rules (such as one page per address)
+  only among the writes it makes itself.
+
+### Not yet: refusing writes from older code
+
+Some systems let a migration declare that older code must stop writing a piece of data once
+the migration is applied, so the old instances refuse those writes ("a newer version is
+deploying; try again") instead of writing somewhere the new release no longer reads. Nextly
+does not have this yet. It will be built when a data move needs it, and it will be opt-in
+per migration: most migrations only add, and old code working against a database that is
+ahead of it is the normal, safe case.
+
 ## What you should never do
 
 - **Don't call `nextly migrate` from your deployed app's runtime.** It's a CLI tool, not a runtime API. Nextly enforces this with a lint rule for code in `init/`, `route-handler/`, `dispatcher/`, `api/`, `actions/`, `direct-api/`, `routeHandler.ts`, and `next.ts`.
@@ -1171,7 +1260,7 @@ A release can add tables to Nextly's own core schema. An existing database gets 
 
 ### Core schema drift after `nextly upgrade`
 
-User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It reconciles core in dev-loose mode and prompts for confirmation on each destructive operation it will make. It never drops a table or column of Nextly's own: such a drop is left in place and reported, not asked about, and with nothing else destructive to make it asks nothing. `nextly upgrade --reconcile-core --dry-run` names the statements it would run and the drops it would leave in place, changing nothing. Use it only when migrate reports core drift.
+User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It brings Nextly's own tables up to date as `nextly migrate` does, with the same consent for what it deletes: at a terminal it lists each deletion and asks once; with nobody to ask it refuses unless `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers it. A retired column agreed to is dropped once the rest has applied. `nextly upgrade --reconcile-core --dry-run` names the statements it would run, each column it would delete, and the consent a run with nobody to ask needs, changing nothing. Use it only when migrate reports core drift.
 
 ## Rolling back a migration
 
@@ -1492,8 +1581,17 @@ it, the boot requires one.
 
 So, for every enabled plugin in your config, run the install command once on
 each database, after `nextly migrate`, before the first production boot that
-includes the plugin. Running it again is safe: it applies what is pending and
-calls `onInstall` again, which is why `onInstall` has to be idempotent.
+includes the plugin. Running it again is safe. Once the plugin is recorded
+installed, a later install runs no `onInstall` and records no second install:
+it applies any migration module the plugin's package added since, adds any
+permission or role the package newly declares (with every preset role's grants
+and the release record, in one transaction, as a first install writes them),
+and exits 0. So a build that runs `nextly plugins install --all` on every
+release leaves the ledger as the first install wrote it. An install that
+stopped before it finished has not recorded the plugin installed, so running
+it again calls `onInstall` again, which is why `onInstall` has to be
+idempotent. An install after an uninstall is a full install, `onInstall`
+included.
 Each run also records which tables the plugin owns and which columns,
 indexes, keys and checks its modules added to other owners' tables, so an
 install run again after one that stopped part way records whatever that run
@@ -1511,8 +1609,9 @@ existing app? Add its install to your build, after `nextly migrate`:
 nextly migrate && nextly plugins install <name> && next build
 ```
 
-Each run of an install records one row in `nextly_schema_events` and changes
-nothing else that is already in place. When you remove a plugin from
+A first install, and one after an uninstall, records one row in
+`nextly_schema_events`; an install of a plugin already installed records none,
+and changes nothing that is already in place. When you remove a plugin from
 `nextly.config.ts`, remove its `nextly plugins install` from your build
 script, since installing a plugin that is not configured fails the build.
 Install plugins that depend on others after them, as `dependsOn` lists them.
@@ -1579,8 +1678,11 @@ calls `onUninstall` again, and carries on. Run the other way, it is refused
 reason. `nextly plugins install` reinstates the plugin instead.
 
 A full uninstall that would drop tables, or run a DOWN that drops a column,
-lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until
-you re-run it with `--yes`. Each module's DOWN is read, judged and run exactly
+lists what it would drop and asks before it drops anything. At a terminal it
+asks once; without one, it stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until you
+re-run it with `--accept-data-loss`, alone or naming each table and
+`table.column` it drops (or `NEXTLY_ACCEPT_DATA_LOSS`). `--yes` does not
+consent to deleting data. Each module's DOWN is read, judged and run exactly
 as `migrate:down --plugin` runs it, newest first. Tables that a
 development push created, with no applied migration module to undo them, are
 refused with `PLUGIN_UNINSTALL_IRREVERSIBLE` (`logContext.reason` is

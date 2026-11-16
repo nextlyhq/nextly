@@ -14,6 +14,7 @@ import type {
 } from "../../collections/fields/types";
 import { normalizeRelationshipValue } from "../../domains/collections/services/collection-utils";
 import { NextlyError } from "../../errors";
+import { addressableFields } from "../addressable-fields";
 
 import { detachData } from "./detach";
 import { storageTypeToken } from "./plugin-storage";
@@ -502,17 +503,19 @@ export function requiresTransformation(fieldType: string): boolean {
 }
 
 /**
- * Normalize relationship field values on write input, at any nesting depth.
+ * Normalize relationship and upload field values on write input, at any
+ * nesting depth.
  *
- * A read at depth serves a relationship as the populated row, and a
- * multi-target one as `{ relationTo, value: row }`. Both come back on save, and
- * stored as they arrive they put a whole row snapshot in the column: later
- * reads then serve that stale copy instead of reloading the target, so an edit
- * to the target never appears.
+ * A read at depth serves a relationship as the populated row, an upload as the
+ * media object, and a multi-target one as `{ relationTo, value: row }`. All
+ * come back on save, and stored as they arrive they put a whole row snapshot in
+ * the column: later reads then serve that stale copy instead of reloading the
+ * target, so an edit to the target never appears.
  *
  * Groups and repeaters are walked rather than skipped. Their contents are
  * serialized to JSON wholesale, so a reference left populated inside one is
- * written as the row and never recognised as a reference again.
+ * written as the row and never recognised as a reference again; a depth-0
+ * read then gives that row where every other read gives the id.
  *
  * Mutates `data` in place, reducing each value to the reference it stands for.
  */
@@ -520,13 +523,26 @@ export function normalizeRelationshipFields(
   data: Record<string, unknown>,
   fields: FieldConfig[]
 ): void {
-  for (const field of fields) {
+  // The fields stored on this object, those inside a group with no name among them, at every
+  // level the walk reaches: such a group stores its fields where it sits.
+  for (const field of addressableFields(fields) as unknown as FieldConfig[]) {
     if (!("name" in field) || !field.name) continue;
     const value = data[field.name];
     if (value == null) continue;
 
     if (field.type === "relationship") {
       data[field.name] = normalizeRelationshipField(field, value);
+      continue;
+    }
+
+    // An upload is a reference to a media row, reduced item by item as a
+    // relationship's is: the id, or the pair a multi-target one names. A list
+    // is kept whole, as the top-level upload reduction keeps it.
+    if (field.type === "upload") {
+      data[field.name] = normalizeRelationshipValue(
+        value,
+        Array.isArray((field as { relationTo?: unknown }).relationTo)
+      );
       continue;
     }
 
@@ -622,7 +638,9 @@ export function coerceDateFieldsToDate(
   data: Record<string, unknown>,
   fields: ReadonlyArray<{ name?: string; type?: string }>
 ): void {
-  for (const field of fields) {
+  // The fields stored on this object, those inside a group with no name among them: a group with
+  // no name stores its fields where it sits, so a date inside one is a column of this row too.
+  for (const field of addressableFields(fields) as unknown as typeof fields) {
     if (!field.name) continue;
     // A timestamp-backed plugin type binds to the same column a `date` does,
     // so it needs the same coercion: Drizzle refuses to bind a string there.

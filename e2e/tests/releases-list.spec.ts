@@ -142,40 +142,46 @@ test.describe("the Releases list", () => {
 
     await leaveReleasesAsTheRunnerWould(page, needAttention);
 
-    await gotoAdmin(page, "/releases");
-    await searchFor(page, stamp);
+    try {
+      await gotoAdmin(page, "/releases");
+      await searchFor(page, stamp);
 
-    const tab = (label: string) => page.getByRole("tab", { name: label });
-    await expect(tab("Upcoming (27)")).toBeVisible();
-    await expect(tab("Needs attention (2)")).toBeVisible();
-    await expect(tab("Drafts (1)")).toBeVisible();
-    await expect(tab("Done (2)")).toBeVisible();
+      const tab = (label: string) => page.getByRole("tab", { name: label });
+      await expect(tab("Upcoming (27)")).toBeVisible();
+      await expect(tab("Needs attention (2)")).toBeVisible();
+      await expect(tab("Drafts (1)")).toBeVisible();
+      await expect(tab("Done (2)")).toBeVisible();
 
-    // Upcoming pages like the other tables: 25, then the rest, soonest first.
-    const inUpcoming = await titlesInTab(page, 27);
-    expect(inUpcoming).toEqual(upcoming);
+      // Upcoming pages like the other tables: 25, then the rest, soonest first.
+      const inUpcoming = await titlesInTab(page, 27);
+      expect(inUpcoming).toEqual(upcoming);
 
-    const seen: Record<string, string[]> = { upcoming: inUpcoming };
-    for (const [key, label, total] of [
-      ["attention", "Needs attention (2)", 2],
-      ["drafts", "Drafts (1)", 1],
-      ["done", "Done (2)", 2],
-    ] as const) {
-      await tab(label).click();
-      await expect(tab(label)).toHaveAttribute("aria-selected", "true");
-      seen[key] = await titlesInTab(page, total);
+      const seen: Record<string, string[]> = { upcoming: inUpcoming };
+      for (const [key, label, total] of [
+        ["attention", "Needs attention (2)", 2],
+        ["drafts", "Drafts (1)", 1],
+        ["done", "Done (2)", 2],
+      ] as const) {
+        await tab(label).click();
+        await expect(tab(label)).toHaveAttribute("aria-selected", "true");
+        seen[key] = await titlesInTab(page, total);
+      }
+      // Stopped first: it will not run until somebody acts.
+      expect(seen.attention).toEqual([stopped, overdue]);
+      expect(seen.drafts).toEqual([draft]);
+      expect([...seen.done].sort()).toEqual([cancelled, published].sort());
+
+      // Every release written, in exactly one tab.
+      const all = Object.values(seen).flat();
+      expect(new Set(all).size).toBe(all.length);
+      expect([...all].sort()).toEqual(
+        [...upcoming, overdue, stopped, draft, published, cancelled].sort()
+      );
+    } finally {
+      // Cancelled once read: a stopped or overdue release left behind is
+      // listed in every later spec's attention strip and card.
+      for (const { id } of needAttention) await cancel(page, id);
     }
-    // Stopped first: it will not run until somebody acts.
-    expect(seen.attention).toEqual([stopped, overdue]);
-    expect(seen.drafts).toEqual([draft]);
-    expect([...seen.done].sort()).toEqual([cancelled, published].sort());
-
-    // Every release written, in exactly one tab.
-    const all = Object.values(seen).flat();
-    expect(new Set(all).size).toBe(all.length);
-    expect([...all].sort()).toEqual(
-      [...upcoming, overdue, stopped, draft, published, cancelled].sort()
-    );
   });
 });
 
@@ -273,26 +279,32 @@ test.describe("the Releases list, under a brand colour", () => {
       // Last, since Publish now runs a pass of the runner.
       await leaveReleasesAsTheRunnerWould(page, attention);
 
-      await gotoAdmin(page, "/releases", theme);
-      await expectBrandColourApplied(page);
-      await searchFor(page, stamp);
+      try {
+        await gotoAdmin(page, "/releases", theme);
+        await expectBrandColourApplied(page);
+        await searchFor(page, stamp);
 
-      for (const label of [
-        "Upcoming (1)",
-        "Needs attention (2)",
-        "Drafts (1)",
-        "Done (2)",
-      ]) {
-        const tab = page.getByRole("tab", { name: label });
-        await tab.click();
-        await expect(tab).toHaveAttribute("aria-selected", "true");
-        // The table at a desk's width and a card per row at a phone's, which
-        // draw each badge on a different surface.
-        for (const width of [1440, 390]) {
-          await page.setViewportSize({ width, height: 900 });
-          await expectNoAxeViolations(page, { include: STATE_BADGES });
+        for (const label of [
+          "Upcoming (1)",
+          "Needs attention (2)",
+          "Drafts (1)",
+          "Done (2)",
+        ]) {
+          const tab = page.getByRole("tab", { name: label });
+          await tab.click();
+          await expect(tab).toHaveAttribute("aria-selected", "true");
+          // The table at a desk's width and a card per row at a phone's, which
+          // draw each badge on a different surface.
+          for (const width of [1440, 390]) {
+            await page.setViewportSize({ width, height: 900 });
+            await expectNoAxeViolations(page, { include: STATE_BADGES });
+          }
+          await page.setViewportSize({ width: 1440, height: 900 });
         }
-        await page.setViewportSize({ width: 1440, height: 900 });
+      } finally {
+        // Cancelled once scanned, so no later spec finds them among the
+        // releases that need attention.
+        for (const { id } of attention) await cancel(page, id);
       }
     });
   }

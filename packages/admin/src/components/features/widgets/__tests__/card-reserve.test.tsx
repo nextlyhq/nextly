@@ -244,6 +244,23 @@ describe("the footer", () => {
     expect(footer.className).not.toMatch(/:empty\]:hidden/);
   });
 
+  it("holds no line for a checklist card, whose checklist hands the footer nothing", () => {
+    // The setup card's footer is empty once its steps are drawn: a line held
+    // while it loads made the whole row 28 px taller than the row it became.
+    render(
+      <WidgetCard
+        title="Set up your project"
+        state={{ kind: "loading" }}
+        skeleton="checklist"
+      >
+        body
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-footer")).toHaveClass(
+      "has-[[data-testid=widget-card-footer-slot]:empty]:hidden"
+    );
+  });
+
   it("takes no room once the answer is drawn with nothing for the footer", () => {
     // Cards are as tall as their content: an empty footer under a drawn answer is not drawn.
     render(<WidgetCard title="Note">body</WidgetCard>);

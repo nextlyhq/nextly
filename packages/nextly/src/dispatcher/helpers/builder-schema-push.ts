@@ -122,8 +122,8 @@ export interface BuilderCompanionReconcile {
  * translations behind its main table.
  *
  * @throws Error when the push is refused; the settings step's own refusal as it is, the fields
- *   still translated; and `NEXTLY_INTERNAL_ERROR` naming the entity when the push landed but its
- *   companion could not be brought in step.
+ *   still translated; a busy-table stop (`NEXTLY_TABLE_BUSY`) as it is; and `NEXTLY_INTERNAL_ERROR`
+ *   naming the entity when the push landed but its companion could not be brought in step.
  */
 export async function pushAndReconcileCompanion(
   push: (desired: DesiredSchema) => Promise<PipelineResult>,
@@ -161,22 +161,66 @@ export async function pushAndReconcileCompanion(
       await reconcileComponentCompanion({ ...companion, joinedBefore });
     }
   } catch (error) {
-    // A refused setting is the dialog's answer to the admin, naming the field, and nothing has
-    // been dropped by then, so it is passed on as it is rather than as a companion out of step.
-    if (isLeavingSettingsRefusal(error)) throw error;
-    throw NextlyError.internal({
-      cause: error instanceof Error ? error : undefined,
-      logContext: {
-        op:
-          kind === "single"
-            ? "singleCompanionReconcile"
-            : "componentCompanionReconcile",
-        slug: companion.slug,
-        detail: error instanceof Error ? error.message : String(error),
-      },
+    throw companionReconcileFailure(error, {
+      op:
+        kind === "single"
+          ? "singleCompanionReconcile"
+          : "componentCompanionReconcile",
+      slug: companion.slug,
     });
   }
   return result;
+}
+
+/** What a companion reconcile stopped after its entity's push landed leaves, for the admin. */
+const COMPANION_LEFT_BEHIND =
+  "The main table's change was applied, but its translations table's was not: save again to finish it.";
+
+/**
+ * What a companion reconcile that failed after its entity's push landed is reported as, for every
+ * Builder dialog and save that reconciles one. Passed on as they are: a refused setting, the
+ * dialog's answer to the admin naming the field, with nothing dropped by then; and a busy-table
+ * stop (`NEXTLY_TABLE_BUSY`), which the API answers with 409 and a report of the table, its tries
+ * and what to do next, as every other bounded schema path does, saying too that the main table's
+ * change landed and a save again finishes the translations table's. Anything else is an internal error
+ * saying the companion is out of step with its main table, which a save again brings in step.
+ */
+export function companionReconcileFailure(
+  error: unknown,
+  context: { op: string; slug: string; note?: string }
+): unknown {
+  if (isLeavingSettingsRefusal(error)) return error;
+  if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) {
+    // The busy-table stop as it is, its code, status and report, with what it leaves said beside
+    // its first line: the entity's main table has its change, and only the translations table's
+    // waits for the next save.
+    const lines = error.publicMessage.split("\n");
+    lines.splice(1, 0, COMPANION_LEFT_BEHIND);
+    return new NextlyError({
+      code: error.code,
+      publicMessage: lines.join("\n"),
+      ...(error.publicData === undefined
+        ? {}
+        : { publicData: error.publicData }),
+      statusCode: error.statusCode,
+      logContext: {
+        ...error.logContext,
+        op: context.op,
+        slug: context.slug,
+        note: COMPANION_LEFT_BEHIND,
+      },
+      cause: error,
+    });
+  }
+  return NextlyError.internal({
+    cause: error instanceof Error ? error : undefined,
+    logContext: {
+      op: context.op,
+      slug: context.slug,
+      detail: error instanceof Error ? error.message : String(error),
+      ...(context.note === undefined ? {} : { note: context.note }),
+    },
+  });
 }
 
 /**
@@ -220,7 +264,7 @@ const leavingSettingsRefusals = new WeakSet<Error>();
  * Whether `error` is a settings step's refusal, which a caller passes on as it is: nothing has
  * been dropped by then, and it names the fields.
  */
-export function isLeavingSettingsRefusal(error: unknown): boolean {
+function isLeavingSettingsRefusal(error: unknown): boolean {
   return error instanceof Error && leavingSettingsRefusals.has(error);
 }
 

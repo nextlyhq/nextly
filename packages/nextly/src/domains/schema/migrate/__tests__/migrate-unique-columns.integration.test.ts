@@ -299,6 +299,29 @@ describe.each(LOCK_DIALECTS)(
       expect(await ledger()).toEqual([]);
     }, 120_000);
 
+    // A Builder save records its definition before its migration runs: a field it turned into a
+    // relationship still holds the values it held before, which may be anything, a secret included.
+    it("names only how many repeat where the relationship's definition still awaits its migration", async () => {
+      // A row the value names, so a key on the column takes it: the value is what is under test.
+      await run([
+        `INSERT INTO ${q(PEOPLE)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('s3cr3t-token', 'x', 'x')`,
+        profile("p1", "s3cr3t-token"),
+        profile("p2", "s3cr3t-token"),
+      ]);
+      await adapter.executeQuery(
+        `UPDATE ${q("dynamic_collections")} SET ${q("migration_status")} = 'pending' WHERE ${q("slug")} = 'profiles'`
+      );
+      writeUniqueFile();
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toBe(
+        `${FILE} was not applied. Collection 'profiles': field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries. Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`
+      );
+      expect(JSON.stringify(error.logContext)).not.toContain("s3cr3t-token");
+      expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+
     it("applies a file making a column unique whose only repeats hold no value, which then refuses a repeat", async () => {
       await run([
         profile("p1", "ada"),
@@ -346,6 +369,26 @@ describe.each(LOCK_DIALECTS)(
       );
       expect(await isUnique("person")).toBe(false);
       expect(await isUnique("partner")).toBe(false);
+    }, 120_000);
+
+    it("names only how many repeat where the one-to-one's definition still awaits its migration", async () => {
+      await recordOneToOnes("person");
+      await adapter.executeQuery(
+        `UPDATE ${q("dynamic_collections")} SET ${q("migration_status")} = 'pending' WHERE ${q("slug")} = 'profiles'`
+      );
+      await run([
+        `INSERT INTO ${q(PEOPLE)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('s3cr3t-token', 'x', 'x')`,
+        profile("p1", "s3cr3t-token"),
+        profile("p2", "s3cr3t-token"),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toBe(
+        `Making one-to-one relationships unique was not applied. Collection 'profiles': field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries. Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`
+      );
+      expect(JSON.stringify(error.logContext)).not.toContain("s3cr3t-token");
+      expect(await isUnique("person")).toBe(false);
     }, 120_000);
 
     it("finishes a run stopped part-way, adding only the uniqueness still missing", async () => {

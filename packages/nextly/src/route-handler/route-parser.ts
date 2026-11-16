@@ -603,6 +603,23 @@ function parseCollectionRoutes(
     };
   }
 
+  // POST /api/collections/schema/address-check → what creating a collection under an address
+  // would answer, asked before the create. Under the collections service, so the collection
+  // create's own permission gates it.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return {
+      service: "collections",
+      operation: "single",
+      method: "checkCollectionAddress",
+      routeParams,
+    };
+  }
+
   if (id === "schema" && subresource && httpMethod === "GET") {
     // GET /api/collections/schema/course → get collection schema with enriched component fields
     routeParams.collectionName = subresource;
@@ -780,11 +797,13 @@ function parseCollectionEntryPublishAllRoute(
   // that difference twice is how a route and its twin start to disagree about
   // the shape they both match.
   const allLocales = ALL_LOCALES_ENTRY_ROUTES[additionalParams[0] ?? ""];
+  // The route ends at the action: a path that goes on past it names nothing here.
   if (
     id &&
     subresource === "entries" &&
     subId &&
     allLocales &&
+    additionalParams.length === 1 &&
     httpMethod === "POST"
   ) {
     routeParams.collectionName = id;
@@ -1558,6 +1577,23 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/schema/address-check → what creating a Single under an address would
+  // answer, asked before the create. Under the singles service, so the Single create's own
+  // permission gates it.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return {
+      service: "singles",
+      operation: "single",
+      method: "checkSingleAddress",
+      routeParams,
+    };
+  }
+
   return null;
 }
 
@@ -1591,6 +1627,18 @@ function parseComponentRoutes(
       ? parseComponentSchemaRoute(subresource, subId, httpMethod, routeParams)
       : null;
   if (schemaRoute) return schemaRoute;
+
+  // POST /api/field-groups/schema/address-check → what creating a field group under an address
+  // would answer, asked before the create. A POST under this service, so it asks the permission
+  // the field-group create asks.
+  if (
+    id === "schema" &&
+    subresource === "address-check" &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    return componentRoute("single", "checkComponentAddress", routeParams);
+  }
 
   // GET /api/field-groups/[slug]/used-by → the fields that place the field
   // group, and what holds each. Matched before the bare slug routes below,

@@ -71,6 +71,7 @@ import {
   toColumnDescriptor,
   withDeclaredModifiers,
 } from "../extension/column-descriptor";
+import type { ColumnOverride } from "../extension/draft";
 import { enumChecks } from "../extension/enum-check";
 import type { ExtensionColumn } from "../extension/types";
 import type { ForeignKeySpec } from "../pipeline/diff/types";
@@ -84,8 +85,11 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
+  fieldsStoredOnRow,
   getColumnDescriptor,
+  getSingleRowColumnDescriptor,
   migrateStepColumnDescriptors,
+  renderDialectType,
   systemColumnsForFields,
 } from "./field-column-descriptor";
 
@@ -151,6 +155,14 @@ export interface RuntimeSchemaOptions {
    */
   extensionColumns?: readonly ExtensionColumn[];
   /**
+   * The app's overrides of this table's field columns' storage. Defaulted
+   * from the active extension schema, as the contributed columns are: the
+   * runtime table is what drizzle-kit pushes and what a SQLite rebuild
+   * recreates, so a column built here with the field's own storage would be
+   * changed back by either.
+   */
+  columnOverrides?: readonly ColumnOverride[];
+  /**
    * The foreign keys THIS table's desired spec carries, declared on a SQLite
    * table only.
    *
@@ -193,6 +205,8 @@ export function generateRuntimeSchema(
     isSingle: options.isSingle ?? tableName.startsWith("single_"),
     extensionColumns:
       options.extensionColumns ?? contributedColumnsFor(tableName, dialect),
+    columnOverrides:
+      options.columnOverrides ?? overriddenColumnsFor(tableName, dialect),
   };
   let table: unknown;
   switch (dialect) {
@@ -335,6 +349,46 @@ export function contributedColumnsFor(
   dialect: SupportedDialect
 ): readonly ExtensionColumn[] {
   return getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ?? [];
+}
+
+/**
+ * The app's overrides of `tableName`'s field columns, from the active
+ * extension schema: the one lookup every runtime-table builder makes, as
+ * `contributedColumnsFor` is for contributed columns.
+ */
+export function overriddenColumnsFor(
+  tableName: string,
+  dialect: SupportedDialect
+): readonly ColumnOverride[] {
+  return (
+    getActiveExtensionSchema(dialect)?.columnOverrides.get(tableName) ?? []
+  );
+}
+
+/**
+ * A field column's descriptor with the storage an override gives it: the
+ * kind and size change, and its name and nullability stay the field's. The
+ * rendered type is asked of `renderDialectType`, so the runtime column and
+ * the desired spec (`withEntityContributions`) render one override alike.
+ */
+export function withColumnOverride(
+  desc: ColumnDescriptor,
+  overrides: readonly ColumnOverride[],
+  dialect: SupportedDialect
+): ColumnDescriptor {
+  const override = overrides.find(o => o.column === desc.name);
+  if (override === undefined) return desc;
+  return {
+    name: desc.name,
+    nullable: desc.nullable,
+    kind: override.kind,
+    dialectType: renderDialectType(override.kind, dialect, override),
+    ...(override.length !== undefined ? { length: override.length } : {}),
+    ...(override.precision !== undefined
+      ? { precision: override.precision }
+      : {}),
+    ...(override.scale !== undefined ? { scale: override.scale } : {}),
+  };
 }
 
 /**
@@ -553,16 +607,27 @@ function buildDrizzleColumnRecord(
   }
 
   // User-defined fields. Layout-only field types and unmapped types
-  // come back as `null` from getColumnDescriptor and are skipped.
-  for (const field of fields) {
+  // come back as `null` from getColumnDescriptor and are skipped. Those inside
+  // a group with no name are columns of this row, read through the walk every
+  // builder of the row's columns shares (`fieldsStoredOnRow`); the group
+  // itself has no name to give a column. A Single's reference columns accept
+  // NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn =
+    options.isSingle === true
+      ? getSingleRowColumnDescriptor
+      : getColumnDescriptor;
+  for (const field of fieldsStoredOnRow(fields)) {
     if (localizedNames.has(field.name)) continue; // companion-owned
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       field,
       dialect,
       options.builtBy ?? "codeFirst"
     );
     if (!desc) continue;
-    out[field.name] = buildUserDrizzleColumn(desc, dialect);
+    out[field.name] = buildUserDrizzleColumn(
+      withColumnOverride(desc, options.columnOverrides ?? [], dialect),
+      dialect
+    );
   }
 
   addContributedDrizzleColumns(out, options.extensionColumns ?? [], dialect);
@@ -883,7 +948,7 @@ export function buildPgColumnFromKind(
     case "json":
       return withNullability(pgJsonb(name), nullable);
     case "fkSingle":
-      return pgText(name);
+      return withNullability(pgText(name), nullable);
     // Extension-only kinds. Omitting them does NOT fail to compile — this
     // function returns `unknown`, so a missing case falls through to
     // `undefined` and the table receives a non-column. Every kind is listed
@@ -953,7 +1018,10 @@ export function buildMysqlColumnFromKind(
     case "json":
       return withNullability(mysqlJson(name), nullable);
     case "fkSingle":
-      return mysqlVarchar(name, { length: length ?? 36 });
+      return withNullability(
+        mysqlVarchar(name, { length: length ?? 36 }),
+        nullable
+      );
     // See the PostgreSQL builder: a missing case falls through to `undefined`
     // rather than failing to compile, so every kind is listed.
     case "bigint": {
@@ -1026,7 +1094,7 @@ export function buildSqliteColumnFromKind(
       // SQLite stores JSON as text.
       return withNullability(sqliteText(name), nullable);
     case "fkSingle":
-      return sqliteText(name);
+      return withNullability(sqliteText(name), nullable);
     case "skip":
       return null;
     default:

@@ -73,6 +73,12 @@ interface MissingUniqueness {
   /** The index the statements create, whose name nothing else may hold. */
   index: string;
   statements: string[];
+  /**
+   * Whether a refusal may show its repeated values: entry ids, where the entity's definition has
+   * reached the database (`definitionApplied`). One still awaiting its migration may name as a
+   * one-to-one a column holding the values of the field it was before, which may be anything.
+   */
+  showValues?: boolean;
 }
 
 /** What the step needs: the database, and how to run a statement on it and say what it did. */
@@ -238,9 +244,12 @@ async function missingUniqueness(
     // A plugin's tables follow its own migration modules, which would read an index made here as
     // drift; its one-to-ones are its modules' to make unique.
     if (registered.source.startsWith("plugin")) continue;
+    const showValues = registered.definitionApplied;
     missing.push(
-      ...(await missingOnMainTable(db, dialect, registered)),
-      ...(await missingOnTranslations(db, dialect, registered))
+      ...[
+        ...(await missingOnMainTable(db, dialect, registered)),
+        ...(await missingOnTranslations(db, dialect, registered)),
+      ].map(target => ({ ...target, showValues }))
     );
   }
   return missing;
@@ -333,8 +342,16 @@ export async function makeOneToOnesUnique(
     );
     if (repeats.length > 0) {
       const { entity, field, table, column } = target;
-      // A one-to-one's values are ids of entries, which the refusal shows.
-      refused.push({ entity, field, table, column, repeats, showValues: true });
+      // A one-to-one's values are ids of entries, which the refusal shows where its definition
+      // is the one the database has.
+      refused.push({
+        entity,
+        field,
+        table,
+        column,
+        repeats,
+        showValues: target.showValues === true,
+      });
     }
   }
   if (refused.length > 0) {

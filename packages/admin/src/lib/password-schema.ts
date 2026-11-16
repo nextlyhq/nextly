@@ -13,12 +13,11 @@
 
 import { z } from "zod";
 
+import { currentPasswordRule } from "./password-rule";
 import { retryableModule } from "./retryable-module";
 
-/** The server's default policy constants (auth/password/policy.ts). */
-const MIN_LENGTH = 8;
+/** The server's fixed limit (auth/password/policy.ts); the rest it publishes. */
 const MAX_LENGTH = 128;
-const DIGESTER_REACH_BYTES = 72;
 
 /**
  * Pre-computed lowercased, NFC-normalized set, as the server keeps one. The
@@ -62,10 +61,10 @@ function isCommonPassword(lowerCased: string): boolean {
  * that sets a password. The server is authoritative; mirroring lets the user
  * see failures before submit, and src/types/userform-password.test.ts holds
  * the two to the same verdicts — same rules, same messages, same order:
- * 1. At least 8 characters (code points, after NFC normalization)
+ * 1. At least the published minimum (8 by default; code points, after NFC)
  * 2. At most 128 characters (resource safety)
  * 3. Not on the 3,000 common passwords list (NFC-normalized, case-insensitive)
- * 4. Within the default digester's 72-byte reach (UTF-8)
+ * 4. Within the published byte limit of the hasher (72 for bcrypt; UTF-8)
  * No character class is required — a class-less passphrase passes.
  */
 export const passwordSchema: z.ZodString = z
@@ -79,11 +78,15 @@ export const passwordSchema: z.ZodString = z
       return;
     }
 
+    // The minimum and the byte limit the server published, read as the
+    // password is checked, so a form drawn before the answer arrived still
+    // judges by it.
+    const { minLength, maxBytes } = currentPasswordRule();
     const normalized = value.normalize("NFC");
     const charCount = countCodePoints(normalized);
 
-    if (charCount < MIN_LENGTH) {
-      addIssue(`Password must be at least ${MIN_LENGTH} characters`);
+    if (charCount < minLength) {
+      addIssue(`Password must be at least ${minLength} characters`);
     }
 
     if (charCount > MAX_LENGTH) {
@@ -95,10 +98,14 @@ export const passwordSchema: z.ZodString = z
     }
 
     // UTF-8 byte length, browser-safe: the server reads the password raw, so
-    // the mirror measures it raw too, not the NFC-normalized form.
-    if (new TextEncoder().encode(value).length > DIGESTER_REACH_BYTES) {
+    // the mirror measures it raw too, not the NFC-normalized form. No limit
+    // where the app's hasher reads a password whole.
+    if (
+      maxBytes !== null &&
+      new TextEncoder().encode(value).length > maxBytes
+    ) {
       addIssue(
-        `Password exceeds the ${DIGESTER_REACH_BYTES}-byte limit of the password digester.`
+        `Password exceeds the ${maxBytes}-byte limit of the password digester.`
       );
     }
   });

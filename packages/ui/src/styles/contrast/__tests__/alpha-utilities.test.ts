@@ -105,12 +105,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // An own-design card's accent outline. The "Own design" pill inside the card
   // says the same thing in words, so the thin border is supplementary.
   "border-primary/40",
-  // The divider between the halves of a split button in the editor bar's
-  // loading outline. The outline is a disabled placeholder held in the real
-  // bar's place while the document loads (inactive controls are outside WCAG
-  // 1.4.11), and the wait is told by the frame's line and slow-start message,
-  // not by this border.
-  "border-primary-foreground/20",
   // Hardcoded white/black palette utilities. The scan cannot know their local
   // surface (they render on dark scrims or over media, not the page), so each
   // is listed here with the surface that makes it readable, rather than left to

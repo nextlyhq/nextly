@@ -232,7 +232,8 @@ await nextly.unpublish({ collection: "posts", id, locales: ["fr"], data: { _rev 
 ```
 
 Over REST, send the same choice to `POST /api/collections/{slug}/entries/{id}/publish` or
-`.../unpublish`, with a body of `{ "locales": ["es", "fr"], "shared": true, "_rev": 4 }`.
+`.../unpublish`, with a body of `{ "locales": ["es", "fr"], "shared": true, "_rev": "<_rev from your read>" }`.
+`_rev` is the string token a read returns; send it back unchanged.
 `locales: "all"` chooses every language the site has, and the shared part with them.
 
 Everything chosen moves together, or nothing moves:
@@ -249,7 +250,10 @@ Everything chosen moves together, or nothing moves:
 - **The shared part stays live while a language does.** Unpublishing the shared part while a
   language you did not choose stays live is refused, naming that language.
 - **A languages-only publish changes no shared value.** Pending edits to the shared part stay
-  pending until the shared part is published.
+  pending until the shared part is published. To throw them away instead, send
+  `DELETE /api/collections/{slug}/entries/{id}/versions/working-draft?part=shared`: each
+  language's pending change stays. Where the shared part keeps no draft of its own, as on a
+  Single, the request is refused with `NO_SHARED_DRAFT` and nothing is discarded.
 - **A unique translated field needs a value in each language.** A unique field is never filled
   from another language, so a language whose required unique field is empty is refused with
   `UNIQUE_VALUE_REQUIRED_IN_LANGUAGE`.

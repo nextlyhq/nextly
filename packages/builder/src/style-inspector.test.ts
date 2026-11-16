@@ -12,6 +12,8 @@ import {
   BASE_BREAKPOINT,
   clearBlocks,
   registerBlocks,
+  STYLE_CATALOG,
+  styleGroupKeys,
   stylePropertiesForSupports,
   type BlockDocument,
   type BlockNode,
@@ -164,7 +166,9 @@ describe("what a property carries", () => {
     );
 
     expect(labels.get("flexDirection")).toBe("Flex direction");
-    expect(labels.get("gridTemplateColumns")).toBe("Grid template columns");
+    // Too long for the label column under its own name: shortened, with the
+    // full name kept in its tooltip.
+    expect(labels.get("gridTemplateColumns")).toBe("Column sizes");
   });
 
   it("reports which properties this node sets, and which it does not", () => {
@@ -609,5 +613,58 @@ describe("which display the tiers read", () => {
     expect(shown("mobile")).toBe(true);
     // The control: the tablet rule does not apply at the unconditional tier.
     expect(shown(BASE_BREAKPOINT)).toBe(false);
+  });
+});
+
+describe("every label fits the Style tab's label column", () => {
+  /*
+   * The column is 7rem, which is 112px, and labels are set in the panel's
+   * 12px medium face. Measured there, the widest labels that show whole are
+   * 17 characters ("Background colour" and "Link colour hover", 106 and 97px),
+   * and the first one cut was 19 ("Background gradient", 117px). The budget
+   * is 17 characters: a label of 18 with wide letters can already pass
+   * 112px, so a longer one needs a short label of its own.
+   *
+   * What it does not prove: characters stand in for measured width, so a
+   * 17-character label made mostly of wide letters (m, w, M) could still be
+   * cut, and the column is 7rem only at the panel's default width; narrower,
+   * rows with an icon strip give it up first. Every label today is well
+   * inside the budget except the two measured above.
+   */
+  const LABEL_BUDGET = 17;
+
+  /**
+   * Every catalog property as the Style tab labels it, from a block that
+   * supports every style group, so no property escapes the check by not
+   * being offered.
+   */
+  function everyRow() {
+    register(Object.fromEntries(styleGroupKeys().map(key => [key, true])));
+    const inspection = inspectStyle(documentOf(), "a");
+    return (inspection?.sections ?? []).flatMap(section => section.properties);
+  }
+
+  it("reaches every property in the catalog", () => {
+    // The control: without it, a block that offered half the catalog would
+    // check half the labels and pass.
+    const shown = new Set(everyRow().map(row => row.property));
+    expect([...shown].sort()).toEqual(
+      STYLE_CATALOG.map(entry => entry.property).sort()
+    );
+  });
+
+  it("gives each label no more characters than the column holds", () => {
+    const tooLong = everyRow()
+      .filter(row => row.label.length > LABEL_BUDGET)
+      .map(row => `${row.property}: "${row.label}"`);
+    expect(tooLong).toEqual([]);
+  });
+
+  it("labels the background gradient Gradient, with its full name on hover", () => {
+    const gradient = everyRow().find(
+      row => row.property === "backgroundGradient"
+    );
+    expect(gradient?.label).toBe("Gradient");
+    expect(gradient?.summary.startsWith("Background gradient: ")).toBe(true);
   });
 });

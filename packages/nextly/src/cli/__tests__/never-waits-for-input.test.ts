@@ -178,22 +178,26 @@ vi.mock("../../domains/field-groups/storage/resolve-storage-names", () => ({
   resolveRegistryNameFromCatalog: () => Promise.resolve("nextly_field_groups"),
 }));
 
-// The reconcile asks before its destructive change, and refuses as the real
-// one does when the answer is no; `reconciled` records that it went ahead.
-vi.mock("../../domains/schema/migrate/core-reconcile", () => ({
-  reconcileCore: async (deps: {
-    confirmDestructive: (reasons: string[]) => Promise<boolean>;
-  }) => {
-    if (!(await deps.confirmDestructive(["drop column nextly_users.legacy"]))) {
-      throw new NextlyError({
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-        publicMessage:
-          "Core schema reconciliation aborted: destructive operations were not confirmed: drop column nextly_users.legacy.",
-      });
-    }
-    seen.reconciled();
-  },
-}));
+// The core upgrade would delete one column; the command lists it and asks, or
+// refuses with no terminal, before the reconcile runs. The reconcile judges it
+// again, as the real one does, and `reconciled` records that it went ahead.
+vi.mock("../../domains/schema/migrate/core-reconcile", () => {
+  const legacy = {
+    kind: "column" as const,
+    table: "nextly_users",
+    column: "legacy",
+    core: true,
+  };
+  return {
+    planCoreDeletions: async () => [legacy],
+    reconcileCore: async (deps: {
+      judgeDeletions?: (deletions: readonly unknown[]) => Promise<void>;
+    }) => {
+      await deps.judgeDeletions?.([legacy]);
+      seen.reconciled();
+    },
+  };
+});
 
 // The folder the in-process commands run in: empty, so `--promote` finds no
 // configuration to append to and prints its snippet instead.
@@ -324,16 +328,14 @@ describe("--non-interactive at a terminal", () => {
     expect(printedError()).toContain("--confirm-backed-up");
   });
 
-  it("upgrade --reconcile-core does not ask, changes nothing, and says the confirmation needs a terminal", async () => {
+  it("upgrade --reconcile-core does not ask, changes nothing, and names the consent that would cover it", async () => {
     await upgradeAction({ reconcileCore: true }, new Command());
     expect(seen.createInterface).not.toHaveBeenCalled();
     expect(seen.reconciled).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
-    expect(
-      [...seen.printed, printedError()].join("\n").toLowerCase()
-    ).toContain("this confirmation needs a terminal");
+    expect(printedError()).toContain("--accept-data-loss=nextly_users.legacy");
     // Its own code, not the one a "no" typed at the prompt ends with.
-    expect(printedError()).toContain("(CORE_DESTRUCTIVE_NEEDS_TERMINAL)");
+    expect(printedError()).toContain("(DATA_LOSS_CONSENT_REQUIRED)");
   });
 
   it("the schema push's terminal prompts are not shown, and a terminal is asked for", async () => {

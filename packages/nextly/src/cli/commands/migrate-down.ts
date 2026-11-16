@@ -25,6 +25,13 @@ import {
   stepFileOf,
   type StepFile,
 } from "../../domains/i18n/migration/step-windows";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
+import {
+  runUnitInTries,
+  type BusyTableRun,
+} from "../../domains/schema/busy-table/run-unit";
+import { boundedStopRecord } from "../../domains/schema/busy-table/stopped-record";
 import {
   isPluginLedgerRow,
   ledgerFilename,
@@ -105,6 +112,7 @@ import {
 } from "../../domains/schema/schema-version";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { busyTableNotices } from "../busy-table-options";
 import { exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
@@ -373,6 +381,20 @@ export interface MigrateDownCoreDeps {
    * DOWN is recorded only once it ends, as it was before.
    */
   recordDownStarted?: (filename: string) => Promise<string>;
+  /**
+   * After a DOWN stopped waiting for a busy table, writes its ending in one transaction that waits
+   * for the ledger table one try at most (`writeLedgerBounded`): its failed rollback where `failed`,
+   * and the removal of its start row (`attempt`). The ledger table can be the one another session
+   * holds, and the record must not wait past the bounds the stop kept. Absent, the ending is
+   * written by `recordFailed` and `endDownAttempt`, as for any other failure.
+   */
+  recordStopped?: (ending: {
+    filename: string;
+    message: string;
+    transaction: boolean;
+    failed: boolean;
+    attempt?: string;
+  }) => Promise<void>;
   /**
    * Refuses a DOWN whose statements make a column required over rows that would break it,
    * counted before its first statement and before the ledger records an attempt
@@ -670,6 +692,7 @@ export async function rollBackOne(
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "recordStopped"
     | "refuseRequiredColumns"
   >,
   /**
@@ -727,18 +750,53 @@ export async function rollBackOne(
       }
     );
   } catch (err) {
-    if (!isConcurrentRun(err) || partial) {
-      await deps.recordFailed(
-        p.filename,
-        truncateErrorMessage(describeError(err, { context: false })),
-        p.transaction
-      );
+    // A DOWN that stopped waiting for a busy table before anything of it was made durable left
+    // the migration applied, as it was: no failed rollback is recorded, and run again it starts.
+    const leftNothing = busyTableLeftNothing(err);
+    // Whether the ledger tells this DOWN's ending without its start row: nothing of it stayed
+    // (a busy stop that changed nothing, or a lost race rolled back whole, whose other run's
+    // rollback is the migration's outcome), or its failed rollback is recorded below. Only then
+    // may the start row go; otherwise it is the one trace that statements of it may have
+    // committed, and removing it would let the next DOWN send them again.
+    let endingRecorded = leftNothing || (isConcurrentRun(err) && !partial);
+    const busy = NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY";
+    if (busy && deps.recordStopped !== undefined) {
+      // The whole ending in one bounded write; one that cannot land keeps the start row, the
+      // trace a part-way DOWN needs, and the stop is reported all the same.
+      await deps
+        .recordStopped({
+          filename: p.filename,
+          message: truncateErrorMessage(describeError(err, { context: false })),
+          transaction: p.transaction,
+          failed: !leftNothing,
+          ...(attempt === undefined ? {} : { attempt }),
+        })
+        .catch(() => undefined);
+      throw err;
     }
-    // Recorded failed above; a lost race rolled back whole left nothing to
-    // record, and the other run's rollback is the migration's outcome. A
-    // start row left behind reads as a stopped DOWN, which is still true, so
-    // failing to remove it never hides the DOWN's own error.
-    if (attempt !== undefined) {
+    if (!endingRecorded) {
+      endingRecorded = await deps
+        .recordFailed(
+          p.filename,
+          truncateErrorMessage(describeError(err, { context: false })),
+          p.transaction
+        )
+        .then(
+          () => true,
+          (recordError: unknown) => {
+            // A busy-table stop says so whatever its record does: on SQLite the holder can still
+            // hold the database, so the record cannot be written. Its start row then stays.
+            if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
+              throw recordError;
+            }
+            return false;
+          }
+        );
+    }
+    // Removed only once the ending is recorded (above). A start row left
+    // behind reads as a stopped DOWN, which is still true, so failing to
+    // remove it never hides the DOWN's own error.
+    if (attempt !== undefined && endingRecorded) {
       await deps.endDownAttempt?.(attempt).catch(() => undefined);
     }
     throw err;
@@ -1198,6 +1256,10 @@ interface MigrateDownCommandOptions {
   dryRun?: boolean;
   forceUnlock?: boolean;
   plugin?: string;
+  /** One try's bound for a busy table, as typed (`--lock-timeout`). */
+  lockTimeout?: string;
+  /** Every try's bound together, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
 }
 
 interface ResolvedDownOptions extends MigrateDownCommandOptions {
@@ -1241,6 +1303,11 @@ export async function downDatabaseDeps(args: {
   migrationsDir?: string;
   /** What the run's declared schema names, which old Builder files are judged against. */
   declared?: DeclaredNames;
+  /**
+   * How a down section waits for a busy table; absent, it runs in one try with no bound of its
+   * own, as before.
+   */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
 }): Promise<
   Pick<
     MigrateDownCoreDeps,
@@ -1264,12 +1331,17 @@ export async function downDatabaseDeps(args: {
     | "recordFailed"
     | "recordDownStarted"
     | "endDownAttempt"
+    | "recordStopped"
     | "refuseRequiredColumns"
   >
 > {
   const { adapter, dialect, plugin } = args;
   const db = adapter.getDrizzle();
   const repo = new SchemaEventsRepository(db, dialect);
+  // A busy-table stop's record waits for the ledger table one try at most.
+  const stoppedTryMs = args.busyTable?.bounds.tryMs;
+  // The down sections this run rolled back, in order.
+  const rolledBack: string[] = [];
   const {
     SchemaOwnersRepository: OwnersRepo,
     schemaOwnersTableExists,
@@ -1325,10 +1397,24 @@ export async function downDatabaseDeps(args: {
       await refuseRequiredColumnsOverNulls(db, dialect, statements, source);
       await refuseUniqueIndexesOverRepeats(db, dialect, statements, source);
     },
-    execDown: (statements, unit, after) =>
-      runMigrationStatements(adapter, statements, unit, handle =>
-        after(handle)
-      ),
+    execDown: async (statements, unit, after) => {
+      if (args.busyTable === undefined) {
+        return runMigrationStatements(adapter, statements, unit, handle =>
+          after(handle)
+        );
+      }
+      // A down section waits for a busy table in tries; a report names the sections this run
+      // rolled back before it.
+      const ran = await runUnitInTries(
+        adapter,
+        statements,
+        unit,
+        handle => after(handle),
+        { ...args.busyTable, appliedBefore: () => [...rolledBack] }
+      );
+      rolledBack.push(unit.source);
+      return ran;
+    },
     recordRolledBack: async (filename, handle) => {
       const bound = repo.boundTo(handle);
       if (!(await bound.isFileApplied(filename))) return false;
@@ -1380,6 +1466,33 @@ export async function downDatabaseDeps(args: {
         transaction,
         note: `${args.command ?? "migrate:down"} failed: ${message}`,
       }),
+    ...(stoppedTryMs === undefined
+      ? {}
+      : {
+          recordStopped: ({
+            filename,
+            message,
+            transaction,
+            failed,
+            attempt,
+          }) =>
+            boundedStopRecord(
+              adapter,
+              stoppedTryMs
+            )(async handle => {
+              const bound = repo.boundTo(handle);
+              if (failed) {
+                await recordRollbackFailed({
+                  repo: bound,
+                  filename,
+                  dialect,
+                  transaction,
+                  note: `${args.command ?? "migrate:down"} failed: ${message}`,
+                });
+              }
+              if (attempt !== undefined) await bound.discardAttempt(attempt);
+            }),
+        }),
   };
 }
 
@@ -1433,6 +1546,16 @@ export async function runMigrateDown(
 ): Promise<void> {
   const { logger } = context;
   logger.header("Migrate Down");
+
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  const bounds = busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
 
   const opened = await openMigrationCommand(options, logger);
   // A dry run whose database is not there has said so, and ends here.
@@ -1521,6 +1644,9 @@ export async function runMigrateDown(
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
         declared,
+        // An app's down sections and a plugin's modules wait for a busy table in tries, each
+        // try's notice on standard error.
+        busyTable: { bounds, notify: busyTableNotices(logger) },
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,

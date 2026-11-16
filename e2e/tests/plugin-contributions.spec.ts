@@ -229,15 +229,23 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     await expect(cell).toHaveText(DRAFT_TITLE);
     await expectReadable(page, cell);
 
+    // Scanned before the row menus are opened, and only the block and the
+    // draft's own cell. Opening a row's menu scrolls the list sideways to its
+    // row actions, and on a list long with other specs' posts axe then gave
+    // up the whole contrast rule on a fixture cell ("Element midpoint exceeds
+    // the grid bounds"), so it measured nothing at all.
+    const draftRow = await rowOf(page, DRAFT_TITLE).evaluate(row => row.id);
+    expect(draftRow).not.toBe("");
+    const draftRowSelector = `#${await page.evaluate(id => CSS.escape(id), draftRow)}`;
+    await expectNoAxeViolations(page, {
+      include: `${draftRowSelector} [aria-label='Fixture cell'], [aria-label='Fixture block']`,
+    });
+
     // The row action is offered where its rule holds, and only there.
     expect(await rowMenu(page, DRAFT_TITLE)).toContain("Fixture: inspect");
     expect(await rowMenu(page, PUBLISHED_TITLE)).not.toContain(
       "Fixture: inspect"
     );
-
-    await expectNoAxeViolations(page, {
-      include: "[aria-label='Fixture cell'], [aria-label='Fixture block']",
-    });
   });
 }
 

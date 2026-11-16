@@ -30,7 +30,7 @@ export function registerClearPlaintextPasswordsCommand(
     )
     .option(
       CONFIRM_DEFAULT_HASHER,
-      "With --apply: state that no stored password was written by a custom passwordHasher, now or earlier",
+      "With --apply: state that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier",
       false
     )
     .action(

@@ -132,6 +132,9 @@ describe("isBuilderRoute", () => {
     // table is the join between the parser and `BUILDER_METHODS` rather than two lists that agree
     // by hand until one of them gains a method.
     ["POST", "/field-groups/schema/hero/reconcile"],
+    ["POST", "/collections/schema/address-check"],
+    ["POST", "/singles/schema/address-check"],
+    ["POST", "/field-groups/schema/address-check"],
   ])("gates %s %s", (httpMethod, path) => {
     expect(classify(path, httpMethod)).toBe(true);
   });

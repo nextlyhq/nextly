@@ -32,7 +32,6 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { canonicalJson } from "../../../shared/lib/canonical-json";
-import { documentSystemKeys } from "../../versions/snapshot-system-keys";
 import { approvalDigest } from "../approval-digest";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -429,7 +428,21 @@ describe.each(getConfiguredTestDialects())(
           post,
           versionNo
         )) as Record<string, unknown>;
-        const kept = documentSystemKeys("collection");
+        // The keys those releases left out of a collection's digest, as they listed them: spelled
+        // out, so a later change to the system keys cannot move this fixture with the code.
+        const kept = new Set([
+          "id",
+          "createdAt",
+          "updatedAt",
+          "status",
+          "_rev",
+          "_revision",
+          "_changed_by_kind",
+          "_changed_by_id",
+          "_changed_by_principal_kind",
+          "_changed_at",
+          "createdBy",
+        ]);
         const legacy = createHash("sha256")
           .update(
             canonicalJson(
@@ -635,6 +648,33 @@ describe.each(getConfiguredTestDialects())(
           expectedVersion: (read.data as { _rev: string })._rev,
           set: { value: "Rewritten" },
           reason: "Renamed across the site",
+        });
+
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+        expect(await withdrawals("posts", post)).toHaveLength(1);
+      });
+
+      it("withdraws a language's approval on a field rewrite of a live shared field", async () => {
+        await boot(dialect);
+        const { post } = await approvedPost();
+        const read = await handlerOf(app()).getEntry({
+          collectionName: "posts",
+          entryId: post,
+          overrideAccess: true,
+          locale: "en",
+          fallbackLocale: false,
+        });
+        // `code` is shared: English shows it, so English's approval no
+        // longer holds over what it shows.
+        await app().nextly.rewriteField({
+          collection: "posts",
+          id: post,
+          field: "code",
+          expectedVersion: (read.data as { _rev: string })._rev,
+          set: { value: "renumbered" },
+          reason: "Codes renumbered",
         });
 
         expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(

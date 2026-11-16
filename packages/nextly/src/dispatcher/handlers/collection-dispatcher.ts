@@ -24,6 +24,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -47,10 +48,9 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import {
-  previewCollectionSave,
+import type {
+  BuilderSaveSetup,
   writeCollectionSave,
-  type BuilderSaveSetup,
 } from "../../domains/schema/builder-save/collection-save";
 import {
   saveOfSchemaChange,
@@ -133,6 +133,7 @@ import {
 } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
@@ -454,6 +455,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` discards the shared part's pending change alone.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),
@@ -558,6 +561,11 @@ const COLLECTIONS_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   ...COLLECTION_VERSION_METHODS,
+  // What creating a collection under an address would answer, for the Builder's new-entity
+  // dialog; writes nothing.
+  checkCollectionAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("collection", body),
+  },
   createCollection: {
     // The metadata service returns the legacy CollectionServiceResult
     // envelope; we unwrap it and pass the legacy success message through
@@ -805,6 +813,9 @@ const COLLECTIONS_METHODS: Record<
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: collection.fields ?? [],
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          collection.status === true || readRequestedLifecycle(body) === true,
       });
       // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
       const fields = fieldsAsStored(sentFields, collection);
@@ -966,6 +977,9 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1015,7 +1029,13 @@ const COLLECTIONS_METHODS: Record<
           );
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, collection.fields ?? []);
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
+          assertBuilderFieldNames(fields, collection.fields ?? [], {
+            surface: "collection",
+            lifecycleEnabled:
+              collection.status === true || requestedLifecycle === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.
@@ -1988,6 +2008,11 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  // Loaded here, where a save runs: the writer brings the migration generator
+  // and runner, which a request that writes no field change never needs.
+  const { writeCollectionSave } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
@@ -2006,6 +2031,9 @@ async function saveThroughWriter(
 async function reviewLinesOf(change: WriterChange): Promise<string[]> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return [];
+  const { previewCollectionSave } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
   return (await previewCollectionSave(prepared.deps, prepared.save)).notices;
 }
 

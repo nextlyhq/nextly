@@ -28,18 +28,28 @@ async function linkTargets(scope: Locator): Promise<string[]> {
 }
 
 test.describe("the page builder's internal collections", () => {
-  test("have no link in the admin's navigation", async ({ page }) => {
-    await gotoAdmin(page, "/collections/pages");
-    // The sidebars list the collections after they mount, so they are
-    // scanned once they list an authored one: the control that they drew.
-    const sidebars = page.getByRole("complementary");
-    await expect(
-      sidebars.getByRole("link", { name: "Pages", exact: true })
-    ).toBeVisible();
+  // The two panels that list collections: Content, every collection an
+  // author may open, and the Page Builder's own, its libraries. Each is
+  // scanned once it lists an authored collection, the control that it drew:
+  // the panels list their collections after they mount.
+  for (const [path, panel, authored] of [
+    ["/collections/posts", "Content", /^Pages$/],
+    ["/collections/components", "Page Builder", /^Components\b/],
+  ] as const) {
+    test(`have no link in the admin's navigation, ${panel} panel included`, async ({
+      page,
+    }) => {
+      await gotoAdmin(page, path);
+      await expect(
+        page
+          .getByRole("navigation", { name: panel, exact: true })
+          .getByRole("link", { name: authored })
+      ).toBeVisible();
 
-    const targets = await linkTargets(sidebars);
-    expect(targets.filter(target => target.includes(INTERNAL))).toEqual([]);
-  });
+      const targets = await linkTargets(page.getByRole("complementary"));
+      expect(targets.filter(target => target.includes(INTERNAL))).toEqual([]);
+    });
+  }
 
   test("have no link or name on the dashboard", async ({ page }) => {
     await gotoAdmin(page, "/");

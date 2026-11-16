@@ -54,8 +54,9 @@ async function showFirstVersion(page: Page, id: string): Promise<void> {
 
 /** Choose "Restore…", keep the title and summary, and restore them. */
 async function restoreTitleAndSummary(page: Page): Promise<void> {
+  // In the admin's top bar, where an open document draws its controls.
   await page
-    .locator("main")
+    .getByRole("banner")
     .getByRole("button", { name: "Restore this version" })
     .click();
   const dialog = page.getByRole("alertdialog");
@@ -84,8 +85,10 @@ test.describe("restoring a version into the editor", () => {
     await page.getByRole("button", { name: "Undo" }).click();
     await expect(summaryBox(page)).toHaveValue("second summary");
 
-    // Restored again, then saved: the person's own write, which on a
-    // published note is held as its draft.
+    // Restored again, then saved: the person's own write. A note holds no
+    // draft: it embeds the localized SEO field group, and a document with a
+    // localized field group keeps no pending changes, so its leading action
+    // is "Save changes" and the write goes to the live note.
     await showFirstVersion(page, id);
     await restoreTitleAndSummary(page);
     await expect(summaryBox(page)).toHaveValue("first summary");
@@ -94,7 +97,10 @@ test.describe("restoring a version into the editor", () => {
         response.url().includes(`/entries/${id}`) &&
         response.request().method() === "PATCH"
     );
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page
+      .getByRole("banner")
+      .getByRole("button", { name: "Save changes", exact: true })
+      .click();
     expect((await saved).ok()).toBe(true);
 
     // The save records where the two values came from.
@@ -105,14 +111,15 @@ test.describe("restoring a version into the editor", () => {
     };
     expect(items[0]?.fieldSources).toEqual({ title: 1, summary: 1 });
 
-    // And nothing was published or unpublished: the live note is version 2.
+    // And the note stays published, now holding the restored values: the
+    // save neither unpublished it nor kept the values it replaced.
     const live = await page.request.get(`${ENTRIES}/${id}`);
     expect(live.ok(), await live.text()).toBe(true);
     // A read answers with the document itself.
     const item = (await live.json()) as { status: string; summary: string };
     expect(item).toMatchObject({
       status: "published",
-      summary: "second summary",
+      summary: "first summary",
     });
   });
 });

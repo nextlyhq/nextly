@@ -627,18 +627,27 @@ export class S3StorageAdapter implements IStorageAdapter {
    * Creates a pre-signed PutObject URL that allows direct uploads from
    * the browser to S3, bypassing server-side upload limits (e.g., Vercel's 4.5MB).
    *
+   * The signature covers the `Content-Type` and, given `options.contentLength`,
+   * the `Content-Length`: the bytes never pass Nextly's upload checks, so S3
+   * itself refuses a body of another type or length. The browser sets the
+   * length from the body; it is not a header the client sends.
+   *
    * @param key - Storage path/key for the upload
    * @param mimeType - MIME type of the file being uploaded
-   * @param expiresIn - URL validity duration in seconds (default: 3600)
+   * @param expiresIn - URL validity in seconds, at most the configured
+   *   `signedUrlExpiresIn` (its default)
+   * @param options - `contentLength`: the exact size the upload may have
    * @returns Client upload data with URL, method, and headers
    */
   async getPresignedUploadUrl(
     key: string,
     mimeType: string,
-    expiresIn?: number
+    expiresIn?: number,
+    options?: { contentLength?: number }
   ): Promise<ClientUploadData> {
     const client = this.ensureClient();
-    const expiration = expiresIn ?? this.resolvedConfig.signedUrlExpiresIn;
+    const longest = this.resolvedConfig.signedUrlExpiresIn;
+    const expiration = Math.min(expiresIn ?? longest, longest);
 
     // Build PutObject command parameters
     const commandParams: PutObjectCommandInput = {
@@ -646,6 +655,9 @@ export class S3StorageAdapter implements IStorageAdapter {
       Key: key,
       ContentType: mimeType,
       CacheControl: this.resolvedConfig.cacheControl,
+      ...(options?.contentLength !== undefined
+        ? { ContentLength: options.contentLength }
+        : {}),
     };
 
     // Add ACL if not R2
@@ -657,6 +669,8 @@ export class S3StorageAdapter implements IStorageAdapter {
 
     const uploadUrl = await getSignedUrl(client, command, {
       expiresIn: expiration,
+      // Signed, so S3 refuses an upload whose type or length differs.
+      signableHeaders: new Set(["content-type", "content-length"]),
     });
 
     return {

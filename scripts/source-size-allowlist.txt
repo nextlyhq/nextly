@@ -1,0 +1,78 @@
+# Page Builder source files allowed past 1,500 lines until they are split,
+# each with its size in lines on the day the check landed. Read by
+# scripts/check-source-size.mjs, which pnpm lint runs.
+#
+# This list only shrinks. A listed file may get shorter but never longer, and
+# its line comes out once the file is 1,500 lines or fewer. A new file over the
+# limit is split, never added here.
+#
+# Each line is a path and a line count. The blank line between two entries is
+# what lets two branches each delete a neighbouring entry and still merge
+# cleanly, so delete only the entry's own line and leave the blank lines.
+# When a file shrinks, its count may be lowered to its new size.
+
+packages/blocks-engine/src/composition-planners.ts 4288
+
+packages/blocks-engine/src/document.ts 1543
+
+packages/blocks-engine/src/index.ts 1533
+
+packages/blocks-engine/src/list-query.ts 1933
+
+packages/blocks-engine/src/ops.ts 3953
+
+
+packages/blocks-engine/src/style/compile-page.ts 2761
+
+packages/blocks-engine/src/style/css-value.ts 1803
+
+packages/blocks-engine/src/style/dtcg.ts 2362
+
+packages/blocks-engine/src/tree.ts 1944
+
+packages/blocks-engine/src/validation.ts 3573
+
+
+
+
+
+packages/builder/src/binding-controls.tsx 1632
+
+packages/builder/src/builder-shell.tsx 2301
+
+packages/builder/src/canvas-drag.tsx 1698
+
+packages/builder/src/canvas.tsx 2705
+
+packages/builder/src/content-controls.tsx 1591
+
+packages/builder/src/editor-state.ts 1510
+
+packages/builder/src/geometry-dom.ts 2034
+
+packages/builder/src/insert-panel.tsx 1857
+
+packages/builder/src/inserter.ts 1559
+
+packages/builder/src/inspector-panel.tsx 1805
+
+packages/builder/src/keyboard-actions.tsx 1549
+
+packages/builder/src/list-query-controls.tsx 3230
+
+packages/builder/src/shared-styles-panel.tsx 1643
+
+packages/builder/src/style-inspector-panel.tsx 7077
+
+
+packages/plugin-page-builder/src/address-claims/entry-claims-hook.ts 1576
+
+packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
+
+packages/plugin-page-builder/src/admin/editor/site-style-studios.tsx 2038
+
+packages/plugin-page-builder/src/fields/blocks-composition.ts 2427
+
+packages/plugin-page-builder/src/pages-search-route.ts 1561
+
+packages/plugin-page-builder/src/plugin.ts 4723

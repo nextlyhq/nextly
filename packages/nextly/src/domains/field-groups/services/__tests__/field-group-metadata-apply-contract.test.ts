@@ -23,6 +23,20 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
  */
 const bound: string[] = [];
 
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock("../../../schema/busy-table/run-unit", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../schema/busy-table/run-unit")
+  >()),
+  runUnitInTries: (
+    await import("../../../schema/busy-table/__tests__/helpers/run-unit-once")
+  ).runUnitOnce,
+}));
+
 // Whether the created table holds every requested column is judged by the comparison a push makes,
 // tested on its own (`created-table-shape.test.ts`); the double here runs no introspection, so the
 // check answers that nothing was left out and these tests stay on what they inject.
@@ -49,10 +63,16 @@ vi.mock("../field-group-table-provisioning", () => ({
   // is the state the partial-failure tests below are about; the test that cares about the other
   // answer sets it explicitly rather than letting this double decide.
   reconcileComponentCompanion: vi.fn(async () => true),
-  // The update path probes which discriminator column the existing table carries before it moves
-  // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
-  // accepted, and a real probe would make every one of them a test of the catalog instead.
-  resolveComponentTypeColumn: vi.fn(async () => "type"),
+  // The update path probes the existing table before it moves anything: which discriminator column
+  // it carries, and the columns it holds. Stubbed to the current spelling and to no column listing:
+  // these tests are about which field CHANGES are accepted, and a real probe would make every one
+  // of them a test of the catalog instead. `columns: undefined` is the answer that leaves the
+  // runtime table every declared column (`RuntimeSchemaOptions.heldColumns`), so no fixture here
+  // loses a field to a held-column filter it is not about.
+  resolveComponentTableColumns: vi.fn(async () => ({
+    typeColumn: "type",
+    columns: undefined,
+  })),
 }));
 
 // Enabling localization is gated on the app declaring a `localization` block, and that gate runs
@@ -148,6 +168,12 @@ function adapterDouble(
   const executeQuery = vi.fn(async (_sql: string) => []);
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
+    // The catalog reads a translation toggle asks of each column (`readColumnExtras`) find no
+    // definition of its own: no comment, character set or collation for a move to lose.
+    getDrizzle: () => ({
+      execute: async () => ({ rows: [] }),
+      all: () => [],
+    }),
     executeQuery,
     // Recorded so a refusal can be shown to have dropped nothing.
     dropTable: vi.fn(async (_table: string) => {}),

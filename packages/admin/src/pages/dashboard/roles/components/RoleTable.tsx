@@ -14,6 +14,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ShortIdCell } from "@admin/components/ui/table/data-table/short-id-cell";
 import {
   ListView,
   useTableColumns,
@@ -222,17 +223,7 @@ export default function RoleTable(): JSX.Element {
         name: "id",
         header: "ID",
         hideOnMobile: true,
-        cell: ({ value }) => {
-          const id = typeof value === "string" ? value : "";
-          return (
-            <span
-              className="font-mono text-xs text-muted-foreground"
-              title={id}
-            >
-              {id.length > 8 ? `${id.slice(0, 8)}...` : id}
-            </span>
-          );
-        },
+        cell: ({ value }) => <ShortIdCell value={value} />,
       },
       {
         name: "description",

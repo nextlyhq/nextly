@@ -155,7 +155,7 @@ test("each count links to Problems narrowed to it, and Problems' badge is the er
   await ok(
     await page.request.post(`${API}/collections/seo-pages/entries`, {
       data: {
-        title: `SEO overview ${run} ${"t".repeat(60)}`,
+        title: `SEO overview ${run} ${"W".repeat(40)}`,
         slug: `seo-overview-${run}`,
       },
     })

@@ -112,10 +112,41 @@ describe("the plugin pages' startup reads in the prebuilt page", () => {
 
     expect(json).not.toContain("</script>");
     expect(JSON.parse(json ?? "null")).toEqual({
-      "/admin/plugins/acme-seo/overview": [
-        "/plugins/@acme/seo/overview?q=</script>",
-      ],
+      reads: {
+        "/admin/plugins/acme-seo/overview": [
+          "/plugins/@acme/seo/overview?q=</script>",
+        ],
+      },
+      foldedPanels: [],
     });
+  });
+
+  it("names the collections whose screens start with the panel folded, on their served slugs", () => {
+    const forms: PluginDefinition = {
+      name: "@acme/forms",
+      version: "1.0.0",
+      nextly: "*",
+      renameMap: { forms: "site-forms" },
+      contributes: {
+        admin: {
+          views: {
+            forms: { foldedPanel: true },
+            submissions: { foldedPanel: false },
+          },
+        },
+      },
+    };
+    const off: PluginDefinition = {
+      ...forms,
+      name: "@acme/off",
+      enabled: false,
+      renameMap: {},
+      contributes: { admin: { views: { drafts: { foldedPanel: true } } } },
+    };
+
+    expect(JSON.parse(adminStartupScreensJson([forms, off]) ?? "null")).toEqual(
+      { reads: {}, foldedPanels: ["site-forms"] }
+    );
   });
 });
 
