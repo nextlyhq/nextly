@@ -330,6 +330,9 @@ export default function SingleBuilderEditPage({
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
+      // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
+      // on, since its columns stand until the save that turns it off lands.
+      lifecycleEnabled={single.status === true || drafts}
       onSettingsChange={setSettings}
       active={active}
       onActiveChange={setActive}
