@@ -128,6 +128,11 @@ export interface PublishPartsEngines {
   gate: PublishGate;
   /** The entry's collection and who asks, for the gate. */
   collection: string;
+  /**
+   * Whether `collection` names a collection or a Single, as the gate is told; a collection where
+   * absent.
+   */
+  scopeKind?: "collection" | "single";
   caller: PublishCaller;
   /**
    * The transition of `parts` (every part, where absent) in `direction`, in one transaction; or,
@@ -292,7 +297,10 @@ async function gateIssues(
   ];
   const { state } = judged.reads;
   const held = await engines.gate.refusals({
-    scope: { kind: "collection", slug: engines.collection },
+    scope: {
+      kind: engines.scopeKind ?? "collection",
+      slug: engines.collection,
+    },
     entryId: judged.id,
     direction: judged.direction,
     parts,
