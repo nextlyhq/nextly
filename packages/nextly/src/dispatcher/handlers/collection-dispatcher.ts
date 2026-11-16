@@ -56,16 +56,16 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
-import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
+  collectionChangeCarriesValues,
   fieldsAsStored,
+  reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
@@ -1153,25 +1153,11 @@ const COLLECTIONS_METHODS: Record<
           const written = await saveThroughWriter({
             appliedBy: push,
             // Whether the push applies the change in development, the writer recording its
-            // migration once the push has run: a translated collection, or one turning
-            // translation on or off, whose push carries its values across the change; and a change
-            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
-            // the live table, where the file alone, written from the newest snapshot, does not.
-            pushWhen: async () =>
-              wasLocalized ||
-              isLocalized ||
-              reachesRelationStorage({
-                before: collection.fields ?? [],
-                after: fields as unknown as FieldDefinition[],
-                liveTable: async () =>
-                  (
-                    await introspectLiveSnapshot(
-                      adapter.getDrizzle(),
-                      dialect,
-                      [tableName]
-                    )
-                  ).tables[0],
-              }),
+            // migration once the push has run: a save that carries values across its change
+            // (`pushCarriesValues`, the rule a Single's and a field group's saves follow), which
+            // the push moves and judges. Any other save runs its own file, the companion brought
+            // in step after it.
+            pushWhen: () => collectionChangeCarriesValues(change),
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1185,6 +1171,11 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
             },
           });
+          // A translated collection's save that ran its own file: its companion brought in step
+          // after it, as the push's apply does after the push.
+          if (written !== undefined && written.applied && !written.viaPush) {
+            await reconcileCollectionCompanionAfterFile(change);
+          }
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -2001,7 +1992,9 @@ async function saveThroughWriter(
      */
     pushWhen?: () => Promise<boolean>;
   }
-): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
+): Promise<
+  { fields: FieldDefinition[]; applied: boolean; viaPush: boolean } | undefined
+> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
   const viaPush =
@@ -2020,7 +2013,7 @@ async function saveThroughWriter(
       ? { appliedBy: change.appliedBy }
       : {}
   );
-  return { fields: prepared.fields, applied: result.applied };
+  return { fields: prepared.fields, applied: result.applied, viaPush };
 }
 
 /**

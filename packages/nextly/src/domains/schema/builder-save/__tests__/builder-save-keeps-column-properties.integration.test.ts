@@ -9,10 +9,10 @@
  * be the one before with only the named change applied (`helpers/table-definition.ts`), so a
  * property nobody listed here is held too.
  *
- * Every road a Builder save takes to the database is driven: a collection's save, and a Single's
- * and a field group's schema dialog, run the migration file the save writes where the save moves
- * no values; a translated collection's runs the development push; a Single's settings save runs
- * the SQL its service plans. A SQLite rebuild that cannot keep what it would drop must refuse, say
+ * Every road a Builder save takes to the database is driven: a collection's schema dialog and its
+ * settings save, translated or not, and a Single's and a field group's schema dialog, run the
+ * migration file the save writes where the save moves no values; a Single's settings save runs the
+ * SQL its service plans. A SQLite rebuild that cannot keep what it would drop must refuse, say
  * why, and leave the table as it was. A file over a default given by hand, which its snapshot does
  * not record, is refused as drift and changes nothing.
  *
@@ -127,18 +127,33 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a translated collection's shared field (the push)",
+    name: "a collection's settings save (its migration file)",
     table: "dc_posts",
-    // Every translated collection's save is pushed, a shared field's included.
-    known: Object.fromEntries(
-      [RENAME, RENAME_NOT_NULL, HAND_DEFAULT].map(name => [
-        name,
-        {
-          on: ["sqlite", "postgresql", "mysql"],
-          why: "the push restates the table from its declared schema",
-        },
-      ])
-    ),
+    runsFile: true,
+    async create(t, fields) {
+      await t
+        .getService("collectionService")
+        .createCollection(
+          { name: "posts", label: "Post", fields } as Parameters<
+            CollectionService["createCollection"]
+          >[0],
+          {}
+        );
+    },
+    // The update road (`updateCollection`), which detects its own renames.
+    save: (_t, fields) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "posts" },
+        { fields }
+      ),
+  },
+  {
+    name: "a translated collection's shared field (its migration file)",
+    table: "dc_posts",
+    // A shared field's change moves no values, so even a translated collection's save runs its file.
+    runsFile: true,
     async create(t, fields) {
       await t.getService("collectionService").createCollection(
         {

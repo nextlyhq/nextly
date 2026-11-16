@@ -740,7 +740,9 @@ function translatedSettingsDeferred(
  * Where the change's collection kept, and keeps, its translatable values and how each language
  * publishes (`translationLayoutChange`): the one derivation every step of the apply reads.
  */
-function layoutOf(change: CollectionSchemaChange): TranslationLayoutChange {
+export function layoutOf(
+  change: CollectionSchemaChange
+): TranslationLayoutChange {
   return translationLayoutChange({
     wasLocalized: change.wasLocalized,
     isLocalized: change.isLocalized,
@@ -753,7 +755,7 @@ function layoutOf(change: CollectionSchemaChange): TranslationLayoutChange {
  * Whether the change's collection kept, and keeps, its translatable values per language: the
  * storage answer to its translation flags before and after.
  */
-function storedPerLanguage(change: CollectionSchemaChange): {
+export function storedPerLanguage(change: CollectionSchemaChange): {
   wasLocalized: boolean;
   isLocalized: boolean;
 } {
@@ -906,9 +908,9 @@ async function applyHoldingSchemaLock(
     await reconcileCompanion({
       change,
       adapter,
-      desired,
-      apply,
-      result,
+      settleWith: { desired, apply },
+      // Added to the companion, with their values, by the apply before its drop.
+      joinedBefore: movedOnto(result, tableName),
       oldFields,
       companionRename,
       settingsDeferred,
@@ -928,21 +930,108 @@ async function applyHoldingSchemaLock(
 }
 
 /**
- * The companion brought in step with the main table the push left, and the leaving fields'
- * settings pushed once their values are shared.
+ * Whether a collection's change carries values across it (`pushCarriesValues`), so that its push
+ * applies it rather than the save's own migration file: the one answer the schema dialog and the
+ * update road ask, from the change as both state it.
+ */
+export async function collectionChangeCarriesValues(
+  change: CollectionSchemaChange
+): Promise<boolean> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  const dialect = adapter.dialect;
+  const { tableName } = change.collection;
+  const layout = layoutOf(change);
+  const oldFields = (change.collection.fields ?? []) as FieldDefinition[];
+  const [
+    { pushCarriesValues },
+    { renamedFieldsOf },
+    { introspectLiveSnapshot },
+    { getColumnDescriptor },
+  ] = await Promise.all([
+    import("../builder-save/push-carries-values"),
+    import("../builder-save/schema-change-save"),
+    import("../pipeline/diff/introspect-live"),
+    import("./field-column-descriptor"),
+  ]);
+  return pushCarriesValues({
+    oldFields,
+    newFields: change.fields,
+    wasStored: layout.wasStored,
+    isStored: layout.isStored,
+    wasStatus: layout.wasPublishedPerLanguage,
+    status: layout.isPublishedPerLanguage,
+    // The answer on a translated field's rename, as the push's apply resolves it.
+    renamed: await resolveCompanionRename(change.renameResolutions, {
+      tableName,
+      oldFields,
+      newFields: change.fields,
+      wasLocalized: layout.wasStored,
+      isLocalized: layout.isStored,
+      dialect,
+      builtBy: "collection",
+    }),
+    liveTable: async () =>
+      (await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [tableName]))
+        .tables[0],
+    columnOf: field => getColumnDescriptor(field, dialect, "collection"),
+    renames: renamedFieldsOf(change.renameResolutions),
+  });
+}
+
+/**
+ * A translated collection's companion brought in step once the save's own migration file has run
+ * its main table's change: a save that moves no values (`pushCarriesValues`), which runs no push.
+ * Planned from the companion as the file left it, so a change the file already made there is
+ * taken as done, and it registers the companion's runtime table. Under the schema-change
+ * exclusion, as the push's apply runs. Nothing for a collection that keeps no values per language.
+ */
+export async function reconcileCollectionCompanionAfterFile(
+  change: CollectionSchemaChange
+): Promise<void> {
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  if (!wasLocalized && !isLocalized) return;
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await withSchemaChangeExcluded(
+    {
+      adapter,
+      logger: getLoggerFromDI() ?? consoleLogger,
+      label: `bring the translations of collection "${change.slug}" in step`,
+      issuesDdl: true,
+    },
+    () =>
+      reconcileCompanion({
+        change,
+        adapter,
+        // The file moved no values, so none were added to the companion before it.
+        joinedBefore: [],
+        oldFields: (change.collection.fields ?? []) as FieldDefinition[],
+        // A translated field renamed keeps the push, so the file road renames none.
+        companionRename: null,
+        // A field leaving translation keeps the push too: no settings wait here.
+        settingsDeferred: undefined,
+        defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      })
+  );
+}
+
+/**
+ * The companion brought in step with the main table the push or the save's file left, and the
+ * leaving fields' settings pushed once their values are shared.
  */
 async function reconcileCompanion(args: {
   change: CollectionSchemaChange;
   adapter: SchemaChangeDeps["adapter"];
-  desired: DesiredSchema;
-  apply: ApplyDesired;
-  result: Extract<ApplyResult, { success: true }>;
+  /** What pushes the leaving fields' settings, where any wait (`settingsDeferred`). */
+  settleWith?: { desired: DesiredSchema; apply: ApplyDesired };
+  /** Columns already moved onto the companion, with their values, before the main table changed. */
+  joinedBefore: string[];
   oldFields: FieldDefinition[];
   companionRename: Awaited<ReturnType<typeof resolveCompanionRename>>;
   settingsDeferred: ReturnType<typeof fieldsWithLeavingSettingsDeferred>;
   defaultLocale: string;
 }): Promise<void> {
-  const { change, adapter, desired, apply, oldFields } = args;
+  const { change, adapter, oldFields } = args;
+  const settle = args.settleWith;
   const { slug, fields } = change;
   const { wasLocalized, isLocalized } = storedPerLanguage(change);
   const { tableName } = change.collection;
@@ -974,8 +1063,7 @@ async function reconcileCompanion(args: {
       newFields: fields,
       companionExists,
       companionHasStatus,
-      // Added to the companion, with their values, by the apply before its drop.
-      joinedBefore: movedOnto(args.result, tableName),
+      joinedBefore: args.joinedBefore,
       renamed: args.companionRename ?? undefined,
       holdLeavingDrops: args.settingsDeferred !== undefined,
       // What this database holds now, so a re-apply after a part-applied one finishes it.
@@ -994,21 +1082,22 @@ async function reconcileCompanion(args: {
     await applyCompanionTransition({
       adapter,
       plan,
-      settleLeaving: args.settingsDeferred
-        ? leavingSettingsStep({
-            adapter,
-            entity: slug,
-            tableName,
-            builtBy: "collection",
-            oldFields,
-            newFields: fields,
-            renamed: args.companionRename,
-            push: () =>
-              apply(withFields(desired, slug, fields), "ui", {
-                promptChannel: "auto",
-              }),
-          })
-        : undefined,
+      settleLeaving:
+        args.settingsDeferred && settle
+          ? leavingSettingsStep({
+              adapter,
+              entity: slug,
+              tableName,
+              builtBy: "collection",
+              oldFields,
+              newFields: fields,
+              renamed: args.companionRename,
+              push: () =>
+                settle.apply(withFields(settle.desired, slug, fields), "ui", {
+                  promptChannel: "auto",
+                }),
+            })
+          : undefined,
       kind: "collection",
       slug,
       tableName,
