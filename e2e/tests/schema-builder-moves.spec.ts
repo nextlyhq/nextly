@@ -364,14 +364,16 @@ test.describe("focusing one container in the Builder outline", () => {
       await says(page, `${NOT_YET} Nothing moved.`);
       await expect(row(page, "sections/items/cta/label")).toBeVisible();
 
-      // Exit focus: the whole outline again. The drag library swallows every
-      // click for 50ms after a drag ends, so a click this soon after the drop
-      // may not arrive; it is pressed again until Focus ends, as a person's
-      // later click would land.
+      // Exit focus: the whole outline again. dnd-kit swallows every click for
+      // 50ms after a drag ends, so a click this soon after the drop may not
+      // arrive; it is pressed again, only while Focus is still on, until Focus
+      // ends, as a person's later click would land.
       await expect(async () => {
-        await page
-          .getByRole("button", { name: "Exit focus" })
-          .click({ timeout: 1000 });
+        if ((await crumbs.count()) > 0) {
+          await page
+            .getByRole("button", { name: "Exit focus" })
+            .click({ timeout: 1000 });
+        }
         await expect(crumbs).toHaveCount(0, { timeout: 500 });
       }).toPass();
       await expect(row(page, "summary")).toBeVisible();
