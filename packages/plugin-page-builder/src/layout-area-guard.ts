@@ -28,7 +28,8 @@
  *   before removing it, so the two take turns: the Layout either commits
  *   first, or waits and is told the component is gone;
  * - the composition graph lock is taken, then the component's delete run is
- *   read. Delete component moves its run to `deleting` under the same lock
+ *   read, by the reader a blocks field's fence uses (`fencedComponentsOn`).
+ *   Delete component moves its run to `deleting` under the same lock
  *   (`host-rewrite/fence.ts`), and its last check of the Layouts runs after
  *   that move. So a Layout either commits before the move, and that check
  *   sees it and refuses the delete, or reads the run after it and is refused.
@@ -56,16 +57,15 @@ import {
   type InTransactionContext,
   type PluginCollectionTransaction,
 } from "@nextlyhq/plugin-sdk";
-import { inArray } from "@nextlyhq/plugin-sdk/db";
 
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
 import { holdCompositionGraph } from "./composition-graph-lock";
+import { fencedComponentsOn } from "./host-rewrite/fence";
 import {
   areaRowsOf,
   referenceIdOf,
   type AreaRow,
 } from "./layout-component-usage";
-import { componentDeletions } from "./schema/tables";
 
 /** The issue code a refused area carries. */
 export const LAYOUT_COMPONENT_MISSING = "LAYOUT_COMPONENT_MISSING";
@@ -268,7 +268,9 @@ async function checkInTransaction(
   }
 
   await holdCompositionGraph(write.db, args.ctx.dialect);
-  const deleting = await componentsBeingDeleted(
+  // The fence's own reader, on the write's transaction after the graph lock:
+  // a Layout write and a blocks field judge a delete run by one rule.
+  const deleting = await fencedComponentsOn(
     write.db,
     added.map(row => row.componentId)
   );
@@ -280,26 +282,6 @@ async function checkInTransaction(
       componentBeingDeletedMessage
     );
   }
-}
-
-/**
- * The components among these that a delete run is open for, or that one
- * deleted. Read on the write's transaction, after the graph lock.
- */
-async function componentsBeingDeleted(
-  db: Pick<InTransactionContext["db"], "select" | "table">,
-  ids: readonly string[]
-): Promise<Set<string>> {
-  const runs = await db
-    .select(componentDeletions)
-    .where(inArray(db.table(componentDeletions).componentId, [...ids]))
-    .all();
-  // A purpose nobody can classify counts as a delete, as the fence reads it.
-  return new Set(
-    runs
-      .filter(run => run.purpose !== "strip-retired")
-      .map(run => run.componentId)
-  );
 }
 
 /** The refusal, one issue per area, on the row's component. */

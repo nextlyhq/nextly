@@ -212,6 +212,56 @@ function purposeOf(value: string): RunPurpose {
   return value === "strip-retired" ? value : "delete";
 }
 
+/** The run table as a read of the fence needs it. */
+type RunReads = Pick<PluginDatabase, "select" | "table">;
+
+/** The runs of one chunk of components, by the index on the component's id. */
+const runsAmong = (db: RunReads, chunk: readonly string[]) =>
+  db
+    .select(componentDeletions)
+    .where(inArray(db.table(componentDeletions).componentId, [...chunk]))
+    .all();
+
+/** The runs of these components, a bounded number of ids per read. */
+async function runsOf(
+  db: RunReads,
+  ids: readonly string[]
+): Promise<Awaited<ReturnType<typeof runsAmong>>> {
+  const rows: Awaited<ReturnType<typeof runsAmong>> = [];
+  for (let at = 0; at < ids.length; at += IDS_PER_READ) {
+    rows.push(...(await runsAmong(db, ids.slice(at, at + IDS_PER_READ))));
+  }
+  return rows;
+}
+
+/**
+ * Every component a `delete` run is open for, or deleted by one, read on
+ * `db`: the plugin's own database, or a write's transaction, whose
+ * uncommitted writes it then sees. Among `among` alone when named.
+ *
+ * The one reading of the fence. A blocks field judges a write by it
+ * ({@link FenceStore.fenced}), and so does a Layout write adding a component
+ * (`layout-area-guard.ts`), so the two can never disagree on which runs fence.
+ */
+export async function fencedComponentsOn(
+  db: RunReads,
+  among?: readonly string[]
+): Promise<ReadonlySet<string>> {
+  // By the index on the component's id: a deleted component's row stays for
+  // good, so the table grows, and reading all of it is kept for a document
+  // read only in part. Filtered here, as a purpose read strictly fences when
+  // it cannot be told.
+  const rows =
+    among === undefined
+      ? await db.select(componentDeletions).all()
+      : await runsOf(db, among);
+  return new Set(
+    rows
+      .filter(row => purposeOf(row.purpose) === "delete")
+      .map(row => row.componentId)
+  );
+}
+
 /** A run row as this module hands it out. */
 function runOf(row: {
   id: string;
@@ -256,19 +306,6 @@ export function fenceStore(
       .where(both(eq(r.componentId, componentId), eq(r.purpose, purpose)))
       .first();
     return row === null ? null : runOf(row);
-  };
-
-  const runsAmong = (chunk: readonly string[]) =>
-    db
-      .select(componentDeletions)
-      .where(inArray(columns().componentId, [...chunk]))
-      .all();
-  const runsOf = async (ids: readonly string[]) => {
-    const rows: Awaited<ReturnType<typeof runsAmong>> = [];
-    for (let at = 0; at < ids.length; at += IDS_PER_READ) {
-      rows.push(...(await runsAmong(ids.slice(at, at + IDS_PER_READ))));
-    }
-    return rows;
   };
 
   const closeRun = (
@@ -355,22 +392,7 @@ export function fenceStore(
         }
       }
     },
-    fenced: async among => {
-      // The runs of the components named, by the index on the component's
-      // id: a deleted component's row stays for good, so the table grows,
-      // and reading all of it is kept for a document read only in part.
-      // Filtered here, as a purpose read strictly fences when it cannot be
-      // told.
-      const rows =
-        among === undefined
-          ? await db.select(componentDeletions).all()
-          : await runsOf(among);
-      return new Set(
-        rows
-          .filter(row => purposeOf(row.purpose) === "delete")
-          .map(row => row.componentId)
-      );
-    },
+    fenced: among => fencedComponentsOn(db, among),
     runsAt: async phase =>
       (
         await db

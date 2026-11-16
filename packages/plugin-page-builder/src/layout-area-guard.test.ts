@@ -1,13 +1,21 @@
 import type { InTransactionContext } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ClassUsageDirectApi } from "./class-usage-runtime";
+import { fencedComponentsOn } from "./host-rewrite/fence";
 import {
   LAYOUT_COMPONENT_BEING_DELETED,
   LAYOUT_COMPONENT_MISSING,
   registerLayoutAreaGuard,
 } from "./layout-area-guard";
 import { areaRowsOf } from "./layout-component-usage";
+
+// The fence's own reader, watched: a Layout write must judge a delete run
+// exactly as the blocks field does, so it reads the fence through it.
+vi.mock("./host-rewrite/fence", async importOriginal => {
+  const actual = await importOriginal<typeof import("./host-rewrite/fence")>();
+  return { ...actual, fencedComponentsOn: vi.fn(actual.fencedComponentsOn) };
+});
 
 const COMPONENTS = "nx_pb_components";
 const LAYOUTS = "nx_pb_layouts";
@@ -59,6 +67,12 @@ function guard(world: { existing: string[]; runs?: Run[] }) {
   if (before === undefined || inTransaction === undefined) {
     throw new Error("the guard registered no Layout handlers");
   }
+  const db = {
+    table: () => ({ componentId: { name: "component_id" } }),
+    select: () => ({
+      where: () => ({ all: async () => world.runs ?? [] }),
+    }),
+  } as unknown as InTransactionContext["db"];
   const write = (args: {
     operation?: "create" | "update" | "delete";
     data?: Record<string, unknown>;
@@ -75,14 +89,9 @@ function guard(world: { existing: string[]; runs?: Run[] }) {
       transactionKey: {},
       readStored: async () => ({ kind: "absent" }),
       fieldPaths: async () => [],
-      db: {
-        table: () => ({ componentId: { name: "component_id" } }),
-        select: () => ({
-          where: () => ({ all: async () => world.runs ?? [] }),
-        }),
-      } as unknown as InTransactionContext["db"],
+      db,
     } as InTransactionContext);
-  return { before, write, held };
+  return { before, write, held, db };
 }
 
 /** A Direct API over the components that exist and a Layout's pending edit. */
@@ -99,9 +108,12 @@ function api(world: { existing: string[]; pending?: unknown }) {
         items: ids
           .filter(id => world.existing.includes(id))
           .map(id => ({ id })),
+        meta: { hasNext: false },
       };
     },
+    group: async () => ({ buckets: [], truncated: false }),
     findByID: async () => world.pending ?? null,
+    findSingle: async () => null,
     create: async () => ({}),
     delete: async () => ({}),
   };
@@ -162,6 +174,11 @@ describe("saving a Layout, before the write", () => {
       })
     );
 
+    // The status the Layouts docs name for this refusal.
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      statusCode: 400,
+    });
     expect(issuesOf(refused)).toEqual([
       {
         path: "areas[1].component",
@@ -296,6 +313,31 @@ describe("saving a Layout, inside its transaction", () => {
         message:
           "The component chosen for the footer is being deleted, so it can't be used here. Choose another component for the footer.",
       },
+    ]);
+  });
+
+  it("reads the delete runs with the fence's own reader, on the write's transaction", async () => {
+    const g = guard({
+      existing: ["going", "fine"],
+      runs: [{ componentId: "going", purpose: "delete", phase: "converting" }],
+    });
+    vi.mocked(fencedComponentsOn).mockClear();
+
+    const refused = await refusalOf(
+      g.write({
+        operation: "create",
+        data: { areas: [header("fine"), footer("going")] },
+      })
+    );
+
+    expect(vi.mocked(fencedComponentsOn).mock.calls).toEqual([
+      [g.db, ["fine", "going"]],
+    ]);
+    expect(issuesOf(refused)).toEqual([
+      expect.objectContaining({
+        path: "areas[1].component",
+        code: LAYOUT_COMPONENT_BEING_DELETED,
+      }),
     ]);
   });
 

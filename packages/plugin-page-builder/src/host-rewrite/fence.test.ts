@@ -24,6 +24,7 @@ import {
   COMPONENT_BEING_DELETED,
   fenceIssues,
   fenceStore,
+  fencedComponentsOn,
   type FencedComponents,
 } from "./fence";
 
@@ -289,5 +290,51 @@ describe("moving a run to its component's delete", () => {
       true
     );
     expect(s.opened()).toBe(3);
+  });
+});
+
+describe("reading the fence", () => {
+  /**
+   * The run table on a transaction, which has no `transaction` of its own.
+   * Each indexed read answers every run; counted, to see the reads bounded.
+   */
+  function runTable(runs: readonly { componentId: string; purpose: string }[]) {
+    let reads = 0;
+    const db = {
+      table: () => ({ componentId: { name: "component_id" } }),
+      select: () => ({
+        all: async () => runs,
+        where: () => ({
+          all: async () => {
+            reads += 1;
+            return runs;
+          },
+        }),
+      }),
+    } as unknown as Parameters<typeof fencedComponentsOn>[0];
+    return { db, reads: () => reads };
+  }
+
+  it("fences every purpose but removing retired values", async () => {
+    const t = runTable([
+      { componentId: "deleting", purpose: "delete" },
+      { componentId: "unknown", purpose: "something-new" },
+      { componentId: "stripping", purpose: "strip-retired" },
+    ]);
+
+    const fenced = await fencedComponentsOn(t.db);
+
+    expect([...fenced].sort()).toEqual(["deleting", "unknown"]);
+    expect(t.reads()).toBe(0);
+  });
+
+  it("reads the runs of the components named, a bounded number at a time", async () => {
+    const ids = Array.from({ length: 250 }, (_, i) => `c${String(i)}`);
+    const t = runTable([{ componentId: "c249", purpose: "delete" }]);
+
+    const fenced = await fencedComponentsOn(t.db, ids);
+
+    expect([...fenced]).toEqual(["c249"]);
+    expect(t.reads()).toBe(2);
   });
 });
