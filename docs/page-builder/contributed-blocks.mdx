@@ -199,10 +199,12 @@ while it draws, the block gets its generated controls instead.
 
 ## Block code inside the editor's canvas
 
-The editor draws blocks in its canvas, which is meant to become a frame of its own. A
-block whose code measures itself, listens to the window, or reads the viewport must use
-the document and window it is drawn in, not the globals: either its own element's
-`ownerDocument` and `defaultView`, or `useBlockEnvironment()`.
+The editor draws blocks in its canvas, a frame of its own laid out at the width of the
+device being previewed. A block whose code measures itself, listens to the window, or
+reads the viewport must use the document and window it is drawn in, not the globals:
+either its own element's `ownerDocument` and `defaultView`, or `useBlockEnvironment()`.
+Inside the frame, `innerWidth` and `matchMedia` answer for the device, and the window
+fires `resize` when the author changes device.
 
 ```tsx
 "use client";
@@ -225,11 +227,12 @@ export function ViewportWidth() {
 }
 ```
 
-In the editor the hook returns the canvas's document and window. On the published site it
-returns the page's own once the block has mounted, and `undefined` while it renders on the
-server, so read it in an effect. A block that reads the globals still renders in both
-places; only its measurements and listeners would target the admin page instead of the
-canvas.
+In the editor the hook returns the frame's document and window once the canvas has
+mounted. On the published site it returns the page's own once the block has mounted, and
+`undefined` while it renders on the server, so read it in an effect keyed on the value, as
+above, and remove every listener the effect adds when it cleans up. A block that reads the
+globals still renders in both places; only its measurements and listeners would target the
+admin page instead of the canvas.
 
 ## Related
 

@@ -269,10 +269,13 @@ Block code that measures itself, listens to the window or reads the viewport
 reaches the document and window through the node it renders
 (`ownerDocument`, `defaultView`) or through `useBlockEnvironment()` from
 `@nextlyhq/blocks-react/environment`, never through the globals. `Canvas`
-provides that hook with its root's own document and window, so once the canvas
-renders inside a frame, block code reads the frame's without changing. A block
-reading the globals still renders; only its measurements and listeners target
-the admin page instead.
+provides that hook with its root's own document and window, which inside
+`CanvasFrame` are the frame's: `innerWidth` and `matchMedia` answer for the
+device being previewed, and the window fires `resize` when the device changes.
+The hook gives `undefined` until the canvas root has mounted. A block reading
+the globals still renders; only its measurements and listeners target the admin
+page instead. The root `e2e/` suite holds this with a probe block from the
+playground's block fixture.
 
 ### Custom inspectors
 

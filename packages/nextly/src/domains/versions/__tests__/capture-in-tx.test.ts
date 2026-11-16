@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { captureInTx } from "../capture-in-tx";
+import { SHARED_PART_ALONE } from "../changed-parts";
 import type { VersionCaptureService } from "../version-capture-service";
 
 const capture = vi.fn();
@@ -37,6 +38,7 @@ describe("captureInTx", () => {
   it("records the locale the snapshot was assembled from", async () => {
     await captureInTx(tx, service(), {
       lifecycle: true,
+      changedParts: SHARED_PART_ALONE,
       ref,
       parts: { parentRow: { id: "e1" } },
       locale: "de",
@@ -48,9 +50,27 @@ describe("captureInTx", () => {
     );
   });
 
+  it("records the parts the write changed, as the write path decided them", async () => {
+    await captureInTx(tx, service(), {
+      lifecycle: true,
+      ref,
+      parts: { parentRow: { id: "e1" } },
+      locale: "de",
+      changedParts: { locales: ["de"], shared: false },
+    });
+
+    expect(capture).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        changedParts: { locales: ["de"], shared: false },
+      })
+    );
+  });
+
   it("records no locale for an unlocalized document", async () => {
     await captureInTx(tx, service(), {
       lifecycle: true,
+      changedParts: SHARED_PART_ALONE,
       ref,
       parts: { parentRow: { id: "e1" } },
     });
@@ -66,6 +86,7 @@ describe("captureInTx", () => {
     // path does, and passes null when it captured no locale-specific state.
     await captureInTx(tx, service(), {
       lifecycle: true,
+      changedParts: SHARED_PART_ALONE,
       ref,
       parts: { parentRow: { id: "e1" } },
       locale: null,
@@ -80,6 +101,7 @@ describe("captureInTx", () => {
   it("records the version a restore came from", async () => {
     await captureInTx(tx, service(), {
       lifecycle: true,
+      changedParts: SHARED_PART_ALONE,
       ref,
       parts: { parentRow: { id: "e1" } },
       sourceVersionNo: 4,
@@ -96,6 +118,7 @@ describe("captureInTx", () => {
     // reproduce an earlier state is not a restore.
     await captureInTx(tx, service(), {
       lifecycle: true,
+      changedParts: SHARED_PART_ALONE,
       ref,
       parts: { parentRow: { id: "e1" } },
     });
@@ -109,6 +132,7 @@ describe("captureInTx", () => {
   it("still assembles the snapshot, and records a status it does not know as it is", async () => {
     await captureInTx(tx, service(), {
       lifecycle: true,
+      changedParts: SHARED_PART_ALONE,
       ref,
       contentStatus: "nonsense",
       parts: {
@@ -145,6 +169,7 @@ describe("captureInTx", () => {
     it("records no version for an ordinary save", async () => {
       const result = await captureInTx(unchanged, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts,
         onlyIfChanged: true,
@@ -156,6 +181,7 @@ describe("captureInTx", () => {
     it("records a restore, which names what it came from", async () => {
       await captureInTx(unchanged, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts,
         onlyIfChanged: true,
@@ -167,6 +193,7 @@ describe("captureInTx", () => {
     it("records a named version, which was asked for by name", async () => {
       await captureInTx(unchanged, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts,
         onlyIfChanged: true,
@@ -178,6 +205,7 @@ describe("captureInTx", () => {
     it("records a change of status", async () => {
       await captureInTx(unchanged, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts,
         onlyIfChanged: true,
@@ -191,6 +219,7 @@ describe("captureInTx", () => {
       // could match this save yet predate a change to the shared fields.
       await captureInTx(unchanged, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts,
         onlyIfChanged: true,
@@ -213,6 +242,7 @@ describe("captureInTx", () => {
       } as unknown as Parameters<typeof captureInTx>[0];
       const result = await captureInTx(spanish, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts,
         onlyIfChanged: true,
@@ -228,6 +258,7 @@ describe("captureInTx", () => {
         ref,
         parts,
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
       });
       expect(capture).toHaveBeenCalledOnce();
     });
@@ -247,6 +278,7 @@ describe("captureInTx", () => {
       } as unknown as Parameters<typeof captureInTx>[0];
       await captureInTx(queued, service(), {
         lifecycle: true,
+        changedParts: SHARED_PART_ALONE,
         ref,
         parts: { parentRow: { id: "e1", title: "Hi", status: "archived" } },
         contentStatus: "archived",

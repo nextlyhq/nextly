@@ -72,6 +72,9 @@ export const nextlyVersionsMysql = mysqlTable(
     baseDraftRevision: int("base_draft_revision"),
     // Each restored field's source version, as the PostgreSQL schema says.
     fieldSources: json("field_sources").$type<Record<string, number>>(),
+    // The parts this version changed, as the PostgreSQL schema says.
+    changedLocales: json("changed_locales").$type<string[]>(),
+    sharedChanged: boolean("shared_changed"),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

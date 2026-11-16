@@ -23,6 +23,7 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { groupCollections } from "@admin/lib/content-groups";
+import { plural } from "@admin/lib/count-words";
 import {
   collectionDisplayName,
   searchSidebarCollections,
@@ -90,7 +91,8 @@ function DraftsCell({
   return (
     <Link
       href={`${listHref(collection)}?${new URLSearchParams({ status: "draft" }).toString()}`}
-      aria-label={`${drafts} drafts in ${label}`}
+      // "1 draft in Posts", "2 drafts in Posts".
+      aria-label={`${plural(drafts, "draft")} in ${label}`}
       // A 24px target however few digits it holds.
       className="inline-flex min-h-6 min-w-6 items-center justify-end font-medium tabular-nums text-foreground underline underline-offset-2"
     >
