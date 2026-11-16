@@ -50,13 +50,13 @@ import {
   compactRows,
   DOCUMENT_OPTIONS_LABEL,
   PUBLISH_OPTIONS_LABEL,
-  type ActionBinding,
 } from "./DocumentActionBar";
 import {
   useDocumentActionsContext,
   useHostedStored,
   useSaveChipDrawn,
 } from "./DocumentActionsContext";
+import { bindingsThroughRun } from "./DocumentSurfaceControls";
 import { useDocumentIdentity } from "./EntryFormContext";
 import {
   LIFE_STAGE_LABEL,
@@ -216,8 +216,12 @@ function HostedSaveAndPublish({
     hosted.storingAction === "publish" ? PUBLISHING_REASON : saveHeld(hosted);
   const publishHeld = publishReason(hosted);
 
+  // A failed save's own Retry, and a Save otherwise: never a failed
+  // Publish's Retry, which would put the work live from Save.
   const runSave = () => {
-    void (saveState.kind === "failed" && saveState.retry !== undefined
+    void (saveState.kind === "failed" &&
+    hosted.failedAction !== "publish" &&
+    saveState.retry !== undefined
       ? saveState.retry()
       : hosted.run("save"));
   };
@@ -239,9 +243,13 @@ function HostedSaveAndPublish({
     { name: "document-nothing-to-save" }
   );
 
-  const { options, danger } = compactRows(hosted.actions, bindingsOf(hosted), {
-    withToolbar: false,
-  });
+  const { options, danger } = compactRows(
+    hosted.actions,
+    bindingsThroughRun(hosted),
+    {
+      withToolbar: false,
+    }
+  );
   // An arrow only where it has a row to hold: one that opens empty reads
   // as broken.
   const hasRows = options.length + danger.length > 0;
@@ -351,25 +359,6 @@ function HostedSaveAndPublish({
 /** The arrow beside a quiet Save that leads: no fill, as Save has none. */
 const ARROW_QUIET =
   "border-input border-l-input bg-transparent text-foreground hover:bg-muted";
-
-/** The host's bindings in the compact bar's shape: each runs through `run`. */
-function bindingsOf(
-  hosted: DocumentActionBindings
-): Record<string, ActionBinding | undefined> {
-  const bindings: Record<string, ActionBinding | undefined> = {};
-  for (const [id, binding] of Object.entries(hosted.bindings)) {
-    if (binding === undefined) continue;
-    bindings[id] = {
-      onSelect: () => {
-        void hosted.run(id);
-      },
-      ...(binding.disabledReason === undefined
-        ? {}
-        : { disabledReason: binding.disabledReason }),
-    };
-  }
-  return bindings;
-}
 
 /**
  * Why Publish can't run now, where it can't: the offered Publish's own

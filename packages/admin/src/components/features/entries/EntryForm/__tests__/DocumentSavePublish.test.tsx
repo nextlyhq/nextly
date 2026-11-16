@@ -487,6 +487,29 @@ describe("what is spoken", () => {
     await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(2));
   });
 
+  it("Save after a failed publish saves the work, and never tries the publish again", async () => {
+    const onPublish = vi.fn(async () => ({
+      ok: false as const,
+      reason: "failed" as const,
+      message: "Offline.",
+    }));
+    const onSaveWorkingDraft = vi.fn(async () => ok);
+    drawn({
+      entry: { ...livePage, _isWorkingDraft: true },
+      isDirty: true,
+      onPublish,
+      onSaveWorkingDraft,
+    });
+    await userEvent.click(publishButton() as HTMLButtonElement);
+    await waitFor(() =>
+      expect(assertively().textContent).toBe("Not published. Offline.")
+    );
+    expect(saveButton()?.textContent).toBe("Save");
+    await userEvent.click(saveButton() as HTMLButtonElement);
+    await waitFor(() => expect(onSaveWorkingDraft).toHaveBeenCalledTimes(1));
+    expect(onPublish).toHaveBeenCalledTimes(1);
+  });
+
   it("says Saving… to nobody, and the settled Saved politely", async () => {
     let finish: (value: typeof ok) => void = () => undefined;
     const onSaveWorkingDraft = vi.fn(
