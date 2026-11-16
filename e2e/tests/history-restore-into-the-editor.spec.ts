@@ -82,6 +82,11 @@ test.describe("restoring a version into the editor", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     const id = await noteSavedTwice(page);
     await showFirstVersion(page, id);
+    // The history panel, as an assistive technology reads it, checked before
+    // the restore: a scan between the restore and its undo outlasts the
+    // editor's 2-second recovery point, which would then hold the restored
+    // values for the reload further down to bring back.
+    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
     await restoreTitleAndSummary(page, true);
     // The toast, not the history's announcer, which says the same words.
@@ -93,7 +98,6 @@ test.describe("restoring a version into the editor", () => {
     // Said aloud as well as shown, through the history's own announcer.
     const announcer = page.locator("#nextly-history-announcer");
     await expect(announcer).toHaveText(/^2 fields restored from /);
-    await expectNoAxeViolations(page, { include: "[data-history-panel]" });
 
     // Undo puts the current values back, and says so.
     await page.getByRole("button", { name: "Undo" }).click();
