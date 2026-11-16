@@ -179,14 +179,15 @@ export function sentName(field: BuilderField): string {
 
 /**
  * Whether a field is a layout container: it has no name, so it holds no value of its own, and the
- * fields inside it are stored on the level that holds it (the server's sibling rule).
+ * fields inside it are stored on the level that holds it (the server's sibling rule). Shared with
+ * the conditions, which the entry form reads on that same level.
  */
 export function isLayoutContainer(field: BuilderField): boolean {
   return sentName(field) === "" && Array.isArray(field.fields);
 }
 
 /** The named fields one level holds, those inside its layout containers among them. */
-function namedFieldsIn(list: readonly BuilderField[]): BuilderField[] {
+export function namedFieldsIn(list: readonly BuilderField[]): BuilderField[] {
   return list.flatMap(each =>
     isLayoutContainer(each) ? namedFieldsIn(each.fields ?? []) : [each]
   );
@@ -196,7 +197,9 @@ function namedFieldsIn(list: readonly BuilderField[]): BuilderField[] {
  * The container whose level a field in `chain`'s last container is named on: the nearest one with
  * a name, a layout container being part of the level holding it; null for the top level.
  */
-function namingLevel(chain: readonly BuilderField[]): BuilderField | null {
+export function namingLevel(
+  chain: readonly BuilderField[]
+): BuilderField | null {
   for (let at = chain.length - 1; at >= 0; at--) {
     if (!isLayoutContainer(chain[at])) return chain[at];
   }

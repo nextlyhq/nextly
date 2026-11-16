@@ -27,7 +27,7 @@ packages/blocks-engine/src/style/compile-page.ts 2761
 
 packages/blocks-engine/src/style/css-value.ts 1803
 
-packages/blocks-engine/src/style/dtcg.ts 2116
+packages/blocks-engine/src/style/dtcg.ts 2362
 
 packages/blocks-engine/src/tree.ts 1944
 
@@ -35,7 +35,6 @@ packages/blocks-engine/src/validation.ts 3573
 
 packages/blocks-react/src/block-boundary.tsx 1797
 
-packages/blocks-react/src/next.ts 5716
 
 packages/blocks-react/src/rich-text.tsx 1676
 
@@ -67,7 +66,7 @@ packages/builder/src/list-query-controls.tsx 3230
 
 packages/builder/src/shared-styles-panel.tsx 1643
 
-packages/builder/src/style-inspector-panel.tsx 7057
+packages/builder/src/style-inspector-panel.tsx 7077
 
 packages/builder/src/styles/builder-chrome.css 12065
 
