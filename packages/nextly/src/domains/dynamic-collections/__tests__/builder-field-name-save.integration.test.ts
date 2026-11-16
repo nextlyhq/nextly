@@ -349,11 +349,23 @@ describeEachDialect(
     // reaches; kept as it is, the stored name keeps working.
     const TOO_LONG = `${LONGEST}_x`;
 
+    /**
+     * `posts` holding a virtual field named `TOO_LONG`, added through the Builder's apply: the
+     * collection create road caps a name at 50 characters, while the apply asks a field with no
+     * column nothing about a column's length.
+     */
+    async function storedVirtual() {
+      await posts(false);
+      expect(
+        await applyToPosts([
+          ...BODY,
+          { name: TOO_LONG, type: "text", virtual: true },
+        ])
+      ).toBe("accepted");
+    }
+
     it("refuses a stored field given a column its name is too long for, and writes nothing", async () => {
-      await posts(false, [
-        ...BODY,
-        { name: TOO_LONG, type: "text", virtual: true },
-      ]);
+      await storedVirtual();
       const columnsBefore = await columnsOf("dc_posts");
 
       const answer = await applyToPosts([
@@ -372,10 +384,7 @@ describeEachDialect(
     });
 
     it("keeps a stored field whose name is too long for a column while it has none", async () => {
-      await posts(false, [
-        ...BODY,
-        { name: TOO_LONG, type: "text", virtual: true },
-      ]);
+      await storedVirtual();
 
       expect(
         await applyToPosts([
