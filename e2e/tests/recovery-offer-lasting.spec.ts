@@ -78,7 +78,7 @@ test.describe("a recovery point that is no longer offered", () => {
     await read;
     await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
     await expect(field).toHaveValue(title);
-    await expect(page.getByText(/unsaved changes from/i)).toHaveCount(0);
+    await expect(page.getByText(/unsaved changes from/i)).toBeHidden();
     await expect(page.getByRole("button", { name: /^restore$/i })).toHaveCount(
       0
     );
