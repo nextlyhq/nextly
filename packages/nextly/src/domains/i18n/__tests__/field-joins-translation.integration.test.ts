@@ -906,6 +906,68 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
+  // The Builder's saves move a joining field's values on the live database, so the companion
+  // column they add takes what the live main column carries, as the code-first apply's does.
+  it.skipIf(dialect === "sqlite").each(PATHS)(
+    "gives the companion column the main column's default, or refuses where it cannot take it, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${quote(dialect, table)} MODIFY COLUMN ${quote(dialect, "heading")} VARCHAR(255) NULL DEFAULT 'none'`
+          : `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} SET DEFAULT 'none'`
+      );
+
+      const refusal = await change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      // MySQL gives the field's TEXT companion column no literal default, so there the move is
+      // refused before anything runs and the value stays where it was.
+      if (dialect === "mysql") {
+        expect(reportedRefusal(refusal)).toMatch(
+          /own default; turning translation on moves its values into a new column/
+        );
+        expect(await mainHeading(table, id)).toBe("Hello");
+        return;
+      }
+      expect(refusal).toBeUndefined();
+      expect((await companionHeadings(table, id)).en).toBe("Hello");
+      expect(
+        String(await columnDefault(`${table}_locales`, "heading"))
+      ).toMatch(/none/);
+    }
+  );
+
+  // A Builder save refuses as the code-first apply does. SQLite is left out: its collation sits
+  // beside the field in a column of its own, which the Builder's dialogs would ask to drop.
+  it.skipIf(dialect === "sqlite").each(PATHS)(
+    "refuses a field whose move would lose its column's comment as it becomes translated, and changes nothing, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await markColumn(table, "heading");
+
+      const refusal = await change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reportedRefusal(refusal)).toMatch(
+        /own comment; turning translation on moves its values into a new column/
+      );
+      expect(await mainHeading(table, id)).toBe("Hello");
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+    }
+  );
+
+  /** What a Builder save's refusal says, whether it arrives as an error or a refused result. */
+  function reportedRefusal(refusal: unknown): string {
+    return refusal instanceof Error
+      ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+      : String(refusal);
+  }
+
   // SQLite keeps a collation only in a table's statement; a quoted name holding the word is none.
   it.runIf(dialect === "sqlite")(
     "moves a field's values on SQLite beside a column named collate, which declares no collation",

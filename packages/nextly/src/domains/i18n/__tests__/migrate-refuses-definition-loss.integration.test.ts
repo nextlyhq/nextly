@@ -323,7 +323,7 @@ describe.each(getConfiguredTestDialects())(
         });
       const sqlFiles = async () =>
         (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
-      const migrate = (step?: number) =>
+      const migrate = (step?: number, consent = NO_CONSENT) =>
         migrateCore({
           ...(step === undefined ? {} : { step }),
           extensionSchema: undefined,
@@ -333,7 +333,7 @@ describe.each(getConfiguredTestDialects())(
           migrationsDir,
           logger: createLogger({ quiet: true }),
           lockMode: "fail-fast",
-          consent: NO_CONSENT,
+          consent,
           interactive: false,
         } as never);
       await generate(false, "one", "2026-11-13T10:00:00.000Z");
@@ -410,16 +410,17 @@ describe.each(getConfiguredTestDialects())(
         });
         const { migrate } = await enableOverRuntimeCompanion(typed);
 
-        const outcome = await migrate().then(
+        // The data-loss judgement reads the main columns' drop as a loss, since the companion is
+        // already there; consenting to it leaves the definition check alone to decide.
+        const outcome = await migrate(
+          undefined,
+          resolveDataLossConsent({ flag: "dc_mkd_typed", env: {} })
+        ).then(
           () => "applied",
           (error: unknown) => error
         );
 
-        expect(
-          JSON.stringify(
-            (outcome as { publicData?: unknown }).publicData ?? outcome
-          )
-        ).not.toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION/);
+        expect(outcome).toBe("applied");
       },
       120_000
     );
@@ -458,16 +459,16 @@ describe.each(getConfiguredTestDialects())(
           );
         }
 
-        const outcome = await migrate().then(
+        // Consent to the drop the data-loss judgement reads, as above.
+        const outcome = await migrate(
+          undefined,
+          resolveDataLossConsent({ flag: "dc_mkd_docs", env: {} })
+        ).then(
           () => "applied",
           (error: unknown) => error
         );
 
-        expect(
-          JSON.stringify(
-            (outcome as { publicData?: unknown }).publicData ?? outcome
-          )
-        ).not.toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION/);
+        expect(outcome).toBe("applied");
       },
       120_000
     );

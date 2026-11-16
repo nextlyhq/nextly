@@ -1214,7 +1214,7 @@ export async function liveCompanionColumns(
 }
 
 /** `tableName`'s columns as this database has them; empty when the table is missing. */
-async function liveColumnsOf(
+export async function liveColumnsOf(
   adapter: CompanionIntrospectAdapter,
   tableName: string
 ): Promise<readonly ColumnSpec[]> {

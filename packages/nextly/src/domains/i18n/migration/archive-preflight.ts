@@ -977,7 +977,8 @@ export function joiningFieldsLosingValues(
  * (`lostOnMove`): a comment, or a character set or collation other than the receiving table's.
  * Turning it on moves them from the main table to the companion; off, back again. The receiving
  * column is created naming none of these, and the column the values leave is dropped with it. A
- * change that keeps translation as it was moves no field this way, and asks nothing.
+ * change that keeps translation on moves only the fields joining it (`fieldsJoiningTranslation`),
+ * from the main table to the companion, and one that keeps it off moves nothing and asks nothing.
  */
 export async function refuseTranslationMovesLosingDefinition(args: {
   adapter: DrizzleAdapter;
@@ -990,15 +991,24 @@ export async function refuseTranslationMovesLosingDefinition(args: {
   isLocalized: boolean;
   surface: TranslationSurface;
 }): Promise<void> {
-  if (args.wasLocalized === args.isLocalized) return;
+  if (!args.wasLocalized && !args.isLocalized) return;
   const dialect = args.adapter.getCapabilities().dialect;
   const turningOn = args.isLocalized;
+  // Translation kept on moves only the fields joining it, each as translation turning on would.
+  const joining =
+    args.wasLocalized && args.isLocalized
+      ? new Set(fieldsJoiningTranslation(args.oldFields, args.newFields))
+      : undefined;
   // The translated fields on the side where translation holds: their columns are the ones moved.
   const specs = (turningOn ? args.newFields : args.oldFields).flatMap(f => {
-    if (!isFieldLocalized(f, true)) return [];
+    if (!isFieldLocalized(f, true) || joining?.has(f.name) === false) {
+      return [];
+    }
     const column = fieldToLocalizedColumnSpec(f, dialect, args.builtBy);
     return column ? [{ field: f.name, column }] : [];
   });
+  // Nothing moves, so the database is not asked.
+  if (specs.length === 0) return;
   const moved = specs.map(m => ({
     field: m.field,
     column: m.column.name,
