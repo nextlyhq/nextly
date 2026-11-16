@@ -217,3 +217,10 @@ describe("UploadthingStorageAdapter — delete", () => {
     await expect(adapter.delete("k1")).rejects.toThrow("rate limited");
   });
 });
+
+describe("UploadthingStorageAdapter — resized copies", () => {
+  it("keeps none, since UploadThing chooses every key, so core serves the original", () => {
+    // Core reads a storage without `uploadAt` as one that keeps no copies.
+    expect("uploadAt" in adapter).toBe(false);
+  });
+});

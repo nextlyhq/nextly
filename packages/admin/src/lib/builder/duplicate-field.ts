@@ -4,17 +4,16 @@
  * field it carries under the first free name on the level holding it). A name is free when no sibling's
  * clashes with it by the server's own rule (the same, in other letter case,
  * or the same column), no pending delete there still holds one that does,
- * and it is not reserved there.
+ * and the save's field-name rule does not reserve it there (a built-in
+ * column, or Draft/Published's own name while it is on).
  *
  * @module lib/builder/duplicate-field
  */
-import { siblingNameClash } from "nextly/config";
-
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
-import { isReservedFieldName } from "./constants";
 import { copyWithNewIds } from "./copy-field";
 import { freeDuplicateName } from "./duplicate-field-name";
+import { nameIsTakenAt } from "./field-name-check";
 import { findFieldById, findParentContainerId } from "./field-transformers";
 import { insertField, positionAfter } from "./insert-field";
 import {
@@ -27,14 +26,15 @@ import {
 /** What naming a copy needs beyond the fields: the move rule's view of names. */
 export type DuplicateNaming = Pick<
   MoveContext,
-  "heldNames" | "topLevelReservesNames"
+  "heldNames" | "surface" | "lifecycleEnabled"
 >;
 
 /**
  * Whether a copy may not be called `name`: judged as the save will judge it, on the name the save
  * sends, against the named fields on the copy's storage level (a layout group's fields share the
- * level holding it), the names that level's pending deletes still hold, and the top level's
- * reserved names.
+ * level holding it), the names that level's pending deletes still hold, and the names the save's
+ * field-name rule reserves there. A name the rule refuses for its spelling or its length is not
+ * taken, since no suffix frees it; the settings panel says what is wrong with it on the copy.
  */
 function nameTaken(
   copy: BuilderField,
@@ -44,17 +44,13 @@ function nameTaken(
 ): boolean {
   const sent = sentName({ ...copy, name });
   const held = naming?.heldNames?.get(level.id ?? "") ?? [];
-  const reserved =
-    level.id === null &&
-    naming?.topLevelReservesNames === true &&
-    isReservedFieldName(sent);
-  return (
-    reserved ||
-    level.siblings.some(
-      sibling => siblingNameClash(sent, sentName(sibling)) !== null
-    ) ||
-    held.some(other => siblingNameClash(sent, other) !== null)
-  );
+  return nameIsTakenAt(sent, {
+    // Unstated, as a caller that names no entity, only the rules every kind shares are asked.
+    surface: naming?.surface ?? "fieldGroup",
+    nested: level.id !== null,
+    lifecycleEnabled: naming?.lifecycleEnabled === true,
+    siblingNames: [...level.siblings.map(sentName), ...held],
+  });
 }
 
 /**

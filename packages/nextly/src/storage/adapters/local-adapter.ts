@@ -24,9 +24,11 @@
  * ```
  */
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
 import {
   deadlineSignal,
@@ -266,6 +268,53 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
     warnIfUploadUnserved(url, this.baseUrl);
 
     return { url, path: key };
+  }
+
+  /**
+   * Write a file at exactly `filePath`, beside a file already stored.
+   *
+   * Written to a temporary name and then renamed into place, so a request
+   * reading the file while another writes it sees the whole file or none,
+   * never part of one. The path is checked to stay inside the storage's
+   * folder, as every other path here is.
+   *
+   * @experimental
+   */
+  async uploadAt(
+    filePath: string,
+    buffer: Buffer,
+    _options: { mimeType: string }
+  ): Promise<UploadResult> {
+    const fullPath = this.resolveAndValidate(filePath);
+    // Core passes only keys it derived from a stored file, which need no
+    // tidying. One that does (a `..`, a leading slash) would be stored under
+    // another key than the one it was given, so it is refused rather than
+    // reported as somewhere it is not.
+    const stored = path
+      .relative(this.basePath, fullPath)
+      .split(path.sep)
+      .join("/");
+    if (stored !== filePath) {
+      throw NextlyError.internal({
+        logContext: { reason: "upload-at-key-not-canonical" },
+      });
+    }
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    // A short name of its own beside the file, rather than the file's name
+    // with more added: a name near the 255-byte limit fits as the file, but
+    // not with a suffix on it.
+    const partial = path.join(
+      path.dirname(fullPath),
+      `.${randomUUID()}.partial`
+    );
+    try {
+      await fs.writeFile(partial, buffer);
+      await fs.rename(partial, fullPath);
+    } catch (error) {
+      await fs.rm(partial, { force: true });
+      throw error;
+    }
+    return { url: this.getPublicUrl(filePath), path: filePath };
   }
 
   /**

@@ -25,13 +25,16 @@ import { MoveHarness, newProbe, plain } from "./move-harness";
 /** The rule's whole answer, every change of container included. */
 const WHOLE: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
   containerChanges: true,
 };
 
 function setup(
   initial: BuilderField[] = nestedFixtureFields(),
-  blockCatalogs: Map<string, BlockCatalog> = nestedFixtureBlockCatalogsAllMatched(),
+  blockCatalogs: Map<
+    string,
+    BlockCatalog
+  > = nestedFixtureBlockCatalogsAllMatched(),
   errors: ReadonlyMap<string, BuilderFieldError> = new Map()
 ) {
   const probe = newProbe();
@@ -199,7 +202,15 @@ describe("Focus", () => {
     const { user } = setup(
       nestedFixtureFields(),
       nestedFixtureBlockCatalogsAllMatched(),
-      new Map([["f-meta", { kind: "unnamed", message: "Name is required" } satisfies BuilderFieldError]])
+      new Map([
+        [
+          "f-meta",
+          {
+            kind: "unnamed",
+            message: "Name is required",
+          } satisfies BuilderFieldError,
+        ],
+      ])
     );
     await focusOn(user, "meta");
     // Its row, which carried the badge, is not drawn while it is focused.

@@ -7,8 +7,8 @@
  * find no folder may both make one, or one's create may be refused because
  * the other's folder appeared between its look and its insert. So the folder is
  * claimed in the plugin's own `page_builder__site_options` table, whose
- * `name` is unique, as the spacing model is (`spacing-mode-store`). The row
- * `fonts-folder` names the folder's id, and only one insert of it can win.
+ * `name` is unique. The row `fonts-folder` names the folder's id, and only
+ * one insert of it can win.
  *
  * A call that finds no claim uses the oldest root "Fonts" folder, or makes
  * one, and claims it. A call that loses the claim uses the winner's folder
