@@ -17,6 +17,7 @@ import {
   int,
   datetime,
   index,
+  boolean,
 } from "drizzle-orm/mysql-core";
 
 import {
@@ -85,6 +86,12 @@ export const emailDeliveriesMysql = mysqlTable(
     // The keyed digest of the idempotency key the send carried, on every
     // record of that send; cleared on all of them when any one is erased.
     keyDigest: varchar("key_digest", { length: 64 }),
+    queuedId: varchar("queued_id", { length: 36 }),
+    templateOwner: varchar("template_owner", { length: 255 }),
+    templateOverridden: boolean("template_overridden"),
+    templateDigest: varchar("template_digest", { length: 64 }),
+    failureKind: varchar("failure_kind", { length: 16 }),
+    failureStatus: int("failure_status"),
 
     /**
      * `fsp: 3` — milliseconds, not whole seconds.
@@ -112,6 +119,7 @@ export const emailDeliveriesMysql = mysqlTable(
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
+    index("email_deliveries_queued_idx").on(t.queuedId),
     index("email_deliveries_template_idx").on(
       t.templateSlug,
       t.status,

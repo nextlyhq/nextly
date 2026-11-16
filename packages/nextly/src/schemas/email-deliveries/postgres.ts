@@ -72,6 +72,7 @@ import {
   integer,
   timestamp,
   index,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 import { emailProvidersPg } from "../email-providers/postgres";
@@ -204,6 +205,30 @@ export const emailDeliveriesPg = pgTable(
     // record of that send; cleared on all of them when any one is erased.
     keyDigest: varchar("key_digest", { length: 64 }),
 
+    /**
+     * The queued email this was an attempt of, when it was one, so its
+     * attempts read as one timeline.
+     */
+    queuedId: varchar("queued_id", { length: 36 }),
+    /**
+     * Which version of its template was sent: the template's owner (`core`,
+     * `plugin:<name>`, `site`, or `code` for the site's code version), whether
+     * the site had overridden it, and a digest of the version as saved, never
+     * its content or what it rendered to. `none` for a send without a
+     * template; null on a row written before versions were recorded.
+     */
+    templateOwner: varchar("template_owner", { length: 255 }),
+    templateOverridden: boolean("template_overridden"),
+    templateDigest: varchar("template_digest", { length: 64 }),
+    /**
+     * The provider's answer to a failed send, structured: `retryable`,
+     * `refused` or `unknown`, and its status (HTTP or SMTP) where it gave
+     * one. Never the provider's own text, which can quote an address, the
+     * message or a credential.
+     */
+    failureKind: varchar("failure_kind", { length: 16 }),
+    failureStatus: integer("failure_status"),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -229,6 +254,8 @@ export const emailDeliveriesPg = pgTable(
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
+    // A queued email's attempts, read as its timeline.
+    index("email_deliveries_queued_idx").on(t.queuedId),
     // One template's history, and when each template was last sent: the
     // Activity list's template filter, and the Messages list's "Last sent".
     index("email_deliveries_template_idx").on(

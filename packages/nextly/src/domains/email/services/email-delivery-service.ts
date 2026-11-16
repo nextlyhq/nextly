@@ -57,6 +57,7 @@ import {
   recipientDigest,
   recipientDigests,
   storableError,
+  templateVersionColumns,
   type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
   type EmailDeliveryStatus,
@@ -817,6 +818,10 @@ export class EmailDeliveryService extends BaseService {
       error: input.error ? storableError(input.error) : null,
       messageId: input.messageId ?? null,
       keyDigest: input.keyDigest ?? null,
+      queuedId: input.queuedId ?? null,
+      ...templateVersionColumns(input.templateVersion),
+      failureKind: input.failure?.kind ?? null,
+      failureStatus: input.failure?.status ?? null,
       // One timestamp for the whole message: the rows describe a single
       // send, and staggering them by microseconds would suggest otherwise.
       createdAt: now,
