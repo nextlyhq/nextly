@@ -102,6 +102,25 @@ describe("the media read a drawn page resolves its images with", () => {
     expect(api.getMediaByIds).toHaveBeenLastCalledWith(ids(4));
   });
 
+  it("answers an id the read cannot name with nothing on its own, and still reads the rest", async () => {
+    const read = resolver();
+    const tooLong = "x".repeat(65);
+    const [first, long, comma, last] = await Promise.all([
+      read("m1"),
+      read(tooLong),
+      read("a,b"),
+      read("m2"),
+    ]);
+    expect([first?.id, long, comma, last?.id]).toEqual([
+      "m1",
+      null,
+      null,
+      "m2",
+    ]);
+    expect(api.getMediaByIds).toHaveBeenCalledTimes(1);
+    expect(api.getMediaByIds).toHaveBeenCalledWith(["m1", "m2"]);
+  });
+
   it("answers every image with nothing when the read fails, so the page still draws", async () => {
     api.getMediaByIds.mockRejectedValue(new Error("offline"));
     const read = resolver();

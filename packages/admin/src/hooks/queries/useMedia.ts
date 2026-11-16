@@ -310,6 +310,26 @@ function mediaItemQuery(mediaId: string): {
 /** Loads one media item for drawing; rejects for one that cannot be read. */
 type DrawnMediaLoader = (mediaId: string) => Promise<Media>;
 
+/**
+ * The longest id the media read by ids takes, as the server checks it: a
+ * longer one is refused, and would refuse the whole read with it.
+ */
+const MEDIA_ID_MAX_LENGTH = 64;
+
+/**
+ * Whether one read by ids can carry `mediaId`: not empty, no longer than the
+ * server takes, and without the comma that separates ids. Any other is no
+ * media item's, and is answered missing on its own, so a malformed binding
+ * never blanks the other images it is read with.
+ */
+function readableMediaId(mediaId: string): boolean {
+  return (
+    mediaId !== "" &&
+    mediaId.length <= MEDIA_ID_MAX_LENGTH &&
+    !mediaId.includes(",")
+  );
+}
+
 /** Each query client's drawn-media loader, so every caller shares its reads. */
 const drawnMediaLoaders = new WeakMap<QueryClient, DrawnMediaLoader>();
 
@@ -344,6 +364,10 @@ function drawnMediaLoaderOf(queryClient: QueryClient): DrawnMediaLoader {
 
   const loader: DrawnMediaLoader = mediaId =>
     new Promise<Media>((found, refuse) => {
+      if (!readableMediaId(mediaId)) {
+        refuse(new Error("not a media item id"));
+        return;
+      }
       if (queued === null) {
         queued = new Map();
         // After the current turn, so every image a draw asks for in one pass,
