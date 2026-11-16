@@ -209,7 +209,7 @@ export async function retiredByRun(
 }
 
 /** How long a run's counts may take in all, after which what is left is listed without a count. */
-export const ENTITY_COUNT_BUDGET_MS = 5_000;
+const ENTITY_COUNT_BUDGET_MS = 5_000;
 
 /** What reading the database needs: the run's connection, and the adapter where the command holds one. */
 export interface SharedRowsReader {

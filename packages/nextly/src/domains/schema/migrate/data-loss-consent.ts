@@ -407,7 +407,7 @@ function describeWhat(deletion: Deletion): string {
 }
 
 /** A collection or Single as a listing names it: `collection "posts"`, `Single "home"`. */
-export function entityLabel(entity: EntityRef): string {
+function entityLabel(entity: EntityRef): string {
   return `${entity.kind === "single" ? "Single" : "collection"} "${entity.slug}"`;
 }
 
