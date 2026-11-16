@@ -1090,7 +1090,7 @@ function useRemoveStep(plan: RemovalPlan): {
 
 /** Whether Remove opens why it cannot go ahead rather than the confirm. */
 function refuses(removal: VariableRemoval): boolean {
-  return removal === "in-use" || removal === "not-whole";
+  return removal === "in-use";
 }
 
 /**
