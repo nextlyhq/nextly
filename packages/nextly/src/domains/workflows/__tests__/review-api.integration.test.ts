@@ -13,6 +13,10 @@
  *   approval over several is refused before anything moves.
  * - What waits for a caller is what is assigned to them in a stage whose step they may take, a page
  *   at a time, counted.
+ * - Each part names who it waits for: its assignee, else its stage's default reviewer where they may
+ *   take the stage's primary step, else the roles that may; no one in a stage with no step out.
+ * - Each part names its last move: the latest workflow event that involved it, not the document's
+ *   latest and not its first.
  *
  * The plausible broken surfaces: one that checks only the step's permission (and so shows review
  * state the caller may not read), one that moves every document of a bulk request or none, one
@@ -34,17 +38,24 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { defineCollection, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { ServiceContainer } from "../../../services/index";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
+import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
+import { writeWorkflowSettings } from "../workflow-settings-repository";
 
 import {
   bootSteps,
   entry,
   partOf,
   person,
+  role,
   seedState,
+  stateDb,
   stateOf,
+  superAdminRole,
   versionOf,
   type Grant,
 } from "./helpers/step-harness";
@@ -52,6 +63,34 @@ import { editorial } from "./helpers/step-workflows";
 
 const HASH = workflowDefinitionHash(editorial);
 const PAGES = "pages";
+const POSTS = "posts";
+
+/** Draft → Done, and no step out of Done: a part there waits for no one. */
+const straight = defineWorkflow({
+  slug: "straight",
+  label: "Straight",
+  stages: [
+    { name: "draft", label: "Draft" },
+    { name: "done", label: "Done", allowsPublish: true },
+  ],
+  steps: [
+    {
+      name: "finish",
+      label: "Finish",
+      kind: "approve",
+      from: "draft",
+      to: "done",
+    },
+  ],
+});
+const BRIEFS = "briefs";
+const briefs = defineCollection({
+  slug: BRIEFS,
+  status: true,
+  versions: { drafts: true },
+  workflow: straight,
+  fields: [text({ name: "title" })],
+});
 
 type Doc = Record<string, unknown>;
 
@@ -303,6 +342,38 @@ async function seenPage(id: string, step: string, revision = 0): Promise<Doc> {
 const ALICE: Who = { kind: "person", id: "alice" };
 const BOB: Who = { kind: "person", id: "bob" };
 
+/** The parts of a document's review state, as either door answers them. */
+const partsOf = (state: Doc): Doc[] => state.parts as Doc[];
+
+/** The one part of a document that has only the shared part. */
+async function onlyPart(door: Door, id: string): Promise<Doc> {
+  const parts = partsOf(
+    await door.reviewState(ALICE, { collection: PAGES, id })
+  );
+  expect(parts).toHaveLength(1);
+  return parts[0];
+}
+
+/** A role as a part waiting for it names it: its id and name, read from the roles. */
+async function roleNamed(id: string): Promise<Doc> {
+  const roles = new ServiceContainer(app().adapter).roles;
+  return { id, name: (await roles.getRoleById(id)).name };
+}
+
+const byId = (roles: Doc[]) =>
+  [...roles].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+/** Sets the editorial workflow's default reviewer of `stage`. */
+async function defaultReviewer(stage: string, id: string): Promise<void> {
+  await writeWorkflowSettings(
+    stateDb(app()),
+    "editorial",
+    { defaultReviewers: { [stage]: { kind: "user", id } } },
+    null,
+    null
+  );
+}
+
 /** Alice may read and edit Pages; Bob holds the sign-off step on Pages and may not read them. */
 async function people() {
   await person(app(), "alice", [
@@ -496,6 +567,197 @@ describe.each(getConfiguredTestDialects())(
             .map(item => (item.document as Doc).entryId)
             .sort()
         ).toEqual([...ids].sort());
+      });
+
+      it("names a part's assignee as who it waits for, before its stage's default reviewer", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "rita", [["sign-off", PAGES]]);
+        await defaultReviewer("legal", "rita");
+        const desk = await role(app(), "legal-desk", [["sign-off", PAGES]]);
+        const toBob = await entry(app(), PAGES);
+        const toDesk = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, toBob, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "bob" },
+        });
+        await seedState(app(), partOf(PAGES, toDesk, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "role", id: desk },
+        });
+
+        expect((await onlyPart(door, toBob)).waitingFor).toEqual({
+          kind: "user",
+          id: "bob",
+          name: "bob",
+        });
+        expect((await onlyPart(door, toDesk)).waitingFor).toEqual({
+          kind: "roles",
+          roles: [{ id: desk, name: "legal-desk" }],
+        });
+      });
+
+      it("names an unassigned part's stage's default reviewer as who it waits for", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "rita", [["sign-off", PAGES]]);
+        await defaultReviewer("legal", "rita");
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        expect((await onlyPart(door, id)).waitingFor).toEqual({
+          kind: "user",
+          id: "rita",
+          name: "rita",
+        });
+      });
+
+      it("names the roles holding the stage's primary step where no one is assigned or set", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const superAdmin = await superAdminRole(app());
+        const desk = await role(app(), "legal-desk", [["sign-off", PAGES]]);
+        // Holds sign-off only through the role it inherits; a role with one child names a
+        // permission of its own.
+        const chief = await role(app(), "chief", [["read", PAGES]], [desk]);
+        // Holds a step out of Legal check, but not its primary one.
+        await role(app(), "parker", [["update", PAGES]]);
+        const holdsBob = (
+          await new ServiceContainer(app().adapter).roles.findRoleIdBySlug(
+            "holds-bob"
+          )
+        )?.id;
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        const waiting = (await onlyPart(door, id)).waitingFor as Doc;
+
+        expect(waiting.kind).toBe("roles");
+        expect(byId(waiting.roles as Doc[])).toEqual(
+          byId([
+            await roleNamed(desk),
+            await roleNamed(chief),
+            await roleNamed(String(holdsBob)),
+            await roleNamed(superAdmin),
+          ])
+        );
+      });
+
+      it("passes over a default reviewer who may not take the stage's primary step", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "dora", [["sign-off", PAGES]], { active: false });
+        await defaultReviewer("legal", "dora");
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        const waiting = (await onlyPart(door, id)).waitingFor as Doc;
+
+        expect(waiting.kind).toBe("roles");
+        expect(waiting.roles).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "holds-bob" }),
+          ])
+        );
+      });
+
+      it("names no one for a part in a stage with no step out of it", async () => {
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs],
+        });
+        await person(app(), "alice", [["read", BRIEFS]]);
+        const id = await entry(app(), BRIEFS);
+        await seedState(app(), partOf(BRIEFS, id, null), "done", {
+          definitionHash: workflowDefinitionHash(straight),
+        });
+
+        const parts = partsOf(
+          await door.reviewState(ALICE, { collection: BRIEFS, id })
+        );
+
+        expect(parts).toEqual([
+          expect.objectContaining({ stage: "done", waitingFor: null }),
+        ]);
+      });
+
+      it("names a part's last move: its latest step, by whom, from where to where, with the comment", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const id = await entry(app(), PAGES);
+
+        await door.takeStep(ALICE, {
+          ...(await seenPage(id, "send", 0)),
+          comment: "Ready for legal",
+        });
+        const sent = (await onlyPart(door, id)).lastMove as Doc;
+        await door.takeStep(ALICE, {
+          ...(await seenPage(id, "park", 1)),
+          comment: "Waiting on photos",
+        });
+        const parked = (await onlyPart(door, id)).lastMove as Doc;
+
+        expect(sent).toEqual({
+          kind: "workflow-submit",
+          actor: expect.objectContaining({ kind: "person", id: "alice" }),
+          at: expect.anything(),
+          from: "writing",
+          to: "legal",
+          comment: "Ready for legal",
+        });
+        expect(Number.isNaN(new Date(String(sent.at)).getTime())).toBe(false);
+        expect(parked).toEqual({
+          kind: "workflow-move",
+          actor: expect.objectContaining({ kind: "person", id: "alice" }),
+          at: expect.anything(),
+          from: "legal",
+          to: "hold",
+          comment: "Waiting on photos",
+        });
+      });
+
+      it("names no last move for a part that never moved, though another part did", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "alice", [
+          ["read", PAGES],
+          ["read", POSTS],
+          ["update", POSTS],
+        ]);
+        const fresh = await entry(app(), PAGES);
+        const post = await entry(app(), POSTS);
+        await door.takeStep(ALICE, {
+          document: { collection: POSTS, id: post },
+          step: "send",
+          parts: ["en"],
+          seen: [
+            {
+              part: "en",
+              revision: 0,
+              version: await versionOf(app(), POSTS, post, "en"),
+            },
+          ],
+        });
+
+        const page = partsOf(
+          await door.reviewState(ALICE, { collection: PAGES, id: fresh })
+        );
+        const parts = partsOf(
+          await door.reviewState(ALICE, { collection: POSTS, id: post })
+        );
+        const moveOf = (part: string | null) =>
+          parts.find(each => each.part === part)?.lastMove;
+
+        expect(page).toEqual([expect.objectContaining({ lastMove: null })]);
+        expect(moveOf("en")).toEqual(
+          expect.objectContaining({ kind: "workflow-submit", to: "legal" })
+        );
+        expect(moveOf("es")).toBeNull();
+        expect(moveOf(null)).toBeNull();
       });
     });
   }
