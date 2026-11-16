@@ -219,4 +219,28 @@ describe("a page render overtaken by a later read of the same page", () => {
       expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
     }
   );
+
+  it("is not dated from an earlier read that was served from the cache", async () => {
+    const tag = "nextly:components:id:c1";
+    // The page is stored, and a visitor is served it: that read started no
+    // render.
+    await new IncrementalHandler().set("/cached-page", page("old"), {
+      tags: [tag],
+    });
+    vi.advanceTimersByTime(10);
+    expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
+    vi.advanceTimersByTime(10);
+    // The write expires it; the next visitor misses and renders it afresh.
+    await expireTags([tag]);
+    vi.advanceTimersByTime(10);
+    expect(await new IncrementalHandler().get("/cached-page")).toBeNull();
+    vi.advanceTimersByTime(10);
+    await new IncrementalHandler().set("/cached-page", page("new"), {
+      tags: [tag],
+    });
+    vi.advanceTimersByTime(10);
+
+    // That render began after the write, so it is kept: rendered once.
+    expect(await new IncrementalHandler().get("/cached-page")).not.toBeNull();
+  });
 });

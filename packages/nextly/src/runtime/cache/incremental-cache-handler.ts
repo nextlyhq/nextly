@@ -106,8 +106,18 @@ const FILL_WINDOW_MS = 60_000;
 /** At most this many reads are remembered before the old ones are dropped. */
 const MAX_REMEMBERED_READS = 10_000;
 
+/**
+ * A remembered read of a key: when it was made, and what it answered so far.
+ * `reading` until the handler answers it; `missed` when it answered nothing,
+ * so Next.js renders the key; `served` when it answered a stored entry.
+ */
+interface RememberedRead {
+  at: number;
+  answer: "reading" | "missed" | "served";
+}
+
 const globalForReads = globalThis as unknown as {
-  __nextly_cache_reads?: Map<string, number>;
+  __nextly_cache_reads?: Map<string, RememberedRead>;
   __nextly_cache_reads_overflowed_at?: number;
 };
 
@@ -117,25 +127,37 @@ const globalForReads = globalThis as unknown as {
  * fill began: an expiry recorded while it ran then judges what it stores,
  * instead of the fill passing for fresh because it finished later.
  */
-function reads(): Map<string, number> {
+function reads(): Map<string, RememberedRead> {
   globalForReads.__nextly_cache_reads ??= new Map();
   return globalForReads.__nextly_cache_reads;
 }
 
-function rememberRead(key: string): void {
+/**
+ * Remembers a read of `key`, and answers the record to mark with what the
+ * read answers (`undefined` when it could not be remembered).
+ */
+function rememberRead(key: string): RememberedRead | undefined {
   const remembered = reads();
   const now = localNow();
-  // A render of this key that a read within the window started is still the
-  // one being filled: a later read of the same key is served that render, so
-  // it does not move when the render began. Moved, a render begun before an
-  // expiry and stored after it would be dated after the expiry, and kept.
+  // A render of this key that a missed read within the window started is
+  // still the one being filled: a later read of the same key is served that
+  // render, so it does not move when the render began. Moved, a render begun
+  // before an expiry and stored after it would be dated after the expiry, and
+  // kept. A read still being answered may yet miss, so it holds too. A read
+  // answered from the store started no render, so a later read starts afresh:
+  // kept, it would date a render begun after an expiry from before it, and
+  // refuse it once more than the expiry needs.
   const earlier = remembered.get(key);
-  const began =
-    earlier !== undefined && now - earlier <= FILL_WINDOW_MS ? earlier : now;
+  const read =
+    earlier !== undefined &&
+    earlier.answer !== "served" &&
+    now - earlier.at <= FILL_WINDOW_MS
+      ? earlier
+      : { at: now, answer: "reading" as const };
   remembered.delete(key);
   if (remembered.size >= MAX_REMEMBERED_READS) {
     // Reads past the window mark no fill still running, so they go first.
-    for (const [old, at] of remembered) {
+    for (const [old, { at }] of remembered) {
       if (now - at <= FILL_WINDOW_MS) break;
       remembered.delete(old);
     }
@@ -145,9 +167,23 @@ function rememberRead(key: string): void {
     // that fill would lose when it began. This read is not remembered, and
     // its fill is judged as one begun at the window's start (`fillBegan`).
     globalForReads.__nextly_cache_reads_overflowed_at = now;
-    return;
+    return undefined;
   }
-  remembered.set(key, began);
+  remembered.set(key, read);
+  return read;
+}
+
+/**
+ * Marks what a remembered read answered. A read that another read of the
+ * same key has since joined is marked as missed if either missed, since a
+ * render either started is still the one being filled.
+ */
+function markAnswer(
+  read: RememberedRead | undefined,
+  answer: "missed" | "served"
+): void {
+  if (read === undefined || read.answer === "missed") return;
+  read.answer = answer;
 }
 
 /**
@@ -158,7 +194,7 @@ function rememberRead(key: string): void {
  */
 function fillBegan(key: string): number {
   const remembered = reads();
-  const readAt = remembered.get(key);
+  const readAt = remembered.get(key)?.at;
   remembered.delete(key);
   const now = localNow();
   if (readAt !== undefined && now - readAt <= FILL_WINDOW_MS) return readAt;
@@ -200,12 +236,15 @@ export default class NextlyIncrementalCacheHandler {
     value: unknown;
     cacheControl?: unknown;
   } | null> {
-    rememberRead(key);
+    const read = rememberRead(key);
     // Where a timer may never fire, a read retries what the ledger refused.
     const retrying = retryFailedRecordsAtRead();
     if (retrying !== undefined) await retrying;
     const stored = entries().get(key) ?? (await this.storedFromBuild(key, ctx));
-    if (stored === undefined) return null;
+    if (stored === undefined) {
+      markAnswer(read, "missed");
+      return null;
+    }
     const tags = [
       ...stored.tags,
       ...(ctx?.tags ?? []),
@@ -217,8 +256,13 @@ export default class NextlyIncrementalCacheHandler {
     await refreshTagExpiries(tags);
     if (isEntryExpired(tags, stored.begunAt)) {
       entries().deleteIf(key, stored);
+      markAnswer(read, "missed");
       return null;
     }
+    // A stored entry past its revalidate time is served while Next.js fills
+    // it again in the background; that fill is dated from this read, which a
+    // later read then moves, as before. Only a miss's fill holds its start.
+    markAnswer(read, "served");
     return {
       lastModified: stored.lastModified,
       value: stored.value,
