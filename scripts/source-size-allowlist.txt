@@ -33,7 +33,6 @@ packages/blocks-engine/src/style/compile-page.ts 2761
 
 packages/builder/src/canvas.tsx 2705
 
-packages/builder/src/content-controls.tsx 1591
 
 
 
