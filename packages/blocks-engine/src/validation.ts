@@ -44,8 +44,9 @@ import {
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
   MAX_NODES,
+  documentTooLargeMessage,
+  type DocumentLimits,
 } from "./limits";
-import type { DocumentLimits } from "./limits";
 import {
   LIST_ISSUE_CODES,
   listQueryIssues,
@@ -1579,7 +1580,7 @@ function checkLimits(survey: DocumentSurvey, issues: ValidationIssue[]): void {
       path: "",
       code: "document-too-large",
       severity: "error",
-      message: `Document exceeds the maximum of ${survey.limits.maxBytes} bytes.`,
+      message: documentTooLargeMessage(survey.limits.maxBytes),
     });
   } else if (survey.unwritable) {
     issues.push({

@@ -307,3 +307,12 @@ export function documentBytes(doc: BlockDocument): number {
   });
   return new TextEncoder().encode(json).length;
 }
+
+/**
+ * What a document over its byte cap is told, in the editor and on the server
+ * alike: one sentence, so an author refused before a save reads the same reason
+ * a save would have given.
+ */
+export function documentTooLargeMessage(maxBytes: number): string {
+  return `Document exceeds the maximum of ${String(maxBytes)} bytes.`;
+}

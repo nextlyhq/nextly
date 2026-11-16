@@ -54,6 +54,7 @@ import {
   isBlockOrigin,
   isComponentDocument,
 } from "./document";
+import { keptJsonBytes } from "./kept-sizes";
 import {
   layersLockBreak,
   lockedWithin,
@@ -62,6 +63,7 @@ import {
 import {
   countNodes,
   DEFAULT_LIMITS,
+  documentTooLargeMessage,
   ForestTooLargeError,
   MAX_VALUE_PARTS,
   treeDepth,
@@ -2063,6 +2065,25 @@ function assertFitsCaps(
   // case never pays for measuring `before` in full: a document already inside
   // the cap settles it, and only one already over the cap needs its exact size,
   // which is the repair case a site creates by lowering its own limit.
+  //
+  // From the sizes KEPT against each part when both documents are plain data,
+  // which is every document the editor builds from its own operations: the
+  // starting document was measured once, on its first check, and the result
+  // shares every part it did not change, so only the edited path is measured.
+  // The answer is the full measurement's; a document that is not plain data
+  // has no kept size and takes the full measurement below, which probes every
+  // object for a value the writer refuses.
+  const keptResult = keptJsonBytes(result);
+  const keptBefore =
+    keptResult === undefined ? undefined : keptJsonBytes(before);
+  if (keptResult !== undefined && keptBefore !== undefined) {
+    const keptCeiling =
+      keptBefore > limits.maxBytes ? keptBefore : limits.maxBytes;
+    if (keptResult > keptCeiling) {
+      throw new OpError(documentTooLargeMessage(limits.maxBytes));
+    }
+    return;
+  }
   const startingSize = measureBytes(before, limits.maxBytes);
   const ceiling = startingSize.exceeded
     ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
@@ -2085,9 +2106,9 @@ function assertFitsCaps(
         ? `${verb}: this would leave the document holding a value that cannot ` +
           `be stored — a cycle, or something JSON does not preserve. The ` +
           `edit would apply and then fail to save.`
-        : `${verb}: this would leave the document over ${String(ceiling)} ` +
-          `bytes, past the ${String(limits.maxBytes)} it may hold. The edit ` +
-          `would apply and then fail to save.`
+        : // The server's words for an over-size document, so an author
+          // refused here reads the reason a save would have given.
+          documentTooLargeMessage(limits.maxBytes)
     );
   }
 }
@@ -2243,11 +2264,20 @@ function rebuild(
   return nodes.map(node => {
     const mapped = fn(node);
     if (mapped.slots === undefined) return mapped;
+    // A node `fn` left alone whose child lists all came back unchanged is the
+    // original node, so an edit shares what it did not touch with the document
+    // before it and only the path to the edit is new (see `kept-sizes`).
+    let changed = mapped !== node;
     const slots: Record<string, BlockNode[]> = {};
     for (const [name, children] of Object.entries(mapped.slots)) {
-      slots[name] = rebuild(children, fn);
+      const rebuilt = rebuild(children, fn);
+      const same =
+        rebuilt.length === children.length &&
+        rebuilt.every((child, index) => child === children[index]);
+      slots[name] = same ? children : rebuilt;
+      if (!same) changed = true;
     }
-    return { ...mapped, slots };
+    return changed ? { ...mapped, slots } : mapped;
   });
 }
 
