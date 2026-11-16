@@ -32,6 +32,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const {
   canvasBindingsFor,
   canvasBindingsRequest,
+  dropKeptCanvasReads,
   listConditionsFor,
   siteTimeZoneFor,
   useCanvasBindings,
@@ -388,36 +389,56 @@ describe("the canvas's binding sources", () => {
     editing.identity = null;
   });
 
-  it("asks again once an answer has been kept its while", async () => {
-    // A source can change while what the page asks stays the same: the
-    // author saves a new title, or someone updates a Single.
+  it("keeps an answer while the ask stays the same, however long", async () => {
+    // A lock renewal, an edit to an unrelated block or a minute's wait asks
+    // nothing again: only the ask or the data it read changing does.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       editing.identity = identity;
       writePluginRoute.mockReset();
-      writePluginRoute
-        .mockResolvedValueOnce(answer("Before the save"))
-        .mockResolvedValueOnce(answer("After the save"));
+      writePluginRoute.mockResolvedValue(answer("Kept"));
       const drawn = [page({ text: { $bind: "title" } })];
-      const { result } = renderHook(() => useCanvasBindings(drawn, "it"));
-      await waitFor(() =>
-        expect(result.current.entry).toEqual({
-          id: "p1",
-          title: "Before the save",
-        })
+      const { result, rerender } = renderHook(() =>
+        useCanvasBindings(drawn, "it")
       );
-      await vi.advanceTimersByTimeAsync(15_001);
       await waitFor(() =>
-        expect(result.current.entry).toEqual({
-          id: "p1",
-          title: "After the save",
-        })
+        expect(result.current.entry).toEqual({ id: "p1", title: "Kept" })
       );
-      expect(writePluginRoute).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      rerender();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(writePluginRoute).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
       editing.identity = null;
     }
+  });
+
+  it("asks again once the sources it read have changed", async () => {
+    // A source can change while what the page asks stays the same: the
+    // author saves a new title, or someone updates a Single.
+    editing.identity = identity;
+    writePluginRoute.mockReset();
+    writePluginRoute
+      .mockResolvedValueOnce(answer("Before the save"))
+      .mockResolvedValueOnce(answer("After the save"));
+    const drawn = [page({ text: { $bind: "title" } })];
+    const { result } = renderHook(() => useCanvasBindings(drawn, "pt"));
+    await waitFor(() =>
+      expect(result.current.entry).toEqual({
+        id: "p1",
+        title: "Before the save",
+      })
+    );
+    dropKeptCanvasReads();
+    await waitFor(() =>
+      expect(result.current.entry).toEqual({
+        id: "p1",
+        title: "After the save",
+      })
+    );
+    expect(writePluginRoute).toHaveBeenCalledTimes(2);
+    editing.identity = null;
   });
 });
 
