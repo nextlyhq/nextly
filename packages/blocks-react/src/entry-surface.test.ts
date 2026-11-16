@@ -30,6 +30,7 @@ import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as containerRootModule from "./blocks/container-root";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as imageSlotModule from "./image-slot";
 import * as listCollectionsModule from "./list-collections";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
@@ -113,6 +114,24 @@ const SOURCE_MODULES: ReadonlyArray<{
     // Its one value is the consumer surface: which element a Section or Box
     // renders as its root, asked by an editor.
     internal: [],
+  },
+  {
+    name: "image-slot",
+    module: imageSlotModule,
+    // The entry publishes only the copy types a host's `imageCopies` option
+    // is written against. Working out each device's slot is the renderer's
+    // own, asked by the route and the blocks that draw images.
+    internal: [
+      "childImageContext",
+      "copiesWantedUpTo",
+      "hasDefaultColumnGap",
+      "imageSizingFor",
+      "narrowForColumns",
+      "narrowForOwnSize",
+      "narrowToWidth",
+      "rootImageSlot",
+      "sizesFor",
+    ],
   },
   {
     name: "component-source",

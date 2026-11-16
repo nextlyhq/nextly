@@ -350,7 +350,7 @@ describe("the font variables", () => {
     const onOpenTokens = vi.fn();
     panel({ onOpenTokens });
     expect(screen.getByText(/Ghost/, { selector: "p" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Edit in Variables" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit this variable" }));
     expect(onOpenTokens).toHaveBeenCalledTimes(1);
   });
 

@@ -11,10 +11,15 @@ import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
-import type { LeftPanel, SavedPattern } from "@nextlyhq/builder";
+import type {
+  LeftPanel,
+  PreferenceStore,
+  SavedPattern,
+} from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
   ComponentsPanel,
+  EDITOR_WORDS,
   InsertPanel,
   LayersPanel,
   useBuilderChecklist,
@@ -43,8 +48,16 @@ import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
-import { DesignPanel } from "./design-panel";
-import { checklistStoreFor } from "./editor-preference-stores";
+import {
+  DesignGroup,
+  DesignPanel,
+  DesignReveal,
+  type DesignView,
+} from "./design-panel";
+import {
+  checklistStoreFor,
+  designFoldsStoreFor,
+} from "./editor-preference-stores";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
@@ -273,7 +286,7 @@ type PanelRequests = {
   openPanelRequest:
     | { panel: LeftPanel; view?: string; count: number }
     | undefined;
-  requestPanel: (panel: LeftPanel, view?: string) => void;
+  requestPanel: RequestPanel;
   /**
    * Open Add; given a place a "+" chose, add there whatever the block: inside
    * a container (its empty-container "+"), or in the gap right after a block
@@ -294,6 +307,17 @@ type PanelRequests = {
   /** Told by Add each press it has answered. */
   onAddSummoned: (count: number) => void;
 };
+
+/**
+ * Asks the shell for a panel, and for Design names one of its own tabs, so
+ * a request naming a tab Design does not have is refused when compiled
+ * rather than opening the first tab.
+ */
+interface RequestPanel {
+  (panel: LeftPanel): void;
+  (panel: "design", view?: DesignView): void;
+  (panel: Exclude<LeftPanel, "design">, view?: string): void;
+}
 
 /** A place a canvas "+" chose: inside a container, or right after a block. */
 type InsertPlaceRequest =
@@ -428,6 +452,11 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     () => checklistStoreFor(mount.userId),
     [mount.userId]
   );
+  // The author's folded Design groups, kept under their own key.
+  const designFolds = useMemo(
+    () => designFoldsStoreFor(mount.userId),
+    [mount.userId]
+  );
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
@@ -460,6 +489,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
+    designFolds,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
     availablePanels: AVAILABLE_PANELS,
@@ -481,6 +511,8 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
+    /** Where the author's folded Design groups are kept, once they are known. */
+    designFolds: PreferenceStore | undefined;
     /** The page's Layout section for Settings, or null for another form. */
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
@@ -525,7 +557,6 @@ export function editorPanelRenderer({
   classes,
   pageClassBlocks,
   classSummaryContext,
-  requestPanel,
   insertInside,
   insertAfter,
   addSummon,
@@ -538,6 +569,7 @@ export function editorPanelRenderer({
   documentDirty,
   lookEditing,
   previewMode,
+  designFolds,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -581,12 +613,12 @@ export function editorPanelRenderer({
     EditorPanels,
     | "offered"
     | "offerablePatterns"
-    | "requestPanel"
     | "insertInside"
     | "insertAfter"
     | "addSummon"
     | "onAddSummoned"
     | "pages"
+    | "designFolds"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -695,6 +727,7 @@ export function editorPanelRenderer({
       design: () => (
         <DesignPanel
           view={view}
+          {...(designFolds === undefined ? {} : { foldStore: designFolds })}
           // The studio surrounds every tab, so the header it draws stays the
           // same whichever is open.
           frame={designTabs => (
@@ -714,7 +747,7 @@ export function editorPanelRenderer({
               // A shared style using a variable opens in its own tab; a
               // block look, which that tab does not list, in the inspector.
               opens={{
-                sharedStyles: () => view.choose("classes"),
+                sharedStyles: () => view.choose("styles"),
                 ...(lookEditing === undefined
                   ? {}
                   : { look: lookEditing.edit }),
@@ -727,8 +760,60 @@ export function editorPanelRenderer({
             </TokensStudio>
           )}
           tabs={{
-            variables: () => <VariablesTab />,
-            classes: () => (
+            colours: () => <VariablesTab tab="colours" />,
+            // Type: the site's fonts, then the type sizes and the font and
+            // weight variables.
+            type: () => (
+              <>
+                <DesignGroup
+                  id="site-fonts"
+                  heading={EDITOR_WORDS.fonts}
+                  count={
+                    offerableFaces(
+                      canvasSiteStyle,
+                      siteStylePending,
+                      siteStyleError
+                    )?.length
+                  }
+                >
+                  <DesignReveal>
+                    {reveal => (
+                      <FontsPanelWithUpload
+                        faces={offerableFaces(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        codeFaces={configSiteStyle?.fonts}
+                        tokens={renderedTokens(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        absence={siteStyleError !== null ? "failed" : "pending"}
+                        /*
+                          The fix for a token naming a family this site does not provide
+                          is to edit that token, and editing belongs to the studio. This
+                          shell offers one, so the jump is wired: without the callback
+                          the panel suppresses the action and an author is left to find
+                          the right panel and the right row themselves.
+                        */
+                        // The font variables are in this same tab: their group
+                        // is opened and brought into view, rather than the tab
+                        // asked for again.
+                        onOpenTokens={() => reveal("fonts")}
+                        storedFaces={storedSiteStyle?.fonts}
+                        storedPending={siteStylePending}
+                        unreadableFonts={unreadableStoredFonts}
+                      />
+                    )}
+                  </DesignReveal>
+                </DesignGroup>
+                <VariablesTab tab="type" />
+              </>
+            ),
+            spacing: () => <VariablesTab tab="spacing" />,
+            styles: () => (
               <SharedStylesStudio
                 {...(lookEditing === undefined
                   ? {}
@@ -750,33 +835,6 @@ export function editorPanelRenderer({
                   siteStylePending,
                   siteStyleError
                 )}
-              />
-            ),
-            fonts: () => (
-              <FontsPanelWithUpload
-                faces={offerableFaces(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                codeFaces={configSiteStyle?.fonts}
-                tokens={renderedTokens(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                absence={siteStyleError !== null ? "failed" : "pending"}
-                /*
-                      The fix for a token naming a family this site does not provide
-                      is to edit that token, and editing belongs to the studio. This
-                      shell offers one, so the jump is wired: without the callback
-                      the panel suppresses the action and an author is left to find
-                      the right panel and the right row themselves.
-                    */
-                onOpenTokens={() => requestPanel("design", "variables")}
-                storedFaces={storedSiteStyle?.fonts}
-                storedPending={siteStylePending}
-                unreadableFonts={unreadableStoredFonts}
               />
             ),
           }}
