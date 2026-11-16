@@ -55,6 +55,17 @@ import {
   generateRuntimeSchema,
   type FieldDefinition,
 } from "../../../services/runtime-schema-generator";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import {
+  availableDialects,
+  buildCurrentCoreSchema,
+  createScratchDatabase,
+  withFreshDatabase,
+} from "../../../../../__tests__/helpers/fresh-database";
+import { getCoreTableNames } from "../../../../../schemas/core-schema";
+import { reconcileCore } from "../../../migrate/core-reconcile";
+import { resolveDataLossConsent } from "../../../migrate/data-loss-consent";
+import { introspectLiveSnapshot } from "../../diff/introspect-live";
 import { findUnexpectedDestructiveStatements } from "../../filter-unsafe-statements";
 import { isIdempotencyError } from "../../sql-statement-utils";
 
@@ -448,12 +459,13 @@ const hasCreateTableFor = (stmts: string[], table: string): boolean =>
 // pins that path, so the supported contract stays covered while this one is
 // parked.
 //
-// To restore: make the degraded pass emit the additive operations from Nextly's
-// own differ rather than from an empty-snapshot baseline — the same move
-// `ddl-emitter/additive.ts` already makes for this exact resolver crash — then
-// unskip. That also fixes the pre-existing case its own comment describes, of a
-// column added to a core table never reaching an installation holding ordinary
-// content.
+// The upgrade itself no longer goes through this raw push: the core upgrade
+// hands drizzle-kit each core table WITH its retired columns, so nothing pairs,
+// and drops them itself under the data-loss consent. The block after this one,
+// "a 0.45 database through the core upgrade", runs that upgrade on these same
+// fixtures, on every dialect, and compares the result with a fresh install.
+// This block stays parked: it pins what the raw push proposes, and the raw push
+// still pairs the drop it is handed with the additions.
 describe.skip("existing-user upgrade sim (0.45 DDL → v1)", () => {
   it("sqlite: one data-preserving reconcile, then zero", async () => {
     const fixture = loadFixture("sqlite");
@@ -733,3 +745,126 @@ describe.skip("existing-user upgrade sim (0.45 DDL → v1)", () => {
     }
   );
 });
+
+/** Every core table's columns, sorted, as the live database holds them. */
+async function coreColumnsOf(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<Record<string, string[]>> {
+  const live = await introspectLiveSnapshot(db, dialect, getCoreTableNames());
+  return Object.fromEntries(
+    live.tables
+      .map(
+        table => [table.name, table.columns.map(c => c.name).sort()] as const
+      )
+      .sort(([a], [b]) => a.localeCompare(b))
+  );
+}
+
+/** A fresh install's core tables, on the same dialect. */
+async function freshInstallColumns(
+  dialect: SupportedDialect
+): Promise<Record<string, string[]>> {
+  let columns: Record<string, string[]> = {};
+  await withFreshDatabase(dialect, "nextly_upgrade_045_ref", async fresh => {
+    await buildCurrentCoreSchema(fresh);
+    columns = await coreColumnsOf(fresh.db, dialect);
+  });
+  return columns;
+}
+
+/** A 0.45 database on `dialect`: the fixture replayed, with a row of data. */
+async function with045Database(
+  dialect: SupportedDialect,
+  body: (db: unknown, exec: (sql: string) => Promise<unknown>) => Promise<void>
+): Promise<void> {
+  const fixture = loadFixture(dialect === "postgresql" ? "postgres" : dialect);
+  if (dialect === "sqlite") {
+    const sqlite = new Database(":memory:");
+    try {
+      for (const stmt of fixture.statements) sqlite.exec(stmt);
+      await body(drizzleSqlite({ client: sqlite }), async sql =>
+        /^\s*SELECT/i.test(sql)
+          ? sqlite.prepare(sql).all()
+          : sqlite.prepare(sql).run()
+      );
+    } finally {
+      sqlite.close();
+    }
+    return;
+  }
+  const scratch = await createScratchDatabase(dialect, "nextly_upgrade_045");
+  try {
+    if (dialect === "postgresql") {
+      const pool = new Pool({ connectionString: scratch.url });
+      try {
+        for (const stmt of fixture.statements) await pool.query(stmt);
+        await body(
+          drizzlePg({ client: pool }),
+          async sql => (await pool.query(sql)).rows
+        );
+      } finally {
+        await pool.end();
+      }
+      return;
+    }
+    const pool = createPool({ uri: scratch.url });
+    try {
+      for (const stmt of fixture.statements) await pool.promise().query(stmt);
+      await body(
+        drizzleMysql({ client: pool }),
+        async sql =>
+          ((await pool.promise().query(sql)) as unknown as [unknown])[0]
+      );
+    } finally {
+      await new Promise<void>(res => pool.end(() => res()));
+    }
+  } finally {
+    await scratch.drop();
+  }
+}
+
+describe.each(availableDialects())(
+  "a 0.45 database through the core upgrade (%s)",
+  dialect => {
+    it("ends with every core column a fresh install has, keeps its rows, and a second run changes nothing", async () => {
+      await with045Database(dialect, async (db, exec) => {
+        // A trail row written before the actor migration, and a stored rule
+        // in the retired column: the upgrade keeps the one and, under the
+        // consent, drops the other with its column.
+        await exec(
+          dialect === "sqlite"
+            ? "INSERT INTO users (id, email, created_at, updated_at) VALUES ('u-1', 'upgrader@example.com', 1700000000, 1700000000)"
+            : "INSERT INTO users (id, email) VALUES ('u-1', 'upgrader@example.com')"
+        );
+        await exec(
+          dialect === "sqlite"
+            ? "INSERT INTO activity_log (id, user_id, user_name, user_email, action, collection, created_at) VALUES ('al-1', 'u-1', 'Upgrader', 'upgrader@example.com', 'update', 'articles', 1700000000)"
+            : "INSERT INTO activity_log (id, user_id, user_name, user_email, action, collection) VALUES ('al-1', 'u-1', 'Upgrader', 'upgrader@example.com', 'update', 'articles')"
+        );
+
+        const consent = resolveDataLossConsent({
+          flag: "dynamic_collections.access_rules,dynamic_singles.access_rules",
+        });
+        await reconcileCore({ db, dialect, consent });
+
+        // The retired media `sizes` column is the one difference, by design:
+        // no upgrade drops it, `nextly media remove-sizes --apply --drop` does
+        // once nothing names a file in it.
+        const upgraded = await coreColumnsOf(db, dialect);
+        upgraded.media = (upgraded.media ?? []).filter(c => c !== "sizes");
+        expect(upgraded).toEqual(await freshInstallColumns(dialect));
+        const trail = (await exec(
+          "SELECT user_id, actor_type FROM activity_log WHERE id = 'al-1'"
+        )) as Array<{ user_id: string; actor_type: string | null }>;
+        expect(trail[0]?.user_id).toBe("u-1");
+        expect(trail[0]?.actor_type).toBeNull();
+
+        // No phantom difference left: nothing to change, nothing to consent to.
+        await expect(reconcileCore({ db, dialect })).resolves.toEqual({
+          changed: false,
+        });
+      });
+    });
+  }
+);
