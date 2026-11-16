@@ -17,7 +17,7 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
@@ -155,6 +155,12 @@ export interface UseSchemaSaveOptions {
 const NO_SETTING_CHANGES: readonly SettingChange[] = [];
 
 export interface UseSchemaSaveReturn {
+  /**
+   * The setting changes the review on show was previewed with: what it lists,
+   * and what its confirmation saves. A setting changed while the preview was
+   * on its way is not listed, and the confirmation refuses it unseen.
+   */
+  reviewedSettingChanges: readonly SettingChange[];
   /** The toolbar's Save. */
   handleSave: () => void;
   /** The confirmation dialog's confirm. */
@@ -193,6 +199,9 @@ export function useSchemaSave({
   // Whether the page is still there. Leaving it drops its pending changes, so
   // a preview that answers afterwards saves nothing and asks nobody.
   const mounted = useRef(true);
+  // The setting changes the review on show was previewed with.
+  const [reviewedSettingChanges, setReviewedSettingChanges] =
+    useState<readonly SettingChange[]>(NO_SETTING_CHANGES);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -230,6 +239,7 @@ export function useSchemaSave({
           previewed,
           JSON.stringify({ fields, previewedWith, settingChanges, creates })
         );
+        setReviewedSettingChanges(settingChanges);
         confirmation.request(previewed);
       } catch (err) {
         toast.error(apiErrorMessage(err, "Failed to preview schema changes"));
@@ -361,5 +371,5 @@ export function useSchemaSave({
     ]
   );
 
-  return { handleSave, confirmApply };
+  return { handleSave, confirmApply, reviewedSettingChanges };
 }

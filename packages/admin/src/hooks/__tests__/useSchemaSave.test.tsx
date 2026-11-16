@@ -693,3 +693,32 @@ describe("field groups not saved yet", () => {
     expect(letGoUnused).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the settings a review shows", () => {
+  it("are those its preview was made with, not ones changed while it was on its way", async () => {
+    const RENAMED: SettingChange = {
+      key: "singularName",
+      label: "name",
+      from: "Post",
+      to: "Article",
+    };
+    const unchanged = preview({ hasChanges: false });
+    let changes: SettingChange[] = [RENAMED];
+    const confirmation = confirmationStub(unchanged);
+    const { result, rerender } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(unchanged)),
+      settingChanges: () => changes,
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(unchanged)
+    );
+    changes = [{ ...RENAMED, to: "Story" }];
+    rerender();
+    expect(result.current.reviewedSettingChanges).toEqual([RENAMED]);
+  });
+});

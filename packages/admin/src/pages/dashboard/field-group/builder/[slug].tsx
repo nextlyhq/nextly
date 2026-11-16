@@ -204,6 +204,7 @@ export default function FieldGroupBuilderEditPage({
     settings,
     setSettings,
     moveAddress,
+    busy: confirmation.isBusy,
     editRoute: address =>
       buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: address }),
   });
@@ -363,7 +364,7 @@ export default function FieldGroupBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply } = useSchemaSave({
+  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
     slug,
     missingSlugMessage: "Field group slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -524,7 +525,7 @@ export default function FieldGroupBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
-        settingChanges={pending.settingChanges}
+        settingChanges={reviewedSettingChanges}
         fieldGroupCreates={groupsFirst.creates}
       />
     </BuilderPageLayout>

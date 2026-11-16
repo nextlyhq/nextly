@@ -165,7 +165,11 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
    * Edits made after it, while the save was on its way, stay undoable. With
    * no `saved`, what is shown is the start.
    */
-  clearHistory: (saved?: BuilderSnapshot, step?: number) => void;
+  clearHistory: (
+    saved?: BuilderSnapshot,
+    step?: number,
+    before?: BuilderSnapshot
+  ) => void;
   /** Where the snapshot shown stands in the history; `clearHistory` takes it. */
   historyStep: number;
   canUndo: boolean;
@@ -524,13 +528,25 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     []
   );
 
-  const clearHistory = useCallback((saved?: BuilderSnapshot, step?: number) => {
-    setHistory(prev =>
-      saved === undefined
-        ? createHistory(currentState(prev))
-        : startFrom(prev, saved, step)
-    );
-  }, []);
+  const clearHistory = useCallback(
+    (saved?: BuilderSnapshot, step?: number, before?: BuilderSnapshot) => {
+      setHistory(prev => {
+        if (saved === undefined) return createHistory(currentState(prev));
+        const from = startFrom(prev, saved, step);
+        if (!before) return from;
+        // One state kept before what was saved, so Undo can still take back
+        // what the save has yet to write (its settings), and nothing else.
+        return {
+          ...from,
+          states: [before, ...from.states],
+          ids: [from.nextId, ...from.ids],
+          index: from.index + 1,
+          nextId: from.nextId + 1,
+        };
+      });
+    },
+    []
+  );
 
   const undo = useCallback((): BuilderFieldsStep | null => {
     const before = historyRef.current;

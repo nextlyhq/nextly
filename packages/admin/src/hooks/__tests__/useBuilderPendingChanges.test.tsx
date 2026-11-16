@@ -458,3 +458,30 @@ describe("builder pending changes: a save of fields and settings together", () =
     expect(result.current.state.pending.canUndo).toBe(false);
   });
 });
+
+describe("builder pending changes: settings changed before the fields they are saved with", () => {
+  it("leaves only the settings to undo once the fields have landed", () => {
+    const { result, field } = setup();
+    act(() =>
+      result.current.state.setSettings({
+        ...settingsOf(entity),
+        singularName: "Article",
+      })
+    );
+    act(() =>
+      result.current.builder.handleFieldUpdate({
+        ...field("headline"),
+        label: "X",
+      })
+    );
+    // The fields landed; the settings write has not, and may fail.
+    act(() => result.current.state.pinFields());
+    act(() => {
+      result.current.state.pending.undo();
+    });
+    // The settings go back; the saved field stays as saved.
+    expect(result.current.state.settings?.singularName).toBe("Post");
+    expect(field("headline").label).toBe("X");
+    expect(result.current.state.pending.canUndo).toBe(false);
+  });
+});
