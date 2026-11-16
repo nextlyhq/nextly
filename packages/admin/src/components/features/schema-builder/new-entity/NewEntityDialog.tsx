@@ -8,6 +8,8 @@
  * that says which are on. The address is checked by the server's own rule as
  * it is typed, so Create is never offered for an address the create refuses.
  * A Single has no plural, and a field group no icon or publishing options.
+ * A template, quick or from the gallery, adds its fields to the new entity;
+ * one with a field it cannot add holds Create until that field is left out.
  *
  * @module components/features/schema-builder/new-entity/NewEntityDialog
  */
@@ -33,6 +35,7 @@ import {
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
 import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
 import {
@@ -51,13 +54,16 @@ import {
 } from "../BuilderSettingsModal";
 
 import { EntryKindQuestion } from "./EntryKindQuestion";
+import { TemplateChoice } from "./TemplateChoice";
 import { useAddressCheck, type AddressCheckState } from "./useAddressCheck";
+import { useTemplatePick } from "./useTemplatePick";
 
 type Props = {
   open: boolean;
   config: BuilderConfig;
   onCancel: () => void;
-  onCreate: (values: BuilderSettingsValues) => void;
+  /** Create, with the fields the template picked adds (none without one). */
+  onCreate: (values: BuilderSettingsValues, fields: FieldDefinition[]) => void;
   /**
    * A create is on its way: Create waits for it, so a second click sends no
    * second entity.
@@ -69,7 +75,9 @@ type Props = {
 function createBlockedBy(
   values: BuilderSettingsValues,
   hasPlural: boolean,
-  check: AddressCheckState
+  check: AddressCheckState,
+  // Why the template picked holds Create, once nothing above does.
+  templateBlockedBy: string | null
 ): string | null {
   if (values.singularName.trim() === "") return "Add a name.";
   if (hasPlural && (values.pluralName ?? "").trim() === "") {
@@ -80,7 +88,7 @@ function createBlockedBy(
   if (values.slug.trim() === "") return "Add an API address.";
   if (check.status === "checking") return "Checking the address…";
   if (check.status === "refused") return "Choose another address.";
-  return null;
+  return templateBlockedBy;
 }
 
 /** The fold's accessible name: which of the options it holds are on. */
@@ -138,7 +146,8 @@ export function NewEntityDialog({
   const check = useAddressCheck(kind, values.slug.trim(), unsaved);
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
-  const blockedBy = createBlockedBy(values, hasPlural, check);
+  const pick = useTemplatePick(config, values);
+  const blockedBy = createBlockedBy(values, hasPlural, check, pick.blockedBy);
 
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
@@ -156,7 +165,8 @@ export function NewEntityDialog({
         pluralName: hasPlural ? values.pluralName?.trim() : undefined,
         slug: values.slug.trim(),
         icon: hasIcon ? icon : "",
-      })
+      }),
+      pick.fields()
     );
   };
 
@@ -212,6 +222,8 @@ export function NewEntityDialog({
             note={addressNoteOf(check, typed)}
             onChange={next => set("slug", next)}
           />
+
+          <TemplateChoice ids={ids} pick={pick} />
 
           <MoreOptions
             ids={ids}

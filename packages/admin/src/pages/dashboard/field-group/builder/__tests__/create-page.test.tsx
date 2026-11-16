@@ -7,13 +7,19 @@ import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import type { FieldDefinition } from "@admin/types/collection";
 
-let submit: ((values: BuilderSettingsValues) => void) | undefined;
+let submit:
+  | ((values: BuilderSettingsValues, templateFields: FieldDefinition[]) => void)
+  | undefined;
 vi.mock(
   "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
     NewEntityDialog: (props: {
-      onCreate: (values: BuilderSettingsValues) => void;
+      onCreate: (
+        values: BuilderSettingsValues,
+        templateFields: FieldDefinition[]
+      ) => void;
     }) => {
       submit = props.onCreate;
       return null;
@@ -58,7 +64,7 @@ afterEach(() => removeUnsavedEntity("field-group", "hero_banner"));
 describe("Field group create page", () => {
   it("keeps the field group unsaved, with no fields yet", () => {
     render(<FieldGroupBuilderPage />);
-    submit?.(VALUES);
+    submit?.(VALUES, []);
 
     expect(unsavedEntity("field-group", "hero_banner")).toEqual({
       kind: "field-group",
@@ -72,9 +78,18 @@ describe("Field group create page", () => {
     });
   });
 
+  it("keeps a template's fields as its fields", () => {
+    render(<FieldGroupBuilderPage />);
+    submit?.(VALUES, [{ name: "street", type: "text" }]);
+
+    expect(unsavedEntity("field-group", "hero_banner")?.fields).toEqual([
+      { name: "street", type: "text" },
+    ]);
+  });
+
   it("creates nothing on the server, and opens the field group's editor", () => {
     render(<FieldGroupBuilderPage />);
-    submit?.(VALUES);
+    submit?.(VALUES, []);
 
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith(

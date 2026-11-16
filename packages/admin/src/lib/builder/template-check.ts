@@ -101,6 +101,15 @@ const CLASH_WORDS: Record<SiblingClashKind, string> = {
 /** The fields that hold fields of their own. */
 const CONTAINER_TYPES: ReadonlySet<string> = new Set(["group", "repeater"]);
 
+/**
+ * A field's key: its position among its siblings after its container's key,
+ * outermost first (`2.0`). Fields are left out by key, so two siblings of the
+ * very same name are still told apart.
+ */
+export function templateFieldKey(parentKey: string | null, at: number): string {
+  return parentKey === null ? String(at) : `${parentKey}.${at}`;
+}
+
 /** A field placed: where it is, what it is called, and whether it is nested. */
 interface Placed {
   field: SchemaTemplateField;
@@ -289,7 +298,7 @@ export function checkTemplate(
       .map((field, at) => ({
         field,
         path: parent ? `${parent.path}.${field.name}` : field.name,
-        key: parent ? `${parent.key}.${at}` : String(at),
+        key: templateFieldKey(parent?.key ?? null, at),
         label: field.label || field.name,
         nested: parent !== null,
       }))
