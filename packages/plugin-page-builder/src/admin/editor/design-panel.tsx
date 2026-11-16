@@ -58,7 +58,7 @@ export function designViewOf(view: string | null): DesignView {
 }
 
 /** How many matches a search found in each tab, for the tabs that report. */
-export type DesignMatches = Partial<Record<DesignView, number>>;
+type DesignMatches = Partial<Record<DesignView, number>>;
 
 /**
  * What the open tab and the frame read of the panel: the search, which is
