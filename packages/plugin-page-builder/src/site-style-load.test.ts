@@ -3,10 +3,9 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { withRegisteredLooks } from "./core-looks";
-import { refreshCodeTier } from "./plugin-definition/options";
+import { adminClientConfig, refreshCodeTier } from "./plugin-definition/options";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import { loadSiteStyle } from "./site-style-load";
-import { readSiteStyleRecord } from "./site-style-record";
 import type { SiteStyleReader } from "./site-style-storage";
 
 /** A site that has stored nothing: its single reads as an empty document. */
@@ -66,29 +65,28 @@ describe("the site style a published page loads", () => {
     );
   });
 
-  it("holds the same looks the canvas reads, other plugins' blocks among them", async () => {
+  it("publishes to the editor the code tier init refreshed, other plugins' looks among them", async () => {
     registerBlocks(coreBlocks, { source: "page-builder" });
     registerBlocks([acmeHero], { source: "acme" });
     const card = { id: "c-card", slug: "card", orderIndex: 0, styles: {} };
     const hostDefaults = { classes: [card] };
-    const published = await loadSiteStyle({
-      nextly: nothingStored,
-      defaults: hostDefaults,
-    });
-    // The canvas's own set, built the way it reaches the canvas: the plugin
-    // sends its code tier, refreshed at init once every block registered, and
-    // the editor adds its own registry's looks to that.
-    const sent: SiteStyleData = {};
-    refreshCodeTier(sent, new Set(), hostDefaults);
-    const canvas = resolveSiteStyle(
-      withRegisteredLooks(readSiteStyleRecord(sent))
+    // As the plugin runs it: one shared object, refreshed at init once every
+    // block registered, then published as the admin's client config.
+    const configStyle: SiteStyleData = {};
+    const published = adminClientConfig(
+      { siteStyle: hostDefaults },
+      { configStyle, canvasPath: undefined, fontsOff: false }
     );
-    const looks = (style: SiteStyleData) =>
-      (style.classes ?? []).filter(entry => entry.id.startsWith("look:"));
-    // Whole entries, so a look whose styles, order or block type differed
-    // between the two would show here, not only a missing one.
-    expect(looks(published)).toEqual(looks(canvas));
-    expect(idsOf(published)).toEqual(
+    refreshCodeTier(configStyle, new Set(), hostDefaults);
+    const sent = JSON.parse(JSON.stringify(published.clientConfig)) as {
+      siteStyle: SiteStyleData;
+    };
+    // The tier `use-render-inputs.looks.test` hands the editor's real hook,
+    // whose looks it holds equal to the published page's.
+    expect(sent.siteStyle.classes).toEqual(
+      resolveSiteStyle(withRegisteredLooks(hostDefaults)).classes
+    );
+    expect(idsOf(sent.siteStyle)).toEqual(
       expect.arrayContaining([...CORE_LOOKS, "look:acme/hero:dark"])
     );
   });
