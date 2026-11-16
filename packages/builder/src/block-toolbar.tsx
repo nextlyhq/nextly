@@ -126,6 +126,25 @@ function screenBand(rect: Rect): ToolbarScreen {
 }
 
 /**
+ * The bar's stops: the lock, where one holds the block, leads the bar (on a
+ * locked block it is what an author meets first), then the buttons, then
+ * "More" where it holds any verbs.
+ */
+function barStopsOf(
+  lock: BarLock | undefined,
+  buttons: number,
+  menu: number
+): { lock: BarLock | undefined; lead: number; stops: number } {
+  const lead = lock === undefined ? 0 : 1;
+  return { lock, lead, stops: lead + buttons + (menu > 0 ? 1 : 0) };
+}
+
+/** The bar's stepped-aside marker: present while it steps aside for typing. */
+function typingMark(aside: boolean): { "data-typing"?: "" } {
+  return aside ? { "data-typing": "" } : {};
+}
+
+/**
  * The bar's fade marker: present while the pointer is over a block that is
  * not selected.
  */
@@ -460,11 +479,11 @@ export function BlockToolbar({
     () => actions.filter(action => action.inMenu === true),
     [actions]
   );
-  // The lock, where one holds the block, leads the bar: on a locked block it
-  // is what an author meets first, and one more stop in the roving order.
-  const lock = barLockOf(editor, selectedId, selectedIds);
-  const lead = lock === undefined ? 0 : 1;
-  const stops = lead + buttons.length + (menu.length > 0 ? 1 : 0);
+  const { lock, lead, stops } = barStopsOf(
+    barLockOf(editor, selectedId, selectedIds),
+    buttons.length,
+    menu.length
+  );
 
   /*
    * Which button holds the tab stop, per the WAI-ARIA toolbar pattern: one stop
@@ -780,7 +799,7 @@ export function BlockToolbar({
       aria-label="Block actions"
       data-side={placement?.side}
       {...faded}
-      {...(typingAside ? { "data-typing": "" } : {})}
+      {...typingMark(typingAside)}
       // Kept out of sight rather than unmounted until the first measurement.
       // The bar has to be in the DOM to be measured at all, and mounting it at
       // a default position would show it in the wrong place for one frame.
@@ -791,15 +810,13 @@ export function BlockToolbar({
       }
       onKeyDown={onKeyDown}
     >
-      {lock === undefined ? null : (
-        <BarLockControl
-          lock={lock}
-          active={stop === 0}
-          onFocus={() => setActiveIndex(0)}
-          onUnlock={unlock}
-          onSelect={selectHolder}
-        />
-      )}
+      <BarLockControl
+        lock={lock}
+        active={stop === 0}
+        onFocus={() => setActiveIndex(0)}
+        onUnlock={unlock}
+        onSelect={selectHolder}
+      />
       {buttons.map((action, index) => {
         const Icon = ICONS[action.id];
         const describedBy =
@@ -876,15 +893,16 @@ function BarLockControl({
   onUnlock,
   onSelect,
 }: {
-  lock: BarLock;
+  lock: BarLock | undefined;
   active: boolean;
   onFocus: () => void;
   onUnlock: (id: string) => void;
   onSelect: (id: string) => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const stop = { tabIndex: active ? 0 : -1, onFocus };
   // One editor's reason apart from another's, where two are on one page.
   const reasonId = React.useId();
+  if (lock === undefined) return null;
   if (lock.kind === "unlock") {
     return (
       <button
