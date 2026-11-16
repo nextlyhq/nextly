@@ -16,7 +16,6 @@ packages/blocks-engine/src/document.ts 1543
 
 packages/blocks-engine/src/index.ts 1533
 
-packages/blocks-engine/src/list-query.ts 1933
 
 
 
@@ -61,7 +60,6 @@ packages/builder/src/shared-styles-panel.tsx 1643
 
 
 
-packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
 
 packages/plugin-page-builder/src/admin/editor/site-style-studios.tsx 2038
 

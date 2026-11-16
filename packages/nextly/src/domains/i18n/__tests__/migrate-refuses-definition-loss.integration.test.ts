@@ -385,7 +385,7 @@ describe.each(getConfiguredTestDialects())(
     );
 
     // The companion a development start makes spells some types otherwise than the main table
-    // (PostgreSQL's TIMESTAMPTZ beside timestamp, BOOLEAN beside bool), which hold each other's
+    // (PostgreSQL's BOOLEAN beside bool, DOUBLE PRECISION beside float8), which hold each other's
     // values: an ordinary file turning translation on over it is not refused for them.
     it.runIf(dialect === "postgresql")(
       "does not refuse an ordinary file turning translation on over a companion a development start made",
