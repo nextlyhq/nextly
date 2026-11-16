@@ -1137,6 +1137,34 @@ describe("BlockToolbar", () => {
     }
   });
 
+  it("steps aside for text an input method or a software keyboard puts in", () => {
+    // Composition sends keydown as "Process" (or none at all), then the text
+    // as input: the input is what counts.
+    const boxes = topBlockBoxes();
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const text = typedText("a");
+      fireEvent.keyDown(text, { key: "Process" });
+      expect(bar.hasAttribute("data-typing")).toBe(false);
+      fireEvent(
+        text,
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          inputType: "insertCompositionText",
+          data: "日",
+        })
+      );
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
   it("steps aside again after a drag has hidden and redrawn the bar", () => {
     // A drag unmounts the bar's element and draws a new one after; the
     // selection, the side and the document stay as they were.

@@ -356,21 +356,29 @@ function listenForTyping(
     observer.observe(typing, { attributeFilter: [EDITING_ATTRIBUTE] });
     watched = { element: typing, observer };
   };
-  const typed = (event: KeyboardEvent): void => {
+  // A key that writes, or text put in some other way: an input method's
+  // composition or a software keyboard sends `beforeinput` with no key a
+  // `keydown` names.
+  const typed = (event: Event): void => {
+    if (event.type === "keydown" && !writesText(event as KeyboardEvent)) {
+      return;
+    }
     // The root as it is now, which a page loaded into the frame replaces.
     const root = overlaySpaceOf(bar, CANVAS_ROOT_CLASS)?.root;
     if (root === undefined) return;
     const typing = typingIn(event.target, root, ids);
-    if (typing === null || !writesText(event)) return;
+    if (typing === null) return;
     aside(true);
     watch(typing);
   };
   canvas.addEventListener("keydown", typed, true);
+  canvas.addEventListener("beforeinput", typed, true);
   bar.addEventListener("focusin", back);
   for (const each of documents) each.addEventListener("pointermove", back);
   return () => {
     watched?.observer.disconnect();
     canvas.removeEventListener("keydown", typed, true);
+    canvas.removeEventListener("beforeinput", typed, true);
     bar.removeEventListener("focusin", back);
     for (const each of documents) each.removeEventListener("pointermove", back);
   };
