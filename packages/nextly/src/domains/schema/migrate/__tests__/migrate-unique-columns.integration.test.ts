@@ -1519,6 +1519,41 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    // A table named with capitals, as a custom name can be: PostgreSQL resolves it only quoted,
+    // and an unquoted name would fold to one that holds no constraint.
+    it.runIf(dialect === "postgresql")(
+      "lets go of the inline UNIQUE on a table whose name holds capitals",
+      async () => {
+        const table = "Dc_Profiles";
+        await run([
+          `ALTER TABLE ${q(PROFILES)} RENAME TO ${q(table)}`,
+          `UPDATE ${q("dynamic_collections")} SET ${q("table_name")} = '${table}' WHERE ${q("slug")} = 'profiles'`,
+          `ALTER TABLE ${q(table)} ADD UNIQUE (${q("person")})`,
+        ]);
+        /** The table's unique constraints, read by its quoted name; null while it is not there. */
+        const uniques = async (): Promise<string[] | null> => {
+          const [present] = await adapter.executeQuery<{ found: boolean }>(
+            `SELECT to_regclass(quote_ident('${table}')) IS NOT NULL AS found`
+          );
+          if (present?.found !== true) return null;
+          const rows = await adapter.executeQuery<{ name: string }>(
+            `SELECT conname AS name FROM pg_constraint
+              WHERE contype = 'u' AND conrelid = to_regclass(quote_ident('${table}'))`
+          );
+          return rows.map(row => row.name);
+        };
+        expect(await uniques()).toContain(`${table}_person_key`);
+
+        await migrate();
+
+        // The table still there, without the inline UNIQUE.
+        const after = await uniques();
+        expect(after).not.toBeNull();
+        expect(after).not.toContain(`${table}_person_key`);
+      },
+      120_000
+    );
+
     /** The schema an unqualified name reaches on this connection. */
     async function ownSchema(): Promise<string> {
       if (dialect === "sqlite") return "main";

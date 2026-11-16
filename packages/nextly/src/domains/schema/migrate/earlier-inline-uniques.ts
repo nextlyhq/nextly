@@ -133,7 +133,11 @@ function releasedColumns(
   );
 }
 
-/** The single-column UNIQUE constraints of a PostgreSQL table: each one's name and column. */
+/**
+ * The single-column UNIQUE constraints of a PostgreSQL table: each one's name and column. The
+ * table is resolved by its quoted name, so a name with capitals or a dot is the table it names
+ * rather than one folded to lower case or split at the dot.
+ */
 async function postgresUniqueConstraints(
   db: unknown,
   table: string
@@ -144,7 +148,7 @@ async function postgresUniqueConstraints(
     sql`SELECT con.conname AS ${sql.identifier("name")}, a.attname AS ${sql.identifier("column")}
         FROM pg_constraint con
         JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
-        WHERE con.contype = 'u' AND con.conrelid = to_regclass(${table})
+        WHERE con.contype = 'u' AND con.conrelid = to_regclass(quote_ident(${table}))
           AND array_length(con.conkey, 1) = 1`
   );
 }
