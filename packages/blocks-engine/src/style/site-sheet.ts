@@ -21,7 +21,11 @@ import type {
 } from "../document";
 import type { ValidationIssue } from "../validation";
 
-import { CONTAIN_INSET_PROPERTY, compilePageCss } from "./compile-page";
+import {
+  CONTAIN_INSET_PROPERTY,
+  compilePageCss,
+  SIZED_FLAG_PROPERTIES,
+} from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -257,6 +261,10 @@ function boundsTheContent(token: SiteToken): boolean {
  * site stylesheet cannot promise on behalf of a page. None of them is a width
  * the content can be inset to.
  */
+/** The intrinsic sizing keywords and functions, which no arithmetic takes. */
+const INTRINSIC_SIZE =
+  /(?:^|[^a-z-])(?:min-content|max-content|fit-content|stretch|-webkit-fill-available|-moz-available)(?![a-z-])/;
+
 function boundsWidth(value: string): boolean {
   const normalised = value.trim().toLowerCase();
   if (UNBOUNDED_WIDTHS.has(normalised)) return false;
@@ -267,6 +275,12 @@ function boundsWidth(value: string): boolean {
   // for the same reason an undefined token is: what the merged style does not
   // establish is omitted rather than assumed.
   if (normalised.includes("var(")) return false;
+  // An intrinsic size is a legal `max-width`, but not a length: the inset
+  // subtracts the content width from the box's, and `min-content` or
+  // `fit-content(60rem)` cannot be subtracted, so the inset would be invalid
+  // and the containment silently nothing. Withheld instead, like any width
+  // that bounds nothing here.
+  if (INTRINSIC_SIZE.test(normalised)) return false;
   const { declarations } = compileStyleValues({ maxWidth: value }, "/maxWidth");
   return declarations.length > 0;
 }
@@ -313,16 +327,22 @@ function emitContentWidth(
   // page wearing this class would be constrained by a sheet that is not its
   // own. One class in the anchor keeps the whole selector at 0-1-0, which is
   // the weight the contract gives an element or block-type default.
+  const sizedWidth = SIZED_FLAG_PROPERTIES.width;
+  const sizedMax = SIZED_FLAG_PROPERTIES["max-width"];
   return [
     `@property ${inset}{syntax:"<length-percentage>";inherits:false;initial-value:0px}`,
-    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px}`,
+    // The flags the page compile sets beside a block's own width and
+    // maximum width: 1 while either sizes the block, 0 otherwise.
+    `@property ${sizedWidth}{syntax:"<number>";inherits:false;initial-value:0}`,
+    `@property ${sizedMax}{syntax:"<number>";inherits:false;initial-value:0}`,
+    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0}`,
     // After the reset and at its weight, so a contained element takes this.
     // `100%` resolves where the property is used, in the element's own
     // padding, so it is the width of the box the container is laid out in.
-    // `margin-inline: auto` is 0 on a block that fills that box, and centres
-    // one an author sized, whose inset the page compile sets to 0px; an
-    // author's own margin outweighs it.
-    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2);padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
+    // A block an author sized is narrower than that box, so its inset is
+    // multiplied away; `margin-inline: auto` is 0 on a block that fills its
+    // box and centres a sized one, and an author's own margin outweighs it.
+    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
   ].join("\n");
 }
 

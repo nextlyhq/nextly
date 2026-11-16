@@ -1378,11 +1378,14 @@ function takesContainInset(value: string): boolean {
  * the width of the box the container is laid out in, since a padding's `100%`
  * means that box and CSS cannot name an element's own width there. A contained
  * block whose `width` or `max-width` is set is narrower than that box, so the
- * same rule that sizes it sets the inset to `0px`: the site sheet's
- * `margin-inline: auto` then centres it, and its content fills it within the
- * gutter. In the same rule, so it holds at the breakpoints and states that set
- * the size and nowhere else. A `width: auto` or `max-width: none` sizes
- * nothing, so it leaves the inset alone.
+ * rule that sets either one also sets a flag for it, `1` when the value sizes
+ * the block and `0` for `auto` or `none`, which size nothing. The site sheet
+ * multiplies the inset by one less the larger flag, and its
+ * `margin-inline: auto` centres a sized block, whose content then fills it
+ * within the gutter. One flag per property, written in the same rule, so each
+ * follows its own property through every tier, breakpoint and state: an
+ * override back to `auto` brings the inset back, while a `max-width` that
+ * still applies keeps it off. A CSS-wide keyword leaves its flag alone.
  *
  * Only the emitted rule carries it: the trace records the value as it was set.
  */
@@ -1399,22 +1402,30 @@ function withContainInset(
         }
       : declaration
   );
-  return onRoot && declarations.some(sizesTheBlock)
-    ? [...padded, { property: CONTAIN_INSET_PROPERTY, value: "0px" }]
-    : padded;
+  if (!onRoot) return padded;
+  const flags = declarations.flatMap(sizeFlag);
+  return flags.length === 0 ? padded : [...padded, ...flags];
 }
 
-/** The properties that size a block narrower than the box it is laid out in. */
-const BLOCK_SIZE = new Set(["width", "max-width"]);
+/**
+ * The flag each property that can size a block sets, for the site sheet's
+ * inset: `1` while the property sizes the block, `0` while it does not.
+ */
+export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
+  width: "--nx-sized-width",
+  "max-width": "--nx-sized-max-width",
+};
 
 /** Values of those properties that size nothing. */
 const UNSIZED = new Set(["auto", "none"]);
 
-/** Whether a declaration gives a block a width of its own. */
-function sizesTheBlock(declaration: Declaration): boolean {
-  if (!BLOCK_SIZE.has(declaration.property)) return false;
+/** The flag a declaration sets, if it is one that can size a block. */
+function sizeFlag(declaration: Declaration): Declaration[] {
+  const flag = SIZED_FLAG_PROPERTIES[declaration.property];
+  if (flag === undefined) return [];
   const value = declaration.value.trim().toLowerCase();
-  return !UNSIZED.has(value) && !CSS_WIDE_KEYWORDS.has(value);
+  if (CSS_WIDE_KEYWORDS.has(value)) return [];
+  return [{ property: flag, value: UNSIZED.has(value) ? "0" : "1" }];
 }
 
 /** Compile one styles envelope into rules under one selector. */

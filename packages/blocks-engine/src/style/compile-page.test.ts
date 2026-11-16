@@ -2414,17 +2414,21 @@ describe("inline padding and a contained container's inset", () => {
     expect(out).not.toMatch(/padding-inline-start: \d/);
   });
 
-  it("sets no inset on a block its author sized, in the rule that sizes it", () => {
+  it("flags a block its author sized, in the rule that sizes it", () => {
     // The inset is measured from the box the block is laid out in, so a block
     // narrower than that box would be padded far past its own content edge.
-    // The rule that gives it a width says its inset is nothing; the site
-    // sheet's auto margin then centres it, as before containment padded in.
-    const RESET = "--nx-contain-inset: 0px";
-    for (const size of [{ width: "600px" }, { maxWidth: "40rem" }]) {
-      const out = css(doc([node("n1", { base: { base: size } })]));
-      expect(out).toContain(RESET);
-    }
-    // A Mobile-only width resets the inset on Mobile and nowhere else.
+    // The rule that gives it a width flags it; the site sheet multiplies the
+    // inset away and its auto margin centres the block, as before containment
+    // padded in.
+    const WIDTH_SET = "--nx-sized-width: 1";
+    const MAX_SET = "--nx-sized-max-width: 1";
+    expect(
+      css(doc([node("n1", { base: { base: { width: "600px" } } })]))
+    ).toContain(WIDTH_SET);
+    expect(
+      css(doc([node("n1", { base: { base: { maxWidth: "40rem" } } })]))
+    ).toContain(MAX_SET);
+    // A Mobile-only width flags the block on Mobile and nowhere else.
     const mobile = css(
       doc([
         node("n1", {
@@ -2435,15 +2439,28 @@ describe("inline padding and a contained container's inset", () => {
         }),
       ])
     );
-    expect(mobile.split(RESET)).toHaveLength(2);
-    expect(mobile.indexOf(RESET)).toBeGreaterThan(mobile.indexOf("@media"));
+    expect(mobile.split(WIDTH_SET)).toHaveLength(2);
     expect(mobile.indexOf("@media")).toBeGreaterThan(-1);
-    // A width that sizes nothing leaves the inset alone.
-    for (const size of [{ width: "auto" }, { maxWidth: "none" }]) {
-      expect(css(doc([node("n1", { base: { base: size } })]))).not.toContain(
-        RESET
-      );
-    }
+    expect(mobile.indexOf(WIDTH_SET)).toBeGreaterThan(mobile.indexOf("@media"));
+    // A width that sizes nothing clears its own flag, so an override back to
+    // `auto` brings the inset back where it applies.
+    const hover = css(
+      doc([
+        node("n1", {
+          base: { base: { width: "600px" } },
+          hover: { base: { width: "auto" } },
+        }),
+      ])
+    );
+    expect(hover).toContain(WIDTH_SET);
+    expect(hover).toMatch(/:hover[^{]*\{[^}]*--nx-sized-width: 0/);
+    expect(
+      css(doc([node("n1", { base: { base: { maxWidth: "none" } } })]))
+    ).toContain("--nx-sized-max-width: 0");
+    // A CSS-wide keyword leaves the flag to the cascade.
+    expect(
+      css(doc([node("n1", { base: { base: { width: "inherit" } } })]))
+    ).not.toContain("--nx-sized-width");
   });
 
   it("records the value as it was set in the trace, not the wrapped one", () => {
