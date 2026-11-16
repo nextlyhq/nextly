@@ -9,7 +9,7 @@ import {
   defineNamedQuery,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 /** The document the hook test edits; the other tests pass theirs in. */
@@ -22,7 +22,16 @@ const editing = vi.hoisted(() => ({
   },
 }));
 const writePluginRoute = vi.hoisted(() => vi.fn());
+/** What the canvas handed its change check on each render. */
+const checked = vi.hoisted(() => [] as unknown[]);
 
+// The change check has its own tests; here it would share the mocked route
+// with the read under test, so only what it is handed is recorded.
+vi.mock("./editor/canvas-source-check", () => ({
+  useCanvasSourceCheck: (asked: unknown) => {
+    checked.push(asked);
+  },
+}));
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => editing.userId,
   useDocumentIdentity: () => editing.identity,
@@ -37,6 +46,7 @@ const {
   useCanvasBindings,
 } = await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
+const { canvasSourcesChanged } = await import("./canvas-sources");
 
 /** The retries the editor has asked for, which a wrapper hands the canvas. */
 let retries = 0;
@@ -388,25 +398,61 @@ describe("the canvas's binding sources", () => {
     editing.identity = null;
   });
 
-  it("asks again once an answer has been kept its while", async () => {
-    // A source can change while what the page asks stays the same: the
-    // author saves a new title, or someone updates a Single.
+  it("keeps an answer while the ask stays the same, however long", async () => {
+    // A lock renewal, an edit to an unrelated block or a minute's wait asks
+    // nothing again: only the ask or the data it read changing does.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       editing.identity = identity;
+      writePluginRoute.mockReset();
+      writePluginRoute.mockResolvedValue(answer("Kept"));
+      const bound = page({ text: { $bind: "title" } });
+      const { result, rerender } = renderHook(
+        ({ drawn }: { drawn: BlockDocument[] }) =>
+          useCanvasBindings(drawn, "it"),
+        { initialProps: { drawn: [bound] } }
+      );
+      await waitFor(() =>
+        expect(result.current.entry).toEqual({ id: "p1", title: "Kept" })
+      );
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      // A new tree in which only a prop nothing binds changed.
+      const [heading] = bound.nodes;
+      if (heading === undefined) throw new Error("no heading");
+      rerender({
+        drawn: [
+          {
+            ...bound,
+            nodes: [{ ...heading, props: { ...heading.props, level: "h2" } }],
+          },
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(writePluginRoute).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      editing.identity = null;
+    }
+  });
+
+  it("asks again once the sources it read have changed", async () => {
+    // A source can change while what the page asks stays the same: the
+    // author saves a new title, or someone updates a Single.
+    editing.identity = identity;
+    try {
       writePluginRoute.mockReset();
       writePluginRoute
         .mockResolvedValueOnce(answer("Before the save"))
         .mockResolvedValueOnce(answer("After the save"));
       const drawn = [page({ text: { $bind: "title" } })];
-      const { result } = renderHook(() => useCanvasBindings(drawn, "it"));
+      const { result } = renderHook(() => useCanvasBindings(drawn, "pt"));
       await waitFor(() =>
         expect(result.current.entry).toEqual({
           id: "p1",
           title: "Before the save",
         })
       );
-      await vi.advanceTimersByTimeAsync(15_001);
+      act(() => canvasSourcesChanged());
       await waitFor(() =>
         expect(result.current.entry).toEqual({
           id: "p1",
@@ -415,7 +461,38 @@ describe("the canvas's binding sources", () => {
       );
       expect(writePluginRoute).toHaveBeenCalledTimes(2);
     } finally {
-      vi.useRealTimers();
+      editing.identity = null;
+    }
+  });
+
+  it("checks a page that only lists entries for changes to them, though it binds nothing", () => {
+    editing.identity = identity;
+    try {
+      checked.length = 0;
+      const listing: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "l",
+            type: "core/collection-loop",
+            version: 1,
+            props: { collection: "posts" },
+          },
+        ],
+      } as BlockDocument;
+      renderHook(() => useCanvasBindings([listing], "fr"));
+      // In the language being edited, as the list's rows are read.
+      expect(checked.at(-1)).toEqual({
+        source: { kind: "collection", slug: "posts", id: "p1" },
+        singles: [],
+        lists: ["posts"],
+        locale: "fr",
+      });
+      // CONTROL: a page that reads nothing is checked for nothing.
+      renderHook(() => useCanvasBindings([page()], "fr"));
+      expect(checked.at(-1)).toBeUndefined();
+    } finally {
       editing.identity = null;
     }
   });
