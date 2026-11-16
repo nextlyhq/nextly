@@ -12,6 +12,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  recordingsSent,
   recordingsSettled,
   useAfterRecordings,
   useSnapshotAutosave,
@@ -578,6 +579,24 @@ describe("a real save waits for the recordings already sent", () => {
       return done;
     };
   }
+
+  it("counts each recording sent for a document, and only that document's", async () => {
+    // What a reader of the count asks: was a recording sent since a moment it
+    // noted? Sent, not stored: one on its way may land after any later write.
+    const before = recordingsSent(DOC);
+    const otherBefore = recordingsSent("collection:posts:e3");
+    const recorder = heldRecorder();
+    recorder.record();
+    expect(recordingsSent(DOC)).toBe(before + 1);
+    await recorder.release();
+    // Landing does not take it back.
+    expect(recordingsSent(DOC)).toBe(before + 1);
+    recorder.record();
+    expect(recordingsSent(DOC)).toBe(before + 2);
+    await recorder.release("failed");
+    expect(recordingsSent(DOC)).toBe(before + 2);
+    expect(recordingsSent("collection:posts:e3")).toBe(otherBefore);
+  });
 
   it("answers at once when nothing is on its way, which is the control", async () => {
     const settled = watch(recordingsSettled(DOC));

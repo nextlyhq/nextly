@@ -110,8 +110,26 @@ export interface SnapshotSaveResult {
  */
 const recordingsInFlight = new Map<string, Set<Promise<unknown>>>();
 
+/**
+ * How many recordings of each document this tab has sent, from every recorder:
+ * see `recordingsSent`.
+ */
+const sentByDocument = new Map<string, number>();
+
+/**
+ * How many recordings of `document` this tab has sent so far. Compared with a
+ * count noted earlier, it says whether the author's recovery point may have
+ * been rewritten since: an editor whose form went back to what it stores
+ * replaces the point only then, so a point waiting from a last visit is never
+ * replaced by edits that were undone before anything recorded them.
+ */
+export function recordingsSent(document: string): number {
+  return sentByDocument.get(document) ?? 0;
+}
+
 /** Note a recording on its way, and take it off once it has landed. */
 function trackRecording(document: string, saving: Promise<unknown>): void {
+  sentByDocument.set(document, recordingsSent(document) + 1);
   const inFlight = recordingsInFlight.get(document) ?? new Set();
   inFlight.add(saving);
   recordingsInFlight.set(document, inFlight);

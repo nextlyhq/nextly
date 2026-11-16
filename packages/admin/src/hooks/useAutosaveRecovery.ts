@@ -27,6 +27,11 @@ import {
   versionOf,
   type StaleVersion,
 } from "@admin/lib/document-version";
+import { documentRecordingKey } from "@admin/hooks/useDocumentAutosave";
+import {
+  recordingsSent,
+  recordingsSettled,
+} from "@admin/hooks/useSnapshotAutosave";
 import {
   versionApi,
   type AutosaveDetail,
@@ -169,6 +174,107 @@ function pointValues(snapshot: unknown): unknown {
 }
 
 /**
+ * Whether a point holds no values at all: what a Discard, and edits undone
+ * back to the stored document, leave behind (see `emptyThePoint`). Nothing in
+ * it can be restored, so it is never offered, whatever the document holds
+ * since.
+ */
+function holdsNoValues(point: AutosaveDetail): boolean {
+  const values = pointValues(point.snapshot);
+  return (
+    typeof values === "object" &&
+    values !== null &&
+    Object.keys(values).length === 0
+  );
+}
+
+/**
+ * Replace the author's recovery point with one holding no values, through the
+ * same write a recording makes, so no later session or tab offers it.
+ *
+ * Not a delete: a point holding no values is simply never offered, so no
+ * route beyond the recording's own is needed. Written once the recordings
+ * already on their way have landed, so none of them lands after it and puts
+ * the work back; and only while `stillClean` holds then, since edits made
+ * meanwhile are work the next recording keeps. A write that fails leaves the
+ * point as it was, offered again next time, which costs a second Discard
+ * rather than any work.
+ */
+async function emptyThePoint(
+  scope: VersionScope,
+  locale: string | null,
+  stillClean: () => boolean
+): Promise<void> {
+  await recordingsSettled(documentRecordingKey(scope));
+  if (!stillClean()) return;
+  try {
+    await versionApi.saveAutosave(scope, {}, locale);
+  } catch {
+    // See above: the point stays, and is offered again.
+  }
+}
+
+/**
+ * Empty the author's point when the form goes back to what the document
+ * stores, as when typing in a field and deleting it again.
+ *
+ * A recording is made while the form holds edits, and the form going clean
+ * only stops the next one: the last one stays, holding the undone edits, and
+ * would be offered next time as unsaved work. So it is emptied, but only when
+ * a recording of this document was sent since the form went dirty: edits
+ * undone before anything recorded them leave a point waiting from a last
+ * visit, or one put off with Not now, exactly as it was. And only when the
+ * form went clean by an undo, not by a reset to new stored values (a save,
+ * which deletes the point itself, or a load).
+ *
+ * @returns whether the form holds edits now, as the subscription last heard
+ */
+function useEmptyPointOnUndo(
+  scope: VersionScope | null,
+  form: UseFormReturn<Record<string, unknown>>,
+  locale: string | null
+): () => boolean {
+  const dirty = useRef(false);
+  const latest = useRef({ scope, locale });
+  latest.current = { scope, locale };
+  const document = documentRecordingKey(scope);
+  useEffect(() => {
+    if (document === null) return;
+    // Where the form stood when it went dirty: the recordings sent so far,
+    // and the stored values it was loaded with, as text. Read from what the
+    // subscription hands over: the form's own `formState` is only brought up
+    // to date by a render, so a reset's new values are not in it yet.
+    let dirtyFrom: { sent: number; stored: string } | null = null;
+    dirty.current = form.formState.isDirty;
+    return form.subscribe({
+      formState: { isDirty: true },
+      callback: ({ isDirty, defaultValues }) => {
+        dirty.current = isDirty === true;
+        // Each change reports here, so the document is written out as text
+        // only where the form turns: going dirty, and going clean again.
+        if (isDirty === true) {
+          dirtyFrom ??= {
+            sent: recordingsSent(document),
+            stored: canonicalJson(defaultValues),
+          };
+          return;
+        }
+        const from = dirtyFrom;
+        dirtyFrom = null;
+        if (from === null || from.stored !== canonicalJson(defaultValues)) {
+          return;
+        }
+        if (recordingsSent(document) === from.sent) return;
+        const { scope: at, locale: language } = latest.current;
+        if (at === null) return;
+        void emptyThePoint(at, language, () => !dirty.current);
+      },
+    });
+  }, [form, document]);
+  return useCallback(() => dirty.current, []);
+}
+
+/**
  * A string's 53-bit hash (cyrb53), to name a recovery point's content in a
  * short key rather than storing the whole document.
  */
@@ -298,6 +404,14 @@ export interface UseAutosaveRecoveryResult {
    * offer returning on every load of the editor.
    */
   dismiss: () => void;
+  /**
+   * Discard: stop offering this recovery point for good, in this tab and in
+   * every later session or tab. Unlike `dismiss`, the point is emptied on the
+   * server (see `emptyThePoint`). Written only while the form holds no edits:
+   * edits made since the offer are newer work, which the next recording keeps
+   * in its place.
+   */
+  discard: () => void;
   /**
    * Accept the offer: write the recovered values into the form and stop
    * offering. A no-op when there is nothing on offer, so a caller may wire it
@@ -490,6 +604,8 @@ function offerOf(
   defaultLocale: string | null
 ): AutosaveRecoveryOffer | null {
   if (dismissed || !data) return null;
+  // Discarded, or edits undone back to the stored document: nothing to offer.
+  if (holdsNoValues(data)) return null;
   // Offered only in the language it was typed in: see `recordedIn`.
   if (!recordedIn(data, locale, defaultLocale)) return null;
   const savedAt = new Date(data.updatedAt);
@@ -582,6 +698,15 @@ export function useAutosaveRecovery({
     if (data) putOff(pointIdentity(data));
   }, [data, putOff]);
 
+  const isDirty = useEmptyPointOnUndo(scope, form, locale);
+  const discard = useCallback(() => {
+    // Put off at once, as Not now is, so the offer goes in this tab whatever
+    // the write below answers.
+    dismiss();
+    if (!scope || !data || isDirty()) return;
+    void emptyThePoint(scope, data.locale, () => !isDirty());
+  }, [dismiss, scope, data, isDirty]);
+
   // The document as stored, which the form was loaded with.
   const stored = form.formState.defaultValues;
 
@@ -630,5 +755,14 @@ export function useAutosaveRecovery({
     void queryClient.invalidateQueries({ queryKey });
   }, [queryClient, queryKey]);
 
-  return { offer, isResolved, dismiss, restore, restoreChecked, take, recheck };
+  return {
+    offer,
+    isResolved,
+    dismiss,
+    discard,
+    restore,
+    restoreChecked,
+    take,
+    recheck,
+  };
 }
