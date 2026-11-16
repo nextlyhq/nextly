@@ -201,11 +201,25 @@ export async function withoutUniquesAlreadyEnforced(
       );
     }
   }
-  return ops.filter(
-    op =>
-      !(
-        addsUniqueOnLiveTable(op) &&
-        enforced.get(op.tableName.toLowerCase())?.has(op.index.columns[0])
-      )
+  // A named index the same plan drops stops enforcing its column, so an add replacing it (one made
+  // partial, say) is not redundant: leaving it out would leave the column with no uniqueness.
+  // An inline constraint (`null`) has no name a plan can drop.
+  const droppedByPlan = new Set(
+    ops.flatMap(op =>
+      op.type === "drop_index"
+        ? [`${op.tableName.toLowerCase()}.${op.index.name.toLowerCase()}`]
+        : []
+    )
   );
+  const alreadyEnforced = (
+    op: Extract<Operation, { type: "add_index" }>
+  ): boolean => {
+    const table = op.tableName.toLowerCase();
+    const columns = enforced.get(table);
+    const column = op.index.columns[0];
+    if (columns === undefined || !columns.has(column)) return false;
+    const by = columns.get(column);
+    return by == null || !droppedByPlan.has(`${table}.${by.toLowerCase()}`);
+  };
+  return ops.filter(op => !(addsUniqueOnLiveTable(op) && alreadyEnforced(op)));
 }
