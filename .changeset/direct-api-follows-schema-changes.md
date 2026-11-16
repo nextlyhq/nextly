@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A Direct API call checks the stored schema version before it runs, as a request does, so a process that serves no requests (a worker, a script) picks up a schema change made on another server copy. A call made inside a request or another call keeps the definitions that one started with.
+Every Direct API namespace runs its calls on definitions that follow the stored schema version, as collection, Single, form and field-group calls already did: releases, media (and its folders), users, the email namespaces, roles, permissions, access, API keys, jobs, notices, versions and content events. A release's readiness or publish, among others, no longer judges against definitions another server copy has since changed.
