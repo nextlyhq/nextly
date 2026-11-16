@@ -11278,11 +11278,26 @@ export class CollectionMutationService extends BaseService {
           ]
         : []
     );
+    // A many-to-many relation is kept in a junction, not on the row, so its live value is the
+    // stored document's. Both sides are compared as id sets, since a junction keeps no order.
+    const relations = args.manyToManyFields.flatMap(field =>
+      typeof field.name === "string" ? [field.name] : []
+    );
+    const liveDocument =
+      args.storedBefore.get(null) ?? [...args.storedBefore.values()][0];
+    const live: Record<string, unknown> = { ...args.row };
+    for (const name of relations) {
+      if (!(name in live)) live[name] = asIdSet(liveDocument?.[name] ?? []);
+    }
     const edited: Record<string, unknown> = {};
     for (const change of args.changes) {
       if (change.locale === null) continue;
       const snapshot = snapshotRecord(change.snapshot);
-      for (const name of sharedFieldsEdited(fields, snapshot, args.row)) {
+      const comparable = { ...snapshot };
+      for (const name of relations) {
+        if (name in comparable) comparable[name] = asIdSet(comparable[name]);
+      }
+      for (const name of sharedFieldsEdited(fields, comparable, live)) {
         edited[name] = snapshot[name];
       }
     }
