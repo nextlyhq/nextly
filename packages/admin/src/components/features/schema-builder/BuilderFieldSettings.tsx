@@ -140,9 +140,19 @@ type Props = {
   lifecycleEnabled?: boolean;
 };
 
+/** The names of the named containers above a field, outermost first: the path the save finds it by. */
+function namedPath(ancestors: readonly BuilderField[]): string {
+  return ancestors
+    .filter(ancestor => Boolean(ancestor.name))
+    .map(ancestor => ancestor.name)
+    .join("/");
+}
+
 /**
  * Why a name the field is given cannot be saved where it sits, judged by the save's own rules, or
- * `null`. A name the field already has where it was saved is the save's to keep, not to judge.
+ * `null`. A name the field already has where it was saved is the save's to keep, not to judge. The
+ * save finds a kept field by name, its named containers' included, so once one of those containers
+ * is renamed or the field moves under another, its name is new there and judged as one.
  */
 function nameCheckFor(
   kind: BuilderKind,
@@ -170,8 +180,10 @@ function nameCheckFor(
       .filter(other => other.id !== field.id)
       .map(other => other.name),
   };
+  const keptHere =
+    saved !== null && namedPath(saved.ancestors) === namedPath(ancestors);
   return name =>
-    saved !== null && saved.field.name === name
+    keptHere && saved?.field.name === name
       ? null
       : builderNameProblem(name, place);
 }

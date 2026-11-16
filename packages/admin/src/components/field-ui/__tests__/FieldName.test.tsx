@@ -224,6 +224,37 @@ describe("a name typed in the settings panel", () => {
     expect(problem()).toBeNull();
   });
 
+  // The save finds a kept field by name, its named containers' included: once the group holding a
+  // plugin's camelCase field is renamed, the field's name is new there, and judged as one.
+  it("judges a saved field's name as new once the group holding it is renamed", () => {
+    const child = text("f-child", "metaTitle", { label: "Meta title" });
+    const box = (name: string) =>
+      ({
+        ...text("f-box", name),
+        type: "group",
+        fields: [child],
+      }) as BuilderField;
+    const panelIn = (current: BuilderField[]) => (
+      <BuilderFieldSettings
+        kind="collection"
+        fields={current}
+        fieldId="f-child"
+        savedFieldIds={new Set(["f-box", "f-child"])}
+        readOnly={false}
+        docked
+        savedFields={[box("box")]}
+        lifecycleEnabled={false}
+        onFieldChange={() => {}}
+        onFieldDelete={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const { rerender } = render(panelIn([box("box")]));
+    expect(problem()).toBeNull();
+    rerender(panelIn([box("promo")]));
+    expect(problem()).toHaveTextContent(/lowercase letters/);
+  });
+
   // A saved field's own name is the save's to keep, whatever the rule says of a new one.
   it("says nothing of the name a saved field already has", () => {
     render(<Panel initial={META} />);
