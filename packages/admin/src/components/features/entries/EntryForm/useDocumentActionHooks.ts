@@ -44,7 +44,7 @@ export interface DocumentActions {
    * collection with no status), so a surface that must never publish, such
    * as a preview that saves first, can tell before it offers to.
    */
-  saveWithoutPublishing: (() => Promise<DocumentActionOutcome>) | undefined;
+  saveWithoutPublishing?: () => Promise<DocumentActionOutcome>;
   /**
    * When this document was last stored in this session, whatever the save
    * state now says, or null before the first store. A new value means a store
@@ -84,12 +84,13 @@ export function useDocumentActions(): DocumentActions | null {
     saveState: hosted.saveState,
     // The bar's own Save through `run`, so its permission, lock, before-save
     // steps and save state all apply; the host's own binding is only asked
-    // whether that Save would leave the document unpublished.
-    saveWithoutPublishing:
-      offered.some(action => action.id === "save") &&
-      hosted.saveWithoutPublishing !== undefined
-        ? () => hosted.run("save")
-        : undefined,
+    // whether that Save would leave the document unpublished. A plugin cannot
+    // replace Save (`OVERRIDABLE_DOCUMENT_ACTIONS` is Delete and Unpublish),
+    // so the Save asked about is the one `run` runs.
+    ...(offered.some(action => action.id === "save") &&
+    hosted.saveWithoutPublishing !== undefined
+      ? { saveWithoutPublishing: () => hosted.run("save") }
+      : {}),
     storedAt: hosted.lastStoredAt,
   };
 }

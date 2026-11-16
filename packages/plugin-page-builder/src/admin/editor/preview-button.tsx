@@ -30,6 +30,9 @@ import { Button, toast } from "@nextlyhq/ui";
 import { Eye } from "lucide-react";
 import type * as React from "react";
 
+/** Said when the save before a preview did not store, with its reason under it. */
+const FAILED = "Couldn't save, so the preview didn't open.";
+
 type SaveOutcome = Awaited<
   ReturnType<NonNullable<DocumentActions["saveWithoutPublishing"]>>
 >;
@@ -40,14 +43,22 @@ type SaveOutcome = Awaited<
  * stopped would otherwise just vanish.
  */
 async function savedFirst(save: () => Promise<SaveOutcome>): Promise<boolean> {
-  const outcome = await save();
+  let outcome: SaveOutcome;
+  try {
+    outcome = await save();
+  } catch (error) {
+    // The editor turns a failed store into an outcome; anything that still
+    // throws is reported the same way rather than lost with the tab.
+    toast.error(FAILED, {
+      description: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
   if (outcome.ok) return true;
   // An author who said no to a question was not refused, and a save that
   // already told the author needs no second message.
   if (outcome.reason !== "cancelled" && outcome.reported !== true) {
-    toast.error("Couldn't save, so the preview didn't open.", {
-      description: outcome.message,
-    });
+    toast.error(FAILED, { description: outcome.message });
   }
   return false;
 }
@@ -59,8 +70,15 @@ export function PreviewButton(): React.JSX.Element | null {
 
   const saveState = actions?.saveState.kind;
   const save = actions?.saveWithoutPublishing;
-  // A failed save leaves the work unstored too, so it is saved first as well.
-  const unstored = saveState === "unsaved" || saveState === "failed";
+  // A failed save leaves the work unstored too, so it is saved first as well,
+  // but only where Save can run: a refused Publish with nothing edited also
+  // reads as failed, and there the stored draft already is what the canvas
+  // shows, while a Save would be refused for having nothing to store.
+  const saveAction = actions?.actions.find(action => action.id === "save");
+  const saveRuns =
+    saveAction !== undefined && saveAction.disabledReason === undefined;
+  const unstored =
+    saveState === "unsaved" || (saveState === "failed" && saveRuns);
   const label =
     save === undefined
       ? "Preview the saved version"

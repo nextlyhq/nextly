@@ -22,12 +22,16 @@ type Step = () => Promise<boolean>;
 let preview: { open: (before?: Step) => void } | null = null;
 let actions: {
   saveState: { kind: string };
+  actions?: { id: string; disabledReason?: string }[];
   saveWithoutPublishing?: () => Promise<Outcome>;
 } | null = null;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentPreview: () => preview,
-  useDocumentActions: () => actions,
+  // The real hook always lists the actions; where a case names none, Save is
+  // offered and can run.
+  useDocumentActions: () =>
+    actions === null ? null : { actions: [{ id: "save" }], ...actions },
 }));
 
 const toastError = vi.fn();
@@ -120,10 +124,42 @@ describe("PreviewButton", () => {
 
     it("also saves first after a save that failed, whose work is still unstored", async () => {
       const saveWithoutPublishing = vi.fn(() => Promise.resolve({ ok: true }));
-      actions = { saveState: { kind: "failed" }, saveWithoutPublishing };
+      actions = {
+        saveState: { kind: "failed" },
+        actions: [{ id: "save" }],
+        saveWithoutPublishing,
+      };
       const { open } = press("Save and preview");
       expect(await runStep(open)).toBe(true);
       expect(saveWithoutPublishing).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the saved version without saving after a failure that left nothing to save", () => {
+      // A refused Publish with no edits: the stored draft already is what the
+      // canvas shows, and a Save would only be refused for having nothing to
+      // store, closing the tab with nothing to show.
+      const saveWithoutPublishing = vi.fn(() => Promise.resolve({ ok: true }));
+      actions = {
+        saveState: { kind: "failed" },
+        actions: [{ id: "save", disabledReason: "Nothing has changed yet." }],
+        saveWithoutPublishing,
+      };
+      const { open } = press("Preview");
+      expect(open.mock.calls[0]).toEqual([]);
+      expect(saveWithoutPublishing).not.toHaveBeenCalled();
+    });
+
+    it("stops the preview and says why when the save throws", async () => {
+      actions = {
+        saveState: { kind: "unsaved" },
+        saveWithoutPublishing: () => Promise.reject(new Error("Offline.")),
+      };
+      const { open } = press("Save and preview");
+      expect(await runStep(open)).toBe(false);
+      expect(toastError).toHaveBeenCalledWith(
+        "Couldn't save, so the preview didn't open.",
+        { description: "Offline." }
+      );
     });
 
     it("stops the preview and shows the save's error when the draft save fails", async () => {
