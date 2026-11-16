@@ -139,6 +139,46 @@ function heldDatabaseLock(table: string, waitedMs: number): TableLockFacts {
   };
 }
 
+/** The key SQLite's whole-database tries are kept under for the lock read before the scan. */
+const SCHEMA_LOCK_READ = "nextly_schema_lock";
+
+/**
+ * The schema lock as the scan starts. On SQLite another connection can hold the whole database,
+ * which would make the lock tables' reads wait outside the run's tries, so they run in the
+ * database's tries; where those run out, the lock is unknown, and every later read of the run
+ * takes the same, spent, tries.
+ */
+async function schemaLockBefore(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  waits: TableWaits | undefined
+): Promise<SchemaLockReading> {
+  if (waits === undefined || dialect !== "sqlite") {
+    return readSchemaLockState(adapter);
+  }
+  const read = await waits.read(SCHEMA_LOCK_READ, () =>
+    readSchemaLockState(adapter)
+  );
+  return read.kind === "done"
+    ? read.value
+    : { state: "unknown", reason: DATABASE_HELD };
+}
+
+/**
+ * The schema lock over the whole scan, from its readings before and after: held where either
+ * found it held (the earlier holder first), so a change that overlapped the scan from either end
+ * is named; else unknown where either could not tell; else free.
+ */
+export function overScan(
+  before: SchemaLockReading,
+  after: SchemaLockReading
+): SchemaLockReading {
+  if (before.state === "held") return before;
+  if (after.state === "held") return after;
+  if (before.state === "unknown") return before;
+  return after;
+}
+
 /** The document of a dry run over `entities`. Reads the database and changes nothing. */
 export async function dryRunReport(args: {
   adapter: DrizzleAdapter;
@@ -165,6 +205,9 @@ export async function dryRunReport(args: {
           underSchemaLock: false,
           command: DRY_RUN_COMMAND,
         });
+  // Read before the scan, so a schema change already running as it starts is named even if it
+  // ends before the scan does; read again after it (`readAfter`), for one that starts during it.
+  const before = await schemaLockBefore(adapter, dialect, waits);
   const started = Date.now();
   const entities =
     typeof args.entities === "function"
@@ -180,9 +223,12 @@ export async function dryRunReport(args: {
   // Read after the tables: where another connection held the whole database past its tries, the
   // lock tables cannot be read either, and reading them would wait again outside the tries.
   const { schemaLock, warnings } = schemaLockFacts(
-    waits?.wholeDatabaseHeld() === true
-      ? { state: "unknown", reason: DATABASE_HELD }
-      : await readSchemaLockState(adapter)
+    overScan(
+      before,
+      waits?.wholeDatabaseHeld() === true
+        ? { state: "unknown", reason: DATABASE_HELD }
+        : await readSchemaLockState(adapter)
+    )
   );
   const unfinished = await unfinishedRecords(
     { adapter, dialect, entities },

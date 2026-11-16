@@ -311,6 +311,50 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("names a schema change that was running as the scan started, though it ends before the scan does", async () => {
+      await createTable(FIELDS, true);
+      await insertRows(1);
+      let endChange: () => void = () => {};
+      const changeEnds = new Promise<void>(resolve => {
+        endChange = resolve;
+      });
+      let changeHeld: () => void = () => {};
+      const held = new Promise<void>(resolve => {
+        changeHeld = resolve;
+      });
+      const change = withSchemaLock(
+        {
+          adapter: handle.adapter,
+          command: "nextly migrate",
+          whenHeld: "refuse",
+        },
+        async () => {
+          changeHeld();
+          await changeEnds;
+        }
+      );
+      await held;
+      const document = await dryRunReport({
+        adapter: handle.adapter,
+        dialect,
+        // The scan's first read: the other change ends here, before the tables are read.
+        entities: async () => {
+          endChange();
+          const ended = await change;
+          if (!ended.ran) throw new Error("the test could not take the lock");
+          return [entity(FIELDS)];
+        },
+        nextlyVersion: "test",
+      });
+      expect(document.result?.schemaLock.state).toBe("held");
+      expect(document.result?.schemaLock.holder).toContain("`nextly migrate`");
+      expect(document.warnings).toEqual([
+        expect.objectContaining({
+          code: "NEXTLY_REPAIR_COLUMNS_SCHEMA_CHANGE_RUNNING",
+        }),
+      ]);
+    });
+
     it("exit codes for no difference, differences remaining and could not run", async () => {
       await createTable(MATCHING_FIELDS, false);
       const none = await report(MATCHING_FIELDS);

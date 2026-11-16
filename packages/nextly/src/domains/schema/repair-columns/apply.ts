@@ -669,10 +669,12 @@ class ApplyRun {
     } else {
       const made = await this.waits.inTries(
         this.liveTableOf(finding),
-        async ({ tryMs }) => {
+        async ({ tryMs, tableReached }) => {
           const restore = await boundSqliteWait(this.adapter, tryMs);
           try {
             await ensureColumnRepairsTable(this.adapter, this.dialect);
+            // One statement: its time is its wait.
+            await tableReached(false);
           } finally {
             await restore();
           }
@@ -843,6 +845,11 @@ class ApplyRun {
       );
       await tx.execute(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
     }
+    // The try's one wait is over: PostgreSQL holds the table's lock to the end of the transaction,
+    // SQLite the database's write lock from its BEGIN IMMEDIATE. The watch ends here, so it cannot
+    // cancel a later statement of this conversion that waits for something else, which then fails
+    // the column as its own failure rather than as this table being busy.
+    await try_.tableReached(true);
     const judged = await this.judged(tx.db, finding);
     const stopped = this.stillConverts(judged, clearing);
     if (stopped !== null) return stopped;

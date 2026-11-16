@@ -21,8 +21,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { BusyTableBounds } from "../busy-table/bounds";
-import type { StatementJudgement } from "../busy-table/judge";
+import { causeChain } from "../busy-table/ended-waiting";
+import type { NoRetryReason, StatementJudgement } from "../busy-table/judge";
 import { tryNotice } from "../busy-table/report";
 import { boundSqliteWait } from "../busy-table/session-try";
 import { withBusyTableTries } from "../busy-table/tries";
@@ -46,6 +48,13 @@ export type Waited<T> =
 
 /** What one try is told: its bound, where to report its session, and how to end its watch. */
 export interface TryContext {
+  /**
+   * The try's wait for the table is over: the table's total is charged only up to now for a try
+   * that goes on to get it. Where `lockHeld`, the try holds the table's lock to its end (a
+   * transaction's explicit lock, SQLite's write lock): the watch ends here, and a later failure of
+   * the try is its own, never the table being busy, so it is not tried again.
+   */
+  readonly tableReached: (lockHeld: boolean) => Promise<void>;
   /** How long this try may wait for the table, in milliseconds. */
   readonly tryMs: number;
   /** Tells the try's watch the id of the session its statements run on. */
@@ -81,14 +90,71 @@ export interface TableWaitsOptions {
   readonly sleep?: (ms: number) => Promise<void>;
 }
 
+/**
+ * Why a table's tries ran out: its total (no whole try was left), a statement the next try would
+ * send again that may not run twice, or, on SQLite under the schema lock, the lock's lease.
+ */
+export type TriesEnding =
+  | { readonly kind: "total" }
+  | { readonly kind: "no-retry"; readonly reason: NoRetryReason }
+  | { readonly kind: "lease" };
+
 /** The tries a table has had in this run. */
 interface TableState {
   /** Every try for it that ended waiting, over every wait, and the one its tries ran out at. */
   tries: number;
   /** How much of its total its waits have used, in milliseconds. */
   spentMs: number;
-  /** What held it when its tries ran out; null while they have not. */
-  ranOut: { holder: HolderReport; table: string } | null;
+  /** What held it when a try last ended waiting; null while none has. */
+  lastHolder: HolderReport | null;
+  /** What held it when its tries ran out, and why they did; null while they have not. */
+  ranOut: { holder: HolderReport; ending: TriesEnding } | null;
+}
+
+/**
+ * The holder of a table whose total earlier waits used up, each of them getting it in the end: no
+ * try ended waiting, so no session was read.
+ */
+const TOTAL_USED_HOLDER: HolderReport = {
+  kind: "unnamed",
+  reason:
+    "the table's waits in this run used its total, each getting it in the end, so no try was left to read who uses it",
+};
+
+/** What SQLite's answer that a table is locked says of its holder. */
+const SQLITE_LOCKED_HOLDER: HolderReport = {
+  kind: "unnamed",
+  reason: "SQLite reports only that the database is locked, not who holds it",
+};
+
+/**
+ * Whether `error` is SQLite's answer that a table is locked (`SQLITE_LOCKED`, and its extended
+ * codes such as `SQLITE_LOCKED_SHAREDCACHE`): a lock conflict another statement or connection
+ * holds, which the engine's reading (SQLITE_BUSY only) leaves out. Never for a stop that names
+ * this process as the holder, as the engine reads it.
+ */
+export function sqliteLockedWait(error: unknown): boolean {
+  const links = causeChain(error);
+  if (
+    links.some(link =>
+      NextlyError.isCode(link, "NEXTLY_LOCK_HELD_BY_THIS_PROCESS")
+    )
+  ) {
+    return false;
+  }
+  return links.some(
+    link =>
+      typeof link.code === "string" &&
+      link.code.toUpperCase().startsWith("SQLITE_LOCKED")
+  );
+}
+
+/** How a stop's outcome and lease say the tries ended. */
+function endingOf(stop: BusyTableStop): TriesEnding {
+  if (stop.outcome.kind === "no-retry") {
+    return { kind: "no-retry", reason: stop.outcome.reason };
+  }
+  return stop.endedAtLease ? { kind: "lease" } : { kind: "total" };
 }
 
 /**
@@ -200,7 +266,7 @@ export class TableWaits {
     const key = this.key(table);
     let state = this.states.get(key);
     if (state === undefined) {
-      state = { tries: 0, spentMs: 0, ranOut: null };
+      state = { tries: 0, spentMs: 0, lastHolder: null, ranOut: null };
       this.states.set(key, state);
     }
     return state;
@@ -221,7 +287,6 @@ export class TableWaits {
   }
 
   private factsOf(table: string, state: TableState): TableLockFacts {
-    const sqlite = this.options.dialect === "sqlite";
     const holder =
       state.ranOut === null
         ? SQLITE_HOLDER
@@ -231,10 +296,31 @@ export class TableWaits {
       tries: state.tries,
       waitedMs: state.spentMs,
       holder,
-      nextStep: sqlite
-        ? `run \`${this.options.command}\` again once the connection holding the database ends, end that connection, or raise --lock-timeout-total`
-        : `run \`${this.options.command}\` again once the session using the table ends, end that session, or raise --lock-timeout-total`,
+      nextStep: this.nextStepOf(state.ranOut?.ending ?? { kind: "total" }),
     };
+  }
+
+  /**
+   * What to do once a table's tries ran out, by why they did: only a total that ran out is helped
+   * by a larger one. A statement that may not run twice stops at its first wait whatever the
+   * total, so a longer single try is what lets it through; a lease is the schema lock's, which no
+   * bound moves.
+   */
+  private nextStepOf(ending: TriesEnding): string {
+    const sqlite = this.options.dialect === "sqlite";
+    const again = `run \`${this.options.command}\` again once the ${
+      sqlite
+        ? "connection holding the database ends, end that connection"
+        : "session using the table ends, end that session"
+    }`;
+    switch (ending.kind) {
+      case "total":
+        return `${again}, or raise --lock-timeout-total`;
+      case "no-retry":
+        return `${again}, or raise --lock-timeout: it was not tried again, since a statement it would send again may not run twice (${ending.reason}), so a larger --lock-timeout-total does not help`;
+      case "lease":
+        return `${again}: the tries stopped where the run could no longer show it holds the schema lock`;
+    }
   }
 
   /**
@@ -254,10 +340,20 @@ export class TableWaits {
       return { kind: "ran-out", lock: this.factsOf(table, state) };
     }
     const { adapter, dialect, bounds } = this.options;
-    // One total per table per run: what earlier waits used is gone. A wait always gets one try.
-    const left = Math.max(bounds.tryMs, bounds.totalMs - state.spentMs);
+    // One total per table per run: what earlier waits used is gone, and no try starts unless a
+    // whole one still fits, as the engine's own schedule starts none (`mayStartTry`).
+    const left = bounds.totalMs - state.spentMs;
+    if (left < bounds.tryMs) {
+      state.ranOut = {
+        holder: state.lastHolder ?? TOTAL_USED_HOLDER,
+        ending: { kind: "total" },
+      };
+      return { kind: "ran-out", lock: this.factsOf(table, state) };
+    }
     const started = this.now();
     let lastStarted = started;
+    // When the try that got the table stopped waiting for it, where it said (`tableReached`).
+    let reachedAt: number | undefined;
     let triedNow = 0;
     try {
       const value = await withBusyTableTries(
@@ -283,22 +379,40 @@ export class TableWaits {
         },
         async (_tryNumber, tryMs) => {
           lastStarted = this.now();
+          reachedAt = undefined;
           triedNow++;
           // Made before the try's connection runs anything, so its asks run on another one.
           const watch = watchTry(adapter, dialect, tryMs);
           let settled: Promise<void> | undefined;
           const settle = () => (settled ??= watch.settle());
+          let lockHeld = false;
           try {
             const value = await attempt({
               tryMs,
               onSession: id => watch.onSession(id),
               settle,
+              tableReached: async held => {
+                reachedAt = this.now();
+                if (!held) return;
+                lockHeld = true;
+                await settle();
+              },
             });
             await settle();
             return { kind: "done" as const, value };
           } catch (error) {
-            const holder = await watch.ended(error);
+            // Past its lock, the try waits for nothing of this table: its failure is its own.
+            if (lockHeld) {
+              await settle();
+              throw error;
+            }
+            const holder =
+              (await watch.ended(error)) ??
+              (dialect === "sqlite" && sqliteLockedWait(error)
+                ? SQLITE_LOCKED_HOLDER
+                : undefined);
             if (holder === undefined) throw error;
+            state.lastHolder = holder;
             const lasting = await judge?.();
             return {
               kind: "ended" as const,
@@ -312,16 +426,19 @@ export class TableWaits {
           }
         }
       );
-      // The try that got the table waited at most its own bound, which is not counted, nor is it
-      // a try the table's lock report counts.
-      state.spentMs += lastStarted - started;
+      // The try that got the table is charged for its wait, up to where it said the wait was over;
+      // it is not a try the table's lock report counts.
+      state.spentMs += (reachedAt ?? lastStarted) - started;
       state.tries += triedNow - 1;
       return { kind: "done", value };
     } catch (error) {
       state.spentMs += this.now() - started;
       state.tries += triedNow;
       if (!(error instanceof TriesRanOut)) throw error;
-      state.ranOut = { holder: error.stop.ended.holder, table };
+      state.ranOut = {
+        holder: error.stop.ended.holder,
+        ending: endingOf(error.stop),
+      };
       return { kind: "ran-out", lock: this.factsOf(table, state) };
     }
   }
@@ -337,18 +454,27 @@ export class TableWaits {
   ): Promise<Waited<T>> {
     const { adapter, dialect } = this.options;
     if (dialect === "sqlite") {
-      return this.inTries(table, async ({ tryMs }) => {
+      return this.inTries(table, async ({ tryMs, tableReached }) => {
         // In WAL mode a read waits only for a connection holding the database in exclusive
         // locking mode; the busy timeout bounds that wait to the try.
         const restore = await boundSqliteWait(adapter, tryMs);
         try {
+          // The try's wait, on its own: a read of the schema, which a held database refuses as
+          // it refuses any. The reads after it take no lock they keep, so a holder that comes
+          // back between them still ends the try waiting.
+          await querySqlRows(
+            adapter.getDrizzle(),
+            dialect,
+            sql`SELECT 1 FROM sqlite_master LIMIT 1`
+          );
+          await tableReached(false);
           return await work(adapter.getDrizzle());
         } finally {
           await restore();
         }
       });
     }
-    return this.inTries(table, ({ tryMs, onSession, settle }) =>
+    return this.inTries(table, ({ tryMs, onSession, settle, tableReached }) =>
       executeTransaction(adapter, async tx => {
         const session = await tx.session();
         if (session !== undefined) onSession(session);
@@ -369,6 +495,7 @@ export class TableWaits {
               `LOCK TABLE ${quoteIdent(table, dialect)} IN ACCESS SHARE MODE`
             );
           }
+          await tableReached(true);
           return settledFirst(settle, () => work(tx.db));
         }
         // MySQL: a session setting outlives the transaction on its pooled connection, so both
@@ -378,6 +505,10 @@ export class TableWaits {
         await tx.execute(`SET SESSION lock_wait_timeout = ${seconds}`);
         await tx.execute(`SET SESSION innodb_lock_wait_timeout = ${seconds}`);
         try {
+          // The try's one wait: a read of no rows takes the table's metadata lock, held to the
+          // end of the transaction, so the reads after it wait for nothing of the table.
+          await mysqlTableLocked(tx, table);
+          await tableReached(true);
           return await settledFirst(settle, () => work(tx.db));
         } finally {
           for (const reset of [
@@ -389,6 +520,28 @@ export class TableWaits {
         }
       })
     );
+  }
+}
+
+/** MySQL's errno for a table that does not exist. */
+const MYSQL_NO_SUCH_TABLE = 1146;
+
+/**
+ * Take `table`'s metadata lock in `tx` with a read of no rows. A table that does not exist has no
+ * lock to wait for; the reads after it say what is missing.
+ */
+async function mysqlTableLocked(
+  tx: { execute: (statement: string) => Promise<unknown> },
+  table: string
+): Promise<void> {
+  try {
+    await tx.execute(`SELECT 1 FROM ${quoteIdent(table, "mysql")} WHERE 1 = 0`);
+  } catch (error) {
+    const missing = causeChain(error).some(
+      link =>
+        link.errno === MYSQL_NO_SUCH_TABLE || link.code === "ER_NO_SUCH_TABLE"
+    );
+    if (!missing) throw error;
   }
 }
 

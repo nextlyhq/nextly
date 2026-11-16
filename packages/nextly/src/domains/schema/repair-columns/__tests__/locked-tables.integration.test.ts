@@ -684,6 +684,47 @@ describe.each(LOCK_DIALECTS)(
       });
     }
 
+    it("a PostgreSQL conversion that holds its table, then waits for another, fails as its own failure", async () => {
+      // Once the conversion's LOCK TABLE holds its table, a later wait (here its record's insert,
+      // behind another session's lock on the record table) is not that table being busy: the
+      // try's watch has ended, and the column fails at the database's own bound, with no retry.
+      if (dialect !== "postgresql") return;
+      await setUp();
+      const holder = holderAdapter;
+      if (holder === null) throw new Error("no holder connection");
+      let first: string | undefined;
+      // Longer than one try's backstop (the try plus half a second), shorter than the total.
+      const HOLD_MS = BOUNDS.tryMs + 1_500;
+      const applied = await apply(entities(), {
+        beforeStep: async at => {
+          if (first !== undefined) return;
+          first = `${at.table}.${at.column}`;
+          let held: () => void = () => {};
+          const isHeld = new Promise<void>(resolve => {
+            held = resolve;
+          });
+          holding = holder
+            .transaction(async ctx => {
+              await ctx.execute(
+                `LOCK TABLE ${q(COLUMN_REPAIRS_TABLE)} IN ACCESS EXCLUSIVE MODE`
+              );
+              held();
+              await sleep(HOLD_MS);
+            })
+            .catch(() => undefined);
+          await isHeld;
+        },
+      });
+      expect(first).toBeDefined();
+      expect(notices).toEqual([]);
+      const records = applied.result?.records ?? [];
+      const record = records.find(r => `${r.table}.${r.column}` === first);
+      expect(record).toMatchObject({ outcome: "failed", lock: null });
+      expect(record?.failure?.reason).toMatch(/lock/i);
+      // Rolled back whole: the column is as it was.
+      await holding;
+    });
+
     it("the catalog read does not wait for a table another session holds", async () => {
       // Why MySQL reads its tables' definitions once, outside the tries: only its rows wait. On
       // PostgreSQL the read opens each table, so each is read in its own tries.

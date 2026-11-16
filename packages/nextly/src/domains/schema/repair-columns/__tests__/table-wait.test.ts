@@ -9,7 +9,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { describe, expect, it } from "vitest";
 
-import { TableWaits, tableHolderOf } from "../table-wait";
+import { ownWriteLockError } from "../../migrate/migration-transaction";
+import { TableWaits, tableHolderOf, type TryContext } from "../table-wait";
 
 /** SQLite's answer to a write that waited out its busy timeout. */
 const busy = () =>
@@ -45,7 +46,23 @@ function waits(bounds = { tryMs: 1_000, totalMs: 4_000 }) {
       },
     };
   };
-  return { run, notices, attempt, elapsed: () => now };
+  /** A try that waits `waitMs`, says its wait is over, and gets the table. */
+  const reachesAfter =
+    (waitMs: number, lockHeld = false) =>
+    async ({ tableReached }: TryContext) => {
+      now += waitMs;
+      await tableReached(lockHeld);
+      // Its work after the wait takes time too, which is not the table's to count.
+      now += 10_000;
+      return "read";
+    };
+  return {
+    run,
+    notices,
+    attempt,
+    reachesAfter,
+    elapsed: () => now,
+  };
 }
 
 describe("a run's waits for a busy table", () => {
@@ -114,6 +131,104 @@ describe("a run's waits for a busy table", () => {
     });
     expect(notices).toEqual([]);
     expect(run.ranOut("dc_posts")).toBeNull();
+  });
+
+  it("charges a wait that got the table up to where its wait ended, and starts no try once less than a whole one is left", async () => {
+    const { run, reachesAfter, attempt } = waits({
+      tryMs: 1_000,
+      totalMs: 4_000,
+    });
+    // Each wait gets the table just before its try's bound: 900 ms of the total each time, and
+    // none of the work after it.
+    for (let wait = 0; wait < 4; wait++) {
+      expect(await run.inTries("dc_posts", reachesAfter(900))).toEqual({
+        kind: "done",
+        value: "read",
+      });
+    }
+    // 3.6 s of 4 s are used: no whole try fits, so the next wait makes none.
+    const next = attempt(1);
+    const waited = await run.inTries("dc_posts", next.run);
+    expect(next.tries()).toBe(0);
+    expect(waited).toMatchObject({
+      kind: "ran-out",
+      lock: { table: "dc_posts", tries: 0, waitedMs: 3_600 },
+    });
+    expect(waited.kind === "ran-out" && waited.lock.nextStep).toContain(
+      "raise --lock-timeout-total"
+    );
+  });
+
+  it("lets a try's failure through once the try holds the table's lock, and tries no more", async () => {
+    const { run, notices } = waits();
+    let tried = 0;
+    const lateWait = busy();
+    await expect(
+      run.inTries("dc_posts", async ({ tableReached }) => {
+        tried++;
+        await tableReached(true);
+        // A later statement of the try met a lock on something else.
+        throw lateWait;
+      })
+    ).rejects.toBe(lateWait);
+    expect(tried).toBe(1);
+    expect(notices).toEqual([]);
+    expect(run.ranOut("dc_posts")).toBeNull();
+  });
+
+  it("names a longer single try, not a larger total, where a statement that may not run twice stopped the tries", async () => {
+    const { run, attempt } = waits();
+    const held = attempt();
+    const waited = await run.inTries("dc_posts", held.run, () =>
+      Promise.resolve({
+        statementNumber: 1,
+        judgement: { kind: "no-retry", reason: "trigger" },
+      })
+    );
+    expect(held.tries()).toBe(1);
+    if (waited.kind !== "ran-out") throw new Error("expected ran-out");
+    expect(waited.lock.nextStep).toContain("raise --lock-timeout:");
+    expect(waited.lock.nextStep).toContain("(trigger)");
+    expect(waited.lock.nextStep).not.toContain("or raise --lock-timeout-total");
+    // The table's later waits keep the reason.
+    expect(run.ranOut("dc_posts")?.nextStep).toBe(waited.lock.nextStep);
+  });
+
+  it("waits out SQLite's answer that a table is locked as it waits out a busy database", async () => {
+    for (const code of ["SQLITE_LOCKED", "SQLITE_LOCKED_SHAREDCACHE"]) {
+      const { run } = waits();
+      let tried = 0;
+      const waited = await run.inTries("dc_posts", () => {
+        tried++;
+        return Promise.reject(
+          Object.assign(new Error("database table is locked"), { code })
+        );
+      });
+      // Tried again, as the schedule allows, then reported locked rather than failed.
+      expect(tried).toBeGreaterThan(1);
+      expect(waited).toMatchObject({
+        kind: "ran-out",
+        lock: { tries: tried, holder: { wholeDatabase: true } },
+      });
+    }
+  });
+
+  it("lets a lock this process holds through at once, whatever SQLite's code under it", async () => {
+    const { run } = waits();
+    const own = ownWriteLockError(
+      undefined,
+      Object.assign(new Error("database table is locked"), {
+        code: "SQLITE_LOCKED",
+      })
+    );
+    let tried = 0;
+    await expect(
+      run.inTries("dc_posts", () => {
+        tried++;
+        return Promise.reject(own);
+      })
+    ).rejects.toBe(own);
+    expect(tried).toBe(1);
   });
 
   it("lets any other failure of a try through as it is", async () => {
