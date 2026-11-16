@@ -339,7 +339,7 @@ describe("the whole-document walks one selection costs", () => {
     expect(walksDuring(() => measureBytes(PAGE, 1_000_000))).toBe(1);
   });
 
-  it("a selection walks the whole document: budget none (known miss)", () => {
+  it("a selection walks the whole document: budget none", () => {
     render(<KeyboardHost />);
     act(() => editor().select("block-1"));
     const walks = walksDuring(() => {
@@ -347,14 +347,16 @@ describe("the whole-document walks one selection costs", () => {
     });
     // The control: the selection reached the keyboard layer's editor.
     expect(editor().selectedId).toBe("block-7");
-    expectKnownMiss(walks);
+    expectWithinBudget(walks);
   });
 });
 
 /**
  * The editor and its Add panel, with every trial insert it asks for counted:
- * each insert among the operations it asks the editor to try. The panel opens
- * on `open`, after the author has selected a block, as it does in the editor.
+ * each insert among the operations it asks the editor to try, or hands the
+ * editor to apply, since an apply tries its edit before it keeps it. The
+ * panel opens on `open`, after the author has selected a block, as it does in
+ * the editor.
  */
 function AddPanelHost({
   trials,
@@ -366,11 +368,21 @@ function AddPanelHost({
   const state = useEditorState({ initialDocument: PAGE });
   editorRef = state;
   if (!open) return null;
+  const inserts = (ops: readonly { kind: string }[]): number =>
+    ops.filter(op => op.kind === "insert").length;
   const counting: EditorState = {
     ...state,
     lockRefusalFor: ops => {
-      trials.count += ops.filter(op => op.kind === "insert").length;
+      trials.count += inserts(ops);
       return state.lockRefusalFor(ops);
+    },
+    apply: op => {
+      trials.count += inserts([op]);
+      return state.apply(op);
+    },
+    applyAll: ops => {
+      trials.count += inserts(ops);
+      return state.applyAll(ops);
     },
   };
   return <InsertPanel editor={counting} onInsert={() => undefined} />;
@@ -385,20 +397,40 @@ function openAddPanel(trials: { count: number }) {
   return view;
 }
 
-describe("the trial inserts opening the Add panel costs", () => {
-  it("the counter sees a trial insert: a click on a tile asks for one", () => {
+describe("the trial inserts the Add panel costs", () => {
+  it("adding a tile's block tries its insert once: the counter sees it", () => {
     const trials = { count: 0 };
     const view = openAddPanel(trials);
     trials.count = 0;
     fireEvent.click(view.getByRole("option", { name: "Text" }));
-    expect(trials.count).toBeGreaterThan(0);
+    // The control: the block went in.
+    expect(editor().document.nodes).toHaveLength(PAGE.nodes.length + 1);
+    expect(trials.count).toBe(1);
   });
 
-  it("opening the Add panel runs trial inserts: budget none (known miss)", () => {
+  it("opening the Add panel runs trial inserts: budget none", () => {
     const trials = { count: 0 };
     const view = openAddPanel(trials);
     // The control: the panel is open, offering the registered block.
     expect(view.getByRole("option", { name: "Text" })).toBeTruthy();
-    expectKnownMiss(trials.count);
+    expectWithinBudget(trials.count);
+  });
+
+  it("an insert while the Add panel is open runs no trial insert for the other tiles", () => {
+    const trials = { count: 0 };
+    const view = openAddPanel(trials);
+    act(() => {
+      editor().apply({
+        kind: "insert",
+        node: text("elsewhere", "Elsewhere"),
+        at: { index: 0 },
+      });
+    });
+    trials.count = 0;
+    view.rerender(<AddPanelHost trials={trials} open />);
+    // The control: the panel drew the page after the insert.
+    expect(editor().document.nodes[0]?.id).toBe("elsewhere");
+    expect(view.getByRole("option", { name: "Text" })).toBeTruthy();
+    expectWithinBudget(trials.count);
   });
 });

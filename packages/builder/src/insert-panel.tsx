@@ -110,6 +110,7 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
+import { insertLockAt, type InsertLock } from "./insert-lock";
 import {
   cardAnchor,
   NOWHERE,
@@ -1533,8 +1534,11 @@ interface OfferInputs {
   readonly source: NestingSource;
   readonly components: ComponentLookup | undefined;
   readonly expansion: EntryPlacement["expansion"];
-  /** Asked what the locks say of an insert; its identity changes with the document. */
-  readonly editor: Pick<EditorState, "lockRefusalFor">;
+  /** The lock rules and caps a place's locks are read with (`insert-lock`). */
+  readonly editor: Pick<
+    EditorState,
+    "lockDefinitions" | "limits" | "lockRefusalFor"
+  >;
   /** Whether the template's collection's blocks fields are known yet. */
   readonly entryFieldsKnown: boolean;
 }
@@ -1639,6 +1643,8 @@ function offersFor(inputs: OfferInputs): ReadonlyMap<string, EntryOffer> {
 /** What judging any entry at one place reads, asked once per place. */
 interface PlaceContext {
   readonly placement: EntryPlacement | undefined;
+  /** The locks at this place, read from the structure around it. */
+  readonly locks: InsertLock;
   /**
    * The locks' answer for the catalog's first block here, which a pattern or
    * a component follows: each arrives as a block of its own type, which no
@@ -1647,7 +1653,7 @@ interface PlaceContext {
   readonly firstBlockLock: () => LockRefusalFacts | undefined;
 }
 
-/** {@link PlaceContext} for one place, its lock question asked lazily. */
+/** {@link PlaceContext} for one place, its locks read lazily. */
 function placeContext(
   inputs: OfferInputs,
   candidate: InsertionCandidate
@@ -1655,12 +1661,19 @@ function placeContext(
   const firstBlock = inputs.catalog.find(
     (entry): entry is BlockInsertEntry => entry.kind === "block"
   );
+  const locks = insertLockAt(inputs.document, candidate.at, {
+    definitions: inputs.editor.lockDefinitions,
+    nesting: inputs.source,
+    limits: inputs.editor.limits,
+    ask: inputs.editor.lockRefusalFor,
+  });
   const asked: { answer?: LockRefusalFacts; done: boolean } = { done: false };
   return {
     placement: placementAt(inputs, candidate.at),
+    locks,
     firstBlockLock: () => {
       if (!asked.done && firstBlock !== undefined) {
-        const answer = lockAt(inputs, firstBlock, candidate.at);
+        const answer = lockAt(inputs, locks, firstBlock);
         if (answer !== undefined) asked.answer = answer;
       }
       asked.done = true;
@@ -1699,30 +1712,26 @@ function refusalAt(
   }
   const lock =
     entry.kind === "block"
-      ? lockAt(inputs, entry, candidate.at)
+      ? lockAt(inputs, context.locks, entry)
       : context.firstBlockLock();
   return lock === undefined
     ? undefined
     : refusalAnnouncement(lockRefusalWording(lock));
 }
 
-/** What the locks say of inserting one block at a position. */
+/**
+ * What the locks say of inserting one block at a place, from the structure
+ * there: no trial insert, which runs only for the block actually added, in
+ * the editor's apply.
+ */
 function lockAt(
   inputs: OfferInputs,
-  entry: BlockInsertEntry,
-  at: OpPosition
+  locks: InsertLock,
+  entry: BlockInsertEntry
 ): LockRefusalFacts | undefined {
-  return inputs.editor.lockRefusalFor([
-    {
-      kind: "insert",
-      node: nodeForEntry(
-        entry,
-        inputs.expansion.definitions,
-        inputs.expansion.nesting
-      ),
-      at,
-    },
-  ]);
+  return locks.of(
+    nodeForEntry(entry, inputs.expansion.definitions, inputs.expansion.nesting)
+  );
 }
 
 /**
