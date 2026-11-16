@@ -205,26 +205,28 @@ describe("the entry editor's layout", () => {
     expect(column.contains(screen.getByText("version banner"))).toBe(false);
   });
 
-  it("shows the title first and the slug on the line under it", () => {
+  it("shows the title first and the address on the line under it", () => {
     renderEditor();
     const title = screen.getByLabelText("Title");
     const slugs = screen.getAllByText("hello-world");
     expect(slugs).toHaveLength(1);
-    expect(screen.getAllByRole("button", { name: "Edit slug" })).toHaveLength(
-      1
-    );
+    expect(
+      screen.getAllByRole("button", { name: "Edit address" })
+    ).toHaveLength(1);
     expect(follows(title, slugs[0]!)).toBe(true);
     // Nothing of the document between the banners and the title.
     expect(follows(screen.getByText("version banner"), title)).toBe(true);
   });
 
-  it("shows the status once, in the bar", () => {
+  it("shows the status once, beside the title", () => {
     // The panel folded away, so what is counted is the editor's own chrome.
     window.localStorage.setItem("nextly:admin:entry-rail-collapsed", "1");
     renderEditor();
     const pills = screen.getAllByText("Published");
     expect(pills).toHaveLength(1);
-    expect(screen.getByTestId("document-bar").contains(pills[0]!)).toBe(true);
+    // The title is in view, so the bar leaves the pill to it.
+    expect(screen.getByTestId("document-bar").contains(pills[0]!)).toBe(false);
+    expect(follows(screen.getByLabelText("Title"), pills[0]!)).toBe(true);
   });
 
   it("shows the status once with the document panel open beside it", () => {
@@ -233,6 +235,6 @@ describe("the entry editor's layout", () => {
     expect(screen.getByText("Created")).toBeInTheDocument();
     const pills = screen.getAllByText("Published");
     expect(pills).toHaveLength(1);
-    expect(screen.getByTestId("document-bar").contains(pills[0]!)).toBe(true);
+    expect(screen.getByTestId("document-bar").contains(pills[0]!)).toBe(false);
   });
 });
