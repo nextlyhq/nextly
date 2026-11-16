@@ -484,6 +484,26 @@ describe("what Advanced writes as it goes away", () => {
     expect(firstAttributes()).toEqual({ "data-x": "1" });
   });
 
+  it("shows an undo made on Style when Content comes back, for the same block", async () => {
+    render(<Host page={ATTRIBUTED} />);
+    act(() => editor().select("first"));
+    openAdvancedSection();
+    const id = screen.getByLabelText("CSS id");
+    act(() => (id as HTMLInputElement).focus());
+    fireEvent.change(id, { target: { value: "intro" } });
+    leaveForStyle();
+    // The control: leaving for Style saved the id.
+    expect(editor().document.nodes[0]?.cssId).toBe("intro");
+    await act(async () => {
+      await editor().undo();
+    });
+    expect(editor().document.nodes[0]?.cssId).toBeUndefined();
+    openTab("Content");
+    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
+      ""
+    );
+  });
+
   it("still writes a draft typed while it shows, when another block is selected straight away", () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));

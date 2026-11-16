@@ -106,7 +106,7 @@ import {
 } from "./inspector";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
-import { keptWhileHidden } from "./kept-while-hidden";
+import { keptWhileHidden, ownHtmlChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { LookInspector, type LookEditing } from "./look-inspector";
 import { NeverQuote } from "./never-quote";
@@ -846,11 +846,10 @@ function SelectionInspector({
         </TabsList>
 
         {/*
-          FORCE-MOUNTED, because Advanced inside holds a draft: unmounting it
+          FORCE-MOUNTED: Advanced inside holds a draft, and unmounting it
           threw away what the author typed and why a refused row was not
-          saved. HIDDEN here, not by Radix, which ties mounting to showing
-          (`forceMount` alone draws Content under Style), and `hidden` takes
-          it out of the accessibility tree as an unmounted panel was.
+          saved. HIDDEN here, not by Radix, which ties mounting to showing;
+          `hidden` takes it out of the accessibility tree as unmounting did.
         */}
         <TabsContent value="content" forceMount hidden={tab !== "content"}>
           <ContentTab
@@ -891,10 +890,11 @@ function SelectionInspector({
 }
 
 /**
- * The Content tab: the block's own fields, then its Advanced section with the
- * CSS id and custom attributes. Not drawn again while another tab shows.
+ * The Content tab: the block's own fields, then Advanced (CSS id, attributes).
+ * Hidden, it is drawn again only for its own block's CSS id or attributes.
  */
-const ContentTab = keptWhileHidden(function ContentTab({
+const ContentTab = keptWhileHidden(DrawnContentTab, ownHtmlChanged);
+function DrawnContentTab({
   block,
   editor,
   onCommit: commit,
@@ -1028,7 +1028,7 @@ const ContentTab = keptWhileHidden(function ContentTab({
       </details>
     </>
   );
-});
+}
 
 /**
  * Where an edit lands, as the bar's second line says it: the devices the
