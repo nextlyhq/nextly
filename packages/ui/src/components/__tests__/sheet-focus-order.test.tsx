@@ -62,6 +62,32 @@ describe("a sheet that is not modal", () => {
   });
 });
 
+describe("a sheet that is not modal and holds nothing to focus", () => {
+  it("lets Tab leave from the sheet itself", () => {
+    render(
+      <>
+        <button type="button">In the page</button>
+        <Sheet open modal={false}>
+          <SheetContent side="right">
+            <SheetTitle>History</SheetTitle>
+            <SheetDescription>Loading…</SheetDescription>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+    const after = document.createElement("button");
+    after.id = "after-the-sheet";
+    after.type = "button";
+    after.textContent = "After the sheet";
+    document.body.appendChild(after);
+    // With nothing inside to focus, the sheet itself holds focus.
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(after);
+  });
+});
+
 describe("a modal sheet", () => {
   it("keeps focus inside: Tab from its last control goes round to its first", () => {
     renderBesidePage(true);

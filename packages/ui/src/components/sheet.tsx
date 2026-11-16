@@ -351,7 +351,12 @@ function leaveNonModalAtEdge(event: React.KeyboardEvent<HTMLElement>): void {
   const sheet = event.currentTarget;
   const inside = tabbablesIn(sheet);
   const edge = event.shiftKey ? inside[0] : inside[inside.length - 1];
-  if (edge === undefined || document.activeElement !== edge) return;
+  // An edge is the first or last control in the sheet, or the sheet itself while it holds focus,
+  // as it does when nothing inside it can (a loading or explanatory panel).
+  const atEdge =
+    document.activeElement === sheet ||
+    (edge !== undefined && document.activeElement === edge);
+  if (!atEdge) return;
   const page = tabbablesIn(sheet.ownerDocument.body).filter(
     element => !sheet.contains(element)
   );
