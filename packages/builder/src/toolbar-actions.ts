@@ -315,8 +315,12 @@ function placementActions(
       plan === undefined
         ? detach
         : plan.problem === undefined
-        ? heldByLock(detach, ask, plan.pageOps)
-        : { ...detach, enabled: false, reason: compositionRefusalReason(plan) }
+          ? heldByLock(detach, ask, plan.pageOps)
+          : {
+              ...detach,
+              enabled: false,
+              reason: compositionRefusalReason(plan),
+            }
     );
   }
   const duplicate: ToolbarAction = {

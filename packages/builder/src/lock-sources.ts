@@ -22,7 +22,9 @@ import {
 import { useMemo } from "react";
 
 /** The lock sources a host hands the store, if any. */
-export type HostLocks = Pick<LockSources, "definitions" | "nesting"> | undefined;
+export type HostLocks =
+  | Pick<LockSources, "definitions" | "nesting">
+  | undefined;
 
 /**
  * The definitions lock questions are judged by: the host's own, or the live

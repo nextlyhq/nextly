@@ -727,27 +727,27 @@ function MoreMenuItems({
   );
   return (
     <>
-        {items.map(action => {
-          const Icon = ICONS[action.id];
-          return (
-            <DropdownMenuItem
-              key={action.id}
-              disabled={!action.enabled}
-              className="nx-block-toolbar__menu-item"
-              onSelect={() => run(action)}
-            >
-              <Icon size={16} aria-hidden="true" />
-              <span className="nx-block-toolbar__menu-text">
-                <span>{action.label}</span>
-                {action.reason === undefined ? null : (
-                  <span className="nx-block-toolbar__menu-reason">
-                    {action.reason}
-                  </span>
-                )}
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
+      {items.map(action => {
+        const Icon = ICONS[action.id];
+        return (
+          <DropdownMenuItem
+            key={action.id}
+            disabled={!action.enabled}
+            className="nx-block-toolbar__menu-item"
+            onSelect={() => run(action)}
+          >
+            <Icon size={16} aria-hidden="true" />
+            <span className="nx-block-toolbar__menu-text">
+              <span>{action.label}</span>
+              {action.reason === undefined ? null : (
+                <span className="nx-block-toolbar__menu-reason">
+                  {action.reason}
+                </span>
+              )}
+            </span>
+          </DropdownMenuItem>
+        );
+      })}
     </>
   );
 }

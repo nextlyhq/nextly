@@ -1487,15 +1487,15 @@ export function BlockKeyboardActions({
   return (
     <NestingContext.Provider value={rules}>
       <SelectionActionsContext.Provider value={offer}>
-          <BlockActionsContext.Provider value={actions}>
-            <ToolbarFocusContext.Provider value={toolbarFocus}>
-              <CanvasFrameReader into={canvasFrame} />
-              <p aria-live="polite" role="status" className="nx-sr-only">
-                {announcement}
-              </p>
-              {children}
-            </ToolbarFocusContext.Provider>
-          </BlockActionsContext.Provider>
+        <BlockActionsContext.Provider value={actions}>
+          <ToolbarFocusContext.Provider value={toolbarFocus}>
+            <CanvasFrameReader into={canvasFrame} />
+            <p aria-live="polite" role="status" className="nx-sr-only">
+              {announcement}
+            </p>
+            {children}
+          </ToolbarFocusContext.Provider>
+        </BlockActionsContext.Provider>
       </SelectionActionsContext.Provider>
     </NestingContext.Provider>
   );

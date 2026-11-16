@@ -311,35 +311,35 @@ function BlockMenuItems({
 
   return (
     <>
-          {entries.map((action, index) => (
-            <React.Fragment key={action.id}>
-              {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
-                <ContextMenuSeparator />
-              ) : null}
-              <ContextMenuItem
-                disabled={!action.enabled}
-                // Stacked once there is a reason, so the explanation sits under
-                // the verb rather than running on from it.
-                className={
-                  action.reason === undefined
-                    ? undefined
-                    : "flex-col items-start gap-0.5"
-                }
-                onSelect={() => {
-                  action.run();
-                }}
-              >
-                <span>{action.label}</span>
-                {action.reason === undefined ? null : (
-                  // Part of the item's own content, so it is both on screen and
-                  // in the name the item is announced by. Nothing here stays
-                  // hoverable or focusable once disabled, so an explanation
-                  // carried outside the content would reach nobody.
-                  <span className="text-xs opacity-80">{action.reason}</span>
-                )}
-              </ContextMenuItem>
-            </React.Fragment>
-          ))}
+      {entries.map((action, index) => (
+        <React.Fragment key={action.id}>
+          {DESTRUCTIVE.has(action.id) || startsMenuGroup(entries, index) ? (
+            <ContextMenuSeparator />
+          ) : null}
+          <ContextMenuItem
+            disabled={!action.enabled}
+            // Stacked once there is a reason, so the explanation sits under
+            // the verb rather than running on from it.
+            className={
+              action.reason === undefined
+                ? undefined
+                : "flex-col items-start gap-0.5"
+            }
+            onSelect={() => {
+              action.run();
+            }}
+          >
+            <span>{action.label}</span>
+            {action.reason === undefined ? null : (
+              // Part of the item's own content, so it is both on screen and
+              // in the name the item is announced by. Nothing here stays
+              // hoverable or focusable once disabled, so an explanation
+              // carried outside the content would reach nobody.
+              <span className="text-xs opacity-80">{action.reason}</span>
+            )}
+          </ContextMenuItem>
+        </React.Fragment>
+      ))}
     </>
   );
 }
