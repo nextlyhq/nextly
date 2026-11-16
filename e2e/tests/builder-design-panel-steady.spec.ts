@@ -128,9 +128,9 @@ test("switching Design tabs leaves the rows' columns where they were", async ({
     const room = () =>
       page.locator(".nx-vars__body").evaluate(body => body.clientWidth);
     const scrolling = await room();
-    await switchTo(page, "Fonts");
+    await switchTo(page, "Type");
     expect(await room()).toBe(scrolling);
-    for (const tab of ["Shared styles", "Variables", "Fonts", "Variables"]) {
+    for (const tab of ["Styles", "Colours", "Type", "Spacing", "Colours"]) {
       await switchTo(page, tab);
     }
     // And once the counts are in.
