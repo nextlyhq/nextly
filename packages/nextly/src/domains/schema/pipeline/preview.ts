@@ -30,12 +30,12 @@ import {
 } from "../ownership/kept-elements";
 
 import { RealClassifier } from "./classifier/classifier";
-import { typeChangeJudge } from "./classifier/judge-type-change";
 import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
+import { typeChangeJudge } from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import {
   buildDesiredSnapshot,

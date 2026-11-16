@@ -134,7 +134,8 @@ export function typeChangeJudge(args: {
     );
     const expectedTable = byName(args.expected.tables, op.tableName);
     const live = liveTable && byName(liveTable.columns, op.columnName);
-    const expected = expectedTable && byName(expectedTable.columns, op.columnName);
+    const expected =
+      expectedTable && byName(expectedTable.columns, op.columnName);
     if (!liveTable || !live || !expected) return null;
 
     const keyedBy = keyedByOf(liveTable.columns);

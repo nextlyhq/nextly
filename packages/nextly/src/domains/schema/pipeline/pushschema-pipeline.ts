@@ -79,16 +79,16 @@ import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
 import {
+  convertingColumns,
+  lateValueFailure,
+  type ConvertingColumn,
+} from "./classifier/conversion-refusal";
+import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
   querySqlRows,
 } from "./classifier/count-helpers";
-import {
-  convertingColumns,
-  lateValueFailure,
-  type ConvertingColumn,
-} from "./classifier/conversion-refusal";
 import { typeChangeJudge } from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";

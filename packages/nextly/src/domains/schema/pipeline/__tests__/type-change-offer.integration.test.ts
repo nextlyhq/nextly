@@ -109,8 +109,9 @@ describe.each(getConfiguredTestDialects())(
       databaseName =
         dialect === "mysql"
           ? String(
-              ((await run("SELECT DATABASE() AS db")) as Array<{ db: unknown }>)[0]
-                ?.db
+              (
+                (await run("SELECT DATABASE() AS db")) as Array<{ db: unknown }>
+              )[0]?.db
             )
           : undefined;
       clearCachedSnapshot();
@@ -150,7 +151,9 @@ describe.each(getConfiguredTestDialects())(
           title: "a",
         });
         expect(info.mock.calls.flat().join("\n")).toMatch(
-          new RegExp(`${TABLE}\\.seo: text -> json[b]?, safe \\(rows checked: 2\\)`)
+          new RegExp(
+            `${TABLE}\\.seo: text -> json[b]?, safe \\(rows checked: 2\\)`
+          )
         );
       });
 
@@ -221,28 +224,31 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe.skipIf(dialect !== "mysql")("a MySQL text the legacy map left", () => {
-      it("the offer for each known shape: a value longer than the varchar is refused before any statement", async () => {
-        await tools.createTable(TABLE, [TITLE]);
-        await tools.retype(TABLE, "title", "text");
-        await tools.insert(TABLE, [
-          { id: "p0", title: "short" },
-          { id: "p2", title: "x".repeat(300) },
-        ]);
-        const before = await state("title");
+    describe.skipIf(dialect !== "mysql")(
+      "a MySQL text the legacy map left",
+      () => {
+        it("the offer for each known shape: a value longer than the varchar is refused before any statement", async () => {
+          await tools.createTable(TABLE, [TITLE]);
+          await tools.retype(TABLE, "title", "text");
+          await tools.insert(TABLE, [
+            { id: "p0", title: "short" },
+            { id: "p2", title: "x".repeat(300) },
+          ]);
+          const before = await state("title");
 
-        const result = await sync([TITLE]);
+          const result = await sync([TITLE]);
 
-        expect(result.success).toBe(false);
-        expect(result.error?.message).toContain(
-          `${TABLE}.title: text -> varchar(255) is blocked: values longer than the new type holds would be cut (1 row: id p2).`
-        );
-        expect(result.error?.message).toContain(
-          "shorten the named values so each fits the new type, then run db:sync again"
-        );
-        expect(await state("title")).toEqual(before);
-      });
-    });
+          expect(result.success).toBe(false);
+          expect(result.error?.message).toContain(
+            `${TABLE}.title: text -> varchar(255) is blocked: values longer than the new type holds would be cut (1 row: id p2).`
+          );
+          expect(result.error?.message).toContain(
+            "shorten the named values so each fits the new type, then run db:sync again"
+          );
+          expect(await state("title")).toEqual(before);
+        });
+      }
+    );
 
     describe.skipIf(dialect !== "sqlite")("SQLite", () => {
       it("no conversion is planned for a group column, which SQLite holds as text", async () => {

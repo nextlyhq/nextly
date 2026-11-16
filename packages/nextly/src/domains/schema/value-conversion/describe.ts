@@ -46,7 +46,7 @@ export function describeRowCount(count: number): string {
 /** One reason, as a judgement or a record holds it: its rows absent for a reason of the types. */
 export interface DescribedReason {
   kind: ConversionReasonKind;
-  rows?: Pick<AffectedRows, "count"> & { first: readonly RowKey[] } | null;
+  rows?: (Pick<AffectedRows, "count"> & { first: readonly RowKey[] }) | null;
 }
 
 /** One reason with the rows that give it, by key and never by value. */

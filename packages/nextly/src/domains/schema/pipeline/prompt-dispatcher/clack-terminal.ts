@@ -38,7 +38,6 @@ import {
 } from "../../value-conversion/describe";
 import { nonEmptyValuesOf } from "../classifier/classifier";
 import { lossyConsentRefusal } from "../classifier/conversion-refusal";
-import type { TypeChangeEvent } from "../resolution/types";
 import type {
   ClassifierEvent,
   DestructiveDropEvent,
@@ -48,6 +47,7 @@ import type {
   Resolution,
   ResolutionKind,
 } from "../pushschema-pipeline-interfaces";
+import type { TypeChangeEvent } from "../resolution/types";
 
 import { PromptCancelledError, TTYRequiredError } from "./errors";
 

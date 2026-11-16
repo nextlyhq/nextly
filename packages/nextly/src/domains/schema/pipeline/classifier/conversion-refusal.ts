@@ -68,7 +68,10 @@ export function conversionRefusal(
  * consent given does not cover it, and the consent naming its column that would.
  */
 export function lossyConsentRefusal(
-  uncovered: ReadonlyArray<{ conversion: JudgedConversion; consent: ColumnConsent }>
+  uncovered: ReadonlyArray<{
+    conversion: JudgedConversion;
+    consent: ColumnConsent;
+  }>
 ): NextlyError {
   return NextlyError.validation({
     errors: uncovered.map(({ conversion, consent }) => {

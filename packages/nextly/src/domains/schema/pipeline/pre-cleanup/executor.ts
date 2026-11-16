@@ -280,7 +280,9 @@ function clearedTypeChanges(args: {
   events: ClassifierEvent[];
 }): Array<
   Extract<ClassifierEvent, { kind: "type_change" }> & {
-    lossy: NonNullable<Extract<ClassifierEvent, { kind: "type_change" }>["lossy"]>;
+    lossy: NonNullable<
+      Extract<ClassifierEvent, { kind: "type_change" }>["lossy"]
+    >;
   }
 > {
   const eventById = new Map(args.events.map(e => [e.id, e]));
