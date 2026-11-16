@@ -26,7 +26,15 @@ import type { ContainerProps } from "./container";
 import { gallery } from "./gallery";
 import { section } from "./section";
 
-const CONTAINERS = [section, box, columns, column, card, accordion, gallery].map(
+const CONTAINERS = [
+  section,
+  box,
+  columns,
+  column,
+  card,
+  accordion,
+  gallery,
+].map(
   definition =>
     [
       definition.name,
@@ -63,9 +71,14 @@ describe("a contained container", () => {
     }
   );
 
-  it.each(CONTAINERS)("%s carries no class when it is not contained", (_, definition) => {
-    const html = drawn(definition, false);
-    expect(html).not.toContain(CONTENT_WIDTH_CLASS);
-    expect(html).toMatch(/^<([a-z]+) class="nx-n1"><span>child<\/span><\/\1>$/);
-  });
+  it.each(CONTAINERS)(
+    "%s carries no class when it is not contained",
+    (_, definition) => {
+      const html = drawn(definition, false);
+      expect(html).not.toContain(CONTENT_WIDTH_CLASS);
+      expect(html).toMatch(
+        /^<([a-z]+) class="nx-n1"><span>child<\/span><\/\1>$/
+      );
+    }
+  );
 });
