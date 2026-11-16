@@ -158,10 +158,64 @@ export function matchesQuery(
   }
   const term = query.search.trim().toLowerCase();
   if (!term) return true;
-  return [record.name, record.slug, record.subject, record.description ?? ""]
+  const senders = [
+    ...(record.sentBy?.declared ?? []),
+    ...(record.sentBy?.referenced ?? []),
+  ];
+  return [
+    record.name,
+    record.slug,
+    record.subject,
+    record.description ?? "",
+    ...senders,
+  ]
     .join("\n")
     .toLowerCase()
     .includes(term);
+}
+
+export interface SendersDisplay {
+  lines: string[];
+  incompleteNotice: string | null;
+}
+
+/**
+ * What sends an email, formatted for the "Sent when" column and phone cards.
+ *
+ * An owned template with no declared senders and no references reads "Not
+ * known: may be sent from code". A site template with neither reads "Not sent
+ * by anything yet". When references could not all be checked, that is said
+ * instead or beside the known senders.
+ */
+export function sendersDisplayOf(record: EmailTemplateRecord): SendersDisplay {
+  const declared = record.sentBy?.declared ?? [];
+  const referenced = record.sentBy?.referenced ?? [];
+  const lines = [...declared, ...referenced];
+  const incomplete = record.referencesComplete === false;
+
+  if (lines.length === 0) {
+    if (incomplete) {
+      return {
+        lines: ["Senders couldn't all be checked"],
+        incompleteNotice: null,
+      };
+    }
+    if (record.owner.kind !== "site") {
+      return {
+        lines: ["Not known: may be sent from code"],
+        incompleteNotice: null,
+      };
+    }
+    return {
+      lines: ["Not sent by anything yet"],
+      incompleteNotice: null,
+    };
+  }
+
+  return {
+    lines,
+    incompleteNotice: incomplete ? "Senders couldn't all be checked" : null,
+  };
 }
 
 /** The emails Messages lists: templates, not layouts or partials. */
