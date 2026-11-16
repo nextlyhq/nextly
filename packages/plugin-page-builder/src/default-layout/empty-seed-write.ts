@@ -25,7 +25,8 @@
  * is left as sent and the page is moved once the transaction commits
  * (`afterCommit`), as the one-time move moves one: by core's field rewrite, as
  * the system, publishing nothing. A save of the page in between refuses that
- * rewrite; the save itself passed through this hook.
+ * rewrite, and the move reads the page again and tries again, a few times;
+ * past that it says so in the log, naming the page.
  *
  * A write that runs no hooks at all is not normalised.
  *
@@ -135,18 +136,46 @@ async function moveAfterCommit(
     const nextly = await directApiOf(hook);
     const seed = await emptySeedOf(nextly, args.slugs);
     if (seed !== named) return;
-    const outcome = await movePageOffSeed(
-      { nextly, pagesSlug: args.pages, emptySeed: args.emptySeed },
-      pageId,
-      seed
-    );
+    const outcome = await moveWithRetries(nextly, args, pageId, seed);
     if (outcome === "moved") {
       args.warn(
         "[page-builder] a page written in a batch named the empty seeded header & footer set, so it now uses the site default",
         { pageId, seededLayout: seed }
       );
     }
+    if (outcome === "refused") {
+      args.warn(
+        '[page-builder] a page written in a batch names the empty seeded header & footer set and could not be moved to the site default; saving it with "Site default" chosen moves it',
+        { pageId, seededLayout: seed }
+      );
+    }
   });
+}
+
+/** How many times the move after a commit is tried while saves keep landing. */
+const MOVE_ATTEMPTS = 3;
+
+/**
+ * The page moved off the seed, read again and tried again while a save of
+ * the page refuses the rewrite (a title edit that sends no `layout` leaves the
+ * page on the seed, and the one-time move may have finished already).
+ */
+async function moveWithRetries(
+  nextly: EmptySeedReads,
+  args: EmptySeedWriteArgs,
+  pageId: string,
+  seed: string
+): Promise<"moved" | "unchanged" | "refused"> {
+  let outcome: "moved" | "unchanged" | "refused" = "refused";
+  for (let attempt = 1; attempt <= MOVE_ATTEMPTS; attempt++) {
+    outcome = await movePageOffSeed(
+      { nextly, pagesSlug: args.pages, emptySeed: args.emptySeed },
+      pageId,
+      seed
+    );
+    if (outcome !== "refused") return outcome;
+  }
+  return outcome;
 }
 
 /** Register the normalisation on the pages collection, by its RESOLVED slug. */
