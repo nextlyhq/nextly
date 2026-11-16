@@ -26,7 +26,7 @@
  *   the command does, and the start goes on.
  * - A migration that deletes data: refused without consent, applied under
  *   `NEXTLY_ACCEPT_DATA_LOSS` naming the table, as the command reads it.
- * - A first run with no app migration carrying the registry: the start gives
+ * - A first run whose migrations an earlier release wrote: the start gives
  *   its notice once, and a later `nextly migrate` gives none.
  * - A permission the configuration declares and no migration records: the
  *   start refuses it with the command's code.
@@ -40,7 +40,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -764,14 +771,32 @@ describe.each(getConfiguredTestDialects())(
     }, 600_000);
 
     it("gives the first run's notice once, at the start, and nextly migrate gives none after it", async () => {
-      // No app migration carries the registry yet, so the first run writes
-      // the registry rows from the configuration and says so, once: the
-      // record it writes in the same commit makes every later run ordinary.
+      // A migration an earlier release's `migrate:create` wrote: its snapshot
+      // carries no registry metadata, so the first run on this release writes
+      // the registry rows from the configuration and says so, once; the record
+      // it writes in the same commit makes every later run an ordinary one.
       const database = await emptyDatabase();
+      use(database);
+      await migrateCreate("initial", migratedAtStart(POSTS));
+      const meta = join(state.dir, "migrations", "meta");
+      for (const file of readdirSync(meta)) {
+        if (!file.endsWith(".snapshot.json")) continue;
+        const path = join(meta, file);
+        const snapshot = JSON.parse(readFileSync(path, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        delete snapshot.entities;
+        delete snapshot.permissions;
+        writeFileSync(path, JSON.stringify(snapshot, null, 2));
+      }
       const notice = /First run on this release/;
 
-      // No migration makes the collection's table, so nothing is read.
-      const started = await productionStart(database, migratedAtStart(POSTS));
+      const started = await productionStart(
+        database,
+        migratedAtStart(POSTS),
+        "mas-posts"
+      );
       const later = await migrateRun(database, migratedByCommand(POSTS));
 
       expect(started.refusal).toBeUndefined();

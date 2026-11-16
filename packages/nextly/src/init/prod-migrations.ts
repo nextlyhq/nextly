@@ -358,6 +358,8 @@ async function applyBootMigrations(
   const deployConfig = {
     ...args.served,
     collections: args.served.collections ?? [],
+    // The step's own database settings, as the command reads its own.
+    db: args.config.db,
   };
   const recordedBefore = await recordedBeforeTheRun(
     adapter as never,
