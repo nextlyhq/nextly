@@ -29,7 +29,12 @@ import * as React from "react";
 import { ChoiceList } from "./choice-list";
 import { isElement } from "./dom-kind";
 import { InheritedValue } from "./inherited-value";
-import { useRecentColours } from "./recent-colours";
+import {
+  RecentColoursStore,
+  rememberColour,
+  useRecentColours,
+} from "./recent-colours";
+import type { PreferenceStore } from "./shell-state";
 import {
   activeTokenMode,
   colourHexOf,
@@ -297,7 +302,10 @@ export function ColourField({
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset } = useDraft(stored);
-  const [recentColours, commitColour] = useRememberedCommit(onCommit);
+  const commitColour = rememberingCommit(
+    onCommit,
+    React.useContext(RecentColoursStore)
+  );
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
@@ -456,12 +464,10 @@ export function ColourField({
            * that has no way to hand a ref down here.
            */
           supersededBy={target => supersedes(target, id)}
-          // A variable is one discrete choice rather than a gesture, so it
-          // commits immediately, exactly as the select and toggle controls do.
-          onToken={identity => commitInstead({ $token: identity })}
-          recent={recentColours}
-          // So is a recent colour, written as it is listed.
-          onRecent={commitInstead}
+          // A variable, or a recent colour, is one discrete choice rather
+          // than a gesture, so it commits immediately, exactly as the select
+          // and toggle controls do.
+          onChoose={commitInstead}
         />
         {reference === null ? (
           // The SAME field every other text control uses, rather than one
@@ -530,9 +536,7 @@ function ColourPicker({
   onColour,
   onClosed,
   supersededBy,
-  onToken,
-  recent,
-  onRecent,
+  onChoose,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
@@ -577,11 +581,11 @@ function ColourPicker({
    * this is bound.
    */
   supersededBy: (target: EventTarget | null) => boolean;
-  onToken: (identity: string) => void;
-  /** The author's Recent colours, newest first. */
-  recent: readonly string[];
-  /** A recent colour was chosen, as it is listed. */
-  onRecent: (colour: string) => void;
+  /**
+   * A discrete choice: a variable, as a reference to its identity, or a
+   * recent colour, as it is listed.
+   */
+  onChoose: (value: StyleValue) => void;
 }): React.JSX.Element {
   // Whether the dismissal in progress belongs to a control that writes for
   // itself. Read once by the close below and reset there, so it cannot leak
@@ -664,13 +668,12 @@ function ColourPicker({
           onPick={identity => {
             // One discrete choice, committed at once; the close that follows
             // has nothing left to write.
-            onToken(identity);
+            onChoose({ $token: identity });
             setOpen(false);
           }}
         />
         <RecentColourChoices
-          colours={recent}
-          onPick={onRecent}
+          onPick={onChoose}
           // One discrete choice, as a variable is: the picker closes.
           onPicked={setOpen}
         />
@@ -690,18 +693,18 @@ function ColourPicker({
 
 /**
  * A field's commit that also remembers the raw colour it wrote, or chose
- * again, among the author's Recent colours; a refused value is not one.
+ * again, among the author's Recent colours; a refused value is not one, nor
+ * a variable or a clear.
  */
-function useRememberedCommit(
-  onCommit: (value: StyleValue | null) => CommitOutcome
-): readonly [readonly string[], (value: StyleValue | null) => CommitOutcome] {
-  const [recent, remember] = useRecentColours();
-  const commit = (value: StyleValue | null): CommitOutcome => {
+function rememberingCommit(
+  onCommit: (value: StyleValue | null) => CommitOutcome,
+  store: PreferenceStore | undefined
+): (value: StyleValue | null) => CommitOutcome {
+  return value => {
     const outcome = onCommit(value);
-    if (outcome !== "refused") remember(value);
+    if (outcome !== "refused") rememberColour(store, value);
     return outcome;
   };
-  return [recent, commit] as const;
 }
 
 /**
@@ -710,16 +713,15 @@ function useRememberedCommit(
  * there are none too, saying what will appear, so the place is known.
  */
 function RecentColourChoices({
-  colours,
   onPick,
   onPicked,
 }: {
-  colours: readonly string[];
   onPick: (colour: string) => void;
   /** Called with `false` once a colour is picked, to close the picker. */
   onPicked: (open: false) => void;
 }): React.JSX.Element {
   const headingId = React.useId();
+  const [colours] = useRecentColours();
   return (
     <div
       className="nx-style-inspector__recent"

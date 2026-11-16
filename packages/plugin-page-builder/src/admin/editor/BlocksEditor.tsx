@@ -20,7 +20,6 @@ import {
   type BlockDocument,
   type DocumentKind,
 } from "@nextlyhq/blocks-engine";
-import type { PreferenceStore } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   BuilderShell,
@@ -75,6 +74,7 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
+import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
 import {
@@ -615,10 +615,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     // Fills the view's area, under the admin's lock and recovery notices for
     // this document, rather than covering the window over them. A component's
     // own view carries its banner above the editor.
-    <EditorFrame
-      banner={componentView.banner}
-      recentColours={panels.recentColours}
-    >
+    <EditorFrame banner={componentView.banner} userId={mount.userId}>
       {/* The bound props a visitor will not see, for the inspector's note
           under each; the canvas's badges are handed the same answer. */}
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
@@ -808,13 +805,15 @@ function shellExit(
  */
 function EditorFrame({
   banner,
-  recentColours,
+  userId,
   children,
 }: {
   banner: React.ReactNode;
-  recentColours: PreferenceStore | undefined;
+  /** The signed-in author, whose Recent colours these are. */
+  userId: string | null;
   children: React.ReactNode;
 }): React.JSX.Element {
+  const recentColours = useMemo(() => recentColoursStore(userId), [userId]);
   const body = (
     <RecentColoursStore.Provider value={recentColours}>
       {children}

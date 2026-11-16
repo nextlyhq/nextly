@@ -65,7 +65,6 @@ import {
   type ComponentGraph,
 } from "./offered-library";
 import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
-import { recentColoursStore } from "./recent-colours-store";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
@@ -406,13 +405,6 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   };
 }
 
-/** The author's Recent colours, for every colour picker in the editor. */
-function useRecentColoursStore(
-  userId: string | null
-): PreferenceStore | undefined {
-  return useMemo(() => recentColoursStore(userId), [userId]);
-}
-
 /**
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
@@ -465,7 +457,6 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     () => designFoldsStoreFor(mount.userId),
     [mount.userId]
   );
-  const recentColours = useRecentColoursStore(mount.userId);
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
@@ -499,7 +490,6 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     pages,
     checklist,
     designFolds,
-    recentColours,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
     availablePanels: AVAILABLE_PANELS,
@@ -523,8 +513,6 @@ export type EditorPanels = OfferedLibrary &
     checklist: UseBuilderChecklistResult;
     /** Where the author's folded Design groups are kept, once they are known. */
     designFolds: PreferenceStore | undefined;
-    /** Where the author's Recent colours are kept, once they are known. */
-    recentColours: PreferenceStore | undefined;
     /** The page's Layout section for Settings, or null for another form. */
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
