@@ -85,6 +85,12 @@ const pgPath = (keys: readonly string[]) =>
 const dollarPath = (keys: readonly string[]) =>
   `'$${keys.map(key => `."${safeKey(key)}"`).join("")}'`;
 
+/** Whether a PostgreSQL timestamp column keeps its zone. */
+const zoned = (columnType: string) => /time zone|tz/i.test(columnType);
+
+/** An ISO date's trailing offset (`Z`, `+05:00`), which MySQL's casts do not read. */
+const ISO_OFFSET = "'(Z|[+-][0-9]{2}:[0-9]{2})$'";
+
 const POSTGRES: JsonDialect = {
   valueAt: (c, k) => `${c} #> ${pgPath(k)}`,
   holds: (c, k) =>
@@ -99,9 +105,7 @@ const POSTGRES: JsonDialect = {
     if (target.kind === "json") return c;
     if (target.kind === "timestamp") {
       // A zone-aware column is first read at UTC; a plain one already holds UTC.
-      const utc = /time zone|tz/i.test(target.columnType)
-        ? `${c} AT TIME ZONE 'UTC'`
-        : c;
+      const utc = zoned(target.columnType) ? `${c} AT TIME ZONE 'UTC'` : c;
       return `to_jsonb(to_char(${utc}, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))`;
     }
     return `to_jsonb(${c})`;
@@ -109,6 +113,12 @@ const POSTGRES: JsonDialect = {
   fromJson: (c, k, target) => {
     if (target.kind === "json") return `${c} #> ${pgPath(k)}`;
     const text = `${c} #>> ${pgPath(k)}`;
+    if (target.kind === "timestamp") {
+      // Read as an instant, whatever offset it was written with; a plain column holds it at UTC.
+      return zoned(target.columnType)
+        ? `(${text})::timestamptz`
+        : `((${text})::timestamptz AT TIME ZONE 'UTC')`;
+    }
     return TEXT_KINDS.has(target.kind)
       ? text
       : `(${text})::${target.columnType}`;
@@ -142,8 +152,12 @@ const MYSQL: JsonDialect = {
         return value;
       case "boolean":
         return `IF(${text} IN ('true', '1'), 1, 0)`;
-      case "timestamp":
-        return `CAST(REPLACE(REPLACE(${text}, 'T', ' '), 'Z', '') AS DATETIME(3))`;
+      case "timestamp": {
+        // The column holds UTC: the local part is read, then moved from its offset to UTC.
+        const offset = `REGEXP_SUBSTR(${text}, ${ISO_OFFSET})`;
+        const local = `CAST(REPLACE(REGEXP_REPLACE(${text}, ${ISO_OFFSET}, ''), 'T', ' ') AS DATETIME(3))`;
+        return `CONVERT_TZ(${local}, IF(${offset} IS NULL OR ${offset} = 'Z', '+00:00', ${offset}), '+00:00')`;
+      }
       case "integer":
       case "bigint":
       case "smallint":

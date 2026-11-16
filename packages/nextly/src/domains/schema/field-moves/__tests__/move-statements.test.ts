@@ -120,6 +120,23 @@ describe("moveDataStatements on SQLite", () => {
     });
   });
 
+  it("reads a date written with an offset back as the same instant", () => {
+    const db = table("published integer");
+    db.exec(
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"2026-11-16T10:00:00+05:00"}');`
+    );
+    run(
+      db,
+      moveDataStatements(
+        { from: key("meta", "published"), to: column("published") },
+        sqlite("timestamp", "integer")
+      ).copy
+    );
+    expect(db.prepare("SELECT published FROM dc_posts").get()).toEqual({
+      published: Date.parse("2026-11-16T10:00:00+05:00") / 1000,
+    });
+  });
+
   it("embeds a JSON value as JSON in the group, not as its text", () => {
     const db = table("tags text");
     db.exec(`INSERT INTO dc_posts (id, tags) VALUES (1, '["a","b"]');`);
@@ -223,6 +240,25 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     expect(out.clearSource).toEqual([
       "UPDATE `dc_posts` SET `meta` = JSON_REMOVE(`meta`, '$.\"title\"') WHERE JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"');",
     ]);
+  });
+
+  it("reads a date out of a group as an instant on PostgreSQL and MySQL, whatever its offset", () => {
+    const date = (dialect: "postgresql" | "mysql", columnType: string): MoveColumn => ({
+      table: "dc_posts",
+      dialect,
+      kind: "timestamp",
+      columnType,
+    });
+    const out = { from: key("meta", "published"), to: column("published") };
+    expect(moveDataStatements(out, date("postgresql", "timestamp")).copy[0]).toContain(
+      `SET "published" = (("meta" #>> '{"published"}')::timestamptz AT TIME ZONE 'UTC')`
+    );
+    expect(
+      moveDataStatements(out, date("postgresql", "timestamp with time zone")).copy[0]
+    ).toContain(`SET "published" = ("meta" #>> '{"published"}')::timestamptz WHERE`);
+    expect(moveDataStatements(out, date("mysql", "datetime(3)")).copy[0]).toContain(
+      "CONVERT_TZ(CAST(REPLACE(REGEXP_REPLACE(JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.\"published\"')), '(Z|[+-][0-9]{2}:[0-9]{2})$', ''), 'T', ' ') AS DATETIME(3)), IF("
+    );
   });
 
   it("refuses a key a JSON path cannot spell safely", () => {

@@ -142,6 +142,41 @@ describe("checkMove", () => {
     ).toMatchObject({ ok: false, reason: "field-group" });
   });
 
+  it("refuses a field with no column of its own, whose values are not on the row", () => {
+    const virtual = text("preview", { virtual: true });
+    expect(
+      checkMove([virtual, group("meta", [])], [group("meta", [virtual])], {
+        from: ["preview"],
+        to: ["meta", "preview"],
+      })
+    ).toMatchObject({ ok: false, reason: "no-column" });
+    const placed = { name: "seo", label: "SEO", type: "component", component: "seo" } as unknown as FieldDefinition;
+    expect(
+      checkMove([placed, group("meta", [])], [group("meta", [placed])], {
+        from: ["seo"],
+        to: ["meta", "seo"],
+      })
+    ).toMatchObject({ ok: false, reason: "no-column" });
+  });
+
+  it("judges a container that kept its name but changed type as one the field leaves", () => {
+    const rows = { name: "box", type: "repeater", fields: [text("title")] } as unknown as FieldDefinition;
+    const boxGroup = group("box", [group("meta", [text("title")])]);
+    expect(
+      checkMove([rows], [boxGroup], { from: ["box", "title"], to: ["box", "meta", "title"] })
+    ).toMatchObject({ ok: false, reason: "out-of-repeater" });
+  });
+
+  it("refuses a move into a field group spelled either way", () => {
+    for (const type of ["component", "fieldGroup"]) {
+      const placed = { name: "seo", type, fields: [] } as unknown as FieldDefinition;
+      const holding = { ...placed, fields: [text("title")] } as unknown as FieldDefinition;
+      expect(
+        checkMove([text("title"), placed], [holding], { from: ["title"], to: ["seo", "title"] })
+      ).toMatchObject({ ok: false, reason: "field-group" });
+    }
+  });
+
   describe("in an entity kept per language", () => {
     const translated = { localized: true };
 

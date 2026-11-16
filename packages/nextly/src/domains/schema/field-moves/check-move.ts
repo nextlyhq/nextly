@@ -11,7 +11,9 @@
  *   field, which holds blocks declared in code;
  * - a move that would change whether the field keeps a value for each language, which a group
  *   kept the same for every language cannot hold;
- * - a move made in the same save as a change of the field's type.
+ * - a move made in the same save as a change of the field's type;
+ * - a field with no column of its own (a virtual field, a field group, a many-to-many
+ *   relationship), whose values are not on the entry's row to move.
  *
  * A field is named by its path: the names of the named containers above it, outermost first, then
  * its own. A group with no name is not on the path, since its fields are stored beside it.
@@ -20,8 +22,10 @@
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { addressableFields } from "../../../shared/addressable-fields";
+import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
+import { fieldProducesColumn } from "../services/field-column-descriptor";
 
 /** Where a field's values are: a column of their own, or a key inside a container's JSON column. */
 export type StoragePlace =
@@ -53,6 +57,7 @@ export interface PlannedMove {
 export type MoveRefusalReason =
   | "not-found"
   | "type-changed"
+  | "no-column"
   | "unique"
   | "into-repeater"
   | "out-of-repeater"
@@ -137,7 +142,9 @@ function crossingRefusal(
 ): MoveCheck | null {
   const kinds = (list: readonly FieldDefinition[], type: string) =>
     list.find(each => each.type === type);
-  const fieldGroup = kinds(left, "component") ?? kinds(entered, "component");
+  const fieldGroup = [...left, ...entered].find(each =>
+    isFieldGroupFieldType(each.type)
+  );
   if (fieldGroup) {
     return refuse(
       "field-group",
@@ -192,6 +199,12 @@ export function checkMove(
       `${label(to.field)} is moved and changes type in the same save. Move it and change its type in separate saves.`
     );
   }
+  if (!fieldProducesColumn(to.field)) {
+    return refuse(
+      "no-column",
+      `${label(to.field)} keeps its values outside the entry's row, so it is not moved into or out of a group.`
+    );
+  }
   // Only the containers the move leaves or enters are judged, not those it stays inside.
   const shared = sharedDepth(from.containers, to.containers);
   const crossing = crossingRefusal(
@@ -221,13 +234,22 @@ export function checkMove(
   };
 }
 
-/** How many containers, outermost first, the two paths share by name. */
+/**
+ * How many containers, outermost first, the two paths share: the same name and the same type. A
+ * container that kept its name but changed type (repeating rows become a group) stores its fields
+ * differently, so a move out of it is judged as leaving it.
+ */
 function sharedDepth(
   a: readonly FieldDefinition[],
   b: readonly FieldDefinition[]
 ): number {
   let at = 0;
-  while (at < a.length && at < b.length && nameOf(a[at]) === nameOf(b[at])) {
+  while (
+    at < a.length &&
+    at < b.length &&
+    nameOf(a[at]) === nameOf(b[at]) &&
+    a[at].type === b[at].type
+  ) {
     at += 1;
   }
   return at;
