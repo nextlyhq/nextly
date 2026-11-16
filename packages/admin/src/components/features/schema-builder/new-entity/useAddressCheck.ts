@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 
+import { unsavedAddresses } from "@admin/lib/builder/unsaved-entities";
 import {
   addressCheckApi,
   type AddressCheckAnswer,
@@ -59,15 +60,42 @@ const UNCHECKED: AddressCheckState = {
   message: "This address could not be checked. Create checks it again.",
 };
 
+/** The words a refused address is shown with, or null when it is free. */
+function refusalWords(
+  kind: BuilderKind,
+  answer: AddressCheckAnswer
+): string | null {
+  if (!answer.refusal) return null;
+  if (answer.refusal.code === "DUPLICATE") return USED_BY[kind];
+  return answer.refusal.message;
+}
+
 function stateOf(
   kind: BuilderKind,
   answer: AddressCheckAnswer
 ): AddressCheckState {
-  if (!answer.refusal) return { status: "free" };
-  if (answer.refusal.code === "DUPLICATE") {
-    return { status: "refused", message: USED_BY[kind] };
-  }
-  return { status: "refused", message: answer.refusal.message };
+  const refused = refusalWords(kind, answer);
+  return refused === null
+    ? { status: "free" }
+    : { status: "refused", message: refused };
+}
+
+/**
+ * Asks once more, right before an unsaved entity's save creates it, whether
+ * its address is still free: another tab may have saved an entity under it
+ * since the dialog checked. Every other entity unsaved in this tab still holds
+ * its address; this one's own does not count against it. Answers with the
+ * words of the refusal, or null when the address is free.
+ */
+export async function checkAddressAgain(
+  kind: BuilderKind,
+  address: string
+): Promise<string | null> {
+  const others = unsavedAddresses().filter(
+    held => !(held.kind === CHECK_KIND[kind] && held.address === address)
+  );
+  const answer = await addressCheckApi.check(CHECK_KIND[kind], address, others);
+  return refusalWords(kind, answer);
 }
 
 export function useAddressCheck(
