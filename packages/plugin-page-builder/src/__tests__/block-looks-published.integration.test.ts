@@ -24,7 +24,7 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import type { ReactElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../plugin";
@@ -44,6 +44,8 @@ const WORN = [
   {
     look: "look:core/section:hero",
     className: "nx-l-section-hero",
+    // The section's own start tag: the one opening onto its heading.
+    wearer: /<section [^>]*>(?=<h2[^>]*>Welcome<)/,
     node: {
       id: "hero",
       type: "core/section",
@@ -64,6 +66,7 @@ const WORN = [
   ...(["secondary", "outline", "text"] as const).map(name => ({
     look: `look:core/button:${name}`,
     className: `nx-l-button-${name}`,
+    wearer: new RegExp(`<a [^>]*>(?=Button ${name}<)`),
     node: {
       id: `button-${name}`,
       type: "core/button",
@@ -74,6 +77,7 @@ const WORN = [
   ...(["rounded", "circle"] as const).map(name => ({
     look: `look:core/image:${name}`,
     className: `nx-l-image-${name}`,
+    wearer: new RegExp(`<img [^>]*alt="Image ${name}"[^>]*>`),
     node: {
       id: `image-${name}`,
       type: "core/image",
@@ -126,12 +130,15 @@ async function render(t: TestNextly, slug: string): Promise<string> {
   const element = (await route.ContentPage({
     params: { slug: [slug] },
   })) as ReactElement;
-  return renderToStaticMarkup(element);
-}
-
-/** The start tag of the element carrying `data-nx-node-id`'s value, if any. */
-function startTagOf(html: string, nodeId: string): string | undefined {
-  return html.match(new RegExp(`<[a-z]+ [^>]*data-nx-id="${nodeId}"[^>]*>`))?.[0];
+  // Streamed to completion: a button resolves its link and an image its
+  // picture asynchronously, and a static render keeps only their fallbacks.
+  const stream = await renderToReadableStream(element, {
+    onError(error) {
+      throw error;
+    },
+  });
+  await stream.allReady;
+  return new Response(stream).text();
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -160,13 +167,19 @@ describe.each(getConfiguredTestDialects())(
       });
 
       const html = await render(t, "looks");
-      console.log("HTMLDUMP", html);
       const css = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
         .map(match => match[1])
         .join("\n");
-      for (const { node, className } of WORN) {
-        expect(startTagOf(html, node.id), node.id).toContain(className);
-        expect(css, className).toContain(`.${className}`);
+      for (const { node, className, wearer } of WORN) {
+        // The class on the very element the node renders, as a whole token.
+        const tag = html.match(wearer)?.[0];
+        expect(tag, node.id).toMatch(
+          new RegExp(`class="(?:[^"]* )?${className}(?: [^"]*)?"`)
+        );
+        // And a rule for it in the page's CSS.
+        expect(css, className).toMatch(
+          new RegExp(`\\.${className}[^{]*\\{[^}]+\\}`)
+        );
       }
       // The rule carries the look's own values, not merely its selector.
       expect(css).toMatch(/\.nx-l-section-hero[^{]*\{[^}]*text-align:\s*center/);
