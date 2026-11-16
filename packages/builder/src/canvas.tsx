@@ -55,8 +55,8 @@ import {
   lockMarksOf,
 } from "./canvas-block-marks";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
-import { drawnRefusal } from "./canvas-drop-refusal";
 import { useCanvasEnvironment, useDrawnPage } from "./canvas-drawn-page";
+import { drawnRefusal } from "./canvas-drop-refusal";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { RegionsAround } from "./canvas-layout-parts";
 import { guardCanvasNavigation } from "./canvas-link-guard";
