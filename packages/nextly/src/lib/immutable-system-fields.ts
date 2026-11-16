@@ -25,11 +25,14 @@
 
 import { isVirtualField } from "../collections/fields/virtual";
 import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
+import { NextlyError } from "../errors";
+import { addressableFields } from "../shared/addressable-fields";
 import { hiddenColumnMatcher } from "../shared/lib/password-fields";
 
 import { toSnakeCase } from "./case-conversion";
 import {
   DOCUMENT_OVERWRITE_KEY,
+  DOCUMENT_RESTORED_FROM_KEY,
   DOCUMENT_VERSION_KEY,
   immutableSystemColumnNames,
   immutableSystemColumnNamesAnyEntity,
@@ -269,4 +272,56 @@ function keptInOwnTable(
     keys.add(field.name);
   }
   return keys;
+}
+
+/**
+ * The keys of a write's body that name nothing a write of that entity may carry: no declared
+ * field (by its name or its column's), no system column of the entity, and none of the keys that
+ * say how to write (`_rev`, `_overwrite`, `_restoredFrom`).
+ *
+ * Such a key has nowhere to go but a column of the same name: on the entity's own row, where a
+ * name that is no column fails the statement, or on a language's row, where it would be stored.
+ * A document as a read hands it out carries only its fields and system columns, so a client
+ * sending back what it read names none.
+ */
+export function undeclaredWriteKeys(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  /** The entity's declared fields, as configured. */
+  fields: unknown
+): string[] {
+  const allowed = new Set<string>([
+    ...systemColumnNames(column => column.appliesTo.includes(entity)),
+    DOCUMENT_VERSION_KEY,
+    DOCUMENT_OVERWRITE_KEY,
+    DOCUMENT_RESTORED_FROM_KEY,
+  ]);
+  for (const field of addressableFields(fields)) {
+    if (typeof field.name !== "string") continue;
+    allowed.add(field.name);
+    allowed.add(toSnakeCase(field.name));
+  }
+  return Object.keys(data).filter(key => !allowed.has(key));
+}
+
+/**
+ * Refuses a write whose body names a key it may not carry ({@link undeclaredWriteKeys}), with one
+ * validation issue per key. Called once the write's access has been judged and before any hook
+ * runs, so nothing of such a key is ever written.
+ */
+export function refuseUndeclaredWriteKeys(
+  data: Record<string, unknown>,
+  entity: WritableEntityKind,
+  fields: unknown
+): void {
+  const keys = undeclaredWriteKeys(data, entity, fields);
+  if (keys.length === 0) return;
+  const kind = entity === "single" ? "Single" : "collection";
+  throw NextlyError.validation({
+    errors: keys.map(key => ({
+      path: key,
+      code: "UNKNOWN_FIELD",
+      message: `"${key}" is not a field of this ${kind}, so a save cannot set it.`,
+    })),
+  });
 }
