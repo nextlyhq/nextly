@@ -113,41 +113,51 @@ const renameResolutions = (
         ],
       };
 
+/** A Single, saved through its Schema Builder dialog. */
+const SINGLE: Kind = {
+  name: "a Single",
+  slug: "notice",
+  table: "single_notice",
+  listed: "singles",
+  create: fields =>
+    dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "notice", label: "Notice", fields }
+    ),
+  change: async (t, fields, rename) =>
+    dispatchSingles(
+      "applySingleSchemaChanges",
+      { slug: "notice" },
+      {
+        fields,
+        confirmed: true,
+        // The version the Builder read, as its dialog sends it back.
+        schemaVersion: (
+          await t.getService("singleRegistryService").getSingle("notice")
+        ).schemaVersion,
+        ...renameResolutions("single_notice", rename),
+      }
+    ),
+  remove: () => dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
+  row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
+  seed: async (t, value) => {
+    await t.nextly.updateSingle({
+      slug: "notice",
+      data: { heading: value, _overwrite: true },
+    } as never);
+  },
+};
+
 const KINDS: Kind[] = [
+  SINGLE,
   {
-    name: "a Single",
-    slug: "notice",
-    table: "single_notice",
-    listed: "singles",
-    create: fields =>
-      dispatchSingles(
-        "createSingle",
-        {},
-        { slug: "notice", label: "Notice", fields }
-      ),
-    change: async (t, fields, rename) =>
-      dispatchSingles(
-        "applySingleSchemaChanges",
-        { slug: "notice" },
-        {
-          fields,
-          confirmed: true,
-          // The version the Builder read, as its dialog sends it back.
-          schemaVersion: (
-            await t.getService("singleRegistryService").getSingle("notice")
-          ).schemaVersion,
-          ...renameResolutions("single_notice", rename),
-        }
-      ),
-    remove: () =>
-      dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
-    row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
-    seed: async (t, value) => {
-      await t.nextly.updateSingle({
-        slug: "notice",
-        data: { heading: value, _overwrite: true },
-      } as never);
-    },
+    ...SINGLE,
+    // The same Single, its schema changed through the API's settings save, which detects a rename
+    // itself rather than being told of one.
+    name: "a Single's settings save",
+    change: (_t, fields) =>
+      dispatchSingles("updateSingleSchema", { slug: "notice" }, { fields }),
   },
   {
     name: "a field group",
@@ -444,6 +454,39 @@ describe.each(getConfiguredTestDialects())(
           .join("\n")
       ).toEqual([]);
     }
+
+    describe("a Single's settings save whose registry row fails after its file applied", () => {
+      it("throws an internal error, keeps the file recorded applied, and the same save again writes the row", async () => {
+        const t = await boot();
+        const kind = KINDS[1];
+        await kind.create([text("heading")]);
+        const registry = t.getService("singleRegistryService");
+        const failOnce = vi
+          .spyOn(registry, "updateSingle")
+          .mockRejectedValueOnce(new Error("the row write was refused"));
+
+        await expect(
+          kind.change(t, [text("heading"), text("body")])
+        ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+        failOnce.mockRestore();
+        // The file ran and is recorded applied; the row still describes the Single as it was.
+        expect(await columns(t, kind.table)).toContain("body");
+        expect(
+          (await kind.row(t))?.fields?.map(
+            field => (field as { name: string }).name
+          )
+        ).toEqual(["heading"]);
+
+        // The same save again: nothing left for the table, and the row is written.
+        await kind.change(t, [text("heading"), text("body")]);
+        expect(
+          (await kind.row(t))?.fields?.map(
+            field => (field as { name: string }).name
+          )
+        ).toEqual(["heading", "body"]);
+        await nothingLeftToDo(t);
+      }, 60_000);
+    });
 
     describe.each(KINDS)("$name", kind => {
       it("leaves nothing for migrate or migrate:check to do after its create, change and delete", async () => {
