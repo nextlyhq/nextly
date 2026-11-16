@@ -29,7 +29,13 @@ import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
-import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
+import {
+  CANVAS_ESCAPE_PRIORITY,
+  escapeOutcome,
+  modalIsOpen,
+  pressOrigin,
+} from "./canvas-escape";
+import { useCanvasFrame } from "./canvas-frame-context";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
@@ -628,6 +634,12 @@ export function useBlockKeyboardActions({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
+  // The canvas's frame, read when Escape lands for the same reason: it is
+  // where focus goes back to from a panel, and the frame is registered after
+  // the bindings are.
+  const canvasFrame = useCanvasFrame().frame;
+  const latestFrame = React.useRef(canvasFrame);
+  latestFrame.current = canvasFrame;
   const toolbarFocus: ToolbarFocusSlot = React.useRef<
     (() => HTMLElement | null) | null
   >(null);
@@ -1088,15 +1100,26 @@ export function useBlockKeyboardActions({
         // The one case the editor declines. `when` rather than a branch in
         // `run`, because declining has to leave the key UNCONSUMED for the
         // dialog to receive it, and a binding that runs has already taken it.
+        // The modal test alone, which is the first thing `escapeOutcome`
+        // asks: the rest of the rule needs the event, and `when` is not given
+        // one.
         when: () =>
-          escapeOutcome(
-            typeof document === "undefined" ? undefined : document
-          ) !== "defer-to-modal",
-        run: () => {
+          !modalIsOpen(typeof document === "undefined" ? undefined : document),
+        run: event => {
           const editorNow = latest.current;
+          // Where the press began, from the keystroke itself: a layer that
+          // closed on this same key has already moved focus by now.
           const outcome = escapeOutcome(
-            typeof document === "undefined" ? undefined : document
+            typeof document === "undefined" ? undefined : document,
+            { origin: pressOrigin(event), canvasFrame: latestFrame.current }
           );
+          if (outcome === "return-to-canvas") {
+            // Where the keyboard reaches the canvas by F6 too: the frame,
+            // with the selected block still outlined in it and the block's
+            // keys (Delete, Alt+F10, Enter, Escape) acting on it from there.
+            latestFrame.current?.focus();
+            return;
+          }
           if (outcome !== "navigate-selection") return;
           if (editorNow.selectedId === null) {
             escapeWithoutSelection.current?.();
