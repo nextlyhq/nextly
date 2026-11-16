@@ -29,7 +29,6 @@ packages/blocks-engine/src/style/compile-page.ts 2761
 
 
 
-packages/builder/src/binding-controls.tsx 1632
 
 
 
@@ -39,13 +38,11 @@ packages/builder/src/content-controls.tsx 1591
 
 
 
-packages/builder/src/insert-panel.tsx 1850
 
 packages/builder/src/inserter.ts 1559
 
 packages/builder/src/inspector-panel.tsx 1805
 
-packages/builder/src/keyboard-actions.tsx 1518
 
 
 
