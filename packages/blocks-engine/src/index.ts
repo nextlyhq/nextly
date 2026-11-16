@@ -308,7 +308,7 @@ export type {
   SelectionStop,
 } from "./select-nodes";
 
-export { measureBytes, surveyDocument } from "./measure-bytes";
+export { documentWork, measureBytes, surveyDocument } from "./measure-bytes";
 // Resolving linked components. Here rather than beside the renderer because
 // four surfaces need a resolved tree and only one of them renders: the
 // same-document canvas, the class-usage index and SEO derivation all read one
