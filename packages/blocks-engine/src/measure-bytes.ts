@@ -1,4 +1,9 @@
+import { countDocumentWalk } from "./document-walks";
 import { isPlainRecord } from "./plain-record";
+
+// The count of these walks, published beside them: read it before and after a
+// call to show whether the call walked a whole document.
+export { documentWork } from "./document-walks";
 
 /**
  * Bounded serialized-size measurement.
@@ -10,7 +15,8 @@ import { isPlainRecord } from "./plain-record";
  * allocation the cap exists to prevent.
  *
  * So this counts bytes and stops the moment the budget is passed, never
- * building the string. It lives in its own module, with no imports, because
+ * building the string. It lives in its own module, importing only leaf
+ * modules with no imports of their own, because
  * both the canonical validator and the published format checker have to reach
  * exactly this answer: two measurements of "how large is this document" would
  * disagree about which documents are refused, and the disagreement would show
@@ -647,6 +653,8 @@ export function surveyDocument(
   root: unknown,
   limits: SurveyLimits
 ): DocumentSurvey {
+  // Counted, so a caller can show an edit costs no whole-document walk.
+  countDocumentWalk();
   // A NaN limit removes every bound silently, because each cap is a `>`
   // comparison and every comparison against NaN is false. Measured:
   // `measureBytes("x".repeat(1_000_000), NaN)` walked the whole string and
