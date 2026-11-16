@@ -268,7 +268,7 @@ describe("the spacing box", () => {
     // reset, so a reset moved outside it, or into another narrow block,
     // fails here.
     const rows = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 13rem)"
+      "@container nx-inspector-fields (width < 16.5rem)"
     ).find(body =>
       body.includes(".nx-spacing-box__caption { position: static; }")
     );
@@ -319,7 +319,7 @@ describe("the spacing box", () => {
 describe("a token side in the narrow inspector", () => {
   it("puts Clear back in the row's flow, always shown", () => {
     const rows = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 13rem)"
+      "@container nx-inspector-fields (width < 16.5rem)"
     ).find(body =>
       body.includes(".nx-spacing-box__caption { position: static; }")
     );
@@ -486,12 +486,12 @@ describe("a style row's reset", () => {
     );
     expect(row).toBeGreaterThan(-1);
     expect(hidden).toBeGreaterThan(row);
-    // Below 13rem the box is rows again, and the reset is shown in its row,
+    // Below 16.5rem the box is rows again, and the reset is shown in its row,
     // a focused side's too: that selector is named here so the overlay rule,
     // which is more specific than the first, does not float it over the next
     // row's label.
     const rows = atRuleBodies(
-      "@container nx-inspector-fields (max-width: 13rem)"
+      "@container nx-inspector-fields (width < 16.5rem)"
     ).join(" ");
     expect(rows).toContain(
       ".nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action, .nx-spacing-box .nx-inspector__field:focus-within .nx-style-inspector__breakpoint-action, .nx-spacing-box .nx-inspector__error { display: flex;"
