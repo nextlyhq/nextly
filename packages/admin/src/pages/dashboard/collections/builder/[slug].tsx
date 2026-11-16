@@ -182,6 +182,9 @@ export default function CollectionBuilderEditPage({
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
   const localized = settings?.i18n === true;
+  // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
+  // refuses a field taking one of the lifecycle's names in the save that turns it on.
+  const drafts = settings?.status === true;
 
   // The schema landed. The apply carries fields only, so a save that also
   // changed the settings would otherwise clear the dirty badge while the
@@ -320,7 +323,7 @@ export default function CollectionBuilderEditPage({
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
-    preview: fields => schemaApi.preview(entitySlug, fields, localized),
+    preview: fields => schemaApi.preview(entitySlug, fields, localized, drafts),
     apply: (fields, version, resolutions, renames) =>
       schemaApi.apply(
         entitySlug,
@@ -328,7 +331,8 @@ export default function CollectionBuilderEditPage({
         version,
         resolutions,
         renames,
-        localized
+        localized,
+        drafts
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,

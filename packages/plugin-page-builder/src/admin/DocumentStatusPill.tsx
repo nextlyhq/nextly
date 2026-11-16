@@ -9,65 +9,42 @@
  * "Save", which does not answer the question an author actually has: is what I
  * am looking at what a visitor sees?
  *
- * ## The state is derived here, not read
+ * ## The saved page's state, and nothing about unsaved edits
  *
- * `useDocumentStatus` reports FACTS — the persisted status of the language
- * being edited, and whether a working draft is pending. What to CALL a
- * published document with unsaved edits depends on who has them, and the form
- * cannot answer that for this surface: the block document lives outside the
- * form until the author leaves the editor, so the form's dirty flag is false
- * through an entire editing session. The editor's own history is the honest
- * source, and `pillStateFromForm` is the same derivation the Document panel
- * uses, asked with a different second argument.
+ * `useDocumentStatus` reports the persisted status of the language being
+ * edited and whether a working draft is pending, and `savedPillState` turns
+ * those into Draft, Published or Changed: the same rule, by the same function,
+ * as the entry page's pill. Unsaved edits are not counted, because the save
+ * chip beside it already says so; a pill that said it too ("Modified") gave
+ * the bar two signals for one state.
  *
  * ## The words are shared and the colours are not
  *
- * `PILL_LABEL` comes from the admin so both editors call the same state by the
- * same name — "Changed" and "Modified" are a distinction the derivation is
- * careful about, and two vocabularies would undo it. The COLOURS are this
- * surface's own: the editor's chrome is drawn from `--nx-builder-*` tokens, and
- * borrowing the admin's warning palette would put a panel's colours on a bar
- * that is not that panel.
+ * The words come from the admin (`PILL_LABEL`, through `StatusPill`), so both
+ * editors call the same state by the same name. The COLOURS are this
+ * surface's own: the editor's chrome is drawn from `--nx-builder-*` tokens,
+ * and borrowing the admin's warning palette would put a panel's colours on a
+ * bar that is not that panel.
  *
  * @module @nextlyhq/plugin-page-builder/admin/DocumentStatusPill
  */
 
-import {
-  pillStateFromForm,
-  useDocumentStatus,
-} from "@nextlyhq/plugin-sdk/admin";
+import { savedPillState, useDocumentStatus } from "@nextlyhq/plugin-sdk/admin";
 import type { JSX } from "react";
 
 import { StatusPill } from "./status-pill";
 
-export interface DocumentStatusPillProps {
-  /**
-   * Whether the editor holds edits the document does not have yet.
-   *
-   * Supplied by the caller rather than read from the form, for the reason in
-   * the module docblock: the form does not know.
-   */
-  isDirty: boolean;
-}
-
 /**
- * @param props - whether the editor has uncommitted work
  * @returns the pill, or nothing when no surrounding form published a status
  */
-export function DocumentStatusPill({
-  isDirty,
-}: DocumentStatusPillProps): JSX.Element | null {
+export function DocumentStatusPill(): JSX.Element | null {
   const status = useDocumentStatus();
   // Nothing rather than a guess. A blocks field also renders inside a create
   // form and inside previews, where no status has been persisted — and a pill
   // reading "Draft" there would be a claim nobody made.
   if (status === null) return null;
 
-  const state = pillStateFromForm(
-    status.status,
-    isDirty,
-    status.hasWorkingDraft
-  );
+  const state = savedPillState(status.status, status.hasWorkingDraft);
   // Named for a reader, because "Draft" alone in a toolbar does not say
   // what it describes.
   return <StatusPill state={state} subject="Page status" />;

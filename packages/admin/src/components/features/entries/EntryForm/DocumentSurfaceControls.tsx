@@ -24,10 +24,11 @@ import {
   useDocumentActionsContext,
   useHostedRecoveryPoint,
   useHostedStored,
+  useSaveChipDrawn,
 } from "./DocumentActionsContext";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { useHostedRecoveryOffer } from "./RecoveryOfferContext";
-import { SaveStateIndicator } from "./SaveStateIndicator";
+import { SaveStateIndicator, type OfferedSave } from "./SaveStateIndicator";
 import type { DocumentActionBindings } from "./useDocumentActionBindings";
 
 /**
@@ -64,6 +65,8 @@ function HostedSaveIndicator({
   // The recovery offer, made in the chip; its control claims it, which takes
   // down the banner.
   const offer = useHostedRecoveryOffer();
+  // Drawn, so the document's Save keeps that offer while it waits.
+  useSaveChipDrawn();
   return (
     <>
       <SaveStateIndicator
@@ -71,6 +74,10 @@ function HostedSaveIndicator({
         recovery={recovery}
         stored={stored}
         offer={offer}
+        // The document's own Save, which keeps changes on offer while they
+        // wait (see `pendingRecovery`), so the chip's Save and the bar's
+        // are one action, refused for the same reasons.
+        save={offeredSave(hosted)}
         {...(className === undefined ? {} : { className })}
       />
       <DocumentStatusLive
@@ -79,6 +86,17 @@ function HostedSaveIndicator({
       />
     </>
   );
+}
+
+/** The document's Save, as the chip's recovery offer runs it. */
+function offeredSave(hosted: DocumentActionBindings): OfferedSave {
+  const reason = hosted.bindings.save?.disabledReason;
+  return {
+    run: () => {
+      void hosted.run("save");
+    },
+    ...(reason === undefined ? {} : { disabledReason: reason }),
+  };
 }
 
 /**
