@@ -348,7 +348,7 @@ function useChipRecoveryOffer(
   viewingVersion: ViewedVersion | null
 ): HostedRecoveryOffer | null {
   const offer = liveRecoveryOffer(recovery, viewingVersion);
-  const { restore, dismiss } = recovery;
+  const { restore, dismiss, discard } = recovery;
   return useMemo(
     () =>
       offer === null
@@ -358,8 +358,9 @@ function useChipRecoveryOffer(
             olderVersion: offer.olderVersion,
             restore,
             dismiss,
+            discard,
           },
-    [offer, restore, dismiss]
+    [offer, restore, dismiss, discard]
   );
 }
 
