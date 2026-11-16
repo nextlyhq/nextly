@@ -421,6 +421,14 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   // author does not already see.
   disclosureIcon: "Icon",
   disclosurePosition: "Position",
+  // In the Background section, where "Background" already says whose it is;
+  // the whole name was cut to "Background gradi…".
+  backgroundGradient: "Gradient",
+  // What the value says: the size of each column or row ("1fr 2fr"). Not
+  // "Columns" alone, which on a Columns block reads as how many there are.
+  // Rows is shortened with Columns so the pair reads as one in Layout.
+  gridTemplateColumns: "Column sizes",
+  gridTemplateRows: "Row sizes",
 };
 
 /**

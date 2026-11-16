@@ -17,12 +17,9 @@ import {
   resultsAddress,
   shareImageFit,
 } from "../tab/display";
-import { DESCRIPTION_LIMIT } from "../tab/problems";
+import { cutToFit } from "../tab/problems";
 
 import { cx } from "./parts";
-
-/** About how many characters of a title a results page shows, with its cut. */
-const RESULTS_TITLE_CUT = 61;
 
 /** One of the two preview cards: its small heading, and what it shows. */
 function PreviewFrame({
@@ -109,6 +106,24 @@ export function PreviewCard({
   );
 }
 
+/**
+ * The text under the result's link: none where the page asks for none, else
+ * its description cut at the width Google shows, and sooner where the page
+ * set a limit in characters (`max-snippet`, which Google counts so).
+ */
+function resultText(answer: SeoAnswer): string {
+  if (answer.display?.nosnippet) return "No text under the link";
+  if (answer.description === undefined) {
+    return "Google will pick text from the page, since nothing is set.";
+  }
+  const limit = answer.display?.maxSnippet;
+  const text = answer.description.value;
+  return cutToFit(
+    "description",
+    limit === undefined ? text : cutAt(text, limit)
+  );
+}
+
 /** The page as one result on Google, with the overlay when it is hidden. */
 function SearchResult({
   answer,
@@ -138,15 +153,16 @@ function SearchResult({
       >
         {answer.title === undefined
           ? name
-          : cutAt(answer.title.value, RESULTS_TITLE_CUT)}
+          : cutToFit("title", answer.title.value)}
       </div>
       <div
         data-testid="seo-search-description"
-        className="mt-1 text-[13px] leading-normal [overflow-wrap:anywhere] text-muted-foreground"
+        className={cx(
+          "mt-1 text-[13px] leading-normal [overflow-wrap:anywhere] text-muted-foreground",
+          answer.display?.nosnippet && "italic"
+        )}
       >
-        {answer.description === undefined
-          ? "Google will pick text from the page, since nothing is set."
-          : cutAt(answer.description.value, DESCRIPTION_LIMIT)}
+        {resultText(answer)}
       </div>
     </div>
   );

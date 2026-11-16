@@ -13,6 +13,7 @@
  * clean slate.
  */
 import { publicApi } from "../api/publicApi";
+import { parsePasswordRule, setPasswordRule } from "../password-rule";
 
 /** What setup-status answers, as the admin reads it. */
 export interface SetupStatus {
@@ -55,9 +56,13 @@ async function fetchSetupStatus(): Promise<SetupStatus> {
           isSetup?: unknown;
           requiresSetupToken?: unknown;
           allowRegistration?: unknown;
+          passwordRule?: unknown;
         }
       | undefined
     >("/auth/setup-status");
+    // The password forms check by the server's rule from here on.
+    const rule = parsePasswordRule(result?.passwordRule);
+    if (rule) setPasswordRule(rule);
     // Require a strict boolean; any other shape (empty body, non-JSON,
     // schema drift) takes the same fail-safe default as the catch branch
     // below. Inlined rather than throwing into the catch -- the admin

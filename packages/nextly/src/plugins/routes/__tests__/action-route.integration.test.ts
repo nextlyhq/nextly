@@ -43,6 +43,7 @@ const handler = (path: string) => async (req: Request) => {
 };
 
 const route = (path: string) => ({
+  siteWide: false as const,
   method: "POST" as const,
   path,
   handler: handler(path),

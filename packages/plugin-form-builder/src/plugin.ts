@@ -366,6 +366,12 @@ export function formBuilder(
       admin: {
         views: {
           [resolvedConfig.formOverrides.slug]: {
+            // The form editor needs the width: the Forms panel starts folded
+            // on it, and the bar's toggle brings it back. Declared rather
+            // than asked for by the editor as it mounts, so the admin's first
+            // frame is drawn folded too and nothing moves when the editor
+            // arrives. The admin remembers the reader's choice.
+            foldedPanel: true,
             documentViews: addressedFormPages().map(page => ({
               ...page,
               component: FORM_EDITOR_VIEW,

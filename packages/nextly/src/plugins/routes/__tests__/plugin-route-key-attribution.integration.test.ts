@@ -57,6 +57,7 @@ const writer = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "POST",
         path: "/as-caller",
         handler: async (req, ctx) => {
@@ -81,6 +82,7 @@ const writer = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/scopes",
         // What the handler runs under: the actor its writes are recorded
@@ -93,6 +95,7 @@ const writer = definePlugin({
           }),
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/as-system",
         handler: async (req, ctx) => {
@@ -108,6 +111,7 @@ const writer = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/as-another",
         handler: async (req, ctx) => {

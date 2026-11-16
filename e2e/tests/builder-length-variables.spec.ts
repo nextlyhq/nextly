@@ -17,8 +17,10 @@ import {
   selection,
 } from "./canvas/editor-driver";
 import { expectNoAxeViolations } from "./support/axe";
+import { CANVAS_FRAME } from "./support/canvas-frame";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { countEveryPage } from "./support/usage-count";
 
 // The homepage is reseeded and saved, and the site's variables are changed
 // and restored, as the other builder files do.
@@ -91,6 +93,8 @@ test("a type size picked for a heading is stored as a reference, and follows the
   test.setTimeout(180_000);
   const before = await storedTokens(page);
   try {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const seeded = await page.request.patch(SITE_STYLE, {
       data: { tokens: { tokens: TYPE_SCALE }, _overwrite: true },
     });
@@ -189,6 +193,8 @@ test("a type size picked for a heading is stored as a reference, and follows the
   } finally {
     // Off the homepage first: a variable still in use cannot be removed.
     await emptyHomepage(page);
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });
@@ -198,12 +204,14 @@ test("a type size picked for a heading is stored as a reference, and follows the
   }
 });
 
-test("Escape closes an open picker and leaves the selection, and the next one goes up", async ({
+test("Escape closes an open picker and leaves the selection, the next returns to the canvas, and the one after goes up", async ({
   page,
 }) => {
   test.setTimeout(150_000);
   const before = await storedTokens(page);
   try {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const seeded = await page.request.patch(SITE_STYLE, {
       data: { tokens: { tokens: TYPE_SCALE }, _overwrite: true },
     });
@@ -258,13 +266,49 @@ test("Escape closes an open picker and leaves the selection, and the next one go
       await expect(picker.list).toHaveCount(0);
       expect(await selection(page)).toEqual([HEADING]);
 
-      // With it closed, Escape is the editor's again: up to the section.
+      // With it closed, focus is back on the picker's button in the
+      // inspector, and Escape there leaves the panel: focus returns to the
+      // canvas and the heading stays selected. Waited for rather than
+      // assumed: the list leaves the page a moment before its close hands
+      // focus back, and a press in between starts on nothing.
+      await expect(picker.open).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(page.locator(CANVAS_FRAME)).toBeFocused();
+      await expect.poll(() => selection(page)).toEqual([HEADING]);
+
+      // From the canvas, Escape is the editor's: up to the section.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => selection(page)).toEqual(["escape-section"]);
+
+      // A pick closes the list itself, and hands focus back to the field it
+      // changed. The Escape after it leaves the inspector, as above, rather
+      // than moving the selection the inspector is showing.
+      await clickBlock(page, HEADING);
+      await expect.poll(() => selection(page)).toEqual([HEADING]);
+      await inspector.getByRole("tab", { name: "Style" }).click();
+      if ((await typography.getAttribute("aria-expanded")) !== "true") {
+        await typography.click();
+      }
+      await expect(typography).toHaveAttribute("aria-expanded", "true");
+      await expect(picker.open).toBeVisible();
+      await picker.open.click();
+      await expect(picker.list).toBeVisible();
+      await picker.list.getByRole("option").first().click();
+      await expect(picker.list).toHaveCount(0);
+      // The field redraws with what it now holds, so the button focus lands
+      // on is a new one: waited for by where it is, in the inspector.
+      await expect(inspector.locator(":focus")).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      await expect(page.locator(CANVAS_FRAME)).toBeFocused();
+      await expect.poll(() => selection(page)).toEqual([HEADING]);
       await page.keyboard.press("Escape");
       await expect.poll(() => selection(page)).toEqual(["escape-section"]);
     }
   } finally {
     // Off the homepage first: a variable still in use cannot be removed.
     await emptyHomepage(page);
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });

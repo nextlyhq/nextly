@@ -21,7 +21,7 @@ import {
   type PluginDocumentActionOverride,
 } from "./admin-contributions";
 import type { PluginDefinition } from "./plugin-context";
-import { renamedSlug } from "./validate-document-views";
+import { renamedSlug } from "./plugin-slug";
 
 /** One action override as the admin is given it, on the slug it applies to. */
 export interface PublishedDocumentActionOverride {
@@ -149,7 +149,12 @@ function isMap(value: unknown): value is Record<string, unknown> {
  */
 function shapeReason(slug: string, view: unknown): string | undefined {
   if (!isMap(view)) return undefined;
-  const { documentActions, panelSections } = view;
+  const { documentActions, panelSections, foldedPanel } = view;
+  // Read by the prebuilt admin page as well as the admin, so anything but a
+  // yes or a no is refused here rather than read two ways.
+  if (foldedPanel !== undefined && typeof foldedPanel !== "boolean") {
+    return `declares foldedPanel on "${slug}" that is neither true nor false`;
+  }
   if (documentActions !== undefined && !isMap(documentActions)) {
     return `declares documentActions on "${slug}" that is not a map of actions to overrides`;
   }

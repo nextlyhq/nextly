@@ -24,7 +24,7 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 
-import type { ResolvedColumn } from "./dsl";
+import type { ColumnBuilder, ResolvedColumn } from "./dsl";
 import type { SchemaOwner } from "./types";
 
 /**
@@ -151,40 +151,210 @@ export function assertMayAddColumns(
 }
 
 /**
- * Whether an override is allowed, and whether it preserves the value type.
- *
- * App only. An override changes the STORAGE of a field's column — Payload's
- * `varchar('city', { length: 10 })` case — and a plugin doing that to somebody
- * else's field would change what every reader of it gets back.
- *
- * The compatibility rule is about the VALUE, not the storage word: text may
- * become a narrower text, an integer a wider integer. Crossing families would
- * make the field's own validation describe a column that cannot hold what it
- * accepts.
+ * The storage an override gives a field's column: the kind it renders as, and
+ * the size that kind takes. Kinds are the field descriptor's own, so the
+ * desired table and the runtime table render an overridden column through
+ * the functions that render every field column.
  */
-const VALUE_FAMILIES: ReadonlyArray<ReadonlySet<string>> = [
-  new Set(["text", "longText", "shortText", "varchar", "char", "uuid", "enum"]),
-  new Set(["integer", "bigint", "smallint"]),
-  new Set(["double", "real", "decimal"]),
-  new Set(["boolean"]),
-  new Set(["timestamp"]),
-  new Set(["json"]),
-  new Set(["bytes"]),
-];
+export interface OverrideStorage {
+  kind: "text" | "longText" | "shortText" | "integer" | "bigint" | "decimal";
+  length?: number;
+  precision?: number;
+  scale?: number;
+}
 
-export function assertOverrideCompatible(
-  fromKind: string,
-  toKind: string,
+/** A field column, as the draft seeds it, that an override is judged against. */
+export interface OverriddenColumn {
+  kind: string;
+  precision?: number;
+  scale?: number;
+}
+
+/** What `overrideColumn` reads of a builder: its storage and what else it says. */
+type OverrideBuilder = Pick<
+  ColumnBuilder,
+  | "kind"
+  | "nullable"
+  | "length"
+  | "precision"
+  | "scale"
+  | "default"
+  | "generated"
+  | "onUpdate"
+  | "enumValues"
+  | "primaryKey"
+  | "references"
+>;
+
+/** The kinds a string field's column has, by the builder that made its table. */
+const STRING_COLUMN_KINDS: ReadonlySet<string> = new Set([
+  "text",
+  "longText",
+  "shortText",
+]);
+
+/**
+ * The storage of a string target. `col.varchar(n)` becomes the bounded
+ * kind a field declaring a width gets, so the width is enforced on
+ * PostgreSQL too, where a declared table's `varchar` renders as `text`: an
+ * override to a width is asked for so that the width holds.
+ */
+function stringTarget(builder: OverrideBuilder): OverrideStorage | undefined {
+  switch (builder.kind) {
+    case "text":
+      return { kind: "text" };
+    case "longText":
+      return { kind: "longText" };
+    case "shortText":
+      return { kind: "shortText", length: 255 };
+    case "varchar":
+      return { kind: "shortText", length: builder.length ?? 255 };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The storage an app's override gives a field's column, or a refusal.
+ *
+ * App only, and storage only: the column's type and the size that type
+ * takes. Its name, nullability, default and keys stay the field's, so a
+ * builder saying anything about them is refused rather than half-applied.
+ *
+ * The targets are listed per kind rather than per family, so what would
+ * change the VALUES is kept out: a `char` pads them, a `uuid` refuses text
+ * that is not one, an `enum` adds a check. A string may narrow, since the
+ * apply judges that by the stored data; a number may only widen from the
+ * field's own storage, since nothing judges a numeric narrowing by its data.
+ */
+export function resolveColumnOverride(
+  column: OverriddenColumn,
+  builder: OverrideBuilder,
   tableName: string,
   columnName: string
-): void {
-  const family = VALUE_FAMILIES.find(set => set.has(fromKind));
-  if (family?.has(toKind) === true) return;
+): OverrideStorage {
+  const path = `${tableName}.${columnName}`;
+  assertStorageOnly(builder, path, columnName);
+
+  if (STRING_COLUMN_KINDS.has(column.kind)) {
+    const target = stringTarget(builder);
+    if (target !== undefined) return target;
+    refuseTarget(path, columnName, column.kind, builder.kind, [
+      "col.text()",
+      "col.longText()",
+      "col.shortText()",
+      "col.varchar(n)",
+    ]);
+  }
+
+  if (column.kind === "integer") {
+    if (builder.kind === "integer" || builder.kind === "bigint") {
+      return { kind: builder.kind };
+    }
+    if (builder.kind === "smallint") {
+      refuse(
+        path,
+        `Column "${columnName}" holds whole numbers as an integer, and smallint is narrower. An override may only widen a number, since nothing checks the stored values fit a narrower one.`
+      );
+    }
+    refuseTarget(path, columnName, column.kind, builder.kind, [
+      "col.integer()",
+      "col.bigint()",
+    ]);
+  }
+
+  if (column.kind === "decimal") {
+    if (builder.kind !== "decimal") {
+      refuseTarget(path, columnName, column.kind, builder.kind, [
+        "col.decimal(precision, scale)",
+      ]);
+    }
+    return decimalTarget(column, builder, path, columnName);
+  }
 
   refuse(
-    `${tableName}.${columnName}`,
-    `A column of kind "${fromKind}" cannot be overridden to "${toKind}": the field's validation would describe a column that cannot hold what it accepts. Overrides may change storage within a value family, not across one.`
+    path,
+    `Column "${columnName}" is ${describeKind(column.kind)}, which has no other storage an override may choose. Overrides change a string field's, a whole-number field's or a decimal field's column.`
   );
+}
+
+/** A decimal target, which may keep or grow the digits on each side of the point. */
+function decimalTarget(
+  column: OverriddenColumn,
+  builder: OverrideBuilder,
+  path: string,
+  columnName: string
+): OverrideStorage {
+  const fromPrecision = column.precision ?? 10;
+  const fromScale = column.scale ?? 2;
+  const toPrecision = builder.precision ?? fromPrecision;
+  const toScale = builder.scale ?? fromScale;
+  if (
+    toScale < fromScale ||
+    toPrecision - toScale < fromPrecision - fromScale
+  ) {
+    refuse(
+      path,
+      `Column "${columnName}" is decimal(${String(fromPrecision)}, ${String(fromScale)}), and decimal(${String(toPrecision)}, ${String(toScale)}) keeps fewer digits on one side of the point. An override may only widen a number, since nothing checks the stored values fit a narrower one.`
+    );
+  }
+  return { kind: "decimal", precision: toPrecision, scale: toScale };
+}
+
+/** Refuse a builder that says anything beyond the column's storage. */
+function assertStorageOnly(
+  builder: OverrideBuilder,
+  path: string,
+  columnName: string
+): void {
+  const extras = [
+    builder.nullable ? "nullable" : undefined,
+    builder.default !== undefined ? "a default" : undefined,
+    builder.generated !== undefined ? "a generated value" : undefined,
+    builder.onUpdate !== undefined ? "an update stamp" : undefined,
+    builder.enumValues !== undefined ? "enum values" : undefined,
+    builder.primaryKey === true ? "a primary key" : undefined,
+    builder.references !== undefined ? "a reference" : undefined,
+  ].filter((extra): extra is string => extra !== undefined);
+  if (extras.length === 0) return;
+  refuse(
+    path,
+    `An override changes only the storage of "${columnName}"; this one also sets ${extras.join(", ")}. Whether the column is required, its default and its keys stay the field's: change the field instead.`
+  );
+}
+
+function refuseTarget(
+  path: string,
+  columnName: string,
+  fromKind: string,
+  toKind: string,
+  allowed: readonly string[]
+): never {
+  refuse(
+    path,
+    `Column "${columnName}" is ${describeKind(fromKind)}, and cannot be overridden to ${toKind}: it may become ${allowed.join(", ")}. An override changes the storage within the column's value family, and a ${toKind} would change what the field's values are.`
+  );
+}
+
+/** A column kind, as a refusal names it. */
+function describeKind(kind: string): string {
+  if (STRING_COLUMN_KINDS.has(kind)) return "a string";
+  switch (kind) {
+    case "integer":
+      return "a whole number";
+    case "decimal":
+      return "a decimal";
+    case "double":
+      return "a floating-point number (its only other storage, real, loses precision)";
+    case "boolean":
+      return "a boolean";
+    case "timestamp":
+      return "a date";
+    case "json":
+      return "JSON";
+    default:
+      return `of kind ${kind}`;
+  }
 }
 
 /** Refuse an override from anyone but the app. */

@@ -257,9 +257,9 @@ export function buildAuthRouterDeps(
       );
     },
 
-    // Sign-out and the theft response delete through `serializeOnSqlite`: a
-    // revocation another request's rollback undid would leave a session the
-    // user was told had ended.
+    // Sign-out and ending all of an account's sessions delete through
+    // `serializeOnSqlite`: a revocation another request's rollback undid
+    // would leave a session the user was told had ended.
     deleteRefreshTokenByHash: async (tokenHash: string) => {
       const { eq } = await import("drizzle-orm");
       const { refreshTokens } = getDialectTables();
@@ -280,12 +280,12 @@ export function buildAuthRouterDeps(
       // and collapsing an unknown answer to "no administrator" would both lie
       // about setup state and risk a second super-admin. Callers convert
       // failures to a 503 envelope. The same question the first-administrator
-      // grant asks, through the same query.
-      const { superAdminRoleHeld } = await import(
-        "../../domains/users/services/last-super-admin"
+      // grant asks, through the same query; a yes is kept under the role
+      // version, since setup-status asks it on every admin screen.
+      const { administratorExists } = await import(
+        "../../domains/users/services/administrator-known"
       );
-      const adapter = getService("adapter");
-      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
+      return administratorExists(getService("adapter"), getDialectTables());
     },
 
     setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),

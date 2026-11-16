@@ -13,6 +13,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { getDialectTables } from "../../database/index";
+import {
+  storeRehashedPassword,
+  type PasswordWriteTx,
+} from "../../domains/users/services/password-write";
 import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
 import type { DatabaseAdapter } from "../../shared/types/database-adapter";
 
@@ -85,6 +89,16 @@ export function passwordCredentialDeps(
           .update(schema.users)
           .set({ failedLoginAttempts: 0, lockedUntil: null })
           .where(eq(schema.users.id, userId))
+      );
+    },
+
+    storeRehashedPassword: async (userId: string, from: string, to: string) => {
+      await serializeOnSqlite(adapter(), () =>
+        storeRehashedPassword(db() as PasswordWriteTx, getDialectTables(), {
+          userId,
+          from,
+          to,
+        })
       );
     },
   };

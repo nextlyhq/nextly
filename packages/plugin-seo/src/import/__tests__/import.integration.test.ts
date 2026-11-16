@@ -648,7 +648,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(after.edition?.canonical).toBe("/edition?edition=original");
   });
 
-  it("leaves out values a page's own code overrides, as never served, unless included", async () => {
+  it("leaves out values a page's own code overrides, saying so, unless included", async () => {
     const { t, staff } = await boot(dialect);
     await page(t, {
       title: "Pricing",
@@ -722,7 +722,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
         description: "An old description the page never showed.",
       },
     });
-    expect(skipped?.reason).toMatch(/^Never served/);
+    expect(skipped?.reason).toMatch(/^The page's code sets its own value now/);
     expect(
       dry.documents.find(entry => entry.label === "Pricing")?.values
     ).toEqual({ title: "Nextly pricing" });
@@ -746,7 +746,7 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(after.changelog?.metaTitle).toBe("Old changelog title");
 
     // Typed now, they win over the route's code, so checking again reports
-    // them as kept, not as never served.
+    // them as kept, not as overridden by the code.
     const checked = await dryRun(staff.importer, source);
     const typed = checked.documents.find(entry => entry.label === "Changelog");
     expect(typed?.kept).toEqual(["title", "description"]);

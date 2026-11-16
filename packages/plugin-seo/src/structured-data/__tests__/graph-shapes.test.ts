@@ -341,7 +341,31 @@ const PAGES: PageCase[] = [
         "operatingSystem",
         "offers",
       ],
-      FAQPage: ["mainEntity"],
+      // The hand-written graph also described the page's questions as an
+      // FAQPage beside the app. The plugin describes questions only on a
+      // page whose kind someone chose as Questions and answers, or where an
+      // FAQ section is declared (the next page), so a home page described as
+      // an app gets none, though its route lists them.
+    },
+  },
+  {
+    name: "the home page with its FAQ section declared",
+    input: single(
+      "home",
+      { id: "s4", updatedAt: "2026-11-11" },
+      { questions: QUESTIONS, faqSection: true }
+    ),
+    answer: answer(
+      "/",
+      "Nextly | Open-source CMS and Visual Page Builder for Next.js",
+      "Nextly is an open-source CMS and Visual Page Builder for Next.js."
+    ),
+    handWritten: {
+      WebPage: ["@id", "url", "name", "isPartOf", "mainEntity", "hasPart"],
+      SoftwareApplication: ["@id", "name", "applicationCategory"],
+      // The questions the hand-written graph described beside the app, now
+      // as a section of the page the page names as a part of it.
+      FAQPage: ["@id", "isPartOf", "mainEntity", "inLanguage"],
     },
   },
 ];

@@ -579,6 +579,36 @@ describe("LayersPanel", () => {
     );
   });
 
+  it("names a block marked never to be quoted as not quoted in search, to a screen reader too", () => {
+    render(
+      <Host
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              node("a", "core/section", {
+                name: "Pricing table",
+                nosnippet: true,
+              }),
+              node("b", "core/section", { name: "Questions" }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    register();
+
+    expect(
+      screen.getByRole("treeitem", {
+        name: /Pricing table.*not quoted in search/i,
+      })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("treeitem", { name: /Questions/ }).textContent
+    ).not.toMatch(/quoted/i);
+  });
+
   it("names a row inside a locked block as locked BY that block, quieter than its own", () => {
     // A lock covers everything inside the block: each row inside says so in
     // words, naming the block to unlock, and only the locked block's own row

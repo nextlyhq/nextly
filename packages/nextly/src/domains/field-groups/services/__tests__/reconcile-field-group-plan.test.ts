@@ -69,11 +69,13 @@ function plan(args: {
     field: ReconcilableField,
     table: ReconcileTable
   ) => string | undefined;
-  /** The builder's DEFAULT for a column; `known: false` means the check must stay silent. */
-  expectedColumnDefault?: (
+  /** The earlier creator's spelling, accepted beside `expectedColumnType`. */
+  preBuilderSaveColumnType?: (
     field: ReconcilableField,
     table: ReconcileTable
-  ) => { known: boolean; value?: string };
+  ) => string | undefined;
+  /** The DEFAULT the creator writes, accepted beside the built table's. */
+  creatorColumnDefault?: (field: ReconcilableField) => string | undefined;
 }) {
   return planFieldGroupReconcile({
     storedFields: args.storedFields,
@@ -85,8 +87,11 @@ function plan(args: {
     ...(args.expectedColumnType
       ? { expectedColumnType: args.expectedColumnType }
       : {}),
-    ...(args.expectedColumnDefault
-      ? { expectedColumnDefault: args.expectedColumnDefault }
+    ...(args.preBuilderSaveColumnType
+      ? { preBuilderSaveColumnType: args.preBuilderSaveColumnType }
+      : {}),
+    ...(args.creatorColumnDefault
+      ? { creatorColumnDefault: args.creatorColumnDefault }
       : {}),
   });
 }
@@ -549,6 +554,62 @@ describe("planFieldGroupReconcile", () => {
   });
 
   /**
+   * Two spellings of one field's column exist in databases: today's, from the column descriptor a
+   * Builder save's migration builds with, and the one the creator before it gave. A column in
+   * either is the field's column; a column in neither is drift, however the widening is read.
+   */
+  describe("a column built before the Builder's save writer", () => {
+    const stored: ReconcilableField[] = [{ name: "contact", type: "email" }];
+    const withLiveType = (type: string): TableSpec => {
+      const live = liveTableFor([{ name: "contact", type: "email" }]);
+      const col = live.columns.find(c => c.name === "contact");
+      if (col) col.type = type;
+      return live;
+    };
+    // PostgreSQL's spellings for an `email`: `text` today, `VARCHAR(255)` from the earlier creator.
+    const spellings = {
+      expectedColumnType: () => "text",
+      preBuilderSaveColumnType: () => "VARCHAR(255)",
+    };
+
+    it("accepts a column in the earlier creator's spelling", () => {
+      const result = plan({
+        storedFields: stored,
+        liveMain: withLiveType("varchar"),
+        ...spellings,
+      });
+
+      expect(result.blockers).toEqual([]);
+    });
+
+    it("accepts a column in today's spelling", () => {
+      const result = plan({
+        storedFields: stored,
+        liveMain: withLiveType("text"),
+        ...spellings,
+      });
+
+      expect(result.blockers).toEqual([]);
+    });
+
+    it("refuses a column in neither spelling, naming today's", () => {
+      const result = plan({
+        storedFields: stored,
+        liveMain: withLiveType("int4"),
+        ...spellings,
+      });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          fieldName: "contact",
+          kind: "physical-type-changed",
+          detail: expect.stringContaining("would create as text"),
+        }),
+      ]);
+    });
+  });
+
+  /**
    * The two tables are built by different code and spell the same field differently, so the type
    * check must ask about the table the column was FOUND in.
    *
@@ -589,20 +650,33 @@ describe("planFieldGroupReconcile", () => {
   /**
    * The DEFAULT is physical, and drifts exactly as the type does.
    *
-   * Three-valued on purpose: the removal case below is the one a `string | undefined` expectation
-   * cannot express, because "the definition declares no default" and "no expectation could be
-   * derived" would be the same value, and the first must block while the second must not.
+   * Two writers build the main table and they disagree about a checkbox's default: a table built
+   * from the definition (a Builder save) carries none, and the creator writes the declared one.
+   * Either is healthy; anything else is drift, including a default the definition no longer
+   * declares.
    */
   describe("column defaults", () => {
-    const storedCheckbox: ReconcilableField[] = [
-      { name: "featured", type: "checkbox" },
-    ];
+    /** A stored checkbox, which carries the default the planner reads beside its flags. */
+    type CheckboxField = ReconcilableField & { defaultValue?: boolean };
 
-    function planWithDefaults(
+    /** The creator's spelling of a checkbox default, as `FieldGroupSchemaService` writes it. */
+    const creatorDefault = (field: ReconcilableField): string | undefined =>
+      "defaultValue" in field && field.defaultValue !== undefined
+        ? String(field.defaultValue)
+        : undefined;
+
+    function planWithDefault(
       liveDefault: string | undefined,
-      expected: { known: boolean; value?: string }
+      declared: boolean | undefined
     ) {
-      const live = liveTableFor(storedCheckbox);
+      const stored: CheckboxField[] = [
+        {
+          name: "featured",
+          type: "checkbox",
+          ...(declared !== undefined ? { defaultValue: declared } : {}),
+        },
+      ];
+      const live = liveTableFor(stored);
       const col = live.columns.find(c => c.name === "featured");
       if (col) {
         col.default = liveDefault;
@@ -612,15 +686,24 @@ describe("planFieldGroupReconcile", () => {
         col.type = "boolean";
       }
       return plan({
-        storedFields: storedCheckbox,
+        storedFields: stored,
         liveMain: live,
-        expectedColumnDefault: () => expected,
+        creatorColumnDefault: creatorDefault,
       });
     }
 
+    // A Builder save's table: the definition declares a default, the column carries none.
+    it("accepts a declared default the column does not carry, as a Builder save builds it", () => {
+      expect(planWithDefault(undefined, true).blockers).toEqual([]);
+    });
+
+    // The creator's table: the column carries the declared default.
+    it("accepts the declared default on the column, as the creator builds it", () => {
+      expect(planWithDefault("true", true).blockers).toEqual([]);
+    });
+
     it("refuses when the live default no longer matches the declared one", () => {
-      const result = planWithDefaults("false", { known: true, value: "true" });
-      expect(result.blockers).toEqual([
+      expect(planWithDefault("false", true).blockers).toEqual([
         expect.objectContaining({
           fieldName: "featured",
           kind: "column-default-changed",
@@ -628,11 +711,10 @@ describe("planFieldGroupReconcile", () => {
       ]);
     });
 
-    // The case the third state exists for: the authored default was REMOVED while the column kept
-    // its own. A two-valued expectation reports this as nothing to compare.
+    // The authored default was REMOVED while the column kept its own: neither writer gives a
+    // column a default the definition does not declare.
     it("refuses when the definition declares no default and the column has one", () => {
-      const result = planWithDefaults("true", { known: true });
-      expect(result.blockers).toEqual([
+      expect(planWithDefault("true", undefined).blockers).toEqual([
         expect.objectContaining({ kind: "column-default-changed" }),
       ]);
     });
@@ -641,14 +723,120 @@ describe("planFieldGroupReconcile", () => {
     // PostgreSQL reports `true` — so a raw string compare would report drift on every healthy
     // SQLite group. This is the pair that proves the comparison runs through the normaliser.
     it("accepts a live default that matches after normalisation", () => {
-      const result = planWithDefaults("1", { known: true, value: "true" });
+      expect(planWithDefault("1", true).blockers).toEqual([]);
+    });
+
+    // Without the creator's answer only the built table's is accepted, so a creator that was not
+    // asked never reads as one that writes no default.
+    it("accepts only the built table's default when the creator is not asked", () => {
+      const stored: CheckboxField[] = [
+        { name: "featured", type: "checkbox", defaultValue: true },
+      ];
+      const live = liveTableFor(stored);
+      const col = live.columns.find(c => c.name === "featured");
+      if (col) {
+        col.default = "true";
+        col.type = "boolean";
+      }
+      expect(plan({ storedFields: stored, liveMain: live }).blockers).toEqual([
+        expect.objectContaining({ kind: "column-default-changed" }),
+      ]);
+    });
+
+    // The companion's columns are rendered by the localization path, which models no defaults, so
+    // a companion column is not judged on one.
+    it("does not judge a companion column's default", () => {
+      const stored: ReconcilableField[] = [
+        { name: "title", type: "text", localized: true },
+      ];
+      const companion = companionWith([{ name: "title" }]);
+      const title = companion.columns.find(c => c.name === "title");
+      if (title) title.default = "'x'";
+      const result = plan({
+        storedFields: stored,
+        liveMain: liveTableFor(stored, { localized: true }),
+        liveCompanion: companion,
+        storedLocalized: true,
+        creatorColumnDefault: creatorDefault,
+      });
+      expect(result.blockers).toEqual([]);
+    });
+  });
+
+  /**
+   * Which index a field's column carries is the generator's answer, not the `index` flag's alone:
+   * a single reference is indexed whether or not it asks, so its undeclared index is healthy and a
+   * missing one is drift no flag can describe.
+   */
+  describe("field indexes", () => {
+    const reference: ReconcilableField & { relationTo: string } = {
+      name: "author",
+      type: "relationship",
+      relationTo: "users",
+    };
+
+    it("accepts the index a single reference carries without declaring one", () => {
+      const stored = [reference];
+      const result = plan({
+        storedFields: stored,
+        liveMain: liveTableFor(stored),
+      });
+      expect(result.repaired).toEqual([]);
+      expect(result.blockers).toEqual([]);
+      expect(result.unchanged).toBe(true);
+    });
+
+    it("refuses a single reference whose index is gone", () => {
+      const stored = [reference];
+      const live = liveTableFor(stored);
+      live.indexes = (live.indexes ?? []).filter(
+        index => !(index.columns.length === 1 && index.columns[0] === "author")
+      );
+      const result = plan({ storedFields: stored, liveMain: live });
+      expect(result.repaired).toEqual([]);
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          fieldName: "author",
+          kind: "field-index-changed",
+        }),
+      ]);
+    });
+
+    // The control: where the flag decides the index, a live index the flag does not ask for is
+    // still recorded on the flag, and a declared one that is gone is still cleared.
+    it("records an index the flag does not ask for on a plain field", () => {
+      const stored: ReconcilableField[] = [{ name: "rank", type: "number" }];
+      const live = liveTableFor([
+        { name: "rank", type: "number", index: true },
+      ]);
+      const result = plan({ storedFields: stored, liveMain: live });
+      expect(result.repaired).toEqual([
+        {
+          fieldName: "rank",
+          columnName: "rank",
+          table: "main",
+          attribute: "index",
+          from: false,
+          to: true,
+        },
+      ]);
       expect(result.blockers).toEqual([]);
     });
 
-    // The negative control. `known: false` must SKIP, never block — the companion reports it for
-    // every column, so blocking here would refuse every localized group.
-    it("stays silent when no default expectation could be derived", () => {
-      const result = planWithDefaults("true", { known: false });
+    it("clears a declared index the plain field's column no longer carries", () => {
+      const stored: ReconcilableField[] = [
+        { name: "rank", type: "number", index: true },
+      ];
+      const live = liveTableFor([{ name: "rank", type: "number" }]);
+      const result = plan({ storedFields: stored, liveMain: live });
+      expect(result.repaired).toEqual([
+        expect.objectContaining({
+          fieldName: "rank",
+          attribute: "index",
+          from: true,
+          to: false,
+        }),
+      ]);
       expect(result.blockers).toEqual([]);
     });
   });
@@ -1089,5 +1277,161 @@ describe("planFieldGroupReconcile", () => {
       localized: true,
       required: false,
     });
+  });
+});
+
+/**
+ * A group with no name only lays fields out, and the fields inside it are stored on the field
+ * group's row. The planner matches each with its column there, keeps the definition in its own
+ * shape, and names the column a table made before such fields were stored is still to receive.
+ */
+describe("planFieldGroupReconcile — fields inside a group with no name", () => {
+  /** A group with no name holding `fields`. */
+  const laidOut = (fields: unknown[]): ReconcilableField =>
+    ({
+      type: "group",
+      label: "Layout",
+      fields,
+    }) as unknown as ReconcilableField;
+
+  /** The stored definition: a field beside the group, and two levels of groups with no name. */
+  const stored = (): ReconcilableField[] => [
+    { name: "title", type: "text" },
+    laidOut([
+      { name: "note", type: "text" },
+      laidOut([{ name: "count", type: "number", required: true }]),
+    ]),
+  ];
+
+  it("matches each field inside the group with its column and keeps the definition's shape", () => {
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields),
+    });
+
+    expect(result.unchanged).toBe(true);
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.awaitingColumns).toEqual([]);
+    expect(result.fields).toEqual(fields);
+  });
+
+  it("names a column the table does not hold yet, keeping its field, and the rest unchanged", () => {
+    const fields = stored();
+    // The table as an earlier version made it: a column for the field beside the group alone.
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor([{ name: "title", type: "text" }]),
+    });
+
+    expect(result.awaitingColumns).toEqual([
+      { fieldName: "note", columnName: "note" },
+      { fieldName: "count", columnName: "count" },
+    ]);
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.blockers).toEqual([]);
+    expect(result.unchanged).toBe(true);
+    expect(result.fields).toEqual(fields);
+  });
+
+  it("refuses a column awaited inside the group beside one no field describes", () => {
+    // `note` may have been renamed to `memo`, or never made: the schema cannot say which, so the
+    // repair refuses rather than adopt `memo` under a guessed type beside a field left waiting.
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor([
+        { name: "title", type: "text" },
+        { name: "memo", type: "text" },
+        { name: "count", type: "number", required: true },
+      ]),
+    });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({
+        kind: "ambiguous-rename",
+        fieldName: "note",
+        columnName: "memo",
+      }),
+    ]);
+  });
+
+  it("repairs a field inside the group in its place", () => {
+    const fields = stored();
+    // The live `count` column takes nulls, so the field it stores is no longer required.
+    const live = liveTableFor(fields);
+    const count = live.columns.find(column => column.name === "count")!;
+    count.nullable = true;
+
+    const result = plan({ storedFields: fields, liveMain: live });
+
+    expect(result.repaired).toEqual([
+      expect.objectContaining({ fieldName: "count", attribute: "required" }),
+    ]);
+    const inner = (result.fields[1] as unknown as { fields: unknown[] })
+      .fields[1] as { fields: ReconcilableField[] };
+    expect(inner.fields[0]).toMatchObject({ name: "count", required: false });
+    // The stored definition itself is left as it was.
+    expect(
+      (
+        (fields[1] as unknown as { fields: unknown[] }).fields[1] as {
+          fields: ReconcilableField[];
+        }
+      ).fields[0]
+    ).toMatchObject({ required: true });
+  });
+
+  it("adopts an unknown live column beside the group, not inside it", () => {
+    const fields = stored();
+    const live = liveTableFor([...fields, { name: "extra", type: "text" }]);
+
+    const result = plan({ storedFields: fields, liveMain: live });
+
+    expect(result.adopted.map(entry => entry.columnName)).toEqual(["extra"]);
+    expect(result.fields.slice(0, 2)).toEqual(fields);
+    expect(result.fields[2]).toMatchObject({ name: "extra" });
+  });
+
+  it("keeps a many-to-many relationship, whose values a field group keeps on its row", () => {
+    // A collection keeps such links in a junction table; a field group has none, and keeps the
+    // list in a column of its own row, inside a group with no name as beside it.
+    const tags = {
+      name: "tags",
+      type: "relationship",
+      options: { target: "tags", relationType: "manyToMany" },
+    } as unknown as ReconcilableField;
+    const besideTags = {
+      ...tags,
+      name: "labels",
+    } as unknown as ReconcilableField;
+    const fields = [besideTags, laidOut([tags])];
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields),
+    });
+
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.awaitingColumns).toEqual([]);
+    expect(result.unchanged).toBe(true);
+    expect(result.fields).toEqual(fields);
+  });
+
+  it("expects a text inside the group on the main table of a translated field group", () => {
+    // Which fields are translated is read from the declared list, so the text inside the group
+    // stays on the row however the field group is translated, and its place needs no repair.
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields, { localized: true }),
+      liveCompanion: companionWith([{ name: "title" }]),
+      storedLocalized: true,
+    });
+
+    expect(result.repaired).toEqual([]);
+    expect(result.blockers).toEqual([]);
+    expect(result.unchanged).toBe(true);
   });
 });

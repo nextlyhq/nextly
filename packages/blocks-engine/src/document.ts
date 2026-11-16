@@ -212,6 +212,15 @@ export interface BlockNode {
   customCss?: string;
   /** CSS id applied to the node's root element. */
   cssId?: string;
+  /**
+   * "Never quote this": the node's root element carries `data-nosnippet`, so
+   * search engines that read it, Google's among them, show none of its text
+   * in a result's snippet. Stored only while on. Google reads the attribute
+   * on `span`, `div` and `section` elements
+   * (https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag),
+   * so it is offered on blocks whose root is one of those.
+   */
+  nosnippet?: boolean;
   /** Sanitized custom HTML attributes applied to the node's root element. */
   attributes?: Record<string, string>;
   /**
@@ -966,6 +975,29 @@ export interface BlockPart {
     /** The wrapper parts the root may be (`frame`, `link`). */
     readonly whenRootIs: readonly string[];
   };
+}
+
+/**
+ * A reference to the design token `identity`, scaled by `times` when given:
+ * the one way a reference is built, so every writer stores the same shape
+ * and a reader looking for one in stored text ({@link tokenRefText}) looks
+ * for what was written.
+ */
+export function tokenRef(identity: string, times?: number): TokenRef {
+  return times === undefined
+    ? { $token: identity }
+    : { $token: identity, times };
+}
+
+/**
+ * The text a stored document holds for any reference to `identity`, as
+ * `JSON.stringify` writes it: the `$token` member of {@link tokenRef}, which
+ * a scale, when present, follows or precedes as another member. Matched
+ * against a document serialized the same way, it finds a reference wherever
+ * the document holds one, without reading the document as blocks.
+ */
+export function tokenRefText(identity: string): string {
+  return JSON.stringify(tokenRef(identity)).slice(1, -1);
 }
 
 /** True if a style value is a design-token reference. */

@@ -22,6 +22,7 @@ import { NextlyError } from "../errors/nextly-error";
 
 import type { ComponentPath } from "./admin-contributions";
 import type { PluginDefinition } from "./plugin-context";
+import { renamedSlug } from "./plugin-slug";
 
 /**
  * Paths the document's own screens already use under its address. A view
@@ -80,19 +81,6 @@ function documentViewError(
 /** The label, carried only when declared. */
 function labelOf(view: { label?: string }): { label?: string } {
   return view.label === undefined ? {} : { label: view.label };
-}
-
-/**
- * A declared slug after the plugin's rename map, read from the map's OWN
- * keys: `constructor` is a legal slug, and an inherited lookup answers it with
- * a function the admin would receive as no slug at all.
- */
-export function renamedSlug(
-  plugin: PluginDefinition,
-  declared: string
-): string {
-  const renames = plugin.renameMap ?? {};
-  return Object.hasOwn(renames, declared) ? renames[declared] : declared;
 }
 
 /** Every view one plugin declares, slug-scoped then field-type-scoped. */

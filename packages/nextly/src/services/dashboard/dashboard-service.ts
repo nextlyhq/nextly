@@ -1710,7 +1710,7 @@ export class DashboardService extends BaseService {
         // `entryHeading` walks the nominated field and then every conventional
         // name in `COMMON_TITLE_FIELDS`, but the Direct
         // API's `select` is a real projection (`applyFieldSelection` in
-        // `collection-query-service.ts` keeps only `id`, the system
+        // `shared/lib/field-selection.ts` keeps only `id`, the system
         // timestamps, and whatever key is named here) -- so `title` and
         // `name` reach the resolver only when they are asked for by name.
         // Without them the fallback candidates are simply absent from every

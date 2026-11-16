@@ -11,6 +11,7 @@
 import { isRecord } from "../plain-values";
 import {
   AI_CRAWLER_CHOICES,
+  largeImagePreviewsOn,
   SITE_KINDS,
   type AiCrawlerChoice,
   type SeoContentType,
@@ -25,6 +26,10 @@ import {
   type Separator,
 } from "../settings/patterns";
 import {
+  VERIFICATION_SERVICES,
+  type VerificationServiceKey,
+} from "../settings/verification";
+import {
   DETAIL_GUESSES,
   STRUCTURED_DATA_TYPES,
   type StructuredDataDetail,
@@ -36,11 +41,43 @@ import type {
   StructuredDataTypeRule,
 } from "../structured-data/rules";
 
+import {
+  BRAND_TEXT_FACTS,
+  brandDetailsDraftOf,
+  storedBrandDetails,
+  type BrandDetailsDraft,
+} from "./brand-draft";
+
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
   network: string;
   url: string;
 }
+
+/**
+ * The site's own robots.txt lines as the form holds them: the box's text,
+ * and the confirmation of the sitemap pages its rules block, saved with the
+ * text and the pages it confirmed.
+ */
+export interface RobotsRulesDraft {
+  text: string;
+  confirmed?: { text: string; pages: string };
+}
+
+/** One other service's tag, as the form holds it while a person types. */
+export interface OtherTagDraft {
+  name: string;
+  code: string;
+}
+
+/**
+ * The verification codes as the form holds them: each box's text as typed,
+ * and the other services' tags. A box holds only a code once what was pasted
+ * is read (`settings/verification`); until then the save is held up.
+ */
+export type VerificationDraft = Record<VerificationServiceKey, string> & {
+  others: OtherTagDraft[];
+};
 
 /** Every value the screen edits, as the form holds it. */
 export interface SettingsDraft {
@@ -56,19 +93,39 @@ export interface SettingsDraft {
   brandOtherNames: string;
   logo: string | null;
   socialProfiles: ProfileDraft[];
+  /**
+   * The brand's other facts: what it is, how to reach it, when it was
+   * founded and who owns it.
+   */
+  brandDetails: BrandDetailsDraft;
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
   /** The content types hidden from search as a whole, by key. */
   hiddenTypes: string[];
+  /**
+   * The content types whose SEO is switched off, by key. Every type is on
+   * until listed, and off deletes nothing.
+   */
+  typesWithSeoOff: string[];
   /** Each content type's structured data choice and detail mapping, by key. */
   structuredData: Record<string, StructuredDataTypeRule>;
   /** Whether IndexNow is told of changed pages. */
   indexNow: boolean;
   /** Whether `/llms.txt` is served. */
   llmsTxt: boolean;
+  /** Whether `/llms-full.txt` is served beside it. */
+  llmsFullTxt: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro: string;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
+  /** The site's own robots.txt lines. */
+  robotsRules: RobotsRulesDraft;
+  /** The codes other services verify the site with. */
+  verificationCodes: VerificationDraft;
+  /** Whether every listed page asks for large image previews. */
+  largeImagePreviews: boolean;
 }
 
 /** The stored Single as the admin reads it. */
@@ -112,6 +169,84 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
   return patterns;
 }
 
+/**
+ * The stored own robots.txt lines as the form holds them: the box empty
+ * where nothing is stored, as before the field existed.
+ */
+export function robotsRulesDraftOf(value: unknown): RobotsRulesDraft {
+  if (!isRecord(value)) return { text: "" };
+  const confirmed = isRecord(value.confirmed) ? value.confirmed : undefined;
+  return {
+    text: text(value.text),
+    ...(confirmed === undefined
+      ? {}
+      : {
+          confirmed: {
+            text: text(confirmed.text),
+            pages: text(confirmed.pages),
+          },
+        }),
+  };
+}
+
+/**
+ * The own lines as they are stored: the text without the blank lines at its
+ * end, the confirmation only while it is for that text, and null for an
+ * empty box, so clearing it clears the value.
+ */
+function storedRobotsRules(draft: RobotsRulesDraft): RobotsRulesDraft | null {
+  const kept = draft.text.replace(/\s+$/, "");
+  if (kept.trim() === "") return null;
+  const confirmed =
+    draft.confirmed !== undefined &&
+    draft.confirmed.text.replace(/\s+$/, "") === kept
+      ? { text: kept, pages: draft.confirmed.pages }
+      : undefined;
+  return confirmed === undefined ? { text: kept } : { text: kept, confirmed };
+}
+
+/**
+ * The stored verification codes as the form holds them: each service's
+ * code, and each other service's tag, with anything that is not text left
+ * out. Nothing stored, as before the field existed, is every box empty.
+ */
+export function verificationDraftOf(value: unknown): VerificationDraft {
+  const stored = isRecord(value) ? value : {};
+  const codes = Object.fromEntries(
+    VERIFICATION_SERVICES.map(service => [
+      service.key,
+      text(stored[service.key]),
+    ])
+  ) as Record<VerificationServiceKey, string>;
+  const others = Array.isArray(stored.others)
+    ? stored.others.filter(isRecord).map(tag => ({
+        name: text(tag.name),
+        code: text(tag.code),
+      }))
+    : [];
+  return { ...codes, others };
+}
+
+/**
+ * The verification codes as they are stored: each code trimmed, an empty box
+ * left out, an empty other-service row dropped, and null where nothing is
+ * left, so clearing every box clears the value.
+ */
+function storedVerification(
+  draft: VerificationDraft
+): Record<string, unknown> | null {
+  const stored: Record<string, unknown> = {};
+  for (const service of VERIFICATION_SERVICES) {
+    const code = draft[service.key].trim();
+    if (code !== "") stored[service.key] = code;
+  }
+  const others = draft.others
+    .map(tag => ({ name: tag.name.trim(), code: tag.code.trim() }))
+    .filter(tag => tag.name !== "" || tag.code !== "");
+  if (others.length > 0) stored.others = others;
+  return Object.keys(stored).length === 0 ? null : stored;
+}
+
 /** What the plugin's own options answer while the settings hold nothing. */
 export interface SettingsDefaults {
   /** The plugin's `aiCrawlers` option: what robots.txt asks until the site chooses. */
@@ -152,6 +287,7 @@ export function draftOf(
     brandOtherNames: text(stored.brandOtherNames),
     logo: mediaId(stored.logo),
     socialProfiles: profilesOf(stored.socialProfiles),
+    brandDetails: brandDetailsDraftOf(stored.brandDetails),
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
@@ -162,6 +298,12 @@ export function draftOf(
           (key): key is string => typeof key === "string"
         )
       : [...(defaults.hiddenTypes ?? [])],
+    // Every type is on until the site switches it off.
+    typesWithSeoOff: Array.isArray(stored.typesWithSeoOff)
+      ? stored.typesWithSeoOff.filter(
+          (key): key is string => typeof key === "string"
+        )
+      : [],
     // The rules in force: the site's own for a type it chose for, else the
     // plugin's, as the page's markup reads them.
     structuredData: {
@@ -171,7 +313,13 @@ export function draftOf(
     // Off unless stored as switched on.
     indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
+    llmsFullTxt: stored.llmsFullTxt === true,
+    llmsIntro: text(stored.llmsIntro),
     plainTextCopies: stored.plainTextCopies === true,
+    robotsRules: robotsRulesDraftOf(stored.robotsRules),
+    verificationCodes: verificationDraftOf(stored.verificationCodes),
+    // On unless stored as switched off.
+    largeImagePreviews: largeImagePreviewsOn(stored.largeImagePreviews),
   };
 }
 
@@ -200,6 +348,46 @@ export function withHidden(
 ): SettingsDraft {
   const others = draft.hiddenTypes.filter(each => each !== key);
   return { ...draft, hiddenTypes: hidden ? [...others, key] : others };
+}
+
+/** Whether the type `key` has SEO: every type does until switched off. */
+export function isSeoOn(draft: SettingsDraft, key: string): boolean {
+  return !draft.typesWithSeoOff.includes(key);
+}
+
+/** `draft` with SEO switched on or off for the type `key`. */
+export function withSeoOn(
+  draft: SettingsDraft,
+  key: string,
+  on: boolean
+): SettingsDraft {
+  const others = draft.typesWithSeoOff.filter(each => each !== key);
+  return { ...draft, typesWithSeoOff: on ? others : [...others, key] };
+}
+
+/**
+ * The switches `draft` changes from `before`, said in plain words under the
+ * Save button ("1 change: SEO off for Authors"), each type by its name in
+ * `labels`; null where no switch changed.
+ */
+export function switchChangesText(
+  before: SettingsDraft,
+  draft: SettingsDraft,
+  labels: ReadonlyMap<string, string>
+): string | null {
+  const keys = [
+    ...new Set([...before.typesWithSeoOff, ...draft.typesWithSeoOff]),
+  ];
+  const said = keys
+    .filter(key => isSeoOn(before, key) !== isSeoOn(draft, key))
+    .map(key => ({ key, label: labels.get(key) ?? key }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map(
+      ({ key, label }) =>
+        `SEO ${isSeoOn(draft, key) ? "on" : "off"} for ${label}`
+    );
+  if (said.length === 0) return null;
+  return `${said.length} ${said.length === 1 ? "change" : "changes"}: ${said.join(", ")}`;
 }
 
 /** The structured data type the type `key` chose, or none: automatic. */
@@ -239,8 +427,12 @@ function sorted(value: unknown): unknown {
 const sameRule = (a: StructuredDataTypeRule, b: StructuredDataTypeRule) =>
   JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 
+// A rule declaring only an FAQ section is a choice the site made, so it is
+// not empty.
 const isEmptyRule = (rule: StructuredDataTypeRule): boolean =>
-  rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
+  rule.type === undefined &&
+  rule.faqSection === undefined &&
+  Object.keys(rule.details ?? {}).length === 0;
 
 /**
  * The rules the site saves: those that differ from the plugin's, so a type
@@ -270,6 +462,25 @@ export function withStructuredType(
 ): SettingsDraft {
   const { type: _previous, ...rest } = draft.structuredData[key] ?? {};
   return withRule(draft, key, type === undefined ? rest : { ...rest, type });
+}
+
+/** Whether the type `key` declares its pages' questions an FAQ section. */
+export function faqSectionOf(draft: SettingsDraft, key: string): boolean {
+  return draft.structuredData[key]?.faqSection === true;
+}
+
+/**
+ * `draft` with the type `key`'s pages' questions declared an FAQ section of
+ * each page, or not: off is no declaration at all rather than `false`, so a
+ * type left alone and one switched back read the same.
+ */
+export function withFaqSection(
+  draft: SettingsDraft,
+  key: string,
+  on: boolean
+): SettingsDraft {
+  const { faqSection: _previous, ...rest } = draft.structuredData[key] ?? {};
+  return withRule(draft, key, on ? { ...rest, faqSection: true } : rest);
 }
 
 /** The fields the type `key` reads each detail of `type` from. */
@@ -378,6 +589,9 @@ function storedForm(
   return {
     ...draft,
     structuredData: savedRules(draft.structuredData, defaults),
+    robotsRules: storedRobotsRules(draft.robotsRules),
+    verificationCodes: storedVerification(draft.verificationCodes),
+    brandDetails: storedBrandDetails(draft.brandDetails),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -428,6 +642,11 @@ export function rebasedDraft(
       before.hiddenTypes,
       after.hiddenTypes
     ),
+    typesWithSeoOff: rebasedSet(
+      draft.typesWithSeoOff,
+      before.typesWithSeoOff,
+      after.typesWithSeoOff
+    ),
     productionAddresses: rebasedSet(
       draft.productionAddresses,
       before.productionAddresses,
@@ -438,7 +657,63 @@ export function rebasedDraft(
       before.socialProfiles,
       after.socialProfiles
     ),
+    verificationCodes: rebasedVerification(
+      draft.verificationCodes,
+      before.verificationCodes,
+      after.verificationCodes
+    ),
+    brandDetails: rebasedBrandDetails(
+      draft.brandDetails,
+      before.brandDetails,
+      after.brandDetails
+    ),
   };
+}
+
+/**
+ * The brand details moved fact by fact, and the contact points item by
+ * item, so an edit to the email keeps another person's edit to the parent
+ * organization.
+ */
+function rebasedBrandDetails(
+  draft: BrandDetailsDraft,
+  before: BrandDetailsDraft,
+  after: BrandDetailsDraft
+): BrandDetailsDraft {
+  const next: BrandDetailsDraft = {
+    ...after,
+    contactPoints: rebasedSet(
+      draft.contactPoints,
+      before.contactPoints,
+      after.contactPoints
+    ),
+  };
+  for (const fact of BRAND_TEXT_FACTS) {
+    if (draft[fact] !== before[fact]) next[fact] = draft[fact];
+  }
+  return next;
+}
+
+/**
+ * The verification codes moved service by service, and the other services'
+ * tags row by row, so an edit to one service's code keeps another person's
+ * edit to another's.
+ */
+function rebasedVerification(
+  draft: VerificationDraft,
+  before: VerificationDraft,
+  after: VerificationDraft
+): VerificationDraft {
+  const next: VerificationDraft = {
+    ...after,
+    others: rebasedSet(draft.others, before.others, after.others),
+  };
+  for (const service of VERIFICATION_SERVICES) {
+    if (draft[service.key] !== before[service.key]) {
+      next[service.key] = draft[service.key];
+    }
+  }
+  return next;
 }
 
 /** The values moved as a whole map or list rather than as one value. */
@@ -446,8 +721,11 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "patterns",
   "structuredData",
   "hiddenTypes",
+  "typesWithSeoOff",
   "productionAddresses",
   "socialProfiles",
+  "verificationCodes",
+  "brandDetails",
 ]);
 
 /** The draft's own values, other than the per-type ones, edited since `before`. */

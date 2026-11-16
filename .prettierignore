@@ -38,4 +38,7 @@ packages/create-nextly-app/templates/
 **/__tests__/v1-golden/__fixtures__/
 # A stylesheet captured from an earlier compiler, compared byte for byte
 packages/blocks-react/src/blocks/__fixtures__/
+# The upgrade gate's baseline: what a published release wrote, kept as it
+# wrote it (apps/playground/upgrade-gate/record.ts).
+apps/playground/upgrade-gate/baseline/
 AGENTS.measured.md

@@ -11,6 +11,7 @@ import {
   resolveDataLossConsent,
 } from "../../../domains/schema/migrate/data-loss-consent";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
+import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
 import {
   assertNotPartiallyApplied,
   concurrentRunError,
@@ -204,6 +205,10 @@ export const MIGRATION_CASES = {
       cause: "table-busy",
       endedAtLease: false,
     }),
+  // As `ownWriteLockError` builds it once a migration file's transaction meets a write, made inside
+  // it on another connection, that waited for the transaction's own lock.
+  LOCK_HELD_BY_THIS_PROCESS: () =>
+    ownWriteLockError("20261020_120000_add_posts.sql"),
   DATA_LOSS_CONSENT_REQUIRED: async () =>
     dataLossRefusal(await refusedVerdict(undefined)),
   DATA_LOSS_CONSENT_NOT_COVERED: async () =>

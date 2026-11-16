@@ -146,6 +146,49 @@ describe("a plugin adding keys, checks and relations to a dependency's table", (
     ).toContain("mark");
   });
 
+  it("judges a contributed key's target by the contributor's stream, not the table owner's", async () => {
+    // The adder depends on both the host and the third plugin, but the third
+    // plugin runs after it, as an optional dependency allows. The key travels
+    // in the adder's migrations, so it is the adder's stream that would reach
+    // the third plugin's table before it exists.
+    const message = await refusal(() =>
+      buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: ["users"],
+        entities: [],
+        pluginPrefixes: new Map([
+          [HOST, "hs"],
+          [ADDER, "ad"],
+          [OTHER, "ot"],
+        ]),
+        dependencies: new Map([[ADDER, new Set([HOST, OTHER])]]),
+        plugins: [
+          { owner: { kind: "plugin", id: HOST }, tables: [items] },
+          {
+            owner: { kind: "plugin", id: ADDER },
+            tables: [marks],
+            extend: [
+              ({ schema }) =>
+                schema.extendTable("hs__items", {
+                  columns: { otherId: col.varchar(36, { nullable: true }) },
+                  foreignKeys: [
+                    {
+                      columns: ["otherId"],
+                      references: { table: "ot__others", columns: ["id"] },
+                    },
+                  ],
+                }),
+            ],
+          },
+          { owner: { kind: "plugin", id: OTHER }, tables: [others] },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'a table plugin "@acme/other" creates after plugin "@acme/adder" runs'
+    );
+  });
+
   it("is refused without a dependency on the table's owner", async () => {
     const message = await refusal(() =>
       compile(keyAndCheck, { adderDependsOn: [] })

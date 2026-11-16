@@ -426,12 +426,14 @@ export function namedQueriesRoute(
   queries: () => readonly NamedQueryDeclaration[]
 ): {
   method: "GET";
+  siteWide: false;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: NAMED_QUERIES_ROUTE_PATH,
+    siteWide: false, // Acts on no site content; signing in is enough.
     handler: async (req, ctx) => {
       const query = parseRouteQuery(
         req.url,

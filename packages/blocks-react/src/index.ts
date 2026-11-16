@@ -147,6 +147,9 @@ export {
  * keeping what visitors see, asks the same question the image block does.
  */
 export { fetchableUrl } from "./blocks/props";
+// The element a container preset (Section, Box) renders its root as, which an
+// editor reads to say what the page will hold.
+export { containerRootTag } from "./blocks/container-root";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the

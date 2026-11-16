@@ -45,8 +45,10 @@ Send the API key as a Bearer token:
 
 ```bash
 curl https://example.com/admin/api/collections/posts/entries \
-  -H "Authorization: Bearer nx_live_<random>..."
+  -H "Authorization: Bearer nx_live_<id>_<secret>"
 ```
+
+A key is `nx_live_`, a 24-character id, an underscore and a 43-character secret. The id lets the server bound failed key lookups per key without looking the key up, so other people's invalid keys cannot lock yours out. Keys made before ids (`nx_live_` and 43 characters) keep working.
 
 API keys are managed via `POST /admin/api/api-keys` (admin UI). There is **no** `X-API-Key` header — `Authorization: Bearer <key>` is the only supported form.
 

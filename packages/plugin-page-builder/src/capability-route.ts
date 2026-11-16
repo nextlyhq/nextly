@@ -194,12 +194,14 @@ export async function mayUpdatePattern(
  */
 export function patternCapabilityRoute(store: ComponentEditingStore = {}): {
   method: "GET";
+  siteWide: false;
   path: string;
   handler: (req: Request, ctx: CapabilityRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: CAPABILITY_ROUTE_PATH,
+    siteWide: false, // Acts on no site content; signing in is enough.
     handler: async (_req, ctx) =>
       Response.json({
         ...(await readEditorCapability(ctx, store)),

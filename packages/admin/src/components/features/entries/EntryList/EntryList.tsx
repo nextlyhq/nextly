@@ -711,7 +711,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // The list's outline while the collection loads: the same outline the frame
   // drew for this address, so nothing changes until the list itself arrives.
   if (collectionLoading) {
-    return <ListOutline framed={false} />;
+    return <ListOutline framed={false} list={collectionSlug} />;
   }
 
   // ---------------------------------------------------------------------------

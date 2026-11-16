@@ -17,7 +17,7 @@ vi.mock("@admin/services/entryApi", async importOriginal => {
     await importOriginal<typeof import("@admin/services/entryApi")>();
   return { ...actual, entryApi: { ...actual.entryApi, updateByIDs } };
 });
-vi.mock("@admin/components/ui", () => ({
+vi.mock("@admin/components/ui/toaster", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning, dismiss: vi.fn() },
 }));
 

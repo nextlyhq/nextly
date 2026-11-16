@@ -2,20 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import {
-  eq,
-  and,
-  or,
-  like,
-  asc,
-  desc,
-  count,
-  inArray,
-  notInArray,
-  sql,
-  type Column,
-  type SQL,
-} from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -29,8 +16,13 @@ import type {
 } from "../../../schemas/dynamic-collections/types";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { listStoredRegistry } from "../../../shared/base-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
+import {
+  registryPage,
+  warnIfRegistryListingLarge,
+} from "../../../shared/lib/registry-listing-page";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
 import {
@@ -138,62 +130,24 @@ export interface ListCollectionsOptions {
   /**
    * Restrict results to collections whose `slug` is in this list.
    *
-   * 🔴 Applied in the WHERE clause, so the COUNT and the page see the same
-   * rows. A caller that filters the returned page in application code instead
+   * 🔴 Applied to the rows before they are counted, so the total and the
+   * page see the same rows. A caller that filters the returned page instead
    * gets a `total` describing rows the reader may not see -- which both leaks
    * how many exist and collapses `totalPages` to 1, because the recomputed
    * total is at most one page. The consumer then reads "there is no next page"
    * and stops, with the rest of what it may see unreachable.
    *
    * `undefined` means no allowlist. `[]` means nothing is visible and
-   * short-circuits, rather than emitting `WHERE slug IN ()`, whose meaning
-   * differs by dialect.
+   * short-circuits to no rows and a zero total.
    */
   slugAllowlist?: string[];
   /**
    * Leave out collections whose `slug` is in this list: the plugins'
-   * collections, on the list of the site's own. A condition on the query, so
+   * collections, on the list of the site's own. Applied before the count, so
    * the count and the page agree; with an allowlist both apply, so it only
    * ever removes rows. `undefined` or `[]` denies nothing.
    */
   slugDenylist?: string[];
-}
-
-/** The slug lists a collections list is limited by. */
-export type CollectionSlugLists = Pick<
-  ListCollectionsOptions,
-  "slugAllowlist" | "slugDenylist"
->;
-
-/**
- * The WHERE conditions a list's slug lists become, for the count and the page
- * alike: an `IN` for the allowlist, a `NOT IN` for a denylist that names a
- * slug, ANDed by the caller.
- *
- * An empty allowlist has no condition: it means nothing is visible, which
- * the list answers before any query, so being asked for one is a caller's
- * mistake. Refused rather than rendered as `IN ()`, whose meaning differs by
- * dialect.
- */
-export function collectionSlugConditions(
-  slugColumn: Column,
-  lists: CollectionSlugLists
-): SQL[] {
-  const conditions: SQL[] = [];
-  if (lists.slugAllowlist) {
-    if (lists.slugAllowlist.length === 0) {
-      throw NextlyError.internal({
-        logContext: {
-          reason: "an empty slug allowlist reached the query builder",
-        },
-      });
-    }
-    conditions.push(inArray(slugColumn, lists.slugAllowlist));
-  }
-  if (lists.slugDenylist && lists.slugDenylist.length > 0) {
-    conditions.push(notInArray(slugColumn, lists.slugDenylist));
-  }
-  return conditions;
 }
 
 export interface ListCollectionsResponse<
@@ -575,109 +529,70 @@ export class DynamicCollectionRegistryService extends BaseService {
       };
     }
 
-    // 🔴 CONDITIONS, not a filter over the result. Both the count below and
-    // the page query read `whereClause`, so the total describes exactly the
-    // rows this caller may see and `totalPages` counts pages of those. The
-    // denylist (the plugins' collections, on the site's own list) the same.
-    const conditions: (SQL | undefined)[] = collectionSlugConditions(
-      this.dynamicCollections.slug,
-      { slugAllowlist, slugDenylist }
+    // 🔴 CONDITIONS, not a filter over the result. The allowlist and the
+    // denylist (the plugins' collections, on the site's own list) decide
+    // which rows are counted, before the total is taken and the page cut, so
+    // the total describes exactly the rows this caller may see and
+    // `totalPages` counts pages of those.
+    //
+    // In memory, from the registry listing this process holds: the registry
+    // is the documented exception to paging in the database
+    // (`shared/lib/registry-listing-page` says why). Page and total come
+    // from one snapshot of it, and an unchanged registry costs no statement.
+    const allowed = slugAllowlist ? new Set(slugAllowlist) : undefined;
+    const denied = new Set(slugDenylist ?? []);
+    const table = "dynamic_collections";
+    const listed = await listStoredRegistry(
+      this.adapter,
+      this.dialect,
+      table,
+      rows => {
+        warnIfRegistryListingLarge("Collection", rows.length, message =>
+          this.logger.warn(message)
+        );
+        const found = registryPage(rows, {
+          include: row => {
+            const slug = String(row.slug);
+            return (
+              (allowed === undefined || allowed.has(slug)) &&
+              !denied.has(slug) &&
+              (!source || row.source === source)
+            );
+          },
+          ...(search
+            ? { search: { text: search, columns: ["slug", "description"] } }
+            : {}),
+          // "name" is the admin/API alias for "slug": both sort on the slug.
+          orderBy:
+            sortBy === "name" || sortBy === "slug"
+              ? "slug"
+              : sortBy === "updatedAt"
+                ? "updatedAt"
+                : "createdAt",
+          direction: sortOrder === "asc" ? "asc" : "desc",
+          offset: (page - 1) * limit,
+          limit,
+        });
+        return {
+          total: found.total,
+          rows: found.rows.map(row => {
+            const copy = structuredClone(row) as Record<string, unknown>;
+            // `fields` is the only column the schema-less shape drops, and
+            // the return type says so: `Omit<CollectionMetadata, "fields">`.
+            if (!includeSchema) delete copy.fields;
+            return copy;
+          }),
+        };
+      }
     );
 
-    if (search) {
-      const searchPattern = `%${search}%`;
-      conditions.push(
-        or(
-          like(this.dynamicCollections.slug, searchPattern),
-          like(this.dynamicCollections.description, searchPattern)
-        )
-      );
-    }
-
-    if (source) {
-      conditions.push(eq(this.dynamicCollections.source, source));
-    }
-
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-    const orderFn = sortOrder === "asc" ? asc : desc;
-    let orderByClause;
-    switch (sortBy) {
-      // "name" is the admin/API alias for "slug" — both sort on the slug column.
-      case "name":
-      case "slug":
-        orderByClause = orderFn(this.dynamicCollections.slug);
-        break;
-      case "updatedAt":
-        orderByClause = orderFn(this.dynamicCollections.updatedAt);
-        break;
-      case "createdAt":
-      default:
-        orderByClause = orderFn(this.dynamicCollections.createdAt);
-    }
-
-    const offset = (page - 1) * limit;
-
-    const countResult = await this.db
-      .select({ value: count() })
-      .from(this.dynamicCollections)
-      .where(whereClause);
-
-    const total = Number(countResult[0]?.value ?? 0);
+    const total = listed.total;
     const totalPages = Math.ceil(total / limit);
-
-    const collections = includeSchema
-      ? await this.db
-          .select()
-          .from(this.dynamicCollections)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(limit)
-          .offset(offset)
-      : await this.db
-          // `fields` is the only column this shape drops, and the return type
-          // says so: `Omit<CollectionMetadata, "fields">`. Every other column
-          // has to be named here, because an omission is invisible — the row
-          // still satisfies the declared type while the value arrives
-          // `undefined`, so a caller reading `status` or `versions` off a list
-          // gets nothing and no error. Dropping the schema blob is what makes
-          // the shape cheap; dropping metadata alongside it only makes it wrong.
-          .select({
-            id: this.dynamicCollections.id,
-            slug: this.dynamicCollections.slug,
-            tableName: this.dynamicCollections.tableName,
-            description: this.dynamicCollections.description,
-            labels: this.dynamicCollections.labels,
-            timestamps: this.dynamicCollections.timestamps,
-            status: this.dynamicCollections.status,
-            localized: this.dynamicCollections.localized,
-            versions: this.dynamicCollections.versions,
-            revalidate: this.dynamicCollections.revalidate,
-            webhooks: this.dynamicCollections.webhooks,
-            admin: this.dynamicCollections.admin,
-            hooks: this.dynamicCollections.hooks,
-            source: this.dynamicCollections.source,
-            locked: this.dynamicCollections.locked,
-            configPath: this.dynamicCollections.configPath,
-            schemaHash: this.dynamicCollections.schemaHash,
-            schemaVersion: this.dynamicCollections.schemaVersion,
-            migrationStatus: this.dynamicCollections.migrationStatus,
-            lastMigrationId: this.dynamicCollections.lastMigrationId,
-            createdBy: this.dynamicCollections.createdBy,
-            createdAt: this.dynamicCollections.createdAt,
-            updatedAt: this.dynamicCollections.updatedAt,
-            // `fields` intentionally excluded — the reason this shape exists.
-          })
-          .from(this.dynamicCollections)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(limit)
-          .offset(offset);
 
     return {
       // Both shapes carry `status` and `localized`, so both need the same
       // coercion `getCollection` applies — see `normalizeCollectionBooleans`.
-      collections: (collections as Record<string, unknown>[]).map(
+      collections: listed.rows.map(
         normalizeCollectionBooleans
       ) as ListCollectionsResponse<TIncludeSchema>["collections"],
       total,

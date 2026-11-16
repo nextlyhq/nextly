@@ -20,6 +20,7 @@
 import { isStartupPath } from "../route-handler/startup-path";
 
 import type { PluginPageStartupRead } from "./admin-contributions";
+import { foldedPanelCollections } from "./folded-panels";
 import type { PluginDefinition } from "./plugin-context";
 import { pluginAdminSlug, pluginPageAddress } from "./plugin-slug";
 import { pluginRouteFullPath } from "./routes/route-path";
@@ -77,16 +78,24 @@ export function adminStartupScreens(
 }
 
 /**
- * The plugin pages' startup reads as the JSON the admin layout writes into the
- * page, or `null` when no page declares any. Every `<` is written as
- * `<`, so a path holding `</script>` cannot end the element early.
+ * What the prebuilt admin page knows of its screens before any request has
+ * answered, as the JSON the admin layout writes into the page, or `null` when
+ * there is nothing to say: `reads`, each plugin page's startup reads by its
+ * address (`adminStartupScreens`), and `foldedPanels`, the collections whose
+ * document screens start with the rail's panel folded away
+ * (`foldedPanelCollections`), so the admin's first frame is drawn as those
+ * screens are. Every `<` is written as `\u003c`, so a path holding
+ * `</script>` cannot end the element early.
  *
  * `const startupScreensJson = adminStartupScreensJson(config.plugins);`
  */
 export function adminStartupScreensJson(
   plugins: readonly PluginDefinition[] | undefined
 ): string | null {
-  const screens = adminStartupScreens(plugins);
-  if (Object.keys(screens).length === 0) return null;
-  return JSON.stringify(screens).replace(/</g, "\\u003c");
+  const reads = adminStartupScreens(plugins);
+  const foldedPanels = foldedPanelCollections(plugins);
+  if (Object.keys(reads).length === 0 && foldedPanels.length === 0) {
+    return null;
+  }
+  return JSON.stringify({ reads, foldedPanels }).replace(/</g, "\\u003c");
 }

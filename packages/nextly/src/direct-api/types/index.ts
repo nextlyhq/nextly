@@ -41,6 +41,7 @@ export type {
   CreateArgs,
   UpdateArgs,
   RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   PublishArgs,
   PublishResult,
   DeleteArgs,

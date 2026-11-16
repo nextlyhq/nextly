@@ -15,6 +15,7 @@
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
+import { preBuilderSaveColumnType } from "../../field-groups/services/pre-builder-save-column-type";
 import { declaredSize } from "../pipeline/diff/declared-size";
 import { normalizeType } from "../pipeline/diff/normalize-type";
 import {
@@ -37,13 +38,15 @@ import type {
  *
  * A repeater or group became JSON in 0.0.2-alpha.67; a float, a select, a radio and an upload
  * started reading the descriptor in 0.0.2-alpha.66; a component's many-to-many became a JSON list
- * in 0.0.2-alpha.69.
+ * in 0.0.2-alpha.69; the field-group creator read every column type from the descriptor in
+ * 0.0.2-alpha.77.
  */
 const LEGACY_BEFORE: Record<LegacyShape, string> = {
   "structured-as-text": "0.0.2-alpha.67",
   "float-as-decimal": "0.0.2-alpha.66",
   "mysql-text-fallback": "0.0.2-alpha.66",
   "component-list-in-scalar": "0.0.2-alpha.69",
+  "field-group-creator-spelling": "0.0.2-alpha.77",
 };
 
 /** Scalar types an older component row held a many-to-many in. */
@@ -142,13 +145,12 @@ function fieldGroupGeneratorColumn(
   ).columnTypeFor(
     field as unknown as Parameters<FieldGroupSchemaService["columnTypeFor"]>[0]
   );
-  // The field-group CREATE writes NOT NULL for a required field, except a many-to-many.
-  return type === null
-    ? null
-    : {
-        type,
-        nullable: !(field.required === true && !usesJunctionTable(field)),
-      };
+  return type === null ? null : { type, nullable: fieldGroupNullable(field) };
+}
+
+/** Whether the field-group CREATE leaves a field's column nullable: NOT NULL for a required field, except a many-to-many. */
+function fieldGroupNullable(field: FieldDefinition): boolean {
+  return !(field.required === true && !usesJunctionTable(field));
 }
 
 /**
@@ -248,8 +250,31 @@ function isComponentListInScalar({
 }
 
 /**
- * Each legacy shape with the test that recognises it, in the order they are tried. Each test asks
- * for a different field type, so at most one holds and the order changes no answer.
+ * A field-group column in the type the field group's creator gave it before 0.0.2-alpha.77
+ * (`preBuilderSaveColumnType`), with the nullability that creator still gives it. Asked of the
+ * recorded spelling rather than of a list of the types it differed in, so every such column is
+ * recognised and none other.
+ */
+function isFieldGroupCreatorSpelling({ args }: ShapeFacts): boolean {
+  if (args.kind !== "fieldGroup") return false;
+  const type = preBuilderSaveColumnType(
+    args.field as unknown as Parameters<typeof preBuilderSaveColumnType>[0],
+    args.dialect
+  );
+  return (
+    type !== null &&
+    compareColumn(args.live, {
+      type,
+      nullable: fieldGroupNullable(args.field),
+    }) === null
+  );
+}
+
+/**
+ * Each legacy shape with the test that recognises it, in the order they are tried. The first four
+ * each ask for a different field type, so at most one of them holds; the field-group creator's
+ * spelling is tried last, and no column the others recognise is spelled that creator's way, so the
+ * order changes no answer.
  */
 const LEGACY_SHAPE_TESTS: ReadonlyArray<
   readonly [LegacyShape, (facts: ShapeFacts) => boolean]
@@ -258,6 +283,7 @@ const LEGACY_SHAPE_TESTS: ReadonlyArray<
   ["float-as-decimal", isFloatAsDecimal],
   ["mysql-text-fallback", isMysqlTextFallback],
   ["component-list-in-scalar", isComponentListInScalar],
+  ["field-group-creator-spelling", isFieldGroupCreatorSpelling],
 ];
 
 /** The legacy shape the live column holds, or null when it holds none of them. */

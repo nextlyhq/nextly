@@ -31,7 +31,7 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { useCollections } from "@admin/hooks/queries";
+import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { filterCollectionItems } from "@admin/lib/permissions/authorization";
 import { isCollectionPlacedElsewhere } from "@admin/lib/plugins/collection-placement";

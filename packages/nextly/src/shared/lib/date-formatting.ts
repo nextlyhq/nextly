@@ -1,6 +1,7 @@
 import { container } from "../../di/container";
-import type { SupportedDialect } from "../../types/database";
 import { consoleLogger } from "../types";
+
+import { datesFormatted, markDatesFormatted } from "./dates-formatted";
 
 // ============================================================================
 // Global API Date/Time Formatting Constants
@@ -169,8 +170,9 @@ export function normalizeTimestampString(
 /**
  * Normalize a value from the database into a standard ISO 8601 UTC string.
  *
- * Crucial for dynamic tables where the DB driver might parse
- * naive datetime strings using the server's local timezone.
+ * A `Date` already names the stored instant (`dbTimestampToInstant`), so it is
+ * only spelled out. A string without a zone is a stored wall clock, which every
+ * adapter writes in UTC, so it is read as UTC.
  *
  * @param value - The value from the database (Date, string, or unknown)
  * @returns Optimized ISO string with explicit UTC 'Z' offset
@@ -178,26 +180,8 @@ export function normalizeTimestampString(
 export function normalizeDbTimestamp(value: unknown): string | null {
   if (value == null) return null;
 
-  // 1. If it's a Date object, it likely reflects the driver's local parsing.
-  // We re-interpret the local parts as UTC to undo the shift.
   if (value instanceof Date) {
-    if (Number.isNaN(value.getTime())) return null;
-
-    // Use Date.UTC with local parts to "un-offset" the date.
-    // If DB had 08:00, driver parsed as 08:00 Local (+5).
-    // value.getHours() is 08. Date.UTC(..., 08) creates 08:00 UTC.
-    const utcDate = new Date(
-      Date.UTC(
-        value.getFullYear(),
-        value.getMonth(),
-        value.getDate(),
-        value.getHours(),
-        value.getMinutes(),
-        value.getSeconds(),
-        value.getMilliseconds()
-      )
-    );
-    return utcDate.toISOString();
+    return dbTimestampToInstant(value)?.toISOString() ?? null;
   }
 
   // 2. If it's a string, we check for an explicit offset.
@@ -222,48 +206,24 @@ export function normalizeDbTimestamp(value: unknown): string | null {
 }
 
 /**
- * Recover the correct instant from a database timestamp `Date`, across dialects.
+ * The instant a database timestamp `Date` names, on every dialect: the `Date`
+ * itself, or `null` for none or an invalid one.
  *
- * SQLite stores timestamps as epoch integers, so its driver builds a `Date` that
- * already holds the right instant — it is returned unchanged. Postgres
- * (`timestamp without time zone`) and MySQL (`datetime`) are naive columns whose
- * drivers construct a `Date` from the stored calendar fields in the server's
- * local timezone; that `Date`'s UTC value is therefore shifted by the local
- * offset. Its calendar fields are reinterpreted as UTC to recover the stored
- * instant, so later JSON serialization emits the correct time on a non-UTC
- * server instead of one shifted by the server's timezone.
- *
- * Unlike {@link normalizeDbTimestamp} (which assumes every `Date` is naive and
- * always un-offsets), this is dialect-aware and safe for SQLite.
+ * Every adapter hands back a timestamp column as the instant that was stored,
+ * whatever the server's time zone. SQLite keeps epoch seconds. PostgreSQL's
+ * `timestamp` and MySQL's `datetime` keep a UTC wall clock: Drizzle reads the
+ * PostgreSQL one as UTC, and the MySQL adapter pins the driver and the session
+ * to UTC. So the `Date` is already right, and reading its LOCAL calendar
+ * fields as UTC, as this once did for PostgreSQL and MySQL, moved it by the
+ * server's offset: five hours ahead on a server five hours ahead of UTC, and
+ * not at all on a UTC one, which is why it went unseen.
  */
-export function dbTimestampToInstant(
-  value: Date,
-  dialect: SupportedDialect
-): Date;
-export function dbTimestampToInstant(
-  value: Date | null,
-  dialect: SupportedDialect
-): Date | null;
-export function dbTimestampToInstant(
-  value: Date | null,
-  dialect: SupportedDialect
-): Date | null {
+export function dbTimestampToInstant(value: Date): Date;
+export function dbTimestampToInstant(value: Date | null): Date | null;
+export function dbTimestampToInstant(value: Date | null): Date | null {
   if (value == null) return null;
   if (Number.isNaN(value.getTime())) return null;
-  // SQLite's epoch-backed Date is already the correct instant.
-  if (dialect === "sqlite") return value;
-  // Postgres/MySQL naive Date: reinterpret its local calendar fields as UTC.
-  return new Date(
-    Date.UTC(
-      value.getFullYear(),
-      value.getMonth(),
-      value.getDate(),
-      value.getHours(),
-      value.getMinutes(),
-      value.getSeconds(),
-      value.getMilliseconds()
-    )
-  );
+  return value;
 }
 
 export function normalizeTimestampsInPayload(
@@ -328,10 +288,13 @@ export async function configuredTimezone(): Promise<string | null> {
 
 /**
  * Higher-order function to apply timezone formatting to a JSON response.
+ * A response it already wrote is returned as it is (`datesFormatted`).
  */
 export async function withTimezoneFormatting(
   response: Response
 ): Promise<Response> {
+  if (datesFormatted(response)) return response;
+
   // Opt-out: a handler marked this body as carrying opaque text that must not be
   // rewritten. Checked first, before any early return, so the internal marker is
   // always stripped and never reaches the client (even on a non-JSON body).
@@ -370,9 +333,10 @@ export async function withTimezoneFormatting(
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
 
-  return new Response(JSON.stringify(transformed), {
+  const formatted = new Response(JSON.stringify(transformed), {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
+  return markDatesFormatted(formatted);
 }

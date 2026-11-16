@@ -7,7 +7,9 @@
  * there, so the install is the one an operator first deploys: no
  * administrator, and setup still open. The production browser suite serves
  * one such install, to drive the first-administrator setup form against a
- * production build.
+ * production build, and CI's production builds of the playground start from
+ * one: the playground keeps no migration files, and neither `next build` nor
+ * a production start creates a table.
  */
 import { getNextly } from "nextly";
 

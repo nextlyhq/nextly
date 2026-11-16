@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defineCollection, text, number } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 
+import { forgetCompanionReadiness } from "./runtime/companion-readiness";
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -39,6 +41,25 @@ async function createCompanionTable(t: TestNextly): Promise<void> {
   };
   await adapter.executeQuery(
     'CREATE TABLE IF NOT EXISTS "dc_pages_locales" ("_parent" text, "_locale" text, "heading" text, PRIMARY KEY ("_parent","_locale"))'
+  );
+}
+
+/**
+ * Recreate the pre-migration shape: the collection was just marked localized, so the main table
+ * still carries the translatable column and no companion exists yet. The code-first boot sync
+ * provisions the companion and drops the column from main, so this undoes both.
+ *
+ * The boot also resolves the companion it provisioned and remembers it as ready, before
+ * `createTestNextly` returns. A server reaches this state by a `db:sync` from another process,
+ * having never seen a companion, so nothing is remembered; forgetting the verdict reproduces
+ * that. Without it the write meets a table dropped from under a process that had already used
+ * it, which is refused on its own (a stale verdict fails closed), and is not the case under test.
+ */
+async function unmigrate(t: TestNextly): Promise<void> {
+  await t.adapter.executeQuery('DROP TABLE IF EXISTS "dc_pages_locales"');
+  forgetCompanionReadiness(t.adapter, "dc_pages_locales");
+  await t.adapter.executeQuery(
+    'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
   );
 }
 
@@ -138,14 +159,8 @@ describe("createEntry — localized write routing (M5a)", () => {
     const adapter = t.adapter as unknown as {
       executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
     };
-    // Recreate the pre-migration shape: the collection was just marked localized, so the
-    // main table still carries the translatable column and no companion exists yet. The
-    // code-first boot sync provisions the companion and drops the column from main, so undo
-    // that here to exercise the unmigrated fallback (values stay on main until migrate runs).
-    await adapter.executeQuery('DROP TABLE IF EXISTS "dc_pages_locales"');
-    await adapter.executeQuery(
-      'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
-    );
+    // The unmigrated fallback: values stay on main until migrate runs.
+    await unmigrate(t);
     const res = await handler.createEntry(
       { collectionName: "pages", locale: "en", overrideAccess: true },
       { title: "T", heading: "Hello" }
@@ -161,10 +176,7 @@ describe("createEntry — localized write routing (M5a)", () => {
     const adapter = t.adapter as unknown as {
       executeQuery: (sql: string) => Promise<Record<string, unknown>[]>;
     };
-    await adapter.executeQuery('DROP TABLE IF EXISTS "dc_pages_locales"');
-    await adapter.executeQuery(
-      'ALTER TABLE "dc_pages" ADD COLUMN "heading" text'
-    );
+    await unmigrate(t);
     // The main table has no language of its own: whatever sits there is read as the
     // DEFAULT language, and that is what the companion seed copies across when the
     // table appears. Letting `de` land on main would publish German text as English

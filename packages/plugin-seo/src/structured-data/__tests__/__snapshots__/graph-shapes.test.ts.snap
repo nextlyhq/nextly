@@ -425,7 +425,7 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
   {
     "@id": "https://nextlyhq.com/#webpage",
     "@type": "WebPage",
-    "dateModified": "2026-11-11",
+    "dateModified": "2026-11-11T00:00:00.000Z",
     "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
     "inLanguage": "en",
     "isPartOf": {
@@ -442,28 +442,6 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
       "width": 1200,
     },
     "url": "https://nextlyhq.com/",
-  },
-  {
-    "@id": "https://nextlyhq.com/#faq",
-    "@type": "FAQPage",
-    "mainEntity": [
-      {
-        "@type": "Question",
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": "An open-source content platform for Next.js.",
-        },
-        "name": "What is Nextly?",
-      },
-      {
-        "@type": "Question",
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": "Nextly is MIT licensed.",
-        },
-        "name": "Is Nextly free?",
-      },
-    ],
   },
   {
     "@id": "https://nextlyhq.com/#softwareApplication",
@@ -491,6 +469,120 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
       "@id": "https://nextlyhq.com/#organization",
     },
     "url": "https://nextlyhq.com/",
+  },
+]
+`;
+
+exports[`whole graphs of a site's pages > keeps the shape of the home page with its FAQ section decl… 1`] = `
+[
+  {
+    "@id": "https://nextlyhq.com/#organization",
+    "@type": "Organization",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://nextlyhq.com/nextly-logo-light.svg",
+    },
+    "name": "Nextly",
+    "sameAs": [
+      "https://github.com/nextlyhq/nextly",
+      "https://x.com/nextlyhq",
+    ],
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#website",
+    "@type": "WebSite",
+    "alternateName": [
+      "Nextly CMS",
+    ],
+    "description": "An open-source CMS and Visual Page Builder for Next.js.",
+    "inLanguage": "en",
+    "name": "Nextly",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#webpage",
+    "@type": "WebPage",
+    "dateModified": "2026-11-11T00:00:00.000Z",
+    "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
+    "hasPart": {
+      "@id": "https://nextlyhq.com/#faq",
+    },
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#website",
+    },
+    "mainEntity": {
+      "@id": "https://nextlyhq.com/#softwareApplication",
+    },
+    "name": "Nextly | Open-source CMS and Visual Page Builder for Next.js",
+    "primaryImageOfPage": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#softwareApplication",
+    "@type": "SoftwareApplication",
+    "applicationCategory": "DeveloperApplication",
+    "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
+    "image": {
+      "@type": "ImageObject",
+      "height": 630,
+      "url": "https://nextlyhq.com/opengraph-image",
+      "width": 1200,
+    },
+    "mainEntityOfPage": {
+      "@id": "https://nextlyhq.com/#webpage",
+    },
+    "name": "Nextly",
+    "offers": {
+      "@type": "Offer",
+      "price": 0,
+      "priceCurrency": "USD",
+      "url": "https://nextlyhq.com/",
+    },
+    "operatingSystem": "Cross-platform",
+    "publisher": {
+      "@id": "https://nextlyhq.com/#organization",
+    },
+    "url": "https://nextlyhq.com/",
+  },
+  {
+    "@id": "https://nextlyhq.com/#faq",
+    "@type": "FAQPage",
+    "inLanguage": "en",
+    "isPartOf": {
+      "@id": "https://nextlyhq.com/#webpage",
+    },
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "An open-source content platform for Next.js.",
+        },
+        "name": "What is Nextly?",
+      },
+      {
+        "@type": "Question",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Nextly is MIT licensed.",
+        },
+        "name": "Is Nextly free?",
+      },
+    ],
   },
 ]
 `;

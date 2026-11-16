@@ -166,6 +166,7 @@ const composer = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "GET",
         path: "/manifest",
         handler: async (req, ctx) => {
@@ -176,6 +177,7 @@ const composer = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/page",
         handler: async (req, ctx) =>
@@ -184,6 +186,7 @@ const composer = definePlugin({
           ),
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/definition/:id",
         handler: async (req, ctx) =>

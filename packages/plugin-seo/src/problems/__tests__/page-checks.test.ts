@@ -82,36 +82,61 @@ describe("pageProblems", () => {
     expect(problems).toEqual([]);
   });
 
-  it("reports a title past 60 characters and a description past 160, not at them", () => {
-    const at = pageProblems(
+  it("judges a title and description by how wide Google draws them, not by characters", () => {
+    // 65 characters of narrow letters fit Google's 600 px, and 176 of a
+    // narrow description fit its 920 px: a character count would flag both.
+    const narrow = pageProblems(
       withAnswer({
-        title: { value: "t".repeat(60), from: "page" },
-        description: { value: "d".repeat(160), from: "page" },
+        title: {
+          value:
+            "Little tips: fill it in, lift it, tilt it, till it is still. jilt",
+          from: "page",
+        },
+        description: { value: "lilt it ".repeat(22), from: "page" },
       })
+    );
+    expect(narrow).toEqual([]);
+    // 50 characters of wide capitals and 70 of "W" are cut: a character
+    // count would pass both.
+    const wide = pageProblems(
+      withAnswer({
+        title: {
+          value: "WOMEN'S WORKWEAR MADE WELL: MEMBER OFFERS AND NEWS",
+          from: "page",
+        },
+        description: { value: "W".repeat(70), from: "page" },
+      })
+    );
+    expect(kinds(wide)).toEqual(["longTitle", "longDescription"]);
+    // A warning with the width measured and the characters as a hint: the
+    // value is saved and served.
+    expect(wide[0]?.what).toBe("646 of 600 px · 50 characters");
+    expect(wide[1]?.what).toBe("925 of 920 px · 70 characters");
+  });
+
+  it("reports a title one pixel past what Google shows, not at it", () => {
+    // "i" draws 4.443 px: 135 of them are 600 px, 136 are 604.
+    const at = pageProblems(
+      withAnswer({ title: { value: "i".repeat(135), from: "page" } })
     );
     expect(at).toEqual([]);
     const past = pageProblems(
-      withAnswer({
-        title: { value: "t".repeat(61), from: "page" },
-        description: { value: "d".repeat(161), from: "page" },
-      })
+      withAnswer({ title: { value: "i".repeat(136), from: "page" } })
     );
-    expect(kinds(past)).toEqual(["longTitle", "longDescription"]);
-    // A warning with the length measured: the value is saved and served.
-    expect(past[0]?.what).toBe("61 characters, Google shows about 60");
-    expect(past[1]?.what).toBe("161 characters, Google shows about 160");
+    expect(kinds(past)).toEqual(["longTitle"]);
   });
 
-  it("counts characters, not UTF-16 units, so emoji are not counted twice", () => {
+  it("measures an emoji once, not as its two UTF-16 units", () => {
+    // 30 emoji draw one em each, 600 px; counted per unit they would be 60.
     const problems = pageProblems(
-      withAnswer({ title: { value: "😀".repeat(60), from: "page" } })
+      withAnswer({ title: { value: "😀".repeat(30), from: "page" } })
     );
     expect(problems).toEqual([]);
   });
 
   it("sends a title only the route's code sets to a developer", () => {
     const problems = pageProblems(
-      withAnswer({ title: { value: "t".repeat(70), from: "code" } })
+      withAnswer({ title: { value: "W".repeat(40), from: "code" } })
     );
     expect(problems[0]?.fix.place).toBe("developer");
   });
@@ -310,6 +335,43 @@ describe("pageProblems", () => {
     expect(kinds(problems)).toEqual(["brokenLink", "imageAlt"]);
   });
 
+  it("reports a page whose date to drop from search has passed, fixed on its SEO tab", () => {
+    const problems = pageProblems(
+      withAnswer({
+        robots: { value: { index: false, follow: true }, from: "page" },
+        display: {
+          unavailableAfter: {
+            value: "2026-11-01T00:00:00.000Z",
+            passed: true,
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([
+      {
+        kind: "dropDatePassed",
+        subject: SUBJECT,
+        what: "Dropped from search after 2026-11-01 00:00 UTC",
+        action: "Remove the date",
+        fix: { place: "page", tab: "seo", field: "unavailableAfter" },
+      },
+    ]);
+  });
+
+  it("reports nothing for a date to drop from search still to come", () => {
+    const problems = pageProblems(
+      withAnswer({
+        display: {
+          unavailableAfter: {
+            value: "2099-01-01T00:00:00.000Z",
+            passed: false,
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([]);
+  });
+
   it("reports a language left out of language links once, for the whole site", () => {
     const problems = pageProblems(
       facts({
@@ -372,5 +434,58 @@ describe("canonicalIsOwn", () => {
     expect(
       canonicalIsOwn(typed("/blog/other"), "https://example.com", "/blog/same")
     ).toBe(false);
+  });
+});
+
+describe("a page robots.txt blocks", () => {
+  const blocked = { line: 3, rule: "Disallow: /blog" };
+
+  it("is a problem while a rule of the site's own keeps crawlers from it", () => {
+    const problems = pageProblems(facts({ robotsBlock: blocked }));
+    expect(problems).toEqual([
+      {
+        kind: "robotsBlocked",
+        subject: SUBJECT,
+        what: "Line 3 of your own robots.txt rules keeps crawlers away: Disallow: /blog",
+        action: "Change your own rules",
+        fix: { place: "settings", tab: "crawlers" },
+      },
+    ]);
+  });
+
+  it("is said of Nextly's own rule where that is the one blocking it", () => {
+    const problems = pageProblems(
+      facts({ robotsBlock: { rule: "Disallow: /admin$" } })
+    );
+    expect(problems[0]?.what).toBe(
+      "Nextly's own robots.txt rule keeps crawlers away: Disallow: /admin$"
+    );
+  });
+
+  it("is no problem on a page hidden from search, which robots.txt may block", () => {
+    const hidden = facts({
+      robotsBlock: blocked,
+      answer: {
+        ...facts().answer,
+        robots: { value: { index: false, follow: true }, from: "page" },
+      },
+    });
+    expect(kinds(pageProblems(hidden))).toEqual([]);
+  });
+});
+
+describe("a page robots.txt blocks, whose canonical names another address", () => {
+  it("is no sitemap conflict, since the sitemap leaves such a page out", () => {
+    const problems = pageProblems(
+      facts({
+        robotsBlock: { line: 3, rule: "Disallow: /blog" },
+        canonicalIsOwn: false,
+        answer: {
+          ...facts().answer,
+          canonical: { value: "/original", from: "address" },
+        },
+      })
+    );
+    expect(kinds(problems)).not.toContain("robotsBlocked");
   });
 });

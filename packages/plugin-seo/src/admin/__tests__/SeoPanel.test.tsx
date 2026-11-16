@@ -298,16 +298,37 @@ describe("typing in a field", () => {
     expect(screen.queryByText("Typed for this page")).toBeNull();
   });
 
-  it("says above the fields when a title is longer than Google shows", async () => {
+  it("says above the fields when a title is wider than Google shows", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     expect(
       screen.queryByText("The title is longer than Google shows.")
     ).toBeNull();
-    await user.type(titleField(), "x".repeat(61));
+    // 80 narrow letters fit Google's 600 px, though past 60 characters.
+    await user.type(titleField(), "i".repeat(80));
+    expect(
+      screen.queryByText("The title is longer than Google shows.")
+    ).toBeNull();
+    // 40 wide capitals do not, though short of 60.
+    await user.clear(titleField());
+    await user.type(titleField(), "W".repeat(40));
     expect(
       screen.getByText("The title is longer than Google shows.")
     ).toBeVisible();
+  });
+
+  it("shows how wide the title in use draws, against what Google shows", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    // The automatic title is measured while nothing is typed.
+    const meter = screen.getByTestId("seo-width-title");
+    expect(meter).toHaveTextContent("Fits · 532 of 600 px · 58 characters");
+    expect(meter).toHaveAttribute("data-fits", "true");
+    await user.type(titleField(), "W".repeat(40));
+    expect(meter).toHaveTextContent(
+      "Google cuts it · 755 of 600 px · 40 characters"
+    );
+    expect(meter).toHaveAttribute("data-fits", "false");
   });
 
   it("shows the shared card with the same title until a different one is set", async () => {
@@ -440,6 +461,152 @@ describe("Advanced", () => {
     ).toBeNull();
   });
 
+  describe("says what a shared link uses while nothing is typed for it", () => {
+    /** The page with its route's own text for shared links, and its design's. */
+    const withCard = (card: Partial<Levels>): SeoTabContext => ({
+      ...CONTEXT,
+      levels: { ...LEVELS, ...card },
+    });
+    const ROUTE_CARD = withCard({
+      code: {
+        socialTitle: "The route's card title",
+        socialDescription: "The route's card text",
+      },
+    });
+
+    async function openShared(
+      context: SeoTabContext,
+      initial: SeoPanelValues = {}
+    ) {
+      const user = userEvent.setup();
+      render(<Harness context={context} initial={initial} />);
+      await user.click(screen.getByRole("button", { name: /Advanced/ }));
+      await user.click(
+        screen.getByRole("switch", { name: "Different title when shared" })
+      );
+      const advanced = within(inAdvanced());
+      return {
+        title: screen.getByLabelText("Title when shared"),
+        description: screen.getByLabelText("Description when shared"),
+        advanced,
+      };
+    }
+
+    /** The switch's own sentence, with Advanced open and the switch off. */
+    async function switchHelp(context: SeoTabContext) {
+      const user = userEvent.setup();
+      render(<Harness context={context} initial={{}} />);
+      await user.click(screen.getByRole("button", { name: /Advanced/ }));
+      return within(inAdvanced());
+    }
+    const REST =
+      " Turn this on only if you want a different one on LinkedIn, Slack and others.";
+
+    it("the switch says shared links use the Google title where nothing else is set for them", async () => {
+      const advanced = await switchHelp(CONTEXT);
+      expect(
+        advanced.getByText(`Shared links use the Google title.${REST}`)
+      ).toBeVisible();
+    });
+
+    it("the switch says shared links use the route's title where the route sets one", async () => {
+      const advanced = await switchHelp(ROUTE_CARD);
+      expect(
+        advanced.getByText(
+          `Shared links use the title this page's route sets for them.${REST}`
+        )
+      ).toBeVisible();
+      expect(
+        advanced.queryByText(`Shared links use the Google title.${REST}`)
+      ).toBeNull();
+    });
+
+    it("the switch says shared links use the template's or design's title where it sets one", async () => {
+      const card = { template: { socialTitle: "The template's card title" } };
+      const template = await switchHelp(withCard(card));
+      expect(
+        template.getByText(
+          `Shared links use the title this page's template sets for them.${REST}`
+        )
+      ).toBeVisible();
+      cleanup();
+      const design = await switchHelp({
+        ...withCard(card),
+        drawnBy: "design",
+      });
+      expect(
+        design.getByText(
+          `Shared links use the title this page's design sets for them.${REST}`
+        )
+      ).toBeVisible();
+    });
+
+    it("the switch says the Google title once one is typed, ahead of the route's", async () => {
+      const user = userEvent.setup();
+      render(
+        <Harness
+          context={ROUTE_CARD}
+          initial={{ metaTitle: "Typed for Google" }}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: /Advanced/ }));
+      expect(
+        within(inAdvanced()).getByText(
+          `Shared links use the Google title.${REST}`
+        )
+      ).toBeVisible();
+    });
+
+    it("the Google title, where nothing else is set for shared links", async () => {
+      const { title, description, advanced } = await openShared(CONTEXT);
+      expect(title).toHaveAttribute("placeholder", LEVELS.pattern.title?.value);
+      expect(advanced.getByText("same as the Google title")).toBeVisible();
+      expect(description).toHaveAttribute(
+        "placeholder",
+        LEVELS.content.description?.value
+      );
+      expect(
+        advanced.getByText("same as the Google description")
+      ).toBeVisible();
+    });
+
+    it("the route's own text for shared links, where it sets one", async () => {
+      const { title, description, advanced } = await openShared(ROUTE_CARD);
+      expect(title).toHaveAttribute("placeholder", "The route's card title");
+      expect(description).toHaveAttribute(
+        "placeholder",
+        "The route's card text"
+      );
+      expect(advanced.queryByText("same as the Google title")).toBeNull();
+      expect(advanced.queryByText("same as the Google description")).toBeNull();
+      // Named as every value the route sets is named.
+      expect(advanced.getAllByText("Set in code")).toHaveLength(2);
+    });
+
+    it("the typed Google title, which comes before the route's text for shared links", async () => {
+      const { title, description, advanced } = await openShared(ROUTE_CARD, {
+        metaTitle: "Typed for Google",
+      });
+      expect(title).toHaveAttribute("placeholder", "Typed for Google");
+      expect(advanced.getByText("same as the Google title")).toBeVisible();
+      // Nothing is typed for Google's description, so the route's card text
+      // is still what a shared link uses.
+      expect(description).toHaveAttribute(
+        "placeholder",
+        "The route's card text"
+      );
+    });
+
+    it("the template's text for shared links, where it sets one", async () => {
+      const { title, advanced } = await openShared(
+        withCard({ template: { socialTitle: "The template's card title" } })
+      );
+      expect(title).toHaveAttribute("placeholder", "The template's card title");
+      expect(advanced.queryByText("same as the Google title")).toBeNull();
+      expect(advanced.getByText("from this page's template")).toBeVisible();
+    });
+  });
+
   it("edits the shared description beside the shared title", async () => {
     const user = userEvent.setup();
     const writes: [string, unknown][] = [];
@@ -471,6 +638,50 @@ describe("Advanced", () => {
     ).toEqual(["Article · automatic", "Article", "Web page"]);
     await user.click(screen.getByRole("option", { name: "Web page" }));
     expect(writes.at(-1)).toEqual(["structuredDataType", "webPage"]);
+  });
+
+  it("says beside Questions and answers that Google no longer shows it, and names only the type once chosen", async () => {
+    const user = userEvent.setup();
+    const writes: [string, unknown][] = [];
+    const structuredData = CONTEXT.structuredData;
+    if (structuredData === undefined) throw new Error("no structured data");
+    render(
+      <Harness
+        context={{
+          ...CONTEXT,
+          structuredData: {
+            ...structuredData,
+            offered: [
+              ...structuredData.offered,
+              { key: "faqPage", label: "Questions and answers" },
+            ],
+          },
+        }}
+        onWrite={(f, v) => writes.push([f, v])}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Structured data type" })
+    );
+    expect(
+      (await screen.findAllByRole("option")).map(option => option.textContent)
+    ).toEqual([
+      "Article · automatic",
+      "Article",
+      "Web page",
+      "Questions and answers · no longer shown by Google",
+    ]);
+    await user.click(
+      screen.getByRole("option", {
+        name: "Questions and answers · no longer shown by Google",
+      })
+    );
+    expect(writes.at(-1)).toEqual(["structuredDataType", "faqPage"]);
+    // Once chosen, the choice is named alone, so it fits its box.
+    expect(
+      screen.getByRole("combobox", { name: "Structured data type" }).textContent
+    ).toBe("Questions and answers");
   });
 
   it("offers no control for a field the group does not declare", () => {

@@ -241,20 +241,35 @@ async function served(
   };
 }
 
-/** Request a cached page until Next serves it from its store. */
+/**
+ * Request a cached page until Next serves it from its store.
+ *
+ * Next stores a render just after answering with it, so requests sent back to
+ * back after a miss can all arrive before the store holds it, and miss too:
+ * measured here, the first hit came about a quarter of a second after the
+ * miss. So the page is asked for until it is served from the store, within
+ * the assertion's time, rather than a fixed number of times.
+ */
 async function warmed(
   request: APIRequestContext,
   path: string
 ): Promise<Served> {
   let last: Served | undefined;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    last = await served(request, path);
-    expect(last.status, `serving ${path}`).toBe(200);
-    if (last.cache === "HIT") return last;
-  }
-  throw new Error(
-    `${path} was never served from the cache (x-nextjs-cache: ${String(last?.cache)})`
-  );
+  await expect
+    .poll(
+      async () => {
+        last = await served(request, path);
+        expect(last.status, `serving ${path}`).toBe(200);
+        return last.cache;
+      },
+      {
+        message: `${path} was never served from the cache`,
+        intervals: [100, 250, 500],
+      }
+    )
+    .toBe("HIT");
+  if (last === undefined) throw new Error(`${path} was never requested`);
+  return last;
 }
 
 const count = (haystack: string, needle: string) =>

@@ -642,20 +642,24 @@ interface Decided {
 
 /**
  * Asks every rule about a visitor, works out what Public is to be granted,
- * and takes back each plugin grant no enabled plugin declares any longer,
- * except one this boot grants for another reason, such as a read whose rule
- * answers `true`. Taking back needs no permission made, so it is done here,
- * before anything is granted. `null` where the Public role is not made.
+ * and, with `takeBackUndeclared`, takes back each plugin grant no enabled
+ * plugin declares any longer, except one this boot grants for another reason,
+ * such as a read whose rule answers `true`. Taking back needs no permission
+ * made, so it is done here, before anything is granted. `null` where the
+ * Public role is not made.
  */
-async function decide({
-  publicRoleId,
-  targets,
-  permissionIds,
-  declared,
-  withdraw,
-  meta,
-  logger,
-}: PublicReadGrantSeeding): Promise<Decided | null> {
+async function decide(
+  {
+    publicRoleId,
+    targets,
+    permissionIds,
+    declared,
+    withdraw,
+    meta,
+    logger,
+  }: PublicReadGrantSeeding,
+  takeBackUndeclared: boolean
+): Promise<Decided | null> {
   const roleId = await publicRoleId();
   if (roleId === null) return null;
   // Every rule of every target is asked at once, so one deadline bounds them.
@@ -713,11 +717,13 @@ async function decide({
       return id === undefined ? [] : [[id, grant] as const];
     })
   );
-  await withdrawUndeclared(roleId, new Set(wanted.map(({ id }) => id)), {
-    withdraw,
-    meta,
-    logger,
-  });
+  if (takeBackUndeclared) {
+    await withdrawUndeclared(roleId, new Set(wanted.map(({ id }) => id)), {
+      withdraw,
+      meta,
+      logger,
+    });
+  }
   return { roleId, ids, asked, wanted, declaring };
 }
 
@@ -730,7 +736,7 @@ async function decide({
 export async function withdrawUndeclaredPluginGrants(
   deps: PublicReadGrantSeeding
 ): Promise<void> {
-  await decide(deps);
+  await decide(deps, true);
 }
 
 /**
@@ -738,11 +744,19 @@ export async function withdrawUndeclaredPluginGrants(
  * declare for it, once, takes back each plugin grant no enabled plugin
  * declares any longer, tells a site due it which reads its visitors lost, and
  * then lists what Public still lacks that visitors may be relying on.
+ *
+ * `takeBackUndeclared: false` grants and takes nothing back: for a seeding
+ * whose `declared` names only some of the enabled plugins, such as a plugin's
+ * install, which declares that plugin alone. A grant another plugin declares
+ * is missing from it, so taking back what it lacks would take that grant away
+ * from visitors. What no enabled plugin declares any longer is taken back by
+ * the next seeding that knows them all: a start's, or `nextly migrate`'s.
  */
 export async function seedPublicReadGrants(
-  deps: PublicReadGrantSeeding
+  deps: PublicReadGrantSeeding,
+  { takeBackUndeclared = true }: { takeBackUndeclared?: boolean } = {}
 ): Promise<void> {
-  const decided = await decide(deps);
+  const decided = await decide(deps, takeBackUndeclared);
   if (decided === null) return;
   const { roleId, ids, asked, wanted, declaring } = decided;
   const { addOnce, publicHolds, meta, logger } = deps;

@@ -13,39 +13,19 @@
  *
  * @module domains/schema/builder-save/entity-save
  */
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import { loadUiSchema } from "../ui-schema/loader";
 
 import {
   checkSaveHistory,
   writeCollectionSave,
-  type BuilderSaveSetup,
   type CollectionSave,
   type CollectionSaveDeps,
 } from "./collection-save";
 
-/**
- * The writer's dependencies for a service's save, or undefined where no
- * writer is set up or no adapter is registered: the service then makes its
- * change alone, as before the writer.
- */
-export function entitySaveDeps(
-  setup: BuilderSaveSetup | undefined,
-  adapter: DrizzleAdapter | undefined,
-  logger: CollectionSaveDeps["logger"]
-): CollectionSaveDeps | undefined {
-  if (setup === undefined || adapter === undefined) return undefined;
-  return {
-    ...setup,
-    adapter,
-    logger,
-    // Development runs each file and records it applied, as the Builder does
-    // for a collection; elsewhere the deploy's `nextly migrate` does.
-    applies: process.env.NODE_ENV === "development",
-  };
-}
+// Kept in a module of its own, so a service can tell whether it has a writer
+// without loading the writer.
+export { entitySaveDeps } from "./entity-save-deps";
 
 /**
  * The entity as the definition file lists it, or as the registry stored it

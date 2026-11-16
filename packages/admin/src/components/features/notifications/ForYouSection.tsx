@@ -8,10 +8,10 @@
  *
  * @module components/features/notifications/ForYouSection
  */
+import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 import { useEffect, useRef } from "react";
 
-import { Button } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { cn } from "@admin/lib/utils";
 

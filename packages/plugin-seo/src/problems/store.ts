@@ -27,6 +27,7 @@ import {
 import { isRecord, textOf } from "../plain-values";
 
 import type { Problem, ProblemSubject } from "./contract";
+import type { PageLinks } from "./link-graph";
 
 export const PROBLEMS_SLUG = "nx_seo_problems";
 
@@ -58,6 +59,9 @@ export function problemsCollection(): CollectionConfig {
       textarea({ name: "title", label: "Title" }),
       textarea({ name: "description", label: "Description" }),
       json({ name: "problems", label: "Problems" }),
+      // The pages the page's content links to, and whether it is listed and
+      // its language's home, for the site's link counts and orphan pages.
+      json({ name: "links", label: "Links" }),
       // ISO text, which orders and compares alike on every dialect.
       text({ name: "checkedAt", label: "Checked at" }),
       checkbox({ name: "outOfDate", label: "Out of date" }),
@@ -110,6 +114,8 @@ export interface PageRow {
   title?: string;
   description?: string;
   problems: Problem[];
+  /** What its links reach; none on a row kept before links were read. */
+  links?: PageLinks;
   checkedAt: string;
 }
 
@@ -145,6 +151,33 @@ function problemsOf(value: unknown): Problem[] {
     : [];
 }
 
+/**
+ * The links a row keeps, read back: none where nothing well formed is kept,
+ * such as on a row kept before links were read, so its page is left out of
+ * the counts rather than counted as linking nowhere.
+ */
+function linksOf(value: unknown): PageLinks | undefined {
+  const parsed: unknown =
+    typeof value === "string"
+      ? (() => {
+          try {
+            return JSON.parse(value) as unknown;
+          } catch {
+            return undefined;
+          }
+        })()
+      : value;
+  if (!isRecord(parsed) || !Array.isArray(parsed.to)) return undefined;
+  if (typeof parsed.listed !== "boolean" || typeof parsed.home !== "boolean") {
+    return undefined;
+  }
+  return {
+    to: parsed.to.filter((each): each is string => typeof each === "string"),
+    listed: parsed.listed,
+    home: parsed.home,
+  };
+}
+
 /** A stored page row, read back. */
 function pageRowOf(row: Record<string, unknown>): PageRow | undefined {
   const type = textOf(row.holderCollection);
@@ -153,6 +186,7 @@ function pageRowOf(row: Record<string, unknown>): PageRow | undefined {
   const path = textOf(row.path);
   const title = textOf(row.title);
   const description = textOf(row.description);
+  const links = linksOf(row.links);
   return {
     subject: {
       type,
@@ -164,6 +198,7 @@ function pageRowOf(row: Record<string, unknown>): PageRow | undefined {
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
     problems: problemsOf(row.problems),
+    ...(links === undefined ? {} : { links }),
     checkedAt: textOf(row.checkedAt) ?? "",
   };
 }
@@ -231,6 +266,7 @@ export async function savePage(
     title: row.title ?? null,
     description: row.description ?? null,
     problems: row.problems,
+    links: row.links ?? null,
     checkedAt: row.checkedAt,
   });
 }

@@ -64,9 +64,18 @@ const KINDS: BuilderKind[] = [
 function occurrences(page: Page, name: string): Promise<number> {
   return page.evaluate(
     needle =>
-      Array.from(document.querySelectorAll("main *")).filter(
-        el => el.children.length === 0 && el.textContent?.trim() === needle
-      ).length,
+      Array.from(document.querySelectorAll("main *")).filter(el => {
+        if (el.children.length !== 0 || el.textContent?.trim() !== needle) {
+          return false;
+        }
+        // The outline also lists, under a blocks field, each block it accepts
+        // and that block's own props, a level or two down: a block's `title`
+        // prop is the block's, not a field of the entity. The entity's own
+        // fields are the outline's first level, and anything outside the
+        // outline (the system row) is counted as it is.
+        const row = el.closest('[role="treeitem"]');
+        return row === null || row.getAttribute("aria-level") === "1";
+      }).length,
     name
   );
 }

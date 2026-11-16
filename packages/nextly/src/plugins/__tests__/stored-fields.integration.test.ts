@@ -1496,6 +1496,14 @@ describe.each(getConfiguredTestDialects())(
           });
           return { read, count: selects };
         };
+        // The clocks stand still while the reads are counted. The permission
+        // epoch is read again once a second has passed since its last read, and
+        // a registry row once its lifetime has, so a count that crossed either
+        // would hold a query no field caused.
+        const wallClock = Date.now();
+        const monotonic = performance.now();
+        vi.spyOn(Date, "now").mockReturnValue(wallClock);
+        vi.spyOn(performance, "now").mockReturnValue(monotonic);
         // Once to settle what a first read resolves and remembers.
         await countFor(["body", "note", "extra"]);
 

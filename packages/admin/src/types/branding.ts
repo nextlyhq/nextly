@@ -304,6 +304,13 @@ export interface PluginMetadata {
    */
   panelSections?: Array<{ slug: string; title: string; component: string }>;
   /**
+   * @experimental The collections whose document screens start with the
+   * rail's panel folded away, contributed via
+   * `contributes.admin.views[<slug>].foldedPanel`, on the slug the admin
+   * routes. Present only for enabled plugins.
+   */
+  foldedPanels?: string[];
+  /**
    * @experimental The filters this plugin offers in the entry list's toolbar,
    * via `contributes.admin.filters`, as they passed the boot check. Present
    * only for enabled plugins.
@@ -368,6 +375,13 @@ export interface AdminBranding {
    * public half's the login page's alone.
    */
   contributions?: AdminContributionsMeta;
+
+  /**
+   * The fields a plugin's extension switch keeps off each type's pages, by
+   * `collection:<slug>` or `single:<slug>`: added by the plugin there and
+   * switched off now. Drawn nowhere; their stored values stay.
+   */
+  withheldFields?: Record<string, string[]>;
 
   /**
    * Public client configuration, readable before a session exists.

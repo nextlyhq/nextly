@@ -195,20 +195,12 @@ describe("an accordion's titles and icon, on a rendered page", () => {
       container: [],
     },
   };
-  const markup = (
-    document: BlockDocument,
-    spacingMode?: "classic" | "gaps"
-  ): string =>
+  const markup = (document: BlockDocument): string =>
     renderToStaticMarkup(
       <PageRenderer
         document={document}
         blocks={resolver}
-        styles={resolvePageStyles(
-          document,
-          undefined,
-          { ...CONTEXT, ...(spacingMode === undefined ? {} : { spacingMode }) },
-          resolver
-        )}
+        styles={resolvePageStyles(document, undefined, CONTEXT, resolver)}
       />
     );
   const summaryOf = (html: string): string =>
@@ -255,34 +247,12 @@ describe("an accordion's titles and icon, on a rendered page", () => {
     );
   });
 
-  it("draws a chevron after the title on a new site", () => {
+  it("draws a chevron after the title", () => {
     const html = markup(page({}));
     expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
     expect(html).toContain("list-style: none");
     expect(html).toContain("rotate(180deg)");
     expect(html).toContain("margin-inline-start: auto");
-  });
-
-  it("puts an icon chosen on a classic site after the title, as on a new one", () => {
-    const chosen = {
-      ...page({}),
-      nodes: [
-        {
-          ...(page({}).nodes[0] as object),
-          styles: { base: { base: { disclosureIcon: "chevron" } } },
-        },
-      ],
-    } as unknown as BlockDocument;
-    const html = markup(chosen, "classic");
-    expect(html).toContain("rotate(180deg)");
-    expect(html).toContain("margin-inline-start: auto");
-  });
-
-  it("keeps the browser's marker on a site built before icons were offered", () => {
-    const html = markup(page({}), "classic");
-    expect(html).toContain(`> details > summary > .${DISCLOSURE_ICON_CLASS}`);
-    expect(html).not.toContain("list-style: none");
-    expect(html).not.toContain("rotate(180deg)");
   });
 });
 

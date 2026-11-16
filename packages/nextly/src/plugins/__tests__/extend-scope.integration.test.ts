@@ -43,6 +43,7 @@ import type { CollectionRegistryService } from "../../domains/collections/servic
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { reloadNextlyConfig } from "../../init/reload-config";
 import { _resetEnvCache } from "../../shared/lib/env";
+import { typesExtendedBy } from "../extended-types";
 import type { PluginDefinition } from "../plugin-context";
 import { applyPluginSchemaContributionsDeferred } from "../schema/apply-contributions";
 import {
@@ -155,7 +156,10 @@ const homepage = defineSingle({
   fields: [text({ name: "headline" })],
 });
 
-/** Another plugin, whose own collection the scope must never reach. */
+/**
+ * Another plugin, whose own collection the scope must never reach, beside one
+ * it marks as the site's content, which the scope reaches.
+ */
 const formsPlugin: PluginDefinition = {
   name: "@t/forms",
   version: "1.0.0",
@@ -165,6 +169,11 @@ const formsPlugin: PluginDefinition = {
       defineCollection({
         slug: "es_submissions",
         fields: [text({ name: "data" })],
+      }),
+      defineCollection({
+        slug: "es_landing",
+        siteContent: true,
+        fields: [text({ name: "heading" })],
       }),
     ],
   },
@@ -262,12 +271,26 @@ describe.each(getConfiguredTestDialects())(
         dc_es_posts: await columnsOf(current, "dc_es_posts"),
         single_es_homepage: await columnsOf(current, "single_es_homepage"),
         dc_es_cases: await columnsOf(current, "dc_es_cases"),
+        dc_es_landing: await columnsOf(current, "dc_es_landing"),
       };
       expect(reached).toEqual({
         dc_es_posts: expect.arrayContaining(["seo_title"]),
         single_es_homepage: expect.arrayContaining(["seo_title"]),
         dc_es_cases: expect.arrayContaining(["seo_title"]),
+        dc_es_landing: expect.arrayContaining(["seo_title"]),
       });
+      // What the start recorded agrees with the tables: the code types, the
+      // plugin's site-content collection and the Builder type, and no other.
+      expect(
+        typesExtendedBy("@t/seo", "seo_title")
+          .map(type => `${type.kind}:${type.slug}`)
+          .sort()
+      ).toEqual([
+        "collection:es_cases",
+        "collection:es_landing",
+        "collection:es_posts",
+        "single:es_homepage",
+      ]);
       expect(await columnsOf(current, "dc_es_pages")).toContain("title");
       expect(await columnsOf(current, "dc_es_pages")).not.toContain(
         "seo_title"

@@ -16,6 +16,7 @@ import {
   isPluginPageAddress,
   matchPluginPage,
 } from "./plugins/plugin-route-registry";
+import { routePatternRegex } from "./route-pattern";
 import { setRoutePreloader } from "./route-preload";
 import { parseSearchParams } from "./search-params";
 
@@ -90,37 +91,6 @@ export {
   type SearchParams,
 } from "./search-params";
 
-// Normalize Next.js App Router patterns
-function normalizePattern(pattern: string): string {
-  return pattern
-    .replace(/\([^)]*\)\//g, "") // strip route groups (auth) → ""
-    .replace(/\/@[^/]+/g, "") // strip parallel segments @slot → ""
-    .replace(/\(\.\)(\w+)/g, "$1"); // intercepting routes (.)edit → edit
-}
-
-// Convert route pattern to regex and extract parameter keys
-function patternToRegex(pattern: string): { regex: RegExp; keys: string[] } {
-  const keys: string[] = [];
-  pattern = normalizePattern(pattern);
-
-  const regexStr = pattern
-    .replace(/\//g, "\\/") // escape slashes
-    .replace(/\[\.\.\.(\w+)\]/g, (_, key) => {
-      keys.push(key);
-      return "(.*)"; // catch-all
-    })
-    .replace(/\[\[\.\.\.(\w+)\]\]/g, (_, key) => {
-      keys.push(key);
-      return "(.*)?"; // optional catch-all
-    })
-    .replace(/\[(\w+)\]/g, (_, key) => {
-      keys.push(key);
-      return "([^\\/]+)"; // single param
-    });
-
-  return { regex: new RegExp("^" + regexStr + "$"), keys };
-}
-
 // Match dynamic routes
 function matchDynamicRoute(pathname: string): {
   component: React.ComponentType<PageProps>;
@@ -133,7 +103,7 @@ function matchDynamicRoute(pathname: string): {
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
-    const { regex, keys } = patternToRegex(pattern);
+    const { regex, keys } = routePatternRegex(pattern);
     const match = pathname.match(regex);
     if (match) {
       const params: Params = {};

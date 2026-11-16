@@ -420,6 +420,35 @@ describe("SeoOverviewPage", () => {
     expect(line("One of each")).toBe("One of each1");
   });
 
+  it("counts the pages of types with SEO off as their own group, linking to them in Pages", () => {
+    serve({
+      "/pages": {
+        items: [
+          ...PAGES,
+          address("/authors/a", undefined, undefined, "seo-off"),
+          address("/authors/b", undefined, undefined, "seo-off"),
+        ],
+      },
+    });
+    render(<SeoOverviewPage />);
+    const pages = card("Pages");
+    expect(within(pages).getByText("7 public pages")).toBeTruthy();
+    const off = within(pages).getByRole("link", { name: "Pages with SEO off" });
+    expect(off.closest("li")?.textContent).toBe("Pages with SEO off2");
+    expect(off.getAttribute("href")).toBe(
+      "/admin/plugins/nextlyhq-plugin-seo/pages?status=seo-off"
+    );
+    // The other groups count the rest, as before.
+    expect(
+      within(pages).getByText("Hidden from search").closest("li")?.textContent
+    ).toBe("Hidden from search1");
+  });
+
+  it("leaves the SEO off line out where no type has SEO off", () => {
+    render(<SeoOverviewPage />);
+    expect(within(card("Pages")).queryByText("Pages with SEO off")).toBeNull();
+  });
+
   it("lists the week's addresses not found, each opening a new redirect from it", () => {
     render(<SeoOverviewPage />);
     const missing = card("Not found, last 7 days");

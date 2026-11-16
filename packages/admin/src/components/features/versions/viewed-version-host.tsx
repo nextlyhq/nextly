@@ -175,9 +175,13 @@ export interface ViewedVersionHost {
  * Holds everything an editor needs to answer a published version, so each
  * editor states the wiring once and neither answers the panel differently.
  *
- * @param fields - every field the document declares, system fields included
+ * @param fields - the fields the editor draws, system fields included
  * @param takeoverTypes - the takeover field types, from the same source the
  *   live layout used
+ * @param valueFields - every field the document declares, where the editor
+ *   draws fewer (a plugin's switch keeps some off the type): the version's
+ *   values are read over these, so a drawn field conditioned on one it does
+ *   not draw is judged on the value the version stored. Defaults to `fields`.
  */
 export function useViewedVersion(
   fields: FieldConfig[],
@@ -185,7 +189,8 @@ export function useViewedVersion(
   /** The editor's version in a language; see `DocumentHistoryValue`. */
   versionFor?: (locale: string | null) => Promise<string | undefined>,
   /** The editor a restore puts values back into; see `DocumentHistoryValue`. */
-  editor?: EditorRestoreSurface
+  editor?: EditorRestoreSurface,
+  valueFields: FieldConfig[] = fields
 ): ViewedVersionHost {
   // Which past version the document area is showing, or null for the live
   // document. Held by the component that swaps the document, and published
@@ -216,8 +221,8 @@ export function useViewedVersion(
   // still hold the values the version stored.
   const historicalValues = useMemo(() => {
     if (!viewingVersion) return null;
-    return snapshotToFormValues(fields, viewingVersion.snapshot);
-  }, [viewingVersion, fields]);
+    return snapshotToFormValues(valueFields, viewingVersion.snapshot);
+  }, [viewingVersion, valueFields]);
 
   const historicalFields = useMemo(() => {
     if (!viewingVersion || !historicalValues) return null;

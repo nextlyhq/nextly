@@ -268,9 +268,11 @@ jobs:
       # edge; without it `nextly#build` can start before the adapters emit their
       # declarations and fails on TS7016. They stay in the filter list so each
       # leg still builds all three regardless of which suites it runs.
+      # `plugin-seo` is built for the upgrade gate after the suite, which loads
+      # the playground's config, and that imports it.
       - name: Run integration tests (postgres)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-seo
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the PostgreSQL integration suite" \
             pnpm lane:test:integration:postgres -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
@@ -282,6 +284,25 @@ jobs:
           # creates beside nextly_test and drops at the end
           # (packages/nextly/src/__tests__/worker-database-guard.ts).
           NEXTLY_INTEGRATION_WORKERS: "2"
+
+      # The playground's fixture plugin (apps/playground/src/plugins/
+      # reading-lists-fixture) through a site's whole life on this leg's
+      # dialect: the app's migration generated, then migrate, install, use,
+      # uninstall each way and reinstall, with the real `nextly` command. Then
+      # the upgrade gate (apps/playground/upgrade-gate): the playground as the
+      # last published release built it, restored from its recorded dump and
+      # upgraded with this checkout's `nextly`, must plan exactly the
+      # operations its allowlist holds. On the first shard only, after the
+      # suite, on databases of their own: they need nothing but the packages
+      # the suite's build made, and take about a minute and ten seconds
+      # together (the gate about ten).
+      - name: Fixture plugin and upgrade gate (postgres)
+        if: matrix.shard == 1
+        run: |
+          scripts/run-with-budget.sh 5m "the fixture plugin and upgrade gate on PostgreSQL" \
+            pnpm lane:test:integration:playground
+        env:
+          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
@@ -406,7 +427,8 @@ jobs:
           mysql -h 127.0.0.1 -uroot -pnextly -e "SET GLOBAL innodb_redo_log_capacity = 1073741824; SET GLOBAL innodb_flush_log_at_trx_commit = 2; SET GLOBAL sync_binlog = 0;"
           mysql -h 127.0.0.1 -uroot -pnextly -N -e "SELECT @@innodb_redo_log_capacity, @@innodb_flush_log_at_trx_commit, @@sync_binlog;"
 
-      # See the postgres leg for why every adapter is built on every leg.
+      # See the postgres leg for why every adapter, and `plugin-seo`, is built
+      # on every leg.
       #
       # Every five minutes while the suite runs, the server prints the
       # connections held for over a minute, the metadata locks of any schema
@@ -416,7 +438,7 @@ jobs:
       # process, and its connections and locks with it.
       - name: Run integration tests (mysql)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-seo
           # The watcher sleeps in a child it waits on, and stops that child
           # when it is stopped: otherwise the sleep outlives it holding the
           # step's output open, and the step waits for it.
@@ -488,6 +510,25 @@ jobs:
             echo "::error::The shard used ${used} of MySQL's ${max} connections, over the ${limit} (80%) this leg allows. Fewer workers or smaller pools, or raise the service's max_connections."
             exit 1
           fi
+
+      # The playground's fixture plugin (apps/playground/src/plugins/
+      # reading-lists-fixture) through a site's whole life on this leg's
+      # dialect: the app's migration generated, then migrate, install, use,
+      # uninstall each way and reinstall, with the real `nextly` command. Then
+      # the upgrade gate (apps/playground/upgrade-gate): the playground as the
+      # last published release built it, restored from its recorded dump and
+      # upgraded with this checkout's `nextly`, must plan exactly the
+      # operations its allowlist holds. On the first shard only, after the
+      # suite, on databases of their own: they need nothing but the packages
+      # the suite's build made, and take about a minute and ten seconds
+      # together (the gate about ten).
+      - name: Fixture plugin and upgrade gate (mysql)
+        if: matrix.shard == 1
+        run: |
+          scripts/run-with-budget.sh 5m "the fixture plugin and upgrade gate on MySQL" \
+            pnpm lane:test:integration:playground
+        env:
+          TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
@@ -618,6 +659,23 @@ jobs:
           # each worker runs on its own in-memory SQLite database
           # (packages/nextly/src/__tests__/worker-database-guard.ts).
           NEXTLY_INTEGRATION_WORKERS: "2"
+
+      # The playground's fixture plugin (apps/playground/src/plugins/
+      # reading-lists-fixture) through a site's whole life on this leg's
+      # dialect: the app's migration generated, then migrate, install, use,
+      # uninstall each way and reinstall, with the real `nextly` command. Then
+      # the upgrade gate (apps/playground/upgrade-gate): the playground as the
+      # last published release built it, restored from its recorded dump and
+      # upgraded with this checkout's `nextly`, must plan exactly the
+      # operations its allowlist holds. On the first shard only, after the
+      # suite, on databases of their own: they need nothing but the packages
+      # the suite's build made, and take about a minute and ten seconds
+      # together (the gate about ten).
+      - name: Fixture plugin and upgrade gate (sqlite)
+        if: matrix.shard == 1
+        run: |
+          scripts/run-with-budget.sh 5m "the fixture plugin and upgrade gate on SQLite" \
+            pnpm lane:test:integration:playground
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post

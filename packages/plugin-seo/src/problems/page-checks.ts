@@ -21,12 +21,8 @@ import {
   type ProblemKind,
   type ProblemSubject,
 } from "./contract";
-import {
-  DESCRIPTION_LIMIT,
-  TITLE_LIMIT,
-  textChecks,
-  type TextCheck,
-} from "./text-checks";
+import { textChecks, type TextCheck } from "./text-checks";
+import { charactersText, widthText } from "./text-width";
 
 /** An image a page's content shows, and the alt text it is shown with. */
 export interface ImageFact {
@@ -67,6 +63,11 @@ export interface PageFacts {
   brokenLinks: readonly LinkFact[];
   /** The site's languages left out of the page's language links. */
   languageCodes: readonly LanguageCodeProblem[];
+  /**
+   * The robots.txt rule that keeps search engines from the page, where one
+   * does: its line in the site's own rules, or none for one of Nextly's own.
+   */
+  robotsBlock?: { line?: number; rule: string };
 }
 
 /** The site's languages left out of language links, each said of the whole site. */
@@ -147,17 +148,39 @@ function textProblems(facts: PageFacts): Problem[] {
     return {
       kind: words.kind,
       subject,
-      // A long value is a warning, with its length beside what Google
-      // shows: it is saved and served as it is, and Google cuts it to fit.
+      // A long value is a warning, with its width beside what Google shows
+      // and its characters as a hint: it is saved and served as it is, and
+      // Google cuts it to fit.
       what:
         words.what ??
-        `${check.length ?? 0} characters, Google shows about ${check.value === "title" ? TITLE_LIMIT : DESCRIPTION_LIMIT}`,
+        (check.fit === undefined
+          ? ""
+          : `${widthText(check.fit)} · ${charactersText(check.fit)}`),
       // A long value only code sets is a note for a developer.
       action:
         check.problem === "long" ? (action ?? words.action) : words.action,
       fix,
     };
   });
+}
+
+/**
+ * A published page whose date to drop from search has passed: it is served
+ * hidden now, which a person who set the date long ago may not expect.
+ */
+function dropDateProblem(facts: PageFacts): Problem[] {
+  const after = facts.answer.display?.unavailableAfter;
+  if (after?.passed !== true) return [];
+  return [
+    {
+      kind: "dropDatePassed",
+      subject: facts.subject,
+      // The moment as stored, in UTC, the zone the SEO tab sets it in.
+      what: `Dropped from search after ${after.value.slice(0, 16).replace("T", " ")} UTC`,
+      action: "Remove the date",
+      fix: { place: "page", tab: "seo", field: "unavailableAfter" },
+    },
+  ];
 }
 
 /**
@@ -181,6 +204,31 @@ function canonicalProblem(facts: PageFacts): Problem[] {
       what: `Points search engines to ${canonical.value}`,
       action: "Change the official address",
       fix: { place: "page", tab: "seo", field: "canonical" },
+    },
+  ];
+}
+
+/**
+ * A page the sitemap lists that robots.txt asks search engines not to read:
+ * it is listed and blocked at once, so what was set for it never reaches
+ * search. Fixed on the settings tab that holds the site's own rules.
+ */
+function robotsBlockedProblem(facts: PageFacts): Problem[] {
+  const block = facts.robotsBlock;
+  // A page whose canonical names another address is left out of the
+  // sitemap, by the rule `canonicalIsOwn` decides, so it is no conflict.
+  if (block === undefined || !facts.canonicalIsOwn) return [];
+  const by =
+    block.line === undefined
+      ? "Nextly's own robots.txt rule"
+      : `Line ${block.line} of your own robots.txt rules`;
+  return [
+    {
+      kind: "robotsBlocked",
+      subject: facts.subject,
+      what: `${by} keeps crawlers away: ${block.rule}`,
+      action: "Change your own rules",
+      fix: { place: "settings", tab: "crawlers" },
     },
   ];
 }
@@ -353,9 +401,14 @@ function brokenLinkProblems(facts: PageFacts): Problem[] {
  */
 export function pageProblems(facts: PageFacts): Problem[] {
   if (!facts.answer.robots.value.index) {
-    return [...brokenLinkProblems(facts), ...imageAltProblems(facts)];
+    return [
+      ...dropDateProblem(facts),
+      ...brokenLinkProblems(facts),
+      ...imageAltProblems(facts),
+    ];
   }
   return [
+    ...robotsBlockedProblem(facts),
     ...textProblems(facts),
     ...canonicalProblem(facts),
     ...brokenLinkProblems(facts),

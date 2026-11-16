@@ -68,6 +68,7 @@ import type {
   DeleteOptions,
   UpsertOptions,
   TransactionContext,
+  TransactionBounds,
   TransactionInFlow,
   TransactionOptions,
   SessionOptions,
@@ -594,6 +595,54 @@ export abstract class DrizzleAdapter {
    * and another request's open transaction says nothing about this one.
    */
   private readonly scope = new AsyncLocalStorage<TransactionFrame>();
+
+  /**
+   * The bounds the calling async flow's outermost transactions are opened
+   * with (`withTransactionBounds`), kept per flow so one request's background
+   * work never bounds another request's transactions.
+   */
+  private readonly boundsScope = new AsyncLocalStorage<TransactionBounds>();
+
+  /**
+   * Run `work` with every outermost transaction it opens on this adapter
+   * bounded by `bounds` (`TransactionBounds`), however it opens them: through
+   * {@link transaction}, or through a service that does. A transaction joined
+   * to one already open keeps the open one's bounds. A scope inside another
+   * replaces the bounds it names and keeps the rest. Work started inside the
+   * scope and still running after it settles stays bounded, as every async
+   * flow keeps the scope it started in.
+   *
+   * For work that may run on after the process stops running it, such as
+   * work started without being awaited by the request that started it: a
+   * serverless platform freezes the function once the response is sent, and
+   * a transaction such work had open then holds its locks until the server
+   * ends it. PostgreSQL applies the bounds; MySQL and SQLite run `work` as
+   * if they were not given.
+   *
+   * @experimental
+   * @param bounds - The bounds to open each transaction with
+   * @param work - The work whose transactions are bounded
+   * @returns What `work` resolves to
+   */
+  withTransactionBounds<T>(
+    bounds: TransactionBounds,
+    work: () => Promise<T>
+  ): Promise<T> {
+    return this.boundsScope.run(
+      { ...this.boundsScope.getStore(), ...definedBounds(bounds) },
+      work
+    );
+  }
+
+  /**
+   * The bounds the calling flow's next outermost transaction is opened with
+   * (`withTransactionBounds`), or none outside any scope.
+   *
+   * @returns The bounds in force here
+   */
+  protected transactionBounds(): TransactionBounds | undefined {
+    return this.boundsScope.getStore();
+  }
 
   /** Each pool's reporting views, by method list (`observedPool`). Gone with the pool. */
   private readonly observedPools = new WeakMap<object, Map<string, object>>();
@@ -4140,4 +4189,24 @@ function renderDefaultValue(value: unknown, columnName: string): string {
   throw new Error(
     `DEFAULT for column "${columnName}" has an unsupported type (${typeof value}).`
   );
+}
+
+/**
+ * The bounds `bounds` names: a positive whole number of milliseconds each,
+ * the rest left out, so a scope inside another never unsets one by naming it
+ * `undefined`, and nothing that is not a duration reaches a dialect's SQL.
+ */
+function definedBounds(bounds: TransactionBounds): TransactionBounds {
+  const defined: TransactionBounds = {};
+  for (const key of ["lockWaitMs", "idleMs"] as const) {
+    const value = bounds[key];
+    if (value === undefined) continue;
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError(
+        `withTransactionBounds: ${key} must be a positive whole number of milliseconds.`
+      );
+    }
+    defined[key] = value;
+  }
+  return defined;
 }

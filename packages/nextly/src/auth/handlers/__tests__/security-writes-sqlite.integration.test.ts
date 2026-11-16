@@ -301,7 +301,7 @@ describe.each(SURFACES)(
       expect(writeResolvedAt).toBeGreaterThanOrEqual(threwAt);
     });
 
-    it("a theft response's revocations survive the plugin's rollback", async () => {
+    it("deleting one session survives the plugin's rollback, and only that session goes", async () => {
       const { t, pluginDb, userId, db } = await boot(surface);
       await storeRefreshRow(db, userId, "presented");
       await storeRefreshRow(db, userId, "sibling");
@@ -309,14 +309,32 @@ describe.each(SURFACES)(
         t.getService as unknown as (name: string) => unknown
       );
 
-      // The two deletes the refresh handler makes on a hard binding mismatch.
       const { writeResolvedAt, threwAt } = await duringPluginTransaction(
         pluginDb,
         150,
-        async () => {
-          await deps.deleteRefreshToken("rt-presented");
-          await deps.deleteAllRefreshTokensForUser(userId);
-        }
+        () => deps.deleteRefreshToken("rt-presented")
+      );
+
+      expect(await pluginDb.rowsLeft()).toBe(0);
+      // The sibling is left, so the presented row is what went.
+      expect(await refreshHashes(db, userId)).toEqual([
+        hashRefreshToken("sibling"),
+      ]);
+      expect(writeResolvedAt).toBeGreaterThanOrEqual(threwAt);
+    });
+
+    it("deleting all of an account's sessions survives the plugin's rollback", async () => {
+      const { t, pluginDb, userId, db } = await boot(surface);
+      await storeRefreshRow(db, userId, "presented");
+      await storeRefreshRow(db, userId, "sibling");
+      const deps = buildAuthRouterDeps(
+        t.getService as unknown as (name: string) => unknown
+      );
+
+      const { writeResolvedAt, threwAt } = await duringPluginTransaction(
+        pluginDb,
+        150,
+        () => deps.deleteAllRefreshTokensForUser(userId)
       );
 
       expect(await pluginDb.rowsLeft()).toBe(0);

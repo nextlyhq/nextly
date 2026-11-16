@@ -41,6 +41,7 @@ import {
   runInTransactionPhaseFor,
 } from "../../../hooks/in-transaction-call";
 import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
+import { resolveRequestFacts } from "../../../hooks/request-facts";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -50,7 +51,9 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import {
+  getFieldFunctions,
   resolvedCallerGrants,
+  runFieldHooks,
   type CallerGrants,
   type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
@@ -187,6 +190,11 @@ import {
   promoteCallerFor,
   readsSingleInEveryLanguage,
 } from "./promote-gate";
+import { runSingleAfterUpdateHooks } from "./single-after-update";
+import {
+  runSingleStatusMoveBeforeHooks,
+  type SingleBeforeHookCall,
+} from "./single-before-update";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -266,6 +274,14 @@ interface PublishPlan {
    */
   inTransactionHandlers: InTransactionHandlerSet;
   /**
+   * Whether anything hears this publish once it is durable: the Single's
+   * `afterUpdate` hooks (its own and those heard on every type) or its
+   * fields' functions, which hold their `afterChange`. Asked before the
+   * transaction, so the documents they are handed are read in it only where
+   * someone will be handed them.
+   */
+  runsUpdateHooks: boolean;
+  /**
    * Whether the Single may have working drafts, as its schema read reports.
    * A stored draft is promoted only while it does: one left from before the
    * schema made it ineligible is hidden from every read.
@@ -286,6 +302,14 @@ interface PublishOutcome {
   version?: string;
   /** What the publish did to each configured language. */
   languages: LanguageOutcome[];
+  /**
+   * The document after and before the publish, read in its transaction, for
+   * the update hooks run once it commits. Absent where none will run.
+   */
+  hookDocuments?: {
+    data: Record<string, unknown>;
+    previous: Record<string, unknown>;
+  };
 }
 
 /**
@@ -393,6 +417,11 @@ export class SinglePublishAllService extends BaseService {
       holder: {},
     };
 
+    // One context and one account of the request for every hook of the
+    // publish, before and after it, as a save shares them between its phases.
+    const sharedContext: Record<string, unknown> = { ...options.context };
+    const requestFacts = resolveRequestFacts(options.request);
+
     try {
       stale.check = versionCheckFor(
         { ...options.data },
@@ -403,6 +432,19 @@ export class SinglePublishAllService extends BaseService {
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return resolved.result;
       const plan = resolved.plan;
+      const hookCall: SingleBeforeHookCall = {
+        slug,
+        id: plan.existingDoc.id,
+        // Compared against as a save's hooks compare: in its read shape.
+        originalData:
+          this.queryService?.deserializeJsonFields(
+            plan.existingDoc,
+            plan.fieldConfigs
+          ) ?? plan.existingDoc,
+        user: options.user,
+        context: sharedContext,
+        req: requestFacts,
+      };
       translationsTable = plan.companion?.companionTableName;
       // Every language this moves is judged, so the version must name each
       // one: asked before any work only a publish needs.
@@ -425,6 +467,18 @@ export class SinglePublishAllService extends BaseService {
         askedLanguages
       );
       if (denied) return denied;
+
+      // The hooks a status change of one language runs before it writes, run
+      // once for the publish of every language: after the caller is known to
+      // be allowed to make it, and before anything is written, so a site's
+      // rule refuses this as it refuses a save. Run outside the transaction,
+      // as a save runs them: the transaction may re-run on a version
+      // conflict, and a hook's effects outside it could not be withdrawn.
+      await runSingleStatusMoveBeforeHooks(
+        this.hookRegistry,
+        hookCall,
+        "published"
+      );
 
       // Resolved here because the gate that uses them runs inside the write
       // transaction, and resolving grants queries the pooled connection that
@@ -478,6 +532,17 @@ export class SinglePublishAllService extends BaseService {
         };
       }
 
+      // A publish of every language is an update of the Single, so the hooks
+      // an update runs once it is durable run for it: inside an enclosing
+      // SQLite transaction, once that commits, and never for one it rolls
+      // back. A hook's failure is recorded, not thrown: the publish stands.
+      const hookDocuments = outcome.hookDocuments;
+      if (hookDocuments !== undefined) {
+        await this.afterCommit(() =>
+          this.runUpdateHooks(hookCall, hookDocuments)
+        );
+      }
+
       return {
         success: true,
         statusCode: 200,
@@ -515,6 +580,40 @@ export class SinglePublishAllService extends BaseService {
         })
       );
     }
+  }
+
+  /**
+   * The hooks an update of the Single runs once it is durable, run for a
+   * publish of every language: the fields' `afterChange`, then the Single's
+   * `afterUpdate`, over the document the publish committed, as a save runs
+   * them over the document it wrote. What they return reshapes nothing: the
+   * publish answers with its languages, not the document.
+   */
+  private async runUpdateHooks(
+    call: SingleBeforeHookCall,
+    documents: {
+      data: Record<string, unknown>;
+      previous: Record<string, unknown>;
+    }
+  ): Promise<void> {
+    await runFieldHooks({
+      kind: "single",
+      slug: call.slug,
+      phase: "afterChange",
+      data: documents.data,
+      operation: "update",
+      user: call.user,
+    });
+    if (this.hookRegistry === undefined) return;
+    await runSingleAfterUpdateHooks(this.hookRegistry, {
+      slug: call.slug,
+      data: documents.data,
+      originalData: documents.previous,
+      user: call.user,
+      // The context the publish's before hooks shared.
+      context: call.context,
+      req: call.req,
+    });
   }
 
   /**
@@ -837,6 +936,11 @@ export class SinglePublishAllService extends BaseService {
           this.hookRegistry,
           getSingleHookCollection(slug)
         ),
+        runsUpdateHooks:
+          this.hookRegistry?.hasHooks(
+            "afterUpdate",
+            getSingleHookCollection(slug)
+          ) === true || getFieldFunctions("single", slug) !== undefined,
         actor: actorForWrite(options.actor ?? null, options.user),
         // Resolved before the transaction: it reads the component registry.
         draftsEligible: (
@@ -1342,10 +1446,25 @@ export class SinglePublishAllService extends BaseService {
       options.user
     );
 
+    // The document the update hooks are handed once this commits, read here
+    // as the in-transaction phase and the events read it: in the default
+    // language, as the publish committed it. Read again rather than shared
+    // with those, which hand theirs to code that may change it.
+    const hookDocuments = plan.runsUpdateHooks
+      ? await this.publishDocuments(tx, {
+          plan,
+          lockedRow,
+          publishedRow: written.publishedRow,
+          priorComponents,
+          priorCompanionValues,
+        })
+      : undefined;
+
     return {
       documentVanished: false,
       committed,
       eventRecorded,
+      hookDocuments,
       version: await documentVersionOn(tx, {
         dialect: this.adapter.dialect,
         table: singleMeta.tableName,
@@ -1780,8 +1899,8 @@ export class SinglePublishAllService extends BaseService {
    *   Every other language's companion row is left as it is, so the values
    *   read after the publish are the same.
    *
-   * Both empty when no event is recorded and no in-transaction handler
-   * runs: either is handed the before-state.
+   * Both empty when no event is recorded, no in-transaction handler runs
+   * and no update hook hears the publish: each is handed the before-state.
    */
   private async stateBeforePromotion(
     tx: TransactionContext,
@@ -1794,7 +1913,9 @@ export class SinglePublishAllService extends BaseService {
   }> {
     const components = new Map<string, Record<string, unknown>>();
     if (
-      (!plan.recordingEnabled && plan.inTransactionHandlers.length === 0) ||
+      (!plan.recordingEnabled &&
+        plan.inTransactionHandlers.length === 0 &&
+        !plan.runsUpdateHooks) ||
       pending.length === 0
     ) {
       return { components, values: new Map() };

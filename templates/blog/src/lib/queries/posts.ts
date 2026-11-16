@@ -376,10 +376,10 @@ export async function getPostsByAuthor(
 /**
  * Posts in a category, paginated.
  *
- * `categories` is a hasMany relationship stored as a JSON-encoded array
- * in a TEXT column (e.g. `["uuid1","uuid2"]`). The `contains` operator
- * translates to `LIKE '%value%'` which correctly matches the category
- * ID within the serialized JSON string.
+ * `categories` is a hasMany relationship, so the filter is `in`: it matches
+ * a post whose list of categories holds the id, on every database.
+ * `contains` is refused on a list of related entries, since matching the
+ * stored list's text could find one id inside another.
  *
  * The slug→id lookup (`getCategoryBySlug`, itself cached) resolves before
  * the cached posts read so the two caches never nest.
@@ -403,7 +403,7 @@ export async function getPostsByCategory(
         const result = await nextly.find({
           collection: "posts",
           where: {
-            and: [PUBLISHED, { categories: { contains: categoryId } }],
+            and: [PUBLISHED, { categories: { in: [categoryId] } }],
           },
           sort: "-publishedAt",
           page,
@@ -438,7 +438,8 @@ export async function getPostsByCategory(
 }
 
 /**
- * Posts with a given tag, paginated. Same hasMany TEXT column pattern.
+ * Posts with a given tag, paginated. `tags` is hasMany too, so it is
+ * filtered with `in` as well.
  */
 export async function getPostsByTag(
   tagSlug: string,
@@ -459,7 +460,7 @@ export async function getPostsByTag(
         const result = await nextly.find({
           collection: "posts",
           where: {
-            and: [PUBLISHED, { tags: { contains: tagId } }],
+            and: [PUBLISHED, { tags: { in: [tagId] } }],
           },
           sort: "-publishedAt",
           page,
@@ -613,12 +614,12 @@ export async function getRelatedPosts(
         }
       );
 
-    // Resolve slugs to IDs then use `contains` on the JSON-encoded TEXT column
+    // Resolve slugs to IDs, then match the hasMany lists by membership (`in`)
     if (tagSlugs.length > 0) {
       const tag = await getTagBySlug(tagSlugs[0]);
       if (tag) {
         const docs = await tryQuery(`tag:${tag.id}`, {
-          tags: { contains: String(tag.id) },
+          tags: { in: [String(tag.id)] },
         });
         if (docs.length > 0) return docs;
       }
@@ -627,7 +628,7 @@ export async function getRelatedPosts(
       const cat = await getCategoryBySlug(categorySlugs[0]);
       if (cat) {
         const docs = await tryQuery(`category:${cat.id}`, {
-          categories: { contains: String(cat.id) },
+          categories: { in: [String(cat.id)] },
         });
         if (docs.length > 0) return docs;
       }

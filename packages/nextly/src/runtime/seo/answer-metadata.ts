@@ -13,6 +13,7 @@ import type { Metadata } from "next";
 import type {
   PageMetadataAnswer,
   PageMetadataImage,
+  PageRobots,
 } from "./page-metadata-contract";
 
 type OpenGraph = NonNullable<Metadata["openGraph"]>;
@@ -32,17 +33,24 @@ export function defined<T extends Record<string, unknown>>(
   ) as Partial<T>;
 }
 
-/** The canonical and the language addresses, or undefined for neither. */
+/**
+ * The canonical, the language addresses and the page's other forms, by
+ * media type, or undefined for none of them.
+ */
 function alternatesOf(
   answer: PageMetadataAnswer
 ): Metadata["alternates"] | undefined {
-  const languages = answer.languages;
+  const { languages, formats } = answer;
   const hasLanguages =
     languages !== undefined && Object.keys(languages).length > 0;
-  if (answer.canonical === undefined && !hasLanguages) return undefined;
+  const hasFormats = formats !== undefined && Object.keys(formats).length > 0;
+  if (answer.canonical === undefined && !hasLanguages && !hasFormats) {
+    return undefined;
+  }
   return {
     ...(answer.canonical === undefined ? {} : { canonical: answer.canonical }),
     ...(hasLanguages ? { languages } : {}),
+    ...(hasFormats ? { types: { ...formats } } : {}),
   };
 }
 
@@ -98,7 +106,8 @@ function twitterImageOf(
 /**
  * The Twitter card, or undefined when the answer states none of it: a
  * large-image card whenever there is an image to show on it, with the
- * image's alt text where it has one, since that card reads its own.
+ * image's alt text where it has one, since that card reads its own, and the
+ * site's X account as `twitter:site`.
  */
 function twitterOf(answer: PageMetadataAnswer): Twitter | undefined {
   const image = answer.social?.image;
@@ -106,8 +115,33 @@ function twitterOf(answer: PageMetadataAnswer): Twitter | undefined {
     card: image === undefined ? undefined : "summary_large_image",
     ...cardTextOf(answer),
     images: image === undefined ? undefined : [twitterImageOf(image)],
+    site: answer.social?.xAccount,
   });
   return Object.keys(twitter).length > 0 ? twitter : undefined;
+}
+
+/** A switch as the head carries it: written only while on. */
+const onOnly = (on: boolean | undefined): true | undefined =>
+  on === true ? true : undefined;
+
+/**
+ * The answer's robots as Next.js's `robots` object spells them: whether the
+ * page is listed and its links followed, then each of Google's display
+ * controls the answer states, under Google's own name. A control the answer
+ * leaves out is left out of the head.
+ */
+function robotsOf(robots: PageRobots): Metadata["robots"] {
+  return defined({
+    index: robots.index,
+    follow: robots.follow,
+    "max-image-preview": robots.maxImagePreview,
+    "max-snippet": robots.maxSnippet,
+    nosnippet: onOnly(robots.nosnippet),
+    noimageindex: onOnly(robots.noimageindex),
+    unavailable_after: robots.unavailableAfter,
+    noarchive: onOnly(robots.noarchive),
+    nocache: onOnly(robots.nocache),
+  });
 }
 
 /**
@@ -122,11 +156,21 @@ export function metadataFromAnswer(answer: PageMetadataAnswer): Metadata {
     title: answer.title,
     description: answer.description,
     alternates: alternatesOf(answer),
-    robots:
-      answer.robots === undefined
-        ? undefined
-        : { index: answer.robots.index, follow: answer.robots.follow },
+    robots: answer.robots === undefined ? undefined : robotsOf(answer.robots),
     openGraph: openGraphOf(answer),
     twitter: twitterOf(answer),
+    verification: verificationOf(answer),
   });
+}
+
+/**
+ * The answer's verification tags, each placed by its own name, or undefined
+ * for none: Next.js writes `other` as `<meta name content>`, escaping both.
+ */
+function verificationOf(
+  answer: PageMetadataAnswer
+): Metadata["verification"] | undefined {
+  const tags = answer.verification;
+  if (tags === undefined || Object.keys(tags).length === 0) return undefined;
+  return { other: { ...tags } };
 }

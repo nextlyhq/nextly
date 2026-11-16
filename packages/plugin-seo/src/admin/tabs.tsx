@@ -8,13 +8,15 @@
  * @module admin/tabs
  */
 import {
+  Alert,
+  AlertDescription,
   Button,
   Input,
   SegmentedChoice,
   SettingsRowGroup,
   Switch,
 } from "@nextlyhq/plugin-sdk/admin";
-import { X } from "lucide-react";
+import { Info, X } from "lucide-react";
 import { useId, type JSX, type ReactNode } from "react";
 
 import type { SeoContentType } from "../settings/contract";
@@ -25,15 +27,20 @@ import {
 } from "../settings/patterns";
 import { productionAddressProblem } from "../settings/production-addresses";
 import { profileAddressProblem } from "../settings/stored-values";
-import { characters, DESCRIPTION_LIMIT } from "../tab/problems";
+import type { StructuredDataBrand } from "../structured-data/rules";
+import { fitSummary, textFit } from "../tab/problems";
 
+import { BrandDetailRows, CODE_LIST_NOTE, CODE_NOTE } from "./brand-details";
+import { brandDetailsDraftProblem } from "./brand-draft";
 import {
   AI_CHOICES,
   AI_CHOICES_NOTE,
   ChoiceCards,
   SITE_KIND_CHOICES,
 } from "./choices";
+import { CrawlerTable } from "./crawler-table";
 import { MediaChoice } from "./MediaChoice";
+import { OwnRulesRow, type RulesCheck } from "./robots-rules";
 import {
   networkOf,
   patternOf,
@@ -42,6 +49,7 @@ import {
   type SettingsDraft,
 } from "./settings-draft";
 import { ControlNote, SettingsCard, TextRow } from "./settings-parts";
+import { verificationDraftProblem } from "./verification";
 
 /** What every tab is handed: the draft, and how to change it. */
 export interface TabProps {
@@ -49,19 +57,18 @@ export interface TabProps {
   change: (next: (draft: SettingsDraft) => SettingsDraft) => void;
 }
 
-/** What a description's length reads as, under the field. */
+/**
+ * How wide a description draws on Google, under the field: measured as the
+ * SEO tab and the problem list measure one.
+ */
 function descriptionNote(description: string): {
   text: string;
   tone: "muted" | "warning";
 } | null {
-  const count = characters(description.trim());
-  if (count === 0) return null;
-  return count > DESCRIPTION_LIMIT
-    ? {
-        text: `${count} characters · Google shows about ${DESCRIPTION_LIMIT}`,
-        tone: "warning",
-      }
-    : { text: `${count} characters · Good`, tone: "muted" };
+  const trimmed = description.trim();
+  if (trimmed === "") return null;
+  const fit = textFit("description", trimmed);
+  return { text: fitSummary(fit), tone: fit.fits ? "muted" : "warning" };
 }
 
 /** A link-styled button, for a small action under a control. */
@@ -304,9 +311,17 @@ export function ShareImagesTab({ draft, change }: TabProps): JSX.Element {
   );
 }
 
-/** The brand's social profiles: one address each, its network read from it. */
-function SocialProfiles({ draft, change }: TabProps): JSX.Element {
+/**
+ * The brand's social profiles: one address each, its network read from it;
+ * the site's code's, shown read-only, while the settings hold none.
+ */
+function SocialProfiles({
+  draft,
+  change,
+  codeProfiles = [],
+}: TabProps & { codeProfiles?: readonly { url: string }[] }): JSX.Element {
   const profiles = draft.socialProfiles;
+  const showsCode = profiles.length === 0 && codeProfiles.length > 0;
   const set = (index: number, url: string) =>
     change(current => ({
       ...current,
@@ -319,6 +334,12 @@ function SocialProfiles({ draft, change }: TabProps): JSX.Element {
       label="Social profiles"
       description="Your official accounts, so Google can link them to your company."
     >
+      {showsCode ? (
+        <>
+          <CodeProfiles profiles={codeProfiles} />
+          <ControlNote>{CODE_LIST_NOTE}</ControlNote>
+        </>
+      ) : null}
       <div className="grid gap-2">
         {profiles.map((profile, index) => {
           const network = networkOf(profile.url) || profile.network;
@@ -367,7 +388,7 @@ function SocialProfiles({ draft, change }: TabProps): JSX.Element {
         type="button"
         variant="outline"
         size="sm"
-        className={profiles.length > 0 ? "mt-2" : undefined}
+        className={profiles.length > 0 || showsCode ? "mt-2" : undefined}
         onClick={() =>
           change(current => ({
             ...current,
@@ -384,8 +405,57 @@ function SocialProfiles({ draft, change }: TabProps): JSX.Element {
   );
 }
 
-/** One record of facts about the organization behind the site. */
-export function BrandTab({ draft, change }: TabProps): JSX.Element {
+/**
+ * The brand's social profiles from the site's code, shown read-only while
+ * the settings hold none of their own.
+ */
+function CodeProfiles({
+  profiles,
+}: {
+  profiles: readonly { url: string }[];
+}): JSX.Element {
+  return (
+    <div className="grid gap-2">
+      {profiles.map((profile, index) => {
+        const network = networkOf(profile.url) || "Profile";
+        return (
+          <div key={index} className="flex items-center gap-2">
+            <span className="w-20 shrink-0 truncate text-xs font-medium text-muted-foreground">
+              {network}
+            </span>
+            <Input
+              className="bg-muted font-mono text-[13px]"
+              value={profile.url}
+              readOnly
+              aria-label={`${network} profile, set in the site's code`}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * One record of facts about the organization behind the site. Where the
+ * settings hold no value of their own for a fact, the site's code's is shown
+ * in its place, said to be set there.
+ */
+export function BrandTab({
+  draft,
+  change,
+  codeBrand = {},
+}: TabProps & {
+  /** The brand facts the site's code gives (the plugin's options). */
+  codeBrand?: StructuredDataBrand;
+}): JSX.Element {
+  const codeName = draft.brandName.trim() === "" ? codeBrand.name : undefined;
+  const codeOtherNames =
+    draft.brandOtherNames.trim() === "" &&
+    (codeBrand.otherNames ?? []).length > 0
+      ? (codeBrand.otherNames ?? []).join(", ")
+      : undefined;
+  const codeLogo = draft.logo === null ? codeBrand.logo?.url : undefined;
   return (
     <SettingsCard>
       <SettingsRowGroup
@@ -405,13 +475,17 @@ export function BrandTab({ draft, change }: TabProps): JSX.Element {
         label="Name"
         description="The name Google shows for your company."
         value={draft.brandName}
-        placeholder={draft.siteName}
+        placeholder={codeName ?? draft.siteName}
+        {...(codeName === undefined ? {} : { note: CODE_NOTE })}
         onChange={brandName => change(current => ({ ...current, brandName }))}
       />
       <TextRow
         label="Other names"
         description="Names people also search for. Separate with commas."
         value={draft.brandOtherNames}
+        {...(codeOtherNames === undefined
+          ? {}
+          : { placeholder: codeOtherNames, note: CODE_NOTE })}
         onChange={brandOtherNames =>
           change(current => ({ ...current, brandOtherNames }))
         }
@@ -422,9 +496,18 @@ export function BrandTab({ draft, change }: TabProps): JSX.Element {
         shape="square"
         value={draft.logo}
         onChange={logo => change(current => ({ ...current, logo }))}
-        emptyHelp="Square works best, at least 112 × 112."
+        emptyHelp={
+          codeLogo === undefined
+            ? "Square works best, at least 112 × 112."
+            : `Set in the site's code: ${codeLogo}. Choose one to set it in the admin instead.`
+        }
       />
-      <SocialProfiles draft={draft} change={change} />
+      <SocialProfiles
+        draft={draft}
+        change={change}
+        codeProfiles={codeBrand.profiles ?? []}
+      />
+      <BrandDetailRows draft={draft} change={change} codeBrand={codeBrand} />
     </SettingsCard>
   );
 }
@@ -449,7 +532,7 @@ function SwitchRow({
 }
 
 /** The host the site is served from, for the sentences that name it. */
-function siteHostOf(
+export function siteHostOf(
   draft: SettingsDraft,
   serverAddresses: readonly string[] = []
 ): string {
@@ -463,12 +546,44 @@ function siteHostOf(
   return typeof window === "undefined" ? "your-site" : window.location.host;
 }
 
+/**
+ * What robots.txt can't do for Google's AI answers, beside the choices that
+ * might suggest it can: they read pages with Google Search's own crawler,
+ * so only a page's snippet controls keep its text out of them.
+ */
+function AiOverviewsRow(): JSX.Element {
+  return (
+    <SettingsRowGroup
+      label="Google's AI Overviews and AI Mode"
+      description="Answers Google shows above its results."
+    >
+      <Alert variant="info" role="note">
+        <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <AlertDescription>
+          robots.txt can&apos;t take your site out of them. They read pages with
+          Google Search&apos;s own crawler, so blocking it would take you out of
+          Google Search too. To keep a page&apos;s text out, set its{" "}
+          <b className="font-semibold">Text under the link</b> to None on that
+          page; that also removes the text from normal results.
+        </AlertDescription>
+      </Alert>
+    </SettingsRowGroup>
+  );
+}
+
 /** Which automated readers may use the site's pages, and what they are given. */
 export function CrawlersTab({
   draft,
   change,
   serverAddresses,
-}: TabProps & { serverAddresses: readonly string[] }): JSX.Element {
+  rulesCheck,
+  retryRulesCheck,
+}: TabProps & {
+  serverAddresses: readonly string[];
+  /** Which sitemap pages the own rules being typed block. */
+  rulesCheck: RulesCheck;
+  retryRulesCheck: () => void;
+}): JSX.Element {
   const host = siteHostOf(draft, serverAddresses);
   return (
     <SettingsCard>
@@ -476,9 +591,29 @@ export function CrawlersTab({
         label="Search engines"
         description="Google, Bing and the others."
       >
-        <p className="text-sm text-foreground">Always allowed.</p>
+        <p className="text-sm text-foreground">
+          Always allowed, except where your own rules below say otherwise.
+        </p>
         <ControlNote>
           To keep pages out of search, hide them on the page or by content type.
+        </ControlNote>
+      </SettingsRowGroup>
+      {/* The site's default for every listed page; a page's own size under
+          its Advanced section wins over it. */}
+      <SettingsRowGroup
+        label="Large image previews"
+        description="Lets Google show a big picture from your pages in results and in Discover."
+      >
+        <Switch
+          aria-label="Large image previews"
+          checked={draft.largeImagePreviews}
+          onCheckedChange={largeImagePreviews =>
+            change(current => ({ ...current, largeImagePreviews }))
+          }
+        />
+        <ControlNote>
+          On by default. Google asks for pictures at least 1200 px wide for
+          this.
         </ControlNote>
       </SettingsRowGroup>
       <SettingsRowGroup
@@ -495,12 +630,33 @@ export function CrawlersTab({
           }
         />
         <ControlNote>{AI_CHOICES_NOTE}</ControlNote>
+        <CrawlerTable choice={draft.aiCrawlers} />
       </SettingsRowGroup>
+      <AiOverviewsRow />
+      <OwnRulesRow
+        draft={draft}
+        change={change}
+        check={rulesCheck}
+        retry={retryRulesCheck}
+      />
       <SwitchRow
         label="llms.txt"
         description={`A plain list of your pages at ${host}/llms.txt, for AI tools to read. Off by default; few tools use it today. It lists the same pages and words people see.`}
         on={draft.llmsTxt}
         set={llmsTxt => change(current => ({ ...current, llmsTxt }))}
+      />
+      <TextRow
+        label="What AI tools should know"
+        description="Shown under your site's name in llms.txt. Plain sentences and lists; no headings."
+        value={draft.llmsIntro}
+        multiline
+        onChange={llmsIntro => change(current => ({ ...current, llmsIntro }))}
+      />
+      <SwitchRow
+        label="llms-full.txt"
+        description={`Every listed page's words in one file at ${host}/llms-full.txt, for AI tools that read a whole site at once. Served only with llms.txt on. Off by default; on a large site it is cut at 5 MB.`}
+        on={draft.llmsFullTxt}
+        set={llmsFullTxt => change(current => ({ ...current, llmsFullTxt }))}
       />
       <SwitchRow
         label="Plain-text copies"
@@ -562,5 +718,8 @@ export function draftProblem(
       return "Fix the social profile address first.";
     }
   }
-  return null;
+  return (
+    brandDetailsDraftProblem(draft.brandDetails) ??
+    verificationDraftProblem(draft.verificationCodes)
+  );
 }

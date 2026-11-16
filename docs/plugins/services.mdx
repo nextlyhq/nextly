@@ -301,7 +301,7 @@ reads no Single's content, so a plugin has no `_rev` to send for a Single.
 
 <Callout type="warn">
   `rewriteField` is `@experimental`. It takes a top-level field of a collection
-  entry; Singles are not rewritten yet.
+  entry or of a Single.
 </Callout>
 
 Some jobs change one value on many entries on nobody's behalf: moving pages off a layout before it
@@ -329,6 +329,12 @@ const { version, copies } = await ctx.services.collections.rewriteField({
 // copies: [{ form: "live", locale: null }, { form: "draft", locale: null }]
 ```
 
+A Single is rewritten through the same call, named by its slug instead of a collection and an id:
+`{ single: "site-settings", field, expectedVersion, set, reason }`. Its `expectedVersion` is the
+`_rev` a read of the Single returned, such as `nextly.findSingle({ slug: "site-settings" })`. A
+Single's live copy, its drafts, its history and its `single.updated` event are changed and
+recorded exactly as an entry's are below.
+
 - **Only from the version you read.** `expectedVersion` is the `_rev` you read the entry at. If
   anyone has saved the entry since, the rewrite throws `STALE_VERSION` (409) and changes nothing.
   There is no overwrite: read again and decide again.
@@ -338,7 +344,9 @@ const { version, copies } = await ctx.services.collections.rewriteField({
   an author's draft are each transformed from what they hold. Return `null` to clear the field.
 - **Languages.** A shared field is rewritten in every language's draft. A translated field is
   rewritten in one language, `locale` (the default language when omitted), on its live copy and that
-  language's draft.
+  language's draft. Its `expectedVersion` must be a read of that language. Where only that
+  language's live value changes, only that language's version moves, so a read of another language
+  stays current. A shared field or any draft changed moves the document's own version.
 - **History.** The entry's history gets one `field-rewritten` event naming the field, each copy
   changed and your `reason`. A rewrite made as the system names your plugin. One made with
   `as: "user"` names the person, with your plugin beside them. It is never recorded as an
@@ -350,10 +358,12 @@ const { version, copies } = await ctx.services.collections.rewriteField({
   commits, and revalidates the entry's pages.
 - **What it refuses.** The id, status, slug and timestamps; a field whose values must be unique (a
   draft's value is never checked for that); a field stored in tables of its own (a field group, a
-  many-to-many relationship); a password; a virtual field; and a value the field's own checks refuse,
+  many-to-many relationship); a password, or a group or repeater holding one or holding a field group; a virtual field; and a value the field's own checks refuse,
   on any copy. Made with `as: "user"`, it needs the person's permission to update the entry and,
   where the collection has a publish lifecycle, to publish it, plus every field rule of their own
-  update.
+  update. The rules judge each new value against the value it replaces: a group or repeater that
+  leaves out or changes a value the person may not change is refused with `FORBIDDEN`, naming that
+  field in `errors[].path` (such as `card.locked`), rather than deleting it.
 
 A bulk job rewrites entries one at a time, each in its own transaction, and retries an entry that
 moved under it from a fresh read.
@@ -457,8 +467,9 @@ install that already has an account a create without one is refused with
 `VALIDATION_ERROR` before this rule is reached (on an empty install every plugin create is
 refused with `FORBIDDEN` first, as above). The refusal is judged on the account a write
 leaves, and only for a write that changes its activation, verification or address. A
-stored password counts as one when it is a hash core made, or, where the app passes its
-own `passwordHasher` to `getNextly`, whatever that hasher stored. An account core made this way
+stored password counts as one when it is a hash core made, or, where the app brings its
+own `passwordHasher`, one that hasher recognises (any stored value, if it declares no
+`isHash`). An account core made this way
 still takes your plugin's other edits, and can be deactivated or given a password, but a
 plugin cannot verify an active account that has no password (re-verifying one core made
 included), activate a verified one that has none, reactivate one core made, or move one

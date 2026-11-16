@@ -2249,6 +2249,47 @@ describe.each(getConfiguredTestDialects())(
         );
       }
 
+      /** A page as its editor reads it: its working draft, when it has one. */
+      async function draftOf(
+        t: TestNextly,
+        id: string
+      ): Promise<Record<string, unknown>> {
+        const read = await t.nextly.findByID({
+          collection: PAGES_SLUG,
+          id,
+          draft: true,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return (read ?? {}) as Record<string, unknown>;
+      }
+
+      /** A published page's live title. */
+      async function liveTitle(t: TestNextly, id: string): Promise<unknown> {
+        const found = await t.nextly.find({
+          collection: PAGES_SLUG,
+          where: { id: { equals: id } },
+          status: "published",
+          limit: 1,
+          depth: 0,
+          overrideAccess: true,
+        });
+        return (found.items[0] as { title?: unknown } | undefined)?.title;
+      }
+
+      /** The field rewrites a page's history records. */
+      async function rewritesOf(
+        t: TestNextly,
+        id: string
+      ): Promise<Record<string, unknown>[]> {
+        const { items } = await t.nextly.contentEvents.list({
+          subject: { kind: "collection", slug: PAGES_SLUG, id },
+        } as never);
+        return (items as unknown as Record<string, unknown>[]).filter(
+          event => event.kind === "field-rewritten"
+        );
+      }
+
       /** `count` unpublished pages on `layoutId`. */
       async function unpublishedPages(
         t: TestNextly,
@@ -2300,7 +2341,7 @@ describe.each(getConfiguredTestDialects())(
           now: () => new Date(Date.now() + REMOVAL_LEASE_MS + 60_000),
         });
 
-      it("moves unpublished pages and working drafts, leaves live rows, and deletes the Layout", async () => {
+      it("moves every page, a published page's live copy and its pending draft alike, and deletes the Layout", async () => {
         const t = await boot();
         const { cookie } = await owner(t);
         const other = await layout(t, "Other", "other");
@@ -2320,25 +2361,106 @@ describe.each(getConfiguredTestDialects())(
           data: { title: "Edited again", _overwrite: true },
           overrideAccess: true,
         });
+        // POPULATION CONTROL: the edit is held as a draft, not live.
+        expect((await draftOf(t, edited))._isWorkingDraft).toBe(true);
+        expect(await liveTitle(t, edited)).toBe("Edited");
 
         const last = await runMove(cookie, other);
 
-        expect(last.state).toBe("done");
+        expect(last).toEqual({ state: "done", moved: 4 });
         expect(await layoutRow(t, other)).toBeUndefined();
         for (const id of drafts) expect(await pageLayout(t, id)).toBeNull();
+        // The published pages no longer name it, live or in the draft.
+        expect(await liveLayout(t, live)).toBeNull();
+        expect(await liveLayout(t, edited)).toBeNull();
         expect(await pageLayout(t, edited)).toBeNull();
-        // Live rows are left; they draw the site default now it is gone.
-        expect(await liveLayout(t, edited)).toBe(other);
-        expect(await liveLayout(t, live)).toBe(other);
+        // The author's draft is still a draft holding their edit, and the
+        // page is still published with its live title.
+        expect(await draftOf(t, edited)).toMatchObject({
+          _isWorkingDraft: true,
+          title: "Edited again",
+        });
+        expect(await liveTitle(t, edited)).toBe("Edited");
+        // The history names the Page Builder beside the person, and why.
+        expect(await rewritesOf(t, edited)).toEqual([
+          expect.objectContaining({
+            actorKind: "person",
+            note: 'Layout "Other" is being deleted, so this page was moved to the site default.',
+            payload: expect.objectContaining({
+              field: "layout",
+              copies: ["live", "draft"],
+              plugin: PAGE_BUILDER_PLUGIN_NAME,
+            }),
+          }),
+        ]);
         expect(await fence().removalOf(other)).toMatchObject({
           step: "removed",
           pagesLeft: 0,
         });
       });
 
+      it("moves only the draft of a page the person may not publish, names its live copy, and still deletes the Layout", async () => {
+        const t = await boot();
+        await owner(t);
+        const editor = await person(t, "editor");
+        const other = await layout(t, "Other", "other");
+        const [draft] = await unpublishedPages(t, other, 1);
+        const edited = await page(t, "Edited", {
+          layout: other,
+          status: "published",
+        });
+        await t.nextly.update({
+          collection: PAGES_SLUG,
+          id: edited,
+          data: { title: "Edited again", _overwrite: true },
+          overrideAccess: true,
+        });
+        // May remove Layouts and edit pages, but not publish them.
+        await grant(t, editor, [
+          "read-layouts",
+          "delete-layouts",
+          "read-pages",
+          "update-pages",
+        ]);
+
+        const last = await runMove(await sessionOf(t, editor), other);
+
+        // The draft moved, as a save of it; the live copy was left as it is,
+        // and named so someone who may publish it knows where to look.
+        expect(await pageLayout(t, edited)).toBeNull();
+        expect(await draftOf(t, edited)).toMatchObject({
+          _isWorkingDraft: true,
+          title: "Edited again",
+        });
+        expect(await liveLayout(t, edited)).toBe(other);
+        expect(await pageLayout(t, String(draft))).toBeNull();
+        expect(last).toEqual({
+          state: "done",
+          moved: 2,
+          liveLeft: { pages: [{ id: edited, title: "Edited" }], unreadable: 0 },
+        });
+        // The removal finished as before: the live copy draws the default.
+        expect(await layoutRow(t, other)).toBeUndefined();
+        expect(await fence().removalOf(other)).toMatchObject({
+          step: "removed",
+        });
+        // POPULATION CONTROL: the person's rewrite was refused, not skipped.
+        expect(await rewritesOf(t, edited)).toEqual([]);
+      });
+
       it("clears the deleted Layout from a published page's live row when the page is next published", async () => {
         const t = await boot();
-        const { cookie } = await owner(t);
+        await owner(t);
+        // A person who may not publish pages moves them: the live rows keep
+        // naming the Layout, as a page published as it went would.
+        const editor = await person(t, "editor");
+        await grant(t, editor, [
+          "read-layouts",
+          "delete-layouts",
+          "read-pages",
+          "update-pages",
+        ]);
+        const cookie = await sessionOf(t, editor);
         const other = await layout(t, "Other", "other");
         const kept = await layout(t, "Kept", "kept");
         const hidden = await layout(t, "Hidden", "hidden", "draft");
@@ -2398,10 +2520,10 @@ describe.each(getConfiguredTestDialects())(
 
         const last = await runMove(cookie, other, "unpublish");
 
-        expect(last.state).toBe("done");
+        expect(last).toEqual({ state: "done", moved: 2 });
         expect((await layoutRow(t, other))?.status).toBe("draft");
         expect(await pageLayout(t, String(draft))).toBeNull();
-        expect(await liveLayout(t, live)).toBe(other);
+        expect(await liveLayout(t, live)).toBeNull();
         expect(await fence().removalOf(other)).toMatchObject({
           step: "removed",
           action: "unpublish",

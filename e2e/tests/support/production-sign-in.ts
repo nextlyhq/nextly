@@ -29,6 +29,7 @@ import {
   expect,
   request,
   type APIRequestContext,
+  type Locator,
   type Page,
 } from "@playwright/test";
 
@@ -128,6 +129,50 @@ export async function signIn(page: Page): Promise<APIRequestContext> {
   const { cookies } = await sessionOf(server, info.file, info.retry);
   await page.context().addCookies(cookies);
   await page.goto("/admin");
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+  await expect(signedInFrame(page)).toBeVisible({ timeout: 60_000 });
   return page.request;
+}
+
+/**
+ * The signed-in admin's account menu, which only a session draws.
+ *
+ * What a sign-in is waited for by, rather than `main`: the signed-out screens
+ * draw a `main` landmark too, so a `main` on screen is as true of the sign-in
+ * form as of the dashboard, and a request sent on it goes out without a
+ * session.
+ *
+ * @param page - The page the admin is open in.
+ */
+export function signedInFrame(page: Page): Locator {
+  return page.getByRole("button", { name: "User profile menu" });
+}
+
+/**
+ * Signs `user` in through the admin's own form at `origin`, and waits until
+ * the server has answered the sign-in and the admin draws its signed-in frame.
+ * For a spec whose subject is the form, or whose server is another one.
+ *
+ * @param page - The page to sign in.
+ * @param origin - The server's origin, or "" for the suite's own.
+ * @param user - The account's email and password.
+ */
+export async function signInWithTheForm(
+  page: Page,
+  origin: string,
+  user: { email: string; password: string }
+): Promise<void> {
+  await page.goto(`${origin}/admin`);
+  await page.getByRole("textbox", { name: /email/i }).fill(user.email);
+  // By role, because a label match also finds the "Show password" toggle.
+  await page.getByRole("textbox", { name: /password/i }).fill(user.password);
+  const answered = page.waitForResponse(
+    response =>
+      new URL(response.url()).pathname === "/admin/api/auth/login" &&
+      response.request().method() === "POST",
+    { timeout: 60_000 }
+  );
+  await page.getByRole("button", { name: /sign in|log in/i }).click();
+  const answer = await answered;
+  expect(answer.ok(), `signing in: ${answer.status()}`).toBe(true);
+  await expect(signedInFrame(page)).toBeVisible({ timeout: 60_000 });
 }

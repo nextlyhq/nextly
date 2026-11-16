@@ -168,8 +168,22 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 
 ## Secure by default
 
-- **Default:** the request must be authenticated. Add `requiredPermission` to also
-  enforce a permission (see [Permissions](/docs/plugins/permissions)).
+Every route says what reaching it takes, with exactly one of these. A route that
+declares none could act on the whole site for anyone signed in (an account with no
+role, or an API key with no grants), so it is refused for every caller, and named
+in a warning at startup, until it declares one.
+
+- **A permission:** `requiredPermission` names the permission a caller needs (see
+  [Permissions](/docs/plugins/permissions)). Use it for anything that changes or reveals
+  the site's content or settings.
+- **The handler judges each caller:** set `checksAccess: true` on a route that acts on
+  the site but whose check depends on the request (such as the collection it names),
+  so a fixed `requiredPermission` cannot express it. Its handler then decides on every
+  request what this caller may do, with `ctx.caller.can(...)` or by calling services
+  as the user. Signing in is still required.
+- **Only the caller's own record:** set `siteWide: false` on a route that acts only on
+  the signed-in caller's own record, or only reads what any signed-in caller may see.
+  Being signed in is then all it asks.
 - **Opt out:** set `public: true` to make a route callable without a session (e.g. a
   public sitemap or a webhook receiver). `ctx.user` will be `null`.
 - **Your own signed-in people:** set `principal: { kind }` to serve a kind of

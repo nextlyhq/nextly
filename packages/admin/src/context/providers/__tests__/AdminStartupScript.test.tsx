@@ -170,11 +170,11 @@ describe("the prebuilt admin page", () => {
 });
 
 /** The plugin pages' startup reads, as the admin layout writes them into the page. */
-function layoutCarries(screens: Record<string, string[]>): void {
+function layoutCarries(reads: Record<string, string[]>): void {
   const element = document.createElement("script");
   element.type = "application/json";
   element.id = ADMIN_STARTUP_SCREENS_ELEMENT_ID;
-  element.textContent = JSON.stringify(screens);
+  element.textContent = JSON.stringify({ reads, foldedPanels: [] });
   document.body.appendChild(element);
 }
 

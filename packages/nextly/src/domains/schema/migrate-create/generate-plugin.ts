@@ -23,6 +23,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { leavesExistingRowsEmpty } from "../extension/extension-columns";
+import { assertModuleForeignKeysResolve } from "../migrate/plugin/module-foreign-keys";
 import {
   assertModuleKeysFit,
   migrationChecksum,
@@ -772,6 +773,14 @@ export async function generatePluginMigration(
 ): Promise<GeneratePluginMigrationResult | null> {
   const built = buildPluginMigration(args);
   if (!built) return null;
+  // The chain as it is about to stand — shipped modules plus the one being
+  // written — judged before anything reaches disk, so a module whose key
+  // reaches a table only a later module creates is refused at the generation
+  // that completes the pair.
+  assertModuleForeignKeysResolve(args.pluginName, [
+    ...args.existing,
+    built.module,
+  ]);
   const written = await writePluginMigration(
     args.pluginName,
     args.migrationsDir,

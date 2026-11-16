@@ -31,8 +31,8 @@ vi.mock("@admin/hooks/queries/useAuthSession", () => ({
 }));
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock("@admin/components/ui", async importOriginal => ({
-  ...(await importOriginal<typeof import("@admin/components/ui")>()),
+vi.mock("@admin/components/ui/toaster", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/components/ui/toaster")>()),
   toast,
 }));
 

@@ -47,6 +47,7 @@ import {
 } from "../../domains/schema/extension/active-schema";
 import { col, defineTable } from "../../domains/schema/extension/dsl";
 import { compileAndPublishExtensionSchema } from "../../domains/schema/extension/publish";
+import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
   collectionDbOptions,
   publishCollectionDbOptions,
@@ -1996,6 +1997,51 @@ describe("reloadNextlyConfig", () => {
         await reloadNextlyConfig({ resolver: buildResolver() });
 
         expect([...currentDependencies(reader())]).toEqual(["@acme/local"]);
+      });
+    });
+
+    describe("a plugin's recorded prefix", () => {
+      // The owner rows the plugin's install recorded, as the registry
+      // returns them: its table under the prefix it was created with.
+      const recordedUnder = (prefix: string) =>
+        vi.spyOn(SchemaOwnersRepository.prototype, "read").mockResolvedValue([
+          {
+            tableName: `${prefix}__notes`,
+            ownerKind: "plugin",
+            ownerId: "@acme/local",
+            migratedBy: "plugin:@acme/local",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active",
+          },
+        ]);
+
+      it("refuses a reload that moves it, before the pipeline applies anything", async () => {
+        const read = recordedUnder("old");
+        loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(read).toHaveBeenCalled();
+        expect(pipelineApplySpy).not.toHaveBeenCalled();
+        // The previous config stays, with the schema it compiled: none here.
+        expect(getActiveExtensionSchema("sqlite")).toBeFalsy();
+        read.mockRestore();
+      });
+
+      it("control: lets a reload keeping it through", async () => {
+        // `@acme/local` declares no prefix, so its name gives `acme_local`.
+        const read = recordedUnder("acme_local");
+        loadConfigSpy.mockResolvedValue({ config: withPluginTable });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+        read.mockRestore();
       });
     });
 

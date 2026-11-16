@@ -23,6 +23,8 @@ import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 import type { OpenRemovalReader } from "../breakpoint-removal/lock-acceptance";
 import type { Removal } from "../breakpoint-removal/strip";
 
+import { withRewriteScope } from "../host-rewrite/rewrite-scope";
+
 import { layersLockIssues, withLockIssues } from "./layers-lock-judgement";
 import { LAYERS_LOCK_CHANGED } from "./layers-lock-wording";
 
@@ -72,6 +74,45 @@ function argsFor(
 }
 
 describe("layersLockIssues", () => {
+  it("judges each copy of a field rewrite against that copy's own stored value", async () => {
+    // The live copy holds a dark hero; the draft beside it a light one.
+    const readStored = vi.fn(async () => ({
+      kind: "value" as const,
+      value: lockedPage("light"),
+    }));
+    const judged = (current: unknown) =>
+      withRewriteScope(
+        {
+          siteDefinitions: undefined,
+          current: { field: "content", stored: current },
+        },
+        () =>
+          layersLockIssues(
+            lockedPage("dark"),
+            argsFor(writeTo(readStored)),
+            "Content"
+          )
+      );
+
+    // The live copy keeps its own locked hero: nothing broken, and the draft
+    // is not read.
+    expect(await judged(lockedPage("dark"))).toEqual([]);
+    expect(readStored).not.toHaveBeenCalled();
+    // A copy whose own hero differs is still judged, against itself.
+    expect(await judged(lockedPage("light"))).toEqual([
+      expect.objectContaining({ code: LAYERS_LOCK_CHANGED }),
+    ]);
+    // CONTROL: outside a rewrite, the same value is judged against the
+    // newest stored form, the draft, and refused.
+    expect(
+      await layersLockIssues(
+        lockedPage("dark"),
+        argsFor(writeTo(readStored)),
+        "Content"
+      )
+    ).toEqual([expect.objectContaining({ code: LAYERS_LOCK_CHANGED })]);
+  });
+
   it("reads the newest stored form alone, in the write's language", async () => {
     const asked: PluginStoredValueTarget[] = [];
     const issues = await layersLockIssues(

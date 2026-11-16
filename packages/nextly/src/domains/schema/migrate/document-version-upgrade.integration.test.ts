@@ -189,6 +189,8 @@ async function seed(t: TestNextly): Promise<void> {
   const metadata = t.getService(
     "singleMetadataService"
   ) as SingleMetadataService;
+  // No placeholder hash: the create's migration records the Single's own, and `nextly migrate`
+  // brings the row to its record, so a placeholder would read as a change the upgrade made.
   await metadata.createSingle({
     slug: "ui_banner",
     label: "Banner",
@@ -196,7 +198,6 @@ async function seed(t: TestNextly): Promise<void> {
     fields: [{ name: "message", type: "text" }],
     source: "ui",
     locked: false,
-    schemaHash: "banner",
   } as never);
 
   for (const [slug, data] of [

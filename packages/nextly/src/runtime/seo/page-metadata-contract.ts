@@ -116,6 +116,13 @@ export interface PageStructuredDataHints {
   items?: readonly PageListItem[];
   /** The questions the page answers, in the order shown. */
   questions?: readonly PageQuestion[];
+  /**
+   * Whether the page's questions are a section of it, such as an FAQ block
+   * under a pricing table, rather than its whole subject: a provider then
+   * describes them as a part of the page, whatever kind of page it is. The
+   * questions are the ones above, or the ones the page's own fields hold.
+   */
+  faqSection?: boolean;
 }
 
 /** @experimental What a resolver is asked about one page. */
@@ -145,13 +152,45 @@ export interface PageMetadataInput {
   readonly structuredDataHints?: PageStructuredDataHints;
 }
 
+/**
+ * @experimental How large a picture from the page search engines may show:
+ * Google's `max-image-preview` values.
+ */
+export type PageImagePreview = "none" | "standard" | "large";
+
+/**
+ * @experimental Whether search engines may list the page and follow its
+ * links, and how they may show it. Each optional value is one of Google's
+ * robots directives
+ * (https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag),
+ * served only where the answer states it.
+ */
+export interface PageRobots {
+  index: boolean;
+  follow: boolean;
+  /** `max-image-preview`: the largest picture shown from the page. */
+  maxImagePreview?: PageImagePreview;
+  /** `max-snippet`: the most characters of text shown, `-1` for no limit. */
+  maxSnippet?: number;
+  /** `nosnippet`: no text from the page shown under its link. */
+  nosnippet?: boolean;
+  /** `noimageindex`: the page's pictures left out of image search. */
+  noimageindex?: boolean;
+  /** `unavailable_after`: the date and time, as ISO 8601, the page leaves results. */
+  unavailableAfter?: string;
+  /** `noarchive`: no stored copy kept. */
+  noarchive?: boolean;
+  /** `nocache`: the same request, as some search engines spell it. */
+  nocache?: boolean;
+}
+
 /** @experimental The page's answer: the values its head is built from. */
 export interface PageMetadataAnswer {
   title?: string;
   description?: string;
   /** Absolute, or root-relative and resolved against `metadataBase`. */
   canonical?: string;
-  robots?: { index: boolean; follow: boolean };
+  robots?: PageRobots;
   social?: {
     title?: string;
     description?: string;
@@ -160,15 +199,36 @@ export interface PageMetadataAnswer {
     /** The page's language as the social card states it, e.g. `en_US`. */
     locale?: string;
     type?: "website" | "article";
+    /**
+     * The X (Twitter) account of the site, as `@handle`, such as `@example`:
+     * the card's `twitter:site`. Open Graph has no such tag.
+     */
+    xAccount?: string;
   };
   /** The page's address in each language, keyed by language code. */
   languages?: Record<string, string>;
+  /**
+   * Other forms of the page, keyed by media type, such as
+   * `{ "text/markdown": "/blog/hello.md" }`: each is placed in the head as
+   * `<link rel="alternate" type href>`, and replaces a route's own link for
+   * that type. Absolute, or root-relative and resolved against
+   * `metadataBase`.
+   */
+  formats?: Record<string, string>;
   /**
    * The page's structured data: JSON-LD nodes, written without `@context`,
    * which the route helpers hand the page's render as one schema.org graph.
    * Plain JSON only, since the answer is cached as JSON.
    */
   structuredData?: StructuredDataNode[];
+  /**
+   * Tags a service reads to confirm who owns the site, placed in the head as
+   * `<meta name content>`, keyed by name, such as
+   * `{ "msvalidate.01": "8A2F61C4" }`. A name is a letter followed by letters,
+   * digits and `. _ : -`; an answer naming one otherwise is refused whole.
+   * They join any the route sets itself.
+   */
+  verification?: Record<string, string>;
 }
 
 /** @experimental A JSON value, as a structured data node may hold. */

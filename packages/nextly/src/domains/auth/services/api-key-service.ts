@@ -21,14 +21,20 @@
  * ## Key Format
  *
  * ```
- * nx_live_<base64url-32-bytes>
- * └──────┘ └───────────────────┘
- *  prefix   43-char base64url secret (256 bits)
+ * nx_live_<id>_<base64url-32-bytes>
+ * └──────┘└──┘ └───────────────────┘
+ *  prefix  id   43-char base64url secret (256 bits)
  *
- * Full key example : nx_live_<random>...  (51 chars total)
+ * Full key example : nx_live_<id>_<random>...  (76 chars total)
+ * Id               : 24 hex chars the server verifies without a lookup
+ *                    (`domains/auth/lib/api-key-id`)
  * Stored hash      : sha256(fullKey) as hex string (64 chars)
- * Display prefix   : first 16 chars ("nx_live_abcdefgh") for masked UI display
+ * Display prefix   : "nx_live_" + the id's first 8 chars, for masked UI display
  * ```
+ *
+ * A key made before ids (`nx_live_<base64url-32-bytes>`, 51 chars) still
+ * authenticates; it only lacks the id, so its failed lookups from a source the
+ * server cannot resolve share one bound with every other such key.
  *
  * @module domains/auth/services/api-key-service
  * @since 1.0.0
@@ -89,6 +95,7 @@ import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
 import { isPublishWithoutReview } from "../../workflows/permissions";
+import { mintApiKeyId } from "../lib/api-key-id";
 
 import { refuseLinkingPublicRole } from "./public-role";
 import { wholeSecondExpiry } from "./token-account-binding";
@@ -190,29 +197,36 @@ const KEY_PREFIX = "nx_live_";
  * display prefix. The full key must be shown to the user immediately — it is
  * NOT stored and cannot be retrieved later.
  *
- * Key format: `nx_live_<base64url-32-bytes>`
- * - 32 random bytes encoded as base64url = 43 characters (no padding)
- * - Total key length: 8 (prefix) + 43 (secret) = 51 characters
- * - Entropy: 256 bits (same as a 32-byte AES key)
+ * Key format: `nx_live_<id>_<base64url-32-bytes>`
+ * - `<id>`: 24 hex characters the server can verify without a lookup
+ *   (`mintApiKeyId`), so failed lookups from a source it cannot resolve are
+ *   bounded per key rather than shared with every invalid key
+ * - the secret: 32 random bytes as base64url = 43 characters (no padding),
+ *   256 bits of entropy
+ * - Total key length: 8 (prefix) + 24 (id) + 1 + 43 (secret) = 76 characters
+ *
+ * The display prefix is the `nx_live_` prefix and the id's first 8
+ * characters: it names the key in lists without holding any of its secret.
  *
  * @returns Object containing the raw key, its SHA-256 hash, and the display prefix
  *
  * @example
  * ```typescript
  * const { fullKey, keyHash, keyPrefix } = generateApiKey();
- * // fullKey   → "nx_live_<random>..." (return to user, never store)
+ * // fullKey   → "nx_live_<id>_<random>..." (return to user, never store)
  * // keyHash   → "a3f2c1..." (store in DB for lookup)
- * // keyPrefix → "nx_live_abcdefgh" (store in DB for UI display)
+ * // keyPrefix → "nx_live_3f9a2c1d" (store in DB for UI display)
  * ```
  */
 export function generateApiKey(): GeneratedApiKey {
+  const id = mintApiKeyId();
   const secret = randomBytes(32).toString("base64url");
-  const fullKey = `${KEY_PREFIX}${secret}`;
+  const fullKey = `${KEY_PREFIX}${id}_${secret}`;
 
   return {
     fullKey,
     keyHash: hashApiKey(fullKey),
-    keyPrefix: fullKey.slice(0, 16),
+    keyPrefix: `${KEY_PREFIX}${id.slice(0, 8)}`,
   };
 }
 

@@ -99,7 +99,16 @@ export const LANES = [
      * suites take a dialect, so running them three times is the coverage.
      */
     partitioned: false,
-    direct: [],
+    /*
+     * The playground's fixture plugin runs the real `nextly` command on each
+     * leg's dialect. The playground is an app, so for the reason the `test`
+     * lane gives it runs vitest directly rather than through turbo, which
+     * would build the whole graph for a run that needs only what the leg's
+     * own build produced.
+     */
+    direct: [
+      { script: "lane:test:integration:playground", package: "playground" },
+    ],
   },
 ];
 

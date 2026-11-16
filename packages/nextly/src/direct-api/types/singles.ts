@@ -74,7 +74,14 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   status?: "published" | "draft" | "all";
 
   /**
-   * Specific fields to include/exclude.
+   * The fields to answer with, meaning what it means on a collection read: a
+   * field named `true` is included, a `false` entry is ignored, and a
+   * selection that includes nothing answers the whole document. The id and
+   * the system timestamps are always answered.
+   *
+   * Where no read hook or field read rule needs the rest of the document, the
+   * read takes only the selected fields' columns, so a field whose column the
+   * database does not have yet fails only a read that selects it.
    */
   select?: Record<string, boolean>;
 

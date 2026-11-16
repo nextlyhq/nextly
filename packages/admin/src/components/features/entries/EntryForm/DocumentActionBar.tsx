@@ -651,6 +651,9 @@ function DocumentMenu({
           {...BAR_ICON_CONTROL}
           aria-label="More actions"
           title="More actions"
+          // Named as the editor's outline names its More, so a test can hold
+          // the two to one place.
+          data-frame-part="bar-more"
           {...(narrowItems.some(item => item.togglesPanel === true)
             ? { [DOCUMENT_PANEL_TOGGLE_ATTRIBUTE]: "" }
             : {})}

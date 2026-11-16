@@ -23,6 +23,12 @@ const SERVERS = getConfiguredTestDialects().filter(
   dialect => dialect !== "sqlite"
 );
 
+// Shown as skipped, rather than as a file with no tests, on a run that has
+// neither server configured: the SQLite-only leg fails a file with no suite.
+if (SERVERS.length === 0) {
+  it.skip("runs on PostgreSQL and MySQL only", () => {});
+}
+
 describe.each(SERVERS)(
   "a user field created while user_ext is busy (%s)",
   dialect => {

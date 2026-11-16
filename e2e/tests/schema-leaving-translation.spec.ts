@@ -22,11 +22,16 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 const API = "/admin/api";
 
 /**
- * The collection slug for this attempt of a test. A retry runs against the database the first
- * attempt wrote, where a collection of the same slug already exists, so each attempt has its own.
+ * The collection slug for this attempt of a test. A retry, or a repeat under --repeat-each, runs
+ * against the database the first attempt wrote, where a collection of the same slug already
+ * exists, so each attempt has its own.
  */
 function slugFor(base: string, testInfo: TestInfo): string {
-  return testInfo.retry === 0 ? base : `${base}_r${testInfo.retry}`;
+  const repeat =
+    testInfo.repeatEachIndex === 0 ? "" : `_x${testInfo.repeatEachIndex}`;
+  return testInfo.retry === 0
+    ? `${base}${repeat}`
+    : `${base}${repeat}_r${testInfo.retry}`;
 }
 
 /** A translated collection with one entry, its `headline` in English and Spanish. */
@@ -116,17 +121,34 @@ test("lets a required field whose entries have an English value stop being trans
   ).toBeEnabled();
 });
 
-test("refuses a required field while an entry has no English value, with the step that works, and offers no Save", async ({
+test("refuses a required field while an entry would keep no value, with the step that works, and offers no Save", async ({
   page,
 }, testInfo) => {
   const slug = slugFor("e2e_required_gaps", testInfo);
-  await seedTranslated(page, slug, { required: true });
-  // An entry written in Spanish only: its English value, the shared one, would be empty.
-  const spanishOnly = await page.request.post(
+  // Seeded optional, so an entry can be written with no headline in any language; the field
+  // becomes Required below, as a site that made it required later would have it.
+  await seedTranslated(page, slug, {});
+  // An entry written in Spanish only, with no headline: shared, the value it keeps is empty. An
+  // entry with no English value but a Spanish one keeps the Spanish value, which readers saw, and
+  // so leaves translation in one change (the test above).
+  const empty = await page.request.post(
     `${API}/collections/${slug}/entries?locale=es`,
-    { data: { headline: "Solo" } }
+    { data: {} }
   );
-  expect(spanishOnly.ok(), await spanishOnly.text()).toBe(true);
+  expect(empty.ok(), await empty.text()).toBe(true);
+  const required = await page.request.patch(`${API}/collections/${slug}`, {
+    data: {
+      fields: [
+        {
+          name: "headline",
+          type: "text",
+          label: "Headline",
+          required: true,
+        },
+      ],
+    },
+  });
+  expect(required.ok(), await required.text()).toBe(true);
 
   await makeHeadlineShared(page, slug);
 
@@ -138,11 +160,11 @@ test("refuses a required field while an entry has no English value, with the ste
   await expect(dialog.getByText("Needs one step")).toBeVisible();
   await expect(
     dialog.getByText(
-      "1 entry has no English headline, and its English value becomes the shared one."
+      "1 entry would have no headline once it is shared: the value it keeps is empty."
     )
   ).toBeVisible();
   await expect(dialog.getByRole("listitem")).toHaveText([
-    "Give that entry an English headline, or turn off Required, and save again.",
+    "Give that entry a headline, or turn off Required, and save again.",
   ]);
   // Nothing in the change can be saved, so no Save can be pressed: either it is absent, or,
   // where another change rides along, disabled.

@@ -136,10 +136,15 @@ describe("listing Singles creates nothing", () => {
     // of the ones that exist today, so an operation added later is caught by
     // this test rather than by whoever is debugging a site full of Singles
     // nobody created.
-    const writes = ops.filter(op =>
-      /insert|update|delete|upsert|create|drop|alter|execute|transaction/i.test(
-        op
-      )
+    // `transactionOpenInFlow` only asks whether the calling flow is inside a
+    // transaction (the listing is read from the cache when it is not); it
+    // opens nothing and writes nothing.
+    const writes = ops.filter(
+      op =>
+        op !== "transactionOpenInFlow" &&
+        /insert|update|delete|upsert|create|drop|alter|execute|transaction/i.test(
+          op
+        )
     );
     expect(writes).toEqual([]);
   });
@@ -245,14 +250,9 @@ describe("the published record says what the registry can actually return", () =
     return result.data[0]!;
   }
 
-  it("does not carry timestamps, which the registry cannot answer per dialect", async () => {
-    // `normalizeDbTimestamp`, which the registry uses, documents itself as
-    // assuming every `Date` is naive and always un-offsetting, and names
-    // `dbTimestampToInstant` as the dialect-aware alternative "safe for
-    // SQLite". SQLite's columns are epoch-backed, so its driver already holds
-    // the correct instant and un-offsetting shifts it by the server timezone —
-    // wrong on one dialect of three, and only on a non-UTC server, so it reads
-    // as correct wherever it is checked.
+  it("does not carry timestamps, which the registry answers as strings typed `Date`", async () => {
+    // `normalizeDbTimestamp`, which the registry uses, returns an ISO string,
+    // and the registry casts it to `Date`, so a date method on it throws.
     const record = await listOne();
 
     expect(record).not.toHaveProperty("createdAt");

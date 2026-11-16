@@ -70,9 +70,24 @@ let firstAdminPage: string | undefined;
  * `no-store`, so it is held to answering only.
  */
 async function expectTheSamePrebuiltPage(page: Page): Promise<void> {
-  const response = await page.request.get("/admin");
+  let response = await page.request.get("/admin");
   expect(response.status()).toBe(200);
   if (process.env.E2E_SERVER !== "production") return;
+  // The kept page, which every later visitor is sent. A change to grants
+  // anywhere in the install (this spec's own role, or another worker's)
+  // expires every content read, and the playground's root layout reads the
+  // site code into `/admin` (see `app/layout.tsx`), so the request after one
+  // regenerates the page: a MISS, which Next.js answers without a lifetime.
+  // The regenerated page is kept, and the next request is served it.
+  for (
+    let tries = 0;
+    response.headers()["x-nextjs-cache"] === "MISS" && tries < 3;
+    tries += 1
+  ) {
+    response = await page.request.get("/admin");
+    expect(response.status()).toBe(200);
+  }
+  expect(response.headers()["x-nextjs-cache"]).toBe("HIT");
   expect(sharedCacheMayKeep(response.headers()["cache-control"])).toBe(true);
   const body = await response.text();
   firstAdminPage ??= body;

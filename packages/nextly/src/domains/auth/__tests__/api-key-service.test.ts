@@ -8,13 +8,14 @@ import {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants derived from the documented key format:
-//   nx_live_<base64url-32-bytes>
-//   prefix (8) + secret (43) = 51 chars total
+//   nx_live_<id>_<base64url-32-bytes>
+//   prefix (8) + id (24) + "_" (1) + secret (43) = 76 chars total
 // ─────────────────────────────────────────────────────────────────────────────
 const KEY_PREFIX = "nx_live_";
 const PREFIX_LENGTH = KEY_PREFIX.length; // 8
+const ID_LENGTH = 24; // hex: 12 random + a 12-character tag
 const SECRET_LENGTH = 43; // base64url(32 bytes) with no padding
-const FULL_KEY_LENGTH = PREFIX_LENGTH + SECRET_LENGTH; // 51
+const FULL_KEY_LENGTH = PREFIX_LENGTH + ID_LENGTH + 1 + SECRET_LENGTH; // 76
 const KEY_PREFIX_DISPLAY_LENGTH = 16; // first 16 chars stored for masked UI display
 const HASH_LENGTH = 64; // SHA-256 hex digest
 // base64url alphabet (RFC 4648 §5) — no +, /, or = — all safe in HTTP headers
@@ -54,10 +55,18 @@ describe("generateApiKey()", () => {
     it(`should produce a secret part (after prefix) of exactly ${SECRET_LENGTH} characters`, () => {
       // Act
       const { fullKey } = generateApiKey();
-      const secret = fullKey.slice(PREFIX_LENGTH);
+      const secret = fullKey.slice(PREFIX_LENGTH + ID_LENGTH + 1);
 
       // Assert — base64url(32 bytes) without padding = ceil(32 * 4/3) = 43 chars
       expect(secret).toHaveLength(SECRET_LENGTH);
+    });
+
+    it("carries a hex id, and a display prefix holding none of the secret", () => {
+      const { fullKey, keyPrefix } = generateApiKey();
+      const id = fullKey.slice(PREFIX_LENGTH, PREFIX_LENGTH + ID_LENGTH);
+      expect(id).toMatch(/^[0-9a-f]{24}$/);
+      expect(fullKey[PREFIX_LENGTH + ID_LENGTH]).toBe("_");
+      expect(keyPrefix).toBe(`${KEY_PREFIX}${id.slice(0, 8)}`);
     });
 
     it(`should set keyPrefix to the first ${KEY_PREFIX_DISPLAY_LENGTH} characters of fullKey`, () => {

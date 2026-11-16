@@ -32,10 +32,31 @@
  * Any modal a host adds inherits the same deference, and there is no list to
  * keep in step with the components.
  *
+ * ## Where the press STARTED decides what it does
+ *
+ * Escape moves the canvas selection only when the press starts on the canvas,
+ * or with nothing focused at all. Pressed on a control in the inspector or a
+ * side panel, it leaves that control instead: focus goes back to the canvas
+ * and the selection stays, so the next Escape starts on the canvas and goes up
+ * from there.
+ *
+ * The case that needed it: picking a colour variable closes the picker and
+ * hands focus back to the field's button. An author pressing Escape there is
+ * done with the panel, and moving the selection under them emptied the very
+ * inspector they were working in. Popovers and menus that are still open
+ * already answer Escape themselves (they mark it handled, which the shortcut
+ * manager honours), so what was left was a press from a panel control with
+ * nothing open, and that is the press this rule gives a meaning of its own.
+ *
+ * Read from the EVENT, never from the page afterwards: by the time a binding
+ * runs, a layer that closed on the same keystroke has already moved focus, so
+ * where focus is then says nothing about where the press began.
+ *
  * @module canvas-escape
  */
 
-import { deepActiveElement, isInput, isTextArea } from "./dom-kind";
+import { isElement, isInput, isTextArea } from "./dom-kind";
+import { CANVAS_FRAME_BOX_ATTRIBUTE } from "./geometry-dom";
 
 /** The priority that puts the editor's claim above a host page's bindings. */
 export const CANVAS_ESCAPE_PRIORITY = 1;
@@ -126,32 +147,104 @@ const NON_TEXT_INPUT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether focus is inside something floating over the editor: a picker's
- * list, a unit menu, a select's options.
+ * Whether a press started inside something floating over the editor: a
+ * picker's list, a unit menu, a select's options.
  *
- * Each closes on Escape, and the editor moving its selection on the same press
- * would do two things for one key: the list closes AND the canvas selects the
- * block's parent. Most of them mark the key as handled, which the shortcut
- * manager already honours; this covers every one that does not, by where focus
- * is rather than by a list of components. The wrapper is the one every floating
- * layer of the design system is positioned in, so a new menu inherits the rule.
+ * Each closes on Escape, and the editor acting on the same press would do two
+ * things for one key. Most of them mark the key as handled, which the shortcut
+ * manager already honours; this covers every one that does not, by where the
+ * press began rather than by a list of components. The wrapper is the one
+ * every floating layer of the design system is positioned in, so a new menu
+ * inherits the rule.
  */
-function inFloatingLayer(element: Element | null): boolean {
-  return element?.closest("[data-radix-popper-content-wrapper]") != null;
+function inFloatingLayer(element: Element): boolean {
+  return element.closest("[data-radix-popper-content-wrapper]") !== null;
+}
+
+/**
+ * Where an Escape press started, and the canvas it may have started on.
+ *
+ * Both halves come from outside the DOM's present state on purpose: the origin
+ * from the keydown itself, and the frame from the editor's own record of the
+ * canvas, so the answer cannot depend on what a closing layer did to focus
+ * between the keystroke and the rule reading it.
+ */
+export interface EscapePress {
+  /**
+   * The element the keydown was dispatched on, from {@link pressOrigin};
+   * `null` when it was dispatched on no element at all.
+   */
+  readonly origin: Element | null;
+  /**
+   * The frame the canvas is drawn in, or `null` while the canvas shares the
+   * editor's own document and there is no separate place to send focus.
+   */
+  readonly canvasFrame: HTMLIFrameElement | null;
+}
+
+/**
+ * The element a keydown started on.
+ *
+ * The composed path first, because an event leaving an open shadow root is
+ * retargeted to its host, and a field inside a custom element would otherwise
+ * read as the element around it. Read by node type rather than `instanceof`,
+ * since a press on the canvas was built by the frame's window, whose
+ * constructors are not this one's.
+ */
+export function pressOrigin(event: Event): Element | null {
+  const path =
+    typeof event.composedPath === "function" ? event.composedPath() : [];
+  const first = path[0] ?? event.target;
+  return isElement(first) ? first : null;
+}
+
+/**
+ * Whether a press started on the canvas.
+ *
+ * Three places count. Anything in the frame's own document is the page
+ * itself. The box holding the frame counts too: the block toolbar and the
+ * canvas's own add buttons are drawn over the page in the editor's document,
+ * and they act on what is selected there, so Escape on them moves the
+ * selection as it does on the page beneath. And an element holding the frame:
+ * the canvas's region takes focus itself while the page is zoomed past it (F6
+ * stops there so the keyboard can scroll it), and it is the canvas as much as
+ * the page inside it is. The body holds the frame as well, and answers the
+ * same through "nothing focused".
+ */
+function startedOnCanvas(
+  origin: Element,
+  canvasFrame: HTMLIFrameElement
+): boolean {
+  if (origin.closest(`[${CANVAS_FRAME_BOX_ATTRIBUTE}]`) !== null) return true;
+  if (origin.contains(canvasFrame)) return true;
+  return origin.ownerDocument === canvasFrame.contentDocument;
+}
+
+/**
+ * Whether a press started with nothing focused: the browser then delivers it
+ * to the document's body, or to its root element where there is no body.
+ */
+function startedOnNothing(origin: Element | null): boolean {
+  if (origin === null) return true;
+  const owner = origin.ownerDocument;
+  return origin === owner.body || origin === owner.documentElement;
 }
 
 /** What pressing Escape over the editor should do. */
 export type EscapeOutcome =
   | "defer-to-modal"
   | "leave-to-field"
+  | "return-to-canvas"
   | "navigate-selection";
 
 /**
  * The whole rule, as one decision a test can make without a keyboard.
  *
- * `"leave-to-field"` and `"navigate-selection"` are both CONSUMED by the editor; they
- * differ only in what happens afterwards. Only `"defer-to-modal"` declines the
- * key, and it declines to something that is itself dismissing on Escape.
+ * Everything but `"defer-to-modal"` is CONSUMED by the editor, and they differ
+ * only in what happens afterwards: the focused field or floating layer keeps
+ * the key's meaning, focus goes back to the canvas, or the selection moves.
+ * Only `"defer-to-modal"` declines the key, and it declines to something that
+ * is itself dismissing on Escape.
  *
  * **The selection is deliberately not an input.** This answers who OWNS the
  * key, and the editor owns it whether or not a block is selected — an editor
@@ -161,21 +254,71 @@ export type EscapeOutcome =
  * the top — and whether there is a selection at all are the caller's
  * questions, asked after this one.
  */
-export function escapeOutcome(root: Document | undefined): EscapeOutcome {
+export function escapeOutcome(
+  root: Document | undefined,
+  press: EscapePress
+): EscapeOutcome {
   if (modalIsOpen(root)) return "defer-to-modal";
-  // Through any focused frame: from the host, focus inside the canvas frame is
-  // the iframe itself, which is no field, and Escape would deselect under an
-  // author who is typing.
-  const active = root === undefined ? null : deepActiveElement(root);
+  const { origin, canvasFrame } = press;
   // A field, or a menu or list floating over the editor: Escape belongs to
-  // the focused control, and is still consumed so the page cannot take it.
-  if (isTextEntry(active) || inFloatingLayer(active)) {
+  // that control, and is still consumed so the page cannot take it. A field
+  // on the canvas, such as a block's text being edited in place, is the same:
+  // its own Escape finishes the edit.
+  if (origin !== null && (isTextEntry(origin) || inFloatingLayer(origin))) {
     return "leave-to-field";
   }
-  // Moving the selection with nothing selected is a no-op that still consumes
-  // the key — which is the whole point. An editor that let Escape through once
-  // the canvas happened to have no selection would lose the author's work in
-  // exactly the state where they had clicked away from a block before pressing
-  // it.
-  return "navigate-selection";
+  // On the canvas, or with nothing focused: the selection moves. Moving it
+  // with nothing selected is a no-op that still consumes the key — which is
+  // the whole point, since an editor that let Escape through there would lose
+  // the author's work in exactly the state where they had clicked away from a
+  // block before pressing it. With no frame there is nowhere separate to send
+  // focus, so every press moves the selection, as it always has.
+  if (
+    canvasFrame === null ||
+    startedOnNothing(origin) ||
+    (origin !== null && startedOnCanvas(origin, canvasFrame))
+  ) {
+    return "navigate-selection";
+  }
+  // On a control anywhere else in the editor, with nothing open: the press
+  // leaves the control, and the selection stays for the next one.
+  return "return-to-canvas";
+}
+
+/**
+ * The attribute the canvas's frame carries while focus has been brought back
+ * to it from the keyboard, which the editor's stylesheet draws as a focus
+ * outline.
+ *
+ * An attribute rather than `:focus-visible` because, while focus is inside a
+ * frame, the browser matches the frame element only with `:focus-within`, and
+ * that holds after a click into the page just as much: drawn from it, every
+ * click on a block would show a keyboard outline.
+ */
+export const CANVAS_KEYBOARD_FOCUS_ATTRIBUTE = "data-nx-keyboard-focus";
+
+/**
+ * Send focus back to the canvas's frame, and show that it went there.
+ *
+ * Without scrolling, because an author who has scrolled the canvas to the
+ * block they are styling would otherwise be thrown back to the frame's top
+ * edge. The outline stays while the keyboard works the canvas and goes when
+ * focus leaves the frame or a pointer is pressed in it, which is when
+ * `:focus-visible` would stop matching too.
+ */
+export function returnFocusToCanvas(canvasFrame: HTMLIFrameElement): void {
+  canvasFrame.focus({ preventScroll: true });
+  // Marked only once focus has really landed: an outline with no focus behind
+  // it would never see the blur that clears it.
+  if (canvasFrame.ownerDocument.activeElement !== canvasFrame) return;
+  if (canvasFrame.hasAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE)) return;
+  canvasFrame.setAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE, "");
+  const page = canvasFrame.contentDocument;
+  const clear = (): void => {
+    canvasFrame.removeAttribute(CANVAS_KEYBOARD_FOCUS_ATTRIBUTE);
+    canvasFrame.removeEventListener("blur", clear);
+    page?.removeEventListener("pointerdown", clear, true);
+  };
+  canvasFrame.addEventListener("blur", clear);
+  page?.addEventListener("pointerdown", clear, true);
 }

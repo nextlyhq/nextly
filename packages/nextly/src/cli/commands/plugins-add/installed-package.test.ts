@@ -112,9 +112,11 @@ describe("the installed package", () => {
     const before = process.cwd();
     process.chdir(app);
     try {
-      expect((await findInstalledPackage(".", "@acme/seo"))?.dir).toBe(
-        await realpath(dir)
-      );
+      // Compared as real paths on both sides: the folder is found from the
+      // working directory, which Windows can hand back in its short 8.3 form
+      // (`RUNNER~1`) while `realpath` spells it out in full.
+      const found = await findInstalledPackage(".", "@acme/seo");
+      expect(found && (await realpath(found.dir))).toBe(await realpath(dir));
     } finally {
       process.chdir(before);
     }

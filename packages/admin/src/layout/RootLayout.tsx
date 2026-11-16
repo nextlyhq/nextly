@@ -33,6 +33,7 @@ import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
 import LoginPage from "../pages/(auth)/login";
+import { RouteLoadingOutline } from "../pages/route-loading-outline";
 
 import "../styles/globals.css";
 import { DashboardLayout } from "./DashboardLayout";
@@ -110,15 +111,14 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
     // is null because we don't render a load indicator during transitions.
     // A private screen's code arriving shows the screen's outline, which is
     // also what it shows while its data loads, so the outline stays put.
+    // The same while a lazily fetched route's code arrives (`lazyRoute`).
+    const routeOutline =
+      routeType === "private" ? <ScreenOutlineFor pathname={pathname} /> : null;
     const suspended = (
-      <Suspense
-        fallback={
-          routeType === "private" ? (
-            <ScreenOutlineFor pathname={pathname} />
-          ) : null
-        }
-      >
-        <Component params={params} searchParams={searchParams} />
+      <Suspense fallback={routeOutline}>
+        <RouteLoadingOutline.Provider value={routeOutline}>
+          <Component params={params} searchParams={searchParams} />
+        </RouteLoadingOutline.Provider>
       </Suspense>
     );
 
@@ -230,7 +230,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
               endpoint gated by settings permissions, so on the signed-out
               screens (login, register, forgot password, setup) the query
               can only fail and retry once while the form waits on nothing
-              it needs. It renders nothing and sits beside the subtree
+              it needs. The sign-in form drawn in place on a private route
+              mounts it too, so the query itself also waits for a signed-in
+              session (`useGeneralSettings`). It renders nothing and sits beside the subtree
               rather than around it, for the load-bearing reasons recorded
               on GeneralSettingsSync itself. */}
             {routeType !== "public" && <GeneralSettingsSync />}

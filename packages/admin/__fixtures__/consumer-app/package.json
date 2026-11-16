@@ -1,5 +1,10 @@
 {
   "name": "admin-consumer-fixture",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "//": "Not installed: scripts/check-consumer-bundle.mjs packs these two packages and places them in this fixture's node_modules, and everything else resolves from the admin package's own.",
+  "dependencies": {
+    "@nextlyhq/admin": "*",
+    "@nextlyhq/plugin-sdk": "*"
+  }
 }

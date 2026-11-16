@@ -89,6 +89,43 @@ describe("typesReachedBy", () => {
   });
 });
 
+describe("typesReachedBy — a plugin's collection of site content", () => {
+  const withPages: ContentTypeCandidate[] = [
+    ...types,
+    {
+      slug: "pages",
+      kind: "collection",
+      plugin: "@acme/builder",
+      siteContent: true,
+    },
+    { slug: "layouts", kind: "collection", plugin: "@acme/builder" },
+  ];
+
+  it("reaches a plugin's collection that holds site content", () => {
+    expect(
+      slugsOf(typesReachedBy({ every: ["collection"] }, withPages))
+    ).toEqual(["posts", "pages", "pages"]);
+  });
+
+  it("still leaves out the plugin's collections that do not", () => {
+    expect(
+      slugsOf(typesReachedBy({ every: ["collection"] }, withPages))
+    ).not.toContain("layouts");
+  });
+
+  it("leaves one out that the scope excepts", () => {
+    const builderPages = withPages.filter(type => type.plugin !== undefined);
+    expect(
+      slugsOf(
+        typesReachedBy(
+          { every: ["collection"], except: ["pages"] },
+          builderPages
+        )
+      )
+    ).toEqual([]);
+  });
+});
+
 describe("isContentTypeScope", () => {
   it("accepts a scope naming one or both kinds, with or without exceptions", () => {
     expect(isContentTypeScope({ every: ["collection"] })).toBe(true);

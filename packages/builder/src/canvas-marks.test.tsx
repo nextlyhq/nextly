@@ -1534,6 +1534,40 @@ describe("the hovered block's mark", () => {
     expect(mark?.hasAttribute("data-hover-tag-inside")).toBe(false);
   });
 
+  it("says a block marked never to be quoted is not quoted in search", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        if (this.getAttribute(NODE_ID_ATTRIBUTE) === "b") {
+          return new DOMRect(100, 100, 200, 50);
+        }
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const marked: BlockDocument = {
+      ...leaves,
+      nodes: leaves.nodes.map(node =>
+        node.id === "b" ? { ...node, nosnippet: true } : node
+      ),
+    };
+    const { container } = render(
+      <HoveredBlockProvider>
+        <PointAt id="b" />
+        <Canvas
+          document={marked}
+          siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+          overlay={
+            <CanvasMarks nameOf={id => (id === "b" ? "Section" : undefined)} />
+          }
+        />
+      </HoveredBlockProvider>
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(hoveredIn(container)).toHaveLength(1));
+    expect(hoveredIn(container)[0]?.getAttribute("data-hover-label")).toBe(
+      "Section · not quoted in search"
+    );
+  });
+
   it("moves its tag in from the screen's left edge on a block that starts left of it", async () => {
     // The canvas scrolled sideways: the block starts 300px left of what the
     // scroller shows, and its tag moves in by as much, onto the screen.

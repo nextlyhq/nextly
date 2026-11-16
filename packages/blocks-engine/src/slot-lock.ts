@@ -141,7 +141,8 @@ export function holdsStartingChildren(
 /**
  * The parts of a node besides its props that `"contentOnly"` fixes: its design
  * (`styles`, `classes`, `customCss`), what its root element carries (`cssId`,
- * `attributes`), when it is shown (`visibility`), and its own lock (`locked`).
+ * `attributes`, `nosnippet`), when it is shown (`visibility`), and its own
+ * lock (`locked`).
  * Its layer `name` is not among them, because the page never draws it: it is
  * the editor's label for the block.
  */
@@ -150,6 +151,7 @@ const PINNED_PARTS = [
   "classes",
   "cssId",
   "attributes",
+  "nosnippet",
   "visibility",
   "customCss",
   "locked",
@@ -193,7 +195,7 @@ export function contentPropsOf(props: unknown): ReadonlySet<string> {
  * @returns each change, worded for an issue message; empty when only content
  *   changed
  */
-export function nonContentChanges(
+function nonContentChanges(
   held: Record<string, unknown>,
   starting: Record<string, unknown>,
   content: ReadonlySet<string>

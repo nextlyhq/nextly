@@ -27,6 +27,19 @@ vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => mockNavigateTo(path),
 }));
 
+const mockLogout = vi.fn();
+vi.mock("@admin/hooks/useLogout", () => ({
+  useLogout: () => mockLogout,
+}));
+
+const mockRefresh = vi.fn(async () => "ok");
+vi.mock("@admin/lib/api/refreshInterceptor", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/lib/api/refreshInterceptor")
+  >()),
+  refreshAccessToken: () => mockRefresh(),
+}));
+
 import { PrivateRoute } from "../PrivateRoute";
 
 /**
@@ -70,10 +83,55 @@ function pendingSession() {
 }
 
 describe("PrivateRoute", () => {
+  it("tells a signed-in account with no role it has no access, and draws no staff screen", () => {
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: {
+        isSetup: true,
+        isAuthenticated: true,
+        hasRole: false,
+        email: "new@example.com",
+      },
+    });
+
+    renderGuard();
+
+    expect(
+      screen.getByText(/don't have access to the admin yet/)
+    ).toBeInTheDocument();
+    expect(screen.getByText("new@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("protected")).not.toBeInTheDocument();
+    expect(screen.queryByText("frame, no data")).not.toBeInTheDocument();
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("checks again with a freshly minted token, and signs out when asked", async () => {
+    mockUseAuthSession.mockReturnValue({
+      status: "success",
+      data: {
+        isSetup: true,
+        isAuthenticated: true,
+        hasRole: false,
+        email: "new@example.com",
+      },
+    });
+
+    renderGuard();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    });
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(mockRestart).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(mockLogout).toHaveBeenCalledTimes(1);
+  });
+
   it("renders the protected content for a valid session", () => {
     mockUseAuthSession.mockReturnValue({
       status: "success",
-      data: { isSetup: true, isAuthenticated: true },
+      data: { isSetup: true, isAuthenticated: true, hasRole: true },
     });
 
     renderGuard();
@@ -183,7 +241,7 @@ describe("PrivateRoute", () => {
   it("records a confirmed session, and forgets it when the server says there is none", () => {
     mockUseAuthSession.mockReturnValue({
       status: "success",
-      data: { isSetup: true, isAuthenticated: true },
+      data: { isSetup: true, isAuthenticated: true, hasRole: true },
     });
     const { unmount } = renderGuard();
     expect(window.localStorage.getItem(SIGNED_IN_HERE_KEY)).toBe("1");

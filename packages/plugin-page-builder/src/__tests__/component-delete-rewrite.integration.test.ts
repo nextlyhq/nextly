@@ -256,6 +256,7 @@ function harness(
     contributes: {
       routes: [
         {
+          siteWide: false,
           method: "POST",
           path: "/open",
           handler: async (req, ctx) => {
@@ -272,6 +273,7 @@ function harness(
           },
         },
         {
+          siteWide: false,
           method: "POST",
           path: "/rewrite",
           handler: async (req, ctx) => {
@@ -854,7 +856,7 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([id]);
     });
 
-    it("converts a published page's pending draft and reports its live row", async () => {
+    it("converts a published page's live row and its pending draft together, the draft still a draft", async () => {
       const { t, cookie } = await boot();
       const cardId = await card(t);
       const created = await t.nextly.create({
@@ -881,18 +883,23 @@ describe.each(getConfiguredTestDialects())(
       await open(cookie, cardId);
 
       const reports = await rewriteToTheEnd(cookie, cardId);
-      const final = reports.at(-1);
 
-      expect(final?.left).toContainEqual(
-        expect.objectContaining({
-          host: expect.objectContaining({ slug: "pages", id: pageId }),
-          reason: "pending-draft",
-        })
-      );
+      expect(reports.flatMap(report => report.left)).toEqual([]);
       const draft = await nodesOf(t, "pages", pageId, true);
       expect(copies(draft, cardId)).toBe(0);
       expect(texts(draft)).toEqual(["Card title", "Draft edit"]);
-      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      const live = await nodesOf(t, "pages", pageId);
+      expect(copies(live, cardId)).toBe(0);
+      expect(texts(live)).toEqual(["Card title"]);
+      const pending = (await t.nextly.findByID({
+        collection: "pages",
+        id: pageId,
+        overrideAccess: true,
+        status: "all",
+        depth: 0,
+        draft: true,
+      })) as unknown as Record<string, unknown>;
+      expect(pending._isWorkingDraft).toBe(true);
     });
 
     it("refuses a rewrite asked for by anybody but the person who opened the run", async () => {
@@ -1040,9 +1047,11 @@ describe.each(getConfiguredTestDialects())(
         status: "all",
         depth: 0,
       })) as unknown as { title: string; content: unknown };
-      // The draft stayed a draft: its title is not live.
+      // The draft stayed a draft: its title is not live. The write made from
+      // the read without a draft was refused, and the page read again was
+      // converted on its live row and its draft together.
       expect(live.title).toBe("Live");
-      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(1);
+      expect(copies(await nodesOf(t, "pages", pageId), cardId)).toBe(0);
       const draft = (await t.nextly.findByID({
         collection: "pages",
         id: pageId,
@@ -1053,12 +1062,7 @@ describe.each(getConfiguredTestDialects())(
       })) as unknown as { title: string };
       expect(draft.title).toBe("Author draft");
       expect(copies(await nodesOf(t, "pages", pageId, true), cardId)).toBe(0);
-      expect(reports.at(-1)?.left).toContainEqual(
-        expect.objectContaining({
-          host: expect.objectContaining({ id: pageId }),
-          reason: "pending-draft",
-        })
-      );
+      expect(reports.flatMap(report => report.left)).toEqual([]);
     });
 
     it("records a document both walks find unchanged once, in that state", async () => {

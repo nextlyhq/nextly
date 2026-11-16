@@ -18,6 +18,7 @@ import {
   declaredFieldNames,
   keepDeniedAtStored,
   keepPendingWhereDenied,
+  pathsKeptFromCaller,
   resolvePromotedDocument,
   storedProvenance,
 } from "../denied-change";
@@ -698,6 +699,43 @@ it("storedProvenance marks the restored paths, with the values the row holds", a
   expect(values.get("rows[0]")).toEqual({ id: "a", n: 2.5 });
   expect(paths.has("rows[1]")).toBe(false);
   expect(paths.has("meta.label")).toBe(false);
+});
+
+it("pathsKeptFromCaller names the values kept over a different one, or over none", async () => {
+  const update = {
+    card: { label: "new", locked: "taken" },
+    other: { label: "new", sealed: "same" },
+  };
+  const { kept, permitted } = await keepDeniedAtStored({
+    update,
+    stored: {
+      card: { label: "old", locked: "keep", hidden: "keep" },
+      other: { label: "old", sealed: "same" },
+    },
+    applyRules: document => {
+      const card = document.card as Record<string, unknown> | undefined;
+      if (card) {
+        delete card.locked;
+        delete card.hidden;
+      }
+      const other = document.other as Record<string, unknown> | undefined;
+      if (other) delete other.sealed;
+      return Promise.resolve();
+    },
+  });
+  // POPULATION CONTROL: every denied path holds the row's own value.
+  const { paths, values } = storedProvenance(kept, permitted);
+  expect([...paths].sort()).toEqual([
+    "card.hidden",
+    "card.locked",
+    "other.sealed",
+  ]);
+  // Changed (`locked`) and left out (`hidden`) are kept from the caller; a
+  // value sent as the row holds it (`sealed`) is no change of theirs.
+  expect(pathsKeptFromCaller({ paths, values }, update)).toEqual([
+    "card.hidden",
+    "card.locked",
+  ]);
 });
 
 // A save held over another writer's pending change keeps that change's value of each field the

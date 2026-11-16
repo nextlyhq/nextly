@@ -238,7 +238,7 @@ async function connectCliAdapter(
     ? missingSqliteFile(dialect, databaseUrl)
     : undefined;
   if (missing) return missing;
-  return createUnderEnv(options, readOnly, dialect, databaseUrl);
+  return createForTarget(options, readOnly, dialect, databaseUrl);
 }
 
 /**
@@ -289,29 +289,30 @@ function missingSqliteFile(
 }
 
 /**
- * Creates the adapter with the dialect and URL set in the environment the
- * factory reads, put back afterwards, and the static system tables resolvable
- * on it. A read-only open whose PostgreSQL schema is not there answers
+ * Creates the adapter for the dialect and URL given, leaving the environment
+ * untouched, with the static system tables resolvable on it. A read-only open whose PostgreSQL schema is not there answers
  * `missing`; any other failure ends with the one code every command that
  * opens a database ends with.
  */
-async function createUnderEnv(
+async function createForTarget(
   options: CreateCliAdapterOptions,
   readOnly: boolean,
   dialect: SupportedDialect,
   databaseUrl: string
 ): Promise<CLIDatabaseAdapter | MissingDatabase> {
-  const { createAdapterFromEnv } = await import("../../database/factory");
-  const originalDialect = process.env.DB_DIALECT;
-  const originalUrl = process.env.DATABASE_URL;
+  const { createAdapter } = await import("../../database/factory");
   // The CONFIGURED schema, not the default. `migrate` applying DDL through
   // `public` while the application it is migrating runs in `cms` splits the
   // lock and the ledger and leaves the tables where nothing reads them.
   const schema = options.schema ?? activePostgresSchema();
   try {
-    process.env.DB_DIALECT = dialect;
-    process.env.DATABASE_URL = databaseUrl;
-    const adapter = await createAdapterFromEnv({
+    // The target is handed to the factory rather than set in `process.env` for the open: an open
+    // can outlive the command that started it (`migrate:create` stops waiting for the database it
+    // counts in while a PostgreSQL connect is still retrying), and one that put the earlier
+    // variables back when it settled put them back over whatever the process had set since.
+    const adapter = await createAdapter({
+      type: dialect,
+      url: databaseUrl,
       ...(schema === DEFAULT_POSTGRES_SCHEMA ? {} : { schema }),
       ...(readOnly ? { readOnly: true } : {}),
     });
@@ -349,9 +350,6 @@ async function createUnderEnv(
     }
     // Read here, once, so every command that opens a database ends with the same code for it.
     throw connectionFailure(dialect, error);
-  } finally {
-    if (originalDialect !== undefined) process.env.DB_DIALECT = originalDialect;
-    if (originalUrl !== undefined) process.env.DATABASE_URL = originalUrl;
   }
 }
 

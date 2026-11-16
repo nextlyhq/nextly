@@ -97,9 +97,11 @@ import { validateDefaultValue } from "../pipeline/pre-cleanup/validate-default";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { builtByFor } from "../pipeline/registered-collections";
 import { generateStatements } from "../pipeline/sql-templates/index";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
   classifyFieldKind,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
   type ColumnOrigin,
@@ -601,6 +603,16 @@ function conversionOf(table: string, op: Operation): ColumnConversion {
         from: op.fromDefault ?? "no default",
         to: op.toDefault ?? "no default",
       };
+    case "add_column":
+      // Named by the column it adds, so the review says which, and each is confirmed on its own:
+      // a field group made before the fields inside its groups with no name were stored lacks one
+      // per such field, which the mapping now declares.
+      return {
+        table,
+        column: op.column.name,
+        from: "missing, as an earlier version made the table",
+        to: `added as Nextly declares it (${op.column.nullable ? "nullable" : "not null"})`,
+      };
     default:
       return {
         table,
@@ -625,6 +637,19 @@ interface SettledRows {
  * Builder's push path keeps. A field the table does not have yet counts every
  * row. Refused before anything is written.
  */
+/**
+ * The saved field an answer names, found where the answer was matched (`saveOfSchemaChange`):
+ * among the row's fields, those inside a group with no name included.
+ */
+function answeredField(
+  save: CollectionSave,
+  column: string
+): UiSchemaEntity["fields"][number] | undefined {
+  return fieldsStoredOnRow(save.entity?.fields ?? []).find(
+    f => f.name === column
+  );
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -638,7 +663,7 @@ async function settledRows(
     : undefined;
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
-    const field = save.entity?.fields.find(f => f.name === resolution.column);
+    const field = answeredField(save, resolution.column);
     if (field === undefined) {
       throw NextlyError.validation({
         errors: [
@@ -749,7 +774,12 @@ function refuseUnenforceableUniques(
   const dialect = deps.adapter.getCapabilities().dialect;
   const entity = save.entity;
   if (entity === null) return;
-  for (const field of mainTableFields(entity, entity.fields)) {
+  // The row holds the fields inside a group with no name as columns (`fieldsStoredOnRow`), an
+  // entry's and a field group's instance's alike, so a unique one among them is judged as one
+  // beside the group is.
+  for (const field of fieldsStoredOnRow(
+    mainTableFields(entity, entity.fields)
+  )) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
@@ -1446,14 +1476,20 @@ async function runWritten(
       : await unitOf(deps, files.adopt);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   for (const filename of ordered) {
+    // A column made required over rows that would break it, refused before
+    // any statement, as `nextly migrate` refuses it. Asked outside the
+    // judgement of what stayed: nothing of the file has run, so the refusal
+    // is thrown as it is. Inside it, a MySQL file whose tables the judgement
+    // cannot name (a column restated through a prepared statement) was taken
+    // as part-way, and a refusal that ran nothing was reported as a failure
+    // whose statements stayed applied, its files kept for `migrate:resolve`.
+    await refuseBeforeAnyStatement(filename);
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
     applied.push(filename);
   }
 
-  async function runOne(filename: string): Promise<void> {
+  async function refuseBeforeAnyStatement(filename: string): Promise<void> {
     const file = await unitOf(deps, filename);
-    // A column made required over rows that would break it, refused before
-    // any statement, as `nextly migrate` refuses it.
     await refuseRequiredColumnsOverNulls(
       db,
       dialect,
@@ -1462,6 +1498,10 @@ async function runWritten(
       }),
       filename
     );
+  }
+
+  async function runOne(filename: string): Promise<void> {
+    const file = await unitOf(deps, filename);
     const target = await snapshotOf(deps, filename);
     if (target === null) {
       await runRecordedAttempt({ file, dialect, repo, executeSql });
@@ -1550,9 +1590,15 @@ function tablesChangedBy(
   dialect: SupportedDialect
 ): string[] | undefined {
   const tables = new Set<string>();
-  for (const statement of splitSqlStatements(file.sql, dialect, {
+  const statements = splitSqlStatements(file.sql, dialect, {
     transaction: file.transaction,
-  })) {
+  });
+  // A MySQL nullability change or rename is written as a prepared run built
+  // from the live column; read as the one ALTER TABLE it amounts to, so its
+  // table is named. Any other PREPARE stays unread.
+  for (const statement of dialect === "mysql"
+    ? plainMysqlEquivalents(statements)
+    : statements) {
     const first = /^\s*([A-Za-z]+)/.exec(statement)?.[1]?.toUpperCase();
     if (first !== undefined && TABLELESS_STATEMENTS.has(first)) continue;
     const changed = tablesChangedIn(statement, dialect);

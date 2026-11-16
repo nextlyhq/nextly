@@ -33,6 +33,7 @@ import { seoPlugin } from "../../plugin";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { recordProxySeen } from "../../redirects/proxy-seen";
 import { putRedirect } from "../../redirects/store";
+import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
 import { noSocialCardRules } from "../../social/card";
@@ -45,6 +46,7 @@ import {
   type Reader,
 } from "../check";
 import type { Problem } from "../contract";
+import { linkedPageKey } from "../link-graph";
 import { PROBLEMS_SLUG, savePage } from "../store";
 
 let current: TestNextly | undefined;
@@ -232,9 +234,11 @@ describe.each(getConfiguredTestDialects())(
       const [first] = await until(t, checkedSince(id));
 
       let list = await problemList(ctx, CHECKS, everything);
+      // No other page links to it yet either.
       expect(kindsOf(list.problems, id)).toEqual([
         "brokenLink",
         "noDescription",
+        "orphanPage",
         "longTitle",
         "shareImage",
         "imageAlt",
@@ -263,7 +267,306 @@ describe.each(getConfiguredTestDialects())(
       await until(t, checkedSince(id, String(first?.checkedAt)));
 
       list = await problemList(ctx, CHECKS, everything);
-      expect(kindsOf(list.problems, id)).toEqual(["shareImage"]);
+      // It links to Boats now; nothing links to it.
+      expect(kindsOf(list.problems, id)).toEqual(["orphanPage", "shareImage"]);
+    });
+
+    it("counts the pages linking to each page and it links to, and lists a listed page no other page links to", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      const harbour = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+        // Two links to one page, one to itself and one outside the site:
+        // one page out.
+        body: {
+          root: {
+            type: "root",
+            version: 1,
+            children: [
+              {
+                type: "paragraph",
+                version: 1,
+                children: [
+                  "/blog/boats",
+                  "/blog/boats",
+                  "/blog/harbour",
+                  "https://elsewhere.com/x",
+                ].map(url => ({
+                  type: "link",
+                  url,
+                  version: 1,
+                  children: [{ type: "text", text: "read", version: 1 }],
+                })),
+              },
+            ],
+          },
+        },
+      });
+      await until(t, checkedSince(boats));
+      await until(t, checkedSince(harbour));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      const counts = (id: string) =>
+        list.checked?.find(page => page.id === id)?.links;
+      expect(counts(boats)).toEqual({ inbound: 1, outbound: 0 });
+      expect(counts(harbour)).toEqual({ inbound: 0, outbound: 1 });
+      expect(kindsOf(list.problems, harbour)).toContain("orphanPage");
+      expect(kindsOf(list.problems, boats)).not.toContain("orphanPage");
+      expect(list.problems.find(p => p.kind === "orphanPage")).toMatchObject({
+        subject: { type: "posts", id: harbour, detail: "/blog/harbour" },
+        what: "No other page links here",
+      });
+    });
+
+    it("counts a link to a page's old address, which a redirect holds, for the page", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      await until(t, checkedSince(boats));
+      // A published page's new address leaves a redirect from its old one.
+      await t.nextly.update({
+        collection: "posts",
+        id: boats,
+        data: { slug: "boats-of-the-harbour", _overwrite: true },
+      });
+      const harbour = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+        body: body("/blog/boats", "A chart of the tides"),
+      });
+      await until(t, checkedSince(harbour));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      const counts = (id: string) =>
+        list.checked?.find(page => page.id === id)?.links;
+      expect(counts(harbour)).toEqual({ inbound: 0, outbound: 1 });
+      expect(counts(boats)).toEqual({ inbound: 1, outbound: 0 });
+      expect(kindsOf(list.problems, boats)).not.toContain("orphanPage");
+      // Held by the redirect, so the link is not broken either.
+      expect(kindsOf(list.problems, harbour)).not.toContain("brokenLink");
+    });
+
+    it("follows a pattern redirect with the address asked for, and only the redirect a visitor meets", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      const fallback = await publish(t, {
+        title: "Fallback",
+        slug: "fallback",
+        excerpt: "Where old addresses land.",
+      });
+      await until(t, checkedSince(boats));
+      await until(t, checkedSince(fallback));
+      // `/old/*` carries the rest across; `/older/*` sends all to Fallback,
+      // but the exact `/older/boats` answers before it.
+      for (const [source, target] of [
+        ["/old/*", "/blog/*"],
+        ["/older/*", "/blog/fallback"],
+        ["/older/boats", "/blog/boats"],
+      ]) {
+        await ctx.services.collections.withTransaction(tx =>
+          putRedirect(ctx, tx, {
+            locale: "en",
+            origin: "person",
+            source,
+            target,
+          })
+        );
+      }
+      const linking = await publish(t, {
+        title: "Linking",
+        slug: "linking",
+        excerpt: "Links to old addresses.",
+        body: {
+          root: {
+            type: "root",
+            version: 1,
+            children: [
+              {
+                type: "paragraph",
+                version: 1,
+                children: ["/old/boats", "/older/boats"].map(url => ({
+                  type: "link",
+                  url,
+                  version: 1,
+                  children: [{ type: "text", text: "read", version: 1 }],
+                })),
+              },
+            ],
+          },
+        },
+      });
+      await until(t, checkedSince(linking));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      const counts = (id: string) =>
+        list.checked?.find(page => page.id === id)?.links;
+      expect(counts(boats)).toEqual({ inbound: 1, outbound: 0 });
+      // The covering pattern is not the one met, so Fallback gets no link.
+      expect(counts(fallback)).toEqual({ inbound: 0, outbound: 0 });
+      expect(counts(linking)).toEqual({ inbound: 0, outbound: 1 });
+    });
+
+    it("follows a redirect to a full address on the site's own origin", async () => {
+      const { t, ctx } = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          productionAddresses: ["https://example.com"],
+        },
+        overrideAccess: true,
+      });
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      await until(t, checkedSince(boats));
+      await ctx.services.collections.withTransaction(tx =>
+        putRedirect(ctx, tx, {
+          locale: "en",
+          origin: "person",
+          source: "/old-boats",
+          target: "https://example.com/blog/boats",
+        })
+      );
+      const harbour = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+        body: body("/old-boats", "A chart of the tides"),
+      });
+      await until(t, checkedSince(harbour));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      expect(list.checked?.find(page => page.id === boats)?.links).toEqual({
+        inbound: 1,
+        outbound: 0,
+      });
+    });
+
+    it("counts a link from a page of a type whose SEO is switched off", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      await until(t, checkedSince(boats));
+      // A page of another type, still public, linking to Boats; its type's
+      // SEO is then switched off, which keeps the page and its links.
+      await savePage(ctx, {
+        subject: {
+          type: "guides",
+          id: "g1",
+          label: "Guide",
+          detail: "/guides/g1",
+        },
+        locale: "en",
+        problems: [],
+        links: {
+          to: [linkedPageKey("posts", boats, "en")],
+          listed: true,
+          home: false,
+        },
+        checkedAt: new Date().toISOString(),
+      });
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, typesWithSeoOff: ["guides"] },
+        overrideAccess: true,
+      });
+
+      const list = await problemList(ctx, CHECKS, everything);
+      expect(list.checked?.find(page => page.id === boats)?.links).toEqual({
+        inbound: 1,
+        outbound: 0,
+      });
+      expect(kindsOf(list.problems, boats)).not.toContain("orphanPage");
+    });
+
+    it("names no orphan of a page whose canonical names another address", async () => {
+      const { t, ctx } = await boot(dialect);
+      const moved = await publish(t, {
+        title: "Moved",
+        slug: "moved",
+        excerpt: "First published elsewhere.",
+        seo: {
+          canonical: "https://first.example/moved",
+          canonicalElsewhere: true,
+        },
+      });
+      const own = await publish(t, {
+        title: "Own",
+        slug: "own",
+        excerpt: "Its own page.",
+      });
+      await until(t, checkedSince(moved));
+      await until(t, checkedSince(own));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      // Left out of the sitemap by its canonical: no orphan, its counts kept.
+      expect(kindsOf(list.problems, moved)).not.toContain("orphanPage");
+      expect(list.checked?.find(page => page.id === moved)?.links).toEqual({
+        inbound: 0,
+        outbound: 0,
+      });
+      expect(kindsOf(list.problems, own)).toContain("orphanPage");
+    });
+
+    it("lists no problem of a type whose SEO is switched off, and lists it again once on", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, { title: "Harbour", slug: "harbour" });
+      await until(t, checkedSince(id));
+      expect(
+        kindsOf((await problemList(ctx, CHECKS, everything)).problems, id)
+      ).toContain("noDescription");
+
+      const switchOff = (types: string[]) =>
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: { _overwrite: true, typesWithSeoOff: types },
+          overrideAccess: true,
+        });
+      await switchOff(["posts"]);
+      expect(
+        kindsOf((await problemList(ctx, CHECKS, everything)).problems, id)
+      ).toEqual([]);
+
+      await switchOff([]);
+      expect(
+        kindsOf((await problemList(ctx, CHECKS, everything)).problems, id)
+      ).toContain("noDescription");
+    });
+
+    it("stops asking for an address for a type whose SEO is switched off", async () => {
+      const { t, ctx } = await boot(dialect);
+      const noAddress = async () =>
+        (await problemList(ctx, CHECKS, everything)).problems.filter(
+          p => p.kind === "noAddress"
+        );
+      expect((await noAddress()).map(p => p.subject.label)).toEqual(["Notes"]);
+
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, typesWithSeoOff: ["notes"] },
+        overrideAccess: true,
+      });
+      expect(await noAddress()).toEqual([]);
     });
 
     it("lists a canonical naming another address, unless the page is confirmed to live elsewhere", async () => {
@@ -309,11 +612,13 @@ describe.each(getConfiguredTestDialects())(
       expect(kindsOf(list.problems, a)).not.toContain("sharedTitle");
       // The pages checked for them: theirs, not the one left out, whose
       // missing problems say nothing about it.
-      expect(list.checked).toEqual([{ type: "posts", id: a }]);
+      expect(list.checked).toEqual([
+        { type: "posts", id: a, links: { inbound: 0, outbound: 0 } },
+      ]);
       expect((await problemList(ctx, CHECKS, everything)).checked).toEqual(
         expect.arrayContaining([
-          { type: "posts", id: a },
-          { type: "posts", id: b },
+          expect.objectContaining({ type: "posts", id: a }),
+          expect.objectContaining({ type: "posts", id: b }),
         ])
       );
     });
@@ -546,6 +851,81 @@ describe.each(getConfiguredTestDialects())(
       expect((await rows(t)).some(row => row.holderId === id)).toBe(true);
     });
 
+    it("follows an old unprefixed link on a site whose every language is prefixed, as the Proxy reads it", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix" },
+        plugins: [seoWithContext(seen, ["posts"])],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            localized: true,
+            status: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "slug", localized: true }),
+              text({ name: "excerpt", localized: true }),
+              richText({ name: "body", localized: true }),
+            ],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
+      const boats = String(
+        (
+          await t.nextly.create({
+            collection: "posts",
+            locale: "en",
+            data: {
+              title: "Boats",
+              slug: "boats",
+              excerpt: "Boats.",
+              status: "published",
+            },
+          })
+        ).item.id
+      );
+      // An address from before the site had languages, kept in English.
+      await ctx.services.collections.withTransaction(tx =>
+        putRedirect(ctx, tx, {
+          locale: "en",
+          origin: "person",
+          source: "/old-boats",
+          target: "/blog/boats",
+        })
+      );
+      await t.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: {
+          title: "Harbour",
+          slug: "harbour",
+          excerpt: "Harbour.",
+          body: body("/old-boats", "A chart"),
+          status: "published",
+        },
+      });
+      await lastCatchUp();
+
+      await checkSite(ctx, { ...CHECKS, targets: ["posts"] });
+      const list = await problemList(
+        ctx,
+        { ...CHECKS, targets: ["posts"] },
+        everything
+      );
+      expect(list.checked?.find(page => page.id === boats)?.links).toEqual({
+        inbound: 1,
+        outbound: 0,
+      });
+    });
+
     it("checks each language a page is published in", async () => {
       const seen: { ctx?: PluginContext } = {};
       current = await createTestNextly({
@@ -734,7 +1114,7 @@ describe.each(getConfiguredTestDialects())(
       // Saved with a title longer than Google shows: its save checks it.
       await t.nextly.updateSingle({
         slug: "home",
-        data: { title: "t".repeat(70), _overwrite: true },
+        data: { title: "W".repeat(40), _overwrite: true },
       });
       const [saved] = await until(t, found => homeRow(found) !== undefined);
       expect(saved).toBeDefined();
@@ -769,6 +1149,86 @@ describe.each(getConfiguredTestDialects())(
       expect(hidden.problems.some(p => p.subject.type === "single:home")).toBe(
         false
       );
+    });
+
+    it("checks a Single again when every language of it is published at once", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const plugin = seoPlugin({ collections: ["posts"], singles: ["home"] });
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          {
+            ...plugin,
+            init(ctx) {
+              seen.ctx = ctx;
+              return plugin.init?.(ctx);
+            },
+          },
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            access: { read: () => true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            fields: [text({ name: "title", localized: true })],
+            publicAddress: "/",
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
+      await lastCatchUp();
+      const checks = { ...CHECKS, targets: ["posts"], singles: ["home"] };
+      const homeRows = (found: Record<string, unknown>[]) =>
+        found.filter(row => row.holderCollection === "single:home");
+
+      // Both languages saved as drafts, with a title longer than Google
+      // shows: a draft is not a public page, so nothing is kept of it.
+      for (const locale of ["en", "de"]) {
+        await t.nextly.updateSingle({
+          slug: "home",
+          locale,
+          data: { title: "W".repeat(40), status: "draft", _overwrite: true },
+        });
+      }
+      const draftList = await problemList(ctx, checks, everything);
+      expect(
+        draftList.problems.some(p => p.subject.type === "single:home")
+      ).toBe(false);
+      expect(homeRows(await rows(t))).toEqual([]);
+
+      // Every language published in one go is a save of the Single, so it is
+      // checked again, as a publish of one language through a save is.
+      const published = await t
+        .getService<{
+          publishAllLocales: (
+            slug: string,
+            options: Record<string, unknown>
+          ) => Promise<{ success: boolean }>;
+        }>("singleEntryService")
+        .publishAllLocales("home", {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        });
+      expect(published.success).toBe(true);
+      await until(t, found => homeRows(found).length > 0);
+      const list = await problemList(ctx, checks, everything);
+      expect(
+        list.problems
+          .filter(p => p.subject.type === "single:home")
+          .map(p => p.kind)
+      ).toContain("longTitle");
     });
   }
 );
@@ -831,6 +1291,67 @@ describe.each(getConfiguredTestDialects())(
 
       expect(inTransaction.length).toBeGreaterThan(0);
       expect(inTransaction).not.toContain(true);
+    });
+
+    it("lists a page the sitemap holds while an own robots.txt rule blocks it, and drops it once the rule goes", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, {
+        title: "Harbour at dawn",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+      });
+      await until(t, checkedSince(id));
+      await checkSite(ctx, CHECKS);
+      expect((await problemList(ctx, CHECKS, everything)).outOfDate).toBe(
+        false
+      );
+
+      const text = "User-agent: *\nDisallow: /search\nDisallow: /blog";
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, robotsRules: { text } },
+      });
+      // A settings save can change many pages' results: the full check says so.
+      await until(t, found => found.some(row => row.outOfDate === true));
+      // The sitemap lists every collection here.
+      const listed = { ...CHECKS, sitemap: {} };
+      await checkSite(ctx, listed);
+      let list = await problemList(ctx, listed, everything);
+      expect(list.problems.find(p => p.kind === "robotsBlocked")).toMatchObject(
+        {
+          subject: { type: "posts", id, detail: "/blog/harbour" },
+          what: "Line 3 of your own robots.txt rules keeps crawlers away: Disallow: /blog",
+          fix: { place: "settings", tab: "crawlers" },
+        }
+      );
+
+      // A site that serves its own robots.txt, the plugin's switched off,
+      // is not told the plugin's rules block anything.
+      await checkSite(ctx, { ...listed, servesRobots: false });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // Nor is a site whose own robots.txt file wins over the plugin's.
+      await checkSite(ctx, {
+        ...listed,
+        siteServesOwnRobots: () => Promise.resolve(true),
+      });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // A page the sitemap does not list is not one it lists and blocks.
+      await checkSite(ctx, { ...listed, sitemap: { collections: ["notes"] } });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).toContain("robotsBlocked");
+
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, robotsRules: null },
+      });
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
     });
   }
 );

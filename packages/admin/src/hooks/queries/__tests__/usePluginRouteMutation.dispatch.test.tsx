@@ -91,6 +91,9 @@ let written: Array<{ path: string; body: unknown }> = [];
 
 function note(path: string, csrf?: true) {
   return {
+    // Declared, as every plugin route must be: a route that says nothing is
+    // refused before CSRF is weighed, which is what these cases are about.
+    siteWide: false as const,
     method: "POST" as const,
     path,
     ...(csrf ? { csrf } : {}),

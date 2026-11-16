@@ -30,8 +30,10 @@ import {
 } from "../languages/versions";
 import { candidates, type Candidate } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
+import { singleKey } from "../problems/page-types";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
+import { isSeoOff } from "../settings/seo-off";
 
 import {
   codePages,
@@ -48,8 +50,8 @@ import type {
   ValueSource,
   ValueSources,
 } from "./contract";
-import type { CodeRoute } from "./routes";
-import { nameOfAddress, type CodePageRow } from "./store";
+import { dynamicRouteServing, type CodeBuild, type CodeRoute } from "./routes";
+import { nameOfAddress, readCodePages, type CodePageRow } from "./store";
 
 /** How an answer stands with search engines. */
 function standingOfAnswer(answer: SeoAnswer): AddressStanding {
@@ -178,11 +180,26 @@ async function automaticOf(
   });
 }
 
+/** How a page built in code stands: unconfirmed where nothing the build wrote confirms it. */
+function standingOfCodePage(
+  page: CodePage,
+  unconfirmed: ReadonlySet<string>
+): AddressStanding {
+  if (unconfirmed.has(page.route.path)) return "unconfirmed";
+  return page.row?.connected === true
+    ? standingOfAnswer(page.answer)
+    : "not-connected";
+}
+
 /** A page built in code as the screen lists it. */
 async function codeAddressOf(
   ctx: PluginContext,
   page: CodePage,
-  site: { origin: string; name: string | undefined },
+  site: {
+    origin: string;
+    name: string | undefined;
+    unconfirmed: ReadonlySet<string>;
+  },
   readRules: ReadRules | undefined
 ): Promise<SiteAddress> {
   const { route, row, answer } = page;
@@ -196,8 +213,7 @@ async function codeAddressOf(
     name: row?.name ?? nameOfAddress(route.path),
     source: route.source,
     from: route.route,
-    standing:
-      row?.connected === true ? standingOfAnswer(answer) : "not-connected",
+    standing: standingOfCodePage(page, site.unconfirmed),
     sources: sourcesOf(answer),
     ...present({
       ...servedText(answer),
@@ -265,6 +281,28 @@ async function entryAddressOf(
   // language included where the language rule prefixes it too.
   const path = (await servedAt(own, options.language)) ?? own;
   const label = await options.label(type);
+  const entry = {
+    kind: type.kind,
+    slug: type.slug,
+    id: holder.id,
+    ...(translation ? { locale: options.language } : {}),
+  };
+  const name = textOf(document.title) ?? textOf(document.name) ?? label;
+  // A type whose SEO is switched off stays listed, marked so: the plugin
+  // answers its pages nothing, so its route's own code sets what is served.
+  const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+  const rules = await options.readRules?.(ctx, options.language);
+  if (rules !== undefined && isSeoOff(rules, key)) {
+    return {
+      path,
+      name,
+      source: "entry",
+      from: label,
+      standing: "seo-off",
+      sources: {},
+      entry,
+    };
+  }
   const answer = await resolveIn(
     ctx,
     type,
@@ -274,7 +312,7 @@ async function entryAddressOf(
   );
   return {
     path,
-    name: textOf(document.title) ?? textOf(document.name) ?? label,
+    name,
     source: "entry",
     from: label,
     standing: standingOfAnswer(answer),
@@ -283,12 +321,7 @@ async function entryAddressOf(
       ...servedText(answer),
       canonical: canonicalOf(answer, options.origin),
     }),
-    entry: {
-      kind: type.kind,
-      slug: type.slug,
-      id: holder.id,
-      ...(translation ? { locale: options.language } : {}),
-    },
+    entry,
   };
 }
 
@@ -402,17 +435,42 @@ async function entryAddresses(
 }
 
 /**
+ * Where the build's prerender manifest could not be read, the pages a route
+ * with a variable part recorded that no route of `build` confirms, each with
+ * the route that would serve it: a recorded address no route of this build
+ * would serve is a page that is gone, and is left out.
+ */
+async function unconfirmedRoutes(
+  ctx: PluginContext,
+  build: Pick<CodeBuild, "routes" | "dynamic" | "unreadable">
+): Promise<CodeRoute[]> {
+  if (build.unreadable === undefined) return [];
+  const confirmed = new Set(build.routes.map(route => route.path));
+  const found: CodeRoute[] = [];
+  for (const path of (await readCodePages(ctx)).keys()) {
+    if (confirmed.has(path)) continue;
+    const serving = dynamicRouteServing(path, build.dynamic);
+    if (serving !== undefined) {
+      found.push({ path, source: "dynamic", route: serving.route });
+    }
+  }
+  return found;
+}
+
+/**
  * Every public address the site knows of, by address: its entries first
  * where an entry and a route name one address, since the entry's `seo`
  * group is then the address's one home for its SEO. Of the entries, only
  * those `readable` keeps are named; an address one it leaves out holds is
- * still not a page built in code.
+ * still not a page built in code. Where the build's prerender manifest could
+ * not be read, the pages routes with a variable part recorded are listed
+ * too, unconfirmed.
  */
 export async function siteAddresses(
   ctx: PluginContext,
   options: {
     origin: string;
-    routes: readonly CodeRoute[];
+    build: Pick<CodeBuild, "routes" | "dynamic" | "unreadable">;
     readRules?: ReadRules;
     readable: ReadableEntries;
   }
@@ -428,19 +486,25 @@ export async function siteAddresses(
     options.readable
   );
   const entryPaths = new Set(entries.map(entry => entry.path));
+  const unconfirmed = await unconfirmedRoutes(ctx, options.build);
+  const known = [...options.build.routes, ...unconfirmed];
   // A route serving an address a document holds is serving that entry,
   // whatever language the address is in: its SEO is the entry's.
   const held = await heldByDocuments(
     ctx,
-    options.routes.map(route => route.path),
+    known.map(route => route.path),
     options.origin
   );
-  const routes = options.routes.filter(
+  const routes = known.filter(
     route => !entryPaths.has(route.path) && !held.has(route.path)
   );
   const pages = await codePages(ctx, routes, readRules);
   const rules = await readRules?.(ctx, undefined);
-  const site = { origin: options.origin, name: rules?.siteName };
+  const site = {
+    origin: options.origin,
+    name: rules?.siteName,
+    unconfirmed: new Set(unconfirmed.map(route => route.path)),
+  };
   const code: SiteAddress[] = [];
   for (const page of pages) {
     code.push(await codeAddressOf(ctx, page, site, readRules));

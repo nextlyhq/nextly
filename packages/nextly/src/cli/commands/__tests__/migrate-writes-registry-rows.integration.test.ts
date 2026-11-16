@@ -30,6 +30,7 @@ import {
 import { createAdapter } from "../../../database/factory";
 import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { loadedDialect } from "../../../database/dialect-tables";
+import { container } from "../../../di/container";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";
 import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
@@ -40,6 +41,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  installTagExpiryLedger,
+  withdrawTagExpiryLedger,
+} from "../../../runtime/cache/ledger-wiring";
+import { tagExpiryLedgerPublished } from "../../../runtime/cache/tag-expiry-view";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
@@ -199,14 +205,42 @@ async function migrated(
   expect(code, said.join("\n")).toBeUndefined();
 }
 
+/**
+ * `run`, a `nextly migrate:down`, as its own process runs it: with none of the booted instance's
+ * services and no tag expiry ledger of its own published, all put back afterwards whatever `run`
+ * did.
+ *
+ * The command opens its own connection and lends its own services on it (`withCommandServicesLent`),
+ * but a name the process registered already, and a ledger already published, stay the process's.
+ * Here those are the booted instance's, on a second connection: on SQLite a grants write inside the
+ * DOWN's transaction reached them and waited behind the transaction's own write lock. A real
+ * `migrate:down` is a process of its own with nothing registered, and a development start's migrate
+ * runs on the instance's one adapter, so neither has a second connection to wait on.
+ */
+async function asItsOwnProcess<T>(run: () => Promise<T>): Promise<T> {
+  const booted = container.detach();
+  const ledgerWasPublished = tagExpiryLedgerPublished();
+  if (ledgerWasPublished) withdrawTagExpiryLedger();
+  try {
+    return await run();
+  } finally {
+    container.restore(booted);
+    if (ledgerWasPublished) {
+      installTagExpiryLedger(instance!.adapter as unknown as DrizzleAdapter);
+    }
+  }
+}
+
 /** `nextly migrate:down --step <step>`, consenting to what it deletes, which must succeed. */
 async function migratedDown(config: unknown, step = 1): Promise<void> {
   loaded.config = config;
   tick();
   const { context, said } = command();
   setNonInteractive(true);
-  const code = await exiting(() =>
-    runMigrateDown({ cwd: dir, step, acceptDataLoss: true }, context)
+  const code = await asItsOwnProcess(() =>
+    exiting(() =>
+      runMigrateDown({ cwd: dir, step, acceptDataLoss: true }, context)
+    )
   ).finally(() => setNonInteractive(false));
   expect(code, said.join("\n")).toBeUndefined();
 }
@@ -1606,9 +1640,9 @@ describe.each(getConfiguredTestDialects())(
           setNonInteractive(true);
           // The command itself throws; its action turns that into an exit.
           await expect(
-            runMigrateDown({ cwd: dir, acceptDataLoss: true }, context).finally(
-              () => setNonInteractive(false)
-            )
+            asItsOwnProcess(() =>
+              runMigrateDown({ cwd: dir, acceptDataLoss: true }, context)
+            ).finally(() => setNonInteractive(false))
           ).rejects.toThrow(/registry row refused/);
         } finally {
           write.mockRestore();

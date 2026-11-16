@@ -79,6 +79,8 @@ import {
   type VariableUseItem,
 } from "./library-contract";
 import {
+  firstReadableWithin,
+  REMOVAL_COUNT_MS,
   refuseStoredUses,
   storedUsesOf,
   type StillUsed,
@@ -123,6 +125,11 @@ import {
   tokenUsageOf,
   type BlockTypeDefaults,
 } from "./token-usage";
+import {
+  type UncoveredPage,
+  type UncoveredPages,
+  variablesOnUncoveredPages,
+} from "./uncovered-pages";
 import { indexIsWhole, indexStillCounting } from "./usage-index-health";
 
 /** A variable's identity, as the engine bounds one it can write. */
@@ -151,6 +158,11 @@ export interface VariableUseSources {
   readonly usage: SharedStyleUsageSource;
   readonly blocks: RegisteredBlocks;
   readonly stillUsed: StillUsedVariables;
+  /**
+   * The pages the usage index does not cover, read where it cannot become
+   * whole; without them, such an index refuses every removal.
+   */
+  readonly uncovered?: UncoveredPages;
 }
 
 /**
@@ -206,6 +218,92 @@ function blockDefaultReasons(
 }
 
 /**
+ * What the pages the index does not cover say against removing `removable`,
+ * read from their stored text within the removal's time box
+ * (`REMOVAL_COUNT_MS`): each variable used on one, by name, with the page
+ * named where the caller may open it, or the first page not read in time or
+ * not readable at all, or that the pages could not all be listed in time.
+ * Nothing on a clear answer.
+ */
+export async function uncoveredReasons(
+  removable: readonly NamedVariable[],
+  pages: UncoveredPages,
+  namer: Pick<StillUsedVariables, "firstReadable">,
+  now: () => number = () => Date.now()
+): Promise<UsageReason[]> {
+  const outcome = await variablesOnUncoveredPages({
+    identities: removable.map(variable => variable.id),
+    pages,
+    deadline: now() + REMOVAL_COUNT_MS,
+    now,
+  });
+  if (outcome.kind === "clear") return [];
+  // The refusal is decided; naming its pages is held to a box of its own, the
+  // removal's length, shared by every page it names, so a stalled lookup of
+  // a title cannot hold the refusal past it. Not the read's box: a page left
+  // unread because that box ran out would otherwise never be named.
+  const namingEnds = now() + REMOVAL_COUNT_MS;
+  const named = (pagesOf: readonly UncoveredPage[]) =>
+    pagesNamed(pagesOf, namer, namingEnds - now());
+  const them = removable.length === 1 ? "the variable" : "the variables";
+  if (outcome.kind === "unlisted") {
+    // Not every uncovered page is known yet, so none can be named: the
+    // refusal says the list itself did not finish within the box.
+    return [
+      {
+        message: `The pages to check for ${them} could not all be listed in time, so nothing can be removed until they are. Try again shortly.`,
+        used: false,
+      },
+    ];
+  }
+  if (outcome.kind === "unread") {
+    const page = await named([outcome.page]);
+    return [
+      {
+        message: `${page} could not be read to check whether it uses ${them}, so nothing can be removed until it is. Try again shortly.`,
+        used: false,
+      },
+    ];
+  }
+  const reasons: UsageReason[] = [];
+  for (const { id, name } of removable) {
+    const pagesUsing = outcome.uses.get(id);
+    if (pagesUsing === undefined) continue;
+    reasons.push({
+      id,
+      message: `${name} is used on ${await named(pagesUsing)}.`,
+      used: true,
+    });
+  }
+  return reasons;
+}
+
+/**
+ * Pages named as a refusal names them: the first the caller may open by its
+ * title, then how many more; counted alone where none can be named, or none
+ * was named within `ms`.
+ */
+async function pagesNamed(
+  pages: readonly UncoveredPage[],
+  namer: Pick<StillUsedVariables, "firstReadable">,
+  ms: number
+): Promise<string> {
+  const named = await firstReadableWithin(
+    namer,
+    pages.map(page => ({
+      kind: page.scope,
+      slug: page.entity,
+      id: page.entityKey,
+    })),
+    ms
+  );
+  const first = named.answered ? named.title : undefined;
+  const count = pages.length;
+  if (first === undefined) return count === 1 ? "1 page" : `${count} pages`;
+  return count === 1 ? first : `${first} and ${count - 1} more`;
+}
+
+/**
  * Refuse removing variables any of which is still used: the one in-use check
  * for every path that removes one.
  *
@@ -225,8 +323,16 @@ export async function refuseVariablesInUse(
 ): Promise<void> {
   if (removable.length === 0) return;
   const ids = removable.map(variable => variable.id);
+  const uncovered = sources.uncovered;
   const reasons = [
-    ...(await usageRefusals(removable, sources.usage, "variable")),
+    ...(await usageRefusals(
+      removable,
+      sources.usage,
+      "variable",
+      uncovered === undefined
+        ? undefined
+        : asked => uncoveredReasons(asked, uncovered, sources.stillUsed)
+    )),
     ...sharedStyleReasons(removable, classes),
     ...blockDefaultReasons(removable, sources.blocks()),
   ];
@@ -639,6 +745,7 @@ export interface VariableRouteSetup {
  */
 export function variableRoutes(setup: VariableRouteSetup): {
   method: "GET" | "POST";
+  checksAccess?: true;
   path: string;
   requiredPermission?: ReturnType<typeof siteStylePermission>;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -657,6 +764,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
     {
       method: "GET",
       path: VARIABLE_USAGE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         await admitVariableReader(ctx);
         return respondDoc(
@@ -673,6 +781,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
     {
       method: "GET",
       path: VARIABLE_WHERE_USED_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         await admitVariableReader(ctx);
         return readVariableUses(
@@ -721,6 +830,8 @@ export interface VariableCheckSetup {
     uses: readonly StoredUse[]
   ) => Promise<string | undefined>;
   readonly pathOf: (id: string) => string;
+  /** The pages the index does not cover (`uncovered-pages`). */
+  readonly uncovered?: UncoveredPages;
 }
 
 /**
@@ -749,7 +860,14 @@ export function variableRemovalChecks(
       refuseVariablesInUse(
         removable,
         classes,
-        { usage: args.usage, blocks: args.blocks, stillUsed },
+        {
+          usage: args.usage,
+          blocks: args.blocks,
+          stillUsed,
+          ...(args.uncovered === undefined
+            ? {}
+            : { uncovered: args.uncovered }),
+        },
         args.pathOf
       ),
   };

@@ -24,3 +24,39 @@ export const PAGER_CONTROLS =
 
 /** One page button's size: the pager's tallest control, which sets its height. */
 export const PAGER_BUTTON_SIZE = "h-10 w-10";
+
+/** The line saying which rows are shown, under the controls where the two stack. */
+export const PAGER_SUMMARY = "whitespace-nowrap order-2 @2xl/content:order-1";
+
+/** The page-size selector: its words, then its box. */
+export const PAGER_SIZE = "flex items-center space-x-2";
+
+/** The page-size selector's words, which a narrow content column hides. */
+export const PAGER_SIZE_LABEL =
+  "whitespace-nowrap hidden @md/content:inline-block";
+
+/** What the page-size selector's words say. */
+export const PAGER_SIZE_WORDS = "Rows per page";
+
+/** The page-size selector's box. */
+export const PAGER_SIZE_BOX = "h-9 w-[70px]";
+
+/** The page buttons: first, previous, the page numbers, next and last. */
+export const PAGER_NAV = "flex items-center gap-1";
+
+/** The page count at the controls' end, which a narrow content column hides. */
+export const PAGER_COUNT = "whitespace-nowrap hidden @md/content:block";
+
+/**
+ * "Page 3 of 12", or "Page 3" alone when the total is capped and the number
+ * of pages is not known.
+ */
+export function pageCountText(
+  currentPage: number,
+  totalPages: number,
+  totalCapped: boolean
+): string {
+  return totalCapped
+    ? `Page ${currentPage + 1}`
+    : `Page ${currentPage + 1} of ${totalPages}`;
+}

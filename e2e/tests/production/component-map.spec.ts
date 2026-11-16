@@ -24,6 +24,7 @@ import {
 } from "../../production-server.mjs";
 import { stop } from "../../support/playground-dev-server";
 import { resetToDefault } from "../support/dashboard-layout";
+import { signInWithTheForm } from "../support/production-sign-in";
 
 /**
  * A production build whose committed component map lacks a dashboard widget's
@@ -173,14 +174,7 @@ interface Layout {
 
 /** Signs in through the real form, as dev auto-login is blocked in production. */
 async function signIn(page: Page): Promise<void> {
-  await page.goto(`${FIXTURE_URL}/admin`);
-  await page.getByRole("textbox", { name: /email/i }).fill(DEV_USER.email);
-  // By role, because a label match also finds the "Show password" toggle.
-  await page
-    .getByRole("textbox", { name: /password/i })
-    .fill(DEV_USER.password);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+  await signInWithTheForm(page, FIXTURE_URL, DEV_USER);
 }
 
 /** Puts the fixture's card first on the reader's dashboard, beside the cards already there. */

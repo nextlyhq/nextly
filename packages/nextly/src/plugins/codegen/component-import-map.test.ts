@@ -129,6 +129,58 @@ describe("buildComponentImportMap", () => {
     // as a full one does.
     expect(code).toContain("registerComponentMap(registered);");
   });
+
+  // An app without the admin has nothing to register into, and a static import of a package it
+  // never installed stops its type check (TS2307). The map still lists and checks every path, so
+  // the same file, regenerated once the admin is installed, registers them.
+  it("leaves the admin out of a map for an app that has not installed it", () => {
+    for (const plugins of [
+      [],
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+    ]) {
+      const code = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        false
+      );
+      expect(code).not.toContain('"@nextlyhq/admin"');
+      expect(code).not.toContain("registerComponentMap");
+      // And says why, and what registers it, where a developer reads the file.
+      expect(code).toContain("run `nextly generate:types` again");
+      expect(code).toContain("export const componentMapAgreesWithList");
+      expect(code).toContain("export const registeredComponentPaths = listed;");
+    }
+    const listed = buildComponentImportMap(
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    );
+    expect(listed).toContain('"@acme/x/admin#A": _p0.A,');
+    // Installed, the same map imports and registers, empty or not.
+    for (const plugins of [
+      [],
+      [plugin({ pages: [{ path: "a", component: "@acme/x/admin#A" }] })],
+    ]) {
+      const code = buildComponentImportMap(
+        plugins,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      expect(code).toContain(
+        'import { registerComponentMap } from "@nextlyhq/admin";'
+      );
+      expect(code).toContain("registerComponentMap(registered);");
+    }
+  });
 });
 
 describe("the map's check against the site's config", () => {
@@ -1547,5 +1599,57 @@ describe("parity with the contributions a reader is sent", () => {
     expect(
       componentImportMapEntries([p]).every(each => each.use === "contribution")
     ).toBe(true);
+  });
+});
+
+describe("a component path naming the admin's root entry", () => {
+  // A site or plugin may name `@nextlyhq/admin#<Name>`. The root now exports
+  // only what an application mounts; a name it no longer exports lives in
+  // `@nextlyhq/admin/kit`, and a namespace import of the root would read it
+  // as undefined.
+  const site = {
+    widgets: [
+      {
+        id: "site/media",
+        view: { component: "@nextlyhq/admin#MediaLibrary" },
+      },
+      {
+        id: "site/stats",
+        view: { component: "@nextlyhq/admin#useDashboardStats" },
+      },
+    ],
+  };
+  const pagePlugin = plugin({
+    pages: [{ path: "frame", component: "@nextlyhq/admin#RootLayout" }],
+  });
+
+  it("imports a name the root no longer exports from the kit entry", () => {
+    const map = buildComponentImportMap([pagePlugin], undefined, site);
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin\/kit";[\s\S]*"@nextlyhq\/admin#MediaLibrary": \1\.MediaLibrary,/
+    );
+  });
+
+  it("keeps a name the root exports on the root, and the registry key as declared", () => {
+    const map = buildComponentImportMap([pagePlugin], undefined, site);
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin";[\s\S]*"@nextlyhq\/admin#RootLayout": \1\.RootLayout,/
+    );
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin";[\s\S]*"@nextlyhq\/admin#useDashboardStats": \1\.useDashboardStats,/
+    );
+    // The registration call itself still comes from the root.
+    expect(map).toContain(
+      'import { registerComponentMap } from "@nextlyhq/admin";'
+    );
+  });
+
+  it("CONTROL: leaves every other package's path as written", () => {
+    const map = buildComponentImportMap(
+      [plugin({ pages: [{ path: "p", component: "@acme/x/admin#Kit" }] })],
+      undefined
+    );
+    expect(map).toContain('import * as _p0 from "@acme/x/admin";');
+    expect(map).not.toContain("@nextlyhq/admin/kit");
   });
 });

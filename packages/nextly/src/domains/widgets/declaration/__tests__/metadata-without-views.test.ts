@@ -19,6 +19,10 @@ vi.mock("@nextlyhq/admin", () => {
   imported.push("@nextlyhq/admin");
   throw new Error("the admin was imported");
 });
+vi.mock("@nextlyhq/admin/kit", () => {
+  imported.push("@nextlyhq/admin/kit");
+  throw new Error("the admin's kit was imported");
+});
 
 import { resetWidgetRegistries } from "../../../../di/registrations/register-widgets";
 import { NextlyError } from "../../../../errors/nextly-error";

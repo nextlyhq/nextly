@@ -208,6 +208,16 @@ function heldOf(
   };
 }
 
+/**
+ * What a stored redirect holds in the address record: the address its From
+ * address is held at, as its save claimed it, or nothing where that address
+ * no longer reads as one.
+ */
+export function heldByRedirect(redirect: StoredRedirect): HeldAddress[] {
+  const parsed = parseSource(redirect.source);
+  return parsed.ok ? [heldOf(redirect.locale, parsed.address)] : [];
+}
+
 type Refusal = Extract<RedirectOutcome, { refused: string }>;
 
 /**

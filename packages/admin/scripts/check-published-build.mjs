@@ -471,9 +471,9 @@ export async function checkPublishedBuild(packageDir) {
  * `pnpm pack` applies the manifest's `files`, as `pnpm publish` does, so a
  * file the export map names and `files` leaves out is missing here too.
  */
-export function packInto(directory) {
+export function packInto(directory, packageRoot = PACKAGE_ROOT) {
   execFileSync("pnpm", ["pack", "--pack-destination", directory], {
-    cwd: PACKAGE_ROOT,
+    cwd: packageRoot,
     stdio: ["ignore", "ignore", "inherit"],
   });
   const tarball = readdirSync(directory).find(name => name.endsWith(".tgz"));

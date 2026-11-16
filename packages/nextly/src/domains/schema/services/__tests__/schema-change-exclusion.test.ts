@@ -28,6 +28,18 @@ const companionCalls: Record<string, unknown>[] = [];
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
 
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock("../../busy-table/run-unit", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../busy-table/run-unit")>()),
+  runUnitInTries: (
+    await import("../../busy-table/__tests__/helpers/run-unit-once")
+  ).runUnitOnce,
+}));
+
 // A registry write's transaction, and the schema version stored in it, are
 // the integration suite's subject (`schema-version-writers.integration.test.ts`):
 // here a registry write runs on the adapter itself, as it did before it had one.
@@ -38,7 +50,10 @@ vi.mock("../../schema-version", async importOriginal => ({
   writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
 }));
 
-vi.mock("../../../../api/fields-payload", () => ({
+// The plugin judge is made to refuse on demand; every other rule of the payload is the real one,
+// the top-level name rule the Single service asks before its exclusion among them.
+vi.mock("../../../../api/fields-payload", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../../api/fields-payload")>()),
   assertValidPluginFieldOptions: vi.fn(() => {
     if (pluginOptionRefusal.error !== undefined)
       throw pluginOptionRefusal.error;

@@ -10,12 +10,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const find = vi.fn<() => Promise<string[]>>();
 const clear = vi.fn<() => Promise<number>>();
+/** The options each clean-up was built with. */
+const built: unknown[] = [];
+/** What the install's config says, as the loader hands it back. */
+let loadedConfig: Record<string, unknown> = {};
 
 vi.mock("../../../domains/users/services/plaintext-password-cleanup", () => ({
   PlainTextPasswordCleanup: class {
     find = find;
     clear = clear;
+    constructor(_adapter: unknown, _logger: unknown, options: unknown) {
+      built.push(options);
+    }
   },
+}));
+
+vi.mock("../../utils/config-loader", () => ({
+  loadConfig: vi.fn(async () => ({ config: loadedConfig })),
 }));
 
 vi.mock("../../utils/adapter", () => ({
@@ -43,10 +54,13 @@ const context = {
     keyValue: (k: string, v: string) => printed.push(`${k}=${v}`),
     getOptions: () => ({ noColor: true }),
   },
+  options: {},
 } as unknown as Parameters<typeof runClearPlaintextPasswords>[1];
 
 beforeEach(() => {
   printed.length = 0;
+  built.length = 0;
+  loadedConfig = {};
   find.mockReset().mockResolvedValue(["user-a", "user-b"]);
   clear.mockReset().mockResolvedValue(2);
 });
@@ -142,5 +156,12 @@ describe("users:clear-plaintext-passwords", () => {
     expect(plainTextPasswordNotice(3)).toContain(
       "a passwordHasher to getNextly"
     );
+  });
+
+  it("recognises the configured hasher's values, as the app's sign-in does", async () => {
+    const hasher = { name: "own", reach: "unbounded" };
+    loadedConfig = { auth: { passwordHasher: hasher } };
+    await runClearPlaintextPasswords(false, context);
+    expect(built).toEqual([{ hasher }]);
   });
 });

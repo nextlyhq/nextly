@@ -160,9 +160,13 @@ export async function defaultRedirectTo(
         loadSingle: (slug, singleLocale) =>
           readOrReport(() => loadSingleForPreview(slug, singleLocale)),
         loadDeclaration: singlePreviewDeclarationFor,
+        // From the row, never a kept copy: an address saved through another
+        // instance a moment ago is where this link sends its holder.
         loadSiteUrl: async () =>
           resolvePreviewSiteUrl(
-            await (await settingsService()).getSettings().then(s => s.siteUrl)
+            await (await settingsService())
+              .getSettings({ fresh: true })
+              .then(s => s.siteUrl)
           ),
       },
       context?.requestOrigin
@@ -215,9 +219,13 @@ export async function defaultRedirectTo(
         return readFromEnvelope(read);
       },
       loadDeclaration: previewDeclarationFor,
+      // From the row, never a kept copy: an address saved through another
+      // instance a moment ago is where this link sends its holder.
       loadSiteUrl: async () =>
         resolvePreviewSiteUrl(
-          await (await settingsService()).getSettings().then(s => s.siteUrl)
+          await (await settingsService())
+            .getSettings({ fresh: true })
+            .then(s => s.siteUrl)
         ),
     },
     context?.requestOrigin

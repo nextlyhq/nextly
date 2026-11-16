@@ -15,6 +15,9 @@
  *   later read can ask "has it changed?" instead of being sent it again;
  * - **`branding`**: the site's public branding (logo, name, favicon), which
  *   the sign-in page already shows to anyone;
+ * - **`layout`**: how the admin's own parts were last drawn for this person,
+ *   as numbers alone (how many rows a list drew), so an outline drawn before
+ *   the server answers stands as tall as the part that replaces it;
  * - interface preferences (a folded panel, pinned items), under their own keys;
  * - the record that someone signed in here, which picks the first screen.
  *
@@ -45,7 +48,7 @@
  *
  * @module lib/device-memory/device-memory
  */
-import { z } from "zod";
+import * as z from "zod/mini";
 
 import { adminVersion } from "@admin/lib/admin-version";
 
@@ -119,29 +122,29 @@ export function buildLabel(): string {
 // ---------------------------------------------------------------------------
 
 /** A short text kept in an entry: a name, a slug, an icon's name. */
-const name = z.string().min(1).max(200);
+const name = z.string().check(z.minLength(1), z.maxLength(200));
 /** A link within the admin: an absolute path on this origin, or none. */
-const adminLink = z
-  .string()
-  .max(500)
-  .refine(
+const adminLink = z.string().check(
+  z.maxLength(500),
+  z.refine(
     href => href === "#" || (href.startsWith("/") && !href.startsWith("//"))
-  );
+  )
+);
 
 const railEntrySchema = z.object({
   id: name,
   label: name,
   href: adminLink,
   /** The icon's name, for an entry the admin does not draw an icon for itself. */
-  icon: name.optional(),
+  icon: z.optional(name),
 });
 
 const contentItemSchema = z.object({
   slug: name,
   label: name,
-  icon: name.optional(),
+  icon: z.optional(name),
   /** The `sidebarGroup` a collection is listed under, and its shown name. */
-  group: z.object({ slug: name, label: name }).optional(),
+  group: z.optional(z.object({ slug: name, label: name })),
 });
 
 /**
@@ -150,11 +153,11 @@ const contentItemSchema = z.object({
  * is ever kept.
  */
 const rememberedMenuSchema = z.object({
-  rail: z.array(railEntrySchema).max(64),
+  rail: z.array(railEntrySchema).check(z.maxLength(64)),
   /** Which headings the Content panel shows, so they are drawn from memory. */
   parts: z.object({ collections: z.boolean(), singles: z.boolean() }),
-  collections: z.array(contentItemSchema).max(1000),
-  singles: z.array(contentItemSchema).max(1000),
+  collections: z.array(contentItemSchema).check(z.maxLength(1000)),
+  singles: z.array(contentItemSchema).check(z.maxLength(1000)),
 });
 
 export type RememberedMenu = z.infer<typeof rememberedMenuSchema>;
@@ -163,13 +166,16 @@ export type RememberedContentItem = z.infer<typeof contentItemSchema>;
 
 /** A schema as the server answered it, with the tag it carried. */
 const rememberedSchemaSchema = z.object({
-  etag: z.string().min(1).max(200),
+  etag: z.string().check(z.minLength(1), z.maxLength(200)),
   body: z.record(z.string(), z.unknown()),
 });
 
 export type RememberedSchema = z.infer<typeof rememberedSchemaSchema>;
 
-const setText = z.string().trim().min(1).max(2048).optional().catch(undefined);
+const setText = z.catch(
+  z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2048))),
+  undefined
+);
 
 /** The site's public branding: what the sign-in page shows anyone. */
 const rememberedBrandingSchema = z.object({
@@ -181,6 +187,26 @@ const rememberedBrandingSchema = z.object({
 });
 
 export type RememberedBranding = z.infer<typeof rememberedBrandingSchema>;
+
+/** The name of one part of the admin whose drawn size is kept. */
+const layoutPart = z.string().check(z.minLength(1), z.maxLength(200));
+
+/**
+ * The most parts the `layout` entry keeps. A write past it lets the parts
+ * written longest ago go first (`rememberLayout`), so it never fails.
+ */
+const MAX_LAYOUT_PARTS = 500;
+
+/**
+ * How the admin's parts were last drawn: a whole number per part, and
+ * nothing else. A part is named by where it is drawn (`list-rows:posts`),
+ * never by what it shows, and holds a size, never a value read from it.
+ */
+const rememberedLayoutSchema = z
+  .record(layoutPart, z.int().check(z.gte(0), z.lte(100_000)))
+  .check(z.refine(parts => Object.keys(parts).length <= MAX_LAYOUT_PARTS));
+
+type RememberedLayout = z.infer<typeof rememberedLayoutSchema>;
 
 /**
  * The schema reads whose answers may be kept: one collection's, one Single's
@@ -199,11 +225,20 @@ export function isRememberedSchemaPath(path: string): boolean {
   return SCHEMA_READS.some(pattern => pattern.test(path));
 }
 
-/** How each kind is checked on the way in, and whether it carries labels. */
+/**
+ * How each kind is checked on the way in, and which labels it carries: all of
+ * them (`true`), so it is read again only for this person under the same
+ * schema and access; the person alone (`"person"`); or none (`false`).
+ */
 const KINDS = {
   menu: { schema: rememberedMenuSchema, labelled: true },
   schema: { schema: rememberedSchemaSchema, labelled: true },
   branding: { schema: rememberedBrandingSchema, labelled: false },
+  // This person's alone: how tall a part was drawn is a size, not something
+  // they may read, and it stays as good a guess when the schema or anyone's
+  // access changes, which moves the versions for every person at once (a
+  // role, a grant or an account added anywhere in the install).
+  layout: { schema: rememberedLayoutSchema, labelled: "person" },
 } as const;
 
 type MemoryKind = keyof typeof KINDS;
@@ -223,9 +258,9 @@ function entryKey(kind: MemoryKind, id: string): string {
 const storedEntrySchema = z.object({
   labels: z.object({
     build: z.string(),
-    user: z.string().optional(),
-    schemaVersion: z.string().optional(),
-    permissionVersion: z.string().optional(),
+    user: z.optional(z.string()),
+    schemaVersion: z.optional(z.string()),
+    permissionVersion: z.optional(z.string()),
   }),
   data: z.unknown(),
 });
@@ -399,14 +434,16 @@ function keysOf(
 /** Whether an entry's labels say it is still true now. */
 function labelsMatch(kind: MemoryKind, labels: StoredEntry["labels"]): boolean {
   if (labels.build !== buildLabel()) return false;
-  if (!KINDS[kind].labelled) return true;
+  const scope: boolean | "person" = KINDS[kind].labelled;
+  if (scope === false) return true;
   // Before the server answers only the build can be compared.
   const now = state.labels;
   if (now === null) return true;
+  if (labels.user !== now.user) return false;
   return (
-    labels.user === now.user &&
-    labels.schemaVersion === now.schemaVersion &&
-    labels.permissionVersion === now.permissionVersion
+    scope === "person" ||
+    (labels.schemaVersion === now.schemaVersion &&
+      labels.permissionVersion === now.permissionVersion)
   );
 }
 
@@ -501,6 +538,56 @@ export function rememberSchema(
   session: number = state.session
 ): boolean {
   return remember("schema", path, { etag, body }, session);
+}
+
+/** How `part` was last drawn, or undefined where it is not remembered. */
+export function recallLayout(part: string): number | undefined {
+  const kept = recall("layout", "") as RememberedLayout | undefined;
+  return kept !== undefined && Object.hasOwn(kept, part)
+    ? kept[part]
+    : undefined;
+}
+
+/**
+ * Keep how `part` was drawn now, beside every other part kept. Refused, as
+ * every kind is, where the site turned remembering off; and for a size that
+ * is not a whole number from 0, which is no size.
+ */
+export function rememberLayout(part: string, size: number): boolean {
+  if (!layoutPart.safeParse(part).success) return false;
+  const kept = (recall("layout", "") as RememberedLayout | undefined) ?? {};
+  if (kept[part] === size) return true;
+  // Kept in the order written, the newest last, so past the cap the parts
+  // written longest ago give way rather than the new one being refused.
+  const others = Object.entries(kept).filter(([name]) => name !== part);
+  const next: RememberedLayout = Object.fromEntries(
+    others.slice(Math.max(0, others.length - (MAX_LAYOUT_PARTS - 1)))
+  );
+  next[part] = size;
+  return remember("layout", "", next);
+}
+
+/** Every part kept under a name starting with `prefix`, in the order written. */
+export function recallLayoutParts(prefix: string): Record<string, number> {
+  const kept = (recall("layout", "") as RememberedLayout | undefined) ?? {};
+  const parts: Record<string, number> = {};
+  for (const [name, size] of Object.entries(kept)) {
+    if (name.startsWith(prefix)) parts[name] = size;
+  }
+  return parts;
+}
+
+/** Forget the parts `forgotten` says, keeping every other. */
+export function forgetLayoutParts(forgotten: (part: string) => boolean): void {
+  const kept = recall("layout", "") as RememberedLayout | undefined;
+  if (kept === undefined) return;
+  const next: RememberedLayout = {};
+  for (const [name, size] of Object.entries(kept)) {
+    if (!forgotten(name)) next[name] = size;
+  }
+  if (Object.keys(next).length !== Object.keys(kept).length) {
+    remember("layout", "", next);
+  }
 }
 
 /** The remembered public branding; empty when none is kept. */

@@ -246,6 +246,28 @@ export interface PluginRoute {
   /** Opt out of auth — the route is publicly callable. */
   public?: boolean;
   /**
+   * Declares that the route acts only on its caller's own record, or only
+   * reads: being signed in is all it asks. A route a staff session or an API
+   * key can reach declares exactly one of `requiredPermission`, `public`,
+   * `principal`, `checksAccess: true` or `siteWide: false`. One that declares
+   * none could act on the
+   * whole site for anyone signed in, a role-less account or a key with no
+   * grants included, so it is refused for every caller and named at startup
+   * until it declares one. Only `false` is accepted, and it cannot be combined
+   * with the others.
+   */
+  siteWide?: false;
+  /**
+   * Declares that the route acts on the site (or reads what not every signed-in
+   * caller may see), and its HANDLER decides, on every request, what this
+   * caller may do: through `ctx.caller.can(...)`, or by calling services as
+   * the user so the access gate judges each act. For a route whose check
+   * depends on the request, such as the collection it names, which a fixed
+   * `requiredPermission` cannot express. Signing in is still required. Only
+   * `true` is accepted, and it cannot be combined with the others.
+   */
+  checksAccess?: true;
+  /**
    * @experimental Serve a plugin's kind of signed-in person instead of staff.
    *
    * The route reads neither the staff session nor an API key: its handler

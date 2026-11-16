@@ -253,6 +253,36 @@ export const VALIDATION_FIXTURES: ValidationFixture[] = [
     expected: [{ path: "/nodes/0/cssId", code: "invalid-css-id" }],
   },
   {
+    name: "a nosnippet mark that is not on or off is rejected",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          nosnippet: "yes",
+        },
+      ],
+    }),
+    expected: [{ path: "/nodes/0/nosnippet", code: "invalid-nosnippet" }],
+  },
+  {
+    name: "a nosnippet mark is accepted",
+    mode: "strict",
+    doc: invalid({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", version: 1, props: {}, nosnippet: true },
+      ],
+    }),
+    expected: [],
+  },
+  {
     name: "an event-handler attribute is rejected as inline JS",
     mode: "strict",
     doc: {

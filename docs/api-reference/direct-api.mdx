@@ -257,9 +257,9 @@ since one version can't speak for every document the clause could match, so it n
 
 <Callout type="warn">`rewriteField` is `@experimental`.</Callout>
 
-Change one field of an entry on its live copy and on every pending draft that holds it, in one
-transaction, without publishing. Each draft stays a draft, the entry's status doesn't change, and
-the rewrite applies only if the entry is still at the version you read.
+Change one field of an entry or a Single on its live copy and on every pending draft that holds it,
+in one transaction, without publishing. Each draft stays a draft, the status doesn't change, and
+the rewrite applies only if the document is still at the version you read.
 
 ```typescript
 const page = await nextly.findByID({ collection: "pages", id });
@@ -273,12 +273,23 @@ const { item } = await nextly.rewriteField({
 });
 item.version; // the version the entry is at now
 item.copies; // [{ form: "live", locale: null }, { form: "draft", locale: null }]
+
+// A Single, named by its slug, from the `_rev` its read returned:
+const settings = await nextly.findSingle({ slug: "site-settings" });
+await nextly.rewriteField({
+  single: "site-settings",
+  field: "layout",
+  expectedVersion: settings._rev,
+  set: { value: null },
+  reason: "The layout was deleted",
+});
 ```
 
 | Argument          | Type                                     | Default  | Description                                                                                         |
 | ----------------- | ---------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `collection`      | `string`                                 | required | Collection slug.                                                                                    |
-| `id`              | `string`                                 | required | Document ID.                                                                                        |
+| `collection`      | `string`                                 | required | Collection slug. Not with `single`.                                                                 |
+| `id`              | `string`                                 | required | Document ID, with `collection`.                                                                     |
+| `single`          | `string`                                 | required | A Single's slug, in place of `collection` and `id`.                                                 |
 | `field`           | `string`                                 | required | A top-level field.                                                                                  |
 | `locale`          | `string`                                 | default  | For a translated field, the language rewritten. A shared field takes none.                          |
 | `expectedVersion` | `string`                                 | required | The `_rev` you read. A later save refuses the rewrite with `STALE_VERSION`, changing nothing.       |
@@ -288,7 +299,7 @@ item.copies; // [{ form: "live", locale: null }, { form: "draft", locale: null }
 | `user`            | `{ id, role? }`                          | —        | Whose access is judged when `overrideAccess: false`.                                                |
 
 **Returns:** `MutationResult<{ version, copies }>`. Runs no save hooks; the live change records the
-`entry.updated` event and revalidates the entry's pages. See
+`entry.updated` event (`single.updated` for a Single) and revalidates the document's pages. See
 [Rewriting one field](/docs/plugins/services#rewriting-one-field-on-the-live-copy-and-its-drafts)
 for what it refuses and how history records it.
 

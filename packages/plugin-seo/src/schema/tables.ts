@@ -28,7 +28,7 @@ export const SCHEMA_PREFIX = "seo";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** The columns of {@link notFoundLog}, as `defineTable` checks and publishes them. */
 type NotFoundLogColumns = {
@@ -181,9 +181,58 @@ export const addressNotes: TableDefinition<"notes", AddressNotesColumns> =
     }
   );
 
+/** The columns of {@link contentDates}, as `defineTable` checks and publishes them. */
+type ContentDatesColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly pageKey: ColumnBuilder<string, false, false>;
+  readonly holderCollection: ColumnBuilder<string, false, false>;
+  readonly holderId: ColumnBuilder<string, false, false>;
+  readonly locale: ColumnBuilder<string, false, false>;
+  readonly fingerprint: ColumnBuilder<string, false, false>;
+  readonly changedAt: ColumnBuilder<Date, false, false>;
+};
+
+/**
+ * When each page's published content last changed, by language: the date
+ * the sitemap gives the page. One row per page and language, holding the
+ * fingerprint of the page's published content (every field but its `seo`
+ * group and Nextly's bookkeeping) and when that fingerprint last changed,
+ * so a save that changes only the page's SEO, or nothing, leaves the date.
+ *
+ * `pageKey` is the SHA-256 of the page and the language, unique, so two
+ * saves recording one page at once meet on one row. Written only after a
+ * save commits, never while a sitemap is read.
+ */
+export const contentDates: TableDefinition<
+  "content_dates",
+  ContentDatesColumns
+> = defineTable<"content_dates", ContentDatesColumns>(
+  "content_dates",
+  {
+    id: col.id(),
+    pageKey: col.char(64),
+    holderCollection: col.varchar(255),
+    holderId: col.varchar(255),
+    locale: col.varchar(64),
+    fingerprint: col.char(64),
+    changedAt: col.timestamp(),
+  },
+  {
+    indexes: [
+      { columns: ["pageKey"], unique: true },
+      // A listing reads a batch of one type's pages, and a deleted page's
+      // rows go together.
+      { columns: ["holderCollection", "holderId"] },
+    ],
+  }
+);
+
 /** Every table this plugin declares, in the order its migrations create them. */
 export const SEO_TABLES: readonly [
   typeof notFoundLog,
   typeof addressClaims,
   typeof addressNotes,
-] = [notFoundLog, addressClaims, addressNotes];
+  typeof contentDates,
+] = [notFoundLog, addressClaims, addressNotes, contentDates];

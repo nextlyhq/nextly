@@ -17,9 +17,17 @@
 import React from "react";
 
 import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
+import {
   recallPreference,
   rememberPreference,
 } from "@admin/lib/device-memory/device-memory";
+import {
+  collectionFoldKey,
+  collectionFoldsPanel,
+} from "@admin/lib/plugins/folded-panels";
 
 import { useSuppressAdminChrome } from "./ChromeSuppression";
 
@@ -121,13 +129,48 @@ const useDeclarationEffect =
  * so every form opens the way the reader last left the builder.
  */
 export function useFoldedPanel(key: string): void {
+  useFoldedPanelWhere(key);
+}
+
+/**
+ * `useFoldedPanel` for a page that folds only sometimes: `null` declares
+ * nothing and folds nothing. A hook cannot be called conditionally, so a
+ * screen whose fold depends on what it shows names it here.
+ */
+function useFoldedPanelWhere(key: string | null): void {
   const { declare, declared, open } = React.useContext(PanelFoldContext);
-  useDeclarationEffect(() => declare(key), [declare, key]);
-  // Until the declaration lands (`declared` is still null), fold: a page that
-  // asks to start folded must not first paint its panel open.
-  const folded = declared !== key || !open;
+  useDeclarationEffect(() => {
+    if (key === null) return undefined;
+    return declare(key);
+  }, [declare, key]);
+  // Until the declaration lands (`declared` is still another page's or
+  // null), fold: a page that asks to start folded must not first paint its
+  // panel open.
+  const folded = key !== null && (declared !== key || !open);
   useSuppressAdminChrome({
     layers: folded ? ["subSidebar"] : [],
     canExit: true,
   });
+}
+
+/**
+ * Fold the panel on the document screens of the collection `slug`, where its
+ * plugin declares they start folded (`views[slug].foldedPanel`); nothing for
+ * any other collection, or none (`undefined`). Called by the frame's outline
+ * of such a screen and by the screen itself, with one name for the reader's
+ * choice, so the outline is drawn folded exactly where the screen will be.
+ */
+export function useCollectionFoldedPanel(slug: string | undefined): void {
+  const { plugins } = useBranding();
+  // The plugins' list is the admin metadata's signed-in half: until that half
+  // has answered, or when it could not be had, a list from elsewhere proves
+  // nothing, and the prebuilt page answers instead. Once it has answered, its
+  // list is the answer, even an absent one: a site with no plugins left sends
+  // none, which folds nothing, whatever a page built before said.
+  const { isPending, isUnavailable } = useBrandingStatus();
+  const settled = isPending || isUnavailable ? undefined : (plugins ?? []);
+  const folds = slug !== undefined && collectionFoldsPanel(settled, slug);
+  useFoldedPanelWhere(
+    folds && slug !== undefined ? collectionFoldKey(slug) : null
+  );
 }

@@ -5,10 +5,12 @@ import {
   attentionItems,
   changesOf,
   isHidden,
+  faqSectionOf,
   mappingOf,
   missingDetails,
   structuredTypeOf,
   withDetailField,
+  withFaqSection,
   withHidden,
   withStructuredType,
   draftOf,
@@ -75,14 +77,38 @@ describe("the form's values, from the stored settings", () => {
           url: "https://www.linkedin.com/company/rext-ai",
         },
       ],
+      brandDetails: {
+        description: "",
+        email: "",
+        telephone: "",
+        foundingDate: "",
+        contactPoints: [],
+        parentName: "",
+        parentUrl: "",
+        parentDescription: "",
+        parentFoundingDate: "",
+      },
       patterns: { posts: { title: "{Title} | {Site name}" } },
       setupStep: 1,
       setupDismissed: false,
       hiddenTypes: [],
+      typesWithSeoOff: [],
       structuredData: {},
       indexNow: false,
       llmsTxt: false,
+      llmsFullTxt: false,
+      llmsIntro: "",
       plainTextCopies: true,
+      robotsRules: { text: "" },
+      verificationCodes: {
+        google: "",
+        bing: "",
+        pinterest: "",
+        yandex: "",
+        baidu: "",
+        others: [],
+      },
+      largeImagePreviews: true,
     });
   });
 
@@ -99,15 +125,67 @@ describe("the form's values, from the stored settings", () => {
       brandOtherNames: "",
       logo: null,
       socialProfiles: [],
+      brandDetails: {
+        description: "",
+        email: "",
+        telephone: "",
+        foundingDate: "",
+        contactPoints: [],
+        parentName: "",
+        parentUrl: "",
+        parentDescription: "",
+        parentFoundingDate: "",
+      },
       patterns: {},
       setupStep: 0,
       setupDismissed: false,
       hiddenTypes: [],
+      typesWithSeoOff: [],
       structuredData: {},
       indexNow: false,
       llmsTxt: false,
+      llmsFullTxt: false,
+      llmsIntro: "",
       plainTextCopies: false,
+      robotsRules: { text: "" },
+      verificationCodes: {
+        google: "",
+        bing: "",
+        pinterest: "",
+        yandex: "",
+        baidu: "",
+        others: [],
+      },
+      largeImagePreviews: true,
     });
+  });
+});
+
+describe("large image previews, on unless the site turned them off", () => {
+  const empty = { id: "s1", updatedAt: "", _rev: "1" };
+
+  it.each([
+    ["never saved", {}],
+    ["stored empty", { largeImagePreviews: null }],
+    ["stored on", { largeImagePreviews: true }],
+  ])("reads as on when %s, and saves nothing while on", (_, value) => {
+    const settings = { ...empty, ...value };
+    expect(draftOf(settings).largeImagePreviews).toBe(true);
+    expect(changesOf(settings, draftOf(settings))).toBeNull();
+  });
+
+  it("reads as off once turned off, and saves turning it back on", () => {
+    const off = { ...empty, largeImagePreviews: false };
+    expect(draftOf(off).largeImagePreviews).toBe(false);
+    expect(
+      changesOf(off, { ...draftOf(off), largeImagePreviews: true })
+    ).toEqual({ largeImagePreviews: true, _rev: "1" });
+  });
+
+  it("saves turning it off", () => {
+    expect(
+      changesOf(empty, { ...draftOf(empty), largeImagePreviews: false })
+    ).toEqual({ largeImagePreviews: false, _rev: "1" });
   });
 });
 
@@ -364,6 +442,28 @@ describe("a content type's structured data", () => {
     expect(
       structuredTypeOf(withStructuredType(chosen, "posts", undefined), "posts")
     ).toBeUndefined();
+  });
+
+  it("declares the type's questions an FAQ section, saving it alone, and takes it back", () => {
+    const draft = draftOf(stored);
+    expect(faqSectionOf(draft, "posts")).toBe(false);
+
+    const declared = withFaqSection(draft, "posts", true);
+    expect(faqSectionOf(declared, "posts")).toBe(true);
+    // A rule holding only the section is a choice, so it is saved.
+    expect(changesOf(stored, declared)).toEqual({
+      structuredData: { posts: { faqSection: true } },
+      _rev: "4",
+    });
+
+    const both = withStructuredType(declared, "posts", "article");
+    expect(both.structuredData.posts).toEqual({
+      faqSection: true,
+      type: "article",
+    });
+    expect(withFaqSection(both, "posts", false).structuredData.posts).toEqual({
+      type: "article",
+    });
   });
 
   it("names the details no field holds yet, counting a field named like one as holding it", () => {
@@ -647,5 +747,40 @@ describe("a draft moved onto newer settings", () => {
     const rebased = rebasedDraft(draft, before, before);
     expect(rebased.patterns).toEqual({ posts: { title: "{Title}" } });
     expect(rebased.hiddenTypes).toEqual([]);
+  });
+});
+
+describe("rebasedDraft and the verification codes", () => {
+  it("keeps a code another person saved for one service while this draft edits another's", () => {
+    const before = draftOf({
+      id: "s1",
+      verificationCodes: {
+        google: "g-old",
+        others: [{ name: "x-verify", code: "x1" }],
+      },
+    });
+    const draft = {
+      ...before,
+      verificationCodes: { ...before.verificationCodes, google: "g-new" },
+    };
+    const after = draftOf({
+      id: "s1",
+      verificationCodes: {
+        google: "g-old",
+        bing: "b-theirs",
+        others: [
+          { name: "x-verify", code: "x1" },
+          { name: "y-verify", code: "y1" },
+        ],
+      },
+    });
+
+    const rebased = rebasedDraft(draft, before, after);
+    expect(rebased.verificationCodes.google).toBe("g-new");
+    expect(rebased.verificationCodes.bing).toBe("b-theirs");
+    expect(rebased.verificationCodes.others).toEqual([
+      { name: "x-verify", code: "x1" },
+      { name: "y-verify", code: "y1" },
+    ]);
   });
 });

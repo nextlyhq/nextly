@@ -1,6 +1,7 @@
 /**
  * The SEO panel's Advanced section: hiding the page from search, its official
- * address, a different title when shared, and the share image. Closed until
+ * address, a different title when shared, the share image, the structured
+ * data type, and how search results may show the page. Closed until
  * a person opens it; a count beside its name says how many of the page's
  * problems are inside.
  *
@@ -18,27 +19,36 @@ import {
   Textarea,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Check, ChevronRight, Lock, TriangleAlert } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 
-import type { SeoAnswer } from "../resolver/order";
+import type { SeoAnswer, Sourced } from "../resolver/order";
+import {
+  isStructuredDataTypeKey,
+  structuredDataChoiceText,
+} from "../structured-data/catalog";
 import { checkCanonical, storedCanonical } from "../tab/canonical";
 import type { SeoTabContext } from "../tab/contract";
 import { absoluteAddress } from "../tab/display";
 import { thingsToFix } from "../tab/problems";
 
+import { DISPLAY_FIELDS, DisplayRows } from "./display-rows";
 import {
+  AutomaticSource,
   Chip,
   cx,
+  describeSource,
   inSentence,
   Note,
+  type SourcedValue,
   type SourceNames,
   SourceRow,
 } from "./parts";
-import { Row, RowButton } from "./rows";
+import { keyOf, Row, RowButton, useOutsideChange } from "./rows";
 import { ShareImageRow } from "./share-image-row";
 import {
   isTyped,
   typedText,
+  unsharedAnswer,
   type ChosenImage,
   type SeoPanelField,
   type SeoPanelValues,
@@ -195,6 +205,11 @@ function advancedRows(props: AdvancedProps): AdvancedRow[] {
       summary: "structured data",
       Row: StructuredDataRow,
     },
+    has(...DISPLAY_FIELDS) && {
+      key: "display",
+      summary: "how search results show it",
+      Row: DisplayRows,
+    },
   ];
   return rows.filter((row): row is AdvancedRow => row !== false);
 }
@@ -278,7 +293,7 @@ function StructuredDataRow({
       error={errors.structuredDataType}
       label="Structured data type"
       labelId={`${id}-label`}
-      help="Tells Google what kind of page this is, so it can show details like the author and date. Only types Google still shows are offered."
+      help="Tells Google what kind of page this is, so it can show details like the author and date. A type Google no longer shows says so."
       control={
         <Select
           value={chosen === "" ? AUTOMATIC_TYPE : chosen}
@@ -291,7 +306,12 @@ function StructuredDataRow({
             aria-labelledby={`${id}-label`}
             className="h-8 w-auto min-w-[210px] text-xs"
           >
-            <SelectValue />
+            {/* The type's name alone: the list carries its note. */}
+            <SelectValue>
+              {chosen === ""
+                ? `${structured.automatic.label} · automatic`
+                : structured.offered.find(type => type.key === chosen)?.label}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={AUTOMATIC_TYPE}>
@@ -299,7 +319,9 @@ function StructuredDataRow({
             </SelectItem>
             {structured.offered.map(type => (
               <SelectItem key={type.key} value={type.key}>
-                {type.label}
+                {isStructuredDataTypeKey(type.key)
+                  ? structuredDataChoiceText(type.key)
+                  : type.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -336,33 +358,6 @@ function StructuredDataRow({
     </Row>
   );
 }
-
-/**
- * Calls `reset` when the stored values (`stored`, as one key) change by
- * anything but the row's own writes, such as the document being read again
- * or switched to another language, so the row shows what the document holds.
- * Returns the function the row tells the key its own write leaves.
- */
-function useOutsideChange(
-  stored: string,
-  reset: () => void
-): (written: string) => void {
-  const expected = useRef(stored);
-  const latestReset = useRef(reset);
-  latestReset.current = reset;
-  useEffect(() => {
-    if (stored === expected.current) return;
-    expected.current = stored;
-    latestReset.current();
-  }, [stored]);
-  return written => {
-    expected.current = written;
-  };
-}
-
-/** Stored values as one key, an absent value read as none. */
-const keyOf = (...stored: unknown[]): string =>
-  JSON.stringify(stored.map(value => value ?? null));
 
 /** Whether the stored address was confirmed to be on another site. */
 function confirmedElsewhere(values: SeoPanelValues): boolean {
@@ -588,15 +583,87 @@ function AddressCheck({
   );
 }
 
+/**
+ * The source a shared link's text has of its own while none is typed for it,
+ * or `undefined` where a shared link uses the Google one. The one decision the
+ * empty shared fields and the switch's sentence both read.
+ */
+function ownSharedSource(
+  shared: Sourced<string> | undefined,
+  google: Sourced<string> | undefined
+): Sourced<string> | undefined {
+  if (shared === undefined) return undefined;
+  return shared.value === google?.value && shared.from === google.from
+    ? undefined
+    : shared;
+}
+
+/**
+ * The switch's sentence: what shared links use for their title while none is
+ * typed for them, the Google title or the one the route, template or design
+ * sets for them, named as the empty field's source line names it.
+ */
+function sharedTitleHelp(
+  own: Sourced<string> | undefined,
+  names: SourceNames
+): string {
+  const rest =
+    " Turn this on only if you want a different one on LinkedIn, Slack and others.";
+  const source =
+    own === undefined ? undefined : describeSource(own, "socialTitle", names);
+  if (source?.kind === "code") {
+    return `Shared links use the title this page's route sets for them.${rest}`;
+  }
+  if (source?.kind === "template") {
+    const drawer = source.design ? "design" : "template";
+    return `Shared links use the title this page's ${drawer} sets for them.${rest}`;
+  }
+  return `Shared links use the Google title.${rest}`;
+}
+
+/**
+ * Where an empty shared title or description comes from: the Google one,
+ * where a shared link uses the same, and else its own source, named as every
+ * automatic value's is.
+ */
+function SharedSource({
+  shared,
+  google,
+  googleName,
+  value,
+  names,
+}: {
+  shared: Sourced<string> | undefined;
+  google: Sourced<string> | undefined;
+  googleName: string;
+  value: SourcedValue;
+  names: SourceNames;
+}): ReactNode {
+  const own = ownSharedSource(shared, google);
+  if (own === undefined) {
+    return (
+      <>
+        <Chip>Automatic</Chip>
+        <span>same as the {googleName}</span>
+      </>
+    );
+  }
+  return <AutomaticSource sourced={own} value={value} names={names} />;
+}
+
 /** A title for shared links that differs from the Google title. */
 function SharedTitleRow({
   values,
-  answer,
   context,
+  names,
   writable,
   errors,
   onSet,
 }: AdvancedProps): ReactNode {
+  // What a shared link uses while its own text is empty, which the empty
+  // fields show and name: not always the Google title, since the route or the
+  // template may set text for shared links of its own.
+  const unshared = unsharedAnswer(context, values);
   const has = (name: string) =>
     context === undefined || context.fields.includes(name);
   const typedNow = () =>
@@ -621,7 +688,10 @@ function SharedTitleRow({
     <Row
       error={errors.socialTitle ?? errors.socialDescription}
       label={label}
-      help="Shared links use the Google title. Turn this on only if you want a different one on LinkedIn, Slack and others."
+      help={sharedTitleHelp(
+        ownSharedSource(unshared?.socialTitle, unshared?.title),
+        names
+      )}
       control={
         <Switch
           aria-label={label}
@@ -644,7 +714,7 @@ function SharedTitleRow({
               <Input
                 autoFocus
                 aria-label="Title when shared"
-                placeholder={answer?.title?.value ?? ""}
+                placeholder={unshared?.socialTitle?.value ?? ""}
                 value={typed}
                 disabled={!writable}
                 onChange={event => write("socialTitle", event.target.value)}
@@ -653,10 +723,13 @@ function SharedTitleRow({
                 {isTyped(typed) ? (
                   <Chip kind="typed">Typed for this page</Chip>
                 ) : (
-                  <>
-                    <Chip>Automatic</Chip>
-                    <span>same as the Google title</span>
-                  </>
+                  <SharedSource
+                    shared={unshared?.socialTitle}
+                    google={unshared?.title}
+                    googleName="Google title"
+                    value="socialTitle"
+                    names={names}
+                  />
                 )}
               </SourceRow>
             </>
@@ -666,7 +739,7 @@ function SharedTitleRow({
               <Textarea
                 rows={2}
                 aria-label="Description when shared"
-                placeholder={answer?.description?.value ?? ""}
+                placeholder={unshared?.socialDescription?.value ?? ""}
                 value={typedText(values.socialDescription)}
                 disabled={!writable}
                 onChange={event =>
@@ -677,10 +750,13 @@ function SharedTitleRow({
                 {isTyped(values.socialDescription) ? (
                   <Chip kind="typed">Typed for this page</Chip>
                 ) : (
-                  <>
-                    <Chip>Automatic</Chip>
-                    <span>same as the Google description</span>
-                  </>
+                  <SharedSource
+                    shared={unshared?.socialDescription}
+                    google={unshared?.description}
+                    googleName="Google description"
+                    value="description"
+                    names={names}
+                  />
                 )}
               </SourceRow>
             </>

@@ -3773,6 +3773,18 @@
 }
 
 /*
+ * The page's frame, while Escape from a panel control has brought focus back
+ * to it. Drawn as the region's own focus is, inside the edge. Marked by the
+ * editor rather than matched by `:focus-visible`, which never matches a frame
+ * whose page holds focus; the mark goes on a pointer press in the page or
+ * when focus leaves it, so a click into the page shows nothing new.
+ */
+.nx-canvas-frame__page[data-nx-keyboard-focus] {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+/*
  * The layer the editor's chrome is drawn in, over the frame's viewport and
  * clipped to it. Its content box is laid over the canvas root and moved with
  * the frame's scroll, from `canvas-frame.tsx`.
@@ -8772,9 +8784,11 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   margin-top: 1rem;
 }
 
-/* Also the head of Show when, its title and whose fields it reads. */
+/* Also the head of Show when, its title and whose fields it reads, and of
+   Never quote this, its title and its switch. */
 .nx-variants__header,
-.nx-show-when__head {
+.nx-show-when__head,
+.nx-never-quote__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -12036,4 +12050,16 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   border-color: color-mix(in oklch, var(--nx-warning) 45%, transparent);
   color: var(--nx-foreground);
   background: color-mix(in oklch, var(--nx-warning) 10%, var(--nx-background));
+}
+
+/* Never quote this: the attribute the block's root carries, named in the
+   code face, and the line said where Google does not read it. */
+.nx-never-quote__on code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--nx-foreground);
+}
+
+.nx-never-quote__caution {
+  color: var(--nx-warning-text);
 }

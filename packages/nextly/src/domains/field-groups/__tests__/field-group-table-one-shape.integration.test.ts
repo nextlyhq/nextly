@@ -200,10 +200,15 @@ for (const entry of DIALECTS) {
     }
 
     async function builderSave(): Promise<TableDefinition> {
+      // The version the registry holds, as the Builder sends the one it loaded: a create whose
+      // save writes its migration records the row again once applied, so it is not always 1.
+      const { schemaVersion } = await (t as TestNextly)
+        .getService("fieldGroupRegistryService")
+        .getComponent("card");
       await dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "card" },
-        { fields: WITH_EXTRA, confirmed: true, schemaVersion: 1 }
+        { fields: WITH_EXTRA, confirmed: true, schemaVersion }
       );
       return withoutColumn(await builderTable(), "extra");
     }

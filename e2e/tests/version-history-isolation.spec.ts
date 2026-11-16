@@ -153,7 +153,7 @@ test.describe("reading history does not write", () => {
     // component test of either half passes while the two are not connected.
     await expect(
       page
-        .locator("main")
+        .getByRole("banner")
         .getByRole("button", { name: "Restore this version" }),
       "an authorised reader must be offered restore from the title bar"
     ).toBeVisible({ timeout: 15_000 });

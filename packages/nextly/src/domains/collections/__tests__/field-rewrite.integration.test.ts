@@ -11,7 +11,17 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, password, repeater, text } from "../../../config";
+import {
+  recordTransactionEscapes,
+  takeTransactionEscapes,
+} from "../../../__tests__/transaction-escapes";
+import {
+  defineCollection,
+  group,
+  password,
+  repeater,
+  text,
+} from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import {
   definePlugin,
@@ -75,6 +85,13 @@ async function boot(
           text({ name: "title" }),
           text({ name: "layout", maxLength: 12 }),
           repeater({ name: "items", fields: [text({ name: "label" })] }),
+          group({
+            name: "card",
+            fields: [
+              text({ name: "label" }),
+              text({ name: "locked", access: { update: () => false } }),
+            ],
+          }),
         ],
       }),
       defineCollection({
@@ -265,6 +282,40 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
     });
     // The version returned is the one the entry is at now.
     expect(live._rev).toBe(done.item.version);
+  });
+
+  it("reads nothing off its own transaction", async () => {
+    const t = await boot(dialect);
+    const id = await create(t, PAGES, { layout: "wide", status: "published" });
+    await save(t, PAGES, id, { title: "Unfinished" });
+    const version = (await read(t, PAGES, id))._rev as string;
+    // What the boot and the saves above left is theirs, recorded as the
+    // setup file records every test's.
+    recordTransactionEscapes(
+      takeTransactionEscapes(),
+      expect.getState().testPath
+    );
+    // The collection's table built again on its next read, as after a
+    // registry change this process did not make: that read is the rewrite's.
+    (
+      t.getService("collectionsHandler") as CollectionsHandler
+    ).invalidateCollectionSchema(PAGES);
+    await t.nextly.rewriteField({
+      collection: PAGES,
+      id,
+      field: "layout",
+      expectedVersion: version,
+      set: { value: "narrow" },
+      reason: REASON,
+    });
+    // Every escape, accepted or not: on PostgreSQL and MySQL a read on the
+    // pool runs outside the rewrite's transaction. SQLite reports none.
+    const escapes = takeTransactionEscapes();
+    recordTransactionEscapes(escapes, expect.getState().testPath);
+    expect(
+      escapes.map(escape => escape.key),
+      escapes.map(escape => escape.stack).join("\n\n")
+    ).toEqual([]);
   });
 
   it("changes the live copy alone where no draft waits, and records the update event", async () => {
@@ -514,6 +565,54 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
       code: "FORBIDDEN",
     });
     expect((await read(t, OWNED, id)).owner).toBe(EDITOR.id);
+  });
+
+  it("refuses a person's replacement group that leaves out a value they may not change, naming it", async () => {
+    const t = await boot(dialect);
+    await userWhoMay(t, EDITOR.id, "update", [PAGES]);
+    await grantTo(t, EDITOR.id, "read", [PAGES]);
+    await grantTo(t, EDITOR.id, "publish", [PAGES]);
+    const id = await create(t, PAGES, {
+      card: { label: "old", locked: "keep" },
+      status: "published",
+    });
+    const asEditor = new Nextly({
+      overrideAccess: false,
+      user: { id: EDITOR.id } as never,
+    });
+    const rewrite = async (card: Record<string, unknown>) =>
+      asEditor.rewriteField({
+        collection: PAGES,
+        id,
+        field: "card",
+        expectedVersion: (await read(t, PAGES, id))._rev as string,
+        set: { value: card },
+        reason: REASON,
+        overrideAccess: false,
+        user: { id: EDITOR.id } as never,
+      });
+    await expect(rewrite({ label: "new" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicData: {
+        errors: [
+          expect.objectContaining({ path: "card.locked", code: "FORBIDDEN" }),
+        ],
+      },
+    });
+    expect((await read(t, PAGES, id)).card).toMatchObject({
+      label: "old",
+      locked: "keep",
+    });
+    // A value they may not change, changed rather than left out: refused too.
+    await expect(
+      rewrite({ label: "new", locked: "taken" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // POPULATION CONTROL: the same edit, keeping the value, goes through.
+    await rewrite({ label: "new", locked: "keep" });
+    expect((await read(t, PAGES, id)).card).toMatchObject({
+      label: "new",
+      locked: "keep",
+    });
   });
 
   it("records no password in the version it captures", async () => {
@@ -786,6 +885,84 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(t, LOCALIZED, id, { locale: "de" })).layout).toBe(
         "full"
       );
+    });
+
+    it("leaves another language's read current when only a translation's live value moves", async () => {
+      const t = await boot(dialect, true);
+      const id = await create(t, LOCALIZED, {
+        title: "EN",
+        layout: "wide",
+        status: "published",
+      });
+      await save(t, LOCALIZED, id, { title: "DE", status: "published" }, "de");
+      const englishRead = (await read(t, LOCALIZED, id, { locale: "en" }))
+        ._rev as string;
+      const germanRead = (await read(t, LOCALIZED, id, { locale: "de" }))
+        ._rev as string;
+      const rewriteTitle = (
+        locale: string,
+        expectedVersion: string,
+        value: string
+      ) =>
+        t.nextly.rewriteField({
+          collection: LOCALIZED,
+          id,
+          field: "title",
+          locale,
+          expectedVersion,
+          set: { value },
+          reason: REASON,
+        });
+      const done = await rewriteTitle("de", germanRead, "DE neu");
+      // POPULATION CONTROL: German's live copy alone changed.
+      expect(done.item.copies).toEqual([{ form: "live", locale: "de" }]);
+      // German's own version moved: the read before it is out of date, and
+      // the version the rewrite returned is current.
+      await expect(
+        rewriteTitle("de", germanRead, "DE alt")
+      ).rejects.toMatchObject({ code: "STALE_VERSION" });
+      await rewriteTitle("de", done.item.version, "DE neuer");
+      // English's read is still current.
+      await rewriteTitle("en", englishRead, "EN neu");
+      expect((await read(t, LOCALIZED, id, { locale: "en" })).title).toBe(
+        "EN neu"
+      );
+      expect((await read(t, LOCALIZED, id, { locale: "de" })).title).toBe(
+        "DE neuer"
+      );
+    });
+
+    it("moves the entry's own version where a translated rewrite reaches a draft", async () => {
+      const t = await boot(dialect, true);
+      const id = await withDrafts(t);
+      const englishRead = (await read(t, LOCALIZED, id, { locale: "en" }))
+        ._rev as string;
+      const done = await t.nextly.rewriteField({
+        collection: LOCALIZED,
+        id,
+        field: "title",
+        locale: "de",
+        expectedVersion: (await read(t, LOCALIZED, id, { locale: "de" }))
+          ._rev as string,
+        set: { from: current => `${String(current)}!` },
+        reason: REASON,
+      });
+      // POPULATION CONTROL: the German draft moved with the live copy.
+      expect(done.item.copies).toContainEqual({ form: "draft", locale: "de" });
+      // The pending changes are covered by the entry's own version, so a
+      // read from before any of them moved is out of date in every language.
+      await expect(
+        t.nextly.rewriteField({
+          collection: LOCALIZED,
+          id,
+          field: "title",
+          locale: "en",
+          expectedVersion: englishRead,
+          set: { value: "EN neu" },
+          reason: REASON,
+        })
+      ).rejects.toMatchObject({ code: "STALE_VERSION" });
+      expect((await read(t, LOCALIZED, id, { locale: "en" })).title).toBe("EN");
     });
 
     it("changes a translated field in the named language only", async () => {

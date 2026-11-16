@@ -17,7 +17,9 @@
  * - Either way: exactly ONE statement reads the version, none writes it, the
  *   stored version is as it was, and the Direct API answers.
  *
- * The control: a development start, recorded the same way, reads no version.
+ * The control: a development start, recorded the same way, compares nothing and writes no version.
+ * It does read it: each load of the definitions is recorded at the version read just before it, so
+ * the first follow after the start loads nothing again.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -204,11 +206,18 @@ describe.each(getConfiguredTestDialects())(
       expect(run.answered.items).toEqual([]);
     }, 180_000);
 
-    it("a development start, recorded the same way, reads no version and says nothing of it", async () => {
-      await storeVersion(OLDER);
+    it("a development start, recorded the same way, writes no version and says nothing of it", async () => {
+      const before = await storeVersion(OLDER);
       const run = await start("development", NEWER);
 
-      expect(run.calls.filter(touchesVersion)).toEqual([]);
+      // Its reads are the version each load of its definitions is recorded at; none writes it.
+      expect(
+        run.calls
+          .filter(touchesVersion)
+          .map(call => call.text.trim().slice(0, 6).toUpperCase())
+          .filter(verb => verb !== "SELECT")
+      ).toEqual([]);
+      expect(run.stored).toEqual(before);
       expect(run.warnings).toEqual([]);
       expect(run.infos).toEqual([]);
     }, 180_000);

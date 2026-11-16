@@ -6,7 +6,14 @@
  * setup at a time.
  */
 import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { useLoadedPasswordHasher } from "../../../di/password-digester";
+import {
+  resetPasswordPolicy,
+  setMinPasswordLength,
+  type PasswordHasher,
+} from "../../password/policy";
 
 import { claimFirstSetup } from "../../setup-token/setup-gate";
 import {
@@ -402,8 +409,38 @@ describe("setup in production", () => {
       requiresInitialUser: true,
       requiresSetupToken: true,
       allowRegistration: false,
+      // Core's rule: 8 characters, and bcrypt's 72 bytes.
+      passwordRule: { minLength: 8, maxBytes: 72 },
     });
     expect(JSON.stringify(body)).not.toContain(token);
+  });
+
+  it("tells the admin's forms the rule of the app's hasher and minimum", async () => {
+    const { deps } = await productionInstall();
+    const rule = async () => {
+      const res = await handleSetupStatus(
+        new Request(`${ORIGIN}/admin/api/auth/setup-status`),
+        { ...deps, allowRegistration: false }
+      );
+      return ((await res.json()) as { passwordRule: unknown }).passwordRule;
+    };
+    const hasher = (reach: number | "unbounded"): PasswordHasher => ({
+      name: "own",
+      reach,
+      hash: password => Promise.resolve(`own$${password}`),
+      verify: (password, stored) =>
+        Promise.resolve(stored === `own$${password}`),
+    });
+    try {
+      setMinPasswordLength(12);
+      useLoadedPasswordHasher(hasher("unbounded"));
+      // A hasher that reads a password whole sets no byte limit.
+      expect(await rule()).toEqual({ minLength: 12, maxBytes: null });
+      useLoadedPasswordHasher(hasher(32));
+      expect(await rule()).toEqual({ minLength: 12, maxBytes: 32 });
+    } finally {
+      resetPasswordPolicy();
+    }
   });
 });
 
@@ -417,6 +454,44 @@ describe("setup in development", () => {
     };
     expect((await handleSetup(setupRequest(), dev)).status).toBe(201);
     expect(createSuperAdmin).toHaveBeenCalledTimes(1);
+  });
+
+  describe("with the app's own password hasher", () => {
+    /** An unbounded app hasher: it reads a password longer than bcrypt's 72 bytes whole. */
+    const unbounded: PasswordHasher = {
+      name: "unbounded",
+      reach: "unbounded",
+      hash: password => Promise.resolve(`own$${password}`),
+      verify: (password, stored) =>
+        Promise.resolve(stored === `own$${password}`),
+    };
+    /** 80 bytes: past bcrypt's 72. */
+    const LONG = `Str0ng-P@ss-${"x".repeat(68)}`;
+    afterEach(() => useLoadedPasswordHasher(undefined));
+
+    async function devSetup(password: string) {
+      const { deps, createSuperAdmin } = await productionInstall();
+      const dev: SetupHandlerDeps = {
+        ...deps,
+        isProduction: false,
+        setupToken: { ...deps.setupToken, required: false },
+      };
+      const res = await handleSetup(setupRequest(undefined, { password }), dev);
+      return {
+        status: res.status,
+        created: createSuperAdmin.mock.calls.length,
+      };
+    }
+
+    it("judges the first password by the hasher, which reads it whole", async () => {
+      useLoadedPasswordHasher(unbounded);
+      expect(await devSetup(LONG)).toEqual({ status: 201, created: 1 });
+    });
+
+    it("judges it by bcrypt's 72 bytes without one", async () => {
+      // The control: the same password is refused where bcrypt hashes it.
+      expect(await devSetup(LONG)).toEqual({ status: 400, created: 0 });
+    });
   });
 });
 

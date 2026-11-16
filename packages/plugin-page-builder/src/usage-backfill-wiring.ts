@@ -198,6 +198,18 @@ export interface BackfillSurvey {
    * the registry reads a health render costs.
    */
   unaddressable: boolean;
+  /**
+   * The collections and Singles holding such a field, which is what
+   * `unaddressable` says of the site: every document of one is a page the
+   * index cannot cover in full, whatever else of it the index reaches.
+   */
+  unaddressableTypes: readonly UnaddressableType[];
+}
+
+/** A collection or Single holding a blocks field the index cannot address. */
+export interface UnaddressableType {
+  readonly scope: "collection" | "single";
+  readonly slug: string;
 }
 
 /**
@@ -221,6 +233,7 @@ export async function backfillSurvey(
   const fieldGroups = await host.fieldGroups?.();
   const scopes: BackfillScope[] = [];
   let unaddressable = false;
+  const unaddressableTypes: UnaddressableType[] = [];
 
   for (const slug of slugs) {
     const collection = await host.resolveCollection(slug);
@@ -235,7 +248,10 @@ export async function backfillSurvey(
     // Recorded before the early return below, so a collection whose ONLY blocks
     // field is nested — which contributes no scope — still reports that the
     // index cannot cover it.
-    if (survey.unaddressable) unaddressable = true;
+    if (survey.unaddressable) {
+      unaddressable = true;
+      unaddressableTypes.push({ scope: "collection", slug });
+    }
     // Asked BEFORE the field check would be wasteful, and asked at all only
     // for collections that actually carry a blocks field: the draft split is a
     // read, and a site's other collections are the majority.
@@ -262,7 +278,10 @@ export async function backfillSurvey(
       singleUsageDeclaration(single),
       fieldGroups
     );
-    if (survey.unaddressable) unaddressable = true;
+    if (survey.unaddressable) {
+      unaddressable = true;
+      unaddressableTypes.push({ scope: "single", slug: single.slug });
+    }
     // Both forms, whatever the Single's versioning: the registry listing does
     // not say whether a Single keeps a working draft, and the draft read
     // answers absent for one that does not, which records nothing.
@@ -277,7 +296,7 @@ export async function backfillSurvey(
     );
   }
 
-  return { scopes, unaddressable };
+  return { scopes, unaddressable, unaddressableTypes };
 }
 
 /**

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
+import { typesLeftOut } from "../seo-types";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -80,6 +81,13 @@ describe("seoPlugin", () => {
       "canonicalElsewhere",
       "noindex",
       "structuredDataType",
+      "maxImagePreview",
+      "maxSnippet",
+      "nosnippet",
+      "noimageindex",
+      "unavailableAfter",
+      "noarchive",
+      "nocache",
     ]);
   });
 
@@ -110,10 +118,13 @@ describe("seoPlugin", () => {
       ["GET", "/robots.txt", "root", true],
       // Registered always; it answers once switched on in the settings.
       ["GET", "/llms.txt", "root", true],
+      ["GET", "/llms-full.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
+      // Which sitemap pages own robots.txt rules being typed would block.
+      ["POST", "/settings/robots-rules-check", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
       // The redirects screen's routes, for those the redirects' permissions allow.
       ["GET", "/redirects", undefined, undefined],
@@ -128,14 +139,17 @@ describe("seoPlugin", () => {
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
       ["POST", "/received", undefined, undefined],
+      // Whether the live home page carries the saved verification codes.
+      ["POST", "/settings/verification-check", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // A Page Builder template's SEO panel's read.
       ["POST", "/template", undefined, undefined],
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
-      // The Pages screen's list, and its save.
+      // The Pages screen's list, what it is told of the build, and its save.
       ["GET", "/pages", undefined, undefined],
+      ["GET", "/pages/build", undefined, undefined],
       ["POST", "/pages/seo", undefined, undefined],
       // The bulk edit table, for a signed-in reader of each type.
       ["GET", "/bulk/types", undefined, undefined],
@@ -166,6 +180,7 @@ describe("seoPlugin", () => {
       return typeof found === "function" ? found(scope) : found;
     };
     expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("GET", "/pages/build")).toBe("manage-seo");
     expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
@@ -219,8 +234,10 @@ describe("seoPlugin", () => {
       "/connections/search-console/report",
       "/robots.txt",
       "/llms.txt",
+      "/llms-full.txt",
       "/share-image",
       "/settings/content-types",
+      "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
       "/redirects",
@@ -231,11 +248,13 @@ describe("seoPlugin", () => {
       "/not-found/:id",
       "/proxy-status",
       "/received",
+      "/settings/verification-check",
       "/resolve",
       "/template",
       "/problems",
       "/problems/check",
       "/pages",
+      "/pages/build",
       "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
@@ -264,8 +283,10 @@ describe("seoPlugin", () => {
       "/connections/search-console/report",
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
+      "/llms-full.txt",
       "/share-image",
       "/settings/content-types",
+      "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
       "/redirects",
@@ -276,11 +297,13 @@ describe("seoPlugin", () => {
       "/not-found/:id",
       "/proxy-status",
       "/received",
+      "/settings/verification-check",
       "/resolve",
       "/template",
       "/problems",
       "/problems/check",
       "/pages",
+      "/pages/build",
       "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
@@ -354,13 +377,27 @@ describe("seoPlugin", () => {
       "canonicalElsewhere",
       "noindex",
       "structuredDataType",
+      "maxImagePreview",
+      "maxSnippet",
+      "nosnippet",
+      "noimageindex",
+      "unavailableAfter",
+      "noarchive",
+      "nocache",
     ]);
   });
 });
 
 describe("how long a title or description may be", () => {
-  /** The `maxLength` each of a group's fields is saved with. */
-  function limits(group: unknown) {
+  /** A field's own `validate`, where it has one. */
+  type Validate = (value: unknown, args: unknown) => string | true;
+
+  /**
+   * What each of a group's fields answers for `value`, by name: `true`, a
+   * refusal, or `"no rule"` where the field has no `validate` of its own.
+   * A `maxLength` is reported too, since a character cap is a rule as well.
+   */
+  function verdicts(group: unknown, value: string) {
     const fields: readonly unknown[] =
       typeof group === "object" &&
       group !== null &&
@@ -375,37 +412,56 @@ describe("how long a title or description may be", () => {
             typeof field === "object" && field !== null
         )
         .filter(field => "name" in field)
-        .map(field => [field.name, (field as { maxLength?: number }).maxLength])
+        .map(field => {
+          const own = field as { validate?: Validate; maxLength?: number };
+          if (own.maxLength !== undefined) {
+            return [field.name, `maxLength ${own.maxLength}`];
+          }
+          return [
+            field.name,
+            own.validate === undefined
+              ? "no rule"
+              : own.validate(value, { data: {}, req: {} }),
+          ];
+        })
     );
   }
 
-  it("saves a title or description of any length by default", () => {
+  it("saves a title or description of any width by default", () => {
     // Google cuts a long title by width rather than refusing it, so the
-    // length is a warning in the SEO tab and the problem list.
+    // width is a warning in the SEO tab and the problem list.
     const group = seoGroup(seoPlugin({ collections: ["pages"] }));
     for (const read of [
-      limits(group),
-      limits({ fields: defaultSeoFields() }),
+      verdicts(group, "W".repeat(80)),
+      verdicts({ fields: defaultSeoFields() }, "W".repeat(80)),
     ]) {
-      expect(read).toHaveProperty("metaTitle", undefined);
-      expect(read).toHaveProperty("metaDescription", undefined);
+      expect(read).toHaveProperty("metaTitle", "no rule");
+      expect(read).toHaveProperty("metaDescription", "no rule");
     }
   });
 
-  it("refuses a longer one where the site asks for hard limits", () => {
-    const group = seoGroup(
-      seoPlugin({ collections: ["pages"], hardLengthLimits: true })
-    );
-    expect(limits(group)).toMatchObject({
-      metaTitle: 60,
-      metaDescription: 160,
-    });
-    expect(
-      limits({ fields: defaultSeoFields({ hardLengthLimits: true }) })
-    ).toMatchObject({
-      metaTitle: 60,
-      metaDescription: 160,
-    });
+  it("refuses one wider than Google shows where the site asks for hard limits, by width not characters", () => {
+    for (const group of [
+      seoGroup(seoPlugin({ collections: ["pages"], hardLengthLimits: true })),
+      { fields: defaultSeoFields({ hardLengthLimits: true }) },
+    ]) {
+      // 40 wide capitals: short of 60 characters, 755 px as a title.
+      expect(verdicts(group, "W".repeat(40))).toMatchObject({
+        metaTitle:
+          "Google shows about 600 px of a title, and this one is 755 px (40 characters). Shorten it, or put what matters first.",
+        metaDescription: true,
+      });
+      // 80 narrow letters: past 60 characters, 355 px, so both fit.
+      expect(verdicts(group, "i".repeat(80))).toMatchObject({
+        metaTitle: true,
+        metaDescription: true,
+      });
+      // 70 wide capitals are 925 px as a description, past its 920.
+      expect(verdicts(group, "W".repeat(70))).toMatchObject({
+        metaDescription:
+          "Google shows about 920 px of a description, and this one is 925 px (70 characters). Shorten it, or put what matters first.",
+      });
+    }
   });
 });
 
@@ -436,10 +492,11 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
-    // Its admin contributions are the SEO tab, its side panel line, and the
-    // tab in the Page Builder's Settings.
+    // Its admin contributions are the SEO tab, its two side panel lines, and
+    // the tab in the Page Builder's Settings.
     expect(plugin.contributes?.admin?.contributions).toEqual([
       expect.objectContaining({ kind: "tab" }),
+      expect.objectContaining({ kind: "sidebarSection" }),
       expect.objectContaining({ kind: "sidebarSection" }),
       expect.objectContaining({ kind: "tab", place: PAGE_BUILDER_PLACE }),
     ]);
@@ -503,6 +560,15 @@ describe("the SEO tab the plugin contributes", () => {
         collections: ["pages", "posts"],
       },
       {
+        id: "nextlyhq-plugin-seo.display-status",
+        kind: "sidebarSection",
+        place: "collection.edit",
+        label: "Search display",
+        component: "@nextlyhq/plugin-seo/admin#SeoDisplaySection",
+        after: "nextlyhq-plugin-seo.status",
+        collections: ["pages", "posts"],
+      },
+      {
         id: "nextlyhq-plugin-seo.single-tab",
         kind: "tab",
         place: "single.edit",
@@ -520,6 +586,15 @@ describe("the SEO tab the plugin contributes", () => {
         after: "details",
         singles: ["homepage"],
       },
+      {
+        id: "nextlyhq-plugin-seo.single-display-status",
+        kind: "sidebarSection",
+        place: "single.edit",
+        label: "Search display",
+        component: "@nextlyhq/plugin-seo/admin#SeoDisplaySection",
+        after: "nextlyhq-plugin-seo.single-status",
+        singles: ["homepage"],
+      },
       PAGE_BUILDER_TAB_DECLARED,
     ]);
   });
@@ -528,7 +603,12 @@ describe("the SEO tab the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(
       plugin.contributes?.admin?.contributions?.map(each => each.place)
-    ).toEqual(["collection.edit", "collection.edit", PAGE_BUILDER_PLACE]);
+    ).toEqual([
+      "collection.edit",
+      "collection.edit",
+      "collection.edit",
+      PAGE_BUILDER_PLACE,
+    ]);
   });
 });
 
@@ -588,7 +668,7 @@ describe("the SEO tab and fields of a project's own", () => {
       sitemap: false,
       fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
     });
-    expect(editPageContributions(plugin)).toHaveLength(2);
+    expect(editPageContributions(plugin)).toHaveLength(3);
   });
 });
 
@@ -621,6 +701,86 @@ describe("the SEO tab in the Page Builder's Settings", () => {
     expect(gated.contributes?.admin?.contributions).toEqual([
       PAGE_BUILDER_TAB_DECLARED,
     ]);
+  });
+
+  it("is told which types the site's code leaves out, where SEO is on every type", () => {
+    const leaving = seoPlugin({ exclude: ["pages", "pages"], sitemap: false });
+    expect(leaving.contributes?.admin?.clientConfig).toMatchObject({
+      tabEveryType: true,
+      tabExcluded: ["pages"],
+    });
+    const every = seoPlugin({ sitemap: false });
+    expect(every.contributes?.admin?.clientConfig).toMatchObject({
+      tabEveryType: true,
+      tabExcluded: [],
+    });
+  });
+
+  it("is told a type is out exactly where the plugin's extend clauses leave it without the group", () => {
+    // `logs` is excluded from every type and given the group by `include`,
+    // so only `pages` is without it.
+    const plugin = seoPlugin({
+      exclude: ["pages", "logs"],
+      include: ["logs"],
+      sitemap: false,
+    });
+    expect(plugin.contributes?.admin?.clientConfig).toMatchObject({
+      tabExcluded: ["pages"],
+    });
+    // Read from the same clauses the schema is given.
+    expect(typesLeftOut(plugin.contributes?.extend ?? [])).toEqual(["pages"]);
+  });
+});
+
+describe("typesLeftOut", () => {
+  it("names each type the every-type clause leaves out that no named clause gives the group", () => {
+    expect(
+      typesLeftOut([
+        { target: ["logs"], fields: [] },
+        {
+          target: {
+            every: ["collection", "single"],
+            except: ["pages", "logs"],
+          },
+          fields: [],
+        },
+      ])
+    ).toEqual(["pages"]);
+  });
+
+  it("names none where the site names its types", () => {
+    expect(typesLeftOut([{ target: ["posts", "home"], fields: [] }])).toEqual(
+      []
+    );
+  });
+});
+
+describe("the brand facts the settings screen is handed", () => {
+  it("are plain JSON, whatever the options hold: no unset key, no shared list", () => {
+    const shared = ["https://x.com/example"];
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      structuredData: {
+        brand: {
+          name: "Example",
+          email: undefined,
+          parentOrganization: { name: "Example Holdings", sameAs: shared },
+          founders: [{ name: "Sara Khan", sameAs: shared }],
+        },
+      },
+    });
+    const brand = plugin.contributes?.admin?.clientConfig?.brand as
+      | Record<string, unknown>
+      | undefined;
+    // What core's check of a client config accepts: the value survives a
+    // JSON round trip unchanged, with no key JSON would drop.
+    expect(JSON.parse(JSON.stringify(brand))).toEqual(brand);
+    expect(brand).not.toHaveProperty("email");
+    const parent = brand?.parentOrganization as { sameAs: unknown };
+    const [founder] = (brand?.founders ?? []) as { sameAs: unknown }[];
+    expect(parent.sameAs).toEqual(shared);
+    expect(parent.sameAs).not.toBe(founder?.sameAs);
   });
 });
 
@@ -771,5 +931,93 @@ describe("the SEO section", () => {
       ["bulk", "SeoBulkMoved", undefined],
       ["received", "SeoReceivedMoved", undefined],
     ]);
+  });
+});
+
+describe("SEO on every content type, where the site names none", () => {
+  const EVERY = { every: ["collection", "single"] };
+
+  it("adds the seo group to every collection and Single the site defines", () => {
+    const plugin = seoPlugin({ sitemap: false });
+    expect(plugin.contributes?.extend).toHaveLength(1);
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual(EVERY);
+    expect(seoGroup(plugin).name).toBe("seo");
+  });
+
+  it("leaves out each type the site excludes", () => {
+    const plugin = seoPlugin({ exclude: ["logs", "logs", "audit"] });
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual({
+      ...EVERY,
+      except: ["logs", "audit"],
+    });
+  });
+
+  it("adds a plugin's collection the site includes by name, and keeps it out of the scope", () => {
+    const plugin = seoPlugin({ include: ["forms"], exclude: ["logs"] });
+    const [named, scope] = plugin.contributes?.extend ?? [];
+    expect(named?.target).toEqual(["forms"]);
+    expect(named?.fields?.[0]).toBe(scope?.fields?.[0]);
+    // Named once: the scope never reaches it a second time.
+    expect(scope?.target).toEqual({ ...EVERY, except: ["logs", "forms"] });
+  });
+
+  it("keeps a site's named list exactly as before", () => {
+    const plugin = seoPlugin({ collections: ["posts"], singles: ["home"] });
+    expect(plugin.contributes?.extend?.map(clause => clause.target)).toEqual([
+      ["posts", "home"],
+    ]);
+  });
+
+  it.each([
+    ["exclude", { collections: ["posts"], exclude: ["logs"] }],
+    ["include", { singles: ["home"], include: ["forms"] }],
+  ] as const)(
+    "refuses %s beside a named list, which already says which types",
+    (_, options) => {
+      expect(() => seoPlugin(options)).toThrow(/collections|singles/);
+    }
+  );
+
+  it("draws the SEO tab and its line wherever its own group was added", () => {
+    const plugin = seoPlugin({ sitemap: false });
+    const edit = editPageContributions(plugin);
+    expect(edit.map(each => [each.id, each.place])).toEqual([
+      ["nextlyhq-plugin-seo.tab", "collection.edit"],
+      ["nextlyhq-plugin-seo.status", "collection.edit"],
+      ["nextlyhq-plugin-seo.display-status", "collection.edit"],
+      ["nextlyhq-plugin-seo.single-tab", "single.edit"],
+      ["nextlyhq-plugin-seo.single-status", "single.edit"],
+      ["nextlyhq-plugin-seo.single-display-status", "single.edit"],
+    ]);
+    for (const each of edit) {
+      // Offered by core on the types the start added the group to, the
+      // Schema Builder's included and a type with its own `seo` left out.
+      expect(each).toMatchObject({ extendedWith: ["seo"] });
+      expect(each).not.toHaveProperty("collections");
+      expect(each).not.toHaveProperty("singles");
+    }
+  });
+
+  it("refuses page permissions, which are declared for named types before the site starts", () => {
+    expect(() => seoPlugin({ pagePermissions: true })).toThrow(
+      /pagePermissions/
+    );
+  });
+
+  it("shows the dashboard card and its line to whoever manages site-wide SEO", () => {
+    const plugin = seoPlugin({ sitemap: false });
+    const dashboard = plugin.contributes?.dashboard;
+    expect(dashboard?.widgets?.map(widget => widget.access)).toEqual([
+      "manage-seo",
+    ]);
+    expect(dashboard?.attention).toEqual([
+      expect.objectContaining({ id: "seo/problems", permission: "manage-seo" }),
+    ]);
+  });
+
+  it("takes a sitemap list it cannot check until the site starts", () => {
+    expect(() =>
+      seoPlugin({ sitemap: { collections: ["posts"] } })
+    ).not.toThrow();
   });
 });

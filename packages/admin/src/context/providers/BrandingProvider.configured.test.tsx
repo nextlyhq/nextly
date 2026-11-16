@@ -35,6 +35,7 @@ import {
   BrandingProvider,
   useBranding,
 } from "@admin/context/providers/BrandingProvider";
+import { resetDeviceMemoryForTests } from "@admin/lib/device-memory/device-memory";
 
 /** Writes what the admin route writes into the page's first HTML. */
 function carryConfigured(json: string): void {
@@ -71,6 +72,10 @@ const adminIcons = () =>
 
 afterEach(() => {
   cleanup();
+  // The provider remembers the branding it drew on this device; a test that
+  // starts with a remembered favicon draws it before its own answer lands.
+  window.localStorage.clear();
+  resetDeviceMemoryForTests();
   document.getElementById("nextly-admin-branding")?.remove();
   document.head
     .querySelectorAll("link[rel='icon']")
