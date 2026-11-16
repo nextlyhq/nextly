@@ -55,6 +55,26 @@ const documentOf = (kind: string, props: Record<string, unknown>) => ({
   nodes: [heading("h", props)],
 });
 
+/**
+ * The refusal of a value JSON cannot write. Core's own JSON field check gives
+ * it, before the engine's validator is reached: the first gate that refuses.
+ */
+const UNWRITABLE = "must be JSON-serializable";
+
+/**
+ * Why a write was refused, as the error says it, so a test pins the reason
+ * rather than only that something threw. A write that saved is `undefined`.
+ */
+async function refusal(write: Promise<unknown>): Promise<string | undefined> {
+  try {
+    await write;
+    return undefined;
+  } catch (error) {
+    const said = error as { message?: unknown; publicData?: unknown };
+    return `${String(said.message)} ${JSON.stringify(said.publicData ?? null)}`;
+  }
+}
+
 /** The documents the full check refuses, each for a different reason. */
 const REFUSED = {
   "a BigInt": () => documentOf("page", { text: "x", count: 1n }),
@@ -62,6 +82,13 @@ const REFUSED = {
   "a document over the byte cap": () =>
     documentOf("page", { text: "x".repeat(MAX_BYTES) }),
 } as const;
+
+/** What each refusal says. */
+const SAYS: Record<keyof typeof REFUSED, string> = {
+  "a BigInt": UNWRITABLE,
+  "a boxed BigInt": UNWRITABLE,
+  "a document over the byte cap": TOO_LARGE,
+};
 
 describe.each(getConfiguredTestDialects())(
   "a document entering storage (%s)",
@@ -141,17 +168,19 @@ describe.each(getConfiguredTestDialects())(
       "refuses %s on an API write, storing nothing",
       async reason => {
         const title = `api ${reason}`;
-        await expect(
-          t.nextly.create({
-            collection: "pages",
-            data: {
-              title,
-              slug: `api-${Date.now()}`,
-              content: REFUSED[reason](),
-            },
-            overrideAccess: true,
-          })
-        ).rejects.toThrow();
+        expect(
+          await refusal(
+            t.nextly.create({
+              collection: "pages",
+              data: {
+                title,
+                slug: `api-${Date.now()}`,
+                content: REFUSED[reason](),
+              },
+              overrideAccess: true,
+            })
+          )
+        ).toContain(SAYS[reason]);
         expect(await pagesTitled(title)).toBe(0);
       }
     );
@@ -169,14 +198,16 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         });
         const id = String(created.item.id);
-        await expect(
-          t.nextly.update({
-            collection: "pages",
-            id,
-            data: asOverwrite({ content: REFUSED[reason]() }),
-            overrideAccess: true,
-          })
-        ).rejects.toThrow();
+        expect(
+          await refusal(
+            t.nextly.update({
+              collection: "pages",
+              id,
+              data: asOverwrite({ content: REFUSED[reason]() }),
+              overrideAccess: true,
+            })
+          )
+        ).toContain(SAYS[reason]);
         const stored = await t.nextly.findByID({
           collection: "pages",
           id,

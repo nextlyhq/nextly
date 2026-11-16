@@ -992,13 +992,18 @@ export function removeNode(nodes: BlockNode[], id: string): BlockNode[] {
     // slot — an edit that named a DIFFERENT node silently deleting stored
     // content. `fromEntries` defines each key, so it keeps one. See
     // `safe-record` for the two spellings that do not.
+    // A list that did not hold the id stays itself, and a node none of whose
+    // lists held it is returned as itself (see `structural-sharing`).
+    let held = false;
     const slots = Object.fromEntries(
-      Object.entries(node.slots).map(([name, children]) => [
-        name,
-        children.filter(child => child.id !== id),
-      ])
+      Object.entries(node.slots).map(([name, children]) => {
+        const kept = children.filter(child => child.id !== id);
+        if (kept.length === children.length) return [name, children];
+        held = true;
+        return [name, kept];
+      })
     );
-    return { ...node, slots };
+    return held ? { ...node, slots } : node;
   });
 }
 

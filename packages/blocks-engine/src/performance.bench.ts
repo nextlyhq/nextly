@@ -69,10 +69,11 @@ test("migrate", async ({ bench }) => {
   );
 });
 
-// One editor edit checked against the caps, on a 4-block and a 150-block page.
-// Each document's own size is kept first, as an editor holding it already has,
-// so this is the per-edit cost: the target is under 2 ms at 1x on 150 blocks,
-// within 2x of the 4-block page.
+// One whole editor edit (`applyOp`), on a 4-block and a 150-block page. Each
+// document's own size is kept first, as an editor holding it already has. This
+// is the cap check plus the op layer's per-edit validity pass, which still
+// reads every node; "the cap check alone" below is the part kept sizes make
+// independent of the page's size.
 const fourBlocks = scaleDocument({ nodes: 4 });
 const longPage = scaleDocument({ nodes: 150 });
 keptJsonBytes(fourBlocks);
@@ -85,7 +86,7 @@ const updateFirst = (document: typeof longPage) =>
     patch: { props: { text: `edit ${String((edit += 1))}` } },
   });
 
-test("one edit's cap check", async ({ bench }) => {
+test("one whole edit", async ({ bench }) => {
   await bench.compare(
     bench("4 blocks", () => {
       updateFirst(fourBlocks);

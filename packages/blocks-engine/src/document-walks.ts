@@ -16,6 +16,9 @@
  * Counts rather than milliseconds because a count is the same on any machine
  * under any load, so a test can hold it exactly.
  *
+ * What it does not count: the op layer's own pass over a document's nodes when
+ * an edit is applied, which checks their shape rather than measuring them.
+ *
  * @module document-walks
  */
 

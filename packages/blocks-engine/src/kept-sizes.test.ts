@@ -129,7 +129,10 @@ function randomOp(document: BlockDocument, next: () => number): BuilderOp {
         version: 1,
         props: { text: "é".repeat(Math.floor(next() * 40)) },
       },
-      at: { index: Math.floor(next() * (document.nodes.length + 1)) },
+      at:
+        next() < 0.5
+          ? { index: Math.floor(next() * (document.nodes.length + 1)) }
+          : { parentId: pick(), slot: "children", index: 0 },
     };
   }
   if (roll < 0.65) {
@@ -141,8 +144,21 @@ function randomOp(document: BlockDocument, next: () => number): BuilderOp {
       },
     };
   }
-  if (roll < 0.85) {
+  if (roll < 0.75) {
     return { kind: "move", id: pick(), to: { index: 0 } };
+  }
+  if (roll < 0.85) {
+    // Into a slot: an existing one or one the parent does not have yet.
+    return {
+      kind: "move",
+      id: pick(),
+      to: {
+        parentId: pick(),
+        slot:
+          next() < 0.5 ? "children" : `extra${String(Math.floor(next() * 3))}`,
+        index: 0,
+      },
+    };
   }
   return { kind: "remove", id: pick() };
 }
@@ -236,6 +252,35 @@ describe("a cap check over kept sizes", () => {
     expect(remove.measuredObjects).toBe(0);
   });
 
+  it("measures only the changed path for a move, a remove and the edit after a remove", () => {
+    const work = (nodes: number) => {
+      const document = scaleDocument({ nodes });
+      keptJsonBytes(document);
+      countNodes(document.nodes);
+      const move = workOf(() =>
+        applyOp(document, { kind: "move", id: "n7", to: { index: 0 } })
+      );
+      const removed = applyOp(document, { kind: "remove", id: "n9" }).document;
+      const afterRemove = workOf(() =>
+        applyOp(removed, {
+          kind: "update",
+          id: "n0",
+          patch: { props: { text: "after" } },
+        })
+      );
+      return {
+        move: move.measuredObjects,
+        afterRemove: afterRemove.measuredObjects,
+      };
+    };
+    const small = work(12);
+    const large = work(150);
+    expect(large.move).toBeLessThanOrEqual(2 * Math.max(1, small.move));
+    expect(large.afterRemove).toBeLessThanOrEqual(
+      2 * Math.max(1, small.afterRemove)
+    );
+  });
+
   it("refuses an insert past the byte cap in the editor, with the server's message", () => {
     const document = scaleDocument({ nodes: 150 });
     const maxBytes = fullBytes(document) + 100;
@@ -270,5 +315,103 @@ describe("a cap check over kept sizes", () => {
       breakpoints: { viewport: [], container: [] },
     }).map(issue => issue.message);
     expect(server).toContain(documentTooLargeMessage(maxBytes));
+  });
+});
+
+/**
+ * Values the kept path must not answer differently from the full measurement:
+ * where it has a kept size, that size is the full measurement's, and where the
+ * full measurement refuses, the kept path has none.
+ */
+describe("what the kept path declines", () => {
+  const throwingProxy = new Proxy(
+    {},
+    {
+      getPrototypeOf() {
+        throw new Error("trap");
+      },
+    }
+  );
+  const iteratesNothing = Object.assign([1, 2], {
+    [Symbol.iterator]: function* () {},
+  });
+  const shared = { text: "shared" };
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  const CASES: Record<string, unknown> = {
+    "-0": { a: -0 },
+    NaN: { a: Number.NaN },
+    undefined: { a: undefined },
+    "a toJSON": { toJSON: () => "x" },
+    "an accessor": Object.defineProperty({}, "a", {
+      get: () => 1,
+      enumerable: true,
+    }),
+    "a throwing proxy": { a: throwingProxy },
+    "a null prototype": Object.assign(Object.create(null) as object, { a: 1 }),
+    "a sparse array": { a: [1, , 2] },
+    "a cycle": cyclic,
+    "a shared part": { a: shared, b: shared },
+    "an array iterating nothing": { a: iteratesNothing },
+  };
+
+  it.each(Object.keys(CASES))(
+    "answers %s as the full measurement does",
+    name => {
+      const value = CASES[name];
+      const full = measureBytes(value, Number.POSITIVE_INFINITY);
+      let kept: number | undefined;
+      expect(() => {
+        kept = keptJsonBytes(value);
+      }).not.toThrow();
+      if (full.exceeded) expect(kept).toBeUndefined();
+      else if (kept !== undefined) expect(kept).toBe(full.bytes);
+    }
+  );
+
+  const node = (id: string, slots?: unknown) =>
+    ({
+      id,
+      type: "core/box",
+      version: 1,
+      props: {},
+      ...(slots === undefined ? {} : { slots }),
+    }) as unknown as BlockNode;
+  const FORESTS: Record<string, () => BlockNode[]> = {
+    "a list iterating nothing": () =>
+      Object.assign([node("a"), node("b")], {
+        [Symbol.iterator]: function* () {},
+      }),
+    "a slot behind a throwing getter": () => [
+      node(
+        "a",
+        Object.defineProperty({}, "main", {
+          get: () => {
+            throw new Error("getter");
+          },
+          enumerable: true,
+        })
+      ),
+    ],
+    "a slot list that is not an array": () => [node("a", { main: "nope" })],
+    "a node shared by two slots": () => {
+      const child = node("c");
+      return [node("a", { one: [child], two: [child] })];
+    },
+  };
+
+  it.each(Object.keys(FORESTS))("counts %s as the forest walk does", name => {
+    const forest = FORESTS[name]!();
+    let count: number | undefined;
+    expect(() => {
+      count = countNodes(forest);
+    }).not.toThrow();
+    expect(count).toBe(walkedCount(forest));
+  });
+
+  it("leaves a forest past the walk's bound to the walk, which refuses it", () => {
+    const forest = scaleDocument({ nodes: 50 }).nodes;
+    expect(keptForestShape(forest, 10)).toBeUndefined();
+    expect(keptForestShape(forest, 1000)?.count).toBe(walkedCount(forest));
   });
 });

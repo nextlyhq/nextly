@@ -42,7 +42,13 @@ const MAX_KEPT_DEPTH = 512;
  * what lets a cap check use it in place of one.
  */
 export function keptJsonBytes(value: unknown): number | undefined {
-  return bytesOf(value, 0, new Set<object>());
+  // A value that throws while being read (a Proxy's trap) has no kept size;
+  // the full measurement reports it without throwing.
+  try {
+    return bytesOf(value, 0, new Set<object>());
+  } catch {
+    return undefined;
+  }
 }
 
 function bytesOf(
@@ -164,27 +170,53 @@ const SHAPES = new WeakMap<object, Shape | null>();
  * is not a record, an accessor, a cycle) has no kept shape, and those functions walk it instead.
  */
 export function keptForestShape(
-  nodes: unknown
+  nodes: unknown,
+  maxEntries: number = Number.POSITIVE_INFINITY
 ): { count: number; depth: number } | undefined {
-  const shape = listShape(nodes, 0, new Set<object>());
-  return shape === undefined
-    ? undefined
-    : { count: shape.count, depth: shape.height };
+  // Bounded like the walk it stands in for: past `maxEntries` fresh entries it
+  // stops and leaves the forest to the walk, which refuses it. A value that
+  // throws while being read has no kept shape either.
+  const budget: Budget = { left: maxEntries, spent: false };
+  try {
+    const shape = listShape(nodes, 0, new Set<object>(), budget);
+    return shape === undefined || shape.count > maxEntries
+      ? undefined
+      : { count: shape.count, depth: shape.height };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * How many more fresh entries a shape may measure, and whether it ran out. A
+ * walk that ran out keeps nothing: what it did not reach is not "not plain".
+ */
+interface Budget {
+  left: number;
+  spent: boolean;
 }
 
 /** A list's total count and its tallest entry; an empty list is height 0. */
 function listShape(
   list: unknown,
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  budget: Budget
 ): Shape | undefined {
-  if (!Array.isArray(list) || Object.getPrototypeOf(list) !== Array.prototype) {
+  // An ordinary array, read by index as the walk reads it: an own iterator or
+  // a hole would make `for...of` see a different list.
+  if (
+    !Array.isArray(list) ||
+    Object.getPrototypeOf(list) !== Array.prototype ||
+    Object.getOwnPropertySymbols(list).length > 0 ||
+    Object.keys(list).length !== list.length
+  ) {
     return undefined;
   }
   let count = 0;
   let height = 0;
-  for (const entry of list) {
-    const shape = nodeShape(entry, depth, open);
+  for (let index = 0; index < list.length; index++) {
+    const shape = nodeShape(list[index], depth, open, budget);
     if (shape === undefined) return undefined;
     count += shape.count;
     height = Math.max(height, shape.height);
@@ -195,31 +227,37 @@ function listShape(
 function nodeShape(
   node: unknown,
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  budget: Budget
 ): Shape | undefined {
   if (typeof node !== "object" || node === null) return undefined;
   const kept = SHAPES.get(node);
   if (kept !== undefined) return kept ?? undefined;
   if (depth > MAX_KEPT_DEPTH || open.has(node)) return undefined;
+  if ((budget.left -= 1) < 0) {
+    budget.spent = true;
+    return undefined;
+  }
   open.add(node);
-  const shape = freshShape(node, depth, open);
+  const shape = freshShape(node, depth, open, budget);
   open.delete(node);
   countMeasuredObject();
-  SHAPES.set(node, shape ?? null);
+  if (!budget.spent) SHAPES.set(node, shape ?? null);
   return shape;
 }
 
 function freshShape(
   node: object,
   depth: number,
-  open: Set<object>
+  open: Set<object>,
+  budget: Budget
 ): Shape | undefined {
   const slots = plainSlotsOf(node);
   if (slots === undefined) return undefined;
   let count = 1;
   let height = 1;
-  for (const list of Object.values(slots)) {
-    const children = listShape(list, depth + 1, open);
+  for (const list of slots) {
+    const children = listShape(list, depth + 1, open, budget);
     if (children === undefined) return undefined;
     count += children.count;
     height = Math.max(height, 1 + children.height);
@@ -228,20 +266,29 @@ function freshShape(
 }
 
 /**
- * A plain node's slots as a record of lists (`{}` for a node with none, since a
- * falsy `slots` holds no children as the forest walk reads it), or nothing for
- * a node that is not plain data.
+ * A plain node's slot lists (none for a node whose `slots` is falsy, as the
+ * forest walk reads it), or nothing for a node that is not plain data: read
+ * through descriptors, so no getter the document supplies runs.
  */
-function plainSlotsOf(node: object): Record<string, unknown> | undefined {
+function plainSlotsOf(node: object): unknown[] | undefined {
   const prototype = Object.getPrototypeOf(node);
   if (prototype !== Object.prototype && prototype !== null) return undefined;
   const held = Object.getOwnPropertyDescriptor(node, "slots");
   if (held !== undefined && !("value" in held)) return undefined;
   const slots: unknown = held?.value;
-  if (!slots) return {};
-  return typeof slots === "object" &&
-    !Array.isArray(slots) &&
-    Object.getPrototypeOf(slots) === Object.prototype
-    ? (slots as Record<string, unknown>)
-    : undefined;
+  if (!slots) return [];
+  if (
+    typeof slots !== "object" ||
+    Array.isArray(slots) ||
+    Object.getPrototypeOf(slots) !== Object.prototype
+  ) {
+    return undefined;
+  }
+  const lists: unknown[] = [];
+  for (const name of Object.keys(slots)) {
+    const list = Object.getOwnPropertyDescriptor(slots, name);
+    if (list === undefined || !("value" in list)) return undefined;
+    lists.push(list.value);
+  }
+  return lists;
 }

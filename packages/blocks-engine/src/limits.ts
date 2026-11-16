@@ -236,8 +236,8 @@ function walkBounded(
 export function countNodes(nodes: BlockNode[]): number {
   // From the shapes kept for a forest of plain nodes, which an edit shares with
   // the document before it, so only the edited path is counted afresh.
-  const kept = keptForestShape(nodes);
-  if (kept !== undefined && kept.count <= MAX_VALUE_PARTS) return kept.count;
+  const kept = keptForestShape(nodes, MAX_VALUE_PARTS);
+  if (kept !== undefined) return kept.count;
   let count = 0;
   // EVERY entry counts, malformed ones included: the cap exists to reject a
   // document by its real element count, so an array padded with junk must not
@@ -252,8 +252,8 @@ export function countNodes(nodes: BlockNode[]): number {
 export function treeDepth(nodes: BlockNode[]): number {
   // From the kept shapes, as `countNodes`; the walk answers anything else,
   // including a forest past what it will walk, which it refuses.
-  const kept = keptForestShape(nodes);
-  if (kept !== undefined && kept.count <= MAX_VALUE_PARTS) return kept.depth;
+  const kept = keptForestShape(nodes, MAX_VALUE_PARTS);
+  if (kept !== undefined) return kept.depth;
   let deepest = 0;
   walkBounded(nodes, "this forest", depth => {
     if (depth > deepest) deepest = depth;
