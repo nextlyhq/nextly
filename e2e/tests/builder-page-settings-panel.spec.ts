@@ -13,7 +13,12 @@
  */
 import { expect, type Locator, type Page } from "@playwright/test";
 
-import { canvasRoot, clearSelection, pressSave } from "./canvas/editor-driver";
+import {
+  canvasRoot,
+  clearSelection,
+  pressSave,
+  selection,
+} from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
 
@@ -68,6 +73,25 @@ const pageSettings = (page: Page): Locator =>
 const heading = async (page: Page): Promise<Locator> =>
   (await canvasRoot(page)).getByText("Our plans");
 
+/** Esc until nothing is selected, as an author leaves a block. */
+async function deselect(page: Page): Promise<void> {
+  for (let press = 0; press < 4; press += 1) {
+    if ((await selection(page)).length === 0) return;
+    await page.keyboard.press("Escape");
+  }
+  await expect.poll(() => selection(page)).toEqual([]);
+}
+
+/** The page as stored, its draft included, as the entry form reads it. */
+async function storedTitle(page: Page, id: string): Promise<unknown> {
+  const read = (await (
+    await page.request.get(
+      `${API}/collections/pages/entries/${id}?depth=0&draft=true&status=all`
+    )
+  ).json()) as { item?: { title?: unknown }; title?: unknown };
+  return (read.item ?? read).title;
+}
+
 test("with nothing selected, the right panel shows the page's settings", async ({
   page,
   context,
@@ -105,26 +129,29 @@ test("with nothing selected, the right panel shows the page's settings", async (
     `/${seeded.slug}`
   );
 
-  // "All page settings…" opens Settings on the page's own General tab,
-  // even after it was left on another tab.
-  await panel.getByRole("button", { name: "All page settings…" }).click();
+  // "All page settings…" opens Settings on the page's own tab, whichever
+  // tab it was left on.
+  const all = panel.getByRole("button", { name: "All page settings…" });
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("tab", { name: "This page" })).toHaveAttribute(
+  const thisPage = dialog.getByRole("tab", { name: "This page" });
+  await all.click();
+  await expect(thisPage).toHaveAttribute("aria-selected", "true");
+  await dialog.getByRole("tab", { name: "Site" }).click();
+  await expect(thisPage).toHaveAttribute("aria-selected", "false");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await all.click();
+  await expect(thisPage).toHaveAttribute("aria-selected", "true");
+  // And on General among the tabs other plugins add beside it.
+  const seo = dialog.getByRole("tab", { name: "SEO" });
+  await seo.click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await all.click();
+  await expect(dialog.getByRole("tab", { name: "General" })).toHaveAttribute(
     "aria-selected",
     "true"
   );
-  const seo = dialog.getByRole("tab", { name: "SEO" });
-  if ((await seo.count()) > 0) {
-    await seo.click();
-    await page.keyboard.press("Escape");
-    await expect(dialog).toBeHidden();
-    await panel.getByRole("button", { name: "All page settings…" }).click();
-    await expect(dialog.getByRole("tab", { name: "General" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
-  }
 });
 
 test("a rename in the panel is the page's title everywhere, saved with its draft", async ({
@@ -133,6 +160,10 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
   const seeded = await seedPage(page, "Renamed in panel");
   await openBuilder(page, seeded.id);
   await clearSelection(page);
+
+  // Nothing to save yet.
+  const end = page.locator('[data-topbar="end"]');
+  await expect(end.getByRole("button", { name: "Saved" })).toBeVisible();
 
   const renamed = `Plans ${STAMP}`;
   await pageSettings(page).getByRole("textbox", { name: "Title" }).fill(renamed);
@@ -143,11 +174,10 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
       .locator('[data-topbar="start"]')
       .getByRole("button", { name: `${renamed}: switch page` })
   ).toBeVisible();
-  const save = page
-    .locator('[data-topbar="end"]')
-    .getByRole("button", { name: /^Save( draft)?$/ });
-  await expect(save.first()).toBeVisible();
-  await expect(save.first()).not.toHaveAttribute("aria-disabled", "true");
+  await expect(end.getByRole("button", { name: "Saved" })).toHaveCount(0);
+  const save = end.getByRole("button", { name: /^Save( draft)?$/ }).first();
+  await expect(save).toBeEnabled();
+  await expect(save).not.toHaveAttribute("aria-disabled", "true");
 
   // Settings shows the same value.
   await pageSettings(page)
@@ -161,18 +191,9 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
   await expect(dialog).toBeHidden();
 
   await pressSave(page);
+  await expect(end.getByRole("button", { name: "Saved" })).toBeVisible();
   await expect
-    .poll(
-      async () => {
-        const read = (await (
-          await page.request.get(
-            `${API}/collections/pages/entries/${seeded.id}?depth=0`
-          )
-        ).json()) as { item?: { title?: string }; title?: string };
-        return (read.item ?? read).title;
-      },
-      { timeout: 15_000 }
-    )
+    .poll(() => storedTitle(page, seeded.id), { timeout: 15_000 })
     .toBe(renamed);
 });
 
@@ -202,7 +223,7 @@ test("the panel and the canvas keep their size as the selection comes and goes",
       inspector(page).getByRole("tab", { name: "Content" })
     ).toBeVisible();
     expect(await sizes()).toEqual(before);
-    await clearSelection(page);
+    await deselect(page);
     await expect(pageSettings(page)).toBeVisible();
     expect(await sizes()).toEqual(before);
   }

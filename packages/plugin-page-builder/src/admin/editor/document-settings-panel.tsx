@@ -83,6 +83,8 @@ export interface DocumentSettingsPanelProps {
    * would take from the page.
    */
   seoEditsPage: boolean;
+  /** How much the page reads, in its place after the search result. */
+  pageData?: ReactNode;
 }
 
 export function DocumentSettingsPanel({
@@ -92,12 +94,17 @@ export function DocumentSettingsPanel({
   onOpenSettings,
   address,
   seoEditsPage,
+  pageData = null,
 }: DocumentSettingsPanelProps): JSX.Element {
   const words = DOCUMENT_SETTINGS_WORDS[kind];
   const headingId = useId();
   const title = useDocumentField(TITLE_FIELD);
   const slug = useDocumentField(SLUG_FIELD);
   const page = kind === "page";
+  // Held as the title is: a past version on screen, someone else's claim, a
+  // reader who may not edit. The picker writes the form directly, so it is
+  // told, rather than trusted to ask.
+  const held = title !== null && !title.writable;
   return (
     <section
       aria-labelledby={headingId}
@@ -114,13 +121,14 @@ export function DocumentSettingsPanel({
       {page && slug !== null && typeof slug.value === "string" ? (
         <AddressRow field={slug} address={address} />
       ) : null}
-      {page ? <PageLayoutPicker control={control} /> : null}
+      {page ? <PageLayoutPicker control={control} disabled={held} /> : null}
       {page && !seoEditsPage ? (
         <SearchSummary
           title={typeof title?.value === "string" ? title.value : ""}
           address={address}
         />
       ) : null}
+      {page ? pageData : null}
       {own}
       <Button
         type="button"
@@ -280,8 +288,7 @@ function SearchSummary({
         </p>
       </div>
       <p className="nx-inspector__note">
-        Built from the page&apos;s title. The SEO plugin lets you set what
-        search shows.
+        Built from the page&apos;s title and address.
       </p>
     </section>
   );

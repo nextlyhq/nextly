@@ -57,7 +57,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 // The one header & footer picker, tested where it lives.
 vi.mock("../page-layout", () => ({
-  PageLayoutPicker: () => <p>Header &amp; footer picker</p>,
+  PageLayoutPicker: ({ disabled }: { disabled?: boolean }) => (
+    <p>{disabled === true ? "Header & footer picker, held" : "Header & footer picker"}</p>
+  ),
 }));
 
 import {
@@ -188,8 +190,8 @@ describe("a page's settings in the right panel", () => {
   it("leaves the search result to the SEO plugin where it edits the page", () => {
     mount("page", { seoEditsPage: true });
     expect(screen.queryByRole("region", { name: "Search result" })).toBeNull();
-    // And says nothing about the plugin being missing.
-    expect(screen.queryByText(/SEO plugin/)).toBeNull();
+    // And says nothing of its own about search.
+    expect(screen.queryByText(/Built from the page/)).toBeNull();
   });
 
   it("holds its fields while the page takes no edits", () => {
@@ -203,6 +205,22 @@ describe("a page's settings in the right panel", () => {
       (screen.getByRole("textbox", { name: "Address" }) as HTMLInputElement)
         .disabled
     ).toBe(true);
+    // The picker writes the form itself, so it is held too.
+    expect(screen.getByText("Header & footer picker, held")).toBeTruthy();
+  });
+
+  it("keeps the page data line's place, after the search result", () => {
+    mount("page", { pageData: <p>Page data line</p> });
+    const view = panel("Page settings");
+    const line = within(view).getByText("Page data line");
+    const result = within(view).getByRole("region", { name: "Search result" });
+    const all = within(view).getByRole("button", { name: "All page settings…" });
+    expect(
+      result.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      line.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 });
 
