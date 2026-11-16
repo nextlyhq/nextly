@@ -2,7 +2,8 @@ import { allBlocks, clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine"
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { withBlockLooks, withRegisteredLooks } from "./core-looks";
+import { withRegisteredLooks } from "./core-looks";
+import { refreshCodeTier } from "./plugin-definition/options";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import { loadSiteStyle } from "./site-style-load";
 import { readSiteStyleRecord } from "./site-style-record";
@@ -75,9 +76,10 @@ describe("the site style a published page loads", () => {
       defaults: hostDefaults,
     });
     // The canvas's own set, built the way it reaches the canvas: the plugin
-    // sends its code tier (the host's style with every registered block's
-    // looks, resolved), and the editor adds its registry's looks to that.
-    const sent = resolveSiteStyle(withBlockLooks(hostDefaults, allBlocks()));
+    // sends its code tier, refreshed at init once every block registered, and
+    // the editor adds its own registry's looks to that.
+    const sent: SiteStyleData = {};
+    refreshCodeTier(sent, new Set(), hostDefaults);
     const canvas = resolveSiteStyle(
       withRegisteredLooks(readSiteStyleRecord(sent))
     );
