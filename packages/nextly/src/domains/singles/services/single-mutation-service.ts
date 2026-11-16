@@ -3881,7 +3881,15 @@ export class SingleMutationService extends BaseService {
                 componentSlug =>
                   singleComponentSchemas?.get(componentSlug)?.fields
               );
-              mainPayload = promoted.main;
+              // The split passes the save's own values through the strip a client's values
+              // pass, which takes `updated_at` off as a column no client writes; this save's
+              // stamp is put back, as the save writes it when nothing is pending. Without it a
+              // change of translated values alone, in a language other than the default, leaves
+              // the Single's row no value to set, and the database refuses the empty update.
+              mainPayload = {
+                ...promoted.main,
+                updated_at: updatePayload.updated_at,
+              };
               companionData = promoted.companion;
               // The draft's component values, with the publish's own over
               // them, are written by the component save below, without the
