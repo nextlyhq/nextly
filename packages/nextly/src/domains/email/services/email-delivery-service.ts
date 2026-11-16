@@ -26,7 +26,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, desc, eq, gte, inArray, lt, lte, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
@@ -984,6 +984,12 @@ export class EmailDeliveryService extends BaseService {
         : undefined,
       options.providerType !== undefined
         ? eq(this.deliveries.providerType, options.providerType)
+        : undefined,
+      // By its exact bytes on MySQL, whose collation ignores case: a type id
+      // is case-sensitive everywhere else. The equality above keeps the
+      // index narrowing the rows.
+      options.providerType !== undefined && this.dialect === "mysql"
+        ? sql`CAST(${this.deliveries.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
         : undefined,
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
       options.queuedId !== undefined

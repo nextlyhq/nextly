@@ -265,6 +265,12 @@ export const emailDeliveriesPg = pgTable(
       t.status,
       t.createdAt
     ),
+    // One template's deliveries in the list's order, whatever their outcome.
+    index("email_deliveries_template_created_idx").on(
+      t.templateSlug,
+      t.createdAt,
+      t.id
+    ),
   ]
 );
 

@@ -486,6 +486,8 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await slugsOf(`providerId=${providerId.toUpperCase()}`)).toEqual(
         await slugsOf(`providerId=${providerId}`)
       );
+      // A type id is compared exactly, on MySQL as on the others.
+      expect(await slugsOf("providerType=SMTP")).toEqual([]);
       expect(await slugsOf("providerType=smtp")).toEqual([
         "failed:welcome",
         "sent:null",
@@ -681,16 +683,52 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     });
 
-    it("queues a template name longer than any template's as having no template, on every dialect", async () => {
-      const long = "x".repeat(300);
-      const queued = await t.nextly.email.queueWithTemplate({
-        template: long,
+    it("queues a template name longer than any template's, or not slug-shaped, as having no template, on every dialect", async () => {
+      for (const name of ["x".repeat(300), "alice@example.com"]) {
+        const queued = await t.nextly.email.queueWithTemplate({
+          template: name,
+          to: "queued@example.com",
+        });
+        const { items } = await t.nextly.emailDeliveries.findQueued({});
+        expect(items.find(item => item.id === queued.id)).toMatchObject({
+          state: "failed",
+          templateSlug: null,
+        });
+      }
+      // The address passed as a name is not returned anywhere.
+      const { text } = await read("email-deliveries/queued?limit=100", reader);
+      expectNothingPersonal(text);
+    });
+
+    it("says a queued email's attempts are unknown once its job is pruned", async () => {
+      const queued = await t.nextly.email.queue({
         to: "queued@example.com",
+        subject: SUBJECT,
+        html: BODY,
       });
-      const { items } = await t.nextly.emailDeliveries.findQueued({});
+      const tables = loadedDialect(dialect).tables;
+      const db = t.adapter.getDrizzle() as never as {
+        select(fields: unknown): {
+          from(table: unknown): { where(c: unknown): Promise<unknown[]> };
+        };
+        delete(table: unknown): { where(c: unknown): Promise<unknown> };
+      };
+      const [row] = (await db
+        .select({ jobId: tables.emailQueue.jobId })
+        .from(tables.emailQueue)
+        .where(eq(tables.emailQueue.id as never, queued.id))) as Array<{
+        jobId: string;
+      }>;
+      await db
+        .delete(tables.nextlyJobs)
+        .where(eq(tables.nextlyJobs.id as never, row.jobId));
+
+      const { items } = await t.nextly.emailDeliveries.findQueued({
+        state: "sent",
+      });
       expect(items.find(item => item.id === queued.id)).toMatchObject({
-        state: "failed",
-        templateSlug: null,
+        state: "sent",
+        attempts: null,
       });
     });
 

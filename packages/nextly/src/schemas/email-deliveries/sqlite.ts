@@ -101,6 +101,11 @@ export const emailDeliveriesSqlite = sqliteTable(
       t.status,
       t.createdAt
     ),
+    index("email_deliveries_template_created_idx").on(
+      t.templateSlug,
+      t.createdAt,
+      t.id
+    ),
   ]
 );
 

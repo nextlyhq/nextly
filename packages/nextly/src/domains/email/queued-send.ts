@@ -134,6 +134,13 @@ export type QueuedMessage =
 /** The longest template slug the queue records, as its column holds. */
 const TEMPLATE_SLUG_LENGTH = 255;
 
+/**
+ * The names the queue records in clear: a slug's characters, which no address
+ * can be written in. A caller may queue any name, and one of another shape
+ * (an address passed by mistake) is kept only sealed, recorded as no template.
+ */
+const TEMPLATE_SLUG_SHAPE = /^[\w.:/-]+$/;
+
 /** The queue's table for a dialect. */
 export type EmailQueueTable =
   | typeof emailQueuePg
@@ -450,10 +457,12 @@ export async function storeQueuedEmail(
   // The template it is sent from, in clear for the Activity list: a slug
   // names a kind of message, never a person. A name longer than any stored
   // template's can name none, and is recorded as no template on every
-  // dialect rather than refused by the narrower columns of two.
+  // dialect rather than refused by the narrower columns of two; so is one
+  // that is not slug-shaped.
   const templateSlug =
     input.message.kind === "template" &&
-    input.message.slug.length <= TEMPLATE_SLUG_LENGTH
+    input.message.slug.length <= TEMPLATE_SLUG_LENGTH &&
+    TEMPLATE_SLUG_SHAPE.test(input.message.slug)
       ? input.message.slug
       : null;
   if (input.person && erasedAs !== undefined) {

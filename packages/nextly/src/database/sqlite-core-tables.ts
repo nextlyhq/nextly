@@ -974,6 +974,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("provider_type", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_template_idx"
       ON "email_deliveries" ("template_slug", "status", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_template_created_idx"
+      ON "email_deliveries" ("template_slug", "created_at", "id")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,

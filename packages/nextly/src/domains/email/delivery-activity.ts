@@ -151,8 +151,11 @@ export interface QueuedEmailActivity {
   /** When it was sent, failed for good, or was cancelled. */
   settledAt: Date | null;
   state: QueuedEmailStanding;
-  /** Attempts made so far, the one in flight included. */
-  attempts: number;
+  /**
+   * Attempts made so far, the one in flight included; null once the job
+   * that made them has been pruned.
+   */
+  attempts: number | null;
   /** When the next attempt is due, while one is to follow. */
   nextAttemptAt: Date | null;
   /** The last failed attempt's failure, with no address in it. */
@@ -741,7 +744,7 @@ function queuedOf(row: QueueRow, job: JobRow | undefined): QueuedEmailActivity {
     updatedAt: epoch(row.updatedAt),
     settledAt: row.settledAt === null ? null : epoch(row.settledAt),
     state,
-    attempts: job ? Number(job.attemptCount) : 0,
+    attempts: attemptsOf(row, job),
     nextAttemptAt: nextAttemptOf(state, job),
     lastFailure: storedFailureOf(row.failure) ?? null,
     messageHeld: isHeld(row.held),
@@ -761,6 +764,16 @@ function nextAttemptOf(
 ): Date | null {
   if (!job || (state !== "waiting" && state !== "retrying")) return null;
   return job.nextAttemptAt ?? job.runAt ?? job.createdAt;
+}
+
+/**
+ * How many attempts a queued email's job has made: none for one stored with
+ * no job, and unknown (null) once its job has been pruned, which a jobs run
+ * with a shorter retention than the queue's can do.
+ */
+function attemptsOf(row: QueueRow, job: JobRow | undefined): number | null {
+  if (job) return Number(job.attemptCount);
+  return row.jobId === null ? 0 : null;
 }
 
 /** Whether a message is held: a boolean on PostgreSQL, 0 or 1 elsewhere. */
