@@ -8,6 +8,7 @@
  * the push applied instead would plan the companion's change itself, as the push leaves the
  * companion alone.
  */
+import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -215,6 +216,48 @@ for (const dialect of getConfiguredTestDialects()) {
         // The file added the translated field's companion column: a read of it finds no value.
         expect(await companionValues(kind.table, "summary")).toEqual({});
       });
+
+      // SQLite rebuilds a table to make a column required. The companion's rows reference the
+      // main table ON DELETE CASCADE, so a rebuild run with foreign keys on would drop every
+      // language's value with the old table; the file runs as `nextly migrate` runs one, with
+      // them off and the dangling-reference check after.
+      it.runIf(dialect === "sqlite")(
+        "makes a shared field required through a rebuild, keeping every language's value, with foreign keys back on after",
+        async () => {
+          await kind.create();
+          await kind.seed(t);
+          const filesBefore = new Set(
+            readdirSync(join(basePath, "migrations"))
+          );
+
+          await kind.save([
+            TRANSLATED[0]!,
+            { name: "views", type: "number", localized: false, required: true },
+          ]);
+
+          const written = readdirSync(join(basePath, "migrations")).filter(
+            name => name.endsWith(".sql") && !filesBefore.has(name)
+          );
+          const up = written
+            .map(
+              name =>
+                readFileSync(join(basePath, "migrations", name), "utf-8").split(
+                  "-- DOWN"
+                )[0]
+            )
+            .join("\n");
+          // The change reached the rebuild: the main table made again and the old one dropped.
+          expect(up).toMatch(new RegExp(`DROP TABLE [^;]*${kind.table}`, "i"));
+          expect(await companionValues(kind.table, "heading")).toEqual({
+            en: "Hello",
+            es: "Hola",
+          });
+          const [enforced] = await exec<{ foreign_keys: number }>(
+            "PRAGMA foreign_keys"
+          );
+          expect(Number(enforced?.foreign_keys)).toBe(1);
+        }
+      );
 
       it("renames a translated field, keeping every language's value, the companion step planning nothing after the file", async () => {
         await kind.create();
