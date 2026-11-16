@@ -311,14 +311,17 @@ function AddressField({
         onChange={e => onChange(e.target.value)}
       />
       {/* A live region: the check answers after typing stops, so its answer
-          is announced when it arrives, not only read with the field. */}
+          is announced when it arrives, not only read with the field. A
+          refusal is drawn in the error text colour the form messages use,
+          which reads at 4.5:1 in both schemes; the destructive action colour
+          is lighter than that in light. */}
       <p
         id={`${ids}-address-note`}
         role="status"
         aria-live="polite"
         className={
           note.refused
-            ? "text-xs text-destructive"
+            ? "text-xs text-danger-text"
             : "text-xs text-muted-foreground"
         }
       >
