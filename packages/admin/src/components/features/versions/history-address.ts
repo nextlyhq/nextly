@@ -122,16 +122,24 @@ export function useHistoryAddress(available = true): HistoryAddress {
       window.history.back();
       return;
     }
+    // A restore the comparison page asked for goes with it: the ask is for
+    // the version the address named, once, and left behind it would open a
+    // restore list unasked the next time history opens on a version.
     setSearchParams(
-      { [HISTORY_PARAM]: null, [VERSION_PARAM]: null },
+      { [HISTORY_PARAM]: null, [VERSION_PARAM]: null, [RESTORE_PARAM]: null },
       { replace: true }
     );
   }, []);
 
+  // Choosing another version, or going back to the list, abandons a restore
+  // asked for the version the address named, for the same reason.
   const setVersion = useCallback((next: number | null) => {
     setVersionState(next);
     setSearchParams(
-      { [VERSION_PARAM]: next === null ? null : String(next) },
+      {
+        [VERSION_PARAM]: next === null ? null : String(next),
+        [RESTORE_PARAM]: null,
+      },
       { replace: true }
     );
   }, []);
