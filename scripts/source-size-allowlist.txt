@@ -18,7 +18,6 @@ packages/blocks-engine/src/document.ts 1543
 
 
 
-packages/blocks-engine/src/style/compile-page.ts 2761
 
 
 
@@ -33,13 +32,11 @@ packages/blocks-engine/src/style/compile-page.ts 2761
 
 packages/builder/src/canvas.tsx 2705
 
-packages/builder/src/content-controls.tsx 1591
 
 
 
 
 
-packages/builder/src/inspector-panel.tsx 1805
 
 
 
