@@ -913,6 +913,45 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await states(id)).toEqual(before);
   });
 
+  // The field rules a publishing save is judged by are asked in the language it writes: a rule
+  // that refuses Spanish keeps a Spanish save's value out of what the value rules count, where
+  // asked in no language it would let it in.
+  it("asks a publishing save's field rules in the language it writes", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({
+            name: "title",
+            required: true,
+            access: { update: ({ locale }) => locale !== "es" },
+          }),
+          text({ name: "tagline", localized: false }),
+        ],
+      })
+    );
+    const id = await entry({ es: { tagline: "Shared" } });
+    const before = await states(id);
+    const editor = await userWhoMay(t!, "editor", "update", ["posts"]);
+    await grantTo(t!, editor, "publish", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale: "es",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: { title: "Hola", status: "published", _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/REQUIRED_IN_LANGUAGE/);
+    expect(await states(id)).toEqual(before);
+  });
+
   // Taking one language down is not a publish, whatever a language it did not move holds: the
   // trail judges the move by the parts it moved.
   it("records no publish when one language alone is taken down beside a language still a draft", async () => {

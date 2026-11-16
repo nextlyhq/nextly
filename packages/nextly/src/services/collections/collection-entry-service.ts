@@ -979,7 +979,8 @@ export class CollectionEntryService extends BaseService {
         params.locale === EVERY_LOCALE
           ? "all"
           : [params.locale ?? this.localization?.defaultLocale ?? ""],
-        params.locale === EVERY_LOCALE ? undefined : body
+        params.locale === EVERY_LOCALE ? undefined : body,
+        params.locale
       );
       if (refusal) return refusal;
     }
@@ -1028,7 +1029,9 @@ export class CollectionEntryService extends BaseService {
       | "authenticatedScope"
     >,
     locales: readonly string[] | "all",
-    written?: Readonly<Record<string, unknown>>
+    written?: Readonly<Record<string, unknown>>,
+    /** The language the save writes, as it names it, which its field rules are asked in. */
+    writeLocale?: string
   ): Promise<CollectionServiceResult | null> {
     // Nothing to read where no value rule could refuse: most collections.
     if (
@@ -1073,16 +1076,22 @@ export class CollectionEntryService extends BaseService {
     // save and its hooks must still be handed what was submitted.
     const writable = structuredClone({ ...written });
     if (params.overrideAccess !== true) {
-      await applyFieldWriteAccess({
-        kind: "collection",
-        slug: params.collectionName,
-        data: writable,
-        operation: "update",
-        user: params.user,
-        authenticatedScope: params.authenticatedScope,
-        overrideAccess: false,
-        id: params.entryId,
-      });
+      // Asked in the language the save writes, as the save itself asks them, so a field rule
+      // that answers by language answers here as it will there.
+      await withRuleLanguage(
+        writeLanguagesFor(this.localization, writeLocale),
+        () =>
+          applyFieldWriteAccess({
+            kind: "collection",
+            slug: params.collectionName,
+            data: writable,
+            operation: "update",
+            user: params.user,
+            authenticatedScope: params.authenticatedScope,
+            overrideAccess: false,
+            id: params.entryId,
+          })
+      );
     }
     const languages = new Map(state.languages);
     for (const locale of locales) {
