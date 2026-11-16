@@ -40,9 +40,14 @@ describe("nextly db:sync", () => {
   });
 });
 
+/** A process environment holding `vars`, as a test's own: nothing else is read from it. */
+function testEnv(vars: Record<string, string>): NodeJS.ProcessEnv {
+  return { NODE_ENV: "test", ...vars };
+}
+
 describe("exportBusyTableBounds", () => {
   it("hands each flag given to its variable, replacing what it held", () => {
-    const env: NodeJS.ProcessEnv = { NEXTLY_LOCK_TIMEOUT: "9" };
+    const env = testEnv({ NEXTLY_LOCK_TIMEOUT: "9" });
     exportBusyTableBounds({ lockTimeout: "1", lockTimeoutTotal: "5" }, env);
     expect(env).toMatchObject({
       NEXTLY_LOCK_TIMEOUT: "1",
@@ -51,7 +56,7 @@ describe("exportBusyTableBounds", () => {
   });
 
   it("leaves a variable whose flag was not given as it is", () => {
-    const env: NodeJS.ProcessEnv = { NEXTLY_LOCK_TIMEOUT_TOTAL: "60" };
+    const env = testEnv({ NEXTLY_LOCK_TIMEOUT_TOTAL: "60" });
     exportBusyTableBounds({ lockTimeout: "2" }, env);
     expect(env).toMatchObject({
       NEXTLY_LOCK_TIMEOUT: "2",
@@ -61,7 +66,7 @@ describe("exportBusyTableBounds", () => {
 
   it("refuses a value outside its range, read with the environment's, and hands nothing on", () => {
     // A total below the one try is refused, though each value is a whole number of seconds.
-    const env: NodeJS.ProcessEnv = { NEXTLY_LOCK_TIMEOUT_TOTAL: "3" };
+    const env = testEnv({ NEXTLY_LOCK_TIMEOUT_TOTAL: "3" });
     expect(() => exportBusyTableBounds({ lockTimeout: "4" }, env)).toThrow(
       /NEXTLY_LOCK_TIMEOUT_TOTAL is "3"/
     );

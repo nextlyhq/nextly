@@ -235,12 +235,18 @@ test.describe("a development server missing a widget's component, with regenerat
     page,
   }) => {
     test.setTimeout(240_000);
-    // Development signs the dev user in on its own.
+    // Development signs the dev user in on its own. Waited for by the
+    // signed-in frame's account menu, not by `main`: the signed-out screens
+    // draw a `main` too, and the sign-in screen shows one while the server
+    // is still starting, before the dev user is signed in.
     await page.goto(`${FIXTURE_URL}/admin`, { timeout: 200_000 });
-    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    await expect(
+      page.getByRole("button", { name: "User profile menu" })
+    ).toBeVisible({ timeout: 60_000 });
     const read = await page.request.get(
       `${FIXTURE_URL}/admin/api/dashboard/layout`
     );
+    expect(read.ok(), await read.text()).toBe(true);
     const layout = (await read.json()) as Layout;
     const write = await page.request.put(
       `${FIXTURE_URL}/admin/api/dashboard/layout`,

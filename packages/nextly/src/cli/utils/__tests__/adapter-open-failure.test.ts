@@ -9,10 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
-const createAdapterFromEnv = vi.fn();
+const createAdapter = vi.fn();
 
 vi.mock("../../../database/factory", () => ({
-  createAdapterFromEnv: (...args: unknown[]) => createAdapterFromEnv(...args),
+  createAdapter: (...args: unknown[]) => createAdapter(...args),
 }));
 
 const { createCliAdapter } = await import("../adapter");
@@ -24,12 +24,12 @@ const open = () =>
   });
 
 afterEach(() => {
-  createAdapterFromEnv.mockReset();
+  createAdapter.mockReset();
 });
 
 describe("a database that cannot be opened", () => {
   it("is DATABASE_UNREACHABLE when the connection fails, with the driver's reason", async () => {
-    createAdapterFromEnv.mockRejectedValue(
+    createAdapter.mockRejectedValue(
       new Error("connect ECONNREFUSED 127.0.0.1:5432")
     );
     await expect(open()).rejects.toMatchObject({
@@ -40,7 +40,7 @@ describe("a database that cannot be opened", () => {
 
   it("is DATABASE_ADAPTER_MISSING when the adapter's package cannot be loaded", async () => {
     // The factory's own wording for a package it could not import.
-    createAdapterFromEnv.mockRejectedValue(
+    createAdapter.mockRejectedValue(
       new Error(
         'Failed to load database adapter for "postgresql". Make sure @nextlyhq/adapter-postgres is installed'
       )
@@ -52,7 +52,7 @@ describe("a database that cannot be opened", () => {
 
   it("is DATABASE_VERSION_UNSUPPORTED when the server is older than Nextly supports", async () => {
     // As the adapters' version check throws it: by kind, with both versions.
-    createAdapterFromEnv.mockRejectedValue(
+    createAdapter.mockRejectedValue(
       Object.assign(new Error("PostgreSQL 12.4 is not supported."), {
         kind: "unsupported_version",
         detectedVersion: "12.4",
@@ -71,7 +71,7 @@ describe("a database that cannot be opened", () => {
       publicMessage:
         'db.postgres.schema is "cms", but this database\'s Nextly installation is in "public".',
     });
-    createAdapterFromEnv.mockRejectedValue(refusal);
+    createAdapter.mockRejectedValue(refusal);
     await expect(open()).rejects.toBe(refusal);
   });
 });

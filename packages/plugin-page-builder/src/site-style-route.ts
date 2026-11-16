@@ -345,12 +345,14 @@ export function siteStyleRoute(
   store: Pick<ComponentStore, "collection"> = {}
 ): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: SiteStyleRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: SITE_STYLE_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (_req, ctx) =>
       respondDoc(
         await readSiteStyleForEditor(ctx, await getCachedNextly(), store)

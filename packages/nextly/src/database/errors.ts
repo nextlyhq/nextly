@@ -203,6 +203,52 @@ export function isDatabaseBusy(error: unknown): boolean {
   return isBusyCode(safeCode(error));
 }
 
+/**
+ * The kinds a database that could not be reached, or did not answer in time,
+ * is given here: as opposed to one that answered with a refusal.
+ */
+const UNREACHED_KINDS: ReadonlySet<DbErrorKind> = new Set([
+  "busy",
+  "connection-lost",
+  "timeout",
+]);
+
+/** Whether a `DbError`'s kind is a database not reached or not answering in time. */
+export function isUnreachedDbErrorKind(kind: DbErrorKind): boolean {
+  return UNREACHED_KINDS.has(kind);
+}
+
+/**
+ * A refused connection: the host is up and nothing listens, as a database
+ * being restarted or moved answers. No dialect's mapping names it, since it
+ * is the network's code rather than the database's.
+ */
+const CONNECTION_REFUSED = "ECONNREFUSED";
+
+/**
+ * Whether a driver's own code says the database could not be reached or did
+ * not answer in time: busy, a lost or refused connection, a timeout.
+ *
+ * For an error that reaches its reader as the driver threw it, with no
+ * dialect at hand, such as a read through Drizzle directly. Read through each
+ * dialect's mapping above rather than a list of its own, so it never
+ * disagrees with what `toDbError` would call the same code; the dialects'
+ * codes do not overlap (PostgreSQL's five-character SQLSTATEs, MySQL's
+ * numbers and `ER_` names, SQLite's `SQLITE_` names), so reading all three
+ * cannot take one dialect's code for another's.
+ */
+export function isUnreachedDatabaseCode(code: string | undefined): boolean {
+  if (code === undefined) return false;
+  if (isBusyCode(code) || code.toUpperCase() === CONNECTION_REFUSED) {
+    return true;
+  }
+  return [
+    mapPostgresCodeToKind(code),
+    mapMySqlCodeToKind(code),
+    mapSqliteCodeToKind(code),
+  ].some(isUnreachedDbErrorKind);
+}
+
 export function isUniqueViolation(
   dialect: SupportedDialect,
   error: unknown
@@ -229,6 +275,18 @@ export function safeCode(error: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * PostgreSQL codes outside class 08 that mean the database was not reached,
+ * as a lost connection does: admin_shutdown (57P01); too_many_connections
+ * (53300), the server had no connection to give; idle_session_timeout
+ * (57P05), the server closed a connection held idle past its limit.
+ */
+const PG_CONNECTION_LOST: ReadonlySet<string> = new Set([
+  "57P01",
+  "53300",
+  "57P05",
+]);
+
 function mapPostgresCodeToKind(code?: string): DbErrorKind {
   if (!code) return "internal";
   const c = code.toUpperCase();
@@ -239,10 +297,20 @@ function mapPostgresCodeToKind(code?: string): DbErrorKind {
   if (c === "23503") return "fk-violation";
   if (c === "23502") return "not-null-violation";
   if (c === "42601") return "syntax";
-  if (c.startsWith("08") || c === "57P01") return "connection-lost"; // connection exceptions / admin shutdown
+  if (c.startsWith("08") || PG_CONNECTION_LOST.has(c)) return "connection-lost"; // connection exceptions, and the codes above
   if (c.startsWith("23")) return "constraint"; // integrity constraint violation (generic)
   return "internal";
 }
+
+/**
+ * MySQL's too-many-connections error, by number and by name: the server had
+ * no connection to give, so the database was not reached, as PostgreSQL's
+ * 53300 is read above.
+ */
+const MYSQL_TOO_MANY_CONNECTIONS: ReadonlySet<string> = new Set([
+  "1040",
+  "ER_CON_COUNT_ERROR",
+]);
 
 function mapMySqlCodeToKind(code?: string): DbErrorKind {
   if (!code) return "internal";
@@ -257,6 +325,7 @@ function mapMySqlCodeToKind(code?: string): DbErrorKind {
   if (c === "1451" || c === "ER_ROW_IS_REFERENCED_2") return "fk-violation";
   if (c === "ECONNRESET" || c.includes("PROTOCOL_CONNECTION_LOST"))
     return "connection-lost";
+  if (MYSQL_TOO_MANY_CONNECTIONS.has(c)) return "connection-lost";
   if (c === "ETIMEDOUT") return "timeout";
   return "internal";
 }

@@ -248,6 +248,7 @@ describe("Search Console on the Connections tab", () => {
         },
       ],
       checked: 10,
+      readAt: "2026-11-15T08:12:00.000Z",
     };
     vi.mocked(writePluginRoute).mockResolvedValue(undefined);
     render(<SeoSettingsPage />);
@@ -266,6 +267,50 @@ describe("Search Console on the Connections tab", () => {
       path: "/connections/search-console/disconnect",
     });
     expect(rereads).toBe(1);
+  });
+
+  it("counts one click as one click, and says when Search Console was read", () => {
+    serving(
+      { _rev: "1" },
+      {
+        searchConsole: {
+          configured: true,
+          connected: {
+            email: "sara@acme.example",
+            property: "sc-domain:acme.example",
+          },
+        },
+        indexNow: {},
+      }
+    );
+    report = {
+      from: "2026-10-16",
+      to: "2026-11-12",
+      clicks: 1,
+      pages: [{ page: "https://acme.example/", clicks: 1, impressions: 40 }],
+      queries: [
+        { query: "acme", clicks: 1, impressions: 30 },
+        { query: "acme rockets", clicks: 2, impressions: 10 },
+      ],
+      otherAddress: [],
+      checked: 1,
+      readAt: "2026-11-15T08:12:00.000Z",
+    };
+    render(<SeoSettingsPage />);
+    openTab("Connections");
+    const summary = screen.getByText(/from Google in the last 28 days/);
+    expect(summary.textContent).toBe(
+      "1 click from Google in the last 28 days."
+    );
+    expect(screen.getByText("1 click")).toBeTruthy();
+    expect(screen.getByText("2 clicks")).toBeTruthy();
+    expect(screen.queryByText(/1 clicks/)).toBeNull();
+    expect(screen.getByText("Not the most visited page.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /^Last read from Search Console .+, and read again once it is six hours old\.$/
+      )
+    ).toBeTruthy();
   });
 
   it("says the last failure in plain words", () => {

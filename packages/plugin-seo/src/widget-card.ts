@@ -26,6 +26,7 @@ import {
   type PluginContributions,
 } from "@nextlyhq/plugin-sdk";
 
+import { MANAGE_SEO_PERMISSION } from "./permissions";
 import type { ProblemsFor } from "./problems/card-source";
 import {
   KIND_ORDER,
@@ -69,10 +70,30 @@ type IssueBucket = { value: string; count: number };
 
 /** What the card and its line are built from. */
 export interface SeoIssuesSetup {
-  /** The collections SEO is added to. */
+  /** The collections SEO is added to, where the site names them. */
   collections: readonly string[];
+  /**
+   * The permission that shows the card and its line, where SEO is on every
+   * type: which types those are is known only once the site starts, after
+   * the dashboard's declarations are read, so they cannot be named.
+   */
+  permission?: string;
   /** The problem list as the person asking may read it. */
   problemsFor: ProblemsFor;
+}
+
+/**
+ * What the card and its line are built from for `types`: the collections
+ * where the site names them; where SEO is on every type, which are known
+ * only once the site starts, whoever manages site-wide SEO.
+ */
+export function seoIssuesSetup(
+  types: { readonly named: boolean; readonly collections: readonly string[] },
+  problemsFor: ProblemsFor
+): SeoIssuesSetup {
+  return types.named
+    ? { collections: types.collections, problemsFor }
+    : { collections: [], permission: MANAGE_SEO_PERMISSION, problemsFor };
 }
 
 /** Where the problem list is, as a path relative to the admin. */
@@ -134,13 +155,16 @@ function listFor(
  *
  * 🔴 `access` names the collections the list reads, so only a person who may
  * read every one of them is offered the card; anyone else is told it is not
- * available. Its `load` reads the list as that person, so the number is
- * theirs.
+ * available. Where SEO is on every type, which cannot be named here, it is
+ * the permission given instead. Its `load` reads the list as that person, so
+ * the number is theirs.
  */
 export function seoIssuesWidget(
   setup: SeoIssuesSetup
 ): DashboardWidget | undefined {
-  if (setup.collections.length === 0) return undefined;
+  if (setup.permission === undefined && setup.collections.length === 0) {
+    return undefined;
+  }
 
   return defineWidget({
     id: SEO_ISSUES_WIDGET_ID,
@@ -155,7 +179,10 @@ export function seoIssuesWidget(
       min: { w: 3, h: 3 },
       max: { w: 6, h: 4 },
     },
-    access: { collections: [...setup.collections] },
+    access:
+      setup.permission === undefined
+        ? { collections: [...setup.collections] }
+        : setup.permission,
     load: async input => issueBuckets(await listFor(setup, input)),
     view: "bars",
     skeleton: "bars",
@@ -180,20 +207,27 @@ export const SEO_PROBLEMS_ATTENTION_ID = "seo/problems";
  * the list without asking for attention.
  *
  * 🔴 It names every collection SEO is added to, so core shows it to anyone
- * who may read one of them and lets it read those, as that person. The list
- * it counts asks only of the types that person may read, so a reader of one
- * collection is counted that collection's pages and the whole site's
+ * who may read one of them and lets it read those, as that person; where SEO
+ * is on every type, it is shown to whoever holds the permission given. The
+ * list it counts asks only of the types that person may read, so a reader of
+ * one collection is counted that collection's pages and the whole site's
  * problems, as the list shows them.
  */
 export function seoProblemsAttentionItem(
   setup: SeoIssuesSetup
 ): AttentionItem | undefined {
   const [first, ...rest] = setup.collections;
-  if (first === undefined) return undefined;
+  const audience =
+    setup.permission !== undefined
+      ? { permission: setup.permission }
+      : first === undefined
+        ? undefined
+        : { collections: [first, ...rest] as [string, ...string[]] };
+  if (audience === undefined) return undefined;
   return defineAttentionItem({
     id: SEO_PROBLEMS_ATTENTION_ID,
     label: "SEO problems",
-    collections: [first, ...rest],
+    ...audience,
     count: async input =>
       problemsToFix(severityCounts(await listFor(setup, input))),
     link: PROBLEMS_LINK,

@@ -202,7 +202,7 @@ export function declaredPublicAddressProblem(
 
 /** A refused `publicAddress`, as the collection and Single validators report one. */
 export interface PublicAddressError {
-  path: "publicAddress";
+  path: "publicAddress" | "publicAddressField";
   code: "PUBLIC_ADDRESS_INVALID";
   message: string;
 }
@@ -261,4 +261,123 @@ export function fillPublicAddress(
   if (segments.some(s => s === "" || s === "." || s === "..")) return null;
   if (isReservedPath(filled)) return null;
   return filled;
+}
+
+/**
+ * @experimental An entry's own address, as the field a collection names in
+ * `publicAddressField` holds it: none where the field is empty, so the
+ * collection's template gives the entry its address; the address where the
+ * value is one a visitor can be served at on this site; and why not
+ * otherwise.
+ */
+export type OwnAddress =
+  | { status: "none" }
+  | { status: "resolved"; path: string }
+  | { status: "invalid"; problem: string };
+
+/** The shape a refused own address is described against. */
+const OWN_ADDRESS_SHAPE =
+  'Use an address on this site, starting with "/", such as "/about"';
+
+/**
+ * One part of an own address as a browser sends it, or why it can't be one:
+ * not a valid escape, empty, or a step out of the path (`.`, `..`, escaped
+ * or not), which is refused rather than encoded into a segment as a
+ * placeholder's value would be.
+ */
+function spelledPart(part: string): string | OwnAddress {
+  let plain: string;
+  try {
+    plain = decodeURIComponent(part);
+  } catch {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}: "${part}" is not a valid part of an address.`,
+    };
+  }
+  if (plain === "" || plain === "." || plain === "..") {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, with no empty, "." or ".." part.`,
+    };
+  }
+  return encodeURIComponent(plain);
+}
+
+/**
+ * The address `value` names as an entry's own, judged and spelled as a
+ * template's result is: from the site's root, with no other host, query,
+ * fragment or trailing `/`, each segment encoded as a browser sends it, and
+ * no `.`, `..` or empty segment, or path the runtime keeps for itself.
+ */
+export function ownAddressOf(value: unknown): OwnAddress {
+  if (value === undefined || value === null) return { status: "none" };
+  if (typeof value !== "string") {
+    return { status: "invalid", problem: `${OWN_ADDRESS_SHAPE}.` };
+  }
+  const text = value.trim();
+  if (text === "") return { status: "none" };
+  if (text === "/") return { status: "resolved", path: "/" };
+  if (!text.startsWith("/") || text.startsWith("//") || /[?#\\\s]/.test(text)) {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, with no other site, query or fragment.`,
+    };
+  }
+  if (text.endsWith("/")) {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, without a "/" at the end.`,
+    };
+  }
+  // Each part read as a browser sends it, so an address typed already
+  // escaped (`/caf%C3%A9`) and one typed plainly (`/café`) are one address,
+  // never escaped twice.
+  const parts: string[] = [];
+  for (const part of text.slice(1).split("/")) {
+    const spelled = spelledPart(part);
+    if (typeof spelled !== "string") return spelled;
+    parts.push(spelled);
+  }
+  const path = `/${parts.join("/")}`;
+  // Nothing under a path the runtime keeps, as no template's result may be.
+  return isReservedPath(path)
+    ? {
+        status: "invalid",
+        problem: `${OWN_ADDRESS_SHAPE}, outside the paths kept for the admin, the API and the runtime.`,
+      }
+    : { status: "resolved", path };
+}
+
+/**
+ * Why the field `publicAddressField` names cannot hold a collection's
+ * entries' own addresses, or null where it can or none is named: it needs the
+ * collection's template to fall back to, and must be a top-level text field.
+ */
+export function publicAddressFieldProblem(
+  field: unknown,
+  publicAddress: unknown,
+  fields: readonly unknown[]
+): string | null {
+  if (field === undefined) return null;
+  if (typeof field !== "string" || field === "") {
+    return "publicAddressField must name a text field of the collection.";
+  }
+  if (publicAddress === undefined) {
+    return `publicAddressField "${field}" needs publicAddress, the template an entry with no address of its own is served at.`;
+  }
+  const declared = fields.find(
+    each => (each as { name?: unknown } | null)?.name === field
+  ) as { type?: unknown } | undefined;
+  if (declared === undefined) {
+    return `publicAddressField: "${field}" is not a field of the collection.`;
+  }
+  if (declared.type !== "text") {
+    return `publicAddressField: "${field}" must be a text field.`;
+  }
+  // A list of values is no one address.
+  if ((declared as { hasMany?: unknown }).hasMany === true) {
+    return `publicAddressField: "${field}" must hold one value, not a list (hasMany).`;
+  }
+  return null;
 }

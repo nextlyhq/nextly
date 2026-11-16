@@ -96,12 +96,14 @@ async function readBody(
  */
 export function spacingModeRoute(expire?: SiteStyleExpiry): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: SpacingModeRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: SPACING_MODE_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: (req, ctx) => chooseSpacingMode(req, ctx, expire),
   };
 }

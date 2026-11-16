@@ -39,7 +39,7 @@ import {
 import { resolveOrder, type SeoAnswer } from "../resolver/order";
 import type { PatternField } from "../settings/contract";
 import { SITE_NAME_TOKEN } from "../settings/patterns";
-import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "../tab/problems";
+import type { SearchText } from "../tab/problems";
 import type { TemplateContext } from "../template/contract";
 import {
   ruleOfText,
@@ -47,7 +47,7 @@ import {
   type RuleSegment,
 } from "../template/rule-text";
 
-import { CharacterCount, inSentence, Note } from "./parts";
+import { inSentence, Note, WidthMeter } from "./parts";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
 import { useTemplateContext } from "./use-template-context";
@@ -489,8 +489,8 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
       <RuleText
         id={`${id}-title`}
         label="Title on Google"
-        count={answer?.title?.value.length ?? 0}
-        limit={TITLE_LIMIT}
+        kind="title"
+        text={answer?.title?.value ?? ""}
         unknown={unknownIn(draft.title, context.fields)}
       >
         <Input
@@ -504,8 +504,8 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
       <RuleText
         id={`${id}-desc`}
         label="Description on Google"
-        count={answer?.description?.value.length ?? 0}
-        limit={DESCRIPTION_LIMIT}
+        kind="description"
+        text={answer?.description?.value ?? ""}
         unknown={unknownIn(draft.description, context.fields)}
       >
         <Input
@@ -641,34 +641,32 @@ function Variables({
   );
 }
 
-/** One of the rule's text fields: its label and count, and what it names wrongly. */
+/**
+ * One of the rule's text fields: its label, how wide the example it gives
+ * draws on Google, and what it names wrongly.
+ */
 function RuleText({
   id,
   label,
-  count,
-  limit,
+  kind,
+  text,
   unknown,
   children,
 }: {
   id: string;
   label: string;
-  count: number;
-  limit: number;
+  kind: SearchText;
+  text: string;
   unknown: readonly string[];
   children: ReactNode;
 }): ReactNode {
   return (
     <div className="grid gap-1.5">
-      <div className="flex items-baseline justify-between gap-2.5">
-        <label
-          htmlFor={id}
-          className="text-[13px] font-semibold text-foreground"
-        >
-          {label}
-        </label>
-        <CharacterCount count={count} limit={limit} />
-      </div>
+      <label htmlFor={id} className="text-[13px] font-semibold text-foreground">
+        {label}
+      </label>
       {children}
+      <WidthMeter kind={kind} text={text} />
       {unknown.length === 0 ? null : (
         <p role="alert" className="m-0 text-xs font-medium text-warning-text">
           {unknown.map(token => `{${token}}`).join(", ")}{" "}

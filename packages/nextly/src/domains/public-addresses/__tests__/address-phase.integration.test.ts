@@ -25,6 +25,7 @@ import {
 } from "../participants";
 
 import { heldPage } from "../held-listing";
+import { publicAddressOf } from "../public-address";
 
 import { memoryParticipant, type Holding } from "./memory-participant";
 
@@ -82,6 +83,18 @@ async function boot(
       defineCollection({
         slug: "notes",
         fields: [text({ name: "title" }), text({ name: "slug" })],
+      }),
+      // Most features at /features/{slug}; one at an address of its own.
+      defineCollection({
+        slug: "features",
+        status: true,
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug" }),
+          text({ name: "address" }),
+        ],
+        publicAddress: "/features/{slug}",
+        publicAddressField: "address",
       }),
       ...(localized
         ? [
@@ -585,6 +598,97 @@ describe.each(getConfiguredTestDialects())(
       expect(record.held()).toEqual({
         "en|/articles/hello": `articles:${article}`,
         "fr|/articles/bonjour": `articles:${article}`,
+      });
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "an entry's own address, named by a field (%s)",
+  dialect => {
+    it("holds an entry's own address where its field names one, else the template's", async () => {
+      const t = await boot(dialect);
+      const record = join(memoryParticipant());
+      const own = await create(t, "features", {
+        title: "Brand voice",
+        slug: "brand-voice",
+        address: "/brand-voice",
+        status: "published",
+      });
+      const plain = await create(t, "features", {
+        title: "Article writer",
+        slug: "article-writer",
+        address: "",
+        status: "published",
+      });
+
+      expect(record.held()).toEqual({
+        "en|/brand-voice": `features:${own}`,
+        "en|/features/article-writer": `features:${plain}`,
+      });
+      const type = { kind: "collection" as const, slug: "features" };
+      expect(
+        await publicAddressOf(type, {
+          slug: "brand-voice",
+          address: "/brand-voice",
+        })
+      ).toEqual({ status: "resolved", path: "/brand-voice" });
+      expect(
+        await publicAddressOf(type, { slug: "article-writer", address: "" })
+      ).toEqual({ status: "resolved", path: "/features/article-writer" });
+    });
+
+    it("refuses an own address another page holds, as any clash", async () => {
+      const t = await boot(dialect);
+      join(memoryParticipant());
+      await create(t, "pages", {
+        title: "Brand voice",
+        slug: "brand-voice",
+        status: "published",
+      });
+
+      await expect(
+        create(t, "features", {
+          title: "Brand voice",
+          slug: "brand-voice",
+          address: "/brand-voice",
+          status: "published",
+        })
+      ).rejects.toMatchObject({
+        code: "DUPLICATE",
+        publicMessage:
+          "/brand-voice (en) is already the address of another page. Choose another address for this entry.",
+      });
+    });
+
+    it("refuses an own address no visitor could be served at, on the field", async () => {
+      const t = await boot(dialect);
+      await expect(
+        create(t, "features", {
+          title: "Elsewhere",
+          slug: "elsewhere",
+          address: "//other.example/brand-voice",
+          status: "published",
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("moves the entry's address when its own address changes, or is cleared", async () => {
+      const t = await boot(dialect);
+      const record = join(memoryParticipant());
+      const id = await create(t, "features", {
+        title: "Brand voice",
+        slug: "brand-voice",
+        address: "/brand-voice",
+        status: "published",
+      });
+
+      await update(t, "features", id, { address: "/voice" });
+      expect(record.held()).toEqual({ "en|/voice": `features:${id}` });
+
+      await update(t, "features", id, { address: "" });
+      expect(record.held()).toEqual({
+        "en|/features/brand-voice": `features:${id}`,
       });
     });
   }

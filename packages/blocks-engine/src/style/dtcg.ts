@@ -28,9 +28,22 @@
  * value, for the tools this exists to talk to, and the exact CSS under this
  * vendor's `$extensions` key. Import prefers the extension when it is there,
  * which makes a Nextly-to-Nextly round trip exact, and falls back to converting
- * the native value, which makes a file from Figma import correctly. A token
- * with no representable value is reported rather than emitted with a shape that
- * would be a lie about what it holds.
+ * the native value, which makes a file from Figma import correctly.
+ *
+ * ## A value the format cannot type still leaves in the file
+ *
+ * Dropping it would lose most of a site's spacing: a custom value has no
+ * `$type`, and a shadow kept as CSS, an `em` size, a percentage or a `var()`
+ * family has no conformant `$value`. Inventing a type of this system's own
+ * would make other tools refuse the file. So such a variable is written under
+ * this vendor's key in the document's own `$extensions`, as `variables`, keyed
+ * by name: other tools ignore it, as the format requires them to, and the file
+ * stays valid; this importer reads it back exactly.
+ *
+ * A fluid size is the one exception with a useful native value: a `clamp()`
+ * whose largest value is in `px` or `rem` is written as that largest value in
+ * `px`, which is what a design tool can draw, with the `clamp()` kept in the
+ * extension and named in `$description`.
  *
  * Foreign extension data is carried in both directions untouched, because the
  * format requires it: "Tools that process design token files MUST preserve any
@@ -54,7 +67,7 @@
  */
 import type { ValidationIssue } from "../validation";
 
-import type { TokenKind } from "./catalog-types";
+import { TOKEN_KINDS, type TokenKind } from "./catalog-types";
 // The colour reader the contrast utility already uses. One parser rather than
 // two, because a second would have to be kept in step with it by hand and the
 // symptom of failure is silent: an exported `$value` that describes a different
@@ -101,6 +114,13 @@ interface NextlyExtension {
    * display name beside the path, so it rides here with the identity.
    */
   label?: string;
+  /**
+   * The token's own description, `null` for none, written only when
+   * `$description` holds text this system added: a fluid size names its
+   * `clamp()` there for other tools, and the import gives back only what the
+   * author wrote.
+   */
+  description?: string | null;
 }
 
 /** A DTCG group or token; the format is a tree of plain JSON. */
@@ -118,9 +138,16 @@ const DTCG_TYPE: Partial<Record<TokenKind, string>> = {
 };
 
 /** The kinds a `$type` projects back onto. */
-const KIND_BY_TYPE = new Map<string, TokenKind>(
-  Object.entries(DTCG_TYPE).map(([kind, type]) => [type, kind as TokenKind])
-);
+const KIND_BY_TYPE = new Map<string, TokenKind>([
+  ...Object.entries(DTCG_TYPE).map(([kind, type]): [string, TokenKind] => [
+    type,
+    kind as TokenKind,
+  ]),
+  // The one type outside DTCG this reads: Figma writes a string variable as
+  // `string`, which is how the Figma export writes a custom value, so a file
+  // from Figma or from this system's own Figma export comes back as one.
+  ["string", "custom"],
+]);
 
 function issue(message: string): ValidationIssue {
   return {
@@ -146,73 +173,78 @@ export function tokensToDtcg(set: SiteTokenSet): {
 } {
   const document: DtcgNode = {};
   const issues: ValidationIssue[] = [];
+  const carried: DtcgNode = {};
 
   for (const token of set.tokens) {
-    const entry = dtcgEntry(token, issues);
-    // Skipped rather than placed: `dtcgEntry` has already said why, and a name
-    // it refused is one `place` would split into a path anyway.
-    if (entry === undefined) continue;
-    place(document, token.name.split("."), entry, issues);
+    const naming = exportNamingRefusal(token, "it was not exported");
+    if (naming !== undefined) {
+      // One rule, phrased for this gate. The identity carries the cap and the
+      // display name carries only the grammar, so a renamed token with a long
+      // label exports normally. The id is covered by the same answer: written,
+      // it would make a file this module's own importer refuses.
+      issues.push(issue(naming));
+      continue;
+    }
+    const typed = typedValue(token);
+    if (typed === undefined) {
+      // Keyed by the whole name: this is extension data, not a token tree, so
+      // the format's ban on a period inside a name does not reach it.
+      if (Object.hasOwn(carried, token.name)) {
+        issues.push(issue(`"${token.name}" is exported more than once.`));
+        continue;
+      }
+      carried[token.name] = entryFor(token, undefined);
+      continue;
+    }
+    place(document, token.name.split("."), entryFor(token, typed), issues);
   }
 
+  if (Object.keys(carried).length > 0) {
+    document.$extensions = { [NEXTLY_EXTENSION]: { [CARRIED]: carried } };
+  }
   return { document, issues };
 }
 
-/**
- * One token as the format holds it, or nothing when it cannot be written.
- *
- * Split from the checks the way {@link readToken} is split from its assembly,
- * and for the same reason: deciding whether a token can cross the boundary and
- * building the node that crosses it are separate jobs, and a guard added to the
- * builder would be a second place that answers the first question.
- */
-function dtcgEntry(
-  token: SiteToken,
-  issues: ValidationIssue[]
-): DtcgNode | undefined {
-  const writable = exportableValue(token, issues);
-  if (writable === undefined) return undefined;
-  return entryFor(token, writable.type, writable.value);
+/** The line a fluid size's `$description` names its `clamp()` with. */
+function fluidNoteFor(css: string): string {
+  return `Fluid size: ${css.trim()}`;
+}
+
+/** A description and a fluid size's note, as `$description` holds the two. */
+function withFluidNote(own: string | undefined, note: string): string {
+  return [own, note].filter(Boolean).join("\n\n");
+}
+
+/** Where the document's own extension holds the variables the format cannot type. */
+const CARRIED = "variables";
+
+/** A token's native DTCG form: its `$type`, its `$value`, and whether it is fluid. */
+interface TypedValue {
+  type: string;
+  value: unknown;
+  /** True when `$value` is a fluid size's largest value rather than the size. */
+  fluid: boolean;
 }
 
 /**
- * What this token becomes in the format, or nothing with the reason reported.
+ * What this token becomes as a DTCG token, or nothing when the format has no
+ * type or no conformant value for it, which carries it in the extension.
  *
  * Returns the converted value rather than merely approving the token, so the
- * caller does not convert it a second time — two conversions of one value is
+ * caller does not convert it a second time: two conversions of one value is
  * the shape that lets an approval and an emission disagree about what was
  * approved.
  */
-function exportableValue(
-  token: SiteToken,
-  issues: ValidationIssue[]
-): { type: string; value: unknown } | undefined {
-  const naming = exportNamingRefusal(token, "it was not exported");
-  if (naming !== undefined) {
-    // One rule, phrased for this gate. The identity carries the cap and the
-    // display name carries only the grammar, so a renamed token with a long
-    // label exports normally — refusing it here would drop a working token from
-    // the file while Nextly went on rendering it.
-    issues.push(issue(naming));
-    return undefined;
-  }
-  // The id is covered by the same answer above, and refused rather than
-  // written: writing it produces a file this module's own importer refuses on
-  // the way back in — and it refuses the WHOLE token, because an id it cannot
-  // read is an identity it cannot honour. An exporter emitting a document that
-  // fails its own round trip is the one shape this module exists to prevent.
-
+function typedValue(token: SiteToken): TypedValue | undefined {
   const type = DTCG_TYPE[token.kind];
-  const value = type === undefined ? undefined : toDtcgValue(token);
-  if (type === undefined || value === undefined) {
-    issues.push(
-      issue(
-        `"${token.name}" holds a value the design-token format cannot express, so it was not exported. Its value is still here in Nextly.`
-      )
-    );
-    return undefined;
-  }
-  return { type, value };
+  if (type === undefined) return undefined;
+  const value = toDtcgValue(token);
+  if (value !== undefined) return { type, value, fluid: false };
+  if (token.kind !== "dimension") return undefined;
+  const largest = fluidLargestPixels(token.values.light.trim());
+  return largest === undefined
+    ? undefined
+    : { type, value: { value: largest, unit: "px" }, fluid: true };
 }
 
 /**
@@ -237,8 +269,16 @@ export function exportNamingRefusal(
     : `"${String(token.name)}" has an id that is not a token name, so ${outcome}. Its value is still here in Nextly.`;
 }
 
-/** The node for a token already established as writable. */
-function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
+/**
+ * The node for a token whose name can be written: a DTCG token when it is
+ * typed, or, with no `typed`, the same fields without `$type` or `$value` for
+ * the document's extension, read back through the same reader.
+ */
+function entryFor(token: SiteToken, typed: TypedValue | undefined): DtcgNode {
+  // A fluid size names its `clamp()` for tools that read only the native value,
+  // and the extension records the author's own description beside it.
+  const fluidNote =
+    typed?.fluid === true ? fluidNoteFor(token.values.light) : undefined;
   const extension: NextlyExtension = {
     css:
       token.values.dark === undefined
@@ -250,10 +290,12 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
     // and everything about which version of this exporter ran.
     ...(token.id === undefined ? {} : { id: token.id }),
     ...(token.label === undefined ? {} : { label: token.label }),
+    ...(fluidNote === undefined
+      ? {}
+      : { description: token.description ?? null }),
   };
   const entry: DtcgNode = {
-    $type: type,
-    $value: value,
+    ...(typed === undefined ? {} : { $type: typed.type, $value: typed.value }),
     $extensions: {
       ...(token.extensions ?? {}),
       // `unreadIn` is what keeps the two halves apart, HERE as much as on the
@@ -268,7 +310,11 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
       [NEXTLY_EXTENSION]: { ...unreadIn(token.unreadExtension), ...extension },
     },
   };
-  if (token.description !== undefined) entry.$description = token.description;
+  const description =
+    fluidNote === undefined
+      ? token.description
+      : withFluidNote(token.description, fluidNote);
+  if (description !== undefined) entry.$description = description;
   return entry;
 }
 
@@ -285,7 +331,7 @@ function entryFor(token: SiteToken, type: string, value: unknown): DtcgNode {
  * prototype behaved the same way, at a leaf or at any segment on the way down.
  *
  * `__proto__` is the one name that would also corrupt the ASSIGNMENT rather
- * than only the lookup, and it cannot arrive here: `exportableValue` refuses a
+ * than only the lookup, and it cannot arrive here: `tokensToDtcg` refuses a
  * name `isTokenName` rejects, and that regex requires a letter first.
  */
 function place(
@@ -374,6 +420,70 @@ function measureToDtcg(
   const unit = asciiLower(decodeIdentifier(match[2] ?? ""));
   if (!Number.isFinite(value) || !units.includes(unit)) return undefined;
   return { value, unit };
+}
+
+/** A length in px from `0`, a px value or a rem value (16px each), or nothing. */
+function pixelsOf(css: string): number | undefined {
+  if (css === "0") return 0;
+  const measure = measureToDtcg(css, DTCG_LENGTH_UNITS);
+  if (measure === undefined) return undefined;
+  return measure.unit === "rem" ? measure.value * 16 : measure.value;
+}
+
+/**
+ * A fluid size's largest value in px: the last argument of a `clamp()`, when
+ * that is a px or rem value. Nothing for any other value.
+ *
+ * The largest because a design tool draws one size, and a layout is designed
+ * at its widest; the `clamp()` itself travels beside it.
+ */
+function fluidLargestPixels(css: string): number | undefined {
+  const match = /^clamp\((.*)\)$/is.exec(css);
+  if (match === null) return undefined;
+  const args = topLevelArguments(match[1] ?? "");
+  if (args.length !== 3) return undefined;
+  return pixelsOf((args[2] ?? "").trim());
+}
+
+/**
+ * What a value becomes in the format, read back as CSS: the value an import
+ * finds for a token this system wrote from `css`. Nothing when the format
+ * cannot type it. The theme file's import compares against it to tell a
+ * converted value from one an author edited.
+ */
+export function nativeReading(
+  kind: TokenKind,
+  css: string
+): string | undefined {
+  const typed = typedValue({ name: "value", kind, values: { light: css } });
+  return typed === undefined ? undefined : fromDtcgValue(typed.value, kind);
+}
+
+/**
+ * A size in px as a design tool draws it: a px or rem value, or a fluid size's
+ * largest value. The one reading the DTCG export and the Figma files share.
+ */
+export function largestPixels(css: string): number | undefined {
+  const text = css.trim();
+  return pixelsOf(text) ?? fluidLargestPixels(text);
+}
+
+/** A function's arguments, split at the commas outside any parentheses. */
+function topLevelArguments(text: string): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at];
+    if (char === "(") depth++;
+    else if (char === ")") depth--;
+    else if (char === "," && depth === 0) {
+      args.push(text.slice(start, at));
+      start = at + 1;
+    }
+  }
+  args.push(text.slice(start));
+  return args;
 }
 
 /** A hex or `rgb()` colour in the format's object form. */
@@ -929,10 +1039,96 @@ export function dtcgToTokens(input: unknown): {
       issues: [issue("The file is not a design-token document.")],
     };
   }
-  const resolved = resolveAliases(input);
+  const { tree, carried } = takeCarried(input, issues);
+  const resolved = resolveAliases(tree);
   issues.push(...resolved.issues);
   read(resolved.document, [], undefined, tokens, issues);
+  // The variables the format could not type, read by the same reader as every
+  // token, so the rules a token is held to cannot differ by where it was kept.
+  const named = new Set(tokens.map(token => token.name));
+  for (const [name, entry] of Object.entries(carried)) {
+    if (named.has(name)) {
+      issues.push(
+        issue(
+          `"${name}" is described twice in the file, as a token and in ${NEXTLY_EXTENSION}, so the second was skipped.`
+        )
+      );
+      continue;
+    }
+    if (!isPlainObject(entry)) {
+      issues.push(
+        issue(
+          `"${name}" in ${NEXTLY_EXTENSION} is not a variable this site can read, so it was skipped.`
+        )
+      );
+      continue;
+    }
+    if (!holdsStoredValue(entry)) {
+      issues.push(
+        issue(
+          `"${name}" in ${NEXTLY_EXTENSION} holds stored data that could not be read, so it was skipped.`
+        )
+      );
+      continue;
+    }
+    const token = readToken(entry, name.split("."), undefined, issues);
+    if (token !== undefined) {
+      named.add(name);
+      tokens.push(token);
+    }
+  }
   return { tokens, issues };
+}
+
+/**
+ * Whether a carried entry states its stored CSS and kind, the only way one can
+ * be read: it has no `$type` or `$value` to fall back on.
+ */
+function holdsStoredValue(entry: DtcgNode): boolean {
+  const own = statedExtensions(entry)?.[NEXTLY_EXTENSION];
+  return (
+    isPlainObject(own) &&
+    isPlainObject(own.css) &&
+    typeof own.css.light === "string" &&
+    isKind(own.kind)
+  );
+}
+
+/**
+ * The document without the variables this system carried in its own root
+ * extension, and those variables by name.
+ *
+ * Taken out before the tree is walked, so the walk reports what is left of the
+ * root's extensions as it always did, and never this system's own data.
+ */
+function takeCarried(
+  input: DtcgNode,
+  issues: ValidationIssue[]
+): { tree: DtcgNode; carried: DtcgNode } {
+  const extensions = statedExtensions(input);
+  const own = extensions?.[NEXTLY_EXTENSION];
+  if (extensions === undefined || !isPlainObject(own) || !(CARRIED in own)) {
+    return { tree: input, carried: {} };
+  }
+  const { [CARRIED]: variables, ...ownRest } = own;
+  const { [NEXTLY_EXTENSION]: _own, ...otherVendors } = extensions;
+  const rest: DtcgNode =
+    Object.keys(ownRest).length === 0
+      ? otherVendors
+      : { ...otherVendors, [NEXTLY_EXTENSION]: ownRest };
+  const { $extensions: _all, ...tree } = input;
+  if (!isPlainObject(variables)) {
+    issues.push(
+      issue(
+        `The file's ${NEXTLY_EXTENSION} "${CARRIED}" is not a list of variables, so none of it was read.`
+      )
+    );
+  }
+  return {
+    tree:
+      Object.keys(rest).length === 0 ? tree : { ...tree, $extensions: rest },
+    carried: isPlainObject(variables) ? variables : {},
+  };
 }
 
 /* ----------------------------------------------------------------- aliases */
@@ -1494,7 +1690,7 @@ function readToken(
   const unread = unreadIn(own);
   reportUnreadMembers(own, name, issues);
 
-  const description = statedDescription(node);
+  const description = authoredDescription(node, own, name, issues);
   const carried = Object.keys(extensions).length > 0 ? extensions : undefined;
 
   // Read ahead of the branch below, because identity does not depend on which
@@ -1611,6 +1807,40 @@ function readToken(
 }
 
 /**
+ * The description the author wrote: the one this system's extension records
+ * when `$description` holds text it added (`null` for none), else the file's.
+ */
+function authoredDescription(
+  node: DtcgNode,
+  own: unknown,
+  name: string,
+  issues: ValidationIssue[]
+): string | undefined {
+  if (!isPlainObject(own) || !("description" in own)) {
+    return statedDescription(node);
+  }
+  const recorded = own.description;
+  const stated = statedDescription(node);
+  const css = isPlainObject(own.css) ? own.css.light : undefined;
+  if (recorded === null || typeof recorded === "string") {
+    const own = recorded ?? undefined;
+    // `$description` as this system wrote it means the recorded one is the
+    // author's; anything else was edited by another tool, and the edit is kept.
+    const written =
+      typeof css === "string"
+        ? withFluidNote(own, fluidNoteFor(css))
+        : undefined;
+    return stated === undefined || stated === written ? own : stated;
+  }
+  issues.push(
+    issue(
+      `"${name}" carries a description in ${NEXTLY_EXTENSION} that is not text, so the file's own description was kept.`
+    )
+  );
+  return statedDescription(node);
+}
+
+/**
  * The plain label this system's extension states, when it can be shown.
  *
  * A label is display text, so one that cannot be shown costs the label and not
@@ -1670,7 +1900,7 @@ function kindRefusal(
  * to be named here, so adding a field to the emitter without adding it here
  * fails.
  */
-const NEXTLY_FIELDS = new Set(["id", "css", "kind", "label"]);
+const NEXTLY_FIELDS = new Set(["id", "css", "kind", "label", "description"]);
 
 /**
  * The half of this system's OWN extension key that the model does not state.
@@ -1864,59 +2094,75 @@ function isWritableValue(
  *
  * Exported because {@link readToken} decides whether to take a token's stored
  * CSS on this and two other conditions, and a caller reporting what the reader
- * dropped has to ask the same question rather than restate it. Restating it
- * gets the answer wrong: the kinds this predicate accepts are the ones the
- * FORMAT has a type for, which is not every `TokenKind` — `custom` is a kind
- * and is not one of them.
+ * dropped has to ask the same question rather than restate it. Every kind,
+ * `custom` included: a variable the format has no type for is carried in this
+ * system's extension, and read back from its stored CSS like any other.
  */
 export function isKind(value: unknown): value is TokenKind {
-  return typeof value === "string" && Object.hasOwn(DTCG_TYPE, value);
+  return typeof value === "string" && TOKEN_KINDS.some(kind => kind === value);
 }
 
 /** A DTCG value as the CSS this system stores, or `undefined`. */
 function fromDtcgValue(value: unknown, kind: TokenKind): string | undefined {
-  switch (kind) {
-    case "color":
-      return colorFromDtcg(value);
-    case "dimension":
-    case "duration": {
-      if (!isPlainObject(value)) return undefined;
-      const amount = value.value;
-      const unit = value.unit;
-      // The same units the export side allows, so the two directions agree. A
-      // unit is text from a file being concatenated into a stored value: read
-      // unchecked, `{ value: 16, unit: "px;color:red" }` becomes CSS nothing
-      // here wrote.
-      const allowed =
-        kind === "dimension" ? DTCG_LENGTH_UNITS : DTCG_TIME_UNITS;
-      if (
-        typeof amount !== "number" ||
-        !Number.isFinite(amount) ||
-        typeof unit !== "string" ||
-        !allowed.includes(unit.toLowerCase())
-      ) {
-        return undefined;
-      }
-      return `${amount}${unit.toLowerCase()}`;
-    }
-    case "fontFamily":
-      // A DTCG family value is a NAME, not CSS. `ACME,Inc` is one family in the
-      // file and two the moment it is written into a stylesheet unquoted, and a
-      // name holding a quote produces CSS that does not parse at all.
-      if (typeof value === "string") return cssFamilyName(value);
-      if (Array.isArray(value) && value.every(v => typeof v === "string")) {
-        return value.map(cssFamilyName).join(", ");
-      }
-      return undefined;
-    case "fontWeight":
-      if (typeof value === "number") return String(value);
-      return typeof value === "string" ? value : undefined;
-    case "number":
-      return typeof value === "number" ? String(value) : undefined;
-    default:
-      return undefined;
-  }
+  return FROM_DTCG[kind](value);
 }
+
+/**
+ * A measure as CSS, in a unit the format allows for it. The same units the
+ * export side allows, so the two directions agree. A unit is text from a file
+ * being concatenated into a stored value: read unchecked,
+ * `{ value: 16, unit: "px;color:red" }` becomes CSS nothing here wrote.
+ */
+const measureFromDtcg =
+  (allowed: readonly string[]) =>
+  (value: unknown): string | undefined => {
+    if (!isPlainObject(value)) return undefined;
+    const amount = value.value;
+    const unit = value.unit;
+    if (
+      typeof amount !== "number" ||
+      !Number.isFinite(amount) ||
+      typeof unit !== "string" ||
+      !allowed.includes(unit.toLowerCase())
+    ) {
+      return undefined;
+    }
+    return `${amount}${unit.toLowerCase()}`;
+  };
+
+/**
+ * A family value as CSS. A DTCG family value is a NAME, not CSS: `ACME,Inc` is
+ * one family in the file and two the moment it is written into a stylesheet
+ * unquoted, and a name holding a quote produces CSS that does not parse at all.
+ */
+function familyFromDtcg(value: unknown): string | undefined {
+  if (typeof value === "string") return cssFamilyName(value);
+  if (Array.isArray(value) && value.every(v => typeof v === "string")) {
+    return value.map(cssFamilyName).join(", ");
+  }
+  return undefined;
+}
+
+/** How each kind's DTCG value reads as CSS, one reader per kind. */
+const FROM_DTCG: Readonly<
+  Record<TokenKind, (value: unknown) => string | undefined>
+> = {
+  color: value => colorFromDtcg(value),
+  dimension: measureFromDtcg(DTCG_LENGTH_UNITS),
+  duration: measureFromDtcg(DTCG_TIME_UNITS),
+  fontFamily: familyFromDtcg,
+  fontWeight: value =>
+    typeof value === "number"
+      ? String(value)
+      : typeof value === "string"
+        ? value
+        : undefined,
+  number: value => (typeof value === "number" ? String(value) : undefined),
+  // A shadow has no DTCG value this reads; its CSS travels in the extension.
+  shadow: () => undefined,
+  // A string variable's text is the custom value itself.
+  custom: value => (typeof value === "string" ? value : undefined),
+};
 
 /**
  * A DTCG colour as CSS.

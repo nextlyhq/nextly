@@ -15,20 +15,29 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { indexKey } from "../pipeline/diff/index-util";
 import type {
+  ColumnSpec,
   ContributedElements,
   IndexSpec,
   TableSpec,
 } from "../pipeline/diff/types";
+import { renderDialectType } from "../services/field-column-descriptor";
 
 import type { ExtensionSchema } from "./build-extension-schema";
 import { toColumnSpec, toIndexSpec } from "./compile";
+import type { ColumnOverride } from "./draft";
 import { withContributedEnumChecks } from "./enum-check";
+import type { ExtensionIndex } from "./types";
 
-/** The part of a compiled extension schema that holds contributions. */
+/**
+ * The part of a compiled extension schema that holds contributions, and the
+ * app's overrides of the entities' own columns. Overrides are optional so a
+ * source assembled for core tables alone, which take none, need not say so.
+ */
 export type EntityContributionSource = Pick<
   ExtensionSchema,
   "entityColumns" | "entityIndexes"
->;
+> &
+  Partial<Pick<ExtensionSchema, "columnOverrides">>;
 
 /**
  * `spec` with the columns, indexes and enum checks contributed to it.
@@ -47,6 +56,10 @@ export type EntityContributionSource = Pick<
  * - Checks come from `withContributedEnumChecks`, which is also what keeps the
  *   checks of `previous` this pipeline does not own.
  *
+ * - The app's overrides replace the type of the field columns they name,
+ *   rendered by the function every field column is rendered by, so neither
+ *   a push nor a migration plans the field's own storage back.
+ *
  * `previous` is the table as it stands on the other side of the comparison:
  * the live table for dev push, the last snapshot's copy for a migration.
  */
@@ -57,25 +70,22 @@ export function withEntityContributions(
   dialect: SupportedDialect
 ): TableSpec {
   const contributedColumns = source?.entityColumns.get(spec.name) ?? [];
-  const contributedIndexes = source?.entityIndexes.get(spec.name) ?? [];
 
-  const columns = [...spec.columns];
+  const columns = withColumnOverrides(
+    spec.columns,
+    source?.columnOverrides?.get(spec.name) ?? [],
+    dialect
+  );
   for (const column of contributedColumns) {
     if (columns.some(existing => existing.name === column.name)) continue;
     columns.push(toColumnSpec(column, dialect));
   }
 
-  const present = new Set(columns.map(column => column.name));
-  const indexes: IndexSpec[] = [...(spec.indexes ?? [])];
-  const keys = new Set(indexes.map(index => indexKey(index)));
-  for (const index of contributedIndexes) {
-    if (index.columns.length === 0) continue;
-    if (!index.columns.every(column => present.has(column))) continue;
-    const built = toIndexSpec(spec.name, index);
-    if (keys.has(indexKey(built))) continue;
-    keys.add(indexKey(built));
-    indexes.push(built);
-  }
+  const indexes = withContributedIndexes(
+    spec,
+    new Set(columns.map(column => column.name)),
+    source?.entityIndexes.get(spec.name) ?? []
+  );
 
   return withContributedEnumChecks(
     {
@@ -86,6 +96,65 @@ export function withEntityContributions(
     contributedColumns,
     previous,
     dialect
+  );
+}
+
+/**
+ * `spec`'s indexes and the ones contributed to it, each over columns the
+ * table has (`present`), and each shape once.
+ */
+function withContributedIndexes(
+  spec: TableSpec,
+  present: ReadonlySet<string>,
+  contributed: readonly ExtensionIndex[]
+): IndexSpec[] {
+  const indexes: IndexSpec[] = [...(spec.indexes ?? [])];
+  const keys = new Set(indexes.map(index => indexKey(index)));
+  for (const index of contributed) {
+    if (index.columns.length === 0) continue;
+    if (!index.columns.every(column => present.has(column))) continue;
+    const built = toIndexSpec(spec.name, index);
+    if (keys.has(indexKey(built))) continue;
+    keys.add(indexKey(built));
+    indexes.push(built);
+  }
+  return indexes;
+}
+
+/**
+ * `columns` with the storage the app's overrides give the columns they name.
+ * The column keeps everything else: its name, nullability and default. A
+ * width the type carries outside its token (PostgreSQL's `bpchar`) is
+ * dropped with the old type, since no override target takes one.
+ */
+function withColumnOverrides(
+  columns: readonly ColumnSpec[],
+  overrides: readonly ColumnOverride[],
+  dialect: SupportedDialect
+): ColumnSpec[] {
+  if (overrides.length === 0) return [...columns];
+  return columns.map(column => {
+    const override = overrides.find(o => o.column === column.name);
+    if (override === undefined) return column;
+    const { typeModifier: _dropped, ...rest } = column;
+    return {
+      ...rest,
+      type: renderDialectType(override.kind, dialect, override),
+    };
+  });
+}
+
+/**
+ * The columns the app's overrides name, as the drop guard takes them
+ * (`assertNoForeignDrops`'s `columnOverrides`): the elements recorded as the
+ * app's, which its migrations may change in place and nothing else may.
+ */
+export function overriddenColumns(
+  source: Partial<Pick<ExtensionSchema, "columnOverrides">> | undefined
+): Array<{ table: string; column: string }> {
+  return [...(source?.columnOverrides?.entries() ?? [])].flatMap(
+    ([table, overrides]) =>
+      overrides.map(override => ({ table, column: override.column }))
   );
 }
 

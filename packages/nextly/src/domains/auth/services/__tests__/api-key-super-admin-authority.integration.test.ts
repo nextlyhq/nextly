@@ -77,6 +77,7 @@ const narrowing = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "POST",
         path: "/read",
         handler: async (_req, ctx) => {
@@ -94,6 +95,7 @@ const narrowing = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/retain",
         handler: async (_req, ctx) => {
@@ -102,6 +104,7 @@ const narrowing = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/read-retained",
         handler: async (_req, ctx) => {
@@ -118,6 +121,7 @@ const narrowing = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/narrowed-read",
         handler: async (_req, ctx) => {

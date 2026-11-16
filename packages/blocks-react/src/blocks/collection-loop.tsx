@@ -393,7 +393,6 @@ export async function renderCollectionLoop({
   props,
   node,
   renderSlot,
-  spacingMode,
   className,
   partClass,
   ctx,
@@ -434,7 +433,7 @@ export async function renderCollectionLoop({
     // collection's entries does, drawn with the query's own item context.
     return drawList(
       await withReadAhead(named, node, ctx, named.entriesOf),
-      { className, renderSlot, spacingMode, ctx, nodeId: node.id },
+      { className, renderSlot, ctx, nodeId: node.id },
       pageLinks(paging, named, props, partClass)
     );
   }
@@ -526,11 +525,7 @@ export async function renderCollectionLoop({
     props,
     partClass
   );
-  return drawList(
-    read,
-    { className, renderSlot, spacingMode, ctx, nodeId: node.id },
-    pages
-  );
+  return drawList(read, { className, renderSlot, ctx, nodeId: node.id }, pages);
 }
 
 /**
@@ -541,12 +536,12 @@ function drawList(
   read: ListRead,
   args: Pick<
     BlockRenderArgs<CollectionLoopProps>,
-    "className" | "renderSlot" | "spacingMode" | "ctx"
+    "className" | "renderSlot" | "ctx"
   > & { readonly nodeId: string },
   pages: ReactElement | null = null
 ): ReactElement {
   const { outcome, itemContext } = read;
-  const { className, renderSlot, spacingMode, ctx } = args;
+  const { className, renderSlot, ctx } = args;
   // How many entries this list drew, told to an editor that asks, so what
   // it says of the list is of what is drawn, never of a read made again.
   reportShown(ctx, args.nodeId, outcome.items.length);
@@ -566,9 +561,7 @@ function drawList(
       : outcome.items.map((item, index) => (
           <div
             key={listItemKey(item, index, read.rowKey)}
-            // Under the classic model no gap is written, so an entry wears
-            // nothing: its blocks space themselves with their own margins.
-            {...(spacingMode === "classic" ? {} : { className: ENTRY_CLASS })}
+            className={ENTRY_CLASS}
           >
             {/* Drawn again per entry, with this entry on the context, so
                 anything inside the template reads its own values rather than
