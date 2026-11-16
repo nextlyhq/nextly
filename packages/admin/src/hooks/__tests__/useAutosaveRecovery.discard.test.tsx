@@ -359,6 +359,36 @@ describe("edits undone back to what the document stores", () => {
     editor.unmount();
   });
 
+  it("leave another tab's newer recording alone, though this tab recorded first", async () => {
+    const editor = openEditor();
+    await waitFor(() =>
+      expect(editor.result.current.recovery.isResolved).toBe(true)
+    );
+    act(() =>
+      editor.result.current.form.setValue("title", "Welcome abc", {
+        shouldDirty: true,
+      })
+    );
+    await settle();
+    // The same author's other tab records newer work over this tab's point.
+    const newer = {
+      snapshot: { title: "Welcome, from the other tab" },
+      updatedAt: "2026-11-16T12:30:00.000Z",
+      locale: null,
+    };
+    server.point = newer;
+
+    act(() =>
+      editor.result.current.form.setValue("title", "Welcome", {
+        shouldDirty: true,
+      })
+    );
+    await settle();
+
+    expect(server.point).toEqual(newer);
+    editor.unmount();
+  });
+
   it("leave a point waiting from a last visit when the recording of the undone edits failed", async () => {
     server.point = waitingPoint();
     const editor = openEditor();

@@ -27,6 +27,7 @@ import {
   type AutosaveStatus,
   DEFAULT_AUTOSAVE_DEBOUNCE_MS,
 } from "@admin/hooks/useSnapshotAutosave";
+import { canonicalJson } from "@admin/lib/canonical-json";
 import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
@@ -105,6 +106,33 @@ export async function emptyThePoint(
     return true;
   } catch {
     // See above: the point stays, and is offered again.
+    return false;
+  }
+}
+
+/**
+ * Whether the author's point still holds the recording `own` (the values this
+ * recorder last stored, as JSON carries them): every value in it the one that
+ * was sent. The server drops some keys before storing, such as a password,
+ * but changes none. Anything else, such as newer work another tab or browser
+ * of the same author recorded, is left alone, and a read that fails answers
+ * no.
+ */
+async function holdsOwnRecording(
+  scope: VersionScope,
+  own: Record<string, unknown> | null
+): Promise<boolean> {
+  if (own === null) return false;
+  try {
+    const now = await versionApi.getAutosave(scope);
+    if (now === null || typeof now.snapshot !== "object" || !now.snapshot) {
+      return false;
+    }
+    return Object.entries(now.snapshot as Record<string, unknown>).every(
+      ([key, value]) =>
+        key in own && canonicalJson(value) === canonicalJson(own[key])
+    );
+  } catch {
     return false;
   }
 }
@@ -190,13 +218,18 @@ export function useDocumentAutosave({
   const save = useCallback(async () => {
     if (!scope) throw new Error("autosave: no scope");
     const startedFrom = version?.();
-    return versionApi.saveAutosave(
-      scope,
+    const snapshot =
       startedFrom === undefined
         ? form.getValues()
-        : { ...form.getValues(), [DOCUMENT_VERSION_KEY]: startedFrom },
-      locale
-    );
+        : { ...form.getValues(), [DOCUMENT_VERSION_KEY]: startedFrom };
+    const stored = await versionApi.saveAutosave(scope, snapshot, locale);
+    // What this recorder last stored, as the server will answer it back: see
+    // `holdsOwnRecording`.
+    lastStoredRef.current = JSON.parse(JSON.stringify(snapshot)) as Record<
+      string,
+      unknown
+    >;
+    return stored;
   }, [scope, form, locale, version]);
 
   /*
@@ -215,6 +248,8 @@ export function useDocumentAutosave({
    * before that would write a copy of what the save just stored.
    */
   const dirtyRef = useRef(false);
+  // This recorder's last stored recording, by when and what: see `save`.
+  const lastStoredRef = useRef<Record<string, unknown> | null>(null);
   // The language recordings are made in now, for an emptying decided later.
   const latestLocale = useRef(locale);
   latestLocale.current = locale;
@@ -254,14 +289,19 @@ export function useDocumentAutosave({
      */
     const emptyIfUndone = (from: number) => {
       if (recordedAs === null) return;
-      void emptyThePoint(scope, latestLocale.current, () => {
+      void emptyThePoint(scope, latestLocale.current, async () => {
         const mine = lastSent();
-        return (
-          !dirtyRef.current &&
-          mine !== null &&
-          mine > from &&
-          lastStoredRecording(recordedAs) === mine
-        );
+        if (
+          dirtyRef.current ||
+          mine === null ||
+          mine <= from ||
+          lastStoredRecording(recordedAs) !== mine
+        ) {
+          return false;
+        }
+        // Asked of the server too: another tab or browser of the same author
+        // writes the same point, and this tab cannot see its recordings.
+        return holdsOwnRecording(scope, lastStoredRef.current);
       });
     };
 
