@@ -327,6 +327,50 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     expect((await migrate(consentFor(posts))).applied).toBe(1);
   }, 180_000);
 
+  it("still refuses a removal from a live table the file renamed onto a name it then creates IF NOT EXISTS", async () => {
+    const fresh = `${P}_onto`;
+    file(
+      [
+        `ALTER TABLE ${posts} RENAME TO ${fresh}`,
+        `CREATE TABLE IF NOT EXISTS ${fresh} (id integer PRIMARY KEY, title varchar(64))`,
+        `DELETE FROM ${fresh} WHERE id = 1`,
+      ],
+      []
+    );
+    const message = await refusedUnchanged(() => migrate());
+    expect(message).toContain(posts);
+    expect((await migrate(consentFor(posts))).applied).toBe(1);
+  }, 180_000);
+
+  // A view holds the name, so CREATE TABLE IF NOT EXISTS makes nothing, and a DELETE through the
+  // view removes the rows beneath it: an updatable view on PostgreSQL and MySQL, an INSTEAD OF
+  // trigger on SQLite.
+  it("still refuses a removal through a view of the name the file creates a table of IF NOT EXISTS", async () => {
+    const recent = `${P}_recent`;
+    await adapter.executeQuery(
+      `CREATE VIEW ${recent} AS SELECT id, title FROM ${posts}`
+    );
+    if (dialect === "sqlite") {
+      await adapter.executeQuery(
+        `CREATE TRIGGER ${recent}_delete INSTEAD OF DELETE ON ${recent} BEGIN DELETE FROM ${posts} WHERE id = OLD.id; END`
+      );
+    }
+    file(
+      [
+        `CREATE TABLE IF NOT EXISTS ${recent} (id integer PRIMARY KEY, title varchar(64))`,
+        `DELETE FROM ${recent} WHERE id = 1`,
+      ],
+      []
+    );
+    const message = await refusedUnchanged(() => migrate());
+    expect(message).toContain(recent);
+    // What a removal through a view reaches cannot be read as a table's, so only the consent
+    // without targets covers it.
+    expect(
+      (await migrate(resolveDataLossConsent({ flag: true, env: {} }))).applied
+    ).toBe(1);
+  }, 180_000);
+
   it("names a live table an earlier file of the run renames by its live name, for what a later file deletes", async () => {
     const renamed = `${P}_renamed`;
     file([`ALTER TABLE ${posts} RENAME TO ${renamed}`], []);

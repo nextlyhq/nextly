@@ -48,6 +48,7 @@ import type { LiveColumns } from "../ownership/drop-guard";
 import { keepsEveryStringValue } from "../pipeline/classifier/type-widening";
 import {
   introspectLiveColumns,
+  introspectRelationNames,
   introspectTableNames,
 } from "../pipeline/diff/introspect-live";
 import {
@@ -107,6 +108,12 @@ export interface DeletionFacts {
    */
   liveTable(table: string): boolean | undefined;
   /**
+   * Whether a relation of any kind (a table, a view, a sequence) holds the name before the run,
+   * which a `CREATE TABLE IF NOT EXISTS` of it leaves in place. Undefined when unreadable, or
+   * when not read at all, which the walk counts as held.
+   */
+  nameTaken?(table: string): boolean | undefined;
+  /**
    * The functions a SELECT may call that run code the statement does not show: lower-cased names
    * of the user-defined functions (outside the system catalogs). Undefined when unreadable, when
    * a SELECT calling anything is judged as one that may delete.
@@ -156,6 +163,7 @@ interface FactSource {
   hiddenCode(table: string, on: keyof HiddenCode): boolean | undefined;
   descendantsOf(table: string): readonly string[] | undefined;
   liveTable(table: string): boolean | undefined;
+  nameTaken(table: string): boolean | undefined;
   /** Whether a SELECT calling `name` may run code that deletes. */
   mayDeleteThrough(name: string): boolean;
   unseenRebuild: "drop" | "deferred";
@@ -184,7 +192,13 @@ type Reach = "delete" | "truncate" | "none";
 
 /** What one statement does that can delete data, or change which name means which table. */
 type Step =
-  | { kind: "create"; table: string; temporary?: boolean }
+  | {
+      kind: "create";
+      table: string;
+      temporary?: boolean;
+      /** Written `IF NOT EXISTS`: it makes the table only where the name is free. */
+      ifNotExists?: boolean;
+    }
   /** A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP TEMPORARY). */
   | { kind: "drop"; table: string; temporary?: boolean }
   | { kind: "add-column"; table: string; column: string }
@@ -563,12 +577,14 @@ function readCreateTemporary(cursor: StatementCursor): Step[] {
  */
 function readCreateTable(cursor: StatementCursor, temporary: boolean): Step[] {
   if (!cursor.accept("TABLE")) return [];
-  if (cursor.accept("IF", "NOT", "EXISTS") && temporary) return [];
+  const ifNotExists = cursor.accept("IF", "NOT", "EXISTS");
+  if (ifNotExists && temporary) return [];
   const table = cursor.name();
   if (table === undefined) return [];
+  if (temporary) return [{ kind: "create", table, temporary }];
   return [
-    temporary
-      ? { kind: "create", table, temporary }
+    ifNotExists
+      ? { kind: "create", table, ifNotExists }
       : { kind: "create", table },
   ];
 }
@@ -1685,7 +1701,11 @@ class FileWalk {
   private applyToTable(step: Step): boolean {
     switch (step.kind) {
       case "create":
-        this.create(step.table, step.temporary === true);
+        this.create(
+          step.table,
+          step.temporary === true,
+          step.ifNotExists === true
+        );
         return true;
       case "drop":
         this.drop(step.table, step.temporary === true);
@@ -1757,7 +1777,22 @@ class FileWalk {
     return this.madeColumns.get(table)?.has(column) === true;
   }
 
-  private create(table: string, temporary: boolean): void {
+  private create(table: string, temporary: boolean, ifNotExists = false): void {
+    // Made only where the name is free at this point of the run: a live table the run renamed
+    // onto it, a relation of any kind holding it before the run, or one not known to be absent
+    // leaves the statement a no-op, and what holds the name stays what it was.
+    if (ifNotExists) {
+      const now = this.origins.get(table);
+      if (typeof now === "string") return;
+      if (
+        now === undefined &&
+        (this.facts.liveTable(table) !== false ||
+          this.facts.nameTaken(table) !== false)
+      )
+        return;
+      this.origins.set(table, null);
+      return;
+    }
     // A temporary table shadows the name until it is dropped again.
     if (temporary) this.shadowed.set(table, this.origins.get(table));
     // A table already there is not the run's: its file may be adopted rather
@@ -2511,6 +2546,8 @@ function factSource(facts: DeletionFacts): FactSource {
     hiddenCode: (table, on) => facts.hiddenCode(table, on),
     descendantsOf: table => facts.descendantsOf(table),
     liveTable: table => facts.liveTable(table),
+    // Not read at all: the name counts as held.
+    nameTaken: table => facts.nameTaken?.(table),
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
@@ -2662,6 +2699,8 @@ interface Questions {
   descendants: Set<string>;
   /** Tables the list creates, asked whether they exist already. */
   live: Set<string>;
+  /** Tables the list creates only if absent, asked whether any relation holds the name. */
+  taken: Set<string>;
   calls: boolean;
 }
 
@@ -2676,6 +2715,7 @@ function answered(asked: Questions): boolean {
       asked.hidden,
       asked.descendants,
       asked.live,
+      asked.taken,
     ].every(set => set.size === 0)
   );
 }
@@ -2701,6 +2741,8 @@ class FactReading {
   private readonly truncates = new Map<string, readonly string[] | undefined>();
   private readonly hidden = new Map<string, HiddenCode | undefined>();
   private readonly liveTables = new Map<string, boolean | undefined>();
+  /** Per name a conditional create names, whether any relation holds it; undefined when unreadable. */
+  private readonly takenNames = new Map<string, boolean | undefined>();
   /** Set once the tables could not be read: whether one exists is then unknown. */
   private spellFailed = false;
   private readonly descendants = new Map<
@@ -2739,6 +2781,7 @@ class FactReading {
       hidden: new Set(),
       descendants: new Set(),
       live: new Set(),
+      taken: new Set(),
       calls: false,
     };
     walk(statements, this.dialect, this.answering(asked));
@@ -2772,6 +2815,10 @@ class FactReading {
       },
       liveTable: table => {
         const known = lookup(this.liveTables, table, asked.live);
+        return known === undefined ? false : known.value;
+      },
+      nameTaken: table => {
+        const known = lookup(this.takenNames, table, asked.taken);
         return known === undefined ? false : known.value;
       },
       mayDeleteThrough: name => {
@@ -2816,6 +2863,17 @@ class FactReading {
         table,
         this.spellFailed ? undefined : this.spellings.has(table)
       );
+    }
+    if (asked.taken.size > 0) {
+      const held = await settle(() =>
+        introspectRelationNames(this.db, this.dialect, [...asked.taken])
+      );
+      for (const name of asked.taken) {
+        this.takenNames.set(
+          name,
+          held === undefined ? undefined : held.includes(name)
+        );
+      }
     }
     for (const table of asked.cascade)
       this.cascades.set(table, await this.readCascade(table));
@@ -2989,6 +3047,7 @@ class FactReading {
       hiddenCode: (table, on) => this.hidden.get(table.toLowerCase())?.[on],
       descendantsOf: table => this.descendants.get(table.toLowerCase()),
       liveTable: table => this.liveTables.get(table.toLowerCase()),
+      nameTaken: table => this.takenNames.get(table.toLowerCase()),
       ...(userFunctions === undefined ? {} : { userFunctions }),
       liveColumns,
       liveColumnTypes,

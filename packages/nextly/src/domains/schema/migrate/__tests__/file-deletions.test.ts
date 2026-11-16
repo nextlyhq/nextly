@@ -49,6 +49,11 @@ interface Facts {
   /** The tables the database has before the run, beyond those `columns` names; "unreadable" for none known. */
   live?: readonly string[] | "unreadable";
   /**
+   * The names another relation (a view, a sequence) holds before the run, beyond the live
+   * tables; "unreadable" for none known.
+   */
+  taken?: readonly string[] | "unreadable";
+  /**
    * MySQL: per table in `columns`, the columns whose character set is not the table's default;
    * none when left out. "unreadable": not read for any table.
    */
@@ -91,6 +96,12 @@ function fake(facts: Facts = {}): DeletionFacts {
       facts.live === "unreadable"
         ? undefined
         : (facts.live ?? []).includes(table) || table in (facts.columns ?? {}),
+    nameTaken: table =>
+      facts.live === "unreadable" || facts.taken === "unreadable"
+        ? undefined
+        : (facts.live ?? []).includes(table) ||
+          table in (facts.columns ?? {}) ||
+          (facts.taken ?? []).includes(table),
     ...(facts.functions === "unreadable"
       ? {}
       : { userFunctions: new Set(facts.functions ?? []) }),
@@ -212,6 +223,46 @@ describe("tables dropped", () => {
         { live: "unreadable" }
       )
     ).toEqual([rows("posts")]);
+  });
+
+  it("keeps a live table the run renamed onto the name live, when the file then creates it IF NOT EXISTS", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "ALTER TABLE posts RENAME TO fresh",
+          "CREATE TABLE IF NOT EXISTS fresh (id integer)",
+          "DELETE FROM fresh WHERE id = 1",
+        ],
+        { live: ["posts"] }
+      )
+    ).toEqual([rows("posts")]);
+  });
+
+  it("keeps a name a view holds live, when the file creates a table of it IF NOT EXISTS", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS recent (id integer)",
+          "DELETE FROM recent WHERE id = 1",
+        ],
+        { live: [], taken: ["recent"] }
+      )
+    ).toEqual([rows("recent")]);
+  });
+
+  it("keeps the name live when which relations hold it cannot be read", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          "CREATE TABLE IF NOT EXISTS recent (id integer)",
+          "DELETE FROM recent WHERE id = 1",
+        ],
+        { live: [], taken: "unreadable" }
+      )
+    ).toEqual([rows("recent")]);
   });
 
   it("makes nothing of a temporary table created IF NOT EXISTS", () => {

@@ -982,6 +982,52 @@ export async function introspectTableNames(
 }
 
 /**
+ * Which of `names` a relation of any kind already holds (a table, a view, and on PostgreSQL a
+ * sequence or any other `pg_class` relation), each lower-cased: a `CREATE TABLE IF NOT EXISTS`
+ * of such a name does nothing. Read where the run's statements land, as `introspectTableNames`.
+ */
+export async function introspectRelationNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  names: readonly string[]
+): Promise<string[]> {
+  if (names.length === 0) return [];
+  const namesIn = sql.join(
+    names.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  let rows: unknown[];
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT t.relname AS name FROM pg_class t
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND lower(t.relname) IN (${namesIn})`
+    )) as { rows: unknown[] };
+    rows = result.rows;
+  } else if (dialect === "mysql") {
+    rows = mysqlResultRows<unknown>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT TABLE_NAME AS name FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND lower(TABLE_NAME) IN (${namesIn})`
+      )
+    );
+  } else {
+    const sqliteRows: unknown = await Promise.resolve(
+      (db as { all(query: unknown): unknown }).all(
+        sql`SELECT name FROM sqlite_master
+            WHERE type IN ('table', 'view') AND lower(name) IN (${namesIn})`
+      )
+    );
+    rows = Array.isArray(sqliteRows) ? sqliteRows : [];
+  }
+  return rows.flatMap(row => {
+    const { name } = (row ?? {}) as Record<string, unknown>;
+    return typeof name === "string" ? [name.toLowerCase()] : [];
+  });
+}
+
+/**
  * The name of every constraint the catalog holds on each of `tableNames`
  * (their live spellings, as `introspectTableNames` returns them), keyed by the
  * lower-cased table name, each name lower-cased, with whether the database
