@@ -17,6 +17,7 @@ import { useDocumentActionsContext } from "./DocumentActionsContext";
 import type {
   BeforeDocumentAction,
   DocumentActionBindings,
+  DocumentActionOutcome,
   DocumentSaveState,
 } from "./useDocumentActionBindings";
 
@@ -34,6 +35,16 @@ export interface DocumentActions {
   run: DocumentActionBindings["run"];
   /** Whether the document's work is stored. */
   saveState: DocumentSaveState;
+  /**
+   * Runs the Save action, as `run("save")` does, where that Save is offered
+   * and keeps the work unpublished: a draft, or a working draft beside the
+   * live version. Undefined where it is not offered (someone who may not
+   * change the document) or where it would publish (a published document
+   * whose collection keeps no drafts) or there is no draft to keep (a
+   * collection with no status), so a surface that must never publish, such
+   * as a preview that saves first, can tell before it offers to.
+   */
+  saveWithoutPublishing: (() => Promise<DocumentActionOutcome>) | undefined;
   /**
    * When this document was last stored in this session, whatever the save
    * state now says, or null before the first store. A new value means a store
@@ -71,6 +82,14 @@ export function useDocumentActions(): DocumentActions | null {
     primary: offered.find(action => action.placement === "primary"),
     run: hosted.run,
     saveState: hosted.saveState,
+    // The bar's own Save through `run`, so its permission, lock, before-save
+    // steps and save state all apply; the host's own binding is only asked
+    // whether that Save would leave the document unpublished.
+    saveWithoutPublishing:
+      offered.some(action => action.id === "save") &&
+      hosted.saveWithoutPublishing !== undefined
+        ? () => hosted.run("save")
+        : undefined,
     storedAt: hosted.lastStoredAt,
   };
 }
