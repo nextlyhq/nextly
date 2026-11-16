@@ -64,6 +64,11 @@ export interface FieldPickerConfig {
   mostUsed?: readonly string[];
   /** The name a label gives a new field; empty when it gives none. */
   deriveName: (label: string) => string;
+  /**
+   * Why a derived name cannot be saved, in words for the person, or `null` when it can. While it
+   * says why, the field cannot be added, by button or by Enter.
+   */
+  nameProblem?: (name: string) => string | null;
   /** The type that embeds a field group, and the groups it may embed. */
   fieldGroups?: {
     type: string;
@@ -242,6 +247,7 @@ function PickerBody({
       initialLabel={initialLabel}
       offerAddAnother={offerAddAnother !== false}
       deriveName={config.deriveName}
+      nameProblem={config.nameProblem}
       onBack={() =>
         setStep(
           step.fieldGroup
@@ -486,12 +492,53 @@ function FieldGroupStep({
   );
 }
 
+/**
+ * The name a label gives a new field, and whether it can be added: a label is needed, and the
+ * name it derives must be one the surface can save. Only a name the label gave is judged; with no
+ * label there is nothing to judge yet.
+ */
+function labelledName(
+  label: string,
+  deriveName: (label: string) => string,
+  nameProblem: ((name: string) => string | null) | undefined
+): { trimmed: string; name: string; problem: string | null; addable: boolean } {
+  const trimmed = label.trim();
+  const name = trimmed ? deriveName(trimmed) : "";
+  const problem = name && nameProblem ? nameProblem(name) : null;
+  return { trimmed, name, problem, addable: name !== "" && problem === null };
+}
+
+/** The name the label gives, and why it cannot be saved when it cannot. */
+function DerivedName({
+  name,
+  problem,
+  problemId,
+}: {
+  name: string;
+  problem: string | null;
+  problemId: string;
+}): React.JSX.Element {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        Name: <code>{name || "—"}</code>
+      </p>
+      {problem !== null && (
+        <p id={problemId} role="alert" className="text-xs text-destructive">
+          {problem}
+        </p>
+      )}
+    </>
+  );
+}
+
 function LabelStep({
   type,
   fieldGroup,
   initialLabel,
   offerAddAnother,
   deriveName,
+  nameProblem,
   onBack,
   onAdd,
 }: {
@@ -500,15 +547,20 @@ function LabelStep({
   initialLabel?: string;
   offerAddAnother: boolean;
   deriveName: (label: string) => string;
+  nameProblem?: (name: string) => string | null;
   onBack: () => void;
   onAdd: (label: string, name: string, addAnother: boolean) => void;
 }) {
   const inputId = useId();
   const [label, setLabel] = useState(fieldGroup?.label ?? initialLabel ?? "");
-  const trimmed = label.trim();
-  const name = trimmed ? deriveName(trimmed) : "";
+  const { trimmed, name, problem, addable } = labelledName(
+    label,
+    deriveName,
+    nameProblem
+  );
+  const problemId = useId();
   const add = (addAnother: boolean) => {
-    if (name) onAdd(trimmed, name, addAnother);
+    if (addable) onAdd(trimmed, name, addAnother);
   };
 
   return (
@@ -527,6 +579,8 @@ function LabelStep({
           id={inputId}
           value={label}
           autoFocus
+          aria-invalid={problem !== null}
+          aria-describedby={problem !== null ? problemId : undefined}
           onChange={event => setLabel(event.target.value)}
           onKeyDown={event => {
             if (event.key === "Enter") {
@@ -535,20 +589,22 @@ function LabelStep({
             }
           }}
         />
-        <p className="text-xs text-muted-foreground">
-          Name: <code>{name || "—"}</code>
-        </p>
+        <DerivedName name={name} problem={problem} problemId={problemId} />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
         {offerAddAnother && (
-          <Button variant="outline" disabled={!name} onClick={() => add(true)}>
+          <Button
+            variant="outline"
+            disabled={!addable}
+            onClick={() => add(true)}
+          >
             Add and add another
           </Button>
         )}
-        <Button disabled={!name} onClick={() => add(false)}>
+        <Button disabled={!addable} onClick={() => add(false)}>
           Add field
         </Button>
       </DialogFooter>

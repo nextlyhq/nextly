@@ -276,6 +276,7 @@ expectTypeOf<adminEntry.FieldPickerConfig>().toEqualTypeOf<{
   exclude?: readonly string[];
   mostUsed?: readonly string[];
   deriveName: (label: string) => string;
+  nameProblem?: (name: string) => string | null;
   fieldGroups?: {
     type: string;
     options: readonly adminEntry.FieldGroupOption[];
@@ -329,6 +330,7 @@ expectTypeOf<adminEntry.FieldSettingsPanelProps>().toEqualTypeOf<{
 expectTypeOf<adminEntry.FieldSettingsSurface>().toEqualTypeOf<{
   surface: "entries" | "users" | "forms" | "blocks";
   deriveName: (label: string) => string;
+  checkName?: (name: string) => string | null;
   fixed?: readonly adminEntry.FixedFieldSetting[];
   extraSettings?: Partial<
     Record<
