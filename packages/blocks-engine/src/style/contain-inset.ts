@@ -133,7 +133,8 @@ export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
  * that sets the parent's `display` also writes this on its children, at the
  * same breakpoint and state, and the site sheet treats a flagged contained
  * child as it does a sized block: centred, not inset. `initial`, `unset` and
- * the reverts give no row and clear it; `inherit` leaves it to the cascade.
+ * the reverts give no row and clear it, and so does `inherit`, whose layout
+ * no rule here can know.
  */
 export const SIZED_ITEM_PROPERTY = "--nx-sized-item";
 
@@ -165,22 +166,40 @@ function flowFlag(declaration: Declaration): Declaration[] {
   ];
 }
 
+/**
+ * The flag a block's `flex-direction` sets on its children: `1` in a column,
+ * `0` in a row. A flex column's items stretch across its whole width, which
+ * is the width the inset is measured from, so a contained item there keeps
+ * its inset; the site sheet reads the item flag only where this one is 0.
+ */
+export const COLUMN_FLOW_PROPERTY = "--nx-column-flow";
+
 /** The layouts whose children are flex or grid items. */
 const ROW_LAYOUTS = new Set(["flex", "inline-flex", "grid", "inline-grid"]);
 
 /** The flag a block's own `display` sets on its children, if it sets one. */
 function itemFlag(declarations: readonly Declaration[]): Declaration[] {
+  const flags: Declaration[] = [];
   const display = declarations.findLast(d => d.property === "display");
-  if (display === undefined) return [];
-  const value = display.value.trim().toLowerCase();
-  // `inherit` takes the parent's layout, which no rule here can know.
-  if (value === "inherit") return [];
-  return [
-    {
+  if (display !== undefined) {
+    // `inherit` takes a layout no rule here can know, so it is read as no
+    // row: the inset is then never lost, at the most an item over-padded.
+    const value = display.value.trim().toLowerCase();
+    flags.push({
       property: SIZED_ITEM_PROPERTY,
       value: ROW_LAYOUTS.has(value) ? "1" : "0",
-    },
-  ];
+    });
+  }
+  const direction = declarations.findLast(d => d.property === "flex-direction");
+  if (direction !== undefined) {
+    flags.push({
+      property: COLUMN_FLOW_PROPERTY,
+      value: direction.value.trim().toLowerCase().startsWith("column")
+        ? "1"
+        : "0",
+    });
+  }
+  return flags;
 }
 
 /**

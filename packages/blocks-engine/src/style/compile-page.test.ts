@@ -2511,13 +2511,40 @@ describe("inline padding and a contained container's inset", () => {
         css(doc([node("n1", { base: { base: { display: keyword } } })]))
       ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
     }
+    // `inherit` takes a layout no rule here can know, so it clears the flag:
+    // the inset is then never lost, at the most an item over-padded.
     expect(
       css(doc([node("n1", { base: { base: { display: "inherit" } } })]))
-    ).not.toContain(ITEM);
+    ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
     // A block that sets no layout flags nothing.
     expect(
       css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
     ).not.toContain(ITEM);
+  });
+
+  it("flags the children of a flex column, whose items fill its width", () => {
+    // In a column, a flex item stretches across the whole width the inset is
+    // measured from, so a contained one keeps its inset: the direction sets a
+    // flag of its own on the children, which the site sheet reads beside the
+    // item flag.
+    const COLUMN = "--nx-column-flow";
+    for (const flexDirection of ["column", "column-reverse"]) {
+      expect(
+        css(
+          doc([
+            node("n1", { base: { base: { display: "flex", flexDirection } } }),
+          ])
+        )
+      ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 1`));
+    }
+    for (const flexDirection of ["row", "row-reverse"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { flexDirection } } })]))
+      ).toMatch(new RegExp(`> \\* \\{[^}]*${COLUMN}: 0`));
+    }
+    expect(
+      css(doc([node("n1", { base: { base: { display: "flex" } } })]))
+    ).not.toContain(COLUMN);
   });
 
   it("flags a block taken out of the flow by its own position", () => {
