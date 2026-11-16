@@ -80,6 +80,15 @@ export interface ShownCopy {
 }
 
 /**
+ * Where an editor puts how to read the copy it shows, for an action drawn outside it (the page's
+ * own) that must send what the editor's copy started from, as the editor's own actions do. Empty
+ * while no editor is drawn.
+ */
+export interface ShownCopyHandle {
+  current: (() => ShownCopy) | null;
+}
+
+/**
  * What a publish of every language refused because the document changed
  * since says, once the document is read again.
  */

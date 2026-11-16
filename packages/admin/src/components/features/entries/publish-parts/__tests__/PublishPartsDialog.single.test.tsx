@@ -96,4 +96,37 @@ describe("choosing what to publish on a Single", () => {
     // The version is read from the Single, in every language.
     expect(api.getDocument).toHaveBeenCalledWith("banner", { locale: "all" });
   });
+  it("is refused as stale when the editor shows an older version than the Single's, and publishes nothing", async () => {
+    const user = userEvent.setup();
+    render(
+      <PublishPartsDialog
+        open
+        onOpenChange={() => undefined}
+        target={{ kind: "single", slug: "banner" }}
+        direction="publish"
+        languages={["en", "es"]}
+        labelOf={code => ({ en: "English", es: "Spanish" })[code] ?? code}
+        initialChoice={{ locales: ["es"], shared: false }}
+        // The editor opened the Single at version 2; it has since been saved as 3.
+        shown={() => ({ version: "2", locale: "es", draft: true })}
+      />
+    );
+    await screen.findByText("Goes live for the first time.");
+
+    await user.click(screen.getByRole("button", { name: "Publish" }));
+
+    // The copy on screen is read as the editor reads it, found changed, and said so.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /changed since you opened it/
+    );
+    expect(api.getDocument).toHaveBeenCalledWith(
+      "banner",
+      expect.objectContaining({ locale: "es" })
+    );
+    expect(
+      api.singlePublishParts.mock.calls.filter(
+        ([, , choice]) => (choice as PublishPartsChoice).describe !== true
+      )
+    ).toEqual([]);
+  });
 });

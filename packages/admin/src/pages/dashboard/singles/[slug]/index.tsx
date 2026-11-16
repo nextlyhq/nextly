@@ -20,7 +20,7 @@ import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
@@ -68,7 +68,7 @@ import {
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { staleVersionOf } from "@admin/lib/document-version";
+import { staleVersionOf, type ShownCopy } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 
@@ -226,8 +226,12 @@ export default function SingleEditPage({
   // "Choose what to publish…", on the Publish split: each language of a translated Single, and
   // separately its shared fields; a Single that is not translated offers its shared fields, which
   // are the whole document.
+  // How to read the copy the editor shows, filled by the editor once it is drawn, so a publish
+  // of chosen parts is refused when the Single changed since the editor opened it.
+  const shownCopy = useRef<(() => ShownCopy) | null>(null);
   const publishParts = usePublishPartsAction({
     target: slug && document ? { kind: "single", slug } : undefined,
+    shown: () => shownCopy.current?.(),
     lifecycleEnabled: schema?.status,
     languages:
       localizationEnabled && schema?.localized === true
@@ -414,6 +418,7 @@ export default function SingleEditPage({
           {schedule.dialog}
           {publishParts.dialog}
           <SingleForm
+            shownCopy={shownCopy}
             revealOutline={<SingleEditPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* Under the editor's header, for the reason the entry editor

@@ -61,7 +61,11 @@ import { useAfterRecordings } from "@admin/hooks/useSnapshotAutosave";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
-import { versionForLanguage } from "@admin/lib/document-version";
+import {
+  versionForLanguage,
+  type ShownCopy,
+  type ShownCopyHandle,
+} from "@admin/lib/document-version";
 import { readsHeldDraft } from "@admin/lib/held-draft";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
@@ -284,6 +288,11 @@ export interface EntryFormProps {
     onExit?: () => void;
   };
   className?: string;
+  /**
+   * Filled with how to read the copy this editor shows, for an action the page draws outside it
+   * (publishing chosen parts) that must be refused when the document changed since it opened.
+   */
+  shownCopy?: ShownCopyHandle;
 }
 
 // ============================================================================
@@ -386,6 +395,7 @@ export function EntryForm({
   documentActions,
   documentBanner,
   documentView,
+  shownCopy,
 }: EntryFormProps): JSX.Element {
   /*
    * Whether the preview pane is open, and when the document last saved.
@@ -511,15 +521,27 @@ export function EntryForm({
   // availability rule through the locale context. Called unconditionally with
   // the resolved slug; the seam below is what decides whether the action is
   // offered, so a create form supplies none and nothing renders.
-  const publishAllEntryLocales = usePublishAllLocales({
-    collectionSlug: collection.slug ?? collection.name,
-    // The copy on screen, read as the editor reads it, so a publish of every
-    // language is refused when that language changed since it opened.
-    shown: () => ({
+  // The copy on screen, read as the editor reads it, so a publish of every
+  // language, or of chosen parts from the page, is refused when that language
+  // changed since it opened.
+  const shownCopyOf = useCallback(
+    (): ShownCopy => ({
       version: versionStartedFrom(),
       locale,
       draft: readsDraft,
     }),
+    [versionStartedFrom, locale, readsDraft]
+  );
+  useEffect(() => {
+    if (!shownCopy) return undefined;
+    shownCopy.current = shownCopyOf;
+    return () => {
+      shownCopy.current = null;
+    };
+  }, [shownCopy, shownCopyOf]);
+  const publishAllEntryLocales = usePublishAllLocales({
+    collectionSlug: collection.slug ?? collection.name,
+    shown: shownCopyOf,
   });
   // Publishing every language waits for the entry's recordings in flight.
   const { run: runAfterRecordings, pending: publishAllPending } =

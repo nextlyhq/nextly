@@ -13,7 +13,7 @@
 
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
@@ -70,6 +70,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import type { ShownCopy } from "@admin/lib/document-version";
 import { readsHeldDraft } from "@admin/lib/held-draft";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -346,8 +347,12 @@ export default function EditEntryPage({
     collection.localized === true
       ? locales.map(each => each.code)
       : [];
+  // How to read the copy the editor shows, filled by the editor once it is drawn, so a publish
+  // of chosen parts is refused when the entry changed since the editor opened it.
+  const shownCopy = useRef<(() => ShownCopy) | null>(null);
   const publishParts = usePublishPartsAction({
     target: slug && id ? { kind: "collection", slug, id } : undefined,
+    shown: () => shownCopy.current?.(),
     lifecycleEnabled: collection?.status,
     languages: translatedLanguages,
     labelOf: languageLabelOf(locales),
@@ -810,6 +815,7 @@ export default function EditEntryPage({
           {schedule.dialog}
           {publishParts.dialog}
           <EntryForm
+            shownCopy={shownCopy}
             revealOutline={<EditEntryPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the

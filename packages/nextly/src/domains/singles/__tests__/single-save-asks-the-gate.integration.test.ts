@@ -35,6 +35,7 @@ import type {
   PublishGate,
   PublishGateQuestion,
 } from "../../collections/services/publish-gate";
+import { WITHOUT_REVIEW_KEY } from "../../collections/services/save-door-gate";
 import type { SingleResult } from "../types";
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -487,7 +488,7 @@ describe.each(getConfiguredTestDialects())(
 
         const result = await save("es", {
           status: "published",
-          withoutReview: { reason: "Correcting a date" },
+          [WITHOUT_REVIEW_KEY]: { reason: "Correcting a date" },
         });
 
         expect(result.success, JSON.stringify(result)).toBe(true);
@@ -499,8 +500,8 @@ describe.each(getConfiguredTestDialects())(
         ]);
         expect(seen.settled).toBe(1);
         expect((await stored()).languages.es).toBe("published");
-        expect(result.data).not.toHaveProperty("withoutReview");
-        expect(await published("es")).not.toHaveProperty("withoutReview");
+        expect(result.data).not.toHaveProperty(WITHOUT_REVIEW_KEY);
+        expect(await published("es")).not.toHaveProperty(WITHOUT_REVIEW_KEY);
         const versions = await app().adapter.select<Record<string, unknown>>(
           "nextly_versions",
           {}
@@ -516,7 +517,7 @@ describe.each(getConfiguredTestDialects())(
 
         const answer = await patchAsSession(cookie, "es", {
           status: "published",
-          withoutReview: { reason: "Correcting a date" },
+          [WITHOUT_REVIEW_KEY]: { reason: "Correcting a date" },
           _overwrite: true,
         });
 
@@ -561,7 +562,7 @@ describe.each(getConfiguredTestDialects())(
 
         const result = await save("es", {
           status: "published",
-          withoutReview: { reason: "" },
+          [WITHOUT_REVIEW_KEY]: { reason: "" },
         });
 
         expect(result.success).toBe(false);
