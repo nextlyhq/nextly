@@ -16,6 +16,7 @@ import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
+
 import type { InitContext } from "./install-context";
 import { componentStoreOf } from "./options";
 import type { Definition } from "./state";

@@ -253,8 +253,15 @@ function Host(): React.JSX.Element {
   );
 }
 
-function openEditor(): void {
+/**
+ * Draw the editor, and wait for the fonts panel: the editor fetches its code
+ * when the Fonts tab first draws it.
+ */
+async function openEditor(): Promise<void> {
   render(<Host />);
+  await act(async () => {
+    await import("./editor/site-style-fonts");
+  });
 }
 
 /** What the inspector was handed for the class surface. */
@@ -281,7 +288,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the fonts panel reaching an author", () => {
-  it("offers the Design panel, whose Fonts tab this is, at all", () => {
+  it("offers the Design panel, whose Fonts tab this is, at all", async () => {
     // The slot was reserved and dark for the whole of Phase 4: the shell named
     // it, and nothing rendered into it, so authors never reached it.
     storedRead = {
@@ -289,11 +296,11 @@ describe("the fonts panel reaching an author", () => {
       isPending: false,
       error: null,
     };
-    openEditor();
+    await openEditor();
     expect(screen.getByTestId("rail").textContent).toContain("design");
   });
 
-  it("hands it the site's faces and tokens, not an empty list", () => {
+  it("hands it the site's faces and tokens, not an empty list", async () => {
     storedRead = {
       data: {
         fonts: [
@@ -312,7 +319,7 @@ describe("the fonts panel reaching an author", () => {
       isPending: false,
       error: null,
     };
-    openEditor();
+    await openEditor();
     const panel = screen.getByTestId("panel");
     // The face reached it...
     expect(panel.textContent).toContain("Brand");
@@ -321,7 +328,7 @@ describe("the fonts panel reaching an author", () => {
     expect(panel.textContent).toContain("Ghost");
   });
 
-  it("sends an author from a typeface the site lacks to Design's Variables tab", () => {
+  it("sends an author from a typeface the site lacks to Design's Variables tab", async () => {
     // The fix is to edit the variable, and the fonts are a tab of the same
     // panel: a request naming only the panel would reopen Design on the tab
     // the author is already on, which is Fonts, and the button would do
@@ -342,29 +349,29 @@ describe("the fonts panel reaching an author", () => {
       isPending: false,
       error: null,
     };
-    openEditor();
+    await openEditor();
     fireEvent.click(screen.getByRole("button", { name: "Edit in Variables" }));
     expect(screen.getByTestId("request").textContent).toBe("design:variables");
   });
 
-  it("draws a read still in flight as loading rather than as a site with no fonts", () => {
+  it("draws a read still in flight as loading rather than as a site with no fonts", async () => {
     // The third state, asserted at the WIRING rather than only in the panel:
     // the panel cannot tell pending from empty unless this file passes
     // `undefined`, and passing `[]` while pending is the plausible bug.
     storedRead = { data: undefined, isPending: true, error: null };
-    openEditor();
+    await openEditor();
     expect(screen.getByTestId("panel").textContent).toContain(
       "Reading this site\u2019s fonts"
     );
   });
 
-  it("says a failed read failed", () => {
+  it("says a failed read failed", async () => {
     storedRead = {
       data: undefined,
       isPending: false,
       error: new Error("nope"),
     };
-    openEditor();
+    await openEditor();
     expect(screen.getByTestId("panel").textContent).toContain(
       "could not be read"
     );
@@ -449,7 +456,7 @@ describe("adding a font file through the panel", () => {
       isPending: false,
       error: null,
     };
-    openEditor();
+    await openEditor();
     await addFace();
 
     const written = saved.at(-1) as { fonts: Array<{ family: string }> };
@@ -478,7 +485,7 @@ describe("adding a font file through the panel", () => {
       isPending: false,
       error: null,
     };
-    openEditor();
+    await openEditor();
     await addFace();
 
     expect(saved).toHaveLength(0);
@@ -500,7 +507,7 @@ describe("adding a font file through the panel", () => {
       isPending: false,
       error: null,
     };
-    openEditor();
+    await openEditor();
     await addFace();
 
     expect(saved).toHaveLength(1);
@@ -520,7 +527,7 @@ describe("adding a font file through the panel", () => {
      * builds next, without the read having reported it.
      */
     storedRead = { data: { fonts: [] }, isPending: false, error: null };
-    openEditor();
+    await openEditor();
 
     await addFace("Inter-Regular.woff2");
     uploadResult = { id: "m-2", mimeType: "font/woff2" };
@@ -539,7 +546,7 @@ describe("adding a font file through the panel", () => {
      */
     uploadResult = { id: "m-woff", mimeType: "font/woff" };
     storedRead = { data: { fonts: [] }, isPending: false, error: null };
-    openEditor();
+    await openEditor();
     await addFace("Inter-Regular.woff");
 
     const written = saved.at(-1) as {
@@ -555,7 +562,7 @@ describe("adding a font file through the panel", () => {
      * message; the alternative is silent loss.
      */
     storedRead = { data: undefined, isPending: true, error: null };
-    openEditor();
+    await openEditor();
 
     /*
      * The reachable guarantee: the panel draws its loading state and the form
@@ -579,7 +586,7 @@ describe("adding a font file through the panel", () => {
      */
     uploadResult = { id: "m-png", mimeType: "image/png" };
     storedRead = { data: { fonts: [] }, isPending: false, error: null };
-    openEditor();
+    await openEditor();
     await addFace("not-a-font.png");
 
     expect(saved).toHaveLength(0);
@@ -595,7 +602,7 @@ describe("adding a font file through the panel", () => {
      * the save. Judged first, so no file is stored that no face points at.
      */
     storedRead = { data: { fonts: [] }, isPending: false, error: null };
-    openEditor();
+    await openEditor();
     await pickFile("Brand-Regular.woff2");
     fireEvent.change(screen.getByRole("textbox", { name: "Family" }), {
       target: { value: "Brand}" },
@@ -618,7 +625,7 @@ describe("adding a font file through the panel", () => {
      */
     saveResult = new Error("refused");
     storedRead = { data: { fonts: [] }, isPending: false, error: null };
-    openEditor();
+    await openEditor();
 
     await pickFile();
     await submitAdd();
