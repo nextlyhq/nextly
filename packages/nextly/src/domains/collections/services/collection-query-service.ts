@@ -1790,6 +1790,11 @@ export class CollectionQueryService extends BaseService {
       companionTableName: companion.companionTableName,
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
+      // A number, date or JSON column is non-blank when not null: compared
+      // with an empty string, PostgreSQL refuses the filter.
+      nonTextColumns: companion.localizedFields
+        .filter(f => f.nonText)
+        .map(f => f.column),
       hasStatus: companion.hasStatus,
       // 🔴 The PHYSICAL answer, not the declared one, and it is the same probe the per-row badge
       // resolves — so the tab and the badge cannot disagree about whether the question is even
