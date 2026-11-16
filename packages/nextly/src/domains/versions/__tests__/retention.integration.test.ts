@@ -332,8 +332,10 @@ describe.each(getConfiguredTestDialects())(
       const rows = await versionsFor(current, "posts");
       expect(rows.map(r => r.versionNo)).toContain(german!.versionNo);
       // The cap still holds for everything that is not protected: the three
-      // newest English saves, plus German's published version.
-      expect(rows).toHaveLength(4);
+      // newest English saves, plus German's published version, plus the
+      // create (v1), the latest publish of the shared part, since German's
+      // publish and every English save changed only their own language.
+      expect(rows.map(r => r.versionNo)).toEqual([1, 2, 5, 6, 7]);
     });
 
     it.each(["draft", "unpublished"])(

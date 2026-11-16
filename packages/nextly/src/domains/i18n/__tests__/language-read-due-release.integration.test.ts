@@ -141,6 +141,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await inSpanish(t, id)).toEqual({ found: true, listed: [id] });
     }, 90_000);
 
+    // The language filter of a public read counts a due release as the read
+    // does: the document it publishes is published in Spanish.
+    it("finds a document a due release publishes with the language filter", async () => {
+      const t = await boot(dialect);
+      const id = await draftInRelease(t, PAST);
+      const listed = async (state: "published" | "missing") =>
+        (
+          await t.nextly.find({
+            collection: SLUG,
+            locale: "en",
+            status: "published",
+            where: { _translated: { locale: "es", state } } as never,
+          })
+        ).items.map(item => item.id);
+      expect(await listed("published")).toEqual([id]);
+      expect(await listed("missing")).toEqual([]);
+    }, 90_000);
+
     // A due release publishes each language's row as it stands, so the read
     // it admits shows those values, in its own language, beside it and in a
     // list, not the nothing a published-only filter leaves.

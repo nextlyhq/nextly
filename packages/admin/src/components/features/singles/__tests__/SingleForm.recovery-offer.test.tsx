@@ -51,6 +51,7 @@ vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
     },
     isResolved: true,
     dismiss: vi.fn(),
+    discard: vi.fn(),
     restore: vi.fn(),
     restoreChecked,
     take: vi.fn(),

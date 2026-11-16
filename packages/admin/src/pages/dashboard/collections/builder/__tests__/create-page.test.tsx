@@ -64,6 +64,8 @@ describe("Collection create page", () => {
     submit?.(values("blocks"));
 
     expect(unsavedEntity("collection", "post")).toEqual({
+      // The store gives each entity a token of its own.
+      token: expect.any(String),
       kind: "collection",
       address: "post",
       settings: expect.objectContaining({

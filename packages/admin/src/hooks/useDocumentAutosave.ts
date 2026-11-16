@@ -20,10 +20,14 @@ import { useCallback, useEffect, useRef } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
+  lastStoredRecording,
+  recordingsSent,
+  recordingsSettled,
   useSnapshotAutosave,
   type AutosaveStatus,
   DEFAULT_AUTOSAVE_DEBOUNCE_MS,
 } from "@admin/hooks/useSnapshotAutosave";
+import { canonicalJson } from "@admin/lib/canonical-json";
 import { DOCUMENT_VERSION_KEY } from "@admin/lib/document-version";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
@@ -74,6 +78,63 @@ export function documentRecordingKey(
   if (!scope) return null;
   const id = "entryId" in scope ? scope.entryId : scope.documentId;
   return `${scope.kind}:${scope.slug}:${id}`;
+}
+
+/**
+ * Replace the author's recovery point with one holding no values, through the
+ * same write a recording makes. A point holding no values is never offered
+ * (see `useAutosaveRecovery`), so no later session or tab offers what was
+ * there, and no route beyond the recording's own is needed.
+ *
+ * Written once the recordings already on their way have landed, so none of
+ * them lands after it and puts the work back, and only if `stillWanted`
+ * answers yes then: it is asked after that wait, since what it checks can
+ * change during it. A write that fails leaves the point as it was, offered
+ * again next time, which costs the author a second answer rather than work.
+ *
+ * @returns whether the point was emptied
+ */
+export async function emptyThePoint(
+  scope: VersionScope,
+  locale: string | null,
+  stillWanted: () => boolean | Promise<boolean>
+): Promise<boolean> {
+  await recordingsSettled(documentRecordingKey(scope));
+  if (!(await stillWanted())) return false;
+  try {
+    await versionApi.saveAutosave(scope, {}, locale);
+    return true;
+  } catch {
+    // See above: the point stays, and is offered again.
+    return false;
+  }
+}
+
+/**
+ * Whether the author's point still holds the recording `own` (the values this
+ * recorder last stored, as JSON carries them): every value in it the one that
+ * was sent. The server drops some keys before storing, such as a password,
+ * but changes none. Anything else, such as newer work another tab or browser
+ * of the same author recorded, is left alone, and a read that fails answers
+ * no.
+ */
+async function holdsOwnRecording(
+  scope: VersionScope,
+  own: Record<string, unknown> | null
+): Promise<boolean> {
+  if (own === null) return false;
+  try {
+    const now = await versionApi.getAutosave(scope);
+    if (now === null || typeof now.snapshot !== "object" || !now.snapshot) {
+      return false;
+    }
+    return Object.entries(now.snapshot as Record<string, unknown>).every(
+      ([key, value]) =>
+        key in own && canonicalJson(value) === canonicalJson(own[key])
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -157,13 +218,18 @@ export function useDocumentAutosave({
   const save = useCallback(async () => {
     if (!scope) throw new Error("autosave: no scope");
     const startedFrom = version?.();
-    return versionApi.saveAutosave(
-      scope,
+    const snapshot =
       startedFrom === undefined
         ? form.getValues()
-        : { ...form.getValues(), [DOCUMENT_VERSION_KEY]: startedFrom },
-      locale
-    );
+        : { ...form.getValues(), [DOCUMENT_VERSION_KEY]: startedFrom };
+    const stored = await versionApi.saveAutosave(scope, snapshot, locale);
+    // What this recorder last stored, as the server will answer it back: see
+    // `holdsOwnRecording`.
+    lastStoredRef.current = JSON.parse(JSON.stringify(snapshot)) as Record<
+      string,
+      unknown
+    >;
+    return stored;
   }, [scope, form, locale, version]);
 
   /*
@@ -182,15 +248,21 @@ export function useDocumentAutosave({
    * before that would write a copy of what the save just stored.
    */
   const dirtyRef = useRef(false);
+  // This recorder's last stored recording, by when and what: see `save`.
+  const lastStoredRef = useRef<Record<string, unknown> | null>(null);
+  // The language recordings are made in now, for an emptying decided later.
+  const latestLocale = useRef(locale);
+  latestLocale.current = locale;
 
-  const { status, lastSavedAt, schedule, cancel } = useSnapshotAutosave({
-    identity,
-    document,
-    save,
-    debounceMs,
-    enabled,
-    stillWanted: () => dirtyRef.current,
-  });
+  const { status, lastSavedAt, schedule, cancel, lastSent } =
+    useSnapshotAutosave({
+      identity,
+      document,
+      save,
+      debounceMs,
+      enabled,
+      stillWanted: () => dirtyRef.current,
+    });
 
   useEffect(() => {
     // Subscribed whether or not recording is enabled. A real save turns
@@ -199,10 +271,43 @@ export function useDocumentAutosave({
     // a subscription that came and went with `enabled` missed exactly that
     // moment. Whether a recording is made is still decided when it fires.
     if (!scope) return;
+    const recordedAs = documentRecordingKey(scope);
+    // When the form last went dirty: the recordings sent by then, and the
+    // stored values it held, as the form's own object (see below).
+    let dirtyFrom: { sent: number; stored: unknown } | null = null;
+
+    /*
+     * The form is back to what the document stores because the author undid
+     * their edits, as when typing in a field and deleting it again. A
+     * recording made while it held them stays the author's recovery point,
+     * and would be offered next time as unsaved work, so the point is emptied:
+     * but only the point this recorder wrote. Not if it recorded nothing since
+     * the form went dirty (a point waiting from a last visit, or put off with
+     * Not now, is left as it was), and not if anything recorded after it, or
+     * its own recording failed: a field recording its own state, such as a
+     * block canvas, may hold work the form cannot see.
+     */
+    const emptyIfUndone = (from: number) => {
+      if (recordedAs === null) return;
+      void emptyThePoint(scope, latestLocale.current, async () => {
+        const mine = lastSent();
+        if (
+          dirtyRef.current ||
+          mine === null ||
+          mine <= from ||
+          lastStoredRecording(recordedAs) !== mine
+        ) {
+          return false;
+        }
+        // Asked of the server too: another tab or browser of the same author
+        // writes the same point, and this tab cannot see its recordings.
+        return holdsOwnRecording(scope, lastStoredRef.current);
+      });
+    };
 
     const subscription = form.subscribe({
       formState: { values: true, isDirty: true },
-      callback: ({ isDirty }) => {
+      callback: ({ isDirty, defaultValues }) => {
         /*
          * Record only while the editor holds uncommitted changes.
          *
@@ -224,7 +329,23 @@ export function useDocumentAutosave({
         // recording still waiting for it has nothing left to protect.
         if (!isDirty) {
           cancel();
+          const from = dirtyFrom;
+          dirtyFrom = null;
+          // Undone by changes to its fields, which leave the stored values
+          // the form holds as they were. A reset installs new ones, even
+          // when they read the same: a save loading what it stored (which
+          // deletes the point itself), or edits kept as a point before the
+          // current version is loaded over them.
+          if (from !== null && from.stored === defaultValues) {
+            emptyIfUndone(from.sent);
+          }
           return;
+        }
+        if (dirtyFrom === null && recordedAs !== null) {
+          dirtyFrom = {
+            sent: recordingsSent(recordedAs),
+            stored: defaultValues,
+          };
         }
         schedule();
       },
@@ -234,6 +355,6 @@ export function useDocumentAutosave({
     // `scope` participates through its identity fields: a different document
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
-  }, [form, schedule, cancel, scope?.kind, scope?.slug, scope]);
+  }, [form, schedule, cancel, lastSent, scope?.kind, scope?.slug, scope]);
   return { status, lastSavedAt };
 }

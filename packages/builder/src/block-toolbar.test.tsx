@@ -1023,6 +1023,16 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
   });
 });
 
+/**
+ * What the bar's Save says when pressed. The bar plans a save only when it
+ * runs, since planning it builds the pattern a save would store, so a refused
+ * save is said in the live region rather than drawn dimmed on selection.
+ */
+function savePressed(): string {
+  fireEvent.click(screen.getByLabelText("Save as pattern"));
+  return screen.getByRole("status").textContent ?? "";
+}
+
 describe("the rules the bar judges a save by", () => {
   it("asks the HOST's nesting source, not the registry", () => {
     /*
@@ -1042,13 +1052,7 @@ describe("the rules the bar judges a save by", () => {
 
     mount(editorSpy(pair(), "a"), {}, rootIsForbidden);
 
-    // `aria-disabled`, not the attribute: this bar keeps an unavailable verb in
-    // the tab sequence deliberately, so the reason is reachable. Asserting
-    // `disabled` checks something this component never sets, and passes either
-    // way — which is how the first version of this case read as green.
-    const save = screen.getByLabelText("Save as pattern");
-    expect(save.getAttribute("aria-disabled")).toBe("true");
-    expect(save.getAttribute("title")).toContain("belongs inside");
+    expect(savePressed()).toContain("belongs inside");
   });
 
   it("judges a SET by the whole selection, not by the primary block", () => {
@@ -1074,9 +1078,7 @@ describe("the rules the bar judges a save by", () => {
 
     mount(editor);
 
-    const save = screen.getByLabelText("Save as pattern");
-    expect(save.getAttribute("aria-disabled")).toBe("true");
-    expect(save.getAttribute("title")).toContain("no gaps");
+    expect(savePressed()).toContain("no gaps");
   });
 
   it("offers the save for a set that IS one run", () => {
@@ -1099,6 +1101,8 @@ describe("the rules the bar judges a save by", () => {
     expect(
       screen.getByLabelText("Save as pattern").getAttribute("aria-disabled")
     ).toBeNull();
+    // Pressed, it goes on to the host's form: nothing is refused.
+    expect(savePressed()).toBe("");
   });
 
   it("offers the save under the registry's own rules", () => {

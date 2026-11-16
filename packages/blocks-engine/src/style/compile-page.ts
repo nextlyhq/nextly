@@ -47,6 +47,7 @@ import { isConditionGated } from "../visibility";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { childGapForms } from "./child-gap";
+import { childFlagRule, withContainInset } from "./contain-inset";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -1309,136 +1310,6 @@ interface EnvelopeContext {
   previewStates?: boolean;
 }
 
-/**
- * The custom property a contained container's inset travels in.
- *
- * A contained container is drawn full width, and its inline padding brings its
- * content in to the site's content width. The site sheet sets this property on
- * a contained element to how far that is from each edge, and to `0px` on every
- * other element of the page (see `emitContentWidth`). It is registered as not
- * inherited there too, so a block inside a contained one never takes the inset
- * of the container around it.
- */
-export const CONTAIN_INSET_PROPERTY = "--nx-contain-inset";
-
-/** The two padding sides a contained container's inset is applied to. */
-const INLINE_PADDING = new Set(["padding-inline-start", "padding-inline-end"]);
-
-/** `0`, `-0`, `+0`, `0.0`, `.0` and the like: a zero with no unit. */
-const UNITLESS_ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
-
-/**
- * A padding value as an argument of `max()`.
- *
- * A bare `0` is a length where a property takes one, but inside `max()` it is
- * a number, and a number beside a length makes the declaration invalid: the
- * padding would fall to nothing and a contained container's content reach the
- * page edge. A unitless zero is the only number a padding accepts, so it is
- * the one value that needs a unit, in whichever spelling it was written.
- */
-function asMaxArgument(value: string): string {
-  return UNITLESS_ZERO.test(value.trim()) ? "0px" : value;
-}
-
-/**
- * The keywords every property takes, none of which a math function can.
- *
- * `max(inherit, ...)` is invalid, so wrapping one would break the keyword on
- * every block, contained or not. A keyword is an author's explicit word about
- * the cascade, so it is written as it is: on a contained block it sets the
- * padding the way it says, as it does anywhere else.
- */
-const CSS_WIDE_KEYWORDS = new Set([
-  "inherit",
-  "initial",
-  "unset",
-  "revert",
-  "revert-layer",
-]);
-
-/** Whether an inline padding value can stand as an argument of `max()`. */
-function takesContainInset(value: string): boolean {
-  return !CSS_WIDE_KEYWORDS.has(value.trim().toLowerCase());
-}
-
-/**
- * The declarations as written into a rule: an inline padding at least the
- * containment inset.
- *
- * Every tier's inline padding (a node's own value, a block-type default, a
- * named class) is written as `max(<value>, var(--nx-contain-inset, 0px))`. The
- * padding is the same everywhere the inset is `0px`, which is every element
- * that is not contained. On a contained one the value an author or a default
- * set replaces the site's gutter as the least space at each side, and can widen
- * the inset, but it cannot take the content past the content width. CSS has no
- * other way to combine two values of one property, so the combination is
- * written into each value that might replace the containment's own.
- *
- * **A block sized by its author is not inset.** The inset is worked out from
- * the width of the box the container is laid out in, since a padding's `100%`
- * means that box and CSS cannot name an element's own width there. A contained
- * block whose `width` or `max-width` is set is narrower than that box, so the
- * rule that sets either one also sets a flag for it, `1` when the value sizes
- * the block and `0` for `auto` or `none`, which size nothing. The site sheet
- * multiplies the inset by one less the larger flag, and its
- * `margin-inline: auto` centres a sized block, whose content then fills it
- * within the gutter. One flag per property, written in the same rule, so each
- * follows its own property through every tier, breakpoint and state: an
- * override back to `auto` brings the inset back, while a `max-width` that
- * still applies keeps it off. `inherit` leaves its flag to the cascade.
- *
- * Only the emitted rule carries it: the trace records the value as it was set.
- */
-function withContainInset(
-  declarations: readonly Declaration[],
-  onRoot: boolean
-): Declaration[] {
-  const padded = declarations.map(declaration =>
-    INLINE_PADDING.has(declaration.property) &&
-    takesContainInset(declaration.value)
-      ? {
-          ...declaration,
-          value: `max(${asMaxArgument(declaration.value)}, var(${CONTAIN_INSET_PROPERTY}, 0px))`,
-        }
-      : declaration
-  );
-  if (!onRoot) return padded;
-  const flags = declarations.flatMap(sizeFlag);
-  return flags.length === 0 ? padded : [...padded, ...flags];
-}
-
-/**
- * The flag each property that can size a block sets, for the site sheet's
- * inset: `1` while the property sizes the block, `0` while it does not.
- */
-export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
-  width: "--nx-sized-width",
-  "max-width": "--nx-sized-max-width",
-};
-
-/**
- * Values of those properties that size nothing. Neither is inherited, so
- * `initial`, `unset` and the reverts resolve to `auto` or `none` as well.
- */
-const UNSIZED = new Set([
-  "auto",
-  "none",
-  "initial",
-  "unset",
-  "revert",
-  "revert-layer",
-]);
-
-/** The flag a declaration sets, if it is one that can size a block. */
-function sizeFlag(declaration: Declaration): Declaration[] {
-  const flag = SIZED_FLAG_PROPERTIES[declaration.property];
-  if (flag === undefined) return [];
-  const value = declaration.value.trim().toLowerCase();
-  // `inherit` takes the parent's size, which no rule here can know.
-  if (value === "inherit") return [];
-  return [{ property: flag, value: UNSIZED.has(value) ? "0" : "1" }];
-}
-
 /** Compile one styles envelope into rules under one selector. */
 function envelopeRules(
   styles: NodeStyles | undefined,
@@ -1577,6 +1448,14 @@ function envelopeRules(
             rule.descendant === ""
           ),
         });
+        // The flag for the block's children; not traced, as no one set it.
+        const flags = childFlagRule(
+          rule,
+          `${selector}${stateSelectors[state]} > *`,
+          weightlessAnchor,
+          context.atRule
+        );
+        if (flags !== undefined) rules.push(flags);
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
@@ -2771,10 +2650,9 @@ export function compilePageCss(
         });
         continue;
       }
-      // A reference that reached nothing. Silently dropping it leaves an author with a class on
-      // the node, no class on the element, and nothing connecting the two — the same account
-      // every other unwritten value in this compile gets. Once per id, because a second report
-      // would name the same missing class and the same fix.
+      // A reference that reached nothing: reported, not dropped in silence, once per id, in words
+      // for the author. The advice suits a deleted shared style or a block style whose block is
+      // gone, and names no screen a host without a page builder lacks.
       // A set per stored node, because the pointer above names one reference and a reference is
       // per node. Deduped across the document, the first node to list a missing class takes the
       // only report, and an author who follows that pointer and repairs it hears nothing about
@@ -2799,8 +2677,9 @@ export function compilePageCss(
         path: entryPath,
         code: "unknown-class",
         severity: "warning",
-        message: `This node lists the class ${describeValue(id)}, which the site library does not define, so it was not applied.`,
-        suggestion: "Remove the reference, or add the class to the library.",
+        message: `This block uses a style this site doesn't have ("${describeValue(id)}"), so the page doesn't show it.`,
+        suggestion:
+          "Remove the style from this block, or choose one this site has.",
       });
     }
     // Two nodes sharing an id share one entry in this map, so a named class recorded here would

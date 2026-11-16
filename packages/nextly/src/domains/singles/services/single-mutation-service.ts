@@ -195,6 +195,7 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { NO_PART, partOfRewrittenField } from "../../versions/changed-parts";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -245,6 +246,7 @@ import {
   findPartDrafts,
   holdsPendingChange,
   partKeysOf,
+  partsWritten,
   SHARED_DRAFT_SLOT,
   sharedFieldsJudged,
   storePartDrafts,
@@ -510,6 +512,32 @@ function storedAtTopLevel(
   fields: DynamicSingleRecord["fields"]
 ): DynamicSingleRecord["fields"] {
   return addressableFields(fields) as unknown as DynamicSingleRecord["fields"];
+}
+
+/**
+ * The fields a Single stores at its top level whose columns `payloads` write,
+ * by field name: what a save supplies, as opposed to what it carries over
+ * from a draft or the live document. A field inside a group with no name is
+ * among them, its column being on the row as well.
+ */
+function fieldsWrittenIn(
+  fields: DynamicSingleRecord["fields"],
+  payloads: readonly Record<string, unknown>[]
+): Set<string> {
+  const written = new Set<string>();
+  for (const field of storedAtTopLevel(fields)) {
+    const name = field.name;
+    if (name === undefined) continue;
+    const column = toSnakeCase(name);
+    if (
+      payloads.some(payload =>
+        Object.prototype.hasOwnProperty.call(payload, column)
+      )
+    ) {
+      written.add(name);
+    }
+  }
+  return written;
 }
 
 /**
@@ -4812,21 +4840,16 @@ export class SingleMutationService extends BaseService {
             const replaces = existingDraft ? base : recordNested(base);
             let pending: Record<string, unknown> = { ...replaces };
             // The fields this save supplies, as opposed to those carried over
-            // from the draft or the live document it builds on.
-            const suppliedFieldNames = new Set<string>();
-            // Every field of the row, those inside a group with no name among them: their
-            // columns are on this row, so an edit to one is held here like one beside the group.
-            for (const field of addressableFields(
-              singleMeta.fields
-            ) as unknown as typeof singleMeta.fields) {
-              if (field.name === undefined) continue;
-              const column = toSnakeCase(field.name);
-              if (Object.prototype.hasOwnProperty.call(mainPayload, column)) {
-                pending[field.name] = (mainPayload as Record<string, unknown>)[
-                  column
-                ];
-                suppliedFieldNames.add(field.name);
-              }
+            // from the draft or the live document it builds on: an edit to a
+            // field inside a group with no name is held here like one beside
+            // the group.
+            const suppliedFieldNames = fieldsWrittenIn(singleMeta.fields, [
+              mainPayload,
+            ]);
+            for (const name of suppliedFieldNames) {
+              pending[name] = (mainPayload as Record<string, unknown>)[
+                toSnakeCase(name)
+              ];
             }
             // The system columns the loop above does not declare — status and
             // the timestamps — still ride along at the read shape.
@@ -4974,6 +4997,14 @@ export class SingleMutationService extends BaseService {
                 views,
               });
             }
+            // The keys this save set, and which part each belongs to, read
+            // once for the parts its version records and the store that
+            // splits the document by part.
+            const heldTouched = new Set([
+              ...suppliedFieldNames,
+              ...Object.keys(attemptComponentFields),
+            ]);
+            const heldKeys = await partKeysOf(fieldConfigs);
             // The draft, and the save as a version of its own. A save that
             // changes nothing against what it replaces records no version.
             const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -5000,6 +5031,14 @@ export class SingleMutationService extends BaseService {
                   ? { restoredFrom: options.restoredFrom }
                   : {}),
                 maxPerDoc: singleMeta.versions?.maxPerDoc,
+                // The parts this save held values in: its language's, the
+                // shared part's, or the one part of a Single without
+                // languages.
+                changedParts: partsWritten({
+                  locale: singleDraftLocale ?? null,
+                  touched: heldTouched,
+                  keys: heldKeys,
+                }),
                 ...(singleParts && typeof singleDraftLocale === "string"
                   ? {
                       storeWorkingDraft: async (repo: VersionsRepository) =>
@@ -5007,11 +5046,8 @@ export class SingleMutationService extends BaseService {
                           ref: draftRef,
                           locale: singleDraftLocale,
                           document: pending,
-                          touched: new Set([
-                            ...suppliedFieldNames,
-                            ...Object.keys(attemptComponentFields),
-                          ]),
-                          keys: await partKeysOf(fieldConfigs),
+                          touched: heldTouched,
+                          keys: heldKeys,
                           existing: singleParts,
                           createdBy: options.user?.id ?? null,
                         }),
@@ -5292,6 +5328,9 @@ export class SingleMutationService extends BaseService {
                   carriesComponentValues(fieldConfigs)
                     ? (snapshotLocale ?? null)
                     : null,
+                // The Single as it stood before the restore, which this
+                // version writes nowhere: it changes no part.
+                changedParts: NO_PART,
                 label: "Before restore",
               });
             }
@@ -5387,6 +5426,35 @@ export class SingleMutationService extends BaseService {
               ...(options.restoredFrom
                 ? { restoredFrom: options.restoredFrom }
                 : {}),
+              // Written in place: the language the snapshot is recorded in
+              // where it wrote a translated value, a component or the
+              // language's status, and the shared part where it wrote a
+              // shared value. A pending change it put live is folded into
+              // what it wrote, so the drafts' values count where the publish
+              // carried them. A Single that keeps no translations of its own
+              // stores its fields on the shared row; its components alone are
+              // a language's.
+              changedParts: partsWritten({
+                locale: savedLocale,
+                touched: new Set([
+                  ...fieldsWrittenIn(singleMeta.fields, [
+                    mainPayload,
+                    companionData,
+                  ]),
+                  ...Object.keys(attemptComponentFields),
+                ]),
+                keys: await partKeysOf(fieldConfigs, {
+                  translated: Boolean(companion),
+                }),
+                // The language's own status rides its translation row; the
+                // Single's is the main row's, which a write in the default
+                // language moves too, and which every language shows.
+                statusWritten: companionStatus !== undefined,
+                documentStatusWritten: Object.prototype.hasOwnProperty.call(
+                  mainPayload,
+                  "status"
+                ),
+              }),
               maxPerDoc: versionsConfig.maxPerDoc,
             });
             await this.recordSingleSave(tx, slug, existingDoc.id, options, {
@@ -6816,6 +6884,7 @@ export class SingleMutationService extends BaseService {
       createdBy: call.user?.id ?? null,
       locale:
         inLanguage || carriesComponentValues(fields) ? (locale ?? null) : null,
+      changedParts: partOfRewrittenField(args.translatedIn),
       maxPerDoc: singleMeta.versions.maxPerDoc,
     });
     return versionNo;
