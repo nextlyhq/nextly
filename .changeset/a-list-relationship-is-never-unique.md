@@ -33,4 +33,4 @@ A relationship or upload that holds a list of links (`hasMany`, a list to severa
 
 The refusal comes wherever the field is declared. The Schema Builder refuses the save of a collection, Single or field group with such a field. A collection or Single defined in code is refused at start, as any other invalid config is.
 
-What an existing site sees: a list relationship already marked unique is now refused at save and at start, until Unique is turned off on it. A later `nextly migrate` step clears what is already stored.
+What an existing site sees: a list relationship already marked unique is now refused at save and at start, until Unique is turned off on it. A site whose migrations recorded such an index is told to run `nextly migrate:create`, which writes its drop.
