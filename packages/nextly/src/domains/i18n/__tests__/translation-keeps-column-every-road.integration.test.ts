@@ -208,6 +208,36 @@ describe.each(getConfiguredTestDialects())(
       }
     };
 
+    /**
+     * Every moved field has its column in `table`, by name: PostgreSQL's date column included,
+     * which the definition comparison leaves out.
+     */
+    const expectAllMovedIn = async (t: TestNextly, table: string) =>
+      expect([...(await movedColumnsLeft(t, table))].sort()).toEqual(
+        [...MOVED].sort()
+      );
+
+    /** One entry's moved values, as each dialect hands back a text and a whole number. */
+    async function valuesIn(
+      t: TestNextly,
+      table: string,
+      where: string
+    ): Promise<{ heading: unknown; body: unknown; views: unknown }> {
+      const [row] = await run<{
+        heading: unknown;
+        body: unknown;
+        views: unknown;
+      }>(
+        t,
+        `SELECT ${q("heading")} AS heading, ${q("body")} AS body, ${q("views")} AS views FROM ${q(table)} WHERE ${where}`
+      );
+      return {
+        heading: row?.heading,
+        body: row?.body,
+        views: row?.views === undefined ? undefined : Number(row.views),
+      };
+    }
+
     /** The moved fields' columns `table` still has, by name; none when the table is gone. */
     async function movedColumnsLeft(
       t: TestNextly,
@@ -240,10 +270,13 @@ describe.each(getConfiguredTestDialects())(
           `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("views")} SET DEFAULT 7`
         );
       }
+      await expectAllMovedIn(first, TABLE);
       const before = await movedColumns(first, dialect, TABLE);
       expectEveryColumn(before);
 
       await setTranslated(first, true);
+
+      await expectAllMovedIn(first, COMPANION);
 
       expect(
         asReceived(await movedColumns(first, dialect, COMPANION), dialect)
@@ -259,6 +292,7 @@ describe.each(getConfiguredTestDialects())(
       // by hand on the main table, not through Nextly, does not survive.
       expect(await movedColumnsLeft(first, COMPANION)).toEqual([]);
       const { views, ...rest } = before;
+      await expectAllMovedIn(first, TABLE);
       const back = await movedColumns(first, dialect, TABLE);
       expectEveryColumn(back);
       expect(back).toEqual({
@@ -288,8 +322,14 @@ describe.each(getConfiguredTestDialects())(
       instance = second;
 
       await migrateFolder(second, { step: created });
+      await expectAllMovedIn(second, TABLE);
       const before = await movedColumns(second, dialect, TABLE);
       expectEveryColumn(before);
+      // An entry holding values, so the replay is seen to move them with their columns.
+      await run(
+        second,
+        `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("heading")}, ${q("body")}, ${q("views")}) VALUES ('r1', 'T', 'r1', 'H', 'B', 7)`
+      );
       // Until the data-loss judgement counts a translations table created in the same file as the
       // run's own, an unattended run refuses the file's writes into that table unless given the
       // consent without targets, which no target names.
@@ -303,10 +343,18 @@ describe.each(getConfiguredTestDialects())(
     it("through nextly migrate, replaying the dialog's turn-on into a second database", async () => {
       const { second, before } = await replayUpToTurnOn();
 
+      await expectAllMovedIn(second, COMPANION);
       expect(
         asReceived(await movedColumns(second, dialect, COMPANION), dialect)
       ).toEqual(asReceived(before, dialect));
       expect(await movedColumnsLeft(second, TABLE)).toEqual([]);
+      expect(
+        await valuesIn(
+          second,
+          COMPANION,
+          `${q("_parent")} = 'r1' AND ${q("_locale")} = 'en'`
+        )
+      ).toEqual({ heading: "H", body: "B", views: 7 });
     });
 
     // A turn-off replayed in a run of its own, after the turn-on's, stops on PostgreSQL and MySQL
@@ -322,8 +370,14 @@ describe.each(getConfiguredTestDialects())(
           consent: resolveDataLossConsent({ flag: COMPANION, env: {} }),
         });
 
+        await expectAllMovedIn(second, TABLE);
         expect(await movedColumns(second, dialect, TABLE)).toEqual(before);
         expect(await movedColumnsLeft(second, COMPANION)).toEqual([]);
+        expect(await valuesIn(second, TABLE, `${q("id")} = 'r1'`)).toEqual({
+          heading: "H",
+          body: "B",
+          views: 7,
+        });
       }
     );
   }
