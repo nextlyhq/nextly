@@ -42,6 +42,14 @@
  * A listed file that shrank passes, and the run prints the lower size its line
  * can be brought down to.
  *
+ * That the list only shrinks is checked against a base revision: an entry
+ * the base's list does not have, or a count higher than the base's, fails.
+ * The base is `SOURCE_SIZE_BASE` when it is set (CI sets it to the commit the
+ * change is compared with), and a base that cannot be read then fails the
+ * run. Otherwise it is where HEAD left `origin/dev`, and without that ref the
+ * comparison is skipped and the run says so. A base with no list yet has
+ * nothing to compare.
+ *
  * `pnpm lint` runs it after the oxlint passes (scripts/lint.mjs).
  *
  *   node scripts/check-source-size.mjs [--root <dir>]
@@ -271,21 +279,79 @@ export function readFiles(base = root, packages = PACKAGES) {
     });
 }
 
+/**
+ * Problems with entries that widen the list against `baseEntries`, the list
+ * at `label`: a path it did not have, or a count higher than it had.
+ */
+export function wideningProblems(baseEntries, entries, label, list = ALLOWLIST) {
+  return [...entries].flatMap(([path, entry]) => {
+    const before = baseEntries.get(path);
+    if (!before) {
+      return [`${path} is in ${list} (line ${entry.at}) but was not at ${label}. The list only shrinks: split the file rather than adding it.`];
+    }
+    if (entry.lines > before.lines) {
+      return [`${path} is allowed ${n(entry.lines)} lines by ${list} (line ${entry.at}), more than the ${n(before.lines)} it was allowed at ${label}. The list only shrinks: put its count back to ${before.lines} and take the file back under it.`];
+    }
+    return [];
+  });
+}
+
+const git = (base, args) =>
+  execFileSync("git", args, { cwd: base, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+/**
+ * The list at the base revision, to compare the list against.
+ *
+ * @returns {{ label: string, entries?: Map<string, { lines: number, at: number }>, skipped?: string, problem?: string }}
+ */
+export function baseAllowlist(base, env = process.env) {
+  let rev = env.SOURCE_SIZE_BASE;
+  const required = Boolean(rev);
+  if (!required) {
+    try {
+      rev = git(base, ["merge-base", "HEAD", "origin/dev"]).trim();
+    } catch {
+      return { label: "origin/dev", skipped: "no origin/dev to compare the list with, so whether it only shrank was not checked" };
+    }
+  }
+  let commit;
+  try {
+    commit = git(base, ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`]).trim();
+  } catch {
+    return { label: rev, problem: `SOURCE_SIZE_BASE names ${rev}, which this checkout does not have, so whether ${ALLOWLIST} only shrank could not be checked. Fetch that commit, or unset SOURCE_SIZE_BASE.` };
+  }
+  const label = required ? `${rev} (${commit.slice(0, 10)})` : `origin/dev at ${commit.slice(0, 10)} (where HEAD left it)`;
+  if (git(base, ["ls-tree", "--name-only", commit, "--", ALLOWLIST]).trim() === "") {
+    return { label, skipped: `${label} has no ${ALLOWLIST}, so there is nothing to compare` };
+  }
+  return { label, entries: parseAllowlist(git(base, ["show", `${commit}:${ALLOWLIST}`])).entries };
+}
+
+/** What the run says about the base comparison when it raised no problem of its own. */
+function baseNote(before, widened) {
+  if (before.skipped) return [`Not compared with a base: ${before.skipped}.`];
+  if (before.problem || widened.length > 0) return [];
+  return [`The list has not grown since ${before.label}.`];
+}
+
 /** Checks a checkout and returns the exit code: 0 when every counted file fits, 1 when one does not. */
-export function main(base = root) {
+export function main(base = root, env = process.env) {
   const listPath = join(base, ALLOWLIST);
   const { entries, errors } = parseAllowlist(
     existsSync(listPath) ? readFileSync(listPath, "utf8") : ""
   );
   const files = readFiles(base);
   const result = judge(files, entries);
-  const problems = [...errors, ...result.problems];
+  const before = baseAllowlist(base, env);
+  const widened = before.entries ? wideningProblems(before.entries, entries, before.label) : [];
+  const problems = [...errors, ...(before.problem ? [before.problem] : []), ...widened, ...result.problems];
   const left = Object.entries(result.leftOut)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([reason, count]) => `${reason} ${n(count)}`)
     .join(", ");
   const generated = files.filter(file => file.reason === "generated").map(file => file.path);
   const notes = [
+    ...baseNote(before, widened),
     ...(generated.length > 0 ? [`Left out as generated: ${generated.join(", ")}.`] : []),
     ...result.lowerable,
   ];

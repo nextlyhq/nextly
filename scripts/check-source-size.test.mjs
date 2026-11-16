@@ -22,6 +22,7 @@ import {
   judge,
   leftOut,
   parseAllowlist,
+  wideningProblems,
 } from "./check-source-size.mjs";
 import { everyPass, lint } from "./lint.mjs";
 
@@ -29,6 +30,8 @@ const SCRIPT = fileURLToPath(new URL("./check-source-size.mjs", import.meta.url)
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 
 const lines = count => "x\n".repeat(count);
+/** This process's environment without a base revision, so a run compares only what a test sets. */
+const { SOURCE_SIZE_BASE: _unset, ...ENV } = process.env;
 const text = body => () => body;
 const counted = (path, n) => ({ path, lines: n, reason: null });
 /** One small counted file in every package, so the population check is met. */
@@ -143,6 +146,23 @@ describe("reading the allowlist", () => {
   });
 });
 
+describe("holding the list to a base", () => {
+  const base = listOf([["packages/a.ts", 2000], ["packages/b.ts", 1800]]);
+
+  it("passes entries kept, lowered or deleted", () => {
+    expect(wideningProblems(base, listOf([["packages/a.ts", 2000], ["packages/b.ts", 1600]]), "dev")).toEqual([]);
+    expect(wideningProblems(base, listOf([["packages/b.ts", 1800]]), "dev")).toEqual([]);
+  });
+
+  it("fails an added path and a raised count, naming the base", () => {
+    const problems = wideningProblems(base, listOf([["packages/a.ts", 2001], ["packages/b.ts", 1800], ["packages/c.ts", 1600]]), "dev", "list.txt");
+    expect(problems).toEqual([
+      "packages/a.ts is allowed 2,001 lines by list.txt (line 1), more than the 2,000 it was allowed at dev. The list only shrinks: put its count back to 2000 and take the file back under it.",
+      "packages/c.ts is in list.txt (line 5) but was not at dev. The list only shrinks: split the file rather than adding it.",
+    ]);
+  });
+});
+
 describe("judging the files", () => {
   const file = "packages/builder/src/canvas.tsx";
 
@@ -222,9 +242,14 @@ describe("the command", () => {
     writeFileSync(join(base, path), body);
   }
 
-  function run() {
+  function run(env = {}) {
     execFileSync("git", ["add", "-A"], { cwd: base });
-    return spawnSync(process.execPath, [SCRIPT, "--root", base], { encoding: "utf8" });
+    return spawnSync(process.execPath, [SCRIPT, "--root", base], { encoding: "utf8", env: { ...ENV, ...env } });
+  }
+
+  function commit() {
+    execFileSync("git", ["add", "-A"], { cwd: base });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], { cwd: base });
   }
 
   const big = "packages/builder/src/big.tsx";
@@ -298,9 +323,69 @@ describe("the command", () => {
     put(ALLOWLIST, `${big} 1600\n`);
     expect(run().status).toBe(0);
     rmSync(join(base, big));
-    const result = spawnSync(process.execPath, [SCRIPT, "--root", base], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, [SCRIPT, "--root", base], { encoding: "utf8", env: ENV });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`${big} is listed (${ALLOWLIST} line 1) but no longer exists.`);
+  });
+
+  describe("against a base revision", () => {
+    const other = "packages/blocks-engine/src/other.ts";
+
+    beforeEach(() => {
+      put(big, lines(1700));
+      put(other, lines(1600));
+      put(ALLOWLIST, `${big} 1700\n\n${other} 1600\n`);
+      commit();
+    });
+
+    it("passes a list that kept or shrank its entries, and says it compared", () => {
+      expect(run({ SOURCE_SIZE_BASE: "HEAD" }).stdout).toContain("The list has not grown since HEAD (");
+      put(big, lines(1650));
+      put(other, lines(1400));
+      put(ALLOWLIST, `${big} 1650\n\n`);
+      const shrank = run({ SOURCE_SIZE_BASE: "HEAD" });
+      expect(shrank.status, shrank.stderr).toBe(0);
+    });
+
+    it("fails an entry the base did not have, even for a file at its listed size", () => {
+      const added = "packages/builder/src/added.tsx";
+      put(added, lines(1800));
+      put(ALLOWLIST, `${big} 1700\n\n${other} 1600\n\n${added} 1800\n`);
+      const result = run({ SOURCE_SIZE_BASE: "HEAD" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/^source-size: FAILED, 1 problem\(s\)\./);
+      expect(result.stderr).toContain(`${added} is in ${ALLOWLIST} (line 5) but was not at HEAD (`);
+    });
+
+    it("fails a count raised above the base's, even when the file matches the new count", () => {
+      put(big, lines(2000));
+      put(ALLOWLIST, `${big} 2000\n\n${other} 1600\n`);
+      const result = run({ SOURCE_SIZE_BASE: "HEAD" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`${big} is allowed 2,000 lines by ${ALLOWLIST} (line 1), more than the 1,700 it was allowed at HEAD (`);
+    });
+
+    it("fails when the base it was given cannot be read, rather than skipping the comparison", () => {
+      const result = run({ SOURCE_SIZE_BASE: "no-such-revision" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("SOURCE_SIZE_BASE names no-such-revision, which this checkout does not have");
+    });
+
+    it("compares nothing with a base that has no list yet, and says so", () => {
+      put("packages/builder/src/added.tsx", lines(1800));
+      put(ALLOWLIST, `${big} 1700\n\n${other} 1600\n\npackages/builder/src/added.tsx 1800\n`);
+      execFileSync("git", ["rm", "-q", "--cached", ALLOWLIST], { cwd: base });
+      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "no list"], { cwd: base });
+      const result = run({ SOURCE_SIZE_BASE: "HEAD" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`has no ${ALLOWLIST}, so there is nothing to compare.`);
+    });
+
+    it("says it did not compare when no base is set and there is no origin/dev", () => {
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Not compared with a base: no origin/dev to compare the list with");
+    });
   });
 
   it("reports every problem in one run", () => {
