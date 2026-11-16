@@ -282,7 +282,7 @@ describe.each(getConfiguredTestDialects())(
       // its pages first, so the cached page is never left drawn inside a
       // Layout that is no longer published.
       await expect(setStatus(LAYOUTS_SLUG, layoutId, "draft")).rejects.toThrow(
-        /Remove Layout/
+        /Remove header & footer set/
       );
       expect(await render()).toContain("Header two");
     });

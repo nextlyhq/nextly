@@ -192,7 +192,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await refusalOf(s.unpublish(s.used));
 
       expect(messageOf(refused)).toContain(
-        'cannot be unpublished because the Layout "Marketing" uses it'
+        'cannot be unpublished because the header & footer set "Marketing" uses it'
       );
       expect(await s.statusOf(s.used)).toBe("published");
     });
@@ -203,7 +203,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await refusalOf(s.remove(s.used));
 
       expect(messageOf(refused)).toContain(
-        'cannot be deleted because the Layout "Marketing" uses it'
+        'cannot be deleted because the header & footer set "Marketing" uses it'
       );
       expect(await s.statusOf(s.used)).toBe("published");
     });
@@ -216,7 +216,7 @@ describe.each(getConfiguredTestDialects())(
       const refused = await refusalOf(s.rename(s.used, "Retired"));
 
       expect(messageOf(refused)).toContain(
-        'cannot be unpublished because the Layout "Marketing" uses it'
+        'cannot be unpublished because the header & footer set "Marketing" uses it'
       );
       expect(await s.statusOf(s.used)).toBe("published");
       // CONTROL: the same hook retiring a component no Layout uses.
@@ -264,7 +264,7 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(body.error?.code).toBe("CONFLICT");
       expect(body.error?.message).toContain(
-        'cannot be unpublished because the Layout "Marketing" uses it'
+        'cannot be unpublished because the header & footer set "Marketing" uses it'
       );
       expect(await s.statusOf(s.used)).toBe("published");
     });

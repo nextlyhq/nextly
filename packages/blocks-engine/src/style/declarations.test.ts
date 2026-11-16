@@ -440,3 +440,54 @@ describe("a child's share of a Row or a Grid, and a grid's item alignment", () =
     expect(emitted({ justifyItems: "legacy center" })).toEqual([]);
   });
 });
+
+describe("an outline, with its offset", () => {
+  const emitted = (values: Record<string, unknown>) =>
+    compileStyleValues(values, "/p").declarations.map(
+      each => `${each.property}: ${each.value}`
+    );
+
+  it("compiles each part to its own longhand", () => {
+    expect(
+      emitted({
+        outline: {
+          width: "2px",
+          style: "solid",
+          color: "#00e",
+          offset: "4px",
+        },
+      })
+    ).toEqual([
+      "outline-color: #00e",
+      "outline-offset: 4px",
+      "outline-style: solid",
+      "outline-width: 2px",
+    ]);
+  });
+
+  it("takes the browser's own ring, the width keywords, a token and an inward offset", () => {
+    expect(emitted({ outline: { style: "auto" } })).toEqual([
+      "outline-style: auto",
+    ]);
+    expect(emitted({ outline: { width: "thick" } })).toEqual([
+      "outline-width: thick",
+    ]);
+    expect(
+      emitted({ outline: { color: { $token: "color.primary" } } })
+    ).toEqual(["outline-color: var(--site-color-primary)"]);
+    // Negative draws the ring inside the border box, over its edge.
+    expect(emitted({ outline: { offset: "-2px" } })).toEqual([
+      "outline-offset: -2px",
+    ]);
+  });
+
+  it("writes nothing for a part the property cannot take", () => {
+    // A percentage resolves against nothing on either, `hidden` is a border
+    // style an outline does not have, and a width is never negative.
+    expect(emitted({ outline: { width: "10%" } })).toEqual([]);
+    expect(emitted({ outline: { width: "-1px" } })).toEqual([]);
+    expect(emitted({ outline: { offset: "10%" } })).toEqual([]);
+    expect(emitted({ outline: { style: "hidden" } })).toEqual([]);
+    expect(emitted({ outline: { color: "16px" } })).toEqual([]);
+  });
+});
