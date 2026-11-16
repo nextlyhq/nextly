@@ -123,9 +123,50 @@ describe("Focus", () => {
   it("shows a blocks field's accepted blocks and their props", async () => {
     const { user } = setup();
     await focusOn(user, "body");
-    const paths = drawn();
-    expect(paths.length).toBeGreaterThan(0);
-    expect(paths.every(path => path?.startsWith("body/"))).toBe(true);
+    // The heading block as the first level, its two props beneath it.
+    expect(drawn()).toEqual([
+      "body/#core/heading",
+      "body/#core/heading/#text",
+      "body/#core/heading/#level",
+    ]);
+    expect(rowAt("body/#core/heading")).toHaveAttribute("aria-level", "1");
+    expect(rowAt("body/#core/heading/#text")).toHaveAttribute(
+      "aria-level",
+      "2"
+    );
+  });
+
+  it("adds at the end of the focused container, and offers no end add in a blocks field", async () => {
+    const { probe, user } = setup();
+    await focusOn(user, "meta");
+    await user.click(screen.getByRole("button", { name: "+ Add field" }));
+    expect(probe.addsAt).toEqual([{ parentFieldId: "f-meta" }]);
+
+    await user.click(screen.getByRole("button", { name: "Exit focus" }));
+    await focusOn(user, "body");
+    expect(screen.queryByRole("button", { name: "+ Add field" })).toBeNull();
+  });
+
+  it("adds the first field of an empty focused container into it", async () => {
+    const { probe, user } = setup([
+      plain("title"),
+      plain("details", { type: "group", fields: [] }),
+    ]);
+    await focusOn(user, "details");
+    expect(drawn()).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "+ Add field" }));
+    expect(probe.addsAt).toEqual([{ parentFieldId: "f-details" }]);
+  });
+
+  it("puts keyboard focus on the first field Find still shows", async () => {
+    const { user } = setup();
+    await user.type(
+      screen.getByPlaceholderText("Find a field by label, name or type"),
+      "kind"
+    );
+    await focusOn(user, "sections/items/cta");
+    expect(drawn()).toEqual(["sections/items/cta/kind"]);
+    expect(rowAt("sections/items/cta/kind")).toHaveFocus();
   });
 
   it("offers Focus only on a group, repeating rows or a blocks field", async () => {

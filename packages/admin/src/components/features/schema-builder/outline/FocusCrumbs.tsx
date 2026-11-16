@@ -2,15 +2,17 @@
 
 /**
  * The breadcrumb Focus draws above the outline: the top level, each container down to the focused
- * one, and Exit focus. A crumb above the focused container goes back to its level, and is a place
- * a dragged field can be dropped: the field goes to the end of that level, judged by the move rule
- * as any other move is.
+ * one, and Exit focus. A crumb above the focused container goes back to its level. Every crumb,
+ * the focused one included, is a place a dragged field can be dropped: the field goes to the end
+ * of that level, judged by the move rule as any other move is. A container above that Focus
+ * cannot show (a field group, changed in its own editor) is named but not a way back or a place.
  */
 import { useDroppable } from "@dnd-kit/core";
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import { canFocus } from "@admin/lib/builder/outline/focus-view";
 import type { OutlineNode } from "@admin/lib/builder/outline/outline-model";
 
 const CRUMB_PREFIX = "focus-crumb:";
@@ -30,6 +32,17 @@ export function crumbTargetOf(dropId: string): FieldInsertPosition | null {
 
 function crumbName(node: OutlineNode): string {
   return node.field.label || node.field.name || "Untitled";
+}
+
+/**
+ * A crumb as a place to drop: its drop id, and what a drag over it is called aloud, since a
+ * crumb is no field the drag's sentences could name.
+ */
+function useCrumbDrop(containerId: string | null, label: string) {
+  return useDroppable({
+    id: crumbDropId(containerId),
+    data: { spoken: `${label}, in the breadcrumb` },
+  });
 }
 
 /**
@@ -53,9 +66,7 @@ function CrumbButton({
   label: string;
   onGo: () => void;
 }): JSX.Element {
-  const { setNodeRef, isOver } = useDroppable({
-    id: crumbDropId(containerId),
-  });
+  const { setNodeRef, isOver } = useCrumbDrop(containerId, label);
   return (
     <button
       ref={setNodeRef}
@@ -67,6 +78,23 @@ function CrumbButton({
     >
       {label}
     </button>
+  );
+}
+
+/** The focused container's crumb: where the outline is, and a place to drop at its end. */
+function CurrentCrumb({ node }: { node: OutlineNode }): JSX.Element {
+  const label = crumbName(node);
+  const { setNodeRef, isOver } = useCrumbDrop(node.id, label);
+  return (
+    <span
+      ref={setNodeRef}
+      aria-current="location"
+      className={`rounded-sm px-1 font-medium text-foreground ${
+        isOver ? "ring-2 ring-primary" : ""
+      }`}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -96,20 +124,21 @@ export function FocusCrumbs({
           </li>
           {above.map(crumb => (
             <li key={crumb.id} className={SEPARATED}>
-              <CrumbButton
-                containerId={crumb.id}
-                label={crumbName(crumb)}
-                onGo={() => onGo(crumb.id)}
-              />
+              {canFocus(crumb) ? (
+                <CrumbButton
+                  containerId={crumb.id}
+                  label={crumbName(crumb)}
+                  onGo={() => onGo(crumb.id)}
+                />
+              ) : (
+                <span className="px-1 text-muted-foreground">
+                  {crumbName(crumb)}
+                </span>
+              )}
             </li>
           ))}
           <li className={SEPARATED}>
-            <span
-              aria-current="location"
-              className="px-1 font-medium text-foreground"
-            >
-              {crumbName(focused)}
-            </span>
+            <CurrentCrumb node={focused} />
           </li>
         </ol>
       </nav>

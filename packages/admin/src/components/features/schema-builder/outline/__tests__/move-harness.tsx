@@ -9,6 +9,7 @@ import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { vi } from "vitest";
 
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import {
   judgeMove,
   moveDestinations,
@@ -32,6 +33,8 @@ export interface MoveHarnessProbe {
   commits: number;
   /** The selected field, as the page would keep it. */
   selectedId: string | null;
+  /** Where each "Add field" asked to add, in order. */
+  addsAt: FieldInsertPosition[];
 }
 
 export function MoveHarness({
@@ -74,7 +77,9 @@ export function MoveHarness({
   };
   const callbacks: OutlineCallbacks = {
     select: id => setSelectedId(id),
-    addAt: vi.fn(),
+    addAt: target => {
+      probe.addsAt.push(target);
+    },
     duplicate: vi.fn(),
     remove: vi.fn(),
     setHidden: vi.fn(),
@@ -106,7 +111,7 @@ export function MoveHarness({
 
 /** A fresh probe for one test. */
 export function newProbe(): MoveHarnessProbe {
-  return { fields: [], commits: 0, selectedId: null };
+  return { fields: [], commits: 0, selectedId: null, addsAt: [] };
 }
 
 /** A plain field, as the Builder holds one. */

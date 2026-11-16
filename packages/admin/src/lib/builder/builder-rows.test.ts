@@ -56,6 +56,18 @@ describe("what a drag says", () => {
     expect(say({ active: active("a"), over: over("c") })).toBeUndefined();
   });
 
+  it("names a place that is no field by what its drop data says it is called", () => {
+    // A breadcrumb crumb is a drop place with an id of its own, which no field has.
+    const crumb = {
+      id: "focus-crumb:meta",
+      data: { current: { spoken: "Meta, in the breadcrumb" } },
+    } as unknown as Over;
+    const say = builderAnnouncements(fields()).onDragOver;
+    expect(say({ active: active("title"), over: crumb })).toBe(
+      "Title is over Meta, in the breadcrumb."
+    );
+  });
+
   it("says a drop over nothing moved nothing", () => {
     const say = builderAnnouncements(fields()).onDragEnd;
     expect(say({ active: active("title"), over: null })).toBe(

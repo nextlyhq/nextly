@@ -58,5 +58,7 @@ export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
     );
   }, []);
 
-  return { view, show, takeReturn };
+  // One object while what it holds is the same, so what is built from it is not rebuilt on every
+  // drawing of the outline.
+  return useMemo(() => ({ view, show, takeReturn }), [view, show, takeReturn]);
 }

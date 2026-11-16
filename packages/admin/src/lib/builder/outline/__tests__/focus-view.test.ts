@@ -6,8 +6,10 @@ import {
   nestedFixtureFields,
 } from "@admin/components/features/schema-builder/__fixtures__/nested-fixture";
 
+import type { RowMark } from "../../pending-changes";
 import {
   canFocus,
+  endAddTarget,
   focusFallback,
   focusHolding,
   focusView,
@@ -18,6 +20,7 @@ import {
   visibleRows,
   type OutlineNode,
 } from "../outline-model";
+import { markPending } from "../pending-rows";
 
 const typeLabel = (type: string) => type;
 
@@ -29,7 +32,15 @@ function outline(): OutlineNode[] {
   });
 }
 
-function node(nodes: OutlineNode[], id: string): OutlineNode {
+/** The outline with each of `ids` marked deleted, pending the save, as the page draws it. */
+function withDeleted(...ids: string[]): OutlineNode[] {
+  const marks = new Map<string, ReadonlySet<RowMark>>(
+    ids.map(id => [id, new Set<RowMark>(["deleted"])])
+  );
+  return [...markPending(outline(), marks, [])];
+}
+
+function node(nodes: readonly OutlineNode[], id: string): OutlineNode {
   const found = flattenOutline(nodes).find(each => each.id === id);
   if (!found) throw new Error(`no row ${id}`);
   return found;
@@ -110,6 +121,47 @@ describe("canFocus", () => {
     // A field group is changed in its own editor; a text field holds nothing.
     expect(canFocus(node(nodes, "f-seo"))).toBe(false);
     expect(canFocus(node(nodes, "f-summary-a"))).toBe(false);
+  });
+});
+
+describe("a container whose delete is pending", () => {
+  it("is not focused, and Focus on it draws the whole outline", () => {
+    const nodes = withDeleted("f-items-cta");
+    expect(canFocus(node(nodes, "f-items-cta"))).toBe(false);
+    const view = focusView(nodes, "f-items-cta");
+    expect(view.focused).toBeNull();
+    expect(view.nodes).toBe(nodes);
+  });
+
+  it("is passed over when Focus falls back to the deepest crumb", () => {
+    const nodes = withDeleted("f-sections-items", "f-items-cta");
+    expect(
+      focusFallback(nodes, ["f-sections", "f-sections-items", "f-items-cta"])
+    ).toBe("f-sections");
+  });
+});
+
+describe("endAddTarget", () => {
+  it("adds at the top level with nothing focused, and into a focused group or repeating rows", () => {
+    const nodes = outline();
+    expect(endAddTarget(focusView(nodes, null))).toEqual({});
+    expect(endAddTarget(focusView(nodes, "f-meta"))).toEqual({
+      parentFieldId: "f-meta",
+    });
+    expect(endAddTarget(focusView(nodes, "f-sections-items"))).toEqual({
+      parentFieldId: "f-sections-items",
+    });
+  });
+
+  it("adds nowhere in a focused blocks field or a container a field group holds", () => {
+    const nodes = outline();
+    expect(endAddTarget(focusView(nodes, "f-body"))).toBeNull();
+    const meta = node(nodes, "f-meta");
+    const held: OutlineNode = {
+      ...meta,
+      readOnly: { kind: "field-group", slug: "seo", label: "SEO" },
+    };
+    expect(endAddTarget(focusView([held], held.id))).toBeNull();
   });
 });
 

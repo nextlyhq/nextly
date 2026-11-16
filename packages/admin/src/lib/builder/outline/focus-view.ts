@@ -4,11 +4,14 @@
  * fields are the first level drawn; everything else about drawing them (folding, finding, the
  * rows' marks) is the outline's as usual.
  */
+import type { FieldInsertPosition } from "../insert-field";
+
 import {
   flattenOutline,
   type OutlineContainer,
   type OutlineNode,
 } from "./outline-model";
+import { isPendingDelete } from "./pending-rows";
 
 /** What the outline draws while a container is focused, or the whole outline when none is. */
 export interface FocusView {
@@ -24,7 +27,9 @@ export interface FocusView {
 
 /**
  * The containers a person may focus: a group, repeating rows and a blocks field. A field group is
- * changed in its own editor, and a block's rows are only read.
+ * changed in its own editor, and a block's rows are only read. A container whose delete is pending
+ * is still drawn, marked, until the save, but it is going: it is not focused, and Focus on it
+ * falls back as for one already gone.
  */
 const FOCUSABLE: ReadonlySet<OutlineContainer> = new Set<OutlineContainer>([
   "group",
@@ -33,7 +38,11 @@ const FOCUSABLE: ReadonlySet<OutlineContainer> = new Set<OutlineContainer>([
 ]);
 
 export function canFocus(node: OutlineNode): boolean {
-  return node.container !== null && FOCUSABLE.has(node.container);
+  return (
+    node.container !== null &&
+    FOCUSABLE.has(node.container) &&
+    !isPendingDelete(node)
+  );
 }
 
 /** The rows from the top level down to `id`, outermost first, or null when no row has it. */
@@ -65,6 +74,21 @@ export function focusView(
     nodes: focused.children,
     rootLevel: focused.level + 1,
   };
+}
+
+/**
+ * Where the outline's own "Add field" at the end adds a field: the end of the entity's top level
+ * with nothing focused, the end of the focused group or repeating rows, or nowhere (null) when
+ * the focused container takes no fields here: a blocks field holds blocks declared in code, and a
+ * container inside a field group is changed in that field group's editor.
+ */
+export function endAddTarget(view: FocusView): FieldInsertPosition | null {
+  const { focused } = view;
+  if (!focused) return {};
+  const takesFields =
+    (focused.container === "group" || focused.container === "repeater") &&
+    focused.readOnly === null;
+  return takesFields ? { parentFieldId: focused.id } : null;
 }
 
 /**

@@ -21,7 +21,10 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { usePersistedStringSet } from "@admin/hooks/usePersistedState";
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
-import { focusHolding } from "@admin/lib/builder/outline/focus-view";
+import {
+  endAddTarget,
+  focusHolding,
+} from "@admin/lib/builder/outline/focus-view";
 import {
   containerPaths,
   flattenOutline,
@@ -188,17 +191,22 @@ function useOutlineView(
     [shown, folded, query, typeLabel]
   );
   // Focus is one more action on a row: once a container is shown on its own,
-  // its first field takes keyboard focus, since its own row is not drawn.
+  // the first of its fields drawn takes keyboard focus, since its own row is
+  // not drawn; with Find on, that is the first that matches. It depends on
+  // `show` alone, which is stable, so the rows' actions stay the same object.
+  const { show } = focus;
   const actions = useMemo<OutlineActions>(
     () => ({
       ...state.actions,
       focusContainer: id =>
-        focus.show(id, [
-          flattenOutline(nodes).find(node => node.id === id)?.children[0]?.id ??
-            null,
-        ]),
+        show(
+          id,
+          flattenOutline(
+            flattenOutline(nodes).find(node => node.id === id)?.children ?? []
+          ).map(node => node.id)
+        ),
     }),
-    [state.actions, focus, nodes]
+    [state.actions, show, nodes]
   );
   useRefocusAfterMove(state, rows, nodes, folded, setFolded, focus);
   useReturnAfterFocus(focus, rows, state);
@@ -245,6 +253,9 @@ export function Outline({
 }: Props): JSX.Element {
   const view = useOutlineView(nodes, callbacks, foldKey);
   const { state, rows, finding, setFolded } = view;
+  // Adding at the end adds where the outline is showing: into the focused
+  // container, or nowhere when that container takes no fields here.
+  const endAdd = endAddTarget(view.focus.view);
   const movesId = useId();
 
   const tree = (
@@ -303,8 +314,8 @@ export function Outline({
         renderPreview={renderPreview}
         empty={nodes.length === 0}
         noMatch={finding && rows.length === 0 ? view.query.trim() : null}
-        readOnly={readOnly}
-        onAddAtEnd={() => callbacks.addAt({})}
+        readOnly={readOnly || endAdd === null}
+        onAddAtEnd={() => endAdd && callbacks.addAt(endAdd)}
         tree={tree}
       />
       <OutlineMoves
