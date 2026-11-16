@@ -43,19 +43,12 @@ import { Input } from "@nextlyhq/ui";
 import { Search } from "lucide-react";
 import * as React from "react";
 
-import {
-  blockLookGroups,
-  lookKeyOf,
-  type BlockLookGroup,
-} from "./block-look-rows";
+import { lookKeyOf, type BlockLookGroup } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import {
   inSharedStyleFilter,
   sharedStyleUse,
-  searchSharedStyles,
-  sharedStyleRows,
-  sharedStylesOnly,
   sharedStyleSearchText,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
@@ -95,6 +88,11 @@ import {
   useRename,
   useUsage,
 } from "./shared-styles-usage";
+import {
+  foundLooks,
+  foundSharedStyles,
+  stylesTabSource,
+} from "./styles-tab-matches";
 import { idsKey, idsOf } from "./usage-reads";
 
 // The tab's shapes, its usage reads and rename, its row, its list and the
@@ -116,27 +114,75 @@ export type { PanelLookEditing } from "./shared-styles-types";
  */
 export { USAGE_RECOUNT_IDLE_MAX, USAGE_RECOUNT_MS } from "./usage-reads";
 
+/** A search a host keeps across several views, and the way to change it. */
+export interface HostSearch {
+  readonly query: string;
+  readonly onQuery: (query: string) => void;
+  /** The host's search box, where focus goes once a style is removed. */
+  readonly searchRef?: React.RefObject<HTMLInputElement | null>;
+}
+
+/**
+ * The search a host keeps across several views, as the Design panel keeps
+ * one across its tabs. Provided, the tab lists what it matches and draws no
+ * search box of its own.
+ */
+export const SharedStylesHostSearch: React.Context<HostSearch | undefined> =
+  React.createContext<HostSearch | undefined>(undefined);
+
+/**
+ * What the tab searches for: the host's search where it keeps one, changed
+ * through the host, else the tab's own. With it, the box focus goes back to
+ * once a style is removed: the host's, since the tab then draws none.
+ */
+function usePanelSearch(): {
+  query: string;
+  setQuery: (query: string) => void;
+  box: React.RefObject<HTMLInputElement | null>;
+} {
+  const host = React.useContext(SharedStylesHostSearch);
+  const [own, setOwn] = React.useState("");
+  const ownBox = React.useRef<HTMLInputElement>(null);
+  return host === undefined
+    ? { query: own, setQuery: setOwn, box: ownBox }
+    : {
+        query: host.query,
+        setQuery: host.onQuery,
+        box: host.searchRef ?? ownBox,
+      };
+}
+
+/** The filter bar, drawn only while there are styles to filter. */
+function FiltersWhenListed(
+  props: React.ComponentProps<typeof FilterBar>
+): React.JSX.Element | null {
+  return props.rows.length > 0 ? <FilterBar {...props} /> : null;
+}
+
 /** No pending names, as one value rather than a fresh record each render. */
 const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
 
-/** The rows the library gives, kept while the library and the code's ids are. */
+/**
+ * The rows the library gives, from the listing the Design panel counts with,
+ * kept while the library and the code's ids are.
+ */
 function useRows(
   library: readonly NamedClass[] | undefined,
   suppliedClassIds: readonly string[] | undefined
-): { rows: SharedStyleRow[]; lookIds: string[] } {
+): { rows: SharedStyleRow[]; groups: BlockLookGroup[]; lookIds: string[] } {
   // Keyed by the ids rather than the array, which a host may build afresh on
   // every render: the search text compiles every style, once per library,
   // not once per render.
   const suppliedKey = idsKey(suppliedClassIds ?? []);
   return React.useMemo(() => {
-    if (library === undefined) return { rows: [], lookIds: [] };
-    const supplied = new Set(idsOf(suppliedKey));
-    return {
-      rows: sharedStyleRows(sharedStylesOnly(library), supplied),
-      // The worn looks, whose counts are read with the styles' in one read,
-      // so the tab's counting and failure notes speak for both.
-      lookIds: wornLookIds(blockLookGroups(library, supplied)),
-    };
+    if (library === undefined) return { rows: [], groups: [], lookIds: [] };
+    const { rows, groups } = stylesTabSource(
+      library,
+      new Set(idsOf(suppliedKey))
+    );
+    // The worn looks, whose counts are read with the styles' in one read, so
+    // the tab's counting and failure notes speak for both.
+    return { rows, groups, lookIds: wornLookIds(groups) };
   }, [library, suppliedKey]);
 }
 
@@ -172,7 +218,7 @@ function useListedRows({
       ),
     [rows, styleContext]
   );
-  const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
+  const found = foundSharedStyles(rows, query, row => texts.get(row.id) ?? "");
   return { rows, lookIds, found, paint };
 }
 
@@ -186,14 +232,7 @@ function useLookGroups(
   query: string,
   styleContext: StyleCompileContext | undefined
 ): BlockLookGroup[] {
-  const suppliedKey = idsKey(suppliedClassIds ?? []);
-  const groups = React.useMemo(
-    () =>
-      library === undefined
-        ? []
-        : blockLookGroups(library, new Set(idsOf(suppliedKey))),
-    [library, suppliedKey]
-  );
+  const { groups } = useRows(library, suppliedClassIds);
   // Each look's search text, as each shared style's is: its name and every
   // property and value it declares, so a search the box promises finds both.
   // Keyed by look, its type with its id, since two types' own looks may
@@ -210,17 +249,7 @@ function useLookGroups(
       ),
     [groups, styleContext]
   );
-  if (query.trim() === "") return groups;
-  return groups
-    .map(group => ({
-      ...group,
-      rows: searchSharedStyles(
-        group.rows,
-        query,
-        row => texts.get(lookKeyOf(row)) ?? ""
-      ),
-    }))
-    .filter(group => group.rows.length > 0);
+  return foundLooks(groups, query, row => texts.get(lookKeyOf(row)) ?? "");
 }
 
 /**
@@ -295,7 +324,7 @@ export function SharedStylesPanel({
   looks,
   initialOpenId,
 }: SharedStylesPanelProps): React.JSX.Element {
-  const [query, setQuery] = React.useState("");
+  const { query, setQuery, box: search } = usePanelSearch();
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
@@ -330,8 +359,6 @@ export function SharedStylesPanel({
     pendingNames,
     setIssue,
   });
-  const search = React.useRef<HTMLInputElement>(null);
-
   if (library === undefined) return <Unread absence={absence} />;
 
   const blocksOf = (id: string): BlocksOnThisPage =>
@@ -353,18 +380,16 @@ export function SharedStylesPanel({
           setPages(1);
         }}
       />
-      {rows.length > 0 && (
-        <FilterBar
-          rows={rows}
-          filter={filter}
-          onFilter={next => {
-            setFilter(next);
-            setPages(1);
-          }}
-          usageOf={usageOf}
-          exact={exact}
-        />
-      )}
+      <FiltersWhenListed
+        rows={rows}
+        filter={filter}
+        onFilter={next => {
+          setFilter(next);
+          setPages(1);
+        }}
+        usageOf={usageOf}
+        exact={exact}
+      />
       <div className="nx-vars__body">
         <PanelNotes
           readOnly={readOnly}
@@ -482,7 +507,9 @@ function SearchBox({
   ref: React.Ref<HTMLInputElement>;
   query: string;
   onQuery: (query: string) => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  // Not drawn where a host keeps the search.
+  if (React.useContext(SharedStylesHostSearch) !== undefined) return null;
   return (
     <div className="nx-vars__search">
       <Search aria-hidden="true" size={16} />

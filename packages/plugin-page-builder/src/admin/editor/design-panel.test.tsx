@@ -16,6 +16,7 @@ import * as ReactDOM from "react-dom";
 
 import {
   DesignPanel,
+  ReportStylesMatches,
   designViewOf,
   useDesignBrowse,
   useDesignHeaderSlot,
@@ -358,5 +359,42 @@ describe("the Design panel's search and folds", () => {
     // A toggle keeps what the store already held.
     fireEvent.click(screen.getByRole("button", { name: "Colours group" }));
     expect(store.held()).toBe('["fonts"]');
+  });
+
+  it("counts the Styles tab's matches beside its name, whichever tab is open", () => {
+    const library = [
+      {
+        id: "c-card",
+        slug: "card",
+        label: "Card",
+        orderIndex: 0,
+        styles: {},
+      },
+    ];
+    render(
+      <DesignPanel
+        view={{ current: "colours", choose: vi.fn() }}
+        tabs={{
+          colours: () => <p>colour rows</p>,
+          type: () => null,
+          spacing: () => null,
+          styles: () => null,
+        }}
+        frame={tabs => (
+          <>
+            <ReportStylesMatches
+              library={library}
+              suppliedClassIds={undefined}
+              styleContext={undefined}
+            />
+            {tabs}
+          </>
+        )}
+      />
+    );
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search Design" }), {
+      target: { value: "card" },
+    });
+    expect(tabText("Styles")).toBe("Styles, 1 match");
   });
 });
