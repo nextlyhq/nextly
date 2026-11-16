@@ -24,11 +24,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
 import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 
-import { hashPassword, isPasswordHash } from "@nextly/auth/password";
 import {
   CreateLocalUserSchema,
   UpdateUserSchema,
 } from "@nextly/schemas/_zod/user";
+import { createPasswordSchema } from "@nextly/schemas/_zod/validation";
 import {
   buildCreateUserSchema,
   buildUpdateUserSchema,
@@ -47,6 +47,7 @@ import {
   firstIdentifierNamed,
   missingSchemaObject,
 } from "../../../database/missing-column";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
 import {
@@ -111,6 +112,10 @@ import {
   tokenTable,
   type TokenTable,
 } from "../../auth/services/token-account-binding";
+import {
+  entryStillReferenced,
+  referrersHolding,
+} from "../../collections/services/entry-still-referenced";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
   eraseRecipientDeliveries,
@@ -526,27 +531,28 @@ function isExternalIdentityShape(account: {
 }
 
 /**
- * How an update recognises a stored password, set by the caller that knows
- * the app's configuration. See {@link UserMutationService.updateUser}.
+ * `schema` with its password judged by the app's hasher: its `reach`, or its
+ * own `validate`, in place of core bcrypt's 72 bytes. The input schemas are
+ * where every account write judges a password, so the hasher's contract is
+ * applied there, before anything is hashed, and the same password is taken or
+ * refused on create and update as on a change or a reset. Without a hasher the
+ * schema is core's, unchanged.
  */
-export interface UpdateUserOptions {
-  /**
-   * Whether the app configures its own `passwordHasher`. Its hashes can take
-   * any form, and its sign-in verifies them, so with one any stored value
-   * counts as a password. Without one only core's hash does: core signs no
-   * one in with anything else.
-   */
-  customPasswordHasher?: boolean;
+function withAppPasswordRule<
+  S extends typeof CreateLocalUserSchema | typeof UpdateUserSchema,
+>(schema: S): S {
+  const { hasher } = appPasswordDigester();
+  if (!hasher) return schema;
+  return schema.extend({
+    password: createPasswordSchema({ hasher }).optional(),
+  }) as S;
 }
 
-/** Whether a stored value is a password, as {@link UpdateUserOptions} says. */
-function storesPassword(
-  value: unknown,
-  customPasswordHasher: boolean
-): boolean {
-  return customPasswordHasher
-    ? typeof value === "string" && value !== ""
-    : isPasswordHash(value);
+/** Whether a stored value is a password the app's sign-in takes. */
+function storesPassword(value: unknown): boolean {
+  // With core's hashing only its hash, since a stored value that is not one
+  // signs nobody in; with the app's own hasher, any value it recognises.
+  return appPasswordDigester().isHash(value);
 }
 
 /**
@@ -779,7 +785,7 @@ export class UserMutationService extends BaseService {
    */
   private getCreateSchema(): typeof CreateLocalUserSchema {
     this.ensureSchemasUpToDate();
-    return this.createSchema;
+    return withAppPasswordRule(this.createSchema);
   }
 
   /**
@@ -787,7 +793,7 @@ export class UserMutationService extends BaseService {
    */
   private getUpdateSchema(): typeof UpdateUserSchema {
     this.ensureSchemasUpToDate();
-    return this.updateSchema;
+    return withAppPasswordRule(this.updateSchema);
   }
 
   /**
@@ -1305,7 +1311,7 @@ export class UserMutationService extends BaseService {
       // write that takes a hash, and which refuses anything else.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
-        passwordHash = await hashPassword(userData.password);
+        passwordHash = await appPasswordDigester().hash(userData.password);
       }
 
       // Account-enumeration sensitive: the public message stays generic
@@ -1445,7 +1451,7 @@ export class UserMutationService extends BaseService {
         isExternalIdentityShape({
           isActive: values.isActive === true,
           verified: values.emailVerified != null,
-          hasPassword: isPasswordHash(values.passwordHash),
+          hasPassword: storesPassword(values.passwordHash),
         })
       ) {
         throw NextlyError.forbidden({
@@ -1835,8 +1841,7 @@ export class UserMutationService extends BaseService {
   async updateUser(
     userId: number | string,
     changes: UpdateUserData,
-    caller: UserWriteCaller = "app",
-    options: UpdateUserOptions = {}
+    caller: UserWriteCaller = "app"
   ): Promise<UserMutationResponse> {
     try {
       // The person's own to set, through their profile: refused here, first,
@@ -1994,7 +1999,7 @@ export class UserMutationService extends BaseService {
         if (rawPassword.trim().length > 0) {
           Object.assign(
             updateData,
-            passwordColumns(await hashPassword(rawPassword))
+            passwordColumns(await appPasswordDigester().hash(rawPassword))
           );
         }
       }
@@ -2229,8 +2234,7 @@ export class UserMutationService extends BaseService {
               await this.refuseExternalIdentityShape(
                 currentUser.id,
                 updateData,
-                txDb,
-                options.customPasswordHasher === true
+                txDb
               );
             }
             if (hasFieldUpdates && endsSessions) {
@@ -2687,8 +2691,7 @@ export class UserMutationService extends BaseService {
   private async refuseExternalIdentityShape(
     userId: string | number,
     set: UserUpdateData,
-    txDb: DrizzleTransactionLike,
-    customPasswordHasher: boolean
+    txDb: DrizzleTransactionLike
   ): Promise<void> {
     const { users } = this.tables;
     const read = txDb
@@ -2735,11 +2738,9 @@ export class UserMutationService extends BaseService {
         set.emailVerified !== undefined
           ? set.emailVerified != null
           : row.emailVerified != null,
-      // A password as the app's sign-in would take one: with core's hashing
-      // only its hash, since a stored value that is not one signs nobody in.
+      // A password as the app's sign-in would take one.
       hasPassword: storesPassword(
-        set.passwordHash !== undefined ? set.passwordHash : row.passwordHash,
-        customPasswordHasher
+        set.passwordHash !== undefined ? set.passwordHash : row.passwordHash
       ),
     };
     if (isExternalIdentityShape(after)) {
@@ -3153,6 +3154,28 @@ export class UserMutationService extends BaseService {
         }
         await refuseAdministratorInTx(txDb);
 
+        // A required relationship the Schema Builder keyed to this account refuses the deletion.
+        // Asked before anything of the account is removed (its roles, media ownership, email
+        // records, its row), so the refusal leaves the account whole and says what still points at it.
+        // An optional relationship is emptied by the database when the row goes. Read through
+        // `txDb`: inside a caller's transaction this one joins, the reads see what it already
+        // wrote (a referring entry it deleted is gone) and run on its connection, not a second
+        // one from the pool; and after the row lock above, no new reference can commit between
+        // the count and the delete on PostgreSQL.
+        const referrers = await referrersHolding(
+          txDb,
+          this.dialect,
+          "users",
+          String(userId)
+        );
+        if (referrers.length > 0) {
+          throw entryStillReferenced(
+            referrers,
+            { operation: "deleteUser", userId },
+            "user"
+          );
+        }
+
         // Delete user_ext row if custom fields are configured
         if (this.hasCustomFields()) {
           const userExtTable = this.getUserExtTable();
@@ -3444,65 +3467,74 @@ export class UserMutationService extends BaseService {
     // `withTransaction` yields a raw Drizzle handle rather than the adapter
     // surface this repository is built on, so joining the transaction would
     // mean a second implementation of which rows are autosaves.
-    try {
-      await new VersionsRepository(this.adapter).deleteAutosavesByAuthor(
-        String(userId)
-      );
-    } catch (err) {
-      // Never fail the deletion for this. The account is already gone; a
-      // surviving recovery point is dead weight rather than a live risk, and
-      // reporting the removal as failed would invite a retry that now answers
-      // not-found.
-      this.logger.error("Failed to remove deleted user's recovery points", {
-        userId: String(userId),
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    //
+    // Both sweeps wait for the outermost commit (`afterCommit`): run as the deletion returns
+    // inside a caller's transaction, they took another connection while that transaction
+    // was still open, destroyed a draft its rollback would have kept, and on MySQL waited for
+    // the rows the in-transaction erasure had just locked, which only the caller's commit
+    // releases. Outside any transaction they run at once, as before. A held sweep that fails
+    // is logged here like one that runs at once, so neither fails a committed deletion.
+    await this.afterCommit(async () => {
+      try {
+        await new VersionsRepository(this.adapter).deleteAutosavesByAuthor(
+          String(userId)
+        );
+      } catch (err) {
+        // Never fail the deletion for this. The account is already gone; a
+        // surviving recovery point is dead weight rather than a live risk, and
+        // reporting the removal as failed would invite a retry that now answers
+        // not-found.
+        this.logger.error("Failed to remove deleted user's recovery points", {
+          userId: String(userId),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
 
-    // Sweep once more now the removal is visible. The erasure inside the
-    // transaction cannot reach an entry that landed after it ran but before the
-    // commit — an activity write already in flight when the deletion started —
-    // and such an entry carries the identity of an account that no longer
-    // exists. Erasing is idempotent, so a second pass over rows already erased
-    // costs one indexed update and changes nothing.
-    try {
-      if (Object.keys(erasableAuditTables).length > 0) {
-        await eraseActorPersonalData(
-          this.db as Parameters<typeof eraseActorPersonalData>[0],
-          erasableAuditTables,
-          String(userId),
-          new Date(),
-          unstampedAuditTables
+      // Sweep once more now the removal is visible. The erasure inside the
+      // transaction cannot reach an entry that landed after it ran but before the
+      // commit — an activity write already in flight when the deletion started —
+      // and such an entry carries the identity of an account that no longer
+      // exists. Erasing is idempotent, so a second pass over rows already erased
+      // costs one indexed update and changes nothing.
+      try {
+        if (Object.keys(erasableAuditTables).length > 0) {
+          await eraseActorPersonalData(
+            this.db as Parameters<typeof eraseActorPersonalData>[0],
+            erasableAuditTables,
+            String(userId),
+            new Date(),
+            unstampedAuditTables
+          );
+        }
+        // The delivery log needs the same second pass and for the same reason: a
+        // send already in flight when the deletion started can insert its row
+        // after the in-transaction erasure has chosen its matches, leaving a live
+        // digest for an account that no longer exists. Erasing is idempotent —
+        // an already-erased row holds the sentinel, which no address hashes to —
+        // so a second pass over untouched rows costs one indexed update.
+        if (deliveriesExist && deletedAddress !== undefined) {
+          await (
+            personColumnsExist
+              ? eraseUnnamedRecipientDeliveries
+              : eraseRecipientDeliveries
+          )(
+            this.db as Parameters<typeof eraseRecipientDeliveries>[0],
+            deliveriesTableFor(this.dialect),
+            deletedAddress
+          );
+        }
+      } catch (err) {
+        // The account is already gone and the caller has been served; failing
+        // here would report a completed deletion as an error and invite a retry
+        // that finds nothing to delete. Loud enough to act on, quiet enough not
+        // to undo a committed write.
+        this.logger.error(
+          `audit erasure sweep after deleteUser failed for ${Object.keys(
+            erasableAuditTables
+          ).join(", ")}: ${err instanceof Error ? err.message : String(err)}`
         );
       }
-      // The delivery log needs the same second pass and for the same reason: a
-      // send already in flight when the deletion started can insert its row
-      // after the in-transaction erasure has chosen its matches, leaving a live
-      // digest for an account that no longer exists. Erasing is idempotent —
-      // an already-erased row holds the sentinel, which no address hashes to —
-      // so a second pass over untouched rows costs one indexed update.
-      if (deliveriesExist && deletedAddress !== undefined) {
-        await (
-          personColumnsExist
-            ? eraseUnnamedRecipientDeliveries
-            : eraseRecipientDeliveries
-        )(
-          this.db as Parameters<typeof eraseRecipientDeliveries>[0],
-          deliveriesTableFor(this.dialect),
-          deletedAddress
-        );
-      }
-    } catch (err) {
-      // The account is already gone and the caller has been served; failing
-      // here would report a completed deletion as an error and invite a retry
-      // that finds nothing to delete. Loud enough to act on, quiet enough not
-      // to undo a committed write.
-      this.logger.error(
-        `audit erasure sweep after deleteUser failed for ${Object.keys(
-          erasableAuditTables
-        ).join(", ")}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
+    });
 
     // With the removal and its outbox row committed, offer the same post-commit
     // hooks as createLocalUser: a bounded retention prune (so user churn on a

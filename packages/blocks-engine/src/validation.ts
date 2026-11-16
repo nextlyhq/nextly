@@ -44,8 +44,9 @@ import {
   LIMIT_WARNING_RATIO,
   MAX_ENVELOPE_ENTRIES,
   MAX_NODES,
+  documentTooLargeMessage,
+  type DocumentLimits,
 } from "./limits";
-import type { DocumentLimits } from "./limits";
 import {
   LIST_ISSUE_CODES,
   listQueryIssues,
@@ -330,6 +331,7 @@ const DOCUMENT_ISSUE_CODES = {
     "A node lists more classes than the compiler will apply to it.",
   "invalid-attributes": "A node attributes field is not a string map.",
   "invalid-css-id": "A node cssId is not a string.",
+  "invalid-nosnippet": "A node nosnippet mark is not true or false.",
   "unknown-node-type": "A node type is not registered.",
   "invalid-style-state": "A style state key is not a known interactive state.",
   "invalid-style-values": "A style values entry is not an object.",
@@ -1567,18 +1569,17 @@ function checkLimits(survey: DocumentSurvey, issues: ValidationIssue[]): void {
   // by deleting blocks, and reporting it as "too large" sends its author to
   // work that cannot help.
   //
-  // Read off the SAME survey that answered depth and node count, rather than
-  // from a second measurement. Over-limit is reported ahead of unwritable when
-  // a document is both: the byte issue is what gates the precise walk
-  // downstream, so losing it to the other cause is what lets an unbounded
-  // traversal run.
+  // Read off the SAME survey that answered depth and node count, not a second
+  // measurement. Over-limit is reported ahead of unwritable for a document that
+  // is both: the byte issue gates the precise walk downstream, so losing it to
+  // the other cause is what lets an unbounded traversal run.
   const { bytes } = survey;
   if (survey.tooLarge) {
     issues.push({
       path: "",
       code: "document-too-large",
       severity: "error",
-      message: `Document exceeds the maximum of ${survey.limits.maxBytes} bytes.`,
+      message: documentTooLargeMessage(survey.limits.maxBytes),
     });
   } else if (survey.unwritable) {
     issues.push({
@@ -1884,6 +1885,7 @@ function validateNode(
     state.skipValueParsing
   );
   validateAttributes(node, path, issues);
+  validateNosnippet(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
@@ -2140,6 +2142,23 @@ function validateClasses(
     chargeIssueBudget(budget, [issue]);
     issues.push(issue);
   }
+}
+
+/** The "never quote this" mark is on or off, never another value. */
+function validateNosnippet(
+  node: BlockNode,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (node.nosnippet === undefined || typeof node.nosnippet === "boolean") {
+    return;
+  }
+  issues.push({
+    path: pointer(path, "nosnippet"),
+    code: "invalid-nosnippet",
+    severity: "error",
+    message: "A node nosnippet mark must be true or false.",
+  });
 }
 
 function validateAttributes(

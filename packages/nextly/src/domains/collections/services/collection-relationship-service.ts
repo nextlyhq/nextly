@@ -95,7 +95,10 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
-import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  fieldsStoredOnRow,
+  usesJunctionTable,
+} from "../../schema/services/field-column-descriptor";
 import {
   localizedFilterContext,
   matchColumn,
@@ -2668,9 +2671,11 @@ export class CollectionRelationshipService extends BaseService {
   async batchExpandRelationships(
     entries: Record<string, unknown>[],
     collectionName: string,
-    fields: FieldDefinition[],
+    declaredFields: FieldDefinition[],
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>[]> {
+    // The references the row holds, those inside a group with no name among them (`rowReferenceFields`).
+    const fields = rowReferenceFields(declaredFields);
     const {
       depth = DEFAULT_RELATIONSHIP_DEPTH,
       currentDepth = 0,
@@ -3187,9 +3192,11 @@ export class CollectionRelationshipService extends BaseService {
   async expandRelationships(
     entry: Record<string, unknown>,
     collectionName: string,
-    fields: FieldDefinition[],
+    declaredFields: FieldDefinition[],
     options: RelationshipExpansionOptions = {}
   ): Promise<Record<string, unknown>> {
+    // The references the row holds, those inside a group with no name among them (`rowReferenceFields`).
+    const fields = rowReferenceFields(declaredFields);
     const { depth = DEFAULT_RELATIONSHIP_DEPTH, currentDepth = 0 } = options;
     // Travels with every nested expansion and row fetch, so a related row at
     // any depth is judged by its own collection's field rules.
@@ -4954,10 +4961,12 @@ export class CollectionRelationshipService extends BaseService {
           ) as table_exists
         `;
       } else {
+        // `current_schema()`, not `public`: the connection's `search_path` is
+        // the installation's configured schema, where the junction table is.
         checkQuery = sql`
           SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
             AND table_name = ${junctionTableName}
           ) as table_exists
         `;
@@ -5102,4 +5111,16 @@ export class CollectionRelationshipService extends BaseService {
     const tables = [sourceTableName, targetTableName].sort();
     return `${tables[0]}_${tables[1]}_${field.name}`;
   }
+}
+
+/**
+ * The fields whose references an entry holds at this level: those at the top, and those inside a
+ * group with no name, whose columns are on the same row (`fieldsStoredOnRow`). A many-to-many is
+ * taken at the top alone, where the creating SQL gives it the junction table it is read from.
+ */
+function rowReferenceFields(fields: FieldDefinition[]): FieldDefinition[] {
+  const topLevel = new Set(fields);
+  return fieldsStoredOnRow(fields).filter(
+    field => topLevel.has(field) || !usesJunctionTable(field)
+  );
 }

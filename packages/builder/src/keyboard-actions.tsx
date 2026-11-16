@@ -29,7 +29,14 @@ import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
-import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
+import {
+  CANVAS_ESCAPE_PRIORITY,
+  escapeOutcome,
+  modalIsOpen,
+  pressOrigin,
+  returnFocusToCanvas,
+} from "./canvas-escape";
+import { useCanvasFrame } from "./canvas-frame-context";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
@@ -555,7 +562,23 @@ export interface BlockKeyboardActionsResult {
    * document, which may hold another editor's toolbar first.
    */
   readonly toolbarFocus: ToolbarFocusSlot;
+  /**
+   * Where the canvas's frame is put for Escape to send focus back to, filled
+   * by {@link BlockKeyboardActions}. Empty, Escape moves the selection from
+   * wherever it is pressed.
+   */
+  readonly canvasFrame: CanvasFrameSlot;
 }
+
+/**
+ * Holds the canvas's frame, or `null` while there is none.
+ *
+ * A slot rather than a context read inside the hook: the canvas frame's
+ * context changes with every zoom and resize the canvas reports, and the
+ * Escape binding needs only the frame, when the key lands. Filled by a child
+ * of its own, so a resize re-renders that child alone.
+ */
+type CanvasFrameSlot = React.MutableRefObject<HTMLIFrameElement | null>;
 
 /**
  * Holds the call that finds an editor's block toolbar's tab stop, which
@@ -628,6 +651,12 @@ export function useBlockKeyboardActions({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
+  // The canvas's frame, read when Escape lands for the same reason: it is
+  // where focus goes back to from a panel, and the frame is registered after
+  // the bindings are. See `CanvasFrameSlot` for who fills it.
+  const latestFrame: CanvasFrameSlot = React.useRef<HTMLIFrameElement | null>(
+    null
+  );
   const toolbarFocus: ToolbarFocusSlot = React.useRef<
     (() => HTMLElement | null) | null
   >(null);
@@ -1088,15 +1117,27 @@ export function useBlockKeyboardActions({
         // The one case the editor declines. `when` rather than a branch in
         // `run`, because declining has to leave the key UNCONSUMED for the
         // dialog to receive it, and a binding that runs has already taken it.
+        // The modal test alone, which is the first thing `escapeOutcome`
+        // asks: the rest of the rule needs the event, and `when` is not given
+        // one.
         when: () =>
-          escapeOutcome(
-            typeof document === "undefined" ? undefined : document
-          ) !== "defer-to-modal",
-        run: () => {
+          !modalIsOpen(typeof document === "undefined" ? undefined : document),
+        run: event => {
           const editorNow = latest.current;
+          // Where the press began, from the keystroke itself: a layer that
+          // closed on this same key has already moved focus by now.
           const outcome = escapeOutcome(
-            typeof document === "undefined" ? undefined : document
+            typeof document === "undefined" ? undefined : document,
+            { origin: pressOrigin(event), canvasFrame: latestFrame.current }
           );
+          if (outcome === "return-to-canvas") {
+            // The frame, where the page's own keys land: the selected block
+            // is still outlined in it, and Delete, Alt+F10, Enter and Escape
+            // act on it from there.
+            const frame = latestFrame.current;
+            if (frame !== null) returnFocusToCanvas(frame);
+            return;
+          }
           if (outcome !== "navigate-selection") return;
           if (editorNow.selectedId === null) {
             escapeWithoutSelection.current?.();
@@ -1352,7 +1393,26 @@ export function useBlockKeyboardActions({
     selectionActions,
     depthMoves,
     toolbarFocus,
+    canvasFrame: latestFrame,
   };
+}
+
+/**
+ * Keeps an editor's canvas frame slot pointing at the frame the canvas has
+ * registered, and draws nothing. Its own component so that the canvas
+ * reporting a new zoom or size re-renders this and not the editor's bindings.
+ */
+function CanvasFrameReader({ into }: { into: CanvasFrameSlot }): null {
+  const frame = useCanvasFrame().frame;
+  useIsomorphicLayoutEffect(() => {
+    into.current = frame;
+    return () => {
+      // Cleared with the frame, so a slot never points at a frame that has
+      // left the page.
+      if (into.current === frame) into.current = null;
+    };
+  }, [into, frame]);
+  return null;
 }
 
 /**
@@ -1423,6 +1483,7 @@ export function BlockKeyboardActions({
     selectionActions: offered,
     depthMoves,
     toolbarFocus,
+    canvasFrame,
   } = useBlockKeyboardActions(options);
 
   /*
@@ -1474,6 +1535,7 @@ export function BlockKeyboardActions({
         <DepthMovesContext.Provider value={depthMoves}>
           <BlockActionsContext.Provider value={actions}>
             <ToolbarFocusContext.Provider value={toolbarFocus}>
+              <CanvasFrameReader into={canvasFrame} />
               <p aria-live="polite" role="status" className="nx-sr-only">
                 {announcement}
               </p>

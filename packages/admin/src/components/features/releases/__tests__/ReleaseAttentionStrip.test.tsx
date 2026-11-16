@@ -12,7 +12,17 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import { QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+
+import {
+  createTestQueryClient,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import type { ReleaseListResponse } from "@admin/services/releaseApi";
 import type { Release } from "@admin/types/releases";
 
@@ -25,7 +35,10 @@ vi.mock("@admin/services/releaseApi", async () => {
   return { ...actual, fetchReleases: mocks.fetchReleases };
 });
 
-import { ReleaseAttentionStrip } from "../ReleaseAttentionStrip";
+import {
+  ReleaseAttentionStrip,
+  useAttentionStripKnown,
+} from "../ReleaseAttentionStrip";
 
 function release(id: string, title: string, state: Release["state"]): Release {
   return {
@@ -120,5 +133,40 @@ describe("the Releases page's needs-attention strip", () => {
 
     await waitFor(() => expect(mocks.fetchReleases).toHaveBeenCalled());
     expect(screen.queryByRole("region")).toBeNull();
+  });
+});
+
+// The page holds what stands under the strip until whether the strip is drawn
+// is known, so the strip never lands above the tabs and pushes them down. A
+// failed read is known too: the strip then draws nothing, and the page must
+// not wait on it for ever.
+/** The hook inside a query client of its own, as the admin shell provides one. */
+function knownHook() {
+  const client = createTestQueryClient();
+  return renderHook(() => useAttentionStripKnown(), {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
+describe("whether the strip is drawn is known", () => {
+  it("not while its read is on its way, and from its answer on", async () => {
+    let settle: (value: ReleaseListResponse) => void = () => {};
+    mocks.fetchReleases.mockReturnValue(
+      new Promise<ReleaseListResponse>(resolve => {
+        settle = resolve;
+      })
+    );
+    const { result } = knownHook();
+    expect(result.current).toBe(false);
+    settle(answer([]));
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it("once its read has failed", async () => {
+    mocks.fetchReleases.mockRejectedValue(new Error("offline"));
+    const { result } = knownHook();
+    await waitFor(() => expect(result.current).toBe(true), { timeout: 5000 });
   });
 });

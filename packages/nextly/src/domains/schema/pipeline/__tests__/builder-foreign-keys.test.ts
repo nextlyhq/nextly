@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { builderKeyTables } from "../../../dynamic-collections/services/collection-tables";
 import {
   withBuilderForeignKeys,
   withoutKeysOnKeylessRenames,
@@ -251,5 +252,199 @@ describe("withoutKeysOnKeylessRenames", () => {
     );
     expect(planned.operations).toEqual([renamed, added]);
     expect(planned.desired.tables[0].foreignKeys).toEqual([key("writer")]);
+  });
+});
+
+/** The admin's relationship shape: its target named by `relationTo` alone. */
+const adminAuthor = (relationTo: unknown = "authors", extra = {}) => ({
+  name: "author",
+  type: "relationship",
+  relationTo,
+  ...extra,
+});
+
+/** The registry's tables, read for a Builder collection's own keys, as the pipeline reads them. */
+const TARGETS = builderKeyTables([
+  ["authors", "dc_authors"],
+  ["editors", "dc_editors"],
+]);
+
+function keysWithTargets(desired: DesiredCollection, liveTable?: TableSpec) {
+  return withBuilderForeignKeys(
+    desiredCollectionTable(desired, "sqlite"),
+    desired,
+    liveTable,
+    "sqlite",
+    TARGETS
+  ).foreignKeys;
+}
+
+describe("withBuilderForeignKeys, for the admin's relationTo", () => {
+  it("keys a relationTo relationship the push adds", () => {
+    const fields = [TITLE, adminAuthor()];
+    expect(keysWithTargets(collection(fields), live([TITLE], []))).toEqual([
+      LIVE_KEY,
+    ]);
+  });
+
+  it("keys none to a target the registry does not hold", () => {
+    const fields = [TITLE, adminAuthor("site-settings")];
+    expect(keysWithTargets(collection(fields), live([TITLE], []))).toEqual([]);
+  });
+
+  it("keys a relationship to Users to the core users table", () => {
+    const fields = [TITLE, adminAuthor("users")];
+    expect(keysWithTargets(collection(fields), live([TITLE], []))).toEqual([
+      { ...LIVE_KEY, referencesTable: "users" },
+    ]);
+  });
+
+  it("plans no key for a relationTo relationship recorded before, whose column has none", () => {
+    const fields = [TITLE, adminAuthor()];
+    expect(
+      keysWithTargets(collection(fields, true, fields), live(fields, []))
+    ).toEqual([]);
+  });
+});
+
+describe("withBuilderForeignKeys moves a keyed relationship's key with its target", () => {
+  const recorded = [TITLE, adminAuthor()];
+  const keyed = live(recorded, [LIVE_KEY]);
+
+  /** The refusal's code, or none. */
+  function refusalOf(fields: unknown[], liveTable = keyed): string | null {
+    try {
+      keysWithTargets(collection(fields, true, recorded), liveTable);
+      return null;
+    } catch (error) {
+      if (!NextlyError.is(error)) throw error;
+      const errors = (error.publicData as { errors?: { code: string }[] })
+        ?.errors;
+      return errors?.[0]?.code ?? error.code;
+    }
+  }
+
+  it("moves a keyed relationship's key to the collection it now points at", () => {
+    expect(
+      keysWithTargets(
+        collection([TITLE, adminAuthor("editors")], true, recorded),
+        keyed
+      )
+    ).toEqual([
+      {
+        ...LIVE_KEY,
+        // A name of its own, so it is added before the old key is dropped.
+        name: "fk_dc_posts_author_to_dc_editors",
+        referencesTable: "dc_editors",
+      },
+    ]);
+  });
+
+  it("moves it back under the column's usual name", () => {
+    const moved = live(recorded, [
+      {
+        ...LIVE_KEY,
+        name: "fk_dc_posts_author_to_dc_editors",
+        referencesTable: "dc_editors",
+      },
+    ]);
+    expect(
+      keysWithTargets(
+        collection([TITLE, adminAuthor("authors")], true, [
+          TITLE,
+          adminAuthor("editors"),
+        ]),
+        moved
+      )
+    ).toEqual([LIVE_KEY]);
+  });
+
+  it("refuses pointing a keyed relationship at a target with no table", () => {
+    expect(refusalOf([TITLE, adminAuthor("site-settings")])).toBe(
+      "KEYED_RELATIONSHIP_TARGET_HAS_NO_TABLE"
+    );
+  });
+
+  it("lets a keyed relationship switch to holding several entries, which converts it", () => {
+    // The switch keeps each value as a one-item list, and the key goes with the conversion.
+    expect(refusalOf([TITLE, adminAuthor("authors", { hasMany: true })])).toBe(
+      null
+    );
+  });
+
+  it("names the field in the message", () => {
+    expect(() =>
+      keysWithTargets(
+        collection(
+          [TITLE, adminAuthor("site-settings", { label: "Lead author" })],
+          true,
+          recorded
+        ),
+        keyed
+      )
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.author",
+              message: expect.stringContaining('"Lead author"'),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("lets a relationship whose column holds no key change freely", () => {
+    expect(refusalOf([TITLE, adminAuthor("editors")], live(recorded, []))).toBe(
+      null
+    );
+  });
+
+  it("lets a keyed relationship keep its target while other things change", () => {
+    expect(
+      refusalOf([TITLE, adminAuthor("authors", { label: "Writer" })])
+    ).toBe(null);
+  });
+
+  it("judges nothing when the save does not say what it records", () => {
+    const fields = [TITLE, adminAuthor("editors")];
+    expect(() => keysWithTargets(collection(fields), keyed)).not.toThrow();
+  });
+});
+
+describe("withBuilderForeignKeys, for a kept key's actions", () => {
+  const recorded = [TITLE, adminAuthor()];
+  const keyed = live(recorded, [LIVE_KEY]);
+
+  it("changes the actions a save changes, keeping the key's name and target", () => {
+    // Made required, the relationship now restricts the delete of its author.
+    expect(
+      keysWithTargets(
+        collection(
+          [TITLE, adminAuthor("authors", { required: true })],
+          true,
+          recorded
+        ),
+        keyed
+      )
+    ).toEqual([{ ...LIVE_KEY, onDelete: "restrict" }]);
+  });
+
+  it("keeps the key as the table holds it when the save leaves the actions alone", () => {
+    const heldElsewhere = live(recorded, [
+      { ...LIVE_KEY, name: "fk_custom", onDelete: "cascade" },
+    ]);
+    expect(
+      keysWithTargets(
+        collection(
+          [TITLE, adminAuthor("authors", { label: "Writer" })],
+          true,
+          recorded
+        ),
+        heldElsewhere
+      )
+    ).toEqual([{ ...LIVE_KEY, name: "fk_custom", onDelete: "cascade" }]);
   });
 });

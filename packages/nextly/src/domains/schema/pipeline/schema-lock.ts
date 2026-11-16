@@ -255,6 +255,8 @@ interface HeldHere {
   released: boolean;
   /** Throws the lost-lock refusal unless the hold can still show it holds the lock. */
   readonly assertHeld: () => Promise<void>;
+  /** When the hold stops being able to show it holds the lock without a new renewal. */
+  readonly confirmedUntil: () => number;
 }
 
 /**
@@ -286,6 +288,17 @@ function heldNow(): HeldHere | undefined {
  */
 export async function assertSchemaLockHeld(): Promise<void> {
   await heldNow()?.assertHeld();
+}
+
+/**
+ * The last moment, by this process's clock, at which the lock this context holds can still be
+ * shown held without another renewal landing (the last confirmation plus the loss deadline);
+ * undefined outside every holder. Work that cannot let a renewal land while it waits (SQLite's
+ * tries for a busy database, which the holder's write lock keeps from renewing) ends by then, so it
+ * stops with its own report rather than as a lost lock.
+ */
+export function schemaLockConfirmedUntil(): number | undefined {
+  return heldNow()?.confirmedUntil();
 }
 
 /** The comment a statement is marked with while `claim` holds the lock (`markedForSchemaLock`). */
@@ -1067,6 +1080,11 @@ class SchemaLockHold {
    * Zero until the lock is taken.
    */
   private confirmedAt = 0;
+
+  /** The last confirmation plus the loss deadline: see `schemaLockConfirmedUntil`. */
+  confirmedUntil(): number {
+    return this.confirmedAt + this.timings.lossAfterMs;
+  }
   /** Whether the field-group claim's table has an expiry for the renewal to extend. */
   fieldGroupRenewable = false;
   private renewal: ReturnType<typeof setInterval> | undefined;
@@ -1598,6 +1616,7 @@ async function runHeld<T>(
           session,
           released: false,
           assertHeld: () => hold.assertHeld(),
+          confirmedUntil: () => hold.confirmedUntil(),
         };
         const result = heldHere
           .run([...(heldHere.getStore() ?? []), held], () => work(session))

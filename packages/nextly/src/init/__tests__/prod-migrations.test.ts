@@ -236,6 +236,57 @@ describe("runProdMigrationsIfEnabled", () => {
    * database the app can usefully serve, and `nextly migrate` fixes them. Only
    * "we do not know what we are serving" is fatal.
    */
+  it("refuses to start when a busy table outlasted its tries, as for a held schema lock", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new NextlyError({
+          code: "NEXTLY_TABLE_BUSY",
+          publicMessage: "`0007_x.sql` stopped: table busy, nothing changed.",
+          logContext: { reason: "table busy" },
+        });
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "NEXTLY_TABLE_BUSY",
+    });
+  });
+
+  it("hands the core the busy-table bounds the environment sets", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.NEXTLY_LOCK_TIMEOUT = "2";
+    process.env.NEXTLY_LOCK_TIMEOUT_TOTAL = "30";
+    try {
+      const a = args();
+      await runProdMigrationsIfEnabled(a as never);
+      expect(a.migrateCore).toHaveBeenCalledWith(
+        expect.objectContaining({
+          busyTable: expect.objectContaining({
+            bounds: { tryMs: 2_000, totalMs: 30_000 },
+          }),
+        })
+      );
+    } finally {
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+      delete process.env.NEXTLY_LOCK_TIMEOUT_TOTAL;
+    }
+  });
+
+  it("refuses to start, running nothing, when a busy-table bound is out of its range", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.NEXTLY_LOCK_TIMEOUT = "0";
+    try {
+      const a = args();
+      await expect(
+        runProdMigrationsIfEnabled(a as never)
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(a.migrateCore).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.NEXTLY_LOCK_TIMEOUT;
+    }
+  });
+
   it("still starts when boot migrations fail for any other reason", async () => {
     process.env.NODE_ENV = "production";
     const a = args({

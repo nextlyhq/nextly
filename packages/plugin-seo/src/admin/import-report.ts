@@ -1,7 +1,7 @@
 /**
  * What Import's last step and its result say, worked out from the engine's
  * dry run alone: the four counts in values (set, the same as automatic,
- * kept, skipped as never served), each page's result for its title and its
+ * kept, skipped as the page's code sets its own), each page's result for its title and its
  * description, and the report a person can download. Nothing here decides
  * an outcome: the engine did, per page and per value, and this only counts
  * and words what it said.
@@ -26,16 +26,23 @@ export type ValueResult =
   | "waiting"
   | "none";
 
+/**
+ * A title or description cell's result: the engine's, or `absent` where the
+ * source holds no value for it, so there is nothing to bring in.
+ */
+type CellResult = ValueResult | "absent";
+
 /** Each result's words, and the line under it. */
 export const RESULT_WORDS: Readonly<
-  Record<Exclude<ValueResult, "none">, { label: string; why?: string }>
+  Record<Exclude<CellResult, "none">, { label: string; why?: string }>
 > = {
   set: { label: "Will set" },
   same: { label: "Same as automatic", why: "left empty" },
   kept: { label: "Kept", why: "already typed" },
-  neverServed: { label: "Skipped", why: "never served" },
+  neverServed: { label: "Skipped", why: "the page's code sets its own" },
   withDraft: { label: "With the draft", why: "live once published" },
   waiting: { label: "Skipped", why: "a draft waits" },
+  absent: { label: "Nothing to import", why: "not in the source" },
 };
 
 /** `place`'s result on the page `entry` reports. */
@@ -50,6 +57,22 @@ export function resultOf(
   if (entry.withDraft?.includes(place) === true) return "withDraft";
   if (entry.waiting?.includes(place) === true) return "waiting";
   return "none";
+}
+
+/**
+ * A page's title or description result, as its cell in the report shows it:
+ * the engine's result, read from `resultOf`; where the engine reports none
+ * and the source holds no value for the place, `absent`, so every cell says
+ * what happens to it rather than one being left blank.
+ */
+export function cellResultOf(
+  entry: ImportReportEntry,
+  place: "title" | "description"
+): CellResult {
+  const result = resultOf(entry, place);
+  if (result !== "none") return result;
+  const value = entry.values[place];
+  return value === undefined || value.trim() === "" ? "absent" : "none";
 }
 
 /** Each version's name in words: its language, where it has one, and its form. */
@@ -190,9 +213,16 @@ function cell(value: string): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** A value's result in words, for the downloaded report. */
-function resultWords(entry: ImportReportEntry, place: ImportTarget): string {
-  const result = resultOf(entry, place);
+/**
+ * A value's result in words, for the downloaded report: the words its cell
+ * shows, and none for a record that matched no page, which has no cells.
+ */
+function resultWords(
+  entry: ImportReportEntry,
+  place: "title" | "description"
+): string {
+  if (entry.id === undefined) return "";
+  const result = cellResultOf(entry, place);
   if (result === "none") return "";
   const words = RESULT_WORDS[result];
   return words.why === undefined
@@ -237,9 +267,11 @@ function counted(n: number, one: string, many: string): string {
 }
 
 /**
- * What the note on matching says about values never served: that they are
- * skipped, and why, or that they are included; none where the dry run
- * skipped none and they are not included.
+ * What the note on matching says about values a page's code overrides: that
+ * they are skipped, and why, or that they are included; none where the dry
+ * run skipped none and they are not included. It says what the plugin knows
+ * now, that the page's code sets its own value, never that a value was never
+ * served: what a page showed before the plugin is unknown to it.
  */
 export function neverServedWords(
   run: DryRunBody | undefined,
@@ -249,7 +281,7 @@ export function neverServedWords(
   // Shown while included too, so the choice can be taken back.
   if (include) {
     return {
-      title: "Values never served are included",
+      title: "Values the page's code overrides are included",
       text: "Values a page's own code sets will be imported, which changes what those pages show.",
     };
   }
@@ -258,10 +290,10 @@ export function neverServedWords(
   const [only] = skipped.labels;
   const who =
     skipped.labels.length === 1
-      ? `${only ?? ""} sets its own title and description in its code`
-      : `${skipped.labels.join(", ")} set their own titles and descriptions in their code`;
+      ? `${only ?? ""} sets its own title and description in its code now`
+      : `${skipped.labels.join(", ")} set their own titles and descriptions in their code now`;
   return {
-    title: `${counted(skipped.pages, "page's values are", "pages' values are")} never served, so they'll be skipped`,
-    text: `${who}, so the values stored in ${sourceLabel} never reached the page. Importing them would change what the page shows.`,
+    title: `${counted(skipped.pages, "page sets its", "pages set their")} own values in code, so they'll be skipped`,
+    text: `${who}, so importing the values stored in ${sourceLabel} would change what the page shows. Include them if the page showed them before and should again.`,
   };
 }

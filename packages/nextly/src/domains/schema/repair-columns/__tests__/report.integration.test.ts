@@ -310,6 +310,120 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("names a schema change that was running as the scan started, though it ends before the scan does", async () => {
+      await createTable(FIELDS, true);
+      await insertRows(1);
+      let endChange: () => void = () => {};
+      const changeEnds = new Promise<void>(resolve => {
+        endChange = resolve;
+      });
+      let changeHeld: () => void = () => {};
+      const held = new Promise<void>(resolve => {
+        changeHeld = resolve;
+      });
+      const change = withSchemaLock(
+        {
+          adapter: handle.adapter,
+          command: "nextly migrate",
+          whenHeld: "refuse",
+        },
+        async () => {
+          changeHeld();
+          await changeEnds;
+        }
+      );
+      await held;
+      const document = await dryRunReport({
+        adapter: handle.adapter,
+        dialect,
+        // The scan's first read: the other change ends here, before the tables are read.
+        entities: async () => {
+          endChange();
+          const ended = await change;
+          if (!ended.ran) throw new Error("the test could not take the lock");
+          return [entity(FIELDS)];
+        },
+        nextlyVersion: "test",
+      });
+      expect(document.result?.schemaLock.state).toBe("held");
+      expect(document.result?.schemaLock.holder).toContain("`nextly migrate`");
+      expect(document.warnings).toEqual([
+        expect.objectContaining({
+          code: "NEXTLY_REPAIR_COLUMNS_SCHEMA_CHANGE_RUNNING",
+        }),
+      ]);
+    });
+
+    it("names a schema change that starts while the unfinished conversions are read", async () => {
+      // Only MySQL reads unfinished conversions; the other change starts as that read begins,
+      // the scan's last read, so the report must read the lock after it.
+      if (dialect !== "mysql") return;
+      await createTable(FIELDS, true);
+      await insertRows(1);
+      const adapter = handle.adapter;
+      let release: () => void = () => {};
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let change: Promise<unknown> | undefined;
+      const startChange = async () => {
+        let held: () => void = () => {};
+        const isHeld = new Promise<void>(resolve => {
+          held = resolve;
+        });
+        change = withSchemaLock(
+          { adapter, command: "nextly migrate", whenHeld: "refuse" },
+          async () => {
+            held();
+            await released;
+          }
+        );
+        await isHeld;
+      };
+      const drizzle = adapter.getDrizzle() as {
+        execute: (query: unknown) => Promise<unknown>;
+      };
+      const watched = new Proxy(drizzle, {
+        get(target, key, receiver) {
+          if (key !== "execute") return Reflect.get(target, key, receiver);
+          return async (query: unknown) => {
+            if (
+              change === undefined &&
+              JSON.stringify(query).includes("nextly_column_repairs")
+            ) {
+              await startChange();
+            }
+            return target.execute(query);
+          };
+        },
+      });
+      const scanned = new Proxy(adapter, {
+        get(target, key) {
+          if (key === "getDrizzle") return () => watched;
+          const value: unknown = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      try {
+        const document = await dryRunReport({
+          adapter: scanned,
+          dialect,
+          entities: [entity(FIELDS)],
+          nextlyVersion: "test",
+        });
+        expect(change).toBeDefined();
+        expect(document.result?.schemaLock.state).toBe("held");
+        expect(document.warnings).toEqual([
+          expect.objectContaining({
+            code: "NEXTLY_REPAIR_COLUMNS_SCHEMA_CHANGE_RUNNING",
+          }),
+        ]);
+      } finally {
+        release();
+        await change;
+      }
+    });
+
     it("exit codes for no difference, differences remaining and could not run", async () => {
       await createTable(MATCHING_FIELDS, false);
       const none = await report(MATCHING_FIELDS);

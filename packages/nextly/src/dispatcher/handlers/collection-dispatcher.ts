@@ -47,10 +47,9 @@ import {
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import {
-  previewCollectionSave,
+import type {
+  BuilderSaveSetup,
   writeCollectionSave,
-  type BuilderSaveSetup,
 } from "../../domains/schema/builder-save/collection-save";
 import {
   saveOfSchemaChange,
@@ -131,6 +130,7 @@ import {
 } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
@@ -239,6 +239,66 @@ function allLocalesLifecycle(
         // The version the move was made from, judged on every language.
         data: versionInputOf(body),
       });
+      const entry = unwrapServiceResult(result, { collectionName, entryId });
+      return respondMutation(result.message ?? successMessage, entry);
+    },
+  };
+}
+
+/**
+ * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
+ * the shared part is chosen too, and whether to only say what it would do. The version fields
+ * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
+ */
+const PublishPartsBody = z
+  .object({
+    locales: z.union([
+      z.literal("all"),
+      z.array(z.string().min(1).max(64)).max(500),
+    ]),
+    shared: z.boolean().optional(),
+    describe: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
+ * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
+ * false, and the version the move was made from.
+ */
+function partsLifecycle(
+  direction: "publish" | "unpublish",
+  successMessage: string
+): MethodHandler<CollectionsHandlerType> {
+  return {
+    execute: async (svc, p, body, request) => {
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      let parts: z.infer<typeof PublishPartsBody>;
+      try {
+        parts = PublishPartsBody.parse(body ?? {});
+      } catch (error) {
+        if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+        throw error;
+      }
+      const result = await svc.publishParts(
+        {
+          request,
+          collectionName,
+          entryId,
+          actor: readAuthenticatedActor(),
+          ...callerUser(),
+          routeAuthorized: false,
+          authenticatedScope: readAuthenticatedScope(),
+          data: versionInputOf(body),
+        },
+        {
+          direction,
+          locales: parts.locales,
+          shared: parts.shared,
+          describe: parts.describe,
+        }
+      );
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
     },
@@ -478,6 +538,11 @@ const COLLECTIONS_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   ...COLLECTION_VERSION_METHODS,
+  // What creating a collection under an address would answer, for the Builder's new-entity
+  // dialog; writes nothing.
+  checkCollectionAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("collection", body),
+  },
   createCollection: {
     // The metadata service returns the legacy CollectionServiceResult
     // envelope; we unwrap it and pass the legacy success message through
@@ -1501,6 +1566,8 @@ const COLLECTIONS_METHODS: Record<
     "unpublishAllLocales",
     "All languages unpublished."
   ),
+  publishParts: partsLifecycle("publish", "Published."),
+  unpublishParts: partsLifecycle("unpublish", "Unpublished."),
 
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without
@@ -1880,6 +1947,11 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  // Loaded here, where a save runs: the writer brings the migration generator
+  // and runner, which a request that writes no field change never needs.
+  const { writeCollectionSave } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
@@ -1898,6 +1970,9 @@ async function saveThroughWriter(
 async function reviewLinesOf(change: WriterChange): Promise<string[]> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return [];
+  const { previewCollectionSave } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
   return (await previewCollectionSave(prepared.deps, prepared.save)).notices;
 }
 

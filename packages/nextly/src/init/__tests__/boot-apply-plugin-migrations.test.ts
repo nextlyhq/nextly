@@ -30,6 +30,10 @@ const migrationModule = { name: "001_notes" };
 /** The application's adapter, as the container holds it. */
 const appAdapter = {
   dialect: "sqlite",
+  // Read before the run, so the extension schema is compiled against what
+  // the connected server can hold. Every adapter reports it; without it the
+  // boot logs the TypeError as "auto-apply skipped" and never runs.
+  getCapabilities: () => ({ dialect: "sqlite" }),
   getDrizzle: () => ({}),
   executeQuery: async () => [],
   tableExists: async () => true,

@@ -120,16 +120,21 @@ export function OutlineRowMenu({
               Add a field after
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={!actions.canMove(id, -1)}
-              onSelect={() => actions.move(id, -1)}
+              disabled={!actions.canMove(id, "up")}
+              onSelect={() => actions.move(id, "up")}
             >
               Move up
             </DropdownMenuItem>
             <DropdownMenuItem
-              disabled={!actions.canMove(id, 1)}
-              onSelect={() => actions.move(id, 1)}
+              disabled={!actions.canMove(id, "down")}
+              onSelect={() => actions.move(id, "down")}
             >
               Move down
+            </DropdownMenuItem>
+            {/* Every place, with why not for the ones it may not go, so it
+                is offered whenever the field itself may move. */}
+            <DropdownMenuItem onSelect={() => actions.openMoveTo(id)}>
+              Move to…
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => actions.duplicate(id)}>
               Duplicate

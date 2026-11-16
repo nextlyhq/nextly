@@ -112,6 +112,7 @@ const gatePlugin = definePlugin({
   contributes: {
     routes: [
       {
+        siteWide: false,
         method: "POST",
         path: "/tx-write",
         /**
@@ -152,6 +153,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/tx-plain",
         // The same transactional write with NOTHING surrendered, so the
@@ -188,6 +190,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/tx-narrowed",
         /**
@@ -237,6 +240,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/tx-field-narrowed",
         /**
@@ -281,6 +285,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/tx-delete-narrowed",
         /**
@@ -322,6 +327,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/read-one",
         // Reads a row back so the gated field's presence can be inspected.
@@ -337,6 +343,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/read-spelled",
         handler: async (_req, ctx) => {
@@ -356,6 +363,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/narrow-then-read",
         /**
@@ -384,6 +392,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/can-read-notes",
         /**
@@ -400,6 +409,7 @@ const gatePlugin = definePlugin({
         },
       },
       {
+        siteWide: false,
         method: "POST",
         path: "/mutate-scope",
         /**

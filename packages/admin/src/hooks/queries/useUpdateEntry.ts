@@ -54,7 +54,7 @@ import {
 import { useCallback } from "react";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   type RefusedForm,

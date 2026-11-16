@@ -142,7 +142,15 @@ and migration read it unconditionally. A node without one cannot be migrated,
 only guessed at.
 
 Optional fields: `bindings`, `slots`, `styles`, `classes`, `visibility`,
-`locked`, `name`, `customCss`, `cssId`, `attributes`, `migrationFailed`.
+`locked`, `name`, `customCss`, `cssId`, `nosnippet`, `attributes`,
+`migrationFailed`.
+
+`nosnippet` is a boolean, written only as `true`: the node's root element
+carries the `data-nosnippet` attribute, so search engines that read it, Google
+among them, quote none of its text in a result's snippet. Google reads the
+attribute on `span`, `div` and `section` elements only
+([robots meta tag](https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag)).
+A document written before the field existed reads exactly as it did.
 
 ### Bindings
 

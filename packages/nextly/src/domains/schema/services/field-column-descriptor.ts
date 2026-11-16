@@ -40,7 +40,9 @@ import {
 } from "../../../lib/system-columns";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
+import { toSnakeCase } from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -156,7 +158,9 @@ export type ColumnKind =
 export function columnsThatMayHoldNull(
   fields: readonly { name: string; required?: boolean; type?: string }[]
 ): string[] {
-  return fields
+  // Every column of the row, those of the fields inside a group with no name among them
+  // (`fieldsStoredOnRow`); the group itself has no column to hold anything.
+  return fieldsStoredOnRow(fields)
     .filter(
       field =>
         field.required !== true &&
@@ -165,11 +169,26 @@ export function columnsThatMayHoldNull(
     .map(field => toSnakeCase(field.name));
 }
 
-export function toSnakeCase(name: string): string {
-  return name
-    .replace(/([A-Z])/g, "_$1")
-    .toLowerCase()
-    .replace(/^_/, "");
+// The name-to-column rule lives in the browser-safe field rules, which the
+// Builder reaches too; re-exported so this module stays its home for callers.
+export { toSnakeCase } from "../field-rules";
+
+/**
+ * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
+ * with no name, at any depth.
+ *
+ * A group with no name only lays fields out. It holds no value and has no name to give a column, and
+ * the fields inside it are stored where it sits: on an entry's row for a collection or a Single, and
+ * on the instance's row (`comp_<slug>`) for a field group. The read and write paths already address
+ * those fields at that level through `addressableFields`, so the builders of a row's columns read
+ * the same walk, and the columns and the data paths cannot disagree about which fields a row holds.
+ *
+ * A named group is kept whole: its fields are stored inside its own value, not on the row.
+ */
+export function fieldsStoredOnRow<F>(fields: readonly F[]): F[] {
+  // The walk keeps each element it returns as it was given: the top-level fields and the fields
+  // the groups with no name hold, which are fields of the same list.
+  return addressableFields(fields) as unknown as F[];
 }
 
 /**
@@ -193,7 +212,8 @@ export function columnsDeclaredBy(
   >
 ): Set<string> {
   const columns = new Set<string>();
-  for (const field of fields) {
+  // The fields inside a group with no name occupy columns on the row too (`fieldsStoredOnRow`).
+  for (const field of fieldsStoredOnRow([...fields])) {
     if (!field || typeof field.name !== "string") continue;
     if (!fieldProducesColumn(field)) continue;
     columns.add(toSnakeCase(field.name));
@@ -1133,8 +1153,10 @@ export function systemColumnsForFields(
   }
 ): SystemColumnDescriptor[] {
   const { builtBy, ...set } = opts;
+  // A field inside a group with no name is stored on the row, so it replaces a system column as a
+  // field beside the group does, and the group itself, which has no name, replaces none.
   const declaresColumn = (column: string): boolean =>
-    fields.some(
+    fieldsStoredOnRow(fields).some(
       f =>
         toSnakeCase(f.name) === column &&
         getColumnDescriptor(f, dialect, builtBy) !== null

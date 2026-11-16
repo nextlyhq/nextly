@@ -27,6 +27,10 @@ import type {
   AuthResult,
   BulkDeleteArgs,
   BulkDeleteMediaArgs,
+  PublishArgs,
+  PublishResult,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   BulkOperationResult,
   ChangePasswordArgs,
   CollectionSlug,
@@ -129,6 +133,7 @@ import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
 } from "../domains/email/services/email-template-service";
+import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import type { PublicSiteSettings } from "../runtime/site-settings-read";
 import type { EmailProviderRecord } from "../schemas/email-providers/types";
@@ -222,6 +227,15 @@ export interface Nextly {
   ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
+   */
+  rewriteField: (
+    args: RewriteFieldArgs | RewriteSingleFieldArgs
+  ) => Promise<MutationResult<FieldRewriteResult>>;
+
+  /**
    * Delete a document by ID or by where clause.
    *
    * the by-id path returns `{ message, item: { id } }`;
@@ -239,6 +253,20 @@ export interface Nextly {
   delete: <TSlug extends CollectionSlug = CollectionSlug>(
     args: DeleteArgs<TSlug>
   ) => Promise<MutationResult<{ id: string }> | DeleteResult>;
+
+  /**
+   * Publish the chosen languages of one entry, and its shared part, together.
+   *
+   * @experimental
+   */
+  publish: (args: PublishArgs) => Promise<MutationResult<PublishResult>>;
+
+  /**
+   * Unpublish the chosen languages of one entry, and its shared part, together.
+   *
+   * @experimental
+   */
+  unpublish: (args: PublishArgs) => Promise<MutationResult<PublishResult>>;
 
   /**
    * Count documents matching a query.
@@ -773,7 +801,8 @@ export interface Nextly {
    * const uploadData = await nextly.storage.getClientUploadUrl(
    *   'video.mp4',
    *   'video/mp4',
-   *   'media'
+   *   'media',
+   *   { size: file.size }
    * );
    *
    * // Get signed URL for private file access

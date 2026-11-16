@@ -114,7 +114,7 @@ export default function SingleBuilderEditPage({
     resolver: zodResolver(singleFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -127,6 +127,7 @@ export default function SingleBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -272,7 +273,9 @@ export default function SingleBuilderEditPage({
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
     confirmation,
-    getValidatedFields,
+    // Judged against the fields as last saved, so a draft that changes a
+    // saved field's storage level is refused before it can lose values.
+    getValidatedFields: () => getValidatedFields(pending.saved),
     preview: fields =>
       singleApi.previewSchemaChanges(entitySlug, fields, localized),
     apply: (fields, version, resolutions, renames) =>
@@ -286,6 +289,7 @@ export default function SingleBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ---------------------------- Loading / error guards ----------------------
@@ -318,6 +322,7 @@ export default function SingleBuilderEditPage({
       locked={isLocked}
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -325,7 +330,6 @@ export default function SingleBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}
@@ -334,7 +338,7 @@ export default function SingleBuilderEditPage({
           context="single"
         />
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs

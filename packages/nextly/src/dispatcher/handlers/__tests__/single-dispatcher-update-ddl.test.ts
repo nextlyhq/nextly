@@ -15,6 +15,25 @@
  */
 import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
+// A Builder save's statements run through the busy-table runner, which waits for a table another
+// session holds; those tries are judged against real databases
+// (`busy-table-parity.integration.test.ts`). Here the save runs as one try that never waits,
+// sending each statement through the double's `executeQuery`, so these stay on the statements
+// the save hands over and the outcome it records.
+vi.mock(
+  "../../../domains/schema/busy-table/run-unit",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("../../../domains/schema/busy-table/run-unit")
+    >()),
+    runUnitInTries: (
+      await import(
+        "../../../domains/schema/busy-table/__tests__/helpers/run-unit-once"
+      )
+    ).runUnitOnce,
+  })
+);
+
 // A registry write's transaction, and the schema version stored in it, are
 // the integration suite's subject (`schema-version-writers.integration.test.ts`):
 // here a registry write runs on the adapter itself, as it did before it had one.

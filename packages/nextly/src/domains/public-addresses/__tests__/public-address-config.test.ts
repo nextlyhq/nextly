@@ -12,9 +12,10 @@ import { describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
 import { defineConfig } from "../../../collections/config/define-config";
-import { text } from "../../../collections/fields/helpers";
+import { number, text } from "../../../collections/fields/helpers";
 import { defineSingle } from "../../../singles/config/define-single";
 import { publicAddressClashes } from "../distinct-public-addresses";
+import { ownAddressOf } from "../public-address-template";
 
 const posts = (publicAddress?: string) =>
   defineCollection({
@@ -109,5 +110,97 @@ describe("two Singles at one address", () => {
         singles: [page("home", "/"), page("shop-home", "/shop")],
       })
     ).toEqual([]);
+  });
+});
+
+const features = (more: Record<string, unknown> = {}) =>
+  defineCollection({
+    slug: "features",
+    fields: [
+      text({ name: "title" }),
+      text({ name: "slug" }),
+      text({ name: "address" }),
+      number({ name: "rank" }),
+    ],
+    publicAddress: "/features/{slug}",
+    publicAddressField: "address",
+    ...more,
+  });
+
+/** What the address field's own rule answers for `value`. */
+async function ruleOn(value: unknown): Promise<unknown> {
+  const field = features().fields.find(
+    each => "name" in each && each.name === "address"
+  ) as { validate?: (value: unknown, ctx: unknown) => unknown } | undefined;
+  return field?.validate?.(value, { data: {}, req: {} });
+}
+
+describe("an entry's own address, named by a field", () => {
+  it("is accepted where it names a text field and the collection has a template", () => {
+    expect(features().publicAddressField).toBe("address");
+  });
+
+  it("refuses a text field that holds a list of values", () => {
+    expect(() =>
+      defineCollection({
+        slug: "features",
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug" }),
+          text({ name: "addresses", hasMany: true }),
+        ],
+        publicAddress: "/features/{slug}",
+        publicAddressField: "addresses",
+      })
+    ).toThrow(/publicAddressField/);
+  });
+
+  it("spells an address as a browser sends it, never encoding an escape twice", () => {
+    expect(ownAddressOf("/caf%C3%A9")).toEqual({
+      status: "resolved",
+      path: "/caf%C3%A9",
+    });
+    expect(ownAddressOf("/café/menu")).toEqual({
+      status: "resolved",
+      path: "/caf%C3%A9/menu",
+    });
+    expect(ownAddressOf("/100%zz").status).toBe("invalid");
+    // An escaped step out of the path is still a step out.
+    expect(ownAddressOf("/a/%2E%2E/admin").status).toBe("invalid");
+  });
+
+  it("refuses a field the collection doesn't have, one that holds no text, and one with no template", () => {
+    expect(() => features({ publicAddressField: "where" })).toThrow(
+      /publicAddressField/
+    );
+    expect(() => features({ publicAddressField: "rank" })).toThrow(
+      /publicAddressField/
+    );
+    expect(() => features({ publicAddress: undefined })).toThrow(
+      /publicAddressField/
+    );
+  });
+
+  it("accepts an address on this site, and an empty value, which leaves the template", async () => {
+    for (const value of [
+      "/brand-voice",
+      "/tools/word-counter",
+      "",
+      undefined,
+    ]) {
+      expect(await ruleOn(value), String(value)).toBe(true);
+    }
+  });
+
+  it.each([
+    ["another site's address", "https://other.example/brand-voice"],
+    ["an address on another host", "//other.example/brand-voice"],
+    ["a relative path", "brand-voice"],
+    ["a path with a dot segment", "/features/../admin"],
+    ["a path with an empty segment", "/brand//voice"],
+    ["a path with a query", "/brand-voice?x=1"],
+    ["a path the runtime keeps", "/admin/brand-voice"],
+  ])("refuses %s, as a template's result would be", async (_why, value) => {
+    expect(await ruleOn(value)).toMatch(/address/);
   });
 });

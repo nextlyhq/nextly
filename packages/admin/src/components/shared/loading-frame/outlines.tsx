@@ -19,6 +19,7 @@
 
 import {
   Button,
+  buttonVariants,
   PageHeader,
   Skeleton,
   Table,
@@ -28,29 +29,78 @@ import {
   TableHeader,
   TableRow,
 } from "@nextlyhq/ui";
-import { cardHeightPx } from "nextly/card-geometry";
-import { GRID_COLUMNS } from "nextly/config";
+import { listCardHeightPx } from "nextly/card-geometry";
+import { GRID_COLUMNS, listEntries } from "nextly/config";
 import { CORE_DEFAULT_LAYOUT } from "nextly/core-widget-data";
-import type { CSSProperties, JSX, ReactNode } from "react";
+import {
+  type CSSProperties,
+  type JSX,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
+import {
+  BAR_CONTROLS_GAP,
+  BAR_ICON_CONTROL,
+  PANEL_TOGGLE_RULE,
+} from "@admin/components/features/entries/EntryForm/bar-controls";
+import {
+  DOCKED_PANEL_COLUMN,
+  DOCKED_PANEL_ROW,
+} from "@admin/components/features/entries/EntryForm/document-panel-mode";
+import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
+import {
+  HISTORY_FRAME,
+  HISTORY_HEAD,
+  HISTORY_RAIL,
+  HISTORY_SPLIT,
+  HISTORY_TITLES,
+} from "@admin/components/features/versions/history-layout";
 import {
   cardSpanClass,
   GRID_CLASS,
 } from "@admin/components/features/widgets/sizes";
+import { MoreHorizontal, PanelRight } from "@admin/components/icons";
+import { UNFOLDED_BAR_ONLY } from "@admin/components/layout/header/bar-fold";
 import {
-  ChevronDown,
-  Eye,
-  History,
-  MoreHorizontal,
-  PanelRight,
-} from "@admin/components/icons";
-import { TopBarPlace } from "@admin/components/layout/header/TopBarPlaces";
+  STAND_IN_ATTRIBUTE,
+  TopBarPlace,
+} from "@admin/components/layout/header/TopBarPlaces";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
+import {
+  PAGER_BUTTON_SIZE,
+  PAGER_CONTROLS,
+  PAGER_COUNT,
+  PAGER_FRAME,
+  PAGER_NAV,
+  PAGER_SIZE,
+  PAGER_SIZE_BOX,
+  PAGER_SIZE_LABEL,
+  PAGER_SIZE_WORDS,
+  PAGER_SUMMARY,
+  pageCountText,
+} from "@admin/components/shared/pagination/pager-layout";
+import {
+  FIXED_LAYOUT_TABLE,
+  fixedColumnLayout,
+  LIST_TABLE,
+  ROW_ACTIONS_COLUMN,
+  ROW_ACTIONS_TRIGGER,
+  SELECTION_COLUMN,
+} from "@admin/components/ui/table/data-table/row-actions";
+import {
+  LIST_TOOLBAR_CONTROLS,
+  LIST_TOOLBAR_ROW,
+  LIST_TOOLBAR_SEARCH,
+} from "@admin/components/ui/table/list-view/toolbar-layout";
 import { MEDIA_GRID_CLASSES } from "@admin/constants/media";
 import { cn } from "@admin/lib/utils";
 
 import { LOADING_FRAME_TIMES, useDelayedReveal } from "./delayed-reveal";
+import { FIRST_GUESS_ROWS, outlineRowsFor, recallListPager } from "./list-rows";
 import { useReportScreenWait } from "./screen-wait";
 
 /**
@@ -94,6 +144,12 @@ function OutlineBar({
  * The wait of one screen (or one part of a screen): reported to the frame while
  * mounted, and drawn as `children` from 0.4 s. Hidden from assistive technology,
  * since the frame's status line is what speaks for a long wait.
+ *
+ * Before 0.4 s the outline is laid out but not drawn, so it holds the place its
+ * parts will take from the first paint: whatever a page draws after a part
+ * that answers late (a plugin's block after the dashboard's cards, a plugin's
+ * content after a list) stands where it will stay, rather than being drawn up
+ * into the empty place and pushed back down when the part arrives.
  */
 export function ScreenOutline({
   children,
@@ -109,9 +165,9 @@ export function ScreenOutline({
       data-testid="screen-outline"
       data-outline-shown={shown ? "" : undefined}
       aria-hidden="true"
-      className={className}
+      className={cn(className, !shown && "invisible")}
     >
-      {shown ? children : null}
+      {children}
     </div>
   );
 }
@@ -188,61 +244,225 @@ const NARROW_HIDDEN = (index: number): string | undefined =>
 const ROW_TITLE_WIDTHS = [200, 240, 160, 130, 110] as const;
 
 /**
- * A table with its real head where its columns are known, and five outline
- * rows: a title, then shorter, softer values in the other columns.
+ * One outline bar on the line a cell's text takes: an empty text run beside it
+ * gives the line the table's own font, so the row is as tall as a row of text
+ * without the outline naming a height.
+ */
+function CellLine({
+  className,
+  soft,
+  style,
+}: {
+  className?: string;
+  soft?: boolean;
+  style?: CSSProperties;
+}): JSX.Element {
+  return (
+    <span className="flex items-center">
+      {"\u200b"}
+      <OutlineBar soft={soft} className={className} style={style} />
+    </span>
+  );
+}
+
+/**
+ * Words the outline cannot say yet but whose width it must keep: laid out
+ * unseen, with a bar drawn over them, so whatever wraps around them wraps
+ * where it will around the words themselves.
+ */
+function OutlineWords({
+  words,
+  className,
+}: {
+  words: string;
+  className?: string;
+}): JSX.Element {
+  return (
+    <span className={cn("relative", className)}>
+      <span className="invisible">{words}</span>
+      <OutlineBar
+        soft
+        className="absolute inset-x-0 top-1/2 h-3 -translate-y-1/2"
+      />
+    </span>
+  );
+}
+
+/**
+ * The pager under a table, piece by piece as the pager draws a list of one
+ * page: its frame, the summary, the page-size selector with its words, the
+ * five page buttons and the page count, each by the pager's own classes
+ * (`pagination/pager-layout`). So the controls wrap onto a second line on
+ * the same content column the pager's do, and the outline stands as tall as
+ * the pager that replaces it at every width.
+ */
+function PagerOutline({ list }: { list?: string }): JSX.Element {
+  const frame = useRef<HTMLDivElement>(null);
+  // Where the list's pager has stood this wide before, as tall as it stood:
+  // a list of several pages has more buttons than one page's, and they wrap
+  // onto more lines. Read from the outline's own width before it is painted.
+  const [kept, setKept] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const width = frame.current?.getBoundingClientRect().width ?? 0;
+    if (list === undefined || width === 0) return;
+    setKept(recallListPager(list, width));
+  }, [list]);
+  return (
+    <div
+      ref={frame}
+      data-frame-part="list-pager"
+      className={cn(PAGER_FRAME, kept !== undefined && "overflow-hidden")}
+      style={kept === undefined ? undefined : { height: kept }}
+    >
+      {/* The summary's line, after the controls where the two stack. */}
+      <span className={cn(PAGER_SUMMARY, "flex items-center")}>
+        {"\u200b"}
+        <OutlineBar soft className="h-3 w-36" />
+      </span>
+      <div className={PAGER_CONTROLS}>
+        <div className={PAGER_SIZE}>
+          <OutlineWords words={PAGER_SIZE_WORDS} className={PAGER_SIZE_LABEL} />
+          <ControlOutline className={PAGER_SIZE_BOX} />
+        </div>
+        <div className={PAGER_NAV}>
+          {Array.from({ length: 5 }, (_, index) => (
+            <ControlOutline key={index} className={PAGER_BUTTON_SIZE} />
+          ))}
+        </div>
+        <OutlineWords
+          words={pageCountText(0, 1, false)}
+          className={PAGER_COUNT}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A table with its real head where its columns are known, and outline rows: a
+ * title, then shorter, softer values in the other columns. Each row ends in
+ * the row actions' column as the table draws it, whose trigger is the row's
+ * tallest part, so an outline row is as tall as a real one; and the table's
+ * pager follows the rows, inside the table's card, as the table's own does.
+ * As many rows as the list drew when this person last opened it
+ * (`outlineRowsFor`), so the pager and whatever sits under the table stay
+ * where they will be.
  */
 export function TableOutline({
   headers,
+  rowActions = true,
+  rows = FIRST_GUESS_ROWS,
+  selection = false,
+  columnWidths,
+  list,
 }: {
+  /** The list the table belongs to, by the name it keeps its layout under. */
+  list?: string;
   /** The column heads, when the columns are known. */
   headers?: readonly ReactNode[];
+  /** Whether the table's rows end in their actions, as every list's do. */
+  rowActions?: boolean;
+  /** How many outline rows to draw. */
+  rows?: number;
+  /** Whether the table's rows start with a selection box, as a selectable list's do. */
+  selection?: boolean;
+  /**
+   * Each column's width, where the table lays its columns out by them
+   * (`fixedColumnLayout`): the outline then stands its columns where the
+   * table's stand.
+   */
+  columnWidths?: readonly (number | undefined)[];
 }): JSX.Element {
   const columns: readonly ReactNode[] = headers ?? [null, null, null];
+  const fixed = columnWidths !== undefined && fixedColumnLayout(columnWidths);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {columns.map((header, index) => (
-              <TableHead
-                key={index}
-                className={cn("py-3", NARROW_HIDDEN(index))}
-              >
-                {header ?? (
-                  <OutlineBar
-                    soft
-                    className={cn("h-3", index === 0 ? "w-16" : "w-12")}
-                  />
-                )}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {ROW_TITLE_WIDTHS.map((width, row) => (
-            <TableRow key={row} className="border-b border-border">
-              {columns.map((_, index) => (
-                <TableCell
+      {/* The head and the rows, named as the table names its own, so a test
+          can hold the two to one box. */}
+      <div data-frame-part="list-rows">
+        <Table className={cn(LIST_TABLE, fixed && FIXED_LAYOUT_TABLE)}>
+          <TableHeader>
+            <TableRow>
+              {selection ? <TableHead className={SELECTION_COLUMN} /> : null}
+              {columns.map((header, index) => (
+                <TableHead
                   key={index}
-                  className={cn("h-12 py-3", NARROW_HIDDEN(index))}
+                  className={cn("py-3", NARROW_HIDDEN(index))}
+                  style={fixed ? { width: columnWidths?.[index] } : undefined}
                 >
-                  {index === 0 ? (
-                    <OutlineBar
-                      className="block h-3 max-w-full"
-                      style={{ width }}
-                    />
-                  ) : (
+                  {header ?? (
                     <OutlineBar
                       soft
-                      className={cn("block h-3", index === 1 ? "w-16" : "w-11")}
+                      className={cn("h-3", index === 0 ? "w-16" : "w-12")}
                     />
                   )}
-                </TableCell>
+                </TableHead>
               ))}
+              {rowActions ? <TableHead className={ROW_ACTIONS_COLUMN} /> : null}
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: rows }, (_, row) => (
+              <TableRow key={row} className="border-b border-border">
+                {selection ? <TableCell className={SELECTION_COLUMN} /> : null}
+                {columns.map((_, index) => (
+                  <TableCell key={index} className={NARROW_HIDDEN(index)}>
+                    {index === 0 ? (
+                      <CellLine
+                        className="h-3 max-w-full"
+                        style={{
+                          width:
+                            ROW_TITLE_WIDTHS[row % ROW_TITLE_WIDTHS.length],
+                        }}
+                      />
+                    ) : (
+                      <CellLine
+                        soft
+                        className={cn("h-3", index === 1 ? "w-16" : "w-11")}
+                      />
+                    )}
+                  </TableCell>
+                ))}
+                {rowActions ? (
+                  <TableCell className={ROW_ACTIONS_COLUMN}>
+                    {/* The trigger's own box, empty and unseen: the row's
+                      height is the real trigger's. Set at the line's top, as
+                      an empty box on the text's baseline would add the
+                      line's descent below it. */}
+                    <span
+                      className={cn(
+                        buttonVariants(ROW_ACTIONS_TRIGGER),
+                        "invisible align-top"
+                      )}
+                    />
+                  </TableCell>
+                ) : null}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      <PagerOutline list={list} />
+    </div>
+  );
+}
+
+/**
+ * A list's toolbar: its search, then Filter and Columns, laid out by the
+ * toolbar's own classes (`list-view/toolbar-layout`), so at every width it
+ * stands as tall as the toolbar that replaces it.
+ */
+export function ListToolbarOutline(): JSX.Element {
+  return (
+    // Named like the toolbar it stands for, so its presence is observable.
+    <div data-slot="list-toolbar-outline" className={LIST_TOOLBAR_ROW}>
+      <div className={LIST_TOOLBAR_SEARCH}>
+        <ControlOutline className="w-full" />
+      </div>
+      <div className={LIST_TOOLBAR_CONTROLS}>
+        <ControlOutline className="w-[106px]" />
+        <ControlOutline className="w-[130px]" />
+      </div>
     </div>
   );
 }
@@ -253,35 +473,60 @@ export function ListOutline({
   headers,
   actions = [72, 112],
   framed = true,
+  list,
+  selection,
+  columnWidths,
+  subtitle = false,
 }: {
   title?: string;
   headers?: readonly ReactNode[];
   actions?: readonly number[];
   /** `false` where the screen draws the outline inside its own container. */
   framed?: boolean;
+  /** The list's name (its `registryKey`), for how many rows it last drew. */
+  list?: string;
+  /** Whether the list's rows start with a selection box. */
+  selection?: boolean;
+  /** Each column's width, where the list lays its columns out by them. */
+  columnWidths?: readonly (number | undefined)[];
+  /** Whether the list's head has a subtitle line under its title. */
+  subtitle?: boolean;
 }): JSX.Element {
   return (
     <ScreenOutline>
       <PageFrame framed={framed}>
         <div className="flex flex-col gap-8">
-          <PageHeadOutline title={title} actions={actions} />
-          {/* The list's toolbar (its search, then Filter and Columns) above
-              the table, at the list's own spacing. */}
+          <PageHeadOutline
+            title={title}
+            actions={actions}
+            subtitle={subtitle}
+          />
+          {/* The list's toolbar above the table, at the list's own spacing. */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <ControlOutline className="w-full max-w-[384px]" />
-              <div className="flex gap-2 max-sm:hidden">
-                <ControlOutline className="w-[106px]" />
-                <ControlOutline className="w-[130px]" />
-              </div>
-            </div>
-            <TableOutline headers={headers} />
+            <ListToolbarOutline />
+            <TableOutline
+              headers={headers}
+              rows={outlineRowsFor(list)}
+              list={list}
+              selection={selection}
+              columnWidths={columnWidths}
+            />
           </div>
         </div>
       </PageFrame>
     </ScreenOutline>
   );
 }
+
+/**
+ * How tall a dashboard card is first drawn, in pixels, while its answer is on
+ * its way: a list card's skeleton, holding its default "Number of entries"
+ * (`listEntries` of no setting) at the default density.
+ */
+const FIRST_DRAWN_CARD_HEIGHT = listCardHeightPx(
+  listEntries(undefined),
+  "default"
+);
 
 /** The widths of the dashboard's recent-list rows, in order. */
 const RECENT_ROW_WIDTHS = [180, 220, 140, 160] as const;
@@ -325,11 +570,12 @@ export function DashboardCardsOutline({
               span,
               "flex flex-col gap-3 rounded-lg border border-border bg-card p-4"
             )}
-            // A card of the default's four rows; the real card is as tall as
-            // its content, which no outline can know.
-            // The height a real card of four rows takes, from the grid's own
-            // geometry, so the outline stands as tall as the card it precedes.
-            style={{ minHeight: cardHeightPx(4) }}
+            // A card is as tall as its content, which no outline can know,
+            // so it stands as tall as the cards that replace it are first
+            // drawn: a list card loading its default number of entries, the
+            // frame and the rows by core's own card geometry. A row of the
+            // default dashboard is that tall until its cards' answers land.
+            style={{ minHeight: FIRST_DRAWN_CARD_HEIGHT }}
           >
             <OutlineBar className="h-3.5 w-[120px]" />
             {RECENT_ROW_WIDTHS.map(width => (
@@ -445,87 +691,75 @@ export function MediaOutline(): JSX.Element {
   );
 }
 
-/** A disabled control of the editor bar's outline. */
-function BarButton({
-  children,
-  primary = false,
-  label,
-  joined,
-  narrow = false,
-}: {
-  children: ReactNode;
-  primary?: boolean;
-  label?: string;
-  /** Which half of a split button this is. */
-  joined?: "start" | "end";
-  /** An icon on the bar's tight padding, as More and the panel toggle are. */
-  narrow?: boolean;
-}): JSX.Element {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={primary ? "default" : "outline"}
-      disabled
-      aria-disabled="true"
-      aria-label={label}
-      className={cn(
-        "gap-1.5",
-        narrow && "px-2",
-        joined === "start" && "rounded-r-none",
-        joined === "end" &&
-          "rounded-l-none border-l border-primary-foreground/20 px-2"
-      )}
-    >
-      {children}
-    </Button>
-  );
-}
+/**
+ * The height of the bar's controls: the height class of the button size they
+ * are drawn at (`BAR_ICON_CONTROL`), read from the button's own sizes.
+ */
+const BAR_CONTROL_HEIGHT = buttonVariants({ size: BAR_ICON_CONTROL.size })
+  .split(/\s+/)
+  .find(name => name.startsWith("h-"));
 
 /**
- * The editor's bar while its document loads: the same right-hand controls the
- * real bar draws (History, Preview, the Publish split, More, the panel toggle),
- * disabled, so the bar keeps their width and nothing in it moves when the
- * document arrives. Drawn at once, as part of the frame, not after 0.4 s.
+ * The editor's bar while its document loads, drawn at once, as part of the
+ * frame, not after 0.4 s. Laid out from the bar's right end, as the real
+ * controls are, and standing in the bar on its own rather than in the place
+ * the real bar fills (`STAND_IN_ATTRIBUTE`): the document's trail, whose
+ * width only the document's title decides, arrives with the real bar and
+ * moves nothing drawn here.
+ *
+ * Only the controls that stand in the same place whatever the document's state
+ * are drawn as controls: for a saved document, More, then the rule and the
+ * panel toggle at the far end, where the wide layout draws them. The ones
+ * before them depend on the document (History where it keeps versions, a
+ * preview where it has one, Publish for a draft beside Save draft, Save alone
+ * for a published one) and so on what no outline can know, so one still bar
+ * holds their place, and the real controls replace it rather than shifting
+ * across it. A new document's bar has only its verbs, so its outline is the
+ * bar alone.
  */
-function EditorBarOutline(): JSX.Element {
+function EditorBarOutline({ creating }: { creating: boolean }): JSX.Element {
   return (
     <TopBarPlace name="end">
       <div
         data-testid="editor-bar-outline"
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-3"
+        {...{ [STAND_IN_ATTRIBUTE]: "" }}
+        className={cn(
+          "flex min-w-0 flex-1 items-center justify-end",
+          BAR_CONTROLS_GAP
+        )}
       >
-        <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-        <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
-          {/* History and Preview as the bar draws them beside a document's
-              trail: their icons, their words stepped aside. */}
-          <span className="contents max-lg:hidden">
-            <BarButton label="History">
-              <History className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-            <BarButton label="Preview">
-              <Eye className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-          </span>
-          {/* The primary action and its menu, joined as the real split is. */}
-          <span className="flex">
-            <BarButton primary joined="start">
-              Publish
-            </BarButton>
-            <BarButton primary joined="end" label="More publishing actions">
-              <ChevronDown className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-          </span>
-          <BarButton label="More" narrow>
-            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-          </BarButton>
-          <span className="contents max-lg:hidden">
-            <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-            <BarButton label="Document panel" narrow>
-              <PanelRight className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-          </span>
-        </div>
+        <OutlineBar
+          soft
+          className={cn(BAR_CONTROL_HEIGHT, "w-24 rounded-md lg:w-48")}
+        />
+        {creating ? null : (
+          <>
+            <Button
+              type="button"
+              {...BAR_ICON_CONTROL}
+              disabled
+              aria-disabled="true"
+              aria-label="More actions"
+              data-frame-part="bar-more"
+            >
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            {/* Drawn only where the bar keeps its controls unfolded, by the
+                bar's own width, as the bar decides it (`bar-fold`). */}
+            <span className={cn("contents", UNFOLDED_BAR_ONLY)}>
+              <span className={PANEL_TOGGLE_RULE} aria-hidden="true" />
+              <Button
+                type="button"
+                {...BAR_ICON_CONTROL}
+                disabled
+                aria-disabled="true"
+                aria-label="Document panel"
+              >
+                <PanelRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </span>
+          </>
+        )}
       </div>
     </TopBarPlace>
   );
@@ -541,7 +775,10 @@ export function EditorOutline({
   sideWidth = 320,
   columnClassName,
   columnStyle,
+  creating = false,
 }: {
+  /** Whether the document is a new one, whose bar has only its verbs. */
+  creating?: boolean;
   /** The document panel's width beside the fields, in pixels. */
   sideWidth?: number;
   /** The editor's field column inset, from the editor itself. */
@@ -549,45 +786,100 @@ export function EditorOutline({
   /** The editor's field column measure, from the editor itself. */
   columnStyle?: CSSProperties;
 }): JSX.Element {
+  // The panel this reader folded away stays folded on the next document, so
+  // the outline draws none either, read as the editor reads it.
+  const panelFolded = useRailCollapsed().collapsed;
   return (
     <>
-      <EditorBarOutline />
+      <EditorBarOutline creating={creating} />
       <ScreenOutline>
         <PageContainer type="editor">
-          <div className="flex flex-col items-stretch lg:min-h-[calc(100vh-var(--admin-bar-height))] lg:flex-row">
+          {/* Sized by the editor's frame, as the editor decides whether its
+              panel docks (`document-panel-mode`), not by the window. */}
+          <div className="@container/editor">
             <div
               className={cn(
-                "mx-auto w-full min-w-0 flex-1 pt-6 lg:pt-8",
-                columnClassName
+                "flex flex-col items-stretch lg:min-h-[calc(100vh-var(--admin-bar-height))]",
+                DOCKED_PANEL_ROW
               )}
-              style={columnStyle}
             >
-              {/* The document's title line and its address under it, then
+              <div
+                className={cn(
+                  "mx-auto w-full min-w-0 flex-1 pt-6 lg:pt-8",
+                  columnClassName
+                )}
+                style={columnStyle}
+              >
+                {/* The document's title line and its address under it, then
                   its fields' card, as the editor draws them. */}
-              <OutlineBar className="h-10 w-2/3 max-w-[480px]" />
-              <OutlineBar className="mt-3 h-3 w-48" />
-              <div className="mt-8">
-                <FieldsOutline />
+                <OutlineBar className="h-10 w-2/3 max-w-[480px]" />
+                <OutlineBar className="mt-3 h-3 w-48" />
+                <div className="mt-8">
+                  <FieldsOutline />
+                </div>
               </div>
-            </div>
-            <div
-              // Beside the fields from the wide layout up; below it the
-              // editor folds its panel into a sheet, so none is drawn.
-              className="hidden w-full shrink-0 flex-col border-border bg-card p-6 lg:flex lg:w-(--editor-side-width) lg:border-l"
-              style={
-                { "--editor-side-width": `${sideWidth}px` } as CSSProperties
-              }
-            >
-              <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-                <OutlineBar className="h-3.5 w-[60px]" />
-                <OutlineBar soft className="h-3 w-full" />
-                <OutlineBar soft className="h-3 w-4/5" />
-              </div>
+              {panelFolded ? null : (
+                <div
+                  // Beside the fields only where the editor docks its panel; a
+                  // narrower editor floats it closed, so none is drawn.
+                  className={cn(
+                    "w-full shrink-0 flex-col border-border bg-card p-6",
+                    DOCKED_PANEL_COLUMN
+                  )}
+                  style={
+                    { "--editor-side-width": `${sideWidth}px` } as CSSProperties
+                  }
+                >
+                  <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+                    <OutlineBar className="h-3.5 w-[60px]" />
+                    <OutlineBar soft className="h-3 w-full" />
+                    <OutlineBar soft className="h-3 w-4/5" />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </PageContainer>
       </ScreenOutline>
     </>
+  );
+}
+
+/**
+ * A document's version history: its header, with the way back, the title and
+ * the document's name, over the rail of versions beside the comparison. Laid
+ * out by the page's own frame, so the header stands where the page draws it.
+ */
+export function HistoryOutline(): JSX.Element {
+  return (
+    <ScreenOutline className={HISTORY_FRAME}>
+      <div data-frame-part="history-head" className={HISTORY_HEAD}>
+        {/* The back button's own box, so the titles start where it ends. */}
+        <span className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          <OutlineBar soft className="size-4" />
+        </span>
+        <div className={HISTORY_TITLES}>
+          <div className="flex h-6 items-center">
+            <OutlineBar className="h-3.5 w-[120px]" />
+          </div>
+          <div className="flex h-4 items-center">
+            <OutlineBar soft className="h-3 w-[160px]" />
+          </div>
+        </div>
+      </div>
+      <div className={HISTORY_SPLIT}>
+        <div className={HISTORY_RAIL}>
+          <div className="flex flex-col gap-4 p-4">
+            {[0, 1, 2, 3].map(row => (
+              <div key={row} className="flex flex-col gap-1">
+                <OutlineBar className="h-4 w-28" />
+                <OutlineBar soft className="h-3 w-36" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </ScreenOutline>
   );
 }
 

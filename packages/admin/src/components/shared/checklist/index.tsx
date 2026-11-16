@@ -14,6 +14,7 @@
  * @module components/shared/checklist
  */
 
+import { Skeleton } from "@nextlyhq/ui";
 import { stepFinished, type SetupStep } from "nextly/config";
 import {
   createContext,
@@ -255,3 +256,43 @@ export function Checklist({
     </div>
   );
 }
+
+/**
+ * A checklist while its steps are on their way: the bar, then `steps` lines
+ * drawn by `ChecklistItem` itself, each with a still bar for its name and
+ * one for its hint, so the checklist that replaces it stands as tall as this,
+ * line for line. Hidden from assistive technology: whatever draws it says
+ * that it is loading.
+ */
+export function ChecklistOutline({ steps }: { steps: number }): JSX.Element {
+  return (
+    <div aria-hidden="true">
+      <Checklist label="" done={0} total={steps}>
+        {Array.from({ length: steps }, (_, step) => (
+          <ChecklistItem
+            key={step}
+            status="open"
+            label={
+              <Skeleton
+                still
+                className={cn(
+                  "inline-block h-3 align-middle",
+                  OUTLINE_NAME_WIDTHS[step % OUTLINE_NAME_WIDTHS.length]
+                )}
+              />
+            }
+            hint={
+              <Skeleton
+                still
+                className="inline-block h-2.5 w-3/5 bg-muted align-middle"
+              />
+            }
+          />
+        ))}
+      </Checklist>
+    </div>
+  );
+}
+
+/** The widths of an outline's step names, in turn. */
+const OUTLINE_NAME_WIDTHS = ["w-2/5", "w-1/2", "w-1/3"] as const;

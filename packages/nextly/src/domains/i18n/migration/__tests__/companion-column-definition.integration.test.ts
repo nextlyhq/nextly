@@ -441,5 +441,39 @@ describeEachDialect(
       ).not.toHaveProperty("localized", true);
       expect(await columnOf("dc_cdef_posts_locales", "price")).toEqual(moved);
     });
+
+    it("finishes a retry of a join that made a short text long, as the first apply allowed it", async () => {
+      // A short text joining translation as a long one is allowed, since the long column holds every
+      // value; the retry of that change, its values already moved, is judged by the same rule.
+      const summary = (variant: "short" | "long"): Field => ({
+        name: "summary",
+        type: "text",
+        ...(variant === "short"
+          ? { options: { variant }, validation: { maxLength: 100 } }
+          : {}),
+      });
+      // Shared as stated: a text field in a translated collection is translated unless it says not.
+      await create("cdef_posts", true, [
+        translated(HEADING),
+        { ...summary("short"), localized: false },
+      ]);
+      await addAsTheTransitionDoes("cdef_posts", summary("long"));
+      await query(
+        `ALTER TABLE ${q("dc_cdef_posts")} DROP COLUMN ${q("summary")}`
+      );
+      const moved = await columnOf("dc_cdef_posts_locales", "summary");
+
+      expect(
+        await saveInDialog("cdef_posts", [
+          translated(HEADING),
+          translated(summary("long")),
+        ])
+      ).toBeUndefined();
+
+      expect(
+        (await recordedFields("cdef_posts")).find(f => f.name === "summary")
+      ).toMatchObject({ localized: true });
+      expect(await columnOf("dc_cdef_posts_locales", "summary")).toEqual(moved);
+    });
   }
 );

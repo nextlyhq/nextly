@@ -21,14 +21,16 @@ import {
   type OutlineNode,
   type VisibleRow,
 } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
+import type { RowMark } from "@admin/lib/builder/pending-changes";
 import { cn } from "@admin/lib/utils";
 
 import type { OutlineActions } from "./outline-types";
 import { OutlineRowMenu } from "./OutlineRowMenu";
 import { ROW_ID_PREFIX } from "./useTreeKeyDown";
 
-/** The width of one level of indent, in pixels. */
-const INDENT = 20;
+/** The width of one level of indent, in pixels; a drag sideways by it changes level. */
+export const INDENT = 20;
 
 type Props = {
   row: VisibleRow;
@@ -39,8 +41,10 @@ type Props = {
   selected: boolean;
   /** The row the tree's tab stop is on. */
   tabStop: boolean;
-  /** May be dragged within its container. */
+  /** May be dragged, and moved by key: the rule judges where to. */
   draggable: boolean;
+  /** The element naming the keys that move a field, for a row that may move. */
+  movesDescribedBy?: string;
   onSelect: (id: string) => void;
   onToggle: (path: string) => void;
   registerRow: (id: string, element: HTMLElement | null) => void;
@@ -164,6 +168,11 @@ function RowBadges({
       show: node.readOnly,
       text: node.readOnly ? `Locked · ${describeReadOnly(node.readOnly)}` : "",
     },
+    // What is pending on the row until the save: one mark per kind.
+    ...(node.pending?.marks ?? []).map(pending => ({
+      show: true,
+      text: pendingMarkText(pending, node.pending?.inside),
+    })),
     {
       // A field using field groups, and each field group a field accepting
       // several offers: both are shared, each with its own count when known.
@@ -187,6 +196,22 @@ function RowBadges({
       )}
     </span>
   );
+}
+
+/** A pending mark's words: a deleted container says how many go with it. */
+function pendingMarkText(mark: RowMark, inside: number | undefined): string {
+  switch (mark) {
+    case "new":
+      return "New";
+    case "changed":
+      return "Changed";
+    case "moved":
+      return "Moved";
+    case "deleted":
+      return inside
+        ? `Deleted · ${inside} ${inside === 1 ? "field" : "fields"} inside`
+        : "Deleted";
+  }
 }
 
 /** The chevron that folds a container; nothing for a row that holds none. */
@@ -247,6 +272,8 @@ function RowItem({
   onSelect,
   onToggle,
   registerRow,
+  draggable,
+  movesDescribedBy,
 }: Pick<
   Props,
   | "row"
@@ -257,6 +284,8 @@ function RowItem({
   | "onSelect"
   | "onToggle"
   | "registerRow"
+  | "draggable"
+  | "movesDescribedBy"
 >): JSX.Element {
   const { node, level, expanded, match } = row;
   const { field } = node;
@@ -273,6 +302,7 @@ function RowItem({
       aria-setsize={row.setsize}
       aria-expanded={expanded}
       aria-selected={selected}
+      aria-describedby={draggable ? movesDescribedBy : undefined}
       tabIndex={tabStop ? 0 : -1}
       onClick={() => onSelect(node.id)}
       className={cn(
@@ -326,7 +356,10 @@ function OutlineRowView(props: Props): JSX.Element {
     >
       <DragHandle draggable={draggable} sortable={sortable} />
       <RowItem {...props} />
-      <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+      {/* A deleted row offers nothing to do to it until it is back. */}
+      {!isPendingDelete(row.node) && (
+        <OutlineRowMenu node={row.node} open={menuOpen} actions={actions} />
+      )}
     </div>
   );
 }

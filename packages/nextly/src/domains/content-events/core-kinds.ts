@@ -66,6 +66,23 @@ export const CORE_CONTENT_EVENT_KINDS = {
       })
       .strict(),
   },
+  fieldRewritten: {
+    name: "field-rewritten",
+    label: "{field} rewritten by {actor}",
+    // One field changed on the live copy and the pending drafts that held it,
+    // without a save of either: which field, and which copies changed
+    // (`live`, and `draft` or `draft:<language>` for each draft). `plugin`
+    // names the plugin that made it for a person, when one did; made on the
+    // plugin's own behalf, the plugin is the event's actor instead. The
+    // reason the caller gave is the event's note.
+    payload: z
+      .object({
+        field: z.string().min(1).max(255),
+        copies: z.array(z.string().min(1).max(64)).min(1).max(64),
+        plugin: z.string().min(1).max(255).optional(),
+      })
+      .strict(),
+  },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
   versionsRemoved: {
     name: "versions-removed",

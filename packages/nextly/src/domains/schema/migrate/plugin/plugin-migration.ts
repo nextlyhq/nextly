@@ -30,7 +30,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { SCHEMA_EVENTS_FILENAME_MAX_LENGTH } from "../../../../schemas/schema-events/types";
 import { normalizeContributions } from "../../pipeline/diff/contributions";
 import type { ContributedElements, TableSpec } from "../../pipeline/diff/types";
-import { splitSqlStatements } from "../split-sql";
+import { splitSqlStatements, withoutWrappingBrackets } from "../split-sql";
 
 import { SCHEMA_VERSION_SHAPE } from "./schema-version-shape";
 
@@ -203,8 +203,10 @@ export function migrationChecksum(content: MigrationContent): string {
  * put through `splitSqlStatements`, the splitter an app migration file goes
  * through. Each entry is split on its own: joined first, an entry ending in a
  * `-- comment` would swallow the separator after it and merge with the next.
- * Split as the module runs, so a `transaction: false` module keeps a
- * transaction bracket for the refusal to name.
+ * Split as the module runs: a module run in a transaction drops a bracket
+ * pair wrapping the whole module, judged over every entry together since
+ * the pair may sit in separate entries, and keeps any other bracket for the
+ * refusal to name, as a file does.
  *
  * Every guard over a module reads this list, and every path that runs one —
  * the apply, `migrate:down --plugin`, `plugins uninstall` — runs it.
@@ -214,10 +216,12 @@ export function pluginModuleStatements(
   dialect: SupportedDialect,
   direction: keyof DialectStatements
 ): string[] {
-  const mode = { transaction: migration.transaction !== false };
-  return (migration.dialects[dialect]?.[direction] ?? []).flatMap(entry =>
-    splitSqlStatements(entry, dialect, mode)
+  const statements = (migration.dialects[dialect]?.[direction] ?? []).flatMap(
+    entry => splitSqlStatements(entry, dialect, { transaction: false })
   );
+  return migration.transaction === false
+    ? statements
+    : withoutWrappingBrackets(statements, dialect);
 }
 
 /**

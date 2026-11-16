@@ -835,6 +835,11 @@ export interface ExportResult {
   readonly text: string;
   /** The file name to offer, which is part of the artefact rather than chrome. */
   readonly filename: string;
+  /**
+   * What the file holds, in words, for the message that says it was saved: a
+   * file name alone does not tell an author which file holds what.
+   */
+  readonly label: string;
   readonly mime: string;
   /** Tokens the format could not represent, in the engine's words. */
   readonly skipped: readonly string[];
@@ -880,6 +885,7 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
     return {
       text: "",
       filename: "tokens.json",
+      label: "variables",
       mime: "application/json",
       /*
        * The engine's own issues are absent here deliberately: the conversion
@@ -895,6 +901,7 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
   return {
     text,
     filename: "tokens.json",
+    label: "variables",
     mime: "application/json",
     skipped,
   };
@@ -922,6 +929,10 @@ export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
     {
       text: `${JSON.stringify(theme.resolver, null, 2)}\n`,
       filename: THEME_FILE,
+      // It holds the dark values the format can type, which a file name
+      // ending in "resolver" does not say; the token file's extension holds
+      // every dark value exactly.
+      label: "theme file: dark values",
       mime: "application/json",
       skipped: theme.issues.map(entry => entry.message),
     },
@@ -940,6 +951,7 @@ export function exportForFigma(tokens: SiteTokenSet): ExportResult[] {
     return {
       text: empty ? "" : `${JSON.stringify(made.document, null, 2)}\n`,
       filename: `${mode}.tokens.json`,
+      label: `Figma ${mode} mode`,
       mime: "application/json",
       skipped: mode === "light" ? made.issues.map(entry => entry.message) : [],
     };
@@ -1105,6 +1117,7 @@ export function exportCss(tokens: SiteTokenSet): ExportResult {
     // warnings saying why are the report they actually needed.
     text: sheet.css === "" ? "" : `${sheet.css}\n`,
     filename: "tokens.css",
+    label: "CSS variables",
     mime: "text/css",
     skipped: sheet.warnings.map(warning => warning.message),
   };

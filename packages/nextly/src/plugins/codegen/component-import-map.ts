@@ -41,6 +41,11 @@ import { collectDeclarations } from "../declarations";
 import { headerSlotOf, validUserMenuItem } from "../header-item";
 import type { PluginDefinition } from "../plugin-context";
 
+import {
+  ADMIN_KIT_MODULE,
+  ADMIN_ROOT_EXPORTS,
+  ADMIN_ROOT_MODULE,
+} from "./admin-root-exports";
 import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
 
 /** What a component in the map is for, as a fault about it names it. */
@@ -517,6 +522,24 @@ interface ParsedPath {
   member: string;
 }
 
+/**
+ * The module a path's component is imported from: the module as written, save
+ * a name `@nextlyhq/admin`'s root no longer exports. The root holds only what
+ * an application mounts, and the rest of the admin's surface moved to
+ * `@nextlyhq/admin/kit`. A path declared before that move names the root, and
+ * the map reads `_pN.Name` from a namespace import, which for a name the root
+ * does not export is undefined with no error: the component would silently
+ * draw nothing after an upgrade. The registry key stays the path as declared,
+ * which is what the admin looks the component up by.
+ */
+function adminEntryOf(p: ParsedPath): string {
+  return p.module === ADMIN_ROOT_MODULE &&
+    p.member !== "default" &&
+    !ADMIN_ROOT_EXPORTS.includes(p.member)
+    ? ADMIN_KIT_MODULE
+    : p.module;
+}
+
 function parsePath(path: string): ParsedPath {
   const hash = path.indexOf("#");
   if (hash === -1) return { path, module: path, member: "default" };
@@ -789,6 +812,11 @@ export function configImportOf(mapCode: string): string | undefined {
  * `import * as` per unique module; duplicate paths deduped. A map with nothing
  * to register imports no component and registers nothing, and still holds
  * itself to its (empty) list.
+ *
+ * An app that has not installed `@nextlyhq/admin` gets the same map with the
+ * admin left out: no import of it and no call, so the app still type-checks.
+ * It still lists and checks every path, and once the admin is installed the
+ * map written again registers them.
  */
 export function buildComponentImportMap(
   plugins: PluginDefinition[],
@@ -797,7 +825,12 @@ export function buildComponentImportMap(
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
   siteCollections?: readonly CollectionConfig[],
   /** Contributed components with no file behind them, left out of the map. */
-  unbacked?: ReadonlySet<string>
+  unbacked?: ReadonlySet<string>,
+  /**
+   * Whether the app has installed `@nextlyhq/admin`, read from its root by the writer. Installed
+   * unless told otherwise, so a caller that cannot tell keeps the import the map always had.
+   */
+  adminInstalled = true
 ): string {
   const entries = componentImportMapEntries(
     plugins,
@@ -825,7 +858,7 @@ export function buildComponentImportMap(
   const importOf = (p: ParsedPath) =>
     fromConfig.has(p.path)
       ? importedFromConfig(p.module, configImport)
-      : p.module;
+      : adminEntryOf(p);
   const modules = Array.from(
     new Set([...parsed, ...handedOff].map(importOf))
   ).sort();
@@ -834,9 +867,16 @@ export function buildComponentImportMap(
   const reference = (p: ParsedPath) => `${alias.get(importOf(p))}.${p.member}`;
 
   const lines: string[] = [HEADER, ""];
-  // Imported whatever the map holds: an empty map is still the whole map, and
-  // its call is what tells the admin nothing more is on its way.
-  lines.push('import { registerComponentMap } from "@nextlyhq/admin";');
+  // Imported whatever the map holds, wherever the admin is installed: an empty
+  // map is still the whole map, and its call is what tells the admin nothing
+  // more is on its way. Left out where the app has not installed the admin,
+  // since an import of a package the app cannot resolve stops its type check,
+  // and there is no admin to register into.
+  if (adminInstalled) {
+    lines.push('import { registerComponentMap } from "@nextlyhq/admin";');
+  } else {
+    lines.push(ADMIN_NOT_INSTALLED_NOTE);
+  }
   if (blockEditor.used) {
     lines.push(
       `import { ${BLOCK_EDITOR_REGISTRAR} } from "${PAGE_BUILDER_ADMIN_MODULE}";`
@@ -893,7 +933,7 @@ export function buildComponentImportMap(
   // its fallback rather than loading. Called on an empty map too: one whose
   // every contribution was left out for want of its file still names them,
   // and their places draw their fallback rather than loading forever.
-  lines.push("registerComponentMap(registered);");
+  if (adminInstalled) lines.push("registerComponentMap(registered);");
   if (blockEditor.used) {
     // The block inspectors are in `registered` too, which keeps them
     // resolvable by path like any component; they are handed over here as
@@ -928,6 +968,12 @@ function widgetNote(entry: ComponentMapEntry | undefined): string {
     ? ` // a setting editor of widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`
     : "";
 }
+
+/** What a map written for an app without the admin says in place of its import. */
+const ADMIN_NOT_INSTALLED_NOTE = [
+  "// `@nextlyhq/admin` is not installed in this app, so this map imports nothing of it and",
+  "// registers nothing. Once it is installed, run `nextly generate:types` again.",
+].join("\n");
 
 /**
  * The page builder's admin entry, and the function there the map hands block
@@ -1011,7 +1057,9 @@ export function buildImportMapArtifacts(
   /** The site config's own collections, whose own views the map lists beside the plugins'. */
   siteCollections?: readonly CollectionConfig[],
   /** Contributed components with no file behind them, left out of both files. */
-  unbacked?: ReadonlySet<string>
+  unbacked?: ReadonlySet<string>,
+  /** Whether the app has installed `@nextlyhq/admin`: see {@link buildComponentImportMap}. */
+  adminInstalled = true
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
@@ -1022,7 +1070,8 @@ export function buildImportMapArtifacts(
         configImport,
         siteDashboard,
         siteCollections,
-        unbacked
+        unbacked,
+        adminInstalled
       ),
     },
     {

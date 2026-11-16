@@ -3,7 +3,7 @@
 /**
  * Import as a person uses it: this site's field group first, matched field
  * by field with an example of each, values a page's own code overrides
- * skipped as never served unless included, the dry run's counts and each
+ * skipped unless included, the dry run's counts and each
  * page's result, then the import applied, or refused with nothing written;
  * and a file from another tool, read and summed up, or refused with one
  * notice. What each request sends is read from the request itself.
@@ -92,7 +92,7 @@ function dryRun(include: boolean): DryRunBody {
         outcome: "skipped",
         neverServed: ["title"],
         values: { title: "Old changelog" },
-        reason: "Never served",
+        reason: "The page's code sets its own value now.",
       });
   return {
     checked: 9,
@@ -248,7 +248,12 @@ describe("importing this site's own field group", () => {
     });
     expect(
       screen.getByText(
-        "1 page's values are never served, so they'll be skipped"
+        "1 page sets its own values in code, so they'll be skipped"
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Changelog sets its own title and description in its code now, so importing the values stored in SEO (old) would change what the page shows. Include them if the page showed them before and should again."
       )
     ).toBeTruthy();
 
@@ -432,6 +437,54 @@ describe("importing this site's own field group", () => {
     ).toBe("sr-only");
   });
 
+  it("gives a value the source doesn't hold a result of its own, not a blank cell", async () => {
+    vi.mocked(writePluginRoute).mockImplementation(async request => {
+      sent.push({
+        path: request.path,
+        body: (request.body ?? {}) as Record<string, unknown>,
+      });
+      return {
+        ...dryRun(false),
+        pages: 1,
+        versions: 2,
+        documents: [
+          entry({
+            id: "pricing",
+            label: "Pricing",
+            locale: "en",
+            language: "English",
+            set: ["title", "description"],
+            values: { title: "Plans", description: "Costs" },
+          }),
+          // The German version holds a title and no description.
+          entry({
+            id: "pricing",
+            label: "Preise",
+            locale: "de",
+            language: "Deutsch",
+            set: ["title"],
+            values: { title: "Preise" },
+          }),
+        ],
+      };
+    });
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+
+    const rows = within(table()).getAllByRole("row").slice(1);
+    const german = rows[1] as HTMLElement;
+    const description = within(german).getAllByRole("cell").at(-1);
+    expect(description?.textContent).toBe("Nothing to importnot in the source");
+    // Counted in none of the four cards: it is not a value.
+    expect(
+      within(rows[0] as HTMLElement).queryByText("Nothing to import")
+    ).toBeNull();
+  });
+
   it("shows no version column where each page has one version", async () => {
     render(<SeoImportPage />);
     fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
@@ -603,6 +656,17 @@ describe("importing a file another tool exported", () => {
       )
     ).toBeTruthy();
     expect(screen.queryByText(/change any that's wrong/)).toBeNull();
+    // A file's count is of the pages each value changes, which is fewer
+    // than the pages holding one where a value is the same as automatic,
+    // so the column says so rather than "Pages with a value".
+    expect(
+      within(table()).getByRole("columnheader", { name: "Pages it changes" })
+    ).toBeTruthy();
+    expect(
+      within(table()).queryByRole("columnheader", {
+        name: "Pages with a value",
+      })
+    ).toBeNull();
   });
 
   it("reads a WordPress export and says what it holds, with a way to another file", async () => {

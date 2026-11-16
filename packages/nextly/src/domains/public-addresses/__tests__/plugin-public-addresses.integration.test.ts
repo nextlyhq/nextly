@@ -53,14 +53,45 @@ function asPluginParticipant(record = memoryParticipant()) {
   const participant: PublicAddressParticipant = {
     holderOf: (address, asker, batch, { db }) => {
       dbs.push(db);
-      return record.runner.holderOf(address, asker, batch, undefined as never);
+      return record.runner.holderOf(
+        address,
+        asker,
+        batch,
+        undefined as never,
+        {}
+      );
     },
     record: (batch, { db }) => {
       dbs.push(db);
-      return record.runner.record(batch, undefined as never);
+      return record.runner.record(batch, undefined as never, {});
     },
   };
   return { record, participant, dbs };
+}
+
+/**
+ * {@link memoryParticipant} as a plugin hands it over, noting the `saveKey`
+ * of each call, which call it was, and the first holder its batch names.
+ */
+function keyedParticipant(record = memoryParticipant()) {
+  const keys: { kind: string; saveKey: object; holder?: string }[] = [];
+  const participant: PublicAddressParticipant = {
+    holderOf: (address, asker, batch, { saveKey }) => {
+      keys.push({ kind: "holderOf", saveKey, holder: asker.id });
+      return record.runner.holderOf(
+        address,
+        asker,
+        batch,
+        undefined as never,
+        saveKey
+      );
+    },
+    record: (batch, { saveKey }) => {
+      keys.push({ kind: "record", saveKey, holder: batch[0]?.holder.id });
+      return record.runner.record(batch, undefined as never, saveKey);
+    },
+  };
+  return { record, participant, keys };
 }
 
 async function boot(
@@ -153,6 +184,75 @@ describe.each(getConfiguredTestDialects())(
       expect(record.held()).toEqual({ "en|/blog/hello": `posts:${post}` });
       expect(dbs.length).toBeGreaterThan(0);
       expect(dbs.every(db => typeof db === "object" && db !== null)).toBe(true);
+    });
+
+    it("hands every call of one save the same saveKey, and the next save another", async () => {
+      const { participant, keys } = keyedParticipant();
+      // Two languages, so one save asks about two addresses.
+      const { t } = await boot(dialect, participant, "/blog/{slug}", true);
+
+      await publish(t, "first");
+      const first = keys.splice(0);
+      await publish(t, "second");
+      const second = keys.splice(0);
+
+      expect(first.map(call => call.kind)).toEqual([
+        "holderOf",
+        "holderOf",
+        "record",
+      ]);
+      expect(new Set(first.map(call => call.saveKey)).size).toBe(1);
+      expect(new Set(second.map(call => call.saveKey)).size).toBe(1);
+      expect(second[0]?.saveKey).not.toBe(first[0]?.saveKey);
+      expect(Object.isFrozen(first[0]?.saveKey)).toBe(true);
+      expect(Object.keys(first[0]?.saveKey ?? { x: 1 })).toEqual([]);
+    });
+
+    it("gives each move its own saveKey, on one transaction, through every round of refusals", async () => {
+      const { participant, keys } = keyedParticipant();
+      const { t, ctx } = await boot(dialect, participant);
+      await publish(t, "taken");
+      keys.splice(0);
+
+      await ctx.services.collections.withTransaction(async tx => {
+        // Refused in its first round: the second round and the record that
+        // follows are the same question.
+        await ctx.publicAddresses.move(
+          [
+            {
+              holder: { collection: "pages", id: "p1" },
+              holds: [{ locale: "en", path: "/blog/taken" }],
+            },
+            {
+              holder: { collection: "pages", id: "p2" },
+              holds: [{ locale: "en", path: "/free" }],
+            },
+          ],
+          tx
+        );
+        await ctx.publicAddresses.move(
+          [
+            {
+              holder: { collection: "pages", id: "p3" },
+              holds: [{ locale: "en", path: "/also-free" }],
+            },
+          ],
+          tx
+        );
+      });
+
+      const firstMove = keys.filter(call => call.holder !== "p3");
+      const secondMove = keys.filter(call => call.holder === "p3");
+      // Two updates asked, then the one left asked again, then recorded.
+      expect(firstMove.map(call => call.kind)).toEqual([
+        "holderOf",
+        "holderOf",
+        "holderOf",
+        "record",
+      ]);
+      expect(new Set(firstMove.map(call => call.saveKey)).size).toBe(1);
+      expect(new Set(secondMove.map(call => call.saveKey)).size).toBe(1);
+      expect(secondMove[0]?.saveKey).not.toBe(firstMove[0]?.saveKey);
     });
 
     it("move returns the refused updates and records the rest", async () => {

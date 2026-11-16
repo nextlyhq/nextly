@@ -62,9 +62,13 @@ export const AI_CHOICES: readonly {
   },
 ];
 
-/** What the AI choices are, said once under them. */
+/**
+ * What the AI choices are, said once under them, and the one crawler no
+ * choice names: OpenAI's ads checker visits only pages the site submitted
+ * as ads, so asking it away would only stop OpenAI checking them.
+ */
 export const AI_CHOICES_NOTE =
-  "These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to use your pages for AI training also limits what Gemini can use from them. Google Search itself is not affected.";
+  "These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to use your pages for AI training also limits what Gemini can use from them. Google Search itself is not affected. No choice asks OpenAI's ads checker, OAI-AdsBot, to stay away: it visits only pages you submitted as ads in ChatGPT.";
 
 /**
  * A group of choice cards, each a radio button with its explanation: a card
@@ -95,9 +99,11 @@ export function ChoiceCards<T extends string>({
   return (
     <div className={grid} role="radiogroup" aria-label={label}>
       {choices.map(choice => (
+        // The hover outline in the muted text token, un-faded, so it keeps
+        // the 3:1 a control's boundary needs against the card.
         <label
           key={choice.value}
-          className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-foreground/40 has-[:checked]:border-foreground has-[:checked]:ring-1 has-[:checked]:ring-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+          className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-muted-foreground has-[:checked]:border-foreground has-[:checked]:ring-1 has-[:checked]:ring-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
         >
           <input
             type="radio"

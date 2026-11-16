@@ -94,4 +94,24 @@ describe("reachesRelationStorage", () => {
     ).toBe(false);
     expect(liveTable).not.toHaveBeenCalled();
   });
+
+  it("answers true for a relationship pointed at another collection while its column holds a key", async () => {
+    expect(
+      await reachesRelationStorage({
+        before: [title, one],
+        after: [title, { ...one, relationTo: "editors" }],
+        liveTable: async () => table(["author"]),
+      })
+    ).toBe(true);
+  });
+
+  it("answers false for a relationship pointed elsewhere whose column holds no key", async () => {
+    expect(
+      await reachesRelationStorage({
+        before: [title, one],
+        after: [title, { ...one, relationTo: "editors" }],
+        liveTable: async () => table([]),
+      })
+    ).toBe(false);
+  });
 });

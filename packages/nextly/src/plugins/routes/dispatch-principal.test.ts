@@ -195,7 +195,7 @@ describe("a route that asks for a kind", () => {
     // session that never verified.
     const res = await runPluginRoute(
       call(`${await staffCookie()}; ${PERSON_COOKIE}`),
-      match({ principal: undefined })
+      match({ principal: undefined, siteWide: false })
     );
     expect(res.status).toBe(200);
     expect(seen?.currentUser).toEqual({ id: "u1", email: "u1@x.com" });
@@ -240,7 +240,7 @@ describe("a route that requires the kind", () => {
       message: "Authentication required",
       error: "Unauthorized",
     } as never);
-    return runPluginRoute(call(""), match({ principal: undefined }));
+    return runPluginRoute(call(""), match({ principal: undefined, siteWide: false }));
   }
 
   async function shape(res: Response) {

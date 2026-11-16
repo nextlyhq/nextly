@@ -84,12 +84,12 @@ import {
   type ImportTool,
 } from "./import-files";
 import {
+  cellResultOf,
   firstOfPage,
   neverServedWords,
   otherChanges,
   reportCsv,
   reportedPages,
-  resultOf,
   RESULT_WORDS,
   showsVersions,
   valueCounts,
@@ -672,7 +672,10 @@ function FileTable({ run }: { run: DryRunBody }): JSX.Element {
     },
     {
       name: "pages",
-      header: "Pages with a value",
+      // The engine counts the pages each value would change: a page whose
+      // value is the same as its automatic one holds a value and is not
+      // counted, so the column says what it counts.
+      header: "Pages it changes",
       cell: ({ row }) => row.pages.toLocaleString(),
     },
   ];
@@ -692,8 +695,8 @@ function FileTable({ run }: { run: DryRunBody }): JSX.Element {
 }
 
 /**
- * The values the import leaves out as never served, since each page's own
- * code sets them, with the choice to include them anyway.
+ * The values the import leaves out because each page's own code sets its
+ * own value now, with the choice to include them anyway.
  */
 function NeverServedNote({
   run,
@@ -740,7 +743,7 @@ function ValueCell({
   /** Whether the table has a Version column beside, so less room. */
   narrow: boolean;
 }): JSX.Element {
-  const result = resultOf(entry, place);
+  const result = cellResultOf(entry, place);
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
@@ -791,11 +794,13 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
     {
       label: "Skipped",
       value: counts.neverServed.values,
-      note: `on ${counted(counts.neverServed.pages, "page")}, never served`,
+      note: `on ${counted(counts.neverServed.pages, "page")} whose code sets its own`,
     },
   ];
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    // Two by two on a phone, so the four counts take half its first screen
+    // rather than all of it and the report's rows start in view.
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {cards.map(card => (
         <Card key={card.label} className="px-4 py-3">
           <Stat label={card.label} value={counted(card.value, "value")} />
@@ -990,7 +995,7 @@ function Imported({ run }: { run: DryRunBody }): JSX.Element {
       </h2>
       <p className="text-sm text-muted-foreground">
         {skipped.values > 0
-          ? `${counted(skipped.values, "value")} skipped (never served on ${skipped.labels.join(", ")}). `
+          ? `${counted(skipped.values, "value")} skipped (the code of ${skipped.labels.join(", ")} sets its own). `
           : ""}
         The old fields are untouched, so nothing is lost.
       </p>
@@ -1222,7 +1227,7 @@ function useDryRuns() {
 
 /**
  * Import's state and what it does: the source chosen, each group's
- * matching, the file read, whether never-served values are included, the
+ * matching, the file read, whether values a page's code overrides are included, the
  * latest dry run, and the import itself. The engine decides; this keeps
  * what it last said.
  */
@@ -1335,7 +1340,7 @@ function useImportFlow() {
 
 type ImportFlow = ReturnType<typeof useImportFlow>;
 
-/** The second step: where each field goes, and values never served. */
+/** The second step: where each field goes, and values a page's code overrides. */
 function MatchStep({ flow }: { flow: ImportFlow }): JSX.Element {
   let matching: ReactNode = null;
   if (flow.group?.own === true) {

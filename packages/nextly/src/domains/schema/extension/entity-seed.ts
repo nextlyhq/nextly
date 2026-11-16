@@ -19,9 +19,11 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
+  type DeclaredIndex,
 } from "../pipeline/diff/build-from-fields";
 import {
   getColumnDescriptor,
@@ -38,6 +40,8 @@ export interface SeedableEntity {
   fields: readonly { name: string; type: string }[];
   status?: boolean;
   localized?: boolean;
+  /** Compound indexes the config declares (a collection's `indexes`), by field. */
+  indexes?: readonly DeclaredIndex[];
 }
 
 type BuilderFields = Parameters<typeof buildDesiredTableFromFields>[1];
@@ -48,10 +52,32 @@ export function entitySeedColumns(
   entity: SeedableEntity,
   dialect: SupportedDialect
 ): SeedEntityTable["columns"] {
+  return entitySeed(entity, dialect).columns;
+}
+
+/**
+ * The seed of one entity table, for one dialect: its columns, and the
+ * indexes its own fields and config give it (a unique or indexed field, a
+ * declared compound index), by column, so an override that would leave one
+ * unbuildable is refused when declared. An expression index names no
+ * column, and none of its columns can be told apart, so it is left out.
+ */
+export function entitySeed(
+  entity: SeedableEntity,
+  dialect: SupportedDialect
+): {
+  columns: SeedEntityTable["columns"];
+  indexes: NonNullable<SeedEntityTable["ownIndexes"]>;
+} {
   // Code-first: the seed is built from the config, which is what these
   // entities come from, and the builder only decides column TYPES — the
   // names, which are what the draft checks, do not depend on it.
   const builtBy = "codeFirst" as const;
+  // Where the entity's translatable values live, as its desired and runtime
+  // tables decide it (`storesPerLanguage`): with every field kept per
+  // language, a translatable field's column is on the language table even
+  // for an entity not marked translatable, and the main table has none.
+  const localized = storesPerLanguage(entity);
   const fields = entity.fields as unknown as BuilderFields;
   const spec =
     entity.entityKind === "component"
@@ -61,13 +87,16 @@ export function entitySeedColumns(
           dialect,
           {
             builtBy,
-            localized: entity.localized === true,
+            localized,
           }
         )
       : buildDesiredTableFromFields(entity.tableName, fields, dialect, {
           builtBy,
           hasStatus: entity.status === true,
-          localized: entity.localized === true,
+          ...(entity.indexes !== undefined
+            ? { indexes: [...entity.indexes] }
+            : {}),
+          localized,
         });
 
   // Every kind a column of this table can have, by name: the fields', and
@@ -87,6 +116,10 @@ export function entitySeedColumns(
       typed.set(system.name, kindAndSizes(system));
     }
   }
+  // The columns the entity's own fields generate, as opposed to the ones its
+  // kind gives it: only these may have their storage overridden. A field of
+  // the same name as a system column (`title`, `slug`) is the field's.
+  const fieldColumns = new Set<string>();
   for (const field of entity.fields) {
     const descriptor = getColumnDescriptor(
       field as unknown as DescribedField,
@@ -95,11 +128,17 @@ export function entitySeedColumns(
     );
     if (descriptor === null) continue;
     typed.set(descriptor.name, kindAndSizes(descriptor));
+    fieldColumns.add(descriptor.name);
   }
-
-  return spec.columns.map(column => ({
-    name: column.name,
-    nullable: column.nullable,
-    ...(typed.get(column.name) ?? {}),
-  }));
+  return {
+    columns: spec.columns.map(column => ({
+      name: column.name,
+      nullable: column.nullable,
+      ...(typed.get(column.name) ?? {}),
+      ...(fieldColumns.has(column.name) ? { field: true } : {}),
+    })),
+    indexes: (spec.indexes ?? [])
+      .filter(index => index.columns.length > 0)
+      .map(index => ({ columns: [...index.columns], unique: index.unique })),
+  };
 }

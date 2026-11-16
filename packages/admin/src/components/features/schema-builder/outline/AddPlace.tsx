@@ -12,6 +12,7 @@
 import type { JSX } from "react";
 
 import type { VisibleRow } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
 
 /** A row to draw, or a place to add a field. */
 export type OutlineItem = { kind: "row"; row: VisibleRow } | AddPlaceItem;
@@ -36,6 +37,7 @@ function editableContainer(row: VisibleRow): boolean {
   return (
     node.own &&
     node.readOnly === null &&
+    !isPendingDelete(node) &&
     (node.container === "group" || node.container === "repeater")
   );
 }
@@ -62,7 +64,9 @@ function beforePlace(
   above: VisibleRow | undefined,
   parent: VisibleRow | undefined
 ): AddPlaceItem | null {
-  const editable = row.node.own && row.node.readOnly === null;
+  // Nor before a deleted row: the builder no longer holds it to add beside.
+  const editable =
+    row.node.own && row.node.readOnly === null && !isPendingDelete(row.node);
   const parentEditable = parent ? editableContainer(parent) : true;
   if (!above || above.node.readOnly !== null || !editable || !parentEditable) {
     return null;

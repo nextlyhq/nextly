@@ -46,6 +46,7 @@ import {
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
@@ -55,6 +56,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import {
   useStoredEntry,
   useWithStoredReferences,
@@ -66,6 +68,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -180,6 +183,31 @@ export default function EditEntryPage({
 }: EditEntryPageProps): React.ReactElement {
   const slug = params?.slug;
   const id = params?.id;
+  // What the parts plugins add to this page read as they open, started as
+  // the page first renders, beside its own reads rather than after them; the
+  // editor waits a moment for them, so their parts are drawn in place.
+  // The page's own place, and the form inside its editor.
+  const known = slug !== undefined && id !== undefined;
+  const partsStartup = usePlaceStartupReads([
+    {
+      place: "collection.edit",
+      ids: known ? { collection: slug, entryId: id } : null,
+    },
+    {
+      place: "entry.form",
+      ids: known ? { kind: "collection", slug, entryId: id } : null,
+    },
+  ]);
+
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  // Above every return, as a hook, so the loading outline is folded too.
+  useCollectionFoldedPanel(slug);
+
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  // Above every return, as a hook, so the loading outline is folded too.
+  useCollectionFoldedPanel(slug);
 
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
@@ -219,7 +247,7 @@ export default function EditEntryPage({
     // collection has the draft/published split enabled, so the editor shows and
     // saves onto the unpublished edits. Inert for non-drafts collections (the
     // server only overlays a draft it actually has).
-    draft: collection?.draftsEnabled === true,
+    draft: readsHeldDraft(collection),
     locale,
     // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
     // shows empty (not the default-language text, which a save would otherwise persist
@@ -239,7 +267,7 @@ export default function EditEntryPage({
   const storedEntry = useStoredEntry({
     collectionSlug: slug,
     entryId: id,
-    draft: collection?.draftsEnabled === true,
+    draft: readsHeldDraft(collection),
     locale,
     fallbackLocale: localizationEnabled ? "none" : undefined,
     // Held for the schema, as the populated read above is.
@@ -758,6 +786,8 @@ export default function EditEntryPage({
           )}
           {schedule.dialog}
           <EntryForm
+            revealOutline={<EditEntryPageSkeleton />}
+            revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
              editor's column directly under its header, read before the fields.
              Inside the editor rather than above it: the editor's row pulls up

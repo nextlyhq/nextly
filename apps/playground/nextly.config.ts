@@ -59,6 +59,7 @@ import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
+import { readingListsFixturePlugin } from "./src/plugins/reading-lists-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { startupReadFixturePlugin } from "./src/plugins/startup-read-fixture/plugin";
 import {
@@ -80,8 +81,9 @@ import { SiteSettings } from "./src/singles/site-settings";
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
 
 /**
- * First-party plugins this playground registers only when asked, by name, in
- * a comma-separated `NEXTLY_PLAYGROUND_PLUGINS` (`seo`). Off by default: each
+ * Plugins this playground registers only when asked, by name, in a
+ * comma-separated `NEXTLY_PLAYGROUND_PLUGINS` (`seo`, `reading-lists`). Off by
+ * default: each
  * one adds fields, routes or dashboard cards that a contributor's daily
  * `pnpm dev:app` and every other browser spec would otherwise meet.
  * `e2e/playwright.config.ts` names the ones the suite's own server runs with.
@@ -93,6 +95,13 @@ const playgroundPlugins = new Set(
     .filter(name => name !== "")
 );
 const seoPluginEnabled = playgroundPlugins.has("seo");
+/**
+ * The reading-lists fixture: a plugin with tables of its own, their migration
+ * modules and a hidden column on Posts, for trying the plugin schema surface
+ * and its install commands against this site (see its `plugin.ts`). Its
+ * integration test runs it on a scratch site of its own, not this one.
+ */
+const readingListsEnabled = playgroundPlugins.has("reading-lists");
 
 /**
  * The collection and the Single the SEO plugin extends here, registered with
@@ -413,6 +422,8 @@ export default defineConfig({
           }),
         ]
       : []),
+    // The reading-lists fixture, by the switch above.
+    ...(readingListsEnabled ? [readingListsFixturePlugin] : []),
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
     ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"

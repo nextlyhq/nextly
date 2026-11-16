@@ -72,17 +72,15 @@ async function historyFunctions() {
     compareDocumentVersions: access.compareDocumentVersions,
     getVersionDiffForDocument: methods.getVersionDiffForDocument,
     getVersionForDocument: methods.getVersionForDocument,
+    assertVersionPaging: methods.assertVersionPaging,
     listVersionsForDocument: methods.listVersionsForDocument,
+    pageOfVersions: methods.pageOfVersions,
     markVersionSeenForDocument: methods.markVersionSeenForDocument,
     normalizeLabel: methods.normalizeLabel,
     restoreVersionForDocument: methods.restoreVersionForDocument,
     setVersionLabelForDocument: methods.setVersionLabelForDocument,
   };
 }
-
-/** The page size REST uses, and its ceiling. */
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
 
 /** @experimental */
 export interface VersionsNamespace {
@@ -109,7 +107,11 @@ export interface VersionsNamespace {
       modifiedOnly?: boolean;
     }
   ): Promise<VersionDiff>;
-  /** Name a version, or clear its name with `null`. */
+  /**
+   * Name a version, or clear its name with `null`. Answers the version as
+   * `get` reads it: its snapshot whole on a trusted call, and on a checked
+   * call with every field the caller may not read withheld.
+   */
   name(
     args: VersionCall & { versionNo: number; label: string | null }
   ): Promise<MutationResult<VersionRow>>;
@@ -190,12 +192,15 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
    */
   async function checkedAs(
     args: VersionCall,
-    ref: VersionRef,
     action: "read" | "update"
   ): Promise<{ user: UserContext } | null> {
     const caller = checkedCaller(defaultConfig, args);
     if (!caller) return null;
-    await authorizeChecked(caller, { action, resource: ref.scopeSlug });
+    // Judged by the target's slug, before a Single's row is looked up: the
+    // answer is the same whether or not the Single has a row yet, as REST's
+    // route answers before its handler resolves one.
+    const resource = "single" in args ? args.single : args.collection;
+    await authorizeChecked(caller, { action, resource });
     const user = accessOptions(mergeConfig(defaultConfig, args)).user;
     return { user: user as UserContext };
   }
@@ -203,6 +208,37 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
   /** Run `operation` with the key scope the call is checked with. */
   function scoped<T>(args: VersionCall, operation: () => Promise<T>) {
     return runWithCallerScope(checkedScope(defaultConfig, args), operation);
+  }
+
+  /**
+   * A trusted call's name: written as the service writes one, recorded in
+   * the document's history against the call's actor where it names one, and
+   * answered as the version is stored.
+   */
+  async function trustedName(
+    ref: VersionRef,
+    args: VersionCall & { versionNo: number },
+    label: string | null
+  ): Promise<VersionRow> {
+    const actor = directApiActor(defaultConfig, args);
+    const person = accessOptions(mergeConfig(defaultConfig, args)).user;
+    const row = await getService("versionsService").setLabel(
+      ref,
+      args.versionNo,
+      label,
+      actor
+        ? {
+            actor,
+            // A person's name only for a person: a call made as an API key is
+            // the key's, never its owner's, so it keeps the key's identity alone.
+            personName:
+              actor.type === "user"
+                ? ((person as { name?: string } | undefined)?.name ?? null)
+                : null,
+          }
+        : undefined
+    );
+    return row;
   }
 
   /** The common arguments of the REST functions, for a checked caller. */
@@ -219,8 +255,8 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
   return {
     async list(args) {
       const h = await historyFunctions();
+      const checked = await checkedAs(args, "read");
       const ref = await refOf(args);
-      const checked = await checkedAs(args, ref, "read");
       if (checked) {
         return scoped(args, () =>
           h.listVersionsForDocument({
@@ -231,32 +267,21 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
           })
         );
       }
-      const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-      // One extra row proves another page exists, as REST pages.
-      const window = await getService("versionsService").list(ref, {
-        limit: limit + 1,
+      // Paged as REST pages, through the same step: its default, its
+      // ceiling, and its refusal of a page size or cursor that is not a
+      // positive integer.
+      h.assertVersionPaging(args);
+      return h.pageOfVersions(ref, {
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
         ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-        ...(args.locale ? { locale: args.locale } : {}),
+        languages: args.locale ? { locale: args.locale } : {},
       });
-      const hasNext = window.length > limit;
-      const items = hasNext ? window.slice(0, limit) : window;
-      return {
-        items,
-        meta: {
-          total: items.length,
-          page: 1,
-          limit,
-          totalPages: 1,
-          hasNext,
-          hasPrev: args.cursor !== undefined,
-        },
-      };
     },
 
     async get(args) {
       const h = await historyFunctions();
+      const checked = await checkedAs(args, "read");
       const ref = await refOf(args);
-      const checked = await checkedAs(args, ref, "read");
       if (checked) {
         return scoped(args, () =>
           h.getVersionForDocument({
@@ -279,8 +304,8 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
         modifiedOnly: args.modifiedOnly === true,
       };
       h.assertComparisonRequest(query);
+      const checked = await checkedAs(args, "read");
       const ref = await refOf(args);
-      const checked = await checkedAs(args, ref, "read");
       if (checked) {
         return scoped(args, () =>
           h.getVersionDiffForDocument({
@@ -300,22 +325,29 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
 
     async name(args) {
       const h = await historyFunctions();
+      const checked = await checkedAs(args, "update");
       const ref = await refOf(args);
-      const checked = await checkedAs(args, ref, "update");
-      const item = checked
-        ? await scoped(args, () =>
-            h.setVersionLabelForDocument({
+      const item: VersionRow = checked
+        ? await scoped(args, async () => {
+            // The version as the caller may read it, through the same read
+            // `get` makes, so a checked call's snapshot is redacted for it.
+            // Read first: a field rule that cannot run refuses the call
+            // before the name or its event is written.
+            const { withheld: _withheld, ...read } =
+              await h.getVersionForDocument({
+                ...restArgs(ref, checked.user, args),
+                versionNo: args.versionNo,
+              });
+            const meta = await h.setVersionLabelForDocument({
               ...restArgs(ref, checked.user, args),
               versionNo: args.versionNo,
               body: { label: args.label },
               params: {},
-            })
-          )
-        : await getService("versionsService").setLabel(
-            ref,
-            args.versionNo,
-            h.normalizeLabel(args.label, "label")
-          );
+            });
+            // The name as written, on the snapshot as read.
+            return { ...read, ...meta };
+          })
+        : await trustedName(ref, args, h.normalizeLabel(args.label, "label"));
       return {
         message: item.label ? "Version named." : "Version name cleared.",
         item,
@@ -324,11 +356,15 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
 
     async restore(args) {
       const h = await historyFunctions();
+      const checked = await checkedAs(args, "update");
       const ref = await refOf(args);
-      const checked = await checkedAs(args, ref, "update");
       const version = versionKeysOf(args);
       const fields = args.fields ? { fields: args.fields } : {};
       const actor = directApiActor(defaultConfig, args);
+      // The request and hook context behind the call, for the update's hooks,
+      // as an ordinary write hands them.
+      const request = accessOptions(mergeConfig(defaultConfig, args)).request;
+      const context = mergeConfig(defaultConfig, args).context;
       const item = checked
         ? await scoped(args, () =>
             h.restoreVersionForDocument({
@@ -338,6 +374,8 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
               version,
               ...fields,
               ...(actor ? { actor } : {}),
+              ...(request ? { request } : {}),
+              ...(context ? { context } : {}),
             })
           )
         : await restoreVersion({
@@ -347,13 +385,16 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
             versionNo: args.versionNo,
             version,
             ...fields,
+            // Who it was made for, never judged as them: a trusted call.
+            ...(actor ? { actor } : {}),
+            ...(request ? { request } : {}),
+            ...(context ? { context } : {}),
           });
       return { message: "Version restored.", item };
     },
 
     async markSeen(args) {
       const h = await historyFunctions();
-      const ref = await refOf(args);
       const user = accessOptions(mergeConfig(defaultConfig, args)).user;
       // A person's own marker: refused, as REST refuses it, when the call
       // names no one, whether or not it is checked.
@@ -363,7 +404,8 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
           logContext: { reason: "direct-api-mark-seen-no-user" },
         });
       }
-      const checked = await checkedAs(args, ref, "read");
+      const checked = await checkedAs(args, "read");
+      const ref = await refOf(args);
       const item = await scoped(args, () =>
         h.markVersionSeenForDocument({
           ...restArgs(ref, checked?.user ?? (user as UserContext), args),

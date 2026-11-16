@@ -41,6 +41,10 @@ import {
   type TransformableEntity,
   type TransformedEntities,
 } from "../entity-transforms";
+import {
+  configuredExtensionsOf,
+  publishConfiguredExtensions,
+} from "../extended-types";
 import type { PluginDefinition } from "../plugin-context";
 import {
   extendFieldDuplicateError,
@@ -322,15 +326,7 @@ function applyTransforms(
   // so a config with no transforms is not re-created on every fold.
   if (contributions.length === 0) return { entities, fieldsAdded: new Map() };
 
-  // The fields each plugin added to each type: a slug target's, from its
-  // declaration (a duplicate there refuses the boot), and a scope's, as the
-  // fold recorded each one it added, so a clause left alone gives nothing.
-  const extendedBy = extendersBySlug(plugins);
-  for (const [slug, added] of scopeAdded) {
-    const names = extendedBy.get(slug) ?? new Map<string, string>();
-    for (const [name, owner] of added) names.set(name, owner);
-    extendedBy.set(slug, names);
-  }
+  const extendedBy = addedBySlug(plugins, scopeAdded);
   const transformable =
     (kind: TransformableEntity["kind"]) =>
     (entity: unknown): TransformableEntity => {
@@ -364,6 +360,39 @@ function applyTransforms(
     },
     fieldsAdded: fieldsAddedFrom(transformed, fieldContributors),
   };
+}
+
+/**
+ * The fields each plugin added to each type, by slug and field name: a slug
+ * target's, from its declaration (a duplicate there refuses the boot), and a
+ * scope's, as the fold recorded each one it added, so a clause left alone
+ * gives nothing.
+ */
+function addedBySlug(
+  plugins: PluginDefinition[],
+  scopeAdded: ReadonlyMap<string, ReadonlyMap<string, string>>
+): Map<string, Map<string, string>> {
+  const extendedBy = extendersBySlug(plugins);
+  for (const [slug, added] of scopeAdded) {
+    const names = extendedBy.get(slug) ?? new Map<string, string>();
+    for (const [name, owner] of added) names.set(name, owner);
+    extendedBy.set(slug, names);
+  }
+  return extendedBy;
+}
+
+/**
+ * Publishes which configured types each plugin's `extend` added each field
+ * to (`typesExtendedBy`), from the fold's own record of what it applied.
+ */
+function publishExtended(
+  entities: Pick<NextlyServiceConfig, "collections" | "singles">,
+  plugins: PluginDefinition[],
+  scopeAdded: ReadonlyMap<string, ReadonlyMap<string, string>>
+): void {
+  publishConfiguredExtensions(
+    configuredExtensionsOf(entities, addedBySlug(plugins, scopeAdded))
+  );
 }
 
 /**
@@ -481,6 +510,20 @@ const BUILDER_SCOPE: ScopeContext = {
   defer: false,
 };
 
+/**
+ * Whether a plugin's type is marked as holding the site's content: only a
+ * collection can be, by `siteContent: true` in its configuration.
+ */
+function isSiteContent(
+  entity: SchemaEntityLike,
+  kind: ContentTypeCandidate["kind"]
+): boolean {
+  return (
+    kind === "collection" &&
+    (entity as { siteContent?: unknown }).siteContent === true
+  );
+}
+
 /** The candidates a scope judges, from the three arrays, in their order. */
 function scopeCandidates(
   collections: readonly SchemaEntityLike[],
@@ -501,6 +544,9 @@ function scopeCandidates(
           slug: entity.slug,
           kind,
           ...(plugin === undefined ? {} : { plugin }),
+          ...(plugin !== undefined && isSiteContent(entity, kind)
+            ? { siteContent: true }
+            : {}),
         };
       });
   return [
@@ -1164,6 +1210,7 @@ export function applyPluginSchemaContributions(
     scopeAdded
   ).entities;
   publishWithheld(config, transformed, plugins, owners);
+  publishExtended(transformed, plugins, scopeAdded);
   return { ...config, ...transformed };
 }
 
@@ -1206,6 +1253,7 @@ export function applyPluginSchemaContributionsDeferred(
     r.scopeAdded
   );
   publishWithheld(config, transformed.entities, plugins, owners);
+  publishExtended(transformed.entities, plugins, r.scopeAdded);
   return {
     config: { ...config, ...transformed.entities },
     // A scope is deferred whole, beside the slugs no configured entity had:

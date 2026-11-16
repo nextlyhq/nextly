@@ -246,6 +246,7 @@ function ConditionsContent({
     <ConditionsTab
       field={control.field}
       siblings={control.siblings}
+      ancestors={control.ancestors}
       conditions={conditions}
       readOnly={control.readOnly}
       onChange={control.onChange}

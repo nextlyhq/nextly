@@ -29,7 +29,7 @@ import { SEO_PLUGIN_NAME } from "../settings/contract";
 import { ControlNote } from "./settings-parts";
 
 /** A day and time, as the admin reads them. */
-export function whenOf(attempt: ConnectionAttempt): string {
+export function whenOf(attempt: Pick<ConnectionAttempt, "at">): string {
   const at = new Date(attempt.at);
   return Number.isNaN(at.getTime())
     ? attempt.at
@@ -39,6 +39,18 @@ export function whenOf(attempt: ConnectionAttempt): string {
         hour: "2-digit",
         minute: "2-digit",
       });
+}
+
+/** A count of clicks, one click named as one. */
+function clicksIn(count: number): string {
+  return count === 1 ? "click" : "clicks";
+}
+
+/** The checked pages, when none of them has another official address. */
+function noneOf(checked: number): string {
+  if (checked === 0) return "No visited pages to check yet.";
+  if (checked === 1) return "Not the most visited page.";
+  return `None of the ${checked} most visited pages.`;
 }
 
 /** A property's name, as a person knows the site: its host. */
@@ -114,12 +126,12 @@ function Report(): JSX.Element {
       </p>
     );
   }
-  const { clicks, queries, otherAddress, checked } = report.data;
+  const { clicks, queries, otherAddress, checked, readAt } = report.data;
   return (
     <div className="mt-3 grid gap-3 border-t border-border pt-3">
       <p className="text-sm text-foreground">
-        <b className="font-semibold">{clicks.toLocaleString()}</b> clicks from
-        Google in the last 28 days.
+        <b className="font-semibold">{clicks.toLocaleString()}</b>{" "}
+        {clicksIn(clicks)} from Google in the last 28 days.
       </p>
       {queries.length > 0 ? (
         <div>
@@ -129,7 +141,7 @@ function Report(): JSX.Element {
               <ReportLine
                 key={row.query}
                 what={row.query}
-                much={`${row.clicks.toLocaleString()} clicks`}
+                much={`${row.clicks.toLocaleString()} ${clicksIn(row.clicks)}`}
               />
             ))}
           </ul>
@@ -140,7 +152,7 @@ function Report(): JSX.Element {
           Where Google chose a different official address
         </ListHeading>
         {otherAddress.length === 0 ? (
-          <ControlNote>None of the {checked} most visited pages.</ControlNote>
+          <ControlNote>{noneOf(checked)}</ControlNote>
         ) : (
           <ul className="grid gap-1">
             {otherAddress.map(row => (
@@ -154,6 +166,10 @@ function Report(): JSX.Element {
           </ul>
         )}
       </div>
+      <ControlNote>
+        Last read from Search Console {whenOf({ at: readAt })}, and read again
+        once it is six hours old.
+      </ControlNote>
     </div>
   );
 }
