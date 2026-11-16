@@ -283,6 +283,7 @@ describe("a node referencing a class that was never written", () => {
       suggestion: "Remove the style from this block, or choose one this site has.",
     });
     // Neither the document's terms nor a page builder's screens, which a host without one lacks.
+    // Nor "add one with that name": a new style gets a new id, so that would not settle it.
     expect(`${missing?.message} ${missing?.suggestion}`).not.toMatch(
       /\b(node|library|reference|design)\b/i
     );

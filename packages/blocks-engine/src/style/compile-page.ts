@@ -2771,10 +2771,9 @@ export function compilePageCss(
         });
         continue;
       }
-      // A reference that reached nothing. Silently dropping it leaves an author with a class on
-      // the node, no class on the element, and nothing connecting the two — the same account
-      // every other unwritten value in this compile gets. Once per id, because a second report
-      // would name the same missing class and the same fix.
+      // A reference that reached nothing: reported, not dropped in silence, once per id, in words
+      // for the author. The advice suits a deleted shared style or a block style whose block is
+      // gone, and names no screen a host without a page builder lacks.
       // A set per stored node, because the pointer above names one reference and a reference is
       // per node. Deduped across the document, the first node to list a missing class takes the
       // only report, and an author who follows that pointer and repairs it hears nothing about
@@ -2795,11 +2794,6 @@ export function compilePageCss(
       reportedMissingClasses.set(path, reportedHere);
       if (reportedHere.has(id)) continue;
       reportedHere.add(id);
-      // Worded for the author, since a builder shows it beside the block: what is missing and
-      // what it costs the page. The advice holds whatever the id once named (a shared style
-      // since deleted, or a block style whose block is gone) and names no screen, as a host
-      // rendering without a page builder has none. A new style gets a new id, so recreating
-      // one by name would not settle it.
       pushBoundedWarning(warningAllowance, warnings, {
         path: entryPath,
         code: "unknown-class",
