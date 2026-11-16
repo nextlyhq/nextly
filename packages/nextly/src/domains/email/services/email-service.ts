@@ -504,7 +504,7 @@ function acceptedRow(
       : deliveryFailureOf(
           wasRefused
             ? refusalOf(facts.result, recipient.to)
-            : (facts.result.failure ?? notAcceptedFailure())
+            : notAcceptedFailure()
         ),
   };
 }
