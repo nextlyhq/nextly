@@ -366,3 +366,91 @@ describe("openPreview", () => {
     expect(mint).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("openPreview with a step before it", () => {
+  const MINTED = "https://site.example/api/preview?token=tok";
+
+  it("claims the tab, runs the step, then opens the preview in that tab", async () => {
+    // The step is a save: awaited before the claim, the tab would lose the
+    // click's gesture and the popup blocker would eat it.
+    const tab = fakeTab();
+    const order: string[] = [];
+    openSpy.mockImplementation(() => {
+      order.push("open");
+      return tab as unknown as Window;
+    });
+    mint.mockImplementation(() => {
+      order.push("mint");
+      return Promise.resolve({ token: "tok", url: MINTED, expiresAt: "x" });
+    });
+    const before = vi.fn(() => {
+      order.push("before");
+      return Promise.resolve(true);
+    });
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" } })
+    );
+    await act(async () => {
+      await result.current.openPreview(before);
+    });
+
+    expect(order).toEqual(["open", "before", "mint"]);
+    expect(tab.location.href).toBe(MINTED);
+  });
+
+  it("closes the claimed tab and asks for nothing when the step answers no", async () => {
+    // A failed save: the saved row is not what the author is looking at, so
+    // opening it would show a stale page as if it were theirs.
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+    const onUnavailable = vi.fn();
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" }, onUnavailable })
+    );
+    await act(async () => {
+      await result.current.openPreview(() => Promise.resolve(false));
+    });
+
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe("");
+    expect(mint).not.toHaveBeenCalled();
+    // The step said why it answered no; the preview adds nothing of its own.
+    expect(onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("runs no step when the popup is blocked", async () => {
+    // Nothing can open, so nothing is saved on the preview's account.
+    openSpy.mockReturnValue(null);
+    const before = vi.fn(() => Promise.resolve(true));
+    const onUnavailable = vi.fn();
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" }, onUnavailable })
+    );
+    await act(async () => {
+      await result.current.openPreview(before);
+    });
+
+    expect(before).not.toHaveBeenCalled();
+    expect(onUnavailable).toHaveBeenCalledWith("popupBlocked");
+  });
+
+  it("closes the claimed tab when the step throws", async () => {
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" } })
+    );
+    await act(async () => {
+      await result.current
+        .openPreview(() => Promise.reject(new Error("offline")))
+        .catch(() => undefined);
+    });
+
+    expect(tab.close).toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+  });
+});
