@@ -178,7 +178,8 @@ function slotNodes(node: BlockNode, name: string): BlockNode[] {
 }
 
 // Re-exported: this module PUBLISHES the names, which consumers outside the
-// package address elements by. `block-boundary-attributes` writes them.
+// package address elements by. The modules that draw the marks import them
+// from `editor-markers`.
 export {
   EDITOR_NAMESPACE,
   ENTRY_CONTENT_DRAWN_ATTRIBUTE,

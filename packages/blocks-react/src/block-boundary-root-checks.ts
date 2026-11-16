@@ -311,7 +311,7 @@ function brokenRootReason(shape: RootShape): string | null {
  * NOT "its styles never apply", which is the stronger claim and is false for
  * one real shape: a wrapper whose child takes the class renders it into the
  * DOM, and the compiled CSS then matches normally. What that block loses is the
- * node's ROOT FIELDS, which are attached here and have nowhere to go — so the
+ * node's ROOT FIELDS, which `withNodeAttributes` attaches and have nowhere to go — so the
  * warning is right and the diagnosis has to be the narrower one.
  *
  * The only signal today arrives through the placeholder above, which fires when
@@ -387,7 +387,7 @@ export function warnNoHostRoot(
     if (broken === null) return;
     /*
      * Says what is CERTAIN and nothing more. The class is handed to the block
-     * rather than attached here, so a wrapper root that forwards it to a child
+     * rather than attached by the boundary, so a wrapper root that forwards it to a child
      * — `({ className }) => <><div className={className} /></>` — does get its
      * compiled styles, on a page whose DOM carries the class. Telling that
      * author their styles do not apply sends them hunting a failure that is not

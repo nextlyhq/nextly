@@ -111,7 +111,7 @@ export function propMarker(
  * The editor's address for one node, read BEFORE any block code runs.
  *
  * A snapshot rather than the live node, and the reason is already argued in
- * this file for `rendersNothing`: the same mutable `node` object is handed to
+ * the block boundary for `rendersNothing`: the same mutable `node` object is handed to
  * `definition.render`, so anything read back afterwards is whatever the render
  * left behind. That argument was made about a block judging its own emptiness;
  * it applies with more force here, because these two values decide which node
@@ -142,7 +142,7 @@ export function editorIdentityOf(
     // key on a stored node, and this component is public — a consumer can hand
     // it a tree assembled in memory, where the property may be an accessor that
     // throws. On a published render nothing wants provenance, so reading it
-    // buys nothing and costs the containment this module exists for: the
+    // buys nothing and costs the containment the boundary exists for: the
     // boundary came down before it could draw a placeholder for the block.
     //
     // The snapshot still happens at the boundary's first line, so an editor
