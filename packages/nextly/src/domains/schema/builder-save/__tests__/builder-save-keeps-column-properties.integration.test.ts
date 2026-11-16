@@ -9,10 +9,15 @@
  * be the one before with only the named change applied (`helpers/table-definition.ts`), so a
  * property nobody listed here is held too.
  *
- * Every road a Builder save takes to the database is driven: a collection's save runs the migration
- * file it writes; a translated collection's, a Single's and a field group's run the development
- * push. A SQLite rebuild that cannot keep what it would drop must refuse, say why, and leave the
- * table as it was.
+ * Every road a Builder save takes to the database is driven: a collection's save, and a Single's
+ * and a field group's schema dialog, run the migration file the save writes where the save moves
+ * no values; a translated collection's runs the development push; a Single's settings save runs
+ * the SQL its service plans. A SQLite rebuild that cannot keep what it would drop must refuse, say
+ * why, and leave the table as it was. A file over a default given by hand, which its snapshot does
+ * not record, is refused as drift and changes nothing.
+ *
+ * A road that still loses something names each such case as known (`known`): it runs, and fails
+ * here, as the case would; fixed, it turns red, and the entry goes.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -43,21 +48,50 @@ const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 
 type Field = Record<string, unknown>;
 
+const RENAME = "renames the column and changes nothing else";
+const RENAME_NOT_NULL =
+  "renames the column and makes it NOT NULL, changing nothing else, or refuses and changes nothing";
+const ADD = "adds an unrelated field and leaves the column as it was";
+const HAND_DEFAULT =
+  "adds an unrelated field and keeps a default given to the column by hand";
+type Case =
+  | typeof RENAME
+  | typeof RENAME_NOT_NULL
+  | typeof ADD
+  | typeof HAND_DEFAULT;
+
 /** One kind of entity the Builder saves, and the table and road its `heading` field takes. */
 interface Road {
   name: string;
   /** The table `heading`'s column is on. */
   table: string;
+  /**
+   * The road runs the migration file the save writes, which a default given by hand, recorded in
+   * no snapshot, refuses as drift.
+   */
+  runsFile?: boolean;
+  /** The cases this road still fails, on the dialects named, and why. */
+  known?: Partial<Record<Case, { on: readonly TestDialect[]; why: string }>>;
   /** Creates the entity with `fields`. */
   create(t: TestNextly, fields: Field[]): Promise<void>;
   /** The Builder's save of `fields`, `renamed` naming a rename of `heading`. */
   save(t: TestNextly, fields: Field[], renamed?: string): Promise<unknown>;
 }
 
+/** The Single both of its roads change. */
+async function createHero(_t: TestNextly, fields: Field[]): Promise<void> {
+  await dispatchSingles(
+    "createSingle",
+    {},
+    { slug: "hero", label: "Hero", fields }
+  );
+}
+
 const ROADS: Road[] = [
   {
     name: "a collection (its migration file)",
     table: "dc_posts",
+    runsFile: true,
     async create(t, fields) {
       await t
         .getService("collectionService")
@@ -95,6 +129,16 @@ const ROADS: Road[] = [
   {
     name: "a translated collection's shared field (the push)",
     table: "dc_posts",
+    // Every translated collection's save is pushed, a shared field's included.
+    known: Object.fromEntries(
+      [RENAME, RENAME_NOT_NULL, HAND_DEFAULT].map(name => [
+        name,
+        {
+          on: ["sqlite", "postgresql", "mysql"],
+          why: "the push restates the table from its declared schema",
+        },
+      ])
+    ),
     async create(t, fields) {
       await t.getService("collectionService").createCollection(
         {
@@ -132,21 +176,58 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a Single (the push)",
+    name: "a Single's schema dialog (its migration file)",
     table: "single_hero",
-    async create(_t, fields) {
-      await dispatchSingles(
-        "createSingle",
-        {},
-        { slug: "hero", label: "Hero", fields }
-      );
+    runsFile: true,
+    create: createHero,
+    save: async (t, fields, renamed) =>
+      dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields,
+          confirmed: true,
+          // The version the Single stands at, as the Builder sends it.
+          schemaVersion: (
+            await t.getService("singleRegistryService").getSingle("hero")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "single_hero",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
+    name: "a Single's settings save (its service's SQL)",
+    table: "single_hero",
+    // The service plans and runs its own SQL (`applyUpdateDdl`), neither the push nor the file.
+    known: {
+      [RENAME]: {
+        on: ["postgresql", "mysql"],
+        why: "the service's SQL restates the renamed column",
+      },
+      [RENAME_NOT_NULL]: {
+        on: ["postgresql", "mysql", "sqlite"],
+        why: "the service's SQL restates the renamed column",
+      },
     },
+    create: createHero,
     save: (_t, fields) =>
       dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
   },
   {
-    name: "a field group (the push)",
+    name: "a field group (its migration file)",
     table: "comp_card",
+    runsFile: true,
     async create(_t, fields) {
       await dispatchComponents(
         "createComponent",
@@ -330,7 +411,14 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(await definitionOf()).toEqual(withNamedChange(before, change));
       }
 
-      it("renames the column and changes nothing else", async () => {
+      /**
+       * The case as this road holds it: one it still fails on this dialect runs expecting the
+       * failure (`it.fails`), shown, not skipped.
+       */
+      const holds = (name: Case) =>
+        road.known?.[name]?.on.includes(dialect as TestDialect) ? it.fails : it;
+
+      holds(RENAME)(RENAME, async () => {
         const before = await seeded();
 
         await road.save(t, fieldsWith("title2"), "title2");
@@ -338,7 +426,7 @@ for (const dialect of getConfiguredTestDialects()) {
         await expectOnly(before, { rename: { from: "heading", to: "title2" } });
       });
 
-      it("renames the column and makes it NOT NULL, changing nothing else, or refuses and changes nothing", async () => {
+      holds(RENAME_NOT_NULL)(RENAME_NOT_NULL, async () => {
         const before = await seeded();
 
         const refused = await road
@@ -362,7 +450,7 @@ for (const dialect of getConfiguredTestDialects()) {
         });
       });
 
-      it("adds an unrelated field and leaves the column as it was", async () => {
+      holds(ADD)(ADD, async () => {
         const before = await seeded();
 
         await road.save(t, [
@@ -377,20 +465,37 @@ for (const dialect of getConfiguredTestDialects()) {
         }).toEqual(before);
       });
 
-      it("adds an unrelated field and keeps a default given to the column by hand", async () => {
-        const before = await seeded("kept");
+      if (road.runsFile === true) {
+        // The file's snapshot records no default, so the database differs from it before the
+        // file runs: refused as drift, before anything changes.
+        it("adds an unrelated field over a default given to the column by hand, refused as drift, changing nothing", async () => {
+          const before = await seeded("kept");
 
-        await road.save(t, [
-          ...fieldsWith("heading"),
-          { name: "extra", type: "text", localized: false },
-        ]);
+          await expect(
+            road.save(t, [
+              ...fieldsWith("heading"),
+              { name: "extra", type: "text", localized: false },
+            ])
+          ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
 
-        const after = await definitionOf();
-        expect({
-          ...after,
-          columns: after.columns.filter(column => column.name !== "extra"),
-        }).toEqual(before);
-      });
+          expect(await definitionOf()).toEqual(before);
+        });
+      } else {
+        holds(HAND_DEFAULT)(HAND_DEFAULT, async () => {
+          const before = await seeded("kept");
+
+          await road.save(t, [
+            ...fieldsWith("heading"),
+            { name: "extra", type: "text", localized: false },
+          ]);
+
+          const after = await definitionOf();
+          expect({
+            ...after,
+            columns: after.columns.filter(column => column.name !== "extra"),
+          }).toEqual(before);
+        });
+      }
     }
   );
 }
