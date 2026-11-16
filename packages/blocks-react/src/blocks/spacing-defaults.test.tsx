@@ -8,16 +8,24 @@
  * it as intended (the h2 sits flush, the second child gets the gap, an author's
  * margin wins) is asserted on a served page in `e2e/tests/blocks-page.spec.ts`.
  */
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  BlockNode,
+  StyleCompileContext,
+} from "@nextlyhq/blocks-engine";
 import {
   CHILD_GAP_CLASS,
   nodeClassName,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "@nextlyhq/blocks-engine";
+import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { BlockResolver } from "../resolver";
+import type { PageContext } from "../context";
+import { PageRenderer } from "../page-renderer";
+import { createBlockResolver, type BlockResolver } from "../resolver";
+import { sharedStyleInputsId } from "../shared-style-inputs";
 import { resolvePageStyles, type PageStyles } from "../styles";
 
 import { accordion } from "./accordion";
@@ -308,5 +316,210 @@ describe("a sheet stored by the compiler before this spacing", () => {
     );
     expect(served.css).not.toContain("1.5em");
     expect(served.sharedInputsId?.startsWith("v5:")).toBe(true);
+  });
+});
+
+/**
+ * One set of defaults, whatever a site's stored style still says.
+ *
+ * A site's stored style may still carry a `spacingMode` key from before there
+ * was one way to space blocks, and it reaches the renderer with the rest of
+ * the style. Nothing reads it any more, so it must change nothing a visitor
+ * is served. Spread in as a plain value, the way an untyped stored document
+ * arrives, rather than as a typed field.
+ */
+describe("a site whose stored style still names a spacing model", () => {
+  const LEFTOVER = { spacingMode: "classic" } as const;
+  const BREAKPOINTS = {
+    viewport: [{ id: "base", label: "Desktop" }],
+    container: [],
+  };
+
+  const node = (
+    id: string,
+    type: string,
+    props: Record<string, unknown> = {},
+    children?: readonly BlockNode[],
+    extra: object = {}
+  ): BlockNode =>
+    ({
+      id,
+      type,
+      version: 1,
+      props,
+      ...(children === undefined ? {} : { slots: { children } }),
+      ...extra,
+    }) as BlockNode;
+
+  const text = (value: string) => ({ type: "text", text: value });
+
+  /** Every block whose spacing once differed, nested as a site builds them. */
+  const PAGE: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      node("band", "core/section", {}, [
+        node("title", "core/heading", { text: "Title", level: "h1" }),
+        node("sub", "core/heading", { text: "Sub", level: "h2" }),
+        node("lead", "core/text", { text: "Lead" }),
+        node("body", "core/rich-text", {
+          content: {
+            root: {
+              type: "root",
+              children: [
+                { type: "heading", tag: "h3", children: [text("Inside")] },
+                { type: "paragraph", children: [text("One")] },
+                { type: "image", src: "/a.png", altText: "A" },
+              ],
+            },
+          },
+        }),
+        node("said", "core/quote", { text: "Said" }),
+        node("rule", "core/divider"),
+        node("go", "core/button", { text: "Go" }),
+        node("tile", "core/card", {}, [node("in-card", "core/text")]),
+        node("row", "core/columns", {}, [
+          node("left", "core/column", {}, [node("l-text", "core/text")]),
+        ]),
+        node("pics", "core/gallery"),
+        node("faq", "core/accordion", {}, [
+          node("q1", "core/accordion-item", { title: "Q" }, [
+            node("a1", "core/text"),
+          ]),
+        ]),
+        // Two buttons in a box laid out as a row: the gap must reach a flex
+        // row as it reaches a stack.
+        node(
+          "pair",
+          "core/box",
+          {},
+          [
+            node("yes", "core/button", { text: "Yes" }),
+            node("no", "core/button", { text: "No" }),
+          ],
+          { styles: { base: { base: { display: "flex" } } } }
+        ),
+        node("loop", "core/collection-loop", { collection: "posts" }, [
+          node("entry-text", "core/text"),
+        ]),
+      ]),
+    ],
+  };
+
+  // Two entries, so the loop draws an entry wrapper for each.
+  const CONTEXT = {
+    entry: null,
+    data: {
+      find: () =>
+        Promise.resolve({ items: [{ id: "e1" }, { id: "e2" }], total: 2 }),
+    },
+    resolveMedia: () => Promise.resolve(null),
+    resolveEntryPath: () => Promise.resolve(null),
+  } as unknown as PageContext;
+
+  /** The page as a visitor is served it, with `stored` as the site's style. */
+  async function served(stored: object): Promise<string> {
+    const stream = await renderToReadableStream(
+      <PageRenderer
+        document={PAGE}
+        blocks={createBlockResolver(coreBlocks)}
+        context={CONTEXT}
+        styleContext={{ breakpoints: BREAKPOINTS }}
+        siteStyles={{ breakpoints: BREAKPOINTS, ...stored }}
+      />
+    );
+    await stream.allReady;
+    return new Response(stream).text();
+  }
+
+  /** A block type's own rule in the served sheet. */
+  const typeRule = (html: string, type: string): string =>
+    new RegExp(`:where\\(\\.nx-bt-${type}\\) \\{[^}]*\\}`).exec(html)?.[0] ??
+    "";
+
+  it("serves exactly the page the same site serves without the key", async () => {
+    expect(await served(LEFTOVER)).toBe(await served({}));
+  });
+
+  it.each(["h1", "h2", "h3", "h4", "h5", "h6", "p"])(
+    "gives %s no outer margin",
+    async element => {
+      expect(await served(LEFTOVER)).toMatch(
+        new RegExp(
+          `:where\\(${element}\\) \\{[^}]*margin-block-end: 0; margin-block-start: 0 \\}`
+        )
+      );
+    }
+  );
+
+  it.each([
+    "section",
+    "card",
+    "column",
+    "accordion-item",
+    "rich-text",
+    "box",
+    "collection-loop",
+  ])("writes the gap of a %s and marks it for the gap", async type => {
+    const html = await served(LEFTOVER);
+    expect(html).toContain(
+      `:where(.nx-bt-core--${type}.${CHILD_GAP_CLASS} > * + *) { margin-block-start: var(`
+    );
+    expect(html).toMatch(
+      new RegExp(`class="[^"]*${CHILD_GAP_CLASS} nx-bt-core--${type}"`)
+    );
+  });
+
+  it("marks each collection loop entry for the gap", async () => {
+    const html = await served(LEFTOVER);
+    const entries = html.match(
+      new RegExp(`class="nx-bt-core--collection-loop ${CHILD_GAP_CLASS}"`, "g")
+    );
+    expect(entries).toHaveLength(2);
+  });
+
+  it.each([
+    ["columns", "var(--site-space-columns)"],
+    ["gallery", "var(--site-space-columns)"],
+    ["accordion", "var(--site-space-stack)"],
+  ])("spaces a %s grid by its own token", async (type, gap) => {
+    expect(typeRule(await served(LEFTOVER), `core--${type}`)).toContain(
+      `gap: ${gap}`
+    );
+  });
+
+  it("gives a quote and a divider no outer margin", async () => {
+    const html = await served(LEFTOVER);
+    for (const type of ["quote", "divider"]) {
+      expect(typeRule(html, `core--${type}`)).toContain(
+        "margin-block-end: 0; margin-block-start: 0"
+      );
+    }
+  });
+
+  it("pads a card and a button by their tokens", async () => {
+    const html = await served(LEFTOVER);
+    expect(typeRule(html, "core--card")).toContain(
+      "padding-block-start: var(--site-space-card)"
+    );
+    expect(typeRule(html, "core--button")).toContain(
+      "padding-block-start: var(--site-button-padding-y)"
+    );
+  });
+
+  it("gives an image in rich text only the inline margin reset", async () => {
+    expect(await served(LEFTOVER)).toContain(
+      '<figure class="nextly-rich-text-image" style="margin-inline:0">'
+    );
+  });
+
+  it("keeps a stored sheet's stamp, so the key alone recompiles nothing", () => {
+    const context: StyleCompileContext = {
+      breakpoints: BREAKPOINTS,
+      elementBases: {},
+    };
+    expect(sharedStyleInputsId({ ...context, ...LEFTOVER })).toBe(
+      sharedStyleInputsId(context)
+    );
   });
 });
