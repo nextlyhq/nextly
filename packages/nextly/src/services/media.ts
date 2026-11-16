@@ -51,6 +51,7 @@ import type {
 } from "../domains/media/media-library-query";
 import type { DeleteClaim } from "../domains/media/pending-delete";
 import {
+  filesToRemoveOf,
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
@@ -63,10 +64,7 @@ import {
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
-import {
-  storedFilesOf,
-  type MediaFilesRecord,
-} from "../domains/media/stored-files";
+import type { MediaFilesRecord } from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -1122,7 +1120,7 @@ export class MediaService extends BaseService {
     const reading = storageReadingOf(this.storage);
     const kept = await filesKeptByOthers(
       this.storedFileSearch,
-      storedFilesOf(record, reading.locator).paths,
+      filesToRemoveOf(record, reading),
       [mediaId],
       reading
     );

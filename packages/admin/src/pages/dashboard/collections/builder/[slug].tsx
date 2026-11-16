@@ -509,6 +509,9 @@ export default function CollectionBuilderEditPage({
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
+      // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
+      // on, since its columns stand until the save that turns it off lands.
+      lifecycleEnabled={collection.status === true || drafts}
       onSettingsChange={onSettingsChange}
       unsavedAddress={unsavedAddress}
       storedHooks={collection.hooks}
