@@ -18,6 +18,8 @@ import { z } from "zod";
 
 import {
   fieldNameProblem,
+  type FieldNamePlace,
+  type FieldNameProblem,
   type FieldNameSurface,
   isCollectionOnlyFieldName,
 } from "../domains/dynamic-collections/field-name-rule";
@@ -211,6 +213,29 @@ function fieldNames(list: unknown): readonly FieldName[] {
 }
 
 /**
+ * What a kept name breaks only because the save gives it a column it did not have: a field
+ * stored as a field-group reference, a many-to-many relationship or a virtual field, saved as
+ * one that becomes a column. The name was never asked about a column, so the rules that a column
+ * brings (its length, a lifecycle column it would reach) are asked now. A problem the name has
+ * with or without a column is the stored name's, which keeps working where it is stored.
+ */
+function problemTheColumnBrings(
+  name: string,
+  field: FieldName,
+  kept: FieldName,
+  place: Omit<FieldNamePlace, "producesColumn" | "spelling">
+): FieldNameProblem | null {
+  if (!fieldProducesColumn(field) || fieldProducesColumn(kept)) return null;
+  // The declared spelling, so a camelCase name a plugin declared reaches the column's rules.
+  const asked = { ...place, spelling: "declared" as const };
+  const withColumn = fieldNameProblem(name, { ...asked, producesColumn: true });
+  const without = fieldNameProblem(name, { ...asked, producesColumn: false });
+  return withColumn !== null && withColumn.kind !== without?.kind
+    ? withColumn
+    : null;
+}
+
+/**
  * Refuses a field, at any depth, whose name is new at its place (not one
  * `stored` already holds there) and breaks the Builder's name rule for that
  * place (`fieldNameProblem`): its spelling, a column longer than the database
@@ -221,7 +246,8 @@ function fieldNames(list: unknown): readonly FieldName[] {
  * `status` field may predate the lifecycle being turned on; the admin sends
  * every field the entity has on each save, so refusing those would refuse
  * every later edit. A name the save creates, renames to, or moves to another
- * place is the Builder's, and is held to the whole rule.
+ * place is the Builder's, and is held to the whole rule. A kept name the save
+ * gives a column it did not have is asked the rules that column brings.
  */
 export function assertBuilderFieldNames(
   fields: unknown,
@@ -237,16 +263,21 @@ export function assertBuilderFieldNames(
     const at = `${path}${index}`;
     const kept =
       typeof field.name === "string" ? held.get(field.name) : undefined;
+    const place = {
+      surface: entity.surface,
+      nested: path !== "",
+      lifecycleEnabled: entity.lifecycleEnabled,
+    };
     const problem =
-      typeof field.name === "string" && kept === undefined
-        ? fieldNameProblem(field.name, {
-            surface: entity.surface,
-            nested: path !== "",
-            lifecycleEnabled: entity.lifecycleEnabled,
-            // Asked of the field by the one predicate that says whether it has a column.
-            producesColumn: fieldProducesColumn(field),
-          })
-        : null;
+      typeof field.name !== "string"
+        ? null
+        : kept === undefined
+          ? fieldNameProblem(field.name, {
+              ...place,
+              // Asked of the field by the one predicate that says whether it has a column.
+              producesColumn: fieldProducesColumn(field),
+            })
+          : problemTheColumnBrings(field.name, field, kept, place);
     if (problem !== null) {
       throw NextlyError.validation({
         errors: [

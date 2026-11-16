@@ -20,7 +20,7 @@ import {
   systemColumnNames,
 } from "../../lib/system-columns";
 import { BUILDER_FIELD_NAME_RE } from "../../schemas/_zod/ui-schema";
-import { toSnakeCase } from "../../shared/lib/case-conversion";
+import { toSnakeCase } from "../schema/field-rules";
 
 /** The kinds of entity whose fields the Schema Builder edits. */
 export type FieldNameSurface = "collection" | "single" | "fieldGroup";

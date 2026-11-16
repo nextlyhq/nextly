@@ -344,6 +344,53 @@ describeEachDialect(
       });
     }
 
+    // A virtual field has no column, so a name too long for one is stored. Saved again as a field
+    // that becomes a column, under the same name, the name is asked about the column it now
+    // reaches; kept as it is, the stored name keeps working.
+    const TOO_LONG = `${LONGEST}_x`;
+
+    it("refuses a stored field given a column its name is too long for, and writes nothing", async () => {
+      await posts(false, [
+        ...BODY,
+        { name: TOO_LONG, type: "text", virtual: true },
+      ]);
+      const columnsBefore = await columnsOf("dc_posts");
+
+      const answer = await applyToPosts([
+        ...BODY,
+        { name: TOO_LONG, type: "text" },
+      ]);
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "INVALID_FIELD_NAME",
+          path: "1.name",
+          message: expect.stringContaining("longer than 63 characters"),
+        }),
+      ]);
+      expect(await columnsOf("dc_posts")).toEqual(columnsBefore);
+    });
+
+    it("keeps a stored field whose name is too long for a column while it has none", async () => {
+      await posts(false, [
+        ...BODY,
+        { name: TOO_LONG, type: "text", virtual: true },
+      ]);
+
+      expect(
+        await applyToPosts([
+          ...BODY,
+          { name: TOO_LONG, type: "text", virtual: true },
+          { name: "teaser", type: "text" },
+        ])
+      ).toBe("accepted");
+      expect((await registered("dynamic_collections", "posts")).names).toEqual([
+        "body",
+        TOO_LONG,
+        "teaser",
+      ]);
+    });
+
     // The control: a name exactly as long as every database keeps saves, and its value is kept.
     it("saves a field whose column is as long as the database keeps, with its value", async () => {
       await posts(false);
