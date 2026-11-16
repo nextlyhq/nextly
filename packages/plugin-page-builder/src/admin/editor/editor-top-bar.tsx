@@ -8,10 +8,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
 import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
-import {
-  DocumentPrimaryAction,
-  DocumentSaveIndicator,
-} from "@nextlyhq/plugin-sdk/admin";
+import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
@@ -153,24 +150,17 @@ export function editorTopBar(
     ),
     topBarEnd: (
       <>
-        {/* Whether the work is stored, beside the verbs that store it: the
-          header's own chip, which reads the field's held work too. Its text
-          sits against Preview, so the width it reserves for its longest
-          state opens towards the panel buttons rather than between it and
-          what it describes. Reserved only where the bar has the room: below
-          1400px it takes what it shows, as the device labels give way there,
-          so the end column never runs into the zoom. Set in the bar's own
-          text size, as Preview beside it is. */}
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
         <PreviewButton />
-        {/* Last, at the bar's far end where the header kept them: the
-          document's leading action with its other ways to publish on its
-          arrow, which the builder's taking the window would otherwise leave
-          reachable only from the keyboard. */}
-        <DocumentPrimaryAction />
+        {/* Last, at the bar's far end where the header kept them: Save and
+          Publish, which say themselves whether the work is saved and
+          whether the live page is behind, so nothing else in the bar says
+          it again. Publish's arrow keeps the other ways to publish, which
+          the builder's taking the window would otherwise leave reachable
+          only from the keyboard. */}
+        <DocumentSaveAndPublish />
       </>
     ),
   };
