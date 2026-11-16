@@ -386,7 +386,6 @@ function editorTopBar(
   topBarEnd: React.JSX.Element;
 } {
   const {
-    documentDirty,
     canvasRender,
     siteStylePending,
     siteStyleError,
@@ -417,7 +416,7 @@ function editorTopBar(
         {page.location === undefined ? null : (
           <FieldLocation location={page.location} />
         )}
-        <DocumentStatusPill isDirty={documentDirty} />
+        <DocumentStatusPill />
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
         <BindingsToFixChip

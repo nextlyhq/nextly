@@ -170,6 +170,20 @@ export function namingSiblingsOf(
   return { level, siblings: namedFieldsIn(siblingsIn(fields, level)) };
 }
 
+/**
+ * The naming level a field added to `containerId` is named on (null for the top level, as for no
+ * container or one no longer there), and the named fields already on it. A layout container is part
+ * of the level holding it, so a field added inside one is named beside the fields around it.
+ */
+export function namingLevelFor(
+  fields: readonly BuilderField[],
+  containerId: string | undefined
+): { level: BuilderField | null; siblings: BuilderField[] } {
+  const chain = containerId ? chainTo(fields, containerId) : null;
+  const level = chain ? namingLevel(chain) : null;
+  return { level, siblings: namedFieldsIn(siblingsIn(fields, level)) };
+}
+
 /** The fields one container holds: the top level for none. */
 function siblingsIn(
   fields: readonly BuilderField[],
