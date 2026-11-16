@@ -60,6 +60,23 @@ describe("a sheet that is not modal", () => {
     fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(button("Further down the page"));
   });
+
+  it("sends Tab from the sheet itself to its first control, not out of it", () => {
+    // The sheet holds focus as it opens. With controls inside, it is no edge: Tab goes in.
+    renderBesidePage(false);
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab" });
+    expect(document.activeElement).toBe(button("First in the sheet"));
+  });
+
+  it("sends Shift+Tab from the sheet itself to its last control, not out of it", () => {
+    renderBesidePage(false);
+    const sheet = screen.getByRole("dialog");
+    sheet.focus();
+    fireEvent.keyDown(sheet, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(button("Last in the sheet"));
+  });
 });
 
 describe("a sheet that is not modal and holds nothing to focus", () => {
