@@ -181,7 +181,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         locale: "en",
         data: { title: "Hi", code: "c1" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
 
       expect((await save(id, "en", { title: "Hello" })).success).toBe(true);
@@ -226,7 +226,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       await save(id, "en", { title: "Hello" });
       await save(id, "es", { title: "Hola" });
@@ -277,7 +277,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       expect((await rowsOf(id)).en).toEqual([
         expect.objectContaining({
@@ -300,7 +300,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "notes",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       const notes = { kind: "collection", slug: "notes" };
       await save(id, "en", { status: "published" }, undefined, "notes");
@@ -370,7 +370,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "notes",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       const notes = { kind: "collection", slug: "notes" };
       await save(id, "en", { status: "published" }, undefined, "notes");
@@ -409,7 +409,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       const service = container.get<CollectionService>("collectionService");
       await service.withTransaction(tx =>
@@ -481,7 +481,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       await save(id, "es", { title: "Hola" });
       const read = (await t!.nextly.findByID({
@@ -519,7 +519,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "notes",
         locale: "en",
         data: { title: "Hi", summary: "Short" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       const notes = { kind: "collection", slug: "notes" };
       await save(id, "en", { status: "published" }, undefined, "notes");
@@ -562,7 +562,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "events",
         locale: "en",
         data: { startsOn: "2026-01-01T00:00:00.000Z", meta: { a: 1, b: 2 } },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       const events = { kind: "collection", slug: "events" };
       const fingerprintOf = async (field: string) =>
@@ -598,7 +598,7 @@ describe.each(getConfiguredTestDialects())(
         collection: "posts",
         locale: "en",
         data: { title: "Hi" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       expect(
         (
@@ -633,7 +633,7 @@ describe.each(getConfiguredTestDialects())(
             { id: "r2", label: "About" },
           ],
         },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       const id = created.item.id;
       const menus = { kind: "collection", slug: "menus" };
       const rowOrigins = async (locale: string) =>

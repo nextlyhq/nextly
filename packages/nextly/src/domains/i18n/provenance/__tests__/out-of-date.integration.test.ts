@@ -84,7 +84,7 @@ async function translatedPost(): Promise<string> {
     collection: "posts",
     locale: "en",
     data: { title: "Hi", summary: "Short" },
-  })) as { item: { id: string } };
+  })) as unknown as { item: { id: string } };
   const id = created.item.id;
   await save(id, "es", { title: "Hola", summary: "Corto" });
   return id;

@@ -33,14 +33,15 @@ const columnNames = (table: Table): string[] =>
 
 /** Each declared index, as its name, whether it is unique, and its columns in order. */
 const indexShapes = (
+  // Each dialect's index config, which differ in their column and flag types.
   declared: readonly {
-    config: { name: string; unique: boolean; columns: unknown[] };
+    config: { name?: string; unique?: boolean; columns: readonly unknown[] };
   }[]
 ) =>
   declared
     .map(({ config }) => ({
-      name: config.name,
-      unique: config.unique,
+      name: config.name ?? "",
+      unique: config.unique === true,
       columns: config.columns.map(column =>
         typeof column === "object" && column !== null && "name" in column
           ? (column as { name: string }).name

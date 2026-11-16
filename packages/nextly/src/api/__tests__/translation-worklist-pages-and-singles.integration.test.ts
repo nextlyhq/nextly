@@ -98,7 +98,7 @@ describe("the translation worklist, page by page", () => {
         collection: "pages",
         locale: "en",
         data: { title, team: "public" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       ids.push(created.item.id);
     }
     await t.nextly.create({
@@ -162,7 +162,7 @@ describe("the translation worklist, page by page", () => {
         collection: "pages",
         locale: "en",
         data: { title, team: "public" },
-      })) as { item: { id: string } };
+      })) as unknown as { item: { id: string } };
       ids.push(created.item.id);
       await handler.updateEntry(
         {
