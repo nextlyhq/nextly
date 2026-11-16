@@ -1,0 +1,643 @@
+/*
+ * A collection list's query, as one group in the Content tab: Source, then a
+ * titled group each for Filters, Sort, How many and When nothing matches,
+ * titled as the Advanced summary is, a rule above each.
+ */
+.nx-list-query {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.nx-list-query__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+.nx-list-query__title {
+  margin: 0;
+  font-size: var(--nx-builder-font-size);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-list-query__hint {
+  margin-top: -0.25rem;
+}
+
+/* Under a field's control rather than under its label. */
+.nx-list-query__indented {
+  padding-inline-start: calc(6.5rem + 0.5rem);
+}
+
+/* Show when: a block's visibility conditions, built from the list's filters.
+   Its head shares the variants header's row, in variants.css. Whose fields the
+   conditions read: "This post", "Each post in the list". */
+.nx-show-when__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* Said once, above the rows, while the page leaves the block out. */
+.nx-show-when__notice {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-destructive);
+  border-radius: var(--radius-md);
+  background: color-mix(
+    in srgb,
+    var(--nx-destructive) 8%,
+    var(--nx-background)
+  );
+  color: var(--nx-destructive);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.45;
+}
+
+.nx-show-when__notice > svg {
+  flex: none;
+  margin-top: 0.125rem;
+}
+
+.nx-show-when__notice > p {
+  margin: 0;
+}
+
+/* Groups set through the API, shown as they read. */
+.nx-show-when__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.nx-show-when__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  font-size: var(--nx-builder-font-size);
+}
+
+/* Wrapped, never cut: an API group's condition reads whole. */
+.nx-show-when__line {
+  overflow-wrap: anywhere;
+}
+
+.nx-show-when__or {
+  align-self: center;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-show-when__keep {
+  align-self: flex-start;
+}
+
+/* A condition wraps to two lines rather than cutting off its rule: a long
+   field name must never hide the operator and value an author has to read,
+   least of all on the row the page can't check. */
+.nx-show-when .nx-list-filter__line {
+  height: auto;
+  min-height: 28px;
+  padding-block: 0.25rem;
+}
+
+.nx-show-when .nx-list-filter__sentence {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+/* A refused value spans its row when the row has no label column. */
+.nx-list-query__group > .nx-list-query__error,
+.nx-list-filter > .nx-list-query__error,
+.nx-list-sort > .nx-list-query__error {
+  grid-column: 1 / -1;
+}
+
+.nx-list-query__icon {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+/* A value after a source's mark takes the room the trigger's space-between
+   would leave around it, so it starts right after the mark whatever its
+   length, as a value with no mark starts at the trigger's start. */
+.nx-font-pick__trigger > .nx-list-query__icon + .nx-font-pick__value {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A refused value's control, marked as the field the error names. */
+.nx-font-pick[data-invalid] .nx-font-pick__trigger,
+.nx-list-query input[aria-invalid="true"],
+.nx-list-query [data-slot="select-trigger"][aria-invalid="true"] {
+  border-color: var(--nx-destructive);
+}
+
+/* Add filter, Add sort: a quiet action at the start of its group. */
+.nx-list-query__add {
+  align-self: flex-start;
+  gap: 0.375rem;
+  padding-inline: 0.25rem;
+  font-weight: 500;
+}
+
+/* The field menu's rows: the field, and the kind of value on the right. */
+.nx-list-query__field-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.nx-list-query__field-kind {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* What a menu leaves out, said once at its foot; a group with nothing. */
+.nx-list-query__menu-foot,
+.nx-list-query__menu-note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-query__menu-foot {
+  border-top: 1px solid var(--nx-border);
+}
+
+/* Inset as the list below it is, so its heading, set in from there as a
+   group's heading is, lines up with "Collections". */
+.nx-list-query__menu-note {
+  padding-inline: 0.25rem;
+  border-bottom: 1px solid var(--nx-border);
+}
+
+/* The note's words, set in from the inset as an option's words are. */
+.nx-list-query__menu-text {
+  margin: 0;
+  padding-inline: 0.5rem;
+}
+
+.nx-list-query__kbd {
+  margin-inline-start: auto;
+  padding-inline-start: 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-query__filters,
+.nx-list-query__sort {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * One filter, closed: its sentence on one 28px line, the field in medium
+ * weight, the operator muted and the value in full ink, cut short with the
+ * whole sentence in its title; the remove button beside it.
+ */
+.nx-list-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__line {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 28px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--nx-builder-font-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-list-filter__line:hover {
+  background: var(--nx-muted);
+}
+
+.nx-list-filter__line:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-list-filter__line > svg {
+  flex: none;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-filter[data-invalid] > .nx-list-filter__line {
+  border-color: var(--nx-destructive);
+}
+
+.nx-list-filter__sentence {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-list-filter__field {
+  font-weight: 500;
+}
+
+.nx-list-filter__op {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-list-filter__said[data-missing] {
+  color: var(--nx-destructive);
+}
+
+/*
+ * One filter, open: a bordered card holding exactly its controls, the field
+ * on its first line and the operator and value on its second.
+ */
+.nx-list-filter[data-open] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+  padding: 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+}
+
+.nx-list-filter[data-open][data-invalid] {
+  border-color: var(--nx-destructive);
+}
+
+.nx-list-filter__head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__head > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-list-filter__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.375rem;
+  min-width: 0;
+  padding-inline-start: calc(24px + 0.25rem);
+}
+
+.nx-list-filter__op-pick {
+  flex: none;
+  width: 7.5rem;
+}
+
+/* "has a value" and "is empty" take no value, so the operator takes the line. */
+.nx-list-filter__op-pick[data-wide] {
+  flex: 1;
+  width: auto;
+}
+
+.nx-list-filter__body > :not(.nx-list-filter__op-pick) {
+  flex: 1;
+  min-width: 0;
+}
+
+.nx-list-filter__chips,
+.nx-list-filter__entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-list-filter__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.25rem 0.125rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-list-filter__chip > button {
+  display: inline-flex;
+  padding: 0.125rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-list-filter__chip > button:focus-visible {
+  outline: 2px solid var(--nx-ring);
+}
+
+.nx-list-filter__checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-list-filter__check {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-foreground);
+}
+
+/* The entry picker takes the row under the operator, named for a screen
+   reader by the field it chooses for, as the row already shows it. */
+.nx-list-filter__entry {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+/* The picker is stacked, one column; its name is said by the row already,
+   so it is kept for a screen reader only. */
+.nx-list-filter__entry .nx-inspector__field-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * One sort key: its handle, its field, its direction in words and its menu,
+ * on one row. Dragged, the row it would land at is marked.
+ */
+.nx-list-sort {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 7.25rem auto;
+  align-items: center;
+  column-gap: 0.25rem;
+  row-gap: 0.25rem;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+
+.nx-list-sort[data-dragging] {
+  background: var(--nx-muted);
+}
+
+.nx-list-sort__handle {
+  display: inline-flex;
+  color: var(--nx-muted-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+
+.nx-list-sort[data-dragging] .nx-list-sort__handle {
+  cursor: grabbing;
+}
+
+.nx-list-sort__direction {
+  width: 100%;
+  white-space: nowrap;
+}
+
+/* The group's icons, at the inspector's icon size, over a control's own. */
+.nx-list-query .lucide {
+  width: 14px;
+  height: 14px;
+}
+
+/* The window: a number with what it counts after it, inside the field. */
+.nx-list-query__bound {
+  position: relative;
+  min-width: 0;
+}
+
+.nx-list-query__bound[data-suffixed] input {
+  padding-inline-end: 3.75rem;
+}
+
+.nx-list-query__suffix {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0.75rem;
+  display: flex;
+  align-items: center;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/*
+ * A collection list's custom sources in the Source menu: wider than its
+ * control, for rows of two lines, and still aligned to the control's end.
+ */
+[data-slot="popover-content"].nx-font-pick__popover[data-wide] {
+  width: max(var(--radix-popover-trigger-width), 18rem);
+}
+
+/* A custom source's row: its label, which wraps rather than being cut, and
+   its developer's line under it, the "Needs input" tag at that line's end. */
+.nx-list-source {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  white-space: normal;
+}
+
+.nx-list-source__label {
+  overflow-wrap: anywhere;
+}
+
+.nx-list-source__line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-list-source__description {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  color: var(--nx-muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+.nx-list-source__tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 1.125rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
+}
+
+/* The Source hint's lines under a custom source: its line, then cautions. */
+.nx-list-query__hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/*
+ * A caution: what a save warns about rather than refuses, in the theme's
+ * warning tone, drawn toward the text colour so it reads as text on the
+ * panel in either scheme, with its triangle beside the first line.
+ */
+.nx-list-query__caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--nx-warning), var(--nx-foreground) 22%);
+}
+
+.nx-list-query .nx-list-query__caution > .lucide {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 0.1875rem;
+}
+
+.nx-list-query__group > .nx-list-query__caution {
+  grid-column: 1 / -1;
+}
+
+/* An input of a custom source: a field of the Content tab. A needed one's
+   dot, where the group's note says the dot means needed. */
+.nx-list-input__needed {
+  color: var(--nx-foreground);
+}
+
+.nx-list-input__choice {
+  width: 100%;
+}
+
+/* A day, which shows what empty means ("Today") until it is focused, with a
+   calendar mark at its end where the platform draws none. */
+.nx-list-input__day {
+  position: relative;
+  min-width: 0;
+}
+
+.nx-list-input__day:not([data-dated]) input {
+  padding-inline-end: 2rem;
+}
+
+.nx-list-input__day-icon {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0.625rem;
+  margin-block: auto;
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/* An entry input is the entry picker, stacked, as it is in a filter. */
+.nx-list-input__entry {
+  min-width: 0;
+}
+
+/* Canvas shows: two words, taking the control column. */
+.nx-inspector__field[data-content-control="canvasShows"]
+  > .nx-style-inspector__toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/*
+ * A collection list's region in Layers: "Each entry" and "When empty",
+ * muted, as regions rather than blocks, with how many blocks each holds.
+ */
+.nx-layer-row[data-nx-layer-slot] .nx-layer-row__label,
+.nx-layer-row__slot-mark {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-layer-row__count {
+  margin-inline-start: auto;
+  padding-inline-end: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * The exposed part being edited in place: a solid ring in the component
+ * colour, so the passage the caret is in reads apart from the placement's
+ * other parts, which dim while it is open.
+ */
+.nx-canvas-mark[data-mark="exposed"][data-editing] {
+  outline: 2px solid var(--nx-builder-component);
+  outline-offset: 0;
+}
+
+.nx-canvas-mark[data-mark="exposed"][data-dimmed] {
+  opacity: 0.4;
+}
+
+/*
+ * A passage field that cannot be edited here (held while the canvas edits it,
+ * or with no editor to open): a muted fill and border, so it does not look
+ * like a field waiting for input. Its focus ring stays for the keyboard.
+ */
+.nx-inspector__rich-text[aria-readonly="true"] {
+  border-color: var(--nx-border);
+  background: var(--nx-muted);
+  color: var(--nx-muted-foreground);
+  cursor: default;
+}
