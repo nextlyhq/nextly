@@ -1640,7 +1640,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             landing.landed,
             {
               // The push where the save carries values across its change; its own migration file,
-              // run in tries as `nextly migrate` runs it, where it carries none.
+              // run in tries as `nextly migrate` runs it, where it carries none. No `singleRow`:
+              // this dialog's push does not fill the Single's row for a field it adds either (an
+              // optional field's default stays out of it, and a required field is refused unless
+              // the dialog answers with a value), so keeping the push for one would fill nothing.
               pushWhen: () =>
                 pushCarriesValues({
                   oldFields: single.fields as unknown as FieldDefinition[],
