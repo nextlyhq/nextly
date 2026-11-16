@@ -1943,3 +1943,18 @@ describe("a role that may not change the site's design", () => {
     ).toBeNull();
   });
 });
+
+describe("a search the host keeps", () => {
+  it("lists what the host's search matches, and draws no search box of its own", async () => {
+    // The Design panel keeps one search across its tabs.
+    await panel({ hostSearch: { query: "old", onQuery: () => undefined } });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search shared styles" })
+    ).toBeNull();
+    const shown = screen
+      .queryAllByRole("button")
+      .filter(button => button.hasAttribute("data-shared-style"))
+      .map(button => button.getAttribute("data-shared-style"));
+    expect(shown).toEqual(["c-old"]);
+  });
+});

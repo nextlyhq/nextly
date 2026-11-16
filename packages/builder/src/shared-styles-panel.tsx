@@ -116,6 +116,20 @@ export type { PanelLookEditing } from "./shared-styles-types";
  */
 export { USAGE_RECOUNT_IDLE_MAX, USAGE_RECOUNT_MS } from "./usage-reads";
 
+/**
+ * What the tab searches for: the host's search where it keeps one, changed
+ * through the host, else the tab's own.
+ */
+function usePanelSearch(hostSearch: SharedStylesPanelProps["hostSearch"]): {
+  query: string;
+  setQuery: (query: string) => void;
+} {
+  const [own, setOwn] = React.useState("");
+  return hostSearch === undefined
+    ? { query: own, setQuery: setOwn }
+    : { query: hostSearch.query, setQuery: hostSearch.onQuery };
+}
+
 /** No pending names, as one value rather than a fresh record each render. */
 const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
 
@@ -294,8 +308,9 @@ export function SharedStylesPanel({
   pendingNames = NO_NAMES,
   looks,
   initialOpenId,
+  hostSearch,
 }: SharedStylesPanelProps): React.JSX.Element {
-  const [query, setQuery] = React.useState("");
+  const { query, setQuery } = usePanelSearch(hostSearch);
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
   const [pages, setPages] = React.useState(1);
   const [issue, setIssue] = React.useState<Issue | null>(null);
@@ -347,6 +362,7 @@ export function SharedStylesPanel({
     <div className="nx-vars nx-shared-styles" {...readOnlyMark(readOnly)}>
       <SearchBox
         ref={search}
+        shown={hostSearch === undefined}
         query={query}
         onQuery={next => {
           setQuery(next);
@@ -476,13 +492,17 @@ function readOnlyMark(readOnly: boolean): { "data-read-only"?: "" } {
 /** The search over every style, by name, property or value. */
 function SearchBox({
   ref,
+  shown,
   query,
   onQuery,
 }: {
   ref: React.Ref<HTMLInputElement>;
+  /** Not drawn where a host keeps the search. */
+  shown: boolean;
   query: string;
   onQuery: (query: string) => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (!shown) return null;
   return (
     <div className="nx-vars__search">
       <Search aria-hidden="true" size={16} />
