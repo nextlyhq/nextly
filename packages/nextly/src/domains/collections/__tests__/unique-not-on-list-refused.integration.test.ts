@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clearServices } from "../../../di/register";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import type { Params } from "../../../dispatcher/types";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -36,7 +37,7 @@ async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
 
 function dispatch(
   method: string,
-  params: Record<string, unknown>,
+  params: Params,
   body: Record<string, unknown>
 ): Promise<unknown> {
   return inDevelopment(() =>
