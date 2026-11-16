@@ -594,6 +594,70 @@ async function withMysqlTryBackstop<T>(
  * follow it; on MySQL the session alone (its bounds are `withMysqlTryBackstop`'s). Nothing on
  * SQLite, whose busy timeout bounds the unit.
  */
+/**
+ * A try that resumes past every statement on MySQL writes only the ledger: the try before ended in
+ * its ledger write, after the unit's statements had all committed (a try resumes at the open
+ * transaction's first statement, so none was left open). The transaction this try opened is
+ * committed first, leaving the session in autocommit, as the last statement left the try that ran
+ * it: each ledger write then commits on its own, and a stop between a rollback row and the
+ * retirement of the applied row it names keeps the rollback.
+ */
+async function commitBeforeLedgerOnlyTry(
+  tx: MigrationTransaction,
+  dialect: SupportedDialect,
+  from: number,
+  total: number
+): Promise<void> {
+  if (dialect === "mysql" && from > 0 && from === total) {
+    await tx.execute("COMMIT");
+  }
+}
+
+/**
+ * MySQL committed the transaction at `statement` and left the session in autocommit: the
+ * transaction opens again, so the statements after it roll back together. The watch moves past the
+ * statement first, and a cancel decided while it waited lands before the transaction opens, never
+ * on it (MySQL's kill ends whatever runs when it arrives).
+ *
+ * Only where statements of the unit follow, for them to roll back together. After the unit's last
+ * statement the session stays in autocommit, so each ledger write after it commits on its own: a
+ * rollback row, which names the applied row it retires in its own insert, lands before that row is
+ * retired, and a stop between the two still leaves the migration rolled back, as the DOWN's
+ * statements, committed already, left it. Opened again here, the two would commit together at the
+ * end, and a stop between them would lose the rollback row over a DOWN that ran.
+ */
+async function reopenAfterMysqlImplicitCommit(
+  tx: MigrationTransaction,
+  dialect: SupportedDialect,
+  bound: StatementTryBound | undefined,
+  at: { statement: string; index: number; total: number }
+): Promise<void> {
+  if (dialect !== "mysql" || !commitsOnMysql(at.statement)) return;
+  bound?.onStatement?.(at.index + 1);
+  await bound?.beforeStatement?.();
+  if (at.index < at.total - 1) await tx.execute("START TRANSACTION");
+}
+
+/**
+ * The ledger write that ends a unit's try in a transaction. A cancel decided while the last
+ * statement waited lands before it starts, never on it (MySQL's kill ends whatever runs when it
+ * arrives). It is part of the try: watched on the same session, and on SQLite bounded by what is
+ * left of it.
+ */
+async function writeLedgerInTry(
+  tx: MigrationTransaction,
+  bound: StatementTryBound | undefined,
+  sqliteWaitLeft: (
+    execute: (statement: string) => Promise<unknown>
+  ) => Promise<void>,
+  write: () => Promise<void>
+): Promise<void> {
+  await bound?.beforeStatement?.();
+  await tx.restoreSession();
+  await sqliteWaitLeft(statement => tx.execute(statement));
+  await write();
+}
+
 async function boundTransactionTry(
   tx: MigrationTransaction,
   dialect: SupportedDialect,
@@ -772,15 +836,7 @@ async function runUnitStatements(
       withMysqlTryBackstop(tx, dialect, bound, async () => {
         await boundTransactionTry(tx, dialect, bound);
         for (const setting of settingsBefore) await tx.execute(sent(setting));
-        // A try that resumes past every statement on MySQL writes only the ledger: the try before
-        // ended in its ledger write, after the unit's statements had all committed (a try resumes
-        // at the open transaction's first statement, so none was left open). The transaction this
-        // try opened is committed first, leaving the session in autocommit, as the last statement
-        // left the try that ran it: each ledger write then commits on its own, and a stop between
-        // a rollback row and the retirement of the applied row it names keeps the rollback.
-        if (dialect === "mysql" && from > 0 && from === statements.length) {
-          await tx.execute("COMMIT");
-        }
+        await commitBeforeLedgerOnlyTry(tx, dialect, from, statements.length);
         for (const [offset, statement] of statements.slice(from).entries()) {
           const index = from + offset;
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
@@ -801,38 +857,20 @@ async function runUnitStatements(
             dialect,
             bound
           );
-          // MySQL committed the transaction at this statement and left the session in autocommit:
-          // the transaction opens again, so the statements after it roll back together. The watch
-          // moves past the statement first, and a cancel decided while it waited lands before the
-          // transaction opens, never on it (MySQL's kill ends whatever runs when it arrives).
-          if (dialect === "mysql" && commitsOnMysql(statement)) {
-            bound?.onStatement?.(index + 1);
-            await bound?.beforeStatement?.();
-            // Only where statements of the unit follow, for them to roll back together. After the
-            // unit's last statement the session stays in autocommit, so each ledger write after it
-            // commits on its own: a rollback row, which names the applied row it retires in its own
-            // insert, lands before that row is retired, and a stop between the two still leaves
-            // the migration rolled back, as the DOWN's statements, committed already, left it.
-            // Opened again here, the two would commit together at the end, and a stop between them
-            // would lose the rollback row over a DOWN that ran.
-            if (index < statements.length - 1) {
-              await tx.execute("START TRANSACTION");
-            }
-          }
+          await reopenAfterMysqlImplicitCommit(tx, dialect, bound, {
+            statement,
+            index,
+            total: statements.length,
+          });
         }
         bound?.onStatement?.(statements.length);
         // A unit may rewrite registry rows (a schema save's upsert of its own
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
         if (after !== undefined) {
-          // A cancel decided while the last statement waited lands before the ledger write starts,
-          // never on it (MySQL's kill ends whatever runs when it arrives).
-          await bound?.beforeStatement?.();
-          await tx.restoreSession();
-          // The ledger write is part of the try: watched on the same session, and on SQLite
-          // bounded by what is left of it.
-          await sqliteWaitLeft(statement => tx.execute(statement));
-          await after(tx.db, statements.length);
+          await writeLedgerInTry(tx, bound, sqliteWaitLeft, () =>
+            after(tx.db, statements.length)
+          );
         }
         // The watch stops before the commit hands the connection back to the pool.
         await bound?.settle?.();
