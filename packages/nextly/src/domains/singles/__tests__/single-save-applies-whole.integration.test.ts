@@ -198,13 +198,13 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
   });
 
   // Not on SQLite, whose unique index is created `IF NOT EXISTS`: a name already taken is skipped
-  // there rather than refused, so the save cannot be made to fail part-way the same way.
+  // there rather than refused.
   it.skipIf(dialect === "sqlite")(
-    "fails a save the database refuses part-way with the reason, and a later save finishes it",
+    "refuses as drift a save over a hand-made index in its table, changing nothing, and saves once it is gone",
     async () => {
-      // Something no precondition foresees: an index already holding the name the new unique
-      // index takes. PostgreSQL rolls the whole save back; MySQL has added the column by then,
-      // since it commits each schema statement, and the next save has to finish from there.
+      // A hand-made index in the Single's table, holding the name the new unique index takes. The
+      // save runs its own migration file, which finds the table differing from its snapshot, so it
+      // is refused as drift before anything runs, on every dialect.
       await heroWith([{ name: "heading", type: "text" }], { heading: "One" });
       const blocking = uniqueIndexNameForColumn("single_hero", "code");
       await query(
@@ -218,18 +218,9 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
 
       const refused = await refusal(save(fields));
 
-      expect(refused).toMatchObject({
-        code: "NEXTLY_MIGRATION_APPLY_FAILED",
-        publicMessage: expect.stringMatching(
-          dialect === "mysql"
-            ? /^The database refused statement \d+ of \d+ of this schema change\. The \d+ before it were applied/
-            : /^The database refused this schema change, so nothing was changed\./
-        ),
-      });
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
       expect((await registeredFields()).map(f => f.name)).toEqual(["heading"]);
-      if (dialect === "postgresql") {
-        expect(await columnsOf("single_hero")).not.toContain("code");
-      }
+      expect(await columnsOf("single_hero")).not.toContain("code");
 
       await query(
         dialect === "mysql"
