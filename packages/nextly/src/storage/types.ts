@@ -321,6 +321,23 @@ export interface IStorageAdapter {
   /** Upload file buffer to storage */
   upload(buffer: Buffer, options: UploadOptions): Promise<UploadResult>;
 
+  /**
+   * Store bytes at exactly `filePath`, replacing anything there (optional).
+   *
+   * Core calls it only with a key it derived from a file this storage already
+   * holds, to keep a file made from that one, such as a resized copy of an
+   * image, beside it. A storage without it cannot keep such files, and core
+   * serves the original instead. `upload` stays the way new files are
+   * stored, since it is the storage that chooses their keys.
+   *
+   * @experimental
+   */
+  uploadAt?(
+    filePath: string,
+    buffer: Buffer,
+    options: { mimeType: string }
+  ): Promise<UploadResult>;
+
   /** Delete file from storage */
   delete(filePath: string): Promise<void>;
 

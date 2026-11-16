@@ -1324,6 +1324,23 @@ export {
 } from "nextly";
 
 /**
+ * Resized copies of stored images, for a plugin showing an image at a known
+ * width: `ctx.services.media.copyOf(source, width)` answers a copy's address
+ * (`MediaCopy`), or `null` when the image is to be used as it is. Copies come
+ * only at `MEDIA_COPY_WIDTHS`, and any other width is served the nearest
+ * (`nearestMediaCopyWidth`), so a plugin can build `srcset` from the same
+ * list the server keeps.
+ * @experimental until a first-party plugin serves them on a deployed site.
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopy,
+  type MediaCopySource,
+  type MediaCopyWidth,
+} from "nextly";
+
+/**
  * Account lifecycle events — `user.created` and `user.deleted`, which core
  * emits after the change commits, with `{ userId }`.
  * @experimental `UserEvents`, `UserEventName`, `UserCreatedPayload`,
