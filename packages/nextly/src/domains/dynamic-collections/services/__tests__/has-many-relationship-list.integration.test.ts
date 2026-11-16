@@ -321,7 +321,9 @@ for (const dialect of getConfiguredTestDialects()) {
       t: TestNextly,
       hasMany: boolean,
       relationTo: string | string[] = "authors",
-      required = false
+      required = false,
+      // Fields `posts` holds beside `author`, which a switch of `author` leaves as they are.
+      others: Record<string, unknown>[] = []
     ) {
       await createCollection("authors", [{ name: "name", type: "text" }]);
       await createCollection("tags", [{ name: "label", type: "text" }]);
@@ -334,6 +336,7 @@ for (const dialect of getConfiguredTestDialects()) {
           ...(required ? { required } : {}),
           options: { target: "authors", relationType: "manyToOne" },
         },
+        ...others,
       ]);
       const a = (
         await t.nextly.create({
@@ -852,14 +855,27 @@ for (const dialect of getConfiguredTestDialects()) {
           "rebuilds the table on replay when a switch to many drops the relationship's key, keeping everything else",
           async () => {
             const t = await boot();
-            await postsWithAuthors(t, false);
-            expect(await foreignKeyColumns("dc_posts")).toContain("author");
+            // A second keyed relationship, which the rebuild must carry whole: a rebuild that
+            // dropped every key would otherwise pass as one that dropped only the switched one.
+            await postsWithAuthors(t, false, "authors", false, [
+              {
+                name: "editor",
+                type: "relationship",
+                relationTo: "authors",
+                hasMany: false,
+                options: { target: "authors", relationType: "manyToOne" },
+              },
+            ]);
+            expect(await foreignKeyColumns("dc_posts")).toEqual(
+              expect.arrayContaining(["author", "editor"])
+            );
             const before = await postsTable(database.adapter);
 
             expect(await switchAuthor(database.adapter, true)).toEqual({
               accepted: true,
             });
             expect(await foreignKeyColumns("dc_posts")).not.toContain("author");
+            expect(await foreignKeyColumns("dc_posts")).toContain("editor");
             const here = await postsTable(database.adapter);
 
             // The folder a deploy receives, copied out before the next instance's boot replaces
@@ -902,6 +918,8 @@ for (const dialect of getConfiguredTestDialects()) {
                 table?.columns.filter(c => c.name !== "author");
               const authorColumn = (table: typeof before) =>
                 table?.columns.find(c => c.name === "author");
+              // Every key the table keeps, as it stands here, and none on `author`.
+              expect(replayedTable?.foreignKeys).toEqual(here?.foreignKeys);
               expect(
                 replayedTable?.foreignKeys?.flatMap(fk => fk.columns) ?? []
               ).not.toContain("author");
