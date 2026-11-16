@@ -22,6 +22,7 @@ import {
   toSnakeCase,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
+import { relationshipTargetSlug } from "../../schema/services/relationship-key-target";
 import {
   fieldNameProblem,
   type FieldNameProblemKind,
@@ -216,48 +217,83 @@ export class DynamicCollectionValidationService {
   }
 
   /**
+   * A relationship must name the collection it links to, read as every other
+   * reader of a stored relationship reads it (`relationshipTargetSlug`): the
+   * editor's `relationTo`, one collection or several, else the earlier
+   * Builder's `options.target`. That earlier shape names its cardinality
+   * beside its target in `options.relationType` and must still give it; the
+   * editor's shape gives its cardinality by `hasMany` and Unique, and is
+   * many-to-one when it states none, as its column is created. A cardinality
+   * given either way must be one the schema knows, and the options given
+   * beside it are judged as before.
+   *
    * @throws Error if the relationship configuration is invalid
    */
   validateRelationshipField(field: FieldDefinition): void {
-    if (!field.options?.target) {
+    this.validateRelationshipTarget(field);
+    if (!field.options) return;
+    this.validateReferentialActions(field, field.options);
+    this.validateCardinalityRules(field, field.options);
+  }
+
+  /** The collection it links to, and the cardinality the earlier shape must give. */
+  private validateRelationshipTarget(field: FieldDefinition): void {
+    const linksSeveral =
+      Array.isArray(field.relationTo) && field.relationTo.length > 0;
+    if (relationshipTargetSlug(field) === null && !linksSeveral) {
       throw new Error(
         `Relationship field "${field.name}" must specify a target collection`
       );
     }
 
-    if (!field.options?.relationType) {
+    // The earlier shape: its target in options, and no `relationTo` beside it.
+    const earlierShape = field.relationTo === undefined;
+    const relationType = field.options?.relationType;
+    if (earlierShape && !relationType) {
       throw new Error(
         `Relationship field "${field.name}" must specify a relationType (oneToOne, oneToMany, manyToOne, or manyToMany)`
       );
     }
 
     const validTypes = ["oneToOne", "oneToMany", "manyToOne", "manyToMany"];
-    if (!validTypes.includes(field.options.relationType)) {
+    if (relationType !== undefined && !validTypes.includes(relationType)) {
       throw new Error(
-        `Invalid relationType "${field.options.relationType}" for field "${field.name}". Must be one of: ${validTypes.join(", ")}`
+        `Invalid relationType "${relationType}" for field "${field.name}". Must be one of: ${validTypes.join(", ")}`
       );
     }
+  }
 
-    if (field.options.onDelete) {
+  /** What a delete or an update of the linked row does, where one is given. */
+  private validateReferentialActions(
+    field: FieldDefinition,
+    options: NonNullable<FieldDefinition["options"]>
+  ): void {
+    if (options.onDelete) {
       const validActions = ["cascade", "set null", "restrict", "no action"];
-      if (!validActions.includes(field.options.onDelete.toLowerCase())) {
+      if (!validActions.includes(options.onDelete.toLowerCase())) {
         throw new Error(
-          `Invalid onDelete action "${field.options.onDelete}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
+          `Invalid onDelete action "${options.onDelete}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
         );
       }
     }
 
-    if (field.options.onUpdate) {
+    if (options.onUpdate) {
       const validActions = ["cascade", "set null", "restrict", "no action"];
-      if (!validActions.includes(field.options.onUpdate.toLowerCase())) {
+      if (!validActions.includes(options.onUpdate.toLowerCase())) {
         throw new Error(
-          `Invalid onUpdate action "${field.options.onUpdate}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
+          `Invalid onUpdate action "${options.onUpdate}" for field "${field.name}". Must be one of: ${validActions.join(", ")}`
         );
       }
     }
+  }
 
+  /** What a stated cardinality asks of the field's own marks. */
+  private validateCardinalityRules(
+    field: FieldDefinition,
+    options: NonNullable<FieldDefinition["options"]>
+  ): void {
     if (
-      field.options.relationType === "oneToOne" &&
+      options.relationType === "oneToOne" &&
       !field.unique &&
       !field.required
     ) {
@@ -267,7 +303,7 @@ export class DynamicCollectionValidationService {
     }
 
     // manyToMany relationships use a junction table and cannot be required.
-    if (field.options.relationType === "manyToMany" && field.required) {
+    if (options.relationType === "manyToMany" && field.required) {
       throw new Error(
         `Many-to-many relationship "${field.name}" cannot be marked as required. Use validation in your application logic instead.`
       );
