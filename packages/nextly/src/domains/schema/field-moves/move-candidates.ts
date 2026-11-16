@@ -10,8 +10,8 @@
  *
  * @module domains/schema/field-moves/move-candidates
  */
-import { addressableFields } from "../../../shared/addressable-fields";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../shared/addressable-fields";
 
 import type { FieldMoveRequest } from "./check-move";
 

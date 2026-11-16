@@ -18,8 +18,8 @@
  *
  * @module domains/schema/field-moves/check-move
  */
-import { addressableFields } from "../../../shared/addressable-fields";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
 
@@ -115,10 +115,7 @@ function keptPerLanguage(placed: PlacedField, entity: MoveEntity): boolean {
   // Inside a container, the outermost one's storage decides: its whole JSON is kept for each
   // language, or once for every language; a field inside it has no storage of its own.
   const holder = placed.containers[0] ?? placed.field;
-  return isFieldLocalized(
-    holder as Parameters<typeof isFieldLocalized>[0],
-    localized
-  );
+  return isFieldLocalized(holder, localized);
 }
 
 function label(field: FieldDefinition): string {

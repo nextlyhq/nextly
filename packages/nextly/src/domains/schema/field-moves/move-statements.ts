@@ -51,7 +51,8 @@ const TEXT_KINDS: ReadonlySet<ColumnKind> = new Set<ColumnKind>([
 /** A key as a JSON path segment: refused where it would need escaping, which no field name does. */
 function safeKey(key: string): string {
   if (!/^[A-Za-z0-9_$-]+$/.test(key)) {
-    throw NextlyError.validation({
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
       publicMessage: "A moved field's name cannot be written as a JSON key.",
       logContext: { key },
     });
