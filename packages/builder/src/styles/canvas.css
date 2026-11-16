@@ -1,0 +1,697 @@
+/*
+ * The canvas's frame, centred in the region the shell gives it.
+ *
+ * The page is drawn in an iframe laid out at the previewed device's size and
+ * painted at the zoom by a transform; the box around it takes the PAINTED
+ * size, so the region scrolls exactly as far as the frame reaches. The stage
+ * fills the region and grows with a frame zoomed past it, and the frame's own
+ * auto margins centre it while it is smaller and resolve to nothing once it is
+ * larger, so an enlarged page scrolls from its left edge with nothing clipped.
+ */
+/*
+ * The canvas region, while it scrolls a frame painted past it: a tab stop of
+ * its own, so its focus is drawn.
+ */
+.nx-canvas-scroller:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+.nx-canvas-stage {
+  display: flex;
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+}
+
+/*
+ * A SHEET on the editor's surface: an outline rather than a border, so the
+ * edge takes no room from the painted box the frame is fitted into, and the
+ * shadow as the secondary cue.
+ */
+.nx-canvas-frame {
+  position: relative;
+  flex: none;
+  /* Centred across the region and held at its top, just under the top bar,
+     as the page sits on any screen; a page shorter than the region leaves
+     the room below it rather than an empty band above. */
+  margin: 0 auto auto;
+  outline: 1px solid var(--nx-builder-border);
+  box-shadow: var(--shadow-md);
+}
+
+/*
+ * The frame itself. No border, so its content starts at its edge; chrome is
+ * still placed through the frame's measured inset, so a border added here
+ * would move the page and its chrome together.
+ *
+ * `color-scheme: normal` rather than inheriting the admin's. A frame's
+ * `prefers-color-scheme` follows the scheme of the iframe ELEMENT, so an
+ * inherited dark scheme would turn a site that darkens with the system dark
+ * on the canvas whenever the ADMIN was dark. `normal` leaves it to the
+ * system, as a visitor's browser does. A mode the author picks to preview
+ * the page in is stated over this on the element itself (`canvas-frame.tsx`).
+ */
+.nx-canvas-frame__page {
+  display: block;
+  border: 0;
+  transform-origin: 0 0;
+  color-scheme: normal;
+}
+
+/*
+ * The page's frame, while Escape from a panel control has brought focus back
+ * to it. Drawn as the region's own focus is, inside the edge. Marked by the
+ * editor rather than matched by `:focus-visible`, which never matches a frame
+ * whose page holds focus; the mark goes on a pointer press in the page or
+ * when focus leaves it, so a click into the page shows nothing new.
+ */
+.nx-canvas-frame__page[data-nx-keyboard-focus] {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+/*
+ * The layer the editor's chrome is drawn in, over the frame's viewport and
+ * clipped to it. Its content box is laid over the canvas root and moved with
+ * the frame's scroll, from `canvas-frame.tsx`.
+ *
+ * No pointer events of its own, so a press over the page reaches the page;
+ * chrome that takes presses claims them back below.
+ */
+.nx-canvas-layer {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  /*
+   * The editing marks take the hue for the PAGE's ground, not for the admin's
+   * theme: they are drawn on the site's colours, and the dark theme's lighter
+   * blue is 2.5:1 on a white page where the deeper one is 5.2:1. The frame
+   * states the page's scheme here, read from the canvas root inside it.
+   */
+  --nx-builder-select: var(--nx-builder-select-on-light);
+  --nx-builder-component: var(--nx-builder-component-on-light);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-light);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-light);
+}
+
+.nx-canvas-layer[data-nx-page-scheme="dark"] {
+  --nx-builder-select: var(--nx-builder-select-on-dark);
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+  --nx-builder-component-text: var(--nx-builder-component-text-on-dark);
+  --nx-builder-select-text: var(--nx-builder-select-text-on-dark);
+}
+
+.nx-canvas-layer__content {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+/*
+ * Chrome held at the frame's viewport (`pinned` in `canvas-frame.tsx`): over
+ * the viewport, inset from the layer's bleed there, and not moved with the
+ * page's scroll as the content box is, so a long page scrolls under it. Above
+ * the content's marks; it takes no presses of its own, so the page under it
+ * is still reached, and the controls in it claim theirs back.
+ */
+.nx-canvas-layer__pinned {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/*
+ * The cue over the site's own layout around the canvas, on a page the site
+ * serves. The layout is inert in the page, so the cue answers the pointer in
+ * its place: a not-allowed cursor, the tooltip, and on hover a tag in the
+ * admin's words saying what it is. Nothing is drawn at rest beyond the page's
+ * own fading, so the page stays the focus.
+ */
+.nx-site-chrome-cue {
+  position: absolute;
+  pointer-events: auto;
+  cursor: not-allowed;
+}
+
+.nx-site-chrome-cue[hidden] {
+  display: none;
+}
+
+.nx-site-chrome-cue__tag {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-site-chrome-cue:hover {
+  box-shadow: inset 0 0 0 1px var(--nx-builder-border);
+}
+
+.nx-site-chrome-cue:hover .nx-site-chrome-cue__tag {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-site-chrome-cue__tag {
+    transition: none;
+  }
+}
+
+/*
+ * Chrome that takes presses claims them back. Weighted as one class and
+ * stated before the chrome's own rules, so a piece of chrome that declares
+ * `pointer-events: none` for itself — a notice, the appenders' container —
+ * keeps it.
+ */
+:where(.nx-canvas-layer) [data-nx-chrome] {
+  pointer-events: auto;
+}
+
+/*
+ * The marks drawn over blocks: the selection, and during a drag the container
+ * a drop would land in or the one refusing it.
+ *
+ * Boxes in the editor's layer rather than outlines on the page's elements, so
+ * the site's CSS can never restyle or hide them and they keep their width at
+ * any zoom.
+ *
+ * The selection's box is laid OUTSIDE the block (`RING_OUTSIDE` in
+ * `canvas-marks.tsx`) and the ring drawn just inside that box, so the ring
+ * never covers the block's own content, and a block flush with the page's
+ * edge, whose box is held to the page, keeps its ring. TWO tones, because the
+ * ring is drawn on the site's content and no single colour reads on all of
+ * it: the select blue disappears on a blue section and a white mark on a white
+ * one, so an inset white band directly inside the blue is the halo, which the
+ * outline covers half of.
+ *
+ * The rest of a multi-block selection is thinner: weight says which block the
+ * inspector describes without implying two kinds of selected. A component
+ * placement takes the component colour.
+ *
+ * The drop container is DASHED and OUTSIDE, where the selection is solid and
+ * inside, so the two are told apart by shape as well as by moment.
+ */
+.nx-canvas-marks {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.nx-canvas-mark {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.nx-canvas-mark[data-mark="selected"] {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px var(--nx-builder-halo);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-secondary] {
+  outline-width: 1px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-component] {
+  outline-color: var(--nx-builder-component);
+}
+
+/*
+ * A selected placement's frame is tagged with a component's mark and its name,
+ * on the frame's top right corner outside it, in the component colour: the
+ * block toolbar takes the top left. Drawn from the mark's
+ * `data-placement-label`.
+ */
+.nx-canvas-mark[data-mark="selected"][data-placement-label]::before {
+  content: attr(data-placement-label);
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-builder-component);
+  color: var(--nx-builder-component-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* At the top of the page, inside the frame, where it stays on the page. */
+.nx-canvas-mark[data-mark="selected"][data-placement-label][data-placement-tag-inside]::before {
+  top: 0;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
+}
+
+/*
+ * The at-rest mark: a faint dashed outline round a block the canvas says
+ * something about whether or not it is selected, with its tabs on the top
+ * edge, so they read as this block's and never cover what it draws. A block
+ * whose visibility conditions decide who sees it ("Conditional", red when
+ * its conditions can't be checked, since visitors then never see it, and
+ * "Shown for this post" while conditions are applied for the entry), and
+ * an Entry content block, which draws the entry's own content
+ * ("Entry content · Body"). A block that is both carries both tabs.
+ */
+.nx-canvas-mark[data-mark="at-rest"] {
+  box-sizing: border-box;
+  border: 1px dashed
+    color-mix(in oklch, var(--nx-muted-foreground) 55%, transparent);
+  border-radius: 2px;
+  outline: none;
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="at-rest"][data-condition="unchecked"] {
+  border-color: color-mix(in oklch, var(--nx-destructive) 70%, transparent);
+}
+
+/* Selected, the selection ring outlines the block, and the dash steps back:
+   after the red rule, so it wins on order at the same specificity. */
+.nx-canvas-mark[data-mark="at-rest"][data-at-rest-selected] {
+  border-color: transparent;
+}
+
+/* The tabs: on the outline's top edge, their feet on the dash, so they read
+   as this block's mark and not the one above. */
+.nx-canvas-mark__tabs {
+  position: absolute;
+  right: calc(var(--nx-tag-inset-side, 0px) - 1px);
+  bottom: 100%;
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.nx-canvas-mark__tab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1px 8px;
+  border: 1px solid var(--nx-border);
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The Entry content tab gives way first on a narrow block: its words are
+   the longer, and the field is named in Layers and the inspector too. */
+.nx-canvas-mark__tab[data-tab="entry-content"] {
+  flex: 0 1 auto;
+}
+
+.nx-canvas-mark__tab > svg {
+  flex: none;
+}
+
+/* At the top of what's on screen, or where the block above's tabs take the
+   top edge (a block shorter than a tab under another): tabs on the
+   outline's bottom edge. */
+.nx-canvas-mark[data-tab-at="below"] > .nx-canvas-mark__tabs {
+  top: 100%;
+  bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="below"] .nx-canvas-mark__tab {
+  border-radius: 0 0 4px 4px;
+}
+
+/* A block taller than what's on screen: inside its top corner, the outer
+   corner square with the dash, so they're seen. */
+.nx-canvas-mark[data-tab-at="inside"] > .nx-canvas-mark__tabs {
+  top: -1px;
+  bottom: auto;
+  align-items: flex-start;
+}
+
+.nx-canvas-mark[data-tab-at="inside"] .nx-canvas-mark__tab {
+  border-radius: 0 0 0 4px;
+}
+
+.nx-canvas-mark__tab[data-tab="unchecked"] {
+  border-color: var(--nx-destructive);
+  color: var(--nx-destructive);
+}
+
+/* Shown for the previewed entry while conditions apply: a tick in the
+   success colour, the words in the foreground's. */
+.nx-canvas-mark__tab[data-tab="shown"] > svg {
+  color: var(--nx-success);
+}
+
+/*
+ * A selected block locked in Layers, by its own lock or one around it: the
+ * ring is dashed, so the canvas says it is held before anything is tried on
+ * it.
+ */
+.nx-canvas-mark[data-mark="selected"][data-locked] {
+  outline-style: dashed;
+}
+
+/*
+ * A mark cut to the part of a block an ancestor's clip leaves visible: the
+ * halo band would run along edges the page does not show, so only the ring is
+ * drawn.
+ */
+.nx-canvas-mark[data-clipped] {
+  box-shadow: none;
+}
+
+/* As specific as a secondary selection's own halo rule, which it overrides. */
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-clipped] {
+  box-shadow: none;
+}
+
+/*
+ * A mark around a block its own clip-path shapes: the halo band would hug the
+ * box's corners, which the shape leaves showing the page behind, so only the
+ * ring is drawn, still outside the box.
+ */
+.nx-canvas-mark[data-shaped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="selected"][data-secondary][data-shaped] {
+  box-shadow: none;
+}
+
+/*
+ * The parts of a selected component placement an author can edit: its exposed
+ * values, dashed in the component colour, so they stand apart from the
+ * component's own design around them. Drawn just inside each part, so each
+ * reads as a box of its own inside the placement's frame, which is drawn
+ * outside the parts: outside, a full-width part's sides would run under it.
+ */
+.nx-canvas-mark[data-mark="exposed"] {
+  outline: 1px dashed var(--nx-builder-component);
+  outline-offset: -2px;
+}
+
+/*
+ * The blocks an edit to the look being edited reaches, while a look is edited
+ * on its own from the Design panel: dashed in the shared colour, outside each
+ * block, as a reach rather than a selection.
+ */
+.nx-canvas-mark[data-mark="look-reach"] {
+  outline: 2px dashed var(--nx-builder-shared);
+  outline-offset: 3px;
+}
+
+.nx-canvas-mark[data-mark="drop-parent"] {
+  outline: 2px dashed var(--nx-builder-select);
+  outline-offset: 2px;
+}
+
+.nx-canvas-mark[data-mark="drop-refused"] {
+  outline: 2px solid var(--nx-destructive);
+  outline-offset: 2px;
+}
+
+/*
+ * The block a Layers row points at: a thin ring in the select colour, haloed
+ * for the reason the selection is, and lighter than it, since a hover is only
+ * where the pointer is. A component placement takes the component colour.
+ */
+.nx-canvas-mark[data-mark="hovered"] {
+  outline: 1px solid var(--nx-builder-select);
+  outline-offset: -1px;
+  box-shadow: inset 0 0 0 2px var(--nx-builder-halo);
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-component] {
+  outline-color: var(--nx-builder-component);
+}
+
+/*
+ * A hovered block an ancestor clips, or its own clip-path shapes, draws no
+ * halo band either: the hover rule above is as specific as the plain no-halo
+ * rules and comes later, so it would put the band back.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-clipped] {
+  box-shadow: none;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-shaped] {
+  box-shadow: none;
+}
+
+/*
+ * The hovered block's name, as a small tag over its outline's top left
+ * corner, outside it, in the outline's colour; inside it at the top of what
+ * is on screen, where it still shows. The selected block's toolbar takes that
+ * corner on the block it acts on, which is never the hovered one.
+ */
+.nx-canvas-mark[data-mark="hovered"][data-hover-label]::before {
+  content: attr(data-hover-label);
+  position: absolute;
+  /* In from the left edge as far as the screen cuts the outline off there. */
+  left: var(--nx-tag-inset-side, 0px);
+  bottom: 100%;
+  max-width: calc(100% - var(--nx-tag-inset-side, 0px));
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px 4px 0 0;
+  background: var(--nx-builder-select);
+  color: var(--nx-builder-select-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-component][data-hover-label]::before {
+  background: var(--nx-builder-component);
+  color: var(--nx-builder-component-text);
+}
+
+.nx-canvas-mark[data-mark="hovered"][data-hover-label][data-hover-tag-inside]::before {
+  top: 0;
+  bottom: auto;
+  border-radius: 0 0 4px 4px;
+}
+
+/*
+ * A selected block the page hides on the device shown, drawn only because it
+ * is selected: hatched over, and tagged in words, so it never reads as a block
+ * a visitor sees. The hatch is the select colour at low weight, so the block
+ * underneath stays readable.
+ */
+.nx-canvas-mark[data-mark="selected"][data-hidden] {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--nx-builder-select) 14%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/*
+ * The tag on the fixed dark ink the block toolbar uses, so it reads on any
+ * section of the page. Just outside the ring's bottom right corner: inside,
+ * it would cover the block it describes, and the toolbar owns the top left.
+ */
+.nx-canvas-mark[data-mark="selected"][data-hidden]::after {
+  content: attr(data-label);
+  position: absolute;
+  top: calc(100% + 4px);
+  right: var(--nx-tag-inset-side, 0);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--nx-builder-ink);
+  color: var(--nx-builder-ink-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+}
+
+/* Above the ring when it ends at the bottom of what is on screen, where a
+   tag below would be cut off. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="above"]::after {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+/* Lined up with the ring's left edge, running right, when there is no room
+   on screen for it to run left from the ring's right edge. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 0);
+}
+
+/* Inside the ring, at its bottom corner, when neither side has room on
+   screen, as on a block that fills it. The insets keep the corner on screen
+   where the ring runs past it; the marks set them. */
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"]::after {
+  top: auto;
+  bottom: var(--nx-tag-inset-bottom, 4px);
+  right: var(--nx-tag-inset-side, 4px);
+}
+
+.nx-canvas-mark[data-mark="selected"][data-hidden][data-tag="inside"][data-tag-edge="left"]::after {
+  right: auto;
+  left: var(--nx-tag-inset-side, 4px);
+}
+
+/*
+ * Where a dragged block will land.
+ *
+ * The same accent as the selection ring, because both answer "this is what the
+ * editor currently means" and two colours for one idea reads as two states.
+ *
+ * Sized on ONE axis only: the other comes from the target's own extent, set
+ * inline, because how far the line runs is a measurement rather than a style.
+ * A region stacking children downward gets a horizontal rule; a row gets a
+ * vertical one.
+ *
+ * Haloed like the ring, for the same reason: the line crosses the site's
+ * content, and on a blue section the blue alone is not there to see.
+ */
+.nx-drop-indicator {
+  position: absolute;
+  z-index: 2;
+  background: var(--nx-builder-select);
+  box-shadow: 0 0 0 1px var(--nx-builder-halo);
+  border-radius: 1px;
+  /*
+   * Never a drop target itself. The element sits under the pointer by
+   * construction — it marks where the pointer is aiming — so a hit-test that
+   * could land on it would resolve the drag to the indicator and lose the block
+   * beneath it.
+   */
+  pointer-events: none;
+}
+
+.nx-drop-indicator[data-axis="y"] {
+  height: 2px;
+  /* Centred on the line it names rather than hanging below it: the coordinate
+   * is a boundary between two blocks, and a 2px bar drawn from that coordinate
+   * downward sits inside the block after it. */
+  transform: translateY(-1px);
+}
+
+.nx-drop-indicator[data-axis="x"] {
+  width: 2px;
+  transform: translateX(-1px);
+}
+
+/*
+ * The line gets a terminal, so it reads as an insertion point.
+ *
+ * A bare 2px rule spanning a region is ambiguous with a border belonging to the
+ * block below it — which is exactly the reading to avoid, because a border says
+ * "this block" and the line means "between these blocks". A dot at the leading
+ * end is the convention every editor that draws this uses, and it costs no
+ * layout: the indicator is already absolutely positioned and takes part in no
+ * flow.
+ */
+.nx-drop-indicator::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nx-builder-select);
+  box-shadow: 0 0 0 1px var(--nx-builder-halo);
+}
+
+.nx-drop-indicator[data-axis="y"]::before {
+  left: -4px;
+  top: -3px;
+}
+
+.nx-drop-indicator[data-axis="x"]::before {
+  top: -4px;
+  left: -3px;
+}
+
+/*
+ * The sentence a refusal draws, over the container that refused.
+ *
+ * Positioned in the canvas's own content coordinates, the space the drop
+ * indicator and the block toolbar already use, so all three agree at any scroll
+ * offset and under zoom.
+ *
+ * Never a drop target itself: it sits over the region the pointer is aiming at
+ * by construction, so a hit-test that could land on it would resolve the drag
+ * to the message rather than to the container beneath.
+ */
+.nx-drop-refusal {
+  /* Over the container that refused, in the chrome layer over the canvas. */
+  position: absolute;
+  z-index: 3;
+}
+
+/*
+ * A refused drop's notice, on the canvas and in Layers alike: the editor's
+ * notice surface with a red edge and a warning mark rather than a red fill,
+ * so the reason reads beside ordinary content at AA contrast in both themes.
+ * The remedy is quieter than the refusal, and never hidden: naming what the
+ * spot DOES take is what makes this an instruction rather than a wall.
+ */
+.nx-refusal-notice {
+  width: max-content;
+  max-width: 18rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-left: 3px solid var(--nx-destructive);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  pointer-events: none;
+}
+
+.nx-refusal-notice__mark {
+  flex: none;
+  margin-top: 0.0625rem;
+  color: var(--nx-destructive);
+}
+
+.nx-refusal-notice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.nx-refusal-notice__why {
+  font-weight: var(--font-weight-semibold);
+}
+
+.nx-refusal-notice__takes {
+  color: var(--nx-builder-text-muted);
+}

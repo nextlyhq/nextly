@@ -31,11 +31,15 @@ import postcss, {
 } from "postcss";
 import { describe, expect, it } from "vitest";
 
+import { chromeStylesheetSource } from "../../../../builder/src/styles/chrome-stylesheet";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../../../..");
 
+const BUILDER_CHROME = "packages/builder/src/styles/builder-chrome.css";
+
 const EDITOR_SHEETS = [
-  "packages/builder/src/styles/builder-chrome.css",
+  BUILDER_CHROME,
   "packages/plugin-page-builder/src/styles/editor.css",
 ] as const;
 
@@ -70,7 +74,12 @@ function parseSheet(path: string): Root {
       `${path} does not exist; build @nextlyhq/admin (pnpm --filter @nextlyhq/admin... build) before this test`
     );
   }
-  return postcss.parse(readFileSync(full, "utf8"), { from: full });
+  // The builder's sheet is an index of partials: read it whole, as they compose.
+  const text =
+    path === BUILDER_CHROME
+      ? chromeStylesheetSource(url => readFileSync(fileURLToPath(url), "utf8"))
+      : readFileSync(full, "utf8");
+  return postcss.parse(text, { from: full });
 }
 
 /**

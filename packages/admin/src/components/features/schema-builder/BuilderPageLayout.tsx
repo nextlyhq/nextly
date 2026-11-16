@@ -48,6 +48,7 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
+import { crumbsByPointer } from "./outline/FocusCrumbs";
 import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
@@ -86,6 +87,13 @@ type Props = {
   isSaving: boolean;
   /** What the live region announces during that save. */
   savingLabel: string;
+  /**
+   * Runs when the editor is left through the leave guard's Discard Changes,
+   * before the navigation: an unsaved entity is let go with its changes.
+   */
+  onDiscard?: () => void;
+  /** Where the Page Builder opens for this entity, when it offers to. */
+  pageBuilderHref?: string;
   /** Page-owned dialogs — the schema-change confirmations, and any of the
    *  page's own. Mounted inside the frame so they share its stacking context. */
   children?: ReactNode;
@@ -109,6 +117,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     onActiveChange,
     isSaving,
     savingLabel,
+    onDiscard,
+    pageBuilderHref,
     children,
   } = props;
   // While changes are pending, every way out asks first: an in-app link, the
@@ -122,6 +132,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
       isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
       busy={isSaving}
+      onDiscard={onDiscard}
     >
       <div className="flex flex-col min-h-screen bg-background">
         <BuilderToolbar
@@ -134,6 +145,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
+          pageBuilderHref={pageBuilderHref}
         />
         <BuilderWorkspace {...props} />
 
@@ -334,7 +346,11 @@ function FieldListRegion({
   // The same map the save's refusal is read from, so a row marked with an
   // error is a row the save refuses.
   const errors = useMemo(
-    () => builderFieldErrors(builder.fields.filter(field => !field.isSystem)),
+    () =>
+      builderFieldErrors(
+        builder.fields.filter(field => !field.isSystem),
+        builder.fields
+      ),
     [builder.fields]
   );
   const systemFields = useMemo(
@@ -393,6 +409,7 @@ function FieldListRegion({
       {beforeFieldList}
       <DndContext
         sensors={builder.sensors}
+        collisionDetection={crumbsByPointer}
         onDragStart={builder.handleDragStart}
         accessibility={{
           announcements: builderAnnouncements(builder.fields),

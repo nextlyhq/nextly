@@ -45,6 +45,7 @@ import {
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
+import { refuseMigrationFilesLosingDefinition } from "../../domains/i18n/migration/move-keeps-definition";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import {
@@ -194,6 +195,12 @@ import {
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
+import {
+  adoptUniqueIndexesAlreadyThere,
+  type AdoptedUniqueIndex,
+  refuseUniqueIndexesOverRepeats,
+  withoutAdoptedIndexes,
+} from "../../domains/schema/migrate/unique-column-guard";
 import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
 import {
   mergeContributions,
@@ -236,6 +243,7 @@ import {
   assertSchemaLockHeld,
   isSchemaLockLost,
   lostLockError,
+  markedForSchemaLock,
 } from "../../domains/schema/pipeline/schema-lock";
 import {
   newestAppliedAppMigration,
@@ -2113,8 +2121,22 @@ export async function runPluginPhase(
       readLiveIndexTables(deps.db, deps.dialect, [statements]),
     // The same before-run count an app file gets: a plugin's module reaches the shared runner
     // through this phase, not through `runFileMigrations`.
-    refuseRequiredColumns: (statements, source) =>
-      refuseRequiredColumnsOverNulls(deps.db, deps.dialect, statements, source),
+    // And the same unique-index check: a module making a column unique over repeated values is
+    // refused before its first statement, as an app file is.
+    refuseRequiredColumns: async (statements, source) => {
+      await refuseRequiredColumnsOverNulls(
+        deps.db,
+        deps.dialect,
+        statements,
+        source
+      );
+      await refuseUniqueIndexesOverRepeats(
+        deps.db,
+        deps.dialect,
+        statements,
+        source
+      );
+    },
     introspect: async (names, stream) => {
       // Exactly the tables this module's snapshots name, as they stand now.
       // Not the app stream's comparable set: that is every collection, Single
@@ -2418,6 +2440,44 @@ function appStepAfter(
 ): number | undefined {
   if (step === undefined || !(step > 0)) return undefined;
   return Math.max(0, step - pluginRecorded);
+}
+
+/**
+ * One statement of the run's own steps, sent as the file runner sends one: refused once the run
+ * has lost the schema lock (`assertSchemaLockHeld`), and marked with the lock's claim on the
+ * servers (`markedForSchemaLock`), where a run taking over a lapsed lock looks for a statement of
+ * the earlier holder still running. SQLite runs one writer at a time and reads a statement's
+ * first word, so its statements go unmarked.
+ */
+async function executeHoldingSchemaLock(
+  deps: MigrateCoreDeps,
+  statement: string
+): Promise<unknown> {
+  await assertSchemaLockHeld();
+  return (deps.adapter as unknown as DrizzleAdapter).executeQuery(
+    deps.dialect === "sqlite" ? statement : markedForSchemaLock(statement)
+  );
+}
+
+/**
+ * Each one-to-one an earlier release left without its uniqueness gets it, judged on the
+ * definitions the run's files just left, and refused, creating nothing, while any repeats a value
+ * (`makeOneToOnesUnique`). A run `--step` stops short leaves it to one that runs every file; a
+ * step of zero or less limits nothing, as the planners read it (`appStepAfter`).
+ */
+async function makeOneToOnesUniqueAfterFiles(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (appStepAfter(deps.step, 0) !== undefined) return;
+  const { makeOneToOnesUnique } = await import(
+    "../../domains/schema/migrate/one-to-one-uniques"
+  );
+  await makeOneToOnesUnique({
+    db: deps.db,
+    dialect: deps.dialect,
+    executeQuery: statement => executeHoldingSchemaLock(deps, statement),
+    logger: deps.logger,
+  });
 }
 
 /**
@@ -2933,6 +2993,10 @@ export async function migrateCore(
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
+      // Each one-to-one an earlier release left without its uniqueness gets it
+      // (`makeOneToOnesUniqueAfterFiles`).
+      await makeOneToOnesUniqueAfterFiles(deps);
+
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();
 
@@ -3265,6 +3329,14 @@ async function judgeFileDeletions(
     deps.db,
     deps.dialect
   );
+  // A file turning translation on or off whose move would lose a column's comment, character set
+  // or collation is refused here too, before any statement (`refuseMigrationFilesLosingDefinition`).
+  await refuseMigrationFilesLosingDefinition(
+    // The files the step leaves the run after the modules, as the rename refusal above judges.
+    appFilesInStep(listed, appStepAfter(deps.step, modules.length)),
+    deps.db,
+    deps.dialect
+  );
   const units = [...modules, ...fileUnits];
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
@@ -3378,11 +3450,20 @@ function appFileUnits(
   step: number | undefined,
   dialect: SupportedDialect
 ): RunUnit[] {
+  return appFilesInStep(listed, step).map(file => fileUnit(file, dialect));
+}
+
+/**
+ * The app files a run applies within `step` (`appStepAfter`), in order: none when the plugins'
+ * modules took the whole step. One window for every judgement of the run's app files.
+ */
+function appFilesInStep(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined
+): ParsedMigration[] {
   if (step === 0) return [];
   const plan = fileRunPlan(listed, step);
-  return listed.flatMap(({ file }) =>
-    plan.runs.has(file) ? [fileUnit(file, dialect)] : []
-  );
+  return listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : []));
 }
 
 /** An app migration file as a unit of the run: its UP section. */
@@ -4315,6 +4396,37 @@ function assertRunsAsJudged(
   }
 }
 
+/**
+ * The file's UP less each unique index the database already carries under the file's name for it
+ * (`adoptUniqueIndexesAlreadyThere`), made by the run's own one-to-one step or a Builder save before
+ * the file was written, with the indexes it left out, which the file's drift check reads the live
+ * table without. A file with a snapshot of its own is judged against the schema that snapshot says
+ * it starts from (`before`); one without is judged on the live table alone.
+ */
+async function upWithoutUniquesAlreadyThere(
+  db: unknown,
+  dialect: SupportedDialect,
+  m: ParsedMigration,
+  snapshots: {
+    target: NextlySchemaSnapshot | null;
+    before: NextlySchemaSnapshot;
+  }
+): Promise<{ upSql: string; adopted: AdoptedUniqueIndex[] }> {
+  const adoption = await adoptUniqueIndexesAlreadyThere(
+    db,
+    dialect,
+    splitSqlStatements(m.upSql, dialect, m),
+    snapshots.target ? snapshots.before : undefined
+  );
+  if (adoption.adopted.length === 0) return { upSql: m.upSql, adopted: [] };
+  return {
+    upSql: adoption.statements
+      .map(statement => `${statement};`)
+      .join("\n--> statement-breakpoint\n"),
+    adopted: adoption.adopted,
+  };
+}
+
 /** An app migration file `runFileMigrations` has just applied, with the point before it. */
 export interface AppliedAppMigration {
   /** Its base name. */
@@ -4531,6 +4643,9 @@ export async function runFileMigrations(args: {
       });
       // A column made required over rows that would break it: refused here, before any statement.
       await refuseRequiredColumnsOverNulls(db, dialect, upStatements, filename);
+      // A column made unique while its entries repeat a value: refused here too, before any
+      // statement, where MySQL would otherwise keep every statement before the index's.
+      await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);
       // A file adding per-language unique indexes is refused here, before the ledger records an
       // attempt and before any statement, where one cannot hold. It also answers with the UP to
       // run on THIS database, which leaves out an index already installed here.
@@ -4550,6 +4665,12 @@ export async function runFileMigrations(args: {
         m.localization,
         filename
       );
+      // A unique index the database already carries under the file's name for it is left out.
+      const adoption = await upWithoutUniquesAlreadyThere(db, dialect, m, {
+        target,
+        before,
+      });
+      m.upSql = adoption.upSql;
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
@@ -4637,7 +4758,11 @@ export async function runFileMigrations(args: {
       const sides = narrowToContributions({
         before,
         target,
-        live: await introspectLiveSnapshot(db, dialect, managed),
+        // Without the indexes the file adopted, which its snapshot before it does not record.
+        live: withoutAdoptedIndexes(
+          await introspectLiveSnapshot(db, dialect, managed),
+          adoption.adopted
+        ),
         contributions: mergeContributions(
           beforeContributions,
           targetFile?.contributions ?? {}

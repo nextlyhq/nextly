@@ -7,7 +7,7 @@
  */
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
@@ -27,11 +27,25 @@ const check = vi.fn(async (kind: string, address: string) => ({
   address,
   refusal: refusals[address] ?? null,
 }));
+/** The unsaved entities' addresses each check was sent, in order. */
+const pendingSent: Array<ReadonlyArray<{ kind: string; address: string }>> = [];
 vi.mock("@admin/services/addressCheckApi", () => ({
   addressCheckApi: {
-    check: (kind: string, address: string) => check(kind, address),
+    check: (
+      kind: string,
+      address: string,
+      pendingCreates: ReadonlyArray<{ kind: string; address: string }> = []
+    ) => {
+      pendingSent.push(pendingCreates);
+      return check(kind, address);
+    },
   },
 }));
+
+import {
+  addUnsavedEntity,
+  removeUnsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 
 import { ADVANCED_SWITCHES } from "../../builder-settings-modal/advanced-switches";
 import type { BuilderConfig } from "../../builder-config";
@@ -68,6 +82,12 @@ beforeEach(() => {
   pluginEntries = [];
   refusals = {};
   check.mockClear();
+  pendingSent.length = 0;
+});
+
+afterEach(() => {
+  removeUnsavedEntity("collection", "product");
+  removeUnsavedEntity("collection", "blog_posts");
 });
 
 describe("NewEntityDialog", () => {
@@ -309,6 +329,53 @@ describe("NewEntityDialog", () => {
     await waitFor(() =>
       expect(check).toHaveBeenLastCalledWith("fieldGroup", "hero_banner")
     );
+  });
+
+  it("counts an address an unsaved entity holds as used", async () => {
+    addUnsavedEntity({
+      kind: "collection",
+      address: "product",
+      settings: { singularName: "Product", slug: "product", icon: "Package" },
+      fields: [],
+    });
+    // The server refuses an address it is told an unsaved entity holds.
+    refusals = {
+      product: { code: "DUPLICATE", message: "Resource already exists." },
+    };
+    const { user } = renderDialog();
+    await user.type(nameInput(), "Product");
+    await waitFor(() =>
+      expect(addressInput()).toHaveAccessibleDescription(
+        "A collection or Single already uses this address."
+      )
+    );
+    expect(pendingSent.at(-1)).toEqual([
+      { kind: "collection", address: "product" },
+    ]);
+    expect(createButton()).toBeDisabled();
+  });
+
+  it("refuses a hyphenated address whose snake_case form an unsaved entity holds", async () => {
+    addUnsavedEntity({
+      kind: "collection",
+      address: "blog_posts",
+      settings: { singularName: "Blog post", slug: "blog_posts", icon: "" },
+      fields: [],
+    });
+    const twin =
+      "Single address 'blog-posts' has the snake_case form 'blog_posts', which the collection 'blog_posts' already has; two addresses that differ only by '-' and '_' would read as one";
+    refusals = {
+      "blog-posts": { code: "SLUG_SAME_SNAKE_CASE", message: twin },
+    };
+    const { user } = renderDialog(SINGLE_BUILDER_CONFIG);
+    await user.type(nameInput(), "Blog posts");
+    await waitFor(() =>
+      expect(addressInput()).toHaveAccessibleDescription(twin)
+    );
+    expect(pendingSent.at(-1)).toEqual([
+      { kind: "collection", address: "blog_posts" },
+    ]);
+    expect(createButton()).toBeDisabled();
   });
 
   // A field group's icon shows in its list and in the navigation, so it is

@@ -1,0 +1,338 @@
+/*
+ * A component's variants, under its exposed fields in its own view: each a
+ * name to edit, how much it presets, and its values when opened. Bordered in
+ * the component accent's tint rather than its full strength, since a variant
+ * is a preset over the fields rather than a field itself.
+ */
+.nx-variants {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* Also the head of Show when, its title and whose fields it reads, and of
+   Never quote this, its title and its switch. */
+.nx-variants__header,
+.nx-show-when__head,
+.nx-never-quote__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* The heading at the size the fields' heading above it takes. */
+.nx-variants__header .nx-inspector__heading {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.nx-variants__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-variants__item {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-lg, 0.5rem);
+  background: var(--nx-background);
+}
+
+/* The open variant, the one the canvas previews, in the component's hue. */
+.nx-variants__item[data-open] {
+  border-color: color-mix(
+    in oklch,
+    var(--nx-builder-component) 40%,
+    var(--nx-border)
+  );
+}
+
+.nx-variants__main {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: 0.125rem 0.25rem;
+}
+
+/* The chevron turns to point down while the variant's values are open. */
+.nx-variants__chevron {
+  transition: transform 150ms ease;
+}
+
+.nx-variants__chevron[data-open] {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-variants__chevron {
+    transition: none;
+  }
+}
+
+.nx-variants__name {
+  flex: 1 1 6rem;
+  min-width: 0;
+}
+
+/*
+ * The variant's name, renamed in place but drawn as the row's title: no box
+ * until it is hovered or focused.
+ */
+/* Qualified by the row, for the reason the field's name is. */
+.nx-variants__name .nx-variants__name-input {
+  height: 1.75rem;
+  padding: 0 0.25rem;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.nx-variants__name .nx-variants__name-input:hover {
+  border-color: var(--nx-border);
+}
+
+.nx-variants__name .nx-variants__name-input:focus-visible {
+  background: var(--nx-background);
+}
+
+/*
+ * A refused name, said under the whole row rather than beside the input, so
+ * the sentence has the row's width to wrap in.
+ */
+.nx-variants__item > .nx-variants__problem {
+  padding: 0 0.5rem 0.5rem 2.25rem;
+}
+
+/* "2 changes", or "No changes yet", quietly beside the name. */
+.nx-variants__summary {
+  flex: 0 0 auto;
+  font-size: var(--text-xs, 0.75rem);
+  white-space: nowrap;
+  color: var(--nx-muted-foreground);
+}
+
+/* Inset only a little, so the values keep the inspector's own widths. */
+.nx-variants__values {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.25rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+/*
+ * One value. Its columns are the inspector's own row grid, the placement
+ * panel's (`.nx-inspector__field`), not a copy: only the height is its own.
+ */
+.nx-variants__value {
+  min-height: 2.25rem;
+}
+
+/* The label with its dot, in the grid's label column. */
+.nx-variants__value > .nx-variants__value-label {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/* The value and its Reset slot, filling the value column. */
+.nx-variants__value-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-variants__value-cell > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * A text value's inset a little under the design system's, so a value of a
+ * usual length shows whole beside the Reset slot in the inspector's width.
+ */
+.nx-variants__value-cell input:not([type="checkbox"]) {
+  padding-inline: 0.375rem;
+}
+
+/* A fixed 24px slot for Reset, the smallest target WCAG 2.2 AA allows. */
+.nx-variants__reset-slot {
+  display: grid;
+  flex: 0 0 1.5rem;
+  place-items: center;
+  width: 1.5rem;
+}
+
+.nx-variants__reset-slot .nx-variants__reset {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.nx-variants__value-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.nx-variants__dot {
+  flex: 0 0 auto;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--nx-builder-component);
+}
+
+.nx-variants__value > .nx-variants__problem {
+  grid-column: 1 / -1;
+}
+
+.nx-variants__hint {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-variants__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.nx-variants__problem {
+  margin: 0;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+/*
+ * The tag over the canvas while a variant is previewed: a pill in the
+ * component's hue at the frame's top right, naming the variant drawn.
+ */
+.nx-variant-preview-tag {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.1875rem 0.625rem;
+  border: 1px solid
+    color-mix(in oklch, var(--nx-builder-component) 40%, var(--nx-border));
+  border-radius: 999px;
+  background: var(--nx-card);
+  color: var(--nx-builder-component);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  pointer-events: none;
+}
+
+/*
+ * The one row the canvas's preview tags share, where the variant's tag sits
+ * alone: the variant previewed and the site mode picked, side by side and
+ * never over each other. Inside it the row places each tag, so the variant's
+ * tag gives up its own position. Drawn in the frame's pinned chrome, so its
+ * top right is the viewport's and it stays there while the page scrolls.
+ */
+.nx-canvas-tags {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 3;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.375rem;
+  pointer-events: none;
+}
+
+.nx-canvas-tags > .nx-variant-preview-tag {
+  position: static;
+}
+
+/*
+ * The variant's tag is drawn on the admin's card, so it takes the admin's
+ * component purple, keyed on the admin's `.dark` as the card is, not the
+ * page's: the layer it sits in follows the canvas page's scheme
+ * (`.nx-canvas-layer[data-nx-page-scheme]`), and a dark page under a light
+ * admin would otherwise draw the dark page's light purple on a white card.
+ */
+.nx-variant-preview-tag {
+  --nx-builder-component: var(--nx-builder-component-on-light);
+}
+
+.dark .nx-variant-preview-tag {
+  --nx-builder-component: var(--nx-builder-component-on-dark);
+}
+
+/*
+ * "Dark preview · Use device": a pill in the admin's own colours, at rest as
+ * the variant's tag is, whose one control takes presses back from the layer.
+ */
+.nx-mode-preview-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.1875rem 0.25rem 0.1875rem 0.625rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 999px;
+  background: var(--nx-card);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.nx-mode-preview-tag__dot {
+  color: var(--nx-muted-foreground);
+}
+
+.nx-mode-preview-tag__clear {
+  padding: 0 0.375rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.nx-mode-preview-tag__clear:hover {
+  background: var(--nx-muted);
+}
+
+.nx-mode-preview-tag__clear:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+/*
+ * A placement's variant, under its title in the placement's inspector: one
+ * field row, laid out by the fields' own rules, set off from the fields below.
+ */
+.nx-variant-picker {
+  margin-bottom: 1rem;
+}

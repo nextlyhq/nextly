@@ -19,7 +19,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { z } from "zod";
 
 import {
@@ -32,8 +32,14 @@ import {
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
+import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { toast } from "@admin/components/ui";
-import { useCollection, useUpdateCollection } from "@admin/hooks/queries";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
+import {
+  useCollection,
+  useCreateCollection,
+  useUpdateCollection,
+} from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
@@ -44,8 +50,17 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { createPreview } from "@admin/lib/builder/create-preview";
+import { collectionCreatePayload } from "@admin/lib/builder/create-request";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
+import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
+import {
+  removeUnsavedEntity,
+  type UnsavedEntity,
+  useUnsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
+import { navigateTo } from "@admin/lib/navigation";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import { schemaApi } from "@admin/services/schemaApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
@@ -123,6 +138,28 @@ function collectionSettings(
   };
 }
 
+/**
+ * A collection created in the dialog and not saved yet, in the shape the page
+ * loads a saved one in. Its id marks it as unsaved, so once its save brings
+ * the server's collection back under a real id the editor loads that afresh.
+ */
+function unsavedCollection(entity: UnsavedEntity): Collection {
+  const { settings } = entity;
+  return {
+    id: `unsaved:collection:${entity.address}`,
+    name: entity.address,
+    slug: entity.address,
+    label: settings.pluralName || settings.singularName,
+    labels: {
+      singular: settings.singularName,
+      plural: settings.pluralName || settings.singularName,
+    },
+    tableName: "",
+    source: "ui",
+    fields: entity.fields,
+  };
+}
+
 interface CollectionBuilderEditPageProps {
   params?: { slug?: string };
 }
@@ -135,7 +172,18 @@ export default function CollectionBuilderEditPage({
   params,
 }: CollectionBuilderEditPageProps): React.ReactElement {
   const slug = params?.slug;
-  const { data: collection, isLoading, error } = useCollection(slug);
+  // A collection created in the dialog waits in this tab until its first
+  // save; the server has nothing under its address to read.
+  const unsaved = useUnsavedEntity("collection", slug ?? "");
+  const {
+    data: savedCollection,
+    isLoading,
+    error,
+  } = useCollection(unsaved ? undefined : slug);
+  const collection = useMemo(
+    () => (unsaved ? unsavedCollection(unsaved) : savedCollection),
+    [unsaved, savedCollection]
+  );
   // The tab names the collection being edited, by the name it is listed under.
   const listedAs = collection ? collectionLabels(collection) : undefined;
   useDocumentTitle(listedAs?.plural || listedAs?.singular);
@@ -150,8 +198,11 @@ export default function CollectionBuilderEditPage({
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const confirmation = useSchemaChangeConfirmation();
 
-  const { mutate: updateCollection, isPending: isSaving } =
+  const { mutate: updateCollection, isPending: isUpdating } =
     useUpdateCollection();
+  const { mutateAsync: createCollection, isPending: isCreating } =
+    useCreateCollection();
+  const isSaving = isUpdating || isCreating;
 
   const {
     settings,
@@ -166,7 +217,8 @@ export default function CollectionBuilderEditPage({
     entity: collection,
     builder,
     toFields: getCollectionFields,
-    toSettings: loaded => collectionSettings(loaded, slug),
+    // An unsaved collection opens with what the dialog set.
+    toSettings: loaded => unsaved?.settings ?? collectionSettings(loaded, slug),
     isDirty: settingsAreDirty,
     onLoad: loaded => {
       const { singular, plural } = collectionLabels(loaded);
@@ -175,6 +227,7 @@ export default function CollectionBuilderEditPage({
     // `id` rather than `slug`, which is optional on a collection; the two are
     // equally stable and only one is guaranteed present.
     identity: loaded => loaded.id,
+    unsaved: unsaved !== undefined,
   });
 
   const isLocked = collection?.locked === true;
@@ -182,6 +235,9 @@ export default function CollectionBuilderEditPage({
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
   const localized = settings?.i18n === true;
+  // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
+  // refuses a field taking one of the lifecycle's names in the save that turns it on.
+  const drafts = settings?.status === true;
 
   // The schema landed. The apply carries fields only, so a save that also
   // changed the settings would otherwise clear the dirty badge while the
@@ -310,6 +366,41 @@ export default function CollectionBuilderEditPage({
     [slug, settings, updateCollection, pinFields, pinSettings]
   );
 
+  // The first save of an unsaved collection is its create: reviewed from the
+  // fields it will be created with, its address checked once more (another
+  // tab may have saved one under it), then created with every field and
+  // setting. A refusal at either step creates nothing and keeps it unsaved.
+  const createUnsaved = useCallback(
+    async (fields: FieldDefinition[]) => {
+      if (!settings) return { success: false };
+      const refused = await checkAddressAgain("collection", entitySlug);
+      if (refused !== null) return { success: false, message: refused };
+      await createCollection(
+        collectionCreatePayload(entitySlug, settings, fields)
+      );
+      return { success: true };
+    },
+    [settings, entitySlug, createCollection]
+  );
+
+  // Created: the file mirror follows the create, as a saved collection's
+  // follows its apply, and this tab lets the unsaved collection go, so the
+  // editor reads the server's from now on.
+  const onCreated = useCallback(
+    async (fieldDefinitions: FieldDefinition[]) => {
+      if (!settings) return;
+      await mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeCollection(
+            collectionEntityFromSettings(entitySlug, settings, fieldDefinitions)
+          ),
+        "Collection created"
+      );
+      removeUnsavedEntity("collection", entitySlug);
+    },
+    [settings, entitySlug]
+  );
+
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
   const { handleSave, confirmApply } = useSchemaSave({
@@ -320,20 +411,43 @@ export default function CollectionBuilderEditPage({
     // Judged against the fields as last saved, so a draft that changes a
     // saved field's storage level is refused before it can lose values.
     getValidatedFields: () => getValidatedFields(pending.saved),
-    preview: fields => schemaApi.preview(entitySlug, fields, localized),
+    preview: fields =>
+      unsaved
+        ? Promise.resolve(createPreview(fields))
+        : schemaApi.preview(entitySlug, fields, localized, drafts),
     apply: (fields, version, resolutions, renames) =>
-      schemaApi.apply(
-        entitySlug,
-        fields,
-        version,
-        resolutions,
-        renames,
-        localized
-      ),
+      unsaved
+        ? createUnsaved(fields)
+        : schemaApi.apply(
+            entitySlug,
+            fields,
+            version,
+            resolutions,
+            renames,
+            localized,
+            drafts
+          ),
     onNoChanges: saveSettingsOnly,
-    onApplied: onSchemaApplied,
+    onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
   });
+
+  // Discard all on an unsaved collection discards the collection itself: it
+  // leaves this tab, and the editor returns to the list.
+  const pendingChanges = useMemo(
+    () =>
+      unsaved
+        ? {
+            ...pending,
+            discardLeaves: true,
+            discardAll: () => {
+              removeUnsavedEntity("collection", entitySlug);
+              navigateTo(ROUTES.BUILDER_COLLECTIONS);
+            },
+          }
+        : pending,
+    [unsaved, pending, entitySlug]
+  );
 
   // ----------------------------------------------------------------
   // Loading / error guards
@@ -369,7 +483,19 @@ export default function CollectionBuilderEditPage({
       locked={isLocked}
       configPath={collection?.configPath}
       unsavedCount={unsavedCount}
-      pending={pending}
+      pending={pendingChanges}
+      pageBuilderHref={
+        // Once saved, an entity laid out from blocks opens in the Page Builder
+        // from a new entry (a Single, from its document).
+        !unsaved && hasPageBuilderField(pending.saved)
+          ? buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: entitySlug })
+          : undefined
+      }
+      onDiscard={
+        unsaved
+          ? () => removeUnsavedEntity("collection", entitySlug)
+          : undefined
+      }
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -394,6 +520,7 @@ export default function CollectionBuilderEditPage({
         kind={COLLECTION_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
+        creating={unsaved !== undefined}
       />
     </BuilderPageLayout>
   );
