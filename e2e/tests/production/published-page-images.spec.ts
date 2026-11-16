@@ -239,6 +239,14 @@ test("a phone and a desktop draw copies, never the upload", async ({
       );
       expect(preloaded).toHaveLength(1);
       expect(urls).toContain(preloaded[0]?.href);
+      // And the section draws it: its background is the copy preloaded.
+      const drawnBackground = await visitor
+        .locator("section")
+        .first()
+        .evaluate(section => getComputedStyle(section).backgroundImage);
+      expect(drawnBackground).toContain(
+        new URL(preloaded[0]?.href ?? "").pathname
+      );
       // The Image block's copy is no wider than twice its slot.
       const drawn = await visitor
         .locator("img")

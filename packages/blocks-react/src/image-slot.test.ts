@@ -38,8 +38,9 @@ describe("an image's slot", () => {
     const slot = narrowForColumns(rootImageSlot(BREAKPOINTS), 4);
     // A device's slot covers every viewport up to its widest: a tablet's row
     // of four wraps to two, and a phone's to one, on its way down, and a
-    // column just before a row of two wraps is 480px wide.
-    expect(slot.devices.map(device => device.width)).toEqual([480, 480, 480]);
+    // column just before a row of two wraps is two minimums and the widest
+    // gap wide, 512px.
+    expect(slot.devices.map(device => device.width)).toEqual([512, 512, 512]);
     // One column is the whole width, and no column count changes nothing.
     expect(
       narrowForColumns(rootImageSlot(BREAKPOINTS), 1).devices[0]?.width
@@ -66,7 +67,7 @@ describe("an image's slot", () => {
   it("writes sizes from the narrowest device up", () => {
     const slot = narrowForColumns(rootImageSlot(BREAKPOINTS), 2);
     expect(sizesFor(slot)).toBe(
-      "(max-width: 640px) 480px, (max-width: 1024px) 512px, 960px"
+      "(max-width: 640px) 512px, (max-width: 1024px) 512px, 960px"
     );
   });
 
@@ -87,7 +88,7 @@ describe("a container's children", () => {
       type: "core/columns",
       slots: { children: [{}, {}] },
     });
-    expect(row?.imageSlot?.devices.map(d => d.width)).toEqual([960, 512, 480]);
+    expect(row?.imageSlot?.devices.map(d => d.width)).toEqual([960, 512, 512]);
     expect(row?.imageSlot?.eager).toBe(true);
     const later = childImageContext(ctx, { id: "later", type: "core/box" });
     expect(later?.imageSlot?.eager).toBeUndefined();
@@ -99,6 +100,8 @@ describe("a container's children", () => {
     for (const changed of [
       { styles: { base: { base: { gridTemplateColumns: "1fr 3fr" } } } },
       { styles: { hover: { mobile: { display: "flex" } } } },
+      { styles: { base: { base: { gap: "200px" } } } },
+      { styles: { base: { tablet: { columnGap: "4rem" } } } },
       { classes: ["wide-row"] },
     ]) {
       const row = childImageContext(ctx, {
@@ -129,6 +132,40 @@ describe("a container's children", () => {
       base: { base: { width: "50%" }, mobile: { width: "100%" } },
     };
     expect(narrowForOwnSize(root, varies)).toBe(root);
+  });
+
+  it("is not narrowed by a width another state changes", () => {
+    const root = rootImageSlot(BREAKPOINTS);
+    for (const styles of [
+      {
+        base: { base: { width: "100px" } },
+        hover: { base: { width: "1000px" } },
+      },
+      {
+        base: { base: { maxWidth: "300px" } },
+        focus: { base: { maxWidth: "none" } },
+      },
+      {
+        base: { base: { width: "300px" } },
+        active: { mobile: { minWidth: "90%" } },
+      },
+    ]) {
+      expect(narrowForOwnSize(root, styles)).toBe(root);
+    }
+  });
+
+  it("is drawn at a width set in pixels, even past its container", () => {
+    // CSS draws `width: 1000px` at 1000 inside a 300px container; a maximum
+    // and a percentage are shares of the container.
+    const narrow = narrowToWidth(rootImageSlot(BREAKPOINTS), "300px");
+    const wide = { base: { base: { width: "1000px" } } };
+    expect(narrowForOwnSize(narrow, wide).devices.map(d => d.width)).toEqual([
+      1000, 1000, 1000,
+    ]);
+    const capped = { base: { base: { width: "1000px", maxWidth: "50%" } } };
+    expect(narrowForOwnSize(narrow, capped).devices.map(d => d.width)).toEqual([
+      150, 150, 150,
+    ]);
   });
 
   it("is not narrowed where a minimum width could widen the block", () => {

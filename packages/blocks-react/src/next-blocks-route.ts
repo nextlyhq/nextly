@@ -301,6 +301,7 @@ function cachedImageCopies(
         keyParts: [
           "page-builder-image-copies",
           config.cacheScope ?? "",
+          media,
           named,
           String(upTo),
         ],

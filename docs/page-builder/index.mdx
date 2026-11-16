@@ -223,7 +223,7 @@ export default route.ContentPage;
   stable.
 </Callout>
 
-Give the route's reader `media.copiesOf` and pass `imageCopies` to the route, and a
+Add `media.copiesOf` to the route's reader and `imageCopies` to the route above, and a
 visitor downloads each image at about the size it is drawn, not at its upload size:
 
 ```tsx
@@ -255,6 +255,7 @@ const route = createPublicBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
+  // Your route's other options stay as they are, its `styleContext` among them.
   imageCopies: pageBuilderImageCopies(reader),
 });
 ```

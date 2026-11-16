@@ -19,6 +19,13 @@ const DESKTOP_WIDTH = 1920;
 /** The narrowest a column is before Columns wraps it onto the next line. */
 const COLUMN_MIN_WIDTH = 240;
 
+/**
+ * The widest gap the default row of columns draws between them: its
+ * `space.columns` token's maximum, 2rem. Allowing for it makes a row wrap at
+ * the widest it would, so a column is never judged narrower than it draws.
+ */
+const COLUMN_GAP_MAX = 32;
+
 /** CSS pixels in a `rem`, at the browser's default root size. */
 const REM = 16;
 
@@ -107,19 +114,25 @@ export function narrowForColumns(slot: ImageSlot, count: number): ImageSlot {
 function widestColumn(width: number, count: number): number {
   const perRow = Math.max(
     1,
-    Math.min(count, Math.floor(width / COLUMN_MIN_WIDTH))
+    Math.min(
+      count,
+      Math.floor((width + COLUMN_GAP_MAX) / (COLUMN_MIN_WIDTH + COLUMN_GAP_MAX))
+    )
   );
-  const atFullWidth = Math.ceil(width / perRow);
   if (perRow === 1) return width;
-  return Math.max(atFullWidth, Math.min(width, COLUMN_MIN_WIDTH * 2));
+  return Math.max(
+    Math.ceil(width / perRow),
+    Math.min(width, COLUMN_MIN_WIDTH * 2 + COLUMN_GAP_MAX)
+  );
 }
-
 /** The style properties an author can redraw a row of columns with. */
 const COLUMN_LAYOUT = [
   "display",
   "gridTemplateColumns",
   "gridAutoFlow",
   "flexDirection",
+  "gap",
+  "columnGap",
 ] as const;
 
 /**
@@ -149,25 +162,31 @@ const LENGTH = /^(\d+(?:\.\d+)?|\.\d+)(px|rem|%)$/;
  * leaves the slot as it was.
  */
 export function narrowToWidth(slot: ImageSlot, width: unknown): ImageSlot {
-  if (typeof width !== "string") return slot;
-  const match = LENGTH.exec(width.trim().toLowerCase());
-  if (match === null) return slot;
-  const amount = Number(match[1]);
-  const unit = match[2];
+  if (lengthIn(width, 0) === undefined) return slot;
   return {
     ...slot,
-    devices: slot.devices.map(device => {
-      const own =
-        unit === "%"
-          ? Math.ceil((device.width * amount) / 100)
-          : unit === "rem"
-            ? Math.ceil(amount * REM)
-            : Math.ceil(amount);
-      return { ...device, width: Math.min(device.width, own) };
-    }),
+    devices: slot.devices.map(device => ({
+      ...device,
+      width: Math.min(
+        device.width,
+        lengthIn(width, device.width) ?? device.width
+      ),
+    })),
   };
 }
 
+/**
+ * A length's width in a box `width` wide: `px` and `rem` as they are, a
+ * percentage as that share, `undefined` for anything else.
+ */
+function lengthIn(value: unknown, width: number): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = LENGTH.exec(value.trim().toLowerCase());
+  if (match === null) return undefined;
+  const amount = Number(match[1]);
+  if (match[2] === "%") return Math.ceil((width * amount) / 100);
+  return Math.ceil(match[2] === "rem" ? amount * REM : amount);
+}
 /**
  * The `sizes` attribute for a slot: each narrower device under its own
  * maximum, then the desktop's width. A browser picks the first that matches.
@@ -232,48 +251,60 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * A slot narrowed by the width and maximum width a block sets for itself,
- * read only where they hold on every device: set at the base, in its resting
- * state, set at no other breakpoint, and with no minimum width anywhere. A
- * width that changes by device is left unjudged, since narrowing by the base
- * value would size the image too small on a device that draws it wider, and
- * so is one a minimum could widen.
+ * A slot sized by the width and maximum width a block sets for itself, read
+ * only where they hold on every device and in every state: set at the base,
+ * in its resting state, set in no other state or breakpoint, and with no
+ * minimum width anywhere. A width that changes by device or on hover is left
+ * unjudged, since sizing by the base value would size the image too small
+ * where it is drawn wider, and so is one a minimum could widen. A width set in
+ * pixels can be wider than the container, since CSS draws it so.
  */
 export function narrowForOwnSize(slot: ImageSlot, styles: unknown): ImageSlot {
-  const breakpoints = recordOf(recordOf(styles)?.base);
-  if (breakpoints === undefined) return slot;
-  for (const [id, values] of Object.entries(breakpoints)) {
-    const sized = recordOf(values);
-    // A minimum can draw the block wider than its width says, at any
-    // breakpoint, so a block with one is left unjudged.
-    if (sized?.minWidth !== undefined) return slot;
-    if (id === "base") continue;
-    if (sized?.width !== undefined || sized?.maxWidth !== undefined) {
-      return slot;
-    }
-  }
-  const base = recordOf(breakpoints.base);
-  // Each against the block's container, as CSS resolves both, then the
-  // narrower: a percentage maximum is a share of the container, never of the
-  // width the block's own `width` already gave it.
-  return narrowerOf(
-    narrowToWidth(slot, base?.width),
-    narrowToWidth(slot, base?.maxWidth)
-  );
-}
-
-/** Two bounds on one slot, device by device, the narrower of each. */
-function narrowerOf(a: ImageSlot, b: ImageSlot): ImageSlot {
-  if (a === b) return a;
+  if (sizedOutsideTheBase(styles)) return slot;
+  const base = recordOf(recordOf(recordOf(styles)?.base)?.base);
+  if (base?.width === undefined && base?.maxWidth === undefined) return slot;
   return {
-    ...a,
-    devices: a.devices.map((device, index) => ({
-      ...device,
-      width: Math.min(device.width, b.devices[index]?.width ?? device.width),
-    })),
+    ...slot,
+    devices: slot.devices.map(device => {
+      // A width set in pixels is drawn at, even past the container; a
+      // percentage, and a maximum, are shares of the container.
+      const own = lengthIn(base.width, device.width) ?? device.width;
+      const cap =
+        lengthIn(base.maxWidth, device.width) ?? Number.POSITIVE_INFINITY;
+      return { ...device, width: Math.min(own, cap) };
+    }),
   };
 }
 
+/** The size properties a block's own width is judged by. */
+const OWN_SIZE = ["width", "maxWidth", "minWidth"] as const;
+
+/**
+ * Whether a block's size is set anywhere but its base breakpoint's resting
+ * state, or by a minimum anywhere, any of which can draw it wider than the
+ * base width says.
+ */
+function sizedOutsideTheBase(styles: unknown): boolean {
+  return Object.entries(recordOf(styles) ?? {}).some(([state, byPoint]) =>
+    Object.entries(recordOf(byPoint) ?? {}).some(([id, stored]) =>
+      widensOwnSize(recordOf(stored) ?? {}, state === "base" && id === "base")
+    )
+  );
+}
+
+/**
+ * Whether one breakpoint's values can draw a block wider than its base width:
+ * a minimum anywhere, or a size anywhere but the resting base.
+ */
+function widensOwnSize(
+  values: Record<string, unknown>,
+  atRestingBase: boolean
+): boolean {
+  if (values.minWidth !== undefined) return true;
+  return (
+    !atRestingBase && OWN_SIZE.some(property => values[property] !== undefined)
+  );
+}
 /** What `childImageContext` reads of a container. */
 interface SizedNode {
   readonly id?: string;
