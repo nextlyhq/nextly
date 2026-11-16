@@ -328,13 +328,15 @@ Where the [Page Builder](/docs/page-builder) is installed, its **Settings** dial
 
 - **A page** gets the same SEO tab its edit page draws, for that page alone. Its `seo`
   group moves from **General** to the tab, and saves with the page.
-- **A template** gets the rules every page it draws follows. **Title on Google**,
-  **Description on Google** and **Different title when shared** are written with variables,
-  `{Post title} | {Site name}`: click a variable to add it where you are typing. A variable
-  is one of the content type's text fields, by its label, or `{Site name}`, the site's name.
-  **Share image** takes the image from one of the type's image fields, or leaves it
-  automatic. A page's own text in its SEO tab still wins over the template's rule, which
-  wins over the content type's pattern ([the order](#turning-the-fields-into-tags)).
+- **A template** gets the rules every page it draws follows. **Description on Google** and
+  **Different title when shared** are written with variables, `{Post excerpt}`: click a
+  variable to add it where you are typing. A variable is one of the content type's text
+  fields, by its label, or `{Site name}`, the site's name. **Share image** takes the image
+  from one of the type's image fields, or leaves it automatic. A page's own text in its SEO
+  tab still wins over the template's rule, which wins over the content type's pattern
+  ([the order](#turning-the-fields-into-tags)). **Title on Google** is not a rule of the
+  template: it follows the content type's [title pattern](#title-patterns), which the tab
+  names, with a link to change it in SEO settings.
   Hiding from search, the official address and structured data stay with each page and its
   content type.
 - **An entry's own design** gets the same rules, for the one entry it draws.
@@ -1100,13 +1102,15 @@ Each value is worked out on its own, from the first of these that has one:
 | ----- | ------------------------------------------------------------------------------ | -------------------------------------- |
 | 1     | What a person typed in the page's `seo` group                                  | every value                            |
 | 2     | What the route's own `buildMetadata` returns                                   | title, description and the social card |
-| 3     | The Page Builder design drawing the page                                       | title, description, the social card    |
+| 3     | The Page Builder design drawing the page                                       | description, the social card           |
 | 4     | The content type's pattern, such as `{Title} \| {Site name}`                   | title, description                     |
 | 5     | The page's own content: its `title`, `excerpt` or `summary`, and a cover image | title, description, share image        |
 | 6     | The site's defaults                                                            | title, description, share image        |
 
 Level 3 is what the design drawing the page sets: a page's own blocks, or the template or own
-design an entry is drawn with, its SEO settings first. A route hands it as it serves the page; the
+design an entry is drawn with, its SEO settings first. It never gives the title: a page's title
+is the one typed for it, else its title in the content type's pattern ("Pricing · Ridgeline"),
+never a heading on the page or a title the design states for itself. A route hands it as it serves the page; the
 SEO tab, the problem list and the check of what search engines received ask the Page Builder for
 it, where it is installed, so they show the value the page is served with.
 

@@ -58,7 +58,6 @@ packages/builder/src/list-query-controls.tsx 3230
 
 packages/builder/src/shared-styles-panel.tsx 1643
 
-packages/builder/src/style-inspector-panel.tsx 7077
 
 
 
