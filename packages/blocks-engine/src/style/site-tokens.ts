@@ -50,7 +50,9 @@
 import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
+import { STYLE_CATALOG } from "./catalog";
 import type { TokenKind } from "./catalog-types";
+import { shapeLeaves } from "./catalog-types";
 import { parseColor } from "./contrast";
 import {
   asciiLower,
@@ -491,9 +493,16 @@ export function resolveTokenPrefix(prefix: string | undefined): {
 
 function tokenIssue(
   message: string,
-  severity: ValidationIssue["severity"] = "warning"
+  severity: ValidationIssue["severity"] = "warning",
+  suggestion?: string
 ): ValidationIssue {
-  return { path: "siteTokens", code: "invalid-style-value", severity, message };
+  return {
+    path: "siteTokens",
+    code: "invalid-style-value",
+    severity,
+    message,
+    ...(suggestion === undefined ? {} : { suggestion }),
+  };
 }
 
 /**
@@ -640,6 +649,30 @@ const OPAQUE_VALUE =
  * spelling, and a grammar narrower here than there is a check that quietly
  * stops covering the values the other side lets through.
  */
+/**
+ * The words a length token may hold: every keyword that a property reading a
+ * length token accepts in a length's place (`auto` on a margin, `large` on a
+ * font size, `thin` on a border width), lower-cased as CSS compares them.
+ *
+ * Derived from the catalog rather than listed here, so a keyword a property
+ * gains is accepted in a token the same day, and a word no property takes is
+ * the certain mismatch this check exists to report.
+ */
+const LENGTH_TOKEN_KEYWORDS: ReadonlySet<string> = new Set(
+  STYLE_CATALOG.flatMap(entry => shapeLeaves(entry.shape))
+    .filter(leaf => leaf.tokenKinds.includes("dimension"))
+    .flatMap(leaf => ("keywords" in leaf ? (leaf.keywords ?? []) : []))
+    .map(asciiLower)
+);
+
+/** What a length token holding words is told, with what to type instead. */
+const LENGTH_WORDS =
+  "is words, not a length; type a number with a unit, such as 16px";
+
+/** What a colour token holding a hex CSS cannot read is told. */
+const HEX_MALFORMED =
+  "is not a hex colour; a hex colour has 3, 4, 6 or 8 digits from 0-9 and a-f, such as #1d4ed8";
+
 /** The only words `font-weight` takes; every other value is a number. */
 const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
 
@@ -714,12 +747,22 @@ export function checkTokenKind(
   switch (kind) {
     case "color":
       // A number is never a colour, whatever unit it wears.
-      return measured
-        ? `is a ${unit === "" ? "number" : "measurement"}, not a colour`
-        : undefined;
+      if (measured) {
+        return `is a ${unit === "" ? "number" : "measurement"}, not a colour`;
+      }
+      // A hex is the one colour spelling read here in full, so one that
+      // `parseColor` cannot read is certainly not a colour.
+      return text.startsWith("#") && !isColor ? HEX_MALFORMED : undefined;
     case "dimension": {
       if (isColor) return "is a colour, not a length";
-      if (unit === undefined) return undefined;
+      // Not a measurement. A function may be one this does not know, so it
+      // passes; a word passes only if some property reading the token takes
+      // it.
+      if (unit === undefined) {
+        return text.includes("(") || LENGTH_TOKEN_KEYWORDS.has(asciiLower(text))
+          ? undefined
+          : LENGTH_WORDS;
+      }
       // Only zero may go without a unit; `16` is not `16px` to CSS.
       if (unit === "") {
         return amount === 0
@@ -1444,7 +1487,12 @@ export function emitTokenBlocks(
       if (mismatch !== undefined) {
         issues.push(
           tokenIssue(
-            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}. It was written as given, and will do nothing where the token is used.`
+            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}.`,
+            "warning",
+            // What a render does with it, kept out of the message: a save
+            // that refuses on this report stores nothing, and the message
+            // must stay true there.
+            "It was written as given, and will do nothing where the token is used."
           )
         );
       }
