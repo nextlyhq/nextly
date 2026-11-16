@@ -43,11 +43,15 @@ export function EntryKindQuestion({
             <label
               key={id}
               htmlFor={id}
+              // Chosen as the field type picker draws its chosen card: a faint
+              // primary tint over the dialog's background, where the label and
+              // hint keep their contrast. Not the accent fill, which a brand
+              // can set to a colour the hint is unreadable on.
               className={cn(
                 "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
                 checked
-                  ? "border-primary bg-accent"
-                  : "border-border hover:bg-accent/50"
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover-unified"
               )}
             >
               <input
