@@ -1349,8 +1349,12 @@ function useKeepOfferedChanges({
   // Whether the document has changed, as of the latest render: asked just
   // before the restore writes anything.
   const dirtyNow = useRef(isDirty);
+  // The document and language on screen now, so an answer that arrives after
+  // the author moved to another is not reported, or retried, there.
+  const scopeNow = useRef(scope);
   useLayoutEffect(() => {
     dirtyNow.current = isDirty;
+    scopeNow.current = scope;
   });
 
   // A render after the restore: everything it wrote has been rendered by now,
@@ -1399,9 +1403,20 @@ function useKeepOfferedChanges({
   ): Promise<DocumentActionOutcome> => {
     setRefusal(null);
     setPhase("checking");
+    const pressedIn = scopeNow.current;
     const outcome = await offer
       .restoreChecked(() => !dirtyNow.current)
       .catch((): KeepOutcome => "unchecked");
+    // Moved to another document or language meanwhile: whatever the answer,
+    // it is about the one left behind, so nothing is saved or said here.
+    if (scopeNow.current !== pressedIn) {
+      return {
+        ok: false,
+        reason: "refused",
+        message: "Nothing was saved: the page on screen changed first.",
+        reported: true,
+      };
+    }
     // Edited while it was checked: that edit is what Save stores.
     if (outcome === "edited") {
       return (latest.current.save ?? unavailableSave)();
