@@ -110,8 +110,13 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
-import { boxInFrameViewport } from "./geometry-dom";
-import { besidePanel, useSummonAnswer } from "./insert-panel-summon";
+import {
+  cardAnchor,
+  NOWHERE,
+  SummonAnswerOnly,
+  useSummonAnswer,
+  type Measurable,
+} from "./insert-panel-summon";
 import { placeParts, placementWords } from "./insert-placement-words";
 import {
   blockLabel,
@@ -580,19 +585,6 @@ function highlightedEntry(
   return undefined;
 }
 
-/**
- * Anything a popover can be anchored to: the tile, or nowhere while there is
- * no tile in the document to measure.
- */
-interface Measurable {
-  getBoundingClientRect(): DOMRect;
-}
-
-/** The anchor for a popover with no tile under it: a point at the origin. */
-const NOWHERE: Measurable = {
-  getBoundingClientRect: () => new DOMRect(),
-};
-
 export { placementWords }; // For the importers of the panel's words.
 
 /**
@@ -661,16 +653,7 @@ function TilePopover({
     const panel = root.current;
     const tile =
       entry === undefined ? null : tileElement(panel, tokens.get(entry.id));
-    // On the panel's right edge, level with the tile, so the card drawn to
-    // its right sits outside the panel, never over the tiles beside it.
-    anchor.current =
-      panel === null || tile === null
-        ? NOWHERE
-        : {
-            // Measured through the module that reads boxes.
-            getBoundingClientRect: () =>
-              besidePanel(boxInFrameViewport(panel), boxInFrameViewport(tile)),
-          };
+    anchor.current = cardAnchor(panel, tile);
   });
   if (entry === undefined) return null;
   const offer = offers.get(entry.id);
@@ -690,6 +673,8 @@ function TilePopover({
         side="right"
         align="start"
         sideOffset={8}
+        // Never flipped back over the tiles where the right has no room.
+        avoidCollisions={false}
         aria-hidden="true"
         className="nx-insert-popover"
         // Focus stays in the search, where typing and the arrow keys work.
@@ -788,9 +773,6 @@ function PlacementLine({
     (entry === undefined ? undefined : offers.get(entry.id)?.place) ?? first;
   return (
     <p
-      // Keyed by the press, so a second press while one still shows starts
-      // the highlight again rather than continuing it.
-      key={flash ?? "rest"}
       className="nx-insert-panel__placement"
       data-flash={flash === undefined ? undefined : ""}
       aria-live={entry === undefined ? "polite" : "off"}
@@ -1276,6 +1258,8 @@ export function InsertPanel({
     // from the page, or holds no region a block can be put in.
     return (
       <div className="nx-insert-panel" data-empty="unplaceable">
+        {/* A press is still answered, with nothing to focus, so it waits for no later open. */}
+        <SummonAnswerOnly {...summons} />
         {header}
         <p className="nx-insert-panel__note">
           The container chosen to add into is no longer on the page. Select a

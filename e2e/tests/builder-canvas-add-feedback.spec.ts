@@ -144,7 +144,10 @@ test.describe("the canvas's add controls", () => {
       nodes: [],
     });
     await openBuilder(page, id);
-    const start = page.getByRole("button", { name: "Add section", exact: true });
+    const start = page.getByRole("button", {
+      name: "Add section",
+      exact: true,
+    });
     for (const open of [false, true]) {
       await setAdd(page, open);
       await start.click();
@@ -210,6 +213,8 @@ test.describe("the Add panel's tile card", () => {
     if (panel === null || cardBox === null) {
       throw new Error("[e2e] the panel or the card drew no box");
     }
+    // It never takes a press meant for what lies under it.
+    await expect(card).toHaveCSS("pointer-events", "none");
     // Outside the panel, to its right, and level with the tile.
     expect(cardBox.x).toBeGreaterThanOrEqual(panel.x + panel.width);
     expect(Math.abs(cardBox.y - a.y)).toBeLessThan(2);

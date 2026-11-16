@@ -8,6 +8,7 @@
 import * as React from "react";
 
 import type { Rect } from "./geometry";
+import { boxInFrameViewport } from "./geometry-dom";
 
 /**
  * Where a tile's card is anchored: a point on the panel's right edge, as
@@ -20,6 +21,40 @@ import type { Rect } from "./geometry";
  */
 export function besidePanel(panel: Rect, tile: Rect): DOMRect {
   return new DOMRect(panel.x + panel.width, tile.y, 0, tile.height);
+}
+
+/**
+ * Anything a popover can be anchored to: a point beside a tile, with the
+ * tile as the element whose scrolling moves it, or nowhere while there is no
+ * tile in the document to measure.
+ */
+export interface Measurable {
+  getBoundingClientRect(): DOMRect;
+  readonly contextElement?: Element;
+}
+
+/** The anchor for a popover with no tile under it: a point at the origin. */
+export const NOWHERE: Measurable = {
+  getBoundingClientRect: () => new DOMRect(),
+};
+
+/**
+ * A tile card's anchor: a point on the panel's right edge, level with the
+ * tile, so the card drawn to its right sits outside the panel, never over
+ * the tiles beside it. The tile is its context element, so the card moves
+ * with the list as it scrolls. Boxes are read through the module that reads
+ * them. `NOWHERE` while either is missing.
+ */
+export function cardAnchor(
+  panel: HTMLElement | null,
+  tile: HTMLElement | null
+): Measurable {
+  if (panel === null || tile === null) return NOWHERE;
+  return {
+    contextElement: tile,
+    getBoundingClientRect: () =>
+      besidePanel(boxInFrameViewport(panel), boxInFrameViewport(tile)),
+  };
 }
 
 /** How long the line naming the place stays highlighted after a press. */
@@ -58,4 +93,21 @@ export function useSummonAnswer(
     return () => clearTimeout(done);
   }, [flash]);
   return flash;
+}
+
+/**
+ * The answer to a press where the panel has nowhere to add: nothing to focus
+ * or scroll, but the press is still said back as answered, so it does not
+ * wait and steal focus when the panel can next draw its palette.
+ */
+export function SummonAnswerOnly({
+  summoned,
+  onSummoned,
+}: {
+  readonly summoned?: number | undefined;
+  readonly onSummoned?: ((count: number) => void) | undefined;
+}): null {
+  const nowhere = React.useRef<HTMLDivElement | null>(null);
+  useSummonAnswer(nowhere, summoned, onSummoned);
+  return null;
 }

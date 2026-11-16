@@ -2328,6 +2328,34 @@ describe("the panel answering an add control", () => {
     expect(onSummoned).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the same line through the highlight, so it fades and is announced once", () => {
+    const { rerender } = mountSummoned(undefined);
+    const before = placement();
+    rerender(1);
+    // One element throughout: a rebuilt one would snap on and off with no
+    // fade, and a rebuilt live region drops what it was about to say.
+    expect(placement()).toBe(before);
+    expect(placement()?.hasAttribute("data-flash")).toBe(true);
+  });
+
+  it("answers a press even with nowhere to add, so it cannot replay later", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const onSummoned = vi.fn();
+    render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        inside="gone-container"
+        summoned={3}
+        onSummoned={onSummoned}
+      />
+    );
+    expect(document.querySelector('[data-empty="unplaceable"]')).not.toBeNull();
+    expect(onSummoned).toHaveBeenCalledWith(3);
+  });
+
   it("lets the highlight go after a moment", () => {
     vi.useFakeTimers();
     try {
