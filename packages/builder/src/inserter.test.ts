@@ -787,7 +787,7 @@ describe("insertionCandidates and insertionFor", () => {
     ]);
   });
 
-  it("puts a block after a selected container, and inside it only as the last place", () => {
+  it("puts a layout block after a selected container, and inside it only as the last place", () => {
     const document = documentOf([
       {
         id: "box",
@@ -797,7 +797,7 @@ describe("insertionCandidates and insertionFor", () => {
         slots: { children: [text("held")] },
       },
     ]);
-    const places = insertionCandidates(document, "box");
+    const places = insertionCandidates(document, "box", { role: "layout" });
     // After it first, so a block that fits beside it goes there.
     expect(places[0]).toMatchObject({
       kind: "after-selection",

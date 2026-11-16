@@ -11,13 +11,16 @@ export {
   styleFlagsInGroup,
 } from "../style/catalog";
 export {
+  APPLIES_WHEN,
   STYLE_GROUPS,
   STYLE_GROUP_DEFS,
   TOKEN_KINDS,
   isStyleLeaf,
   shapeLeaves,
 } from "../style/catalog-types";
+export { applies, type AppliesContext } from "../style/applies";
 export type {
+  AppliesWhen,
   ColorLeaf,
   CssValueLeaf,
   DimensionLeaf,

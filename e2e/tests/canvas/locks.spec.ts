@@ -200,10 +200,10 @@ test.describe("the editor inside locked areas", () => {
     expect(typeof placed[2]).toBe("string");
     expect(placed.slice(3)).toEqual(PLACED.slice(2));
 
-    // The control: after a free block, a tile goes where the line says, with
-    // nothing to add about it.
+    // The control: after a free block, a tile goes where the line says, right
+    // after the block, and says so.
     await clickBlock(page, "lk-free-text");
-    await expect(heading).not.toHaveAccessibleDescription(/Goes/);
+    await expect(heading).toHaveAccessibleDescription(/^Goes after Text\./);
   });
 
   test("shows a block's design read-only inside contentOnly, its content editable", async ({

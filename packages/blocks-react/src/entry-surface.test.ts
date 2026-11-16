@@ -214,7 +214,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     module: listCollectionsModule,
     // The walk behind `listCollections`, shared with the route's other
     // questions about a page's lists; not a consumer surface.
-    internal: ["anyListWhere", "listCollectionsWhere", "listPropsAsBound"],
+    internal: ["anyListWhere", "listPropsAsBound"],
   },
   // Public whole: how a page and the regions of its Layout share one site
   // sheet and keep their styles apart, asked by the published route and the
@@ -618,6 +618,9 @@ describe("the root entry", () => {
       // The collections a page's lists draw: the published route and the
       // editor's canvas ask one walk which lists a page holds.
       "listCollections",
+      // The same walk with a binding run, so the editor's change check
+      // watches the collection a bound list draws.
+      "listCollectionsWhere",
       "migrationSourceFor",
       // Whether a recorded lookup found no field a visitor may read, so the
       // editor can say a whole source is hidden from visitors.

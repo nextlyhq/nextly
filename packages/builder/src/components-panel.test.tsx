@@ -277,9 +277,9 @@ describe("placing a component from the panel", () => {
     );
     renderPanel({ editor });
 
-    expect(screen.getByText(/Adding after/).textContent).toBe(
-      "Adding after Heading"
-    );
+    expect(
+      document.querySelector(".nx-insert-panel__placement")?.textContent
+    ).toBe("Adding after Heading");
     fireEvent.click(placeButton("Promo card"));
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
