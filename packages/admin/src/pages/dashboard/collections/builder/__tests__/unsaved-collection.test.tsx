@@ -42,6 +42,7 @@ vi.mock("@admin/services/schemaFileApi", () => ({
 
 // Watched, and still made: the leave guard sees the navigation as it would.
 const navigate = vi.fn();
+const replaced = vi.fn();
 vi.mock("@admin/lib/navigation", async importOriginal => {
   const actual = await importOriginal<typeof import("@admin/lib/navigation")>();
   return {
@@ -49,6 +50,10 @@ vi.mock("@admin/lib/navigation", async importOriginal => {
     navigateTo: (path: string) => {
       navigate(path);
       actual.navigateTo(path);
+    },
+    replaceTo: (path: string) => {
+      replaced(path);
+      actual.replaceTo(path);
     },
   };
 });
@@ -109,7 +114,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => removeUnsavedEntity("collection", "products"));
+afterEach(() => {
+  removeUnsavedEntity("collection", "products");
+  removeUnsavedEntity("collection", "items");
+});
 
 describe("the collection editor on a collection not saved yet", () => {
   it("opens it from this tab, asking the server nothing, with its create and starting field pending", async () => {
@@ -225,5 +233,149 @@ describe("the collection editor on a collection not saved yet", () => {
     await waitFor(() =>
       expect(unsavedEntity("collection", "products")).toBeUndefined()
     );
+  });
+});
+
+// Before the first save nothing refers to the address, so it can still change.
+// The change moves the collection to its new address at once, outside the
+// undo history: its fields, its pending changes and what can be undone stay.
+describe("an unsaved collection's address", () => {
+  it("moves with its fields, pending changes and undo history when changed in its settings", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "products" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    // An edit to undo: the field's menu, opened from its row, duplicates it.
+    (await screen.findByTestId("field-row-headline")).focus();
+    await user.keyboard("{Shift>}{F10}{/Shift}");
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Duplicate" })
+    );
+    expect(screen.getByText("3 unsaved changes")).toBeInTheDocument();
+
+    check.mockImplementation(async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal: null,
+    }));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    const address = within(settings).getByLabelText("Slug");
+    await user.clear(address);
+    await user.type(address, "items");
+    const save = within(settings).getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+
+    // The same collection corrected, not a new place: the route is replaced,
+    // so Back does not return to an address that holds nothing.
+    expect(replaced).toHaveBeenCalledWith("/admin/builder/collections/items");
+    expect(navigate).not.toHaveBeenCalled();
+    // The same collection under a new address: no leave to ask about, and the
+    // route has moved.
+    expect(
+      screen.queryByRole("alertdialog", { name: "Unsaved Changes" })
+    ).toBeNull();
+    expect(window.location.pathname).toBe("/admin/builder/collections/items");
+    expect(unsavedEntity("collection", "items")).toBeDefined();
+    expect(unsavedEntity("collection", "products")).toBeUndefined();
+
+    // The route now names the new address.
+    rerender(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "items" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    expect(await screen.findByText("3 unsaved changes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /^save/i }));
+    const review = await screen.findByRole("alertdialog");
+    expect(
+      within(review).getByRole("heading", {
+        name: "Create the collection items?",
+      })
+    ).toBeInTheDocument();
+  });
+});
+
+describe("an unsaved collection's address, moved onto one in use", () => {
+  async function moveTo(user: ReturnType<typeof userEvent.setup>, to: string) {
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = await screen.findByRole("dialog");
+    const address = within(settings).getByLabelText("Slug");
+    await user.clear(address);
+    await user.type(address, to);
+    const save = within(settings).getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+  }
+
+  it("stays where it is when the server's rule refuses the new address at the move", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "products" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-headline");
+    // Free while typed; taken by the time of the move (a Single took it).
+    let asks = 0;
+    check.mockImplementation(async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal:
+        address === "items" && ++asks > 1
+          ? { code: "DUPLICATE", message: "Resource already exists." }
+          : null,
+    }));
+    await moveTo(user, "items");
+
+    expect(
+      await screen.findByText(
+        "A collection or Single already uses this address."
+      )
+    ).toBeInTheDocument();
+    expect(unsavedEntity("collection", "items")).toBeUndefined();
+    expect(unsavedEntity("collection", "products")).toBeDefined();
+    expect(replaced).not.toHaveBeenCalled();
+  });
+
+  it("stays where it is while its first save is on its way", async () => {
+    const user = userEvent.setup();
+    render(
+      <RestartProvider>
+        <CollectionBuilderEditPage params={{ slug: "products" }} />
+        <Toaster />
+      </RestartProvider>
+    );
+    await screen.findByTestId("field-row-headline");
+    check.mockImplementation(async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal: null,
+    }));
+    // The create holds until released, so the save is on its way.
+    let release: (value: unknown) => void = () => {};
+    mockCreate.mockImplementation(
+      () => new Promise(resolve => (release = resolve))
+    );
+    await saveAndConfirm(user);
+    await waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+
+    await moveTo(user, "items");
+    expect(
+      await screen.findByText(
+        "This collection is being saved. Change its address once the save ends."
+      )
+    ).toBeInTheDocument();
+    expect(unsavedEntity("collection", "items")).toBeUndefined();
+    expect(replaced).not.toHaveBeenCalled();
+    release({ message: "Collection created" });
   });
 });
