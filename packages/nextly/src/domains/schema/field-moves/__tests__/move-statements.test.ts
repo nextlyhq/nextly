@@ -137,6 +137,38 @@ describe("moveDataStatements on SQLite", () => {
     });
   });
 
+  it("leaves a date the database cannot read where it was, rather than losing it", () => {
+    const db = table("published integer");
+    db.exec(
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"July 17, 2026"}'), (2, '{"published":"2026-07-17T00:00:00.000Z"}');`
+    );
+    const out = moveDataStatements(
+      { from: key("meta", "published"), to: column("published") },
+      sqlite("timestamp", "integer")
+    );
+    run(db, out.copy);
+    run(db, out.clearSource);
+    expect(db.prepare("SELECT id, published, meta FROM dc_posts ORDER BY id").all()).toEqual([
+      { id: 1, published: null, meta: '{"published":"July 17, 2026"}' },
+      { id: 2, published: Date.parse("2026-07-17T00:00:00.000Z") / 1000, meta: "{}" },
+    ]);
+  });
+
+  it("carries an explicit JSON null between groups as null, not as a missing key", () => {
+    const db = table("other text");
+    db.exec(`INSERT INTO dc_posts (id, meta) VALUES (1, '{"note":null}');`);
+    const moved = moveDataStatements(
+      { from: key("meta", "note"), to: key("other", "note") },
+      sqlite("json")
+    );
+    run(db, moved.copy);
+    run(db, moved.clearSource);
+    expect(db.prepare("SELECT meta, other FROM dc_posts").get()).toEqual({
+      meta: "{}",
+      other: '{"note":null}',
+    });
+  });
+
   it("embeds a JSON value as JSON in the group, not as its text", () => {
     const db = table("tags text");
     db.exec(`INSERT INTO dc_posts (id, tags) VALUES (1, '["a","b"]');`);
@@ -213,7 +245,7 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       `UPDATE "dc_posts" SET "views" = ("meta" #>> '{"views"}')::integer WHERE jsonb_typeof("meta" #> '{"views"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"views"}') <> 'null';`,
     ]);
     expect(out.clearSource).toEqual([
-      `UPDATE "dc_posts" SET "meta" = "meta" #- '{"views"}' WHERE ("meta" #> '{"views"}') IS NOT NULL;`,
+      `UPDATE "dc_posts" SET "meta" = "meta" #- '{"views"}' WHERE ("meta" #> '{"views"}') IS NOT NULL AND ("views" IS NOT NULL OR NOT (jsonb_typeof("meta" #> '{"views"}') IS NOT NULL AND jsonb_typeof("meta" #> '{"views"}') <> 'null'));`,
     ]);
   });
 
@@ -238,7 +270,7 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       "UPDATE `dc_posts` SET `title` = JSON_UNQUOTE(JSON_EXTRACT(`meta`, '$.\"title\"')) WHERE JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) <> 'NULL';",
     ]);
     expect(out.clearSource).toEqual([
-      "UPDATE `dc_posts` SET `meta` = JSON_REMOVE(`meta`, '$.\"title\"') WHERE JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"');",
+      "UPDATE `dc_posts` SET `meta` = JSON_REMOVE(`meta`, '$.\"title\"') WHERE JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"') AND (`title` IS NOT NULL OR NOT (JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(`meta`, '$.\"title\"')) <> 'NULL'));",
     ]);
   });
 

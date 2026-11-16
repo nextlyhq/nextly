@@ -25,7 +25,11 @@ import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
-import { fieldProducesColumn } from "../services/field-column-descriptor";
+import {
+  classifyFieldKind,
+  fieldProducesColumn,
+  isTextStorageKind,
+} from "../services/field-column-descriptor";
 
 /** Where a field's values are: a column of their own, or a key inside a container's JSON column. */
 export type StoragePlace =
@@ -193,13 +197,16 @@ export function checkMove(
       `The move names a field that is not at ${(from ? request.to : request.from).join(".")}.`
     );
   }
-  if (from.field.type !== to.field.type) {
+  if (
+    from.field.type !== to.field.type ||
+    !sameStorage(from.field, to.field)
+  ) {
     return refuse(
       "type-changed",
-      `${label(to.field)} is moved and changes type in the same save. Move it and change its type in separate saves.`
+      `${label(to.field)} is moved and changes type, or how its values are stored, in the same save. Move it and make that change in separate saves.`
     );
   }
-  if (!fieldProducesColumn(to.field)) {
+  if (!fieldProducesColumn(from.field) || !fieldProducesColumn(to.field)) {
     return refuse(
       "no-column",
       `${label(to.field)} keeps its values outside the entry's row, so it is not moved into or out of a group.`
@@ -232,6 +239,17 @@ export function checkMove(
     ok: true,
     move: { field: to.field, from: from.place, to: to.place, perLanguage },
   };
+}
+
+/**
+ * Whether a field stores its values the same way before and after: the canonical column kind,
+ * with every text width counted as text (inside JSON a string has no width). A field that keeps
+ * its type but changes how it is stored (a number becoming a list of numbers) is not one move.
+ */
+function sameStorage(before: FieldDefinition, after: FieldDefinition): boolean {
+  const a = classifyFieldKind(before, "collection");
+  const b = classifyFieldKind(after, "collection");
+  return a === b || (isTextStorageKind(a) && isTextStorageKind(b));
 }
 
 /**

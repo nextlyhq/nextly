@@ -159,6 +159,26 @@ describe("checkMove", () => {
     ).toMatchObject({ ok: false, reason: "no-column" });
   });
 
+  it("refuses a move that also changes where or how the field stores its values", () => {
+    // Virtual before, stored after: there was no column to move from.
+    const virtual = text("preview", { virtual: true });
+    expect(
+      checkMove([virtual, group("meta", [])], [group("meta", [text("preview")])], {
+        from: ["preview"],
+        to: ["meta", "preview"],
+      })
+    ).toMatchObject({ ok: false });
+    // The same type, a number becoming a list of numbers: a scalar is not the list it now holds.
+    const views = { name: "views", label: "Views", type: "number" } as FieldDefinition;
+    const many = { ...views, hasMany: true } as FieldDefinition;
+    expect(
+      checkMove([views, group("meta", [])], [group("meta", [many])], {
+        from: ["views"],
+        to: ["meta", "views"],
+      })
+    ).toMatchObject({ ok: false, reason: "type-changed" });
+  });
+
   it("judges a container that kept its name but changed type as one the field leaves", () => {
     const rows = { name: "box", type: "repeater", fields: [text("title")] } as unknown as FieldDefinition;
     const boxGroup = group("box", [group("meta", [text("title")])]);

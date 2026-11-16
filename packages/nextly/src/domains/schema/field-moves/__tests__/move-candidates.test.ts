@@ -57,6 +57,12 @@ describe("moveCandidates", () => {
     ).toEqual([]);
   });
 
+  it("ends on a definition that holds itself", () => {
+    const loop = group("loop", []);
+    (loop as unknown as { fields: FieldDefinition[] }).fields.push(loop);
+    expect(moveCandidates([loop], [loop])).toEqual([]);
+  });
+
   it("takes a renamed group's fields for the rename, not as moves", () => {
     expect(
       moveCandidates([group("meta", [text("title")])], [group("info", [text("title")])])

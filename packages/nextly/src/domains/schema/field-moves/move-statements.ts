@@ -252,7 +252,9 @@ export function moveDataStatements(
   const table = q(target.table);
   const { from, to } = move;
 
-  // Where an entry holds a value to carry, and that value in the form `to` takes.
+  // Where an entry holds a value to carry, and that value in the form `to` takes. Between two
+  // groups an explicit JSON null is a value too, and is carried as null: a missing key and a null
+  // one read differently, since a default fills only the missing one.
   const source =
     from.kind === "column"
       ? {
@@ -260,7 +262,10 @@ export function moveDataStatements(
           asJson: json.toJson(q(from.column), target),
         }
       : {
-          holds: json.holds(q(from.column), from.keys),
+          holds:
+            to.kind === "json"
+              ? json.hasKey(q(from.column), from.keys)
+              : json.holds(q(from.column), from.keys),
           asJson: json.valueAt(q(from.column), from.keys),
         };
 
@@ -278,10 +283,16 @@ export function moveDataStatements(
           `UPDATE ${table} SET ${q(to.column)} = ${json.set(q(to.column), to.keys, source.asJson)} WHERE ${source.holds};`,
         ];
 
+  // A key is cleared only where its value arrived: a value the copy could not read into the
+  // column (a date in a form the database does not parse, say) stays where it was, never lost.
+  const arrived =
+    to.kind === "column"
+      ? `(${q(to.column)} IS NOT NULL OR NOT (${source.holds}))`
+      : json.hasKey(q(to.column), to.keys);
   const clearSource =
     from.kind === "json"
       ? [
-          `UPDATE ${table} SET ${q(from.column)} = ${json.remove(q(from.column), from.keys)} WHERE ${json.hasKey(q(from.column), from.keys)};`,
+          `UPDATE ${table} SET ${q(from.column)} = ${json.remove(q(from.column), from.keys)} WHERE ${json.hasKey(q(from.column), from.keys)} AND ${arrived};`,
         ]
       : [];
 

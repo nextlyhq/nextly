@@ -25,25 +25,31 @@ function nameOf(field: FieldDefinition): string | undefined {
   return typeof name === "string" && name.length > 0 ? name : undefined;
 }
 
-/** Every named field at every depth, with its path; a group with no name is looked through. */
-function everyField(
-  fields: readonly FieldDefinition[],
-  above: readonly string[] = []
-): NamedAt[] {
-  return (addressableFields(fields) as unknown as FieldDefinition[]).flatMap(
-    field => {
+/**
+ * Every named field at every depth, with its path; a group with no name is looked through. Walked
+ * with a stack, each container once, so a definition that holds itself (possible in code) ends.
+ */
+function everyField(fields: readonly FieldDefinition[]): NamedAt[] {
+  const out: NamedAt[] = [];
+  const seen = new WeakSet<object>();
+  const pending: { list: readonly FieldDefinition[]; above: readonly string[] }[] = [
+    { list: fields, above: [] },
+  ];
+  while (pending.length > 0) {
+    const { list, above } = pending.shift() as (typeof pending)[number];
+    for (const field of addressableFields(list) as unknown as FieldDefinition[]) {
       const name = nameOf(field);
-      if (!name) return [];
+      if (!name) continue;
       const path = [...above, name];
+      out.push({ path, field });
       const { fields: inner } = field as { fields?: unknown };
-      return [
-        { path, field },
-        ...(Array.isArray(inner)
-          ? everyField(inner as FieldDefinition[], path)
-          : []),
-      ];
+      if (Array.isArray(inner) && !seen.has(field)) {
+        seen.add(field);
+        pending.push({ list: inner as FieldDefinition[], above: path });
+      }
     }
-  );
+  }
+  return out;
 }
 
 const key = (path: readonly string[]) => path.join("\u0000");
