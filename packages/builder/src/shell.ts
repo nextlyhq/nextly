@@ -625,12 +625,21 @@ export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
  */
-export { TokensPanel, useVariablesHeader } from "./tokens-panel";
+export { GroupToggle, TokensPanel, useVariablesHeader } from "./tokens-panel";
 export type {
+  GroupFolds,
   TokensPanelProps,
   VariablesHeader,
   VariablesPreview,
 } from "./tokens-panel";
+// Which variable groups each Design tab lists, and the one variable search,
+// so a tab's count and the rows it lists come from the same rule.
+export {
+  DESIGN_TAB_GROUPS,
+  searchVariableGroups,
+  variableMatchesByTab,
+} from "./tokens-studio";
+export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
  * Experimental, as the view's `usage` is.

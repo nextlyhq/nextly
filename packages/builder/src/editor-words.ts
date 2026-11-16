@@ -21,6 +21,11 @@ export const EDITOR_WORDS = {
   pages: "Pages",
   components: "Components",
   design: "Design",
+  // The Design panel's tabs, by kind.
+  colours: "Colours",
+  type: "Type",
+  spacing: "Spacing",
+  styles: "Styles",
   variables: "Variables",
   sharedStyles: "Shared styles",
   fonts: "Fonts",

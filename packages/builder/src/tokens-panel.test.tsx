@@ -28,6 +28,7 @@ import {
   type TokensPanelProps,
   type VariablesPreview,
 } from "./tokens-panel";
+import type { VariableGroup } from "./tokens-studio";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "currentTokens" | "onChange">>;
@@ -1602,5 +1603,75 @@ describe("a new variable's code name follows its name", () => {
     expect(
       document.querySelector('[data-variable-key="color.new-colour"]')
     ).not.toBeNull();
+  });
+});
+
+describe("a Design tab's view of the variables", () => {
+  /** The panel under a host that keeps the folds, as the Design panel does. */
+  function Folding({
+    search,
+    groups,
+  }: {
+    search?: string;
+    groups?: readonly VariableGroup[];
+  }): React.JSX.Element {
+    const [folded, setFolded] = React.useState<ReadonlySet<string>>(new Set());
+    return (
+      <Hosted
+        tokens={SITE}
+        {...(search === undefined ? {} : { search })}
+        {...(groups === undefined ? {} : { groups })}
+        folds={{
+          folded,
+          onFold: (group, fold) =>
+            setFolded(current => {
+              const next = new Set(current);
+              if (fold) next.add(group);
+              else next.delete(group);
+              return next;
+            }),
+        }}
+      />
+    );
+  }
+  const regions = (): string[] =>
+    screen
+      .getAllByRole("region")
+      .map(region => region.getAttribute("aria-labelledby") ?? "")
+      .map(id => document.getElementById(id)?.textContent ?? "");
+
+  it("lists only its tab's groups", () => {
+    render(<Folding groups={["colours"]} />);
+    expect(regions()).toEqual(["Colours2"]);
+    expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
+  });
+
+  it("folds a group by its heading, which says how many it holds", () => {
+    render(<Folding />);
+    const toggle = screen.getByRole("button", { name: "Colours, 2" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(row(/^Brand/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
+    // The other groups stay open.
+    expect(row(/^Space 4/)).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(row(/^Brand/)).toBeTruthy();
+  });
+
+  it("takes its search from the host, opens every group it matches in, and folds none", () => {
+    const { rerender } = render(<Folding />);
+    fireEvent.click(screen.getByRole("button", { name: "Colours, 2" }));
+    expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
+    // A search kept by the host: no search box of its own.
+    rerender(<Folding search="brand" />);
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(row(/^Brand/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Space 4/ })).toBeNull();
+    // Cleared: the group folded before is folded again.
+    rerender(<Folding search="" />);
+    expect(screen.queryByRole("button", { name: /^Brand/ })).toBeNull();
+    expect(row(/^Space 4/)).toBeTruthy();
   });
 });

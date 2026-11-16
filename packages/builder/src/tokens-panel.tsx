@@ -51,6 +51,7 @@ import {
 import {
   Braces,
   Bold,
+  ChevronDown,
   Hash,
   Plus,
   Ruler,
@@ -71,6 +72,7 @@ import {
   addVariable,
   labelNewVariable,
   lengthFamilyOf,
+  searchVariableGroups,
   variableGroups,
   type NewVariable,
   type VariableEntry,
@@ -181,6 +183,29 @@ export interface TokensPanelProps {
    * @experimental Settles with the Variables tab's usage.
    */
   classes?: readonly NamedClass[];
+  /**
+   * The variable groups this view lists, in this order: one Design tab's.
+   * Absent: every group.
+   */
+  groups?: readonly VariableGroup[];
+  /**
+   * A search the host keeps across several views, as the Design panel keeps
+   * one across its tabs. Given, this view lists what it matches and draws no
+   * search box of its own.
+   */
+  search?: string;
+  /** Which groups are folded, and the way to fold one. Absent: none fold. */
+  folds?: GroupFolds;
+}
+
+/**
+ * Which of the Design panel's groups the author folded, by group id, and
+ * the way to fold or open one. The host keeps it, so a group stays folded
+ * for that author across reloads.
+ */
+export interface GroupFolds {
+  readonly folded: ReadonlySet<string>;
+  readonly onFold: (group: string, folded: boolean) => void;
 }
 
 /** The Design panel's header controls, and the preview mode they choose. */
@@ -295,6 +320,9 @@ function VariablesView({
   headerActions,
   header,
   placed,
+  groups: listed,
+  search: hostSearch,
+  folds,
   ...hosted
 }: TokensPanelProps & {
   header: VariablesHeader;
@@ -302,7 +330,8 @@ function VariablesView({
   placed: boolean;
 }): React.JSX.Element {
   const { mode } = header;
-  const [query, setQuery] = React.useState("");
+  const [ownQuery, setQuery] = React.useState("");
+  const query = hostSearch ?? ownQuery;
   const { root, openKey, toggle, add, forget, commitFrom } = useOpenVariable({
     tokens,
     onChange,
@@ -313,8 +342,13 @@ function VariablesView({
   const search = React.useRef<HTMLInputElement>(null);
 
   const groups = React.useMemo(
-    () => (tokens === undefined ? [] : variableGroups(tokens, mode)),
-    [tokens, mode]
+    () =>
+      tokens === undefined
+        ? []
+        : variableGroups(tokens, mode).filter(
+            group => listed === undefined || listed.includes(group.group)
+          ),
+    [tokens, mode, listed]
   );
   const needle = query.trim().toLowerCase();
   const shown = searched(groups, needle);
@@ -336,23 +370,26 @@ function VariablesView({
       {placed ? (
         <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
       ) : null}
-      <div className="nx-vars__search">
-        <Search aria-hidden="true" size={16} />
-        <Input
-          ref={search}
-          type="search"
-          aria-label="Search variables"
-          placeholder="Search variables"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-        />
-      </div>
+      {hostSearch === undefined ? (
+        <div className="nx-vars__search">
+          <Search aria-hidden="true" size={16} />
+          <Input
+            ref={search}
+            type="search"
+            aria-label="Search variables"
+            placeholder="Search variables"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+          />
+        </div>
+      ) : null}
       <div className="nx-vars__body">
         <PanelNotes readOnly={readOnly} issue={issue} notice={hosted.notice} />
         {placed ? header.overlays : null}
         <VariableGroups
           shown={shown}
           searching={needle !== ""}
+          folds={folds}
           onAdd={add}
           rows={{
             tokens,
@@ -394,6 +431,7 @@ interface RowsHost {
 function VariableGroups({
   shown,
   searching,
+  folds,
   onAdd,
   rows,
 }: {
@@ -403,6 +441,7 @@ function VariableGroups({
     readonly entries: readonly VariableEntry[];
   }[];
   searching: boolean;
+  folds: GroupFolds | undefined;
   onAdd: (what: NewVariable) => void;
   rows: RowsHost;
 }): React.JSX.Element {
@@ -418,6 +457,7 @@ function VariableGroups({
             heading={group.heading}
             entries={group.entries}
             searching={searching}
+            folds={folds}
             readOnly={rows.readOnly}
             openKey={rows.openKey}
             onAdd={onAdd}
@@ -758,25 +798,25 @@ function namedAfterLabel(
   return { tokens: named, key: tokenIdentity(renamed) };
 }
 
-/** The groups narrowed to a search; Other only when it has rows. */
+/** The groups that list only what they hold, hidden while they hold none. */
+const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
+  "fonts",
+  "other",
+]);
+
+/**
+ * The groups narrowed to a search, through the one search rule; with no
+ * search, "Fonts and weights" and "Other values" only when they have rows.
+ */
 function searched<
   G extends { group: VariableGroup; entries: readonly VariableEntry[] },
 >(groups: readonly G[], needle: string): G[] {
   if (needle === "") {
     return groups.filter(
-      group => group.group !== "other" || group.entries.length > 0
+      group => !SHOWN_WHEN_FILLED.has(group.group) || group.entries.length > 0
     );
   }
-  return groups
-    .map(group => ({
-      ...group,
-      // The name shown, only: the code name is hidden, so a match on it
-      // would list a row with nothing in it matching what was typed.
-      entries: group.entries.filter(entry =>
-        entry.label.toLowerCase().includes(needle)
-      ),
-    }))
-    .filter(group => group.entries.length > 0);
+  return searchVariableGroups(groups, needle);
 }
 
 /**
@@ -848,13 +888,19 @@ const ADDS: Readonly<
       ["shadow", "Shadow"],
     ],
   },
+  fonts: {
+    label: "Add a font or weight",
+    empty: "No font or weight variables yet.",
+    options: [
+      ["fontFamily", "Font"],
+      ["fontWeight", "Font weight"],
+    ],
+  },
   other: {
     label: "Add another variable",
     empty: "",
     options: [
       ["dimension", "Size"],
-      ["fontFamily", "Font"],
-      ["fontWeight", "Font weight"],
       ["number", "Number"],
       ["duration", "Duration"],
       ["custom", "Custom value"],
@@ -868,6 +914,7 @@ function Group({
   heading,
   entries,
   searching,
+  folds,
   readOnly,
   openKey,
   onAdd,
@@ -877,6 +924,8 @@ function Group({
   heading: string;
   entries: readonly VariableEntry[];
   searching: boolean;
+  /** Present: the heading folds the group, and shows how many it holds. */
+  folds: GroupFolds | undefined;
   readOnly: boolean;
   /** The row whose editor is open, which is drawn even past the page. */
   openKey: string | null;
@@ -895,11 +944,29 @@ function Group({
   );
   const hidden = entries.length - shown.length;
   const adds = ADDS[group];
+  // A search opens every group it matches in and folds none; the folds come
+  // back as they were once it is cleared.
+  const folded = folds !== undefined && !searching && folds.folded.has(group);
   return (
-    <section className="nx-vars__group" aria-labelledby={id}>
+    <section
+      className="nx-vars__group"
+      aria-labelledby={id}
+      data-folded={folded ? "" : undefined}
+    >
       <div className="nx-vars__group-head">
         <h3 className="nx-vars__group-name" id={id}>
-          {heading}
+          {folds === undefined ? (
+            heading
+          ) : (
+            <GroupToggle
+              heading={heading}
+              count={entries.length}
+              open={!folded}
+              onToggle={
+                searching ? undefined : () => folds.onFold(group, !folded)
+              }
+            />
+          )}
         </h3>
         {/* The two small swatches on a colour row are its light and dark
             values; this names those columns for sight. Each row's accessible
@@ -914,22 +981,64 @@ function Group({
           <AddButton adds={adds} onAdd={onAdd} />
         )}
       </div>
-      {entries.length === 0 && !searching ? (
-        <EmptyGroup
-          group={group}
-          text={adds.empty}
-          readOnly={readOnly}
-          onAdd={onAdd}
-        />
-      ) : (
-        <ul className="nx-vars__list">{shown.map(children)}</ul>
+      {folded ? null : (
+        <>
+          {entries.length === 0 && !searching ? (
+            <EmptyGroup
+              group={group}
+              text={adds.empty}
+              readOnly={readOnly}
+              onAdd={onAdd}
+            />
+          ) : (
+            <ul className="nx-vars__list">{shown.map(children)}</ul>
+          )}
+          <ShowMore
+            hidden={hidden}
+            pageSize={PAGE_SIZE}
+            onMore={() => setPages(count => count + 1)}
+          />
+        </>
       )}
-      <ShowMore
-        hidden={hidden}
-        pageSize={PAGE_SIZE}
-        onMore={() => setPages(count => count + 1)}
-      />
     </section>
+  );
+}
+
+/**
+ * A Design group's heading as the button that folds it, with how many it
+ * holds. Exported so every Design group folds the same way, the ones other
+ * panels draw included.
+ */
+export function GroupToggle({
+  heading,
+  count,
+  open,
+  onToggle,
+}: {
+  heading: string;
+  count: number;
+  open: boolean;
+  /** Absent while it cannot fold, as during a search. */
+  onToggle: (() => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-vars__group-toggle"
+      // Said as "Colours, 12", with the state its expanded flag gives.
+      aria-label={`${heading}, ${count}`}
+      aria-expanded={open}
+      aria-disabled={onToggle === undefined ? true : undefined}
+      onClick={onToggle}
+    >
+      <ChevronDown
+        aria-hidden="true"
+        size={14}
+        className="nx-vars__group-chevron"
+      />
+      <span className="nx-vars__group-label">{heading}</span>
+      <span className="nx-vars__group-count">{count}</span>
+    </button>
   );
 }
 
