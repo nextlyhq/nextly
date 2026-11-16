@@ -31,7 +31,10 @@ import {
   type PluginTransaction,
 } from "@nextlyhq/plugin-sdk/schema";
 
-import { holdCompositionGraph } from "../composition-graph-lock";
+import {
+  holdCompositionGraph,
+  isGraphSnapshotRefusal,
+} from "../composition-graph-lock";
 import { readStoredForms } from "../fields/lock-baselines";
 import { componentDeletionHosts, componentDeletions } from "../schema/tables";
 
@@ -188,6 +191,13 @@ const STORED_PHASES: ReadonlySet<string> = new Set<StoredPhase>([
 /** How many component ids one indexed read of the runs names. */
 const IDS_PER_READ = 200;
 
+/**
+ * How many transactions the move to `deleting` opens at most to take the
+ * composition graph lock: each retry follows a writer that committed, so a
+ * few are plenty, and a bound keeps a busy site from looping.
+ */
+const LOCK_ATTEMPTS = 3;
+
 /** A stored phase, read strictly: anything else is the converting walk. */
 function phaseOf(value: string): StoredPhase {
   return STORED_PHASES.has(value) ? (value as StoredPhase) : "converting";
@@ -326,10 +336,24 @@ export function fenceStore(
       // before this move, and the delete's last check of the Layouts, made
       // after it, sees the Layout; or it reads the run after the move, and is
       // refused. Neither can leave a Layout naming a deleted component.
-      return db.transaction(async tx => {
-        await holdCompositionGraph(tx, dialect);
-        return move(tx);
-      });
+      //
+      // Tried again in a fresh transaction when the lock refuses this one as
+      // reading from a snapshot older than the last holder: under MySQL's
+      // default isolation a transaction that waited for a Layout write still
+      // reads the lock row as it was before that write committed. A fresh
+      // transaction reads what it committed and takes the lock.
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          return await db.transaction(async tx => {
+            await holdCompositionGraph(tx, dialect);
+            return move(tx);
+          });
+        } catch (error) {
+          if (attempt >= LOCK_ATTEMPTS || !isGraphSnapshotRefusal(error)) {
+            throw error;
+          }
+        }
+      }
     },
     fenced: async among => {
       // The runs of the components named, by the index on the component's
