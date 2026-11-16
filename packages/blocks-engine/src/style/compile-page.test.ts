@@ -2504,10 +2504,40 @@ describe("inline padding and a contained container's inset", () => {
     expect(byDefault).toMatch(
       new RegExp(`:where\\(\\.nx-bt-core--box > \\*\\) \\{ ${ITEM}: 1 \\}`)
     );
+    // `initial`, `unset` and the reverts give no row either; only `inherit`
+    // takes a layout no rule here can know.
+    for (const keyword of ["initial", "unset", "revert", "revert-layer"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { display: keyword } } })]))
+      ).toMatch(new RegExp(`> \\* \\{ ${ITEM}: 0 \\}`));
+    }
+    expect(
+      css(doc([node("n1", { base: { base: { display: "inherit" } } })]))
+    ).not.toContain(ITEM);
     // A block that sets no layout flags nothing.
     expect(
       css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
     ).not.toContain(ITEM);
+  });
+
+  it("flags a block taken out of the flow by its own position", () => {
+    // An absolutely or fixed positioned child of a row is not a flex or grid
+    // item, so the item flag must not hold for it. Its own position sets a
+    // flag of its own, in the rule that sets the position; the site sheet
+    // reads the item flag only where this one is 0.
+    const FLOW = "--nx-out-of-flow";
+    const at = (type: string) =>
+      css(doc([node("n1", { base: { base: { position: { type } } } })]));
+    for (const type of ["absolute", "fixed"]) {
+      expect(at(type)).toContain(`${FLOW}: 1`);
+    }
+    for (const type of ["relative", "static", "sticky"]) {
+      expect(at(type)).toContain(`${FLOW}: 0`);
+    }
+    // A block that sets no position flags nothing.
+    expect(
+      css(doc([node("n1", { base: { base: { gap: "1rem" } } })]))
+    ).not.toContain(FLOW);
   });
 
   it("records the value as it was set in the trace, not the wrapped one", () => {

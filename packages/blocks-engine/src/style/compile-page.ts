@@ -1403,7 +1403,10 @@ function withContainInset(
       : declaration
   );
   if (!onRoot) return padded;
-  const flags = declarations.flatMap(sizeFlag);
+  const flags = [
+    ...declarations.flatMap(sizeFlag),
+    ...declarations.flatMap(flowFlag),
+  ];
   return flags.length === 0 ? padded : [...padded, ...flags];
 }
 
@@ -1425,10 +1428,38 @@ export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
  * contained item would be inset from a box far wider than its own. The rule
  * that sets the parent's `display` also writes this on its children, at the
  * same breakpoint and state, and the site sheet treats a flagged contained
- * child as it does a sized block: centred, not inset. `inherit` and the other
- * CSS-wide keywords leave it to the cascade.
+ * child as it does a sized block: centred, not inset. `initial`, `unset` and
+ * the reverts give no row and clear it; `inherit` leaves it to the cascade.
  */
 export const SIZED_ITEM_PROPERTY = "--nx-sized-item";
+
+/**
+ * The flag a block's own `position` sets: `1` while it is absolutely or fixed
+ * positioned, `0` otherwise.
+ *
+ * A child taken out of the flow is not a flex or grid item, whatever its
+ * parent's layout, so the site sheet reads the item flag only where this one
+ * is 0. A flag of its own, set in the rule that sets the position, so each
+ * follows its own property through the cascade and neither depends on which
+ * of two blocks' rules comes later.
+ */
+export const OUT_OF_FLOW_PROPERTY = "--nx-out-of-flow";
+
+/** The positions that take a block out of the flow. */
+const OUT_OF_FLOW = new Set(["absolute", "fixed"]);
+
+/** The flag a block's own `position` sets, if it sets one. */
+function flowFlag(declaration: Declaration): Declaration[] {
+  if (declaration.property !== "position") return [];
+  const value = declaration.value.trim().toLowerCase();
+  if (value === "inherit") return [];
+  return [
+    {
+      property: OUT_OF_FLOW_PROPERTY,
+      value: OUT_OF_FLOW.has(value) ? "1" : "0",
+    },
+  ];
+}
 
 /** The layouts whose children are flex or grid items. */
 const ROW_LAYOUTS = new Set(["flex", "inline-flex", "grid", "inline-grid"]);
@@ -1438,7 +1469,8 @@ function itemFlag(declarations: readonly Declaration[]): Declaration[] {
   const display = declarations.findLast(d => d.property === "display");
   if (display === undefined) return [];
   const value = display.value.trim().toLowerCase();
-  if (CSS_WIDE_KEYWORDS.has(value)) return [];
+  // `inherit` takes the parent's layout, which no rule here can know.
+  if (value === "inherit") return [];
   return [
     {
       property: SIZED_ITEM_PROPERTY,
