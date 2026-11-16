@@ -424,10 +424,11 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   // In the Background section, where "Background" already says whose it is;
   // the whole name was cut to "Background gradi…".
   backgroundGradient: "Gradient",
-  // A grid's tracks, named as the grid controls of other builders name them.
+  // What the value says: the size of each column or row ("1fr 2fr"). Not
+  // "Columns" alone, which on a Columns block reads as how many there are.
   // Rows is shortened with Columns so the pair reads as one in Layout.
-  gridTemplateColumns: "Columns",
-  gridTemplateRows: "Rows",
+  gridTemplateColumns: "Column sizes",
+  gridTemplateRows: "Row sizes",
 };
 
 /**

@@ -234,8 +234,14 @@ export function DecorationField({
         </PopoverTrigger>
         {/* Mounted outside the editor's root: the builder's tokens come
             with it, and the popover's own rule gives it the inspector's
-            density. */}
-        <PopoverContent className="nx-builder-tokens nx-style-inspector__decoration-popover">
+            density. Spell-check is off here for the same reason it is off
+            on the Style tab, which this layer is drawn outside of and so
+            does not inherit from: a thickness, a colour code or a line of
+            CSS is not words to correct. */}
+        <PopoverContent
+          className="nx-builder-tokens nx-style-inspector__decoration-popover"
+          spellCheck={false}
+        >
           <DecorationStyle
             parts={parts.current}
             write={write}

@@ -779,7 +779,7 @@ function StyleInspectorBody({
         >
           <CanvasTokenModeProvider value={tokenMode}>
             {/*
-             * Spell-check off for the whole tab: its fields hold numbers,
+             * Spell-check off for the tab's fields: they hold numbers,
              * lengths, colours and keywords, which a spell-checker marks as
              * misspelt with the same red line an error would show. Set once
              * here because the attribute is inherited by every field inside,

@@ -107,16 +107,21 @@ export function VariableEditor({
   ];
 
   return (
-    <div className="nx-vars-editor__body">
+    <div
+      className="nx-vars-editor__body"
+      // Spell-check off for every field in the editor, the colour picker's
+      // hex field included: its names and values are code-like words and
+      // colour codes, which a spell-checker underlines as misspelt. Set once
+      // here, since every field below inherits it.
+      spellCheck={false}
+    >
       <div className="nx-vars-editor__field">
         <label className="nx-vars-editor__label" htmlFor={`${id}-name`}>
           Name
         </label>
         <Input
           id={`${id}-name`}
-          // Spell-check and earlier-entry lists off across the variable editor:
-          // its names and values are code-like words a spell-checker marks.
-          spellCheck={false}
+          // No list of earlier entries over a name being typed.
           autoComplete="off"
           value={name}
           onChange={event => setName(event.currentTarget.value)}
@@ -586,8 +591,7 @@ function CommitInput({
     <Input
       id={id}
       aria-label={label}
-      // A value, not prose: no red spell-check line, no earlier-entry list.
-      spellCheck={false}
+      // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
       aria-invalid={refusedBy === undefined ? undefined : true}
       aria-describedby={refusedBy}
@@ -678,8 +682,7 @@ function ColourValue({
         <Input
           id={id}
           className="nx-vars-editor__mono"
-          // A value, not prose: no red spell-check line, no earlier-entry list.
-          spellCheck={false}
+          // A value, not words: no list of earlier entries over the field.
           autoComplete="off"
           aria-invalid={refusedBy === undefined ? undefined : true}
           aria-describedby={refusedBy}

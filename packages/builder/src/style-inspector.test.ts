@@ -166,7 +166,9 @@ describe("what a property carries", () => {
     );
 
     expect(labels.get("flexDirection")).toBe("Flex direction");
-    expect(labels.get("gridTemplateColumns")).toBe("Grid template columns");
+    // Too long for the label column under its own name: shortened, with the
+    // full name kept in its tooltip.
+    expect(labels.get("gridTemplateColumns")).toBe("Column sizes");
   });
 
   it("reports which properties this node sets, and which it does not", () => {
@@ -622,6 +624,12 @@ describe("every label fits the Style tab's label column", () => {
    * and the first one cut was 19 ("Background gradient", 117px). The budget
    * is 17 characters: a label of 18 with wide letters can already pass
    * 112px, so a longer one needs a short label of its own.
+   *
+   * What it does not prove: characters stand in for measured width, so a
+   * 17-character label made mostly of wide letters (m, w, M) could still be
+   * cut, and the column is 7rem only at the panel's default width; narrower,
+   * rows with an icon strip give it up first. Every label today is well
+   * inside the budget except the two measured above.
    */
   const LABEL_BUDGET = 17;
 

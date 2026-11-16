@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-In the page builder, the Style tab, the colour picker and the Design panel's variable editor no longer show a red spell-check line under values such as "12px" or "#1d2b6b", and value fields no longer offer a list of earlier entries. Text written on the Content tab is still spell-checked. Style labels that were cut off now have short names: "Gradient" (was "Background gradient"), "Columns" and "Rows" (were "Grid template columns" and "Grid template rows"), each with its full name in the tooltip.
+In the page builder, the Style tab (its colour picker and text decoration options included) and the Design panel's variable editor (its colour picker included) no longer show a red spell-check line under values such as "12px" or "#1d2b6b", and value fields no longer offer a list of earlier entries. Text written on the Content tab is still spell-checked. Style labels that were cut off now have short names: "Gradient" (was "Background gradient"), "Column sizes" and "Row sizes" (were "Grid template columns" and "Grid template rows"), each with its full name in the tooltip.
