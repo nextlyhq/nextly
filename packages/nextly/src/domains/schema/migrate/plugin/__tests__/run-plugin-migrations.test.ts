@@ -133,6 +133,12 @@ function fakeRepo() {
           return true;
         },
         supersede: async () => {},
+        // A stopped module's record, written through a bounded handle; never reached here.
+        markFailed: async (id: string) => {
+          failed.push(id);
+        },
+        markNothingApplied: async () => {},
+        discardAttempt: async () => {},
       }),
     } satisfies ReconcileRepo,
   };
