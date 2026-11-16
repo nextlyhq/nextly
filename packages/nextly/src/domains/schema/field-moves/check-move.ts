@@ -255,9 +255,10 @@ function placesRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
     to.containers.slice(shared)
   );
   if (crossing) return crossing;
-  // A group that stores nothing (a virtual one) has no column for its fields' values to be in.
-  const emptyHolder = [from.containers[0], to.containers[0]].find(
-    holder => holder !== undefined && !fieldProducesColumn(holder)
+  // A container that stores nothing (a virtual group, or one a field group holds), anywhere on
+  // either path, has no column or key for its fields' values to be in.
+  const emptyHolder = [...from.containers, ...to.containers].find(
+    holder => !fieldProducesColumn(holder)
   );
   return emptyHolder
     ? refuse(
@@ -273,7 +274,12 @@ function valuesRefusal(
   to: PlacedField,
   entity: MoveEntity
 ): MoveCheck | null {
-  if (to.place.kind === "json" && builderColumnIsUnique(to.field)) {
+  // Unique before the move or after it: a move that also drops the uniqueness is two changes, and
+  // the uniqueness is changed in a save of its own first.
+  if (
+    to.place.kind === "json" &&
+    (builderColumnIsUnique(from.field) || builderColumnIsUnique(to.field))
+  ) {
     return refuse(
       "unique",
       `${label(to.field)} cannot be moved into the group ${label(to.containers[0])}: a group keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own.`

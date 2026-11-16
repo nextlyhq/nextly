@@ -85,8 +85,13 @@ const pgPath = (keys: readonly string[]) =>
 const dollarPath = (keys: readonly string[]) =>
   `'$${keys.map(key => `."${safeKey(key)}"`).join("")}'`;
 
-/** Whether a PostgreSQL timestamp column keeps its zone. */
-const zoned = (columnType: string) => /time zone|tz/i.test(columnType);
+/**
+ * Whether a PostgreSQL timestamp column keeps its zone: `timestamptz` or `timestamp with time
+ * zone`; the spelled-out `timestamp without time zone` holds a plain time, as `timestamp` does.
+ */
+const zoned = (columnType: string) =>
+  !/without time zone/i.test(columnType) &&
+  /with time zone|timestamptz/i.test(columnType);
 
 /** An ISO date's trailing offset (`Z`, `+05:00`), which MySQL's casts do not read. */
 const ISO_OFFSET = "'(Z|[+-][0-9]{2}:[0-9]{2})$'";
