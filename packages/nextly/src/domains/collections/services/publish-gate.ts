@@ -15,6 +15,7 @@ import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { container } from "../../../di/container";
 
+import type { UserContext } from "./collection-types";
 import type { PublishDirection } from "./publish-parts";
 
 /** One part of an entry a publish or unpublish moves: a language, or the shared part. */
@@ -32,6 +33,27 @@ export type PublishCaller =
   | { kind: "user"; userId: string }
   | { kind: "api-key"; userId?: string; scope: AuthenticatedScope }
   | { kind: "visitor" };
+
+/**
+ * Who asks a publish of chosen parts to move, as its gate is told: trusted code, an API key on its
+ * own grants (with the owner the request carries), a person, or a visitor with neither.
+ */
+export function publishCallerOf(params: {
+  overrideAccess?: boolean;
+  user?: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}): PublishCaller {
+  if (params.overrideAccess === true) return { kind: "trusted" };
+  const userId = params.user?.id;
+  if (params.authenticatedScope?.actorType === "apiKey") {
+    return {
+      kind: "api-key",
+      ...(userId === undefined ? {} : { userId }),
+      scope: params.authenticatedScope,
+    };
+  }
+  return userId === undefined ? { kind: "visitor" } : { kind: "user", userId };
+}
 
 /** What an entry belongs to: a collection, or a Single (whose one entry is its document). */
 export interface PublishScope {

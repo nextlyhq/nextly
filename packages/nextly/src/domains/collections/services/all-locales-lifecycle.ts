@@ -129,6 +129,11 @@ export interface AllLocalesLifecycleParams {
    * and whether the shared part moves too. Absent, every language and the shared part move.
    */
   parts?: LifecycleParts;
+  /**
+   * A publish made without review, with the caller's reason, as the request asked for it: told to
+   * the publish gate, never stored by the move. A release never asks for it.
+   */
+  withoutReview?: { reason: string };
 }
 
 /**

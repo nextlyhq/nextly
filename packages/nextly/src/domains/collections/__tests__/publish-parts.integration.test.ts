@@ -22,7 +22,7 @@ import { runWithRequestCaller } from "../../../auth/caller-scope";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { container } from "../../../di/container";
 import type { ServiceContainer } from "../../../services";
-import type { PublishGate } from "../services/publish-gate";
+import type { PublishGate, PublishPart } from "../services/publish-gate";
 import { defineCollection, group, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -1245,6 +1245,205 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
         Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
     }));
   }
+
+  /**
+   * A gate whose early answer holds nothing back, and whose verdict on the move's transaction
+   * holds back the parts `held` names; it records each question it is asked there, and each
+   * settle, which throws where `settleThrows`.
+   */
+  function judgeOnTheMove(
+    held: readonly string[],
+    settleThrows = false
+  ): { judged: unknown[]; onTx: boolean[]; settled: number } {
+    const seen = { judged: [] as unknown[], onTx: [] as boolean[], settled: 0 };
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: () => Promise.resolve([]),
+      judge: (tx, question) => {
+        seen.judged.push(question);
+        seen.onTx.push(typeof tx.selectOne === "function");
+        return Promise.resolve({
+          refusals: question.parts
+            .filter(part =>
+              held.includes(part.kind === "shared" ? "shared" : part.locale)
+            )
+            .map(part => ({
+              part,
+              code: "NOT_APPROVED" as const,
+              message: "Waiting for approval.",
+            })),
+          settle: () => {
+            seen.settled += 1;
+            return settleThrows
+              ? Promise.reject(new Error("the review moved on"))
+              : Promise.resolve();
+          },
+        });
+      },
+    }));
+    return seen;
+  }
+
+  // The verdict the move keeps to is the one given under the entry's lock: a part the gate holds
+  // back there is refused though its early answer let it through, and nothing moves.
+  it("holds back a part the gate refuses on the move's transaction, though its early answer let it", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en"],
+      shared: true,
+      data: { _overwrite: true },
+    });
+    const seen = judgeOnTheMove(["es"]);
+    const before = await states(id);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["es"],
+        data: { _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/NOT_APPROVED/);
+    expect(await states(id)).toEqual(before);
+    expect(seen.onTx).toEqual([true]);
+    expect(seen.judged[0]).toMatchObject({
+      scope: { kind: "collection", slug: "posts" },
+      entryId: id,
+      direction: "publish",
+      parts: [{ kind: "language", locale: "es" }],
+      live: { languages: ["en"], shared: true },
+    });
+    expect(seen.settled).toBe(0);
+  });
+
+  // What the gate's judgement started is finished on the move's own transaction once the parts are
+  // written, and a gate that finds what it judged has changed takes the whole move back.
+  it("settles the gate once a publish has written its parts, and keeps nothing when settling throws", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const seen = judgeOnTheMove([]);
+
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+
+    expect(seen.settled).toBe(1);
+    expect((await states(id)).es).toBe("published");
+
+    const other = await entry({ es: { title: "Hola" } });
+    const before = await states(other);
+    judgeOnTheMove([], true);
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id: other,
+        locales: "all",
+        data: { _overwrite: true },
+      })
+    );
+
+    expect(refusal).not.toBe("");
+    expect(await states(other)).toEqual(before);
+  });
+
+  // A publish made without review says so, with its reason, from the REST body to the gate: its
+  // early answer and its verdict under the lock are both told, so a gate that lets such a publish
+  // through for this caller lets it through on both.
+  it("tells the gate a publish made without review, and why, early and under the lock", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const editor = await userWhoMay(t!, "editor", "publish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const reasons: unknown[] = [];
+    const heldUnlessWithoutReview = (question: {
+      parts: readonly PublishPart[];
+      withoutReview?: { reason: string };
+    }) =>
+      question.withoutReview === undefined
+        ? question.parts.map(part => ({
+            part,
+            code: "NOT_APPROVED" as const,
+            message: "Waiting for approval.",
+          }))
+        : [];
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: question => {
+        reasons.push(question.withoutReview?.reason);
+        return Promise.resolve(heldUnlessWithoutReview(question));
+      },
+      judge: (_tx, question) => {
+        reasons.push(question.withoutReview?.reason);
+        return Promise.resolve({
+          refusals: heldUnlessWithoutReview(question),
+          settle: () => Promise.resolve(),
+        });
+      },
+    }));
+
+    const status = await runWithRequestCaller(
+      { userId: editor, actor: { type: "user", id: editor }, roles: [] },
+      async () =>
+        (
+          (await dispatchCollections(
+            {} as ServiceContainer,
+            "publishParts",
+            { collectionName: "posts", entryId: id },
+            {
+              locales: "all",
+              withoutReview: { reason: "Fixing a typo on the live page" },
+              _overwrite: true,
+            }
+          )) as Response
+        ).status
+    );
+
+    expect(status).toBe(200);
+    expect(reasons).toEqual([
+      "Fixing a typo on the live page",
+      "Fixing a typo on the live page",
+    ]);
+    expect((await states(id)).es).toBe("published");
+  });
+
+  // A description changes nothing, and an unpublish closes no review: neither is settled.
+  it("never settles a described publish or an unpublish", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const seen = judgeOnTheMove([]);
+
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      describe: true,
+      data: { _overwrite: true },
+    });
+    expect(seen.settled).toBe(0);
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    const settledByPublish = seen.settled;
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+
+    expect(settledByPublish).toBe(1);
+    expect(seen.settled).toBe(1);
+  });
 
   // A gate decides by who is asking, so it is told: a person, an API key with its own grants,
   // or trusted code. A key is never passed off as the person who owns it.
