@@ -24,10 +24,8 @@ import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "../library-route";
 import { previewViewportsFromSiteStyle } from "../preview-viewports";
 import type { PublishReadinessSetup } from "../publish-readiness";
 import type { PageBuilderSiteCodeOptions } from "../site-code/route";
-import {
-  resolveFontOptions,
-  type PageBuilderFontOptions,
-} from "../site-fonts/options";
+import type { resolveFontOptions } from "../site-fonts/options";
+import { type PageBuilderFontOptions } from "../site-fonts/options";
 import { siteFontRoutes } from "../site-fonts/routes";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import type { PageBuilderTemplateOptions } from "../templates/template-addresses";
