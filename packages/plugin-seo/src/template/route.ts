@@ -26,7 +26,12 @@ import { z } from "nextly/zod";
 import { isRecord, textOf } from "../plain-values";
 import { designLevelOf } from "../resolver/design-level";
 import type { Levels } from "../resolver/order";
-import { levelsOf, NO_RULES, type SiteRules } from "../resolver/page-levels";
+import {
+  levelsOf,
+  NO_RULES,
+  patternsOf,
+  type SiteRules,
+} from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import type { PatternField } from "../settings/contract";
 import { tokenOf } from "../settings/pattern-fields";
@@ -229,20 +234,6 @@ function withoutOwnSeo(input: PageMetadataInput): PageMetadataInput {
   return { ...input, source: { ...input.source, entry } };
 }
 
-/**
- * The title pattern that gives the title of every page the design draws:
- * the type's own, else the site's default, as the order fills it; nothing
- * where neither holds text.
- */
-function titlePatternOf(
-  rules: SiteRules,
-  collection: string
-): string | undefined {
-  return textOf(
-    { ...rules.defaultPatterns, ...rules.patterns[collection] }.title
-  );
-}
-
 /** The route a template's SEO panel reads. */
 export function seoTemplateRoute(setup: {
   readRules?: ReadRules;
@@ -296,7 +287,9 @@ export function seoTemplateRoute(setup: {
       );
       const locale = body.locale ?? undefined;
       const rules = await readRules(ctx, locale);
-      const titlePattern = titlePatternOf(rules, body.collection);
+      // The pattern that gives the title of every page the design draws, as
+      // the order picks it; nothing where it holds no text.
+      const titlePattern = textOf(patternsOf(rules, body.collection).title);
       const answer: TemplateContext = {
         typeLabel: names.one,
         typePlural: names.many,
