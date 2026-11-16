@@ -147,6 +147,12 @@ import {
   sharedStyleWrite,
 } from "./shared-style-target";
 import type { SideOrientation } from "./side-orientation";
+import {
+  CompactSides,
+  fieldDescribedBy,
+  sideKeysFor,
+  spacingRings,
+} from "./spacing-box";
 import { stateLabel } from "./state-switcher";
 import {
   alignmentGroupFor,
@@ -1542,48 +1548,6 @@ function reachingLayout(provenanceOf: ProvenanceOf): string | undefined {
     : undefined;
 }
 
-/** Margin and padding drawn as one box, and what the section shows besides. */
-interface SpacingRings {
-  readonly margin: InspectedStyleProperty | undefined;
-  readonly padding: InspectedStyleProperty;
-  readonly rest: readonly InspectedStyleProperty[];
-}
-
-/**
- * Whether the spacing section draws its box model, and from which properties.
- *
- * Drawn when padding is shown, offered and drawn as a box, which needs the
- * element's axes; margin joins as the outer ring under the same conditions.
- * Anything else the section shows is drawn as before, beneath the box.
- */
-function spacingRings(
-  shown: readonly InspectedStyleProperty[],
-  orientation: SideOrientation | undefined
-): SpacingRings | undefined {
-  const ring = (key: string) =>
-    shown.find(
-      property =>
-        property.property === key &&
-        property.offered &&
-        sideBoxFor(property.controls, orientation).boxed
-    );
-  const padding = ring("padding");
-  if (padding === undefined) return undefined;
-  const margin = ring("margin");
-  return {
-    margin,
-    padding,
-    rest: shown.filter(property => property !== padding && property !== margin),
-  };
-}
-
-/**
- * Fields drawn compact: the spacing box's sides, which take a value typed
- * with its unit, show no unit menu, and say "–" while unset rather than a
- * hint there is no room for.
- */
-const CompactSides = React.createContext(false);
-
 /**
  * Whether this field's form toggle is drawn just above it. A single control
  * there keeps its label for assistive technology and drops the visible copy:
@@ -2299,6 +2263,9 @@ function StyleControlField({
   const inherited = inheritedShown(stored, answer);
 
   const readOnly = showsNoField(control, stored, clearOnly);
+  // A spacing-box side resets by key: see `sideKeysFor`.
+  const inBox = React.useContext(CompactSides);
+  const sideKeys = sideKeysFor(side, inBox, stored, readOnly, id, commit);
   const labelId = `${id}-label`;
   // Computed once and used by both the control and its message: two spellings
   // of "is there an error" is the shape that drifts into a control described by
@@ -2326,6 +2293,7 @@ function StyleControlField({
       // Absent when this is not a side: React omits an `undefined` attribute, so
       // the value says whether the field is in a box without a branch here.
       data-side={side}
+      onKeyDown={sideKeys.onKeyDown}
       {...writes.caption}
     >
       {/* The label drags the value the number field below offers it. */}
@@ -2366,7 +2334,9 @@ function StyleControlField({
         onReset={() => commit(null)}
         stored={stored}
         readOnly={readOnly}
+        resetByKey={sideKeys.resetByKey}
       />
+      {sideKeys.hint}
       <SharedValueLine
         target={target}
         answer={answer}
@@ -2573,6 +2543,7 @@ function BreakpointAction({
   onReset,
   stored,
   readOnly,
+  resetByKey = false,
 }: {
   answer: ProvenanceAnswer | undefined;
   /**
@@ -2593,6 +2564,8 @@ function BreakpointAction({
   stored: StyleValue | undefined;
   /** A field drawn as a retained value, whose own Clear already resets it. */
   readOnly: boolean;
+  /** A field that resets by a key of its own: its reset leaves the Tab order. */
+  resetByKey?: boolean;
 }): React.JSX.Element | null {
   /*
    * The row's one way back, so a list or an icon group needs no Clear of its
@@ -2616,6 +2589,7 @@ function BreakpointAction({
         editing={editing}
         fieldId={fieldId}
         onReset={onReset}
+        outOfTabOrder={resetByKey}
       />
     );
   }
@@ -2627,6 +2601,7 @@ function BreakpointAction({
         editing={editing}
         fieldId={fieldId}
         onReset={onReset}
+        outOfTabOrder={resetByKey}
       />
     );
   }
@@ -2644,6 +2619,7 @@ function BreakpointAction({
         editing={editing}
         fieldId={fieldId}
         onReset={onReset}
+        outOfTabOrder={resetByKey}
       />
     );
   if (answer?.jump === undefined) return reset;
@@ -2808,7 +2784,10 @@ function ResetAction({
   editing,
   fieldId,
   onReset,
+  outOfTabOrder = false,
 }: {
+  /** Out of the Tab order (still clickable): its field resets by key. */
+  outOfTabOrder?: boolean;
   /**
    * What shows once this value is gone: another tier's value, nothing, or
    * `"unknown"` where no ranking of the cascade covers this tier, which the
@@ -2843,6 +2822,7 @@ function ResetAction({
           data-action="reset"
           {...commitsFor(fieldId)}
           onClick={onReset}
+          tabIndex={outOfTabOrder ? -1 : undefined}
           aria-label={named}
         >
           {/* An icon at the row's end, where a "Reset to unset" line under
@@ -6807,7 +6787,7 @@ function TextField({
       title={sideTitle(compact, draft)}
       // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
-      aria-describedby={describedBy}
+      aria-describedby={fieldDescribedBy(describedBy, compact, id)}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
