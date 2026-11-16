@@ -266,6 +266,33 @@ export async function getMediaById(mediaId: string): Promise<Media> {
 }
 
 /**
+ * How many media items one read by id names: the server's page of them.
+ * More are read a page at a time.
+ */
+const MEDIA_IDS_PER_READ = 100;
+
+/**
+ * Several media items by id, in one request per hundred: each item found,
+ * in the order its id was asked; an id with no item readable has none. The
+ * same access as reading each item alone.
+ */
+export async function getMediaByIds(
+  mediaIds: readonly string[]
+): Promise<Media[]> {
+  const found: Media[] = [];
+  for (let at = 0; at < mediaIds.length; at += MEDIA_IDS_PER_READ) {
+    const query = new URLSearchParams({
+      ids: mediaIds.slice(at, at + MEDIA_IDS_PER_READ).join(","),
+    });
+    const page = await mediaFetchJson<{ items?: Media[] }>(
+      `${MEDIA_BASE}?${query.toString()}`
+    );
+    found.push(...(page.items ?? []));
+  }
+  return found;
+}
+
+/**
  * Update media metadata
  */
 export async function updateMedia(

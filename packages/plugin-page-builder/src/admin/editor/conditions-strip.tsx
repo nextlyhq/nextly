@@ -168,12 +168,12 @@ export function PageConditionsStrip({
   );
 }
 
-/** Why the switch can't apply a component's or a Layout's conditions. */
+/** Why the switch can't apply a component's conditions. */
 const PLACED_WHY =
   "No entry to check here. The published page checks them where it’s placed.";
 
 /**
- * The strip a component or a Layout gets while it holds a conditioned block:
+ * The strip a component gets while it holds a conditioned block:
  * what is being edited, and the switch, disabled, since there is no entry to
  * check against here: the published page checks them where it is placed.
  */
@@ -181,7 +181,7 @@ export function PlacedConditionsStrip({
   kind,
   name,
 }: {
-  /** What is being edited, in words: "Component" or "Layout". */
+  /** What is being edited, in words: "Component". */
   readonly kind: string;
   readonly name: string;
 }): React.JSX.Element {
