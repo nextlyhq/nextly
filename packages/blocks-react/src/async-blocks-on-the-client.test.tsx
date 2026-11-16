@@ -30,6 +30,7 @@ import {
   defineBlock,
   type PageContext,
 } from "./context";
+import { NODE_ID_ATTRIBUTE, PROP_ATTRIBUTE } from "./editor-markers";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
@@ -124,6 +125,138 @@ describe("an async block in the editor's client render", () => {
       rerender(canvas(documentWith("Edited"), renders, context));
     });
     expect(screen.getByTestId("late").textContent).toBe("Edited");
+  });
+
+  it("is kept for an editor drawing that addresses no node, such as a Layout's header", async () => {
+    const renders = { count: 0 };
+    const context = createStandaloneContext();
+    const region = (value: string): ReactElement => (
+      <PageRenderer
+        document={documentWith(value)}
+        blocks={createBlockResolver([lateBlock(renders)])}
+        context={context}
+        keepAsyncOutputs
+      />
+    );
+    const { rerender } = await act(async () => render(region("Drawn")));
+    const drawn = screen.getByTestId("late");
+    const before = renders.count;
+    await act(async () => {
+      rerender(region("Drawn"));
+    });
+    expect(screen.getByTestId("late")).toBe(drawn);
+    expect(renders.count).toBe(before);
+    // Kept without the editor's addressing: no node of it is selectable.
+    expect(document.querySelector(`[${NODE_ID_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("is kept for a block inside another block's slot, in a drawing that addresses no node", async () => {
+    const renders = { count: 0 };
+    const context = createStandaloneContext();
+    const holder = defineBlock<Record<string, never>>({
+      name: "test/holder",
+      version: 1,
+      description: "Draws its one slot.",
+      example: { props: {} },
+      defaultProps: {},
+      slots: { body: {} },
+      render: ({ className, renderSlot }) => (
+        <div className={className}>{renderSlot("body")}</div>
+      ),
+    }) as AnyBlockDefinition;
+    const nested = (): BlockDocument => ({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "h",
+          type: "test/holder",
+          version: 1,
+          props: {},
+          slots: {
+            body: [
+              {
+                id: "a",
+                type: "test/late",
+                version: 1,
+                props: { value: "In" },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const blocks = createBlockResolver([holder, lateBlock(renders)]);
+    const region = (): ReactElement => (
+      <PageRenderer
+        document={nested()}
+        blocks={blocks}
+        context={context}
+        keepAsyncOutputs
+      />
+    );
+    const { rerender } = await act(async () => render(region()));
+    const before = renders.count;
+    await act(async () => {
+      rerender(region());
+    });
+    expect(screen.getByTestId("late").textContent).toBe("In");
+    expect(renders.count).toBe(before);
+  });
+
+  it("is kept apart for a drawing that addresses no node, which never wears the page's markers", async () => {
+    // A Layout's header shares the canvas's context with the page, and a
+    // block in it can be stored exactly as one on the page. The page's output
+    // carries the editor's prop markers; the header's must not.
+    const renders = { count: 0 };
+    const context = createStandaloneContext();
+    const marked = defineBlock<{ value: string }>({
+      name: "test/late",
+      version: 1,
+      description: "Renders after a promise settles, marking its text.",
+      example: { props: { value: "late" } },
+      defaultProps: { value: "" },
+      props: {
+        value: { label: "Value", role: "content", type: "text", inline: true },
+      },
+      render: async ({ props, className, markProp }) => {
+        renders.count += 1;
+        await Promise.resolve();
+        return (
+          <p className={className} data-testid="late" {...markProp?.("value")}>
+            {props.value}
+          </p>
+        );
+      },
+    }) as AnyBlockDefinition;
+    const blocks = createBlockResolver([marked]);
+    const view = await act(async () =>
+      render(
+        <PageRenderer
+          document={documentWith("Same")}
+          blocks={blocks}
+          context={context}
+          nodeAttribute
+        />
+      )
+    );
+    const drawnIn = (container: HTMLElement): Element | null =>
+      container.querySelector('[data-testid="late"]');
+    expect(drawnIn(view.container)?.hasAttribute(PROP_ATTRIBUTE)).toBe(true);
+    const region = await act(async () =>
+      render(
+        <PageRenderer
+          document={documentWith("Same")}
+          blocks={blocks}
+          context={context}
+          keepAsyncOutputs
+        />
+      )
+    );
+    const regionLate = drawnIn(region.container);
+    expect(regionLate).not.toBeNull();
+    expect(regionLate?.hasAttribute(PROP_ATTRIBUTE)).toBe(false);
+    expect(renders.count).toBe(2);
   });
 
   it("is not kept for a published page, which renders per request", async () => {

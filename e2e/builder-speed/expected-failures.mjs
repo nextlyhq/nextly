@@ -25,10 +25,6 @@ export const EXPECTED_FAILURES = {
   undo: "about 230 ms against 200 ms: undo redraws the page",
   "keystroke-canvas":
     "not shown until the field is left, against 100 ms: the canvas does not follow typing yet",
-  "insert-hides-regions":
-    "about 12 against none: an insert redraws the header and footer, and their pictures blink",
-  "footer-resizes":
-    "between 2 and 31 against none: the footer changes size while the pointer rests on its top edge",
   "open-canvas-slow-network":
     "about 2.0 s against 2.0 s at 150 ms a round trip: the canvas waits on a chain of requests",
   "open-requests":

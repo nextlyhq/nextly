@@ -199,18 +199,25 @@ const EDITOR_OUTPUTS = new WeakMap<
   Map<string, PromiseLike<unknown>>
 >();
 
-/** How many outputs a context keeps, the oldest dropped first. */
+/** How many outputs a context keeps, the longest unused dropped first. */
 const EDITOR_OUTPUTS_KEPT = 256;
 
-/** What an editor output is kept by, or `undefined` where it cannot be told. */
+/**
+ * What an editor output is kept by, or `undefined` where it cannot be told.
+ * Whether the draw carries the editor's markers is part of it: a Layout's
+ * header shares the canvas's context with the page, a block in it can be
+ * stored exactly as one on the page, and only the page's output wears the
+ * markers that make its text editable.
+ */
 function editorOutputKey(
+  marked: boolean,
   name: string,
   className: string,
   node: BlockNode,
   bound: BoundValues | undefined
 ): string | undefined {
   try {
-    return JSON.stringify([name, className, node, bound ?? null]);
+    return JSON.stringify([marked, name, className, node, bound ?? null]);
   } catch {
     // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
     return undefined;
@@ -255,6 +262,7 @@ const UNKEPT: EditorOutputSlot = {
  */
 export function editorOutputSlot(
   editorRender: boolean,
+  marked: boolean,
   context: PageContext,
   name: string,
   className: string,
@@ -262,9 +270,16 @@ export function editorOutputSlot(
   bound: BoundValues | undefined
 ): EditorOutputSlot {
   if (!editorRender) return UNKEPT;
-  const key = editorOutputKey(name, className, node, bound);
+  const key = editorOutputKey(marked, name, className, node, bound);
   if (key === undefined) return UNKEPT;
-  const kept = EDITOR_OUTPUTS.get(context)?.get(key);
+  const outputs = EDITOR_OUTPUTS.get(context);
+  const kept = outputs?.get(key);
+  if (outputs !== undefined && kept !== undefined) {
+    // Used again, so the newest: a header drawn on every edit is not dropped
+    // behind the page's many edited blocks.
+    outputs.delete(key);
+    outputs.set(key, kept);
+  }
   return {
     output: run => kept ?? run(),
     keep: output => {

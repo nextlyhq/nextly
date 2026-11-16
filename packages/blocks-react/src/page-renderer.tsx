@@ -10,6 +10,7 @@ import {
   type NamedClass,
   type DefinitionsById,
   type DocumentLimits,
+  type SiteSheetArtifact,
   type SiteSheetInput,
   type StyleCompileContext,
   type BreakpointSet,
@@ -161,6 +162,19 @@ export interface PageRendererProps {
    * compiled styles receives only the block-TYPE class.
    */
   nodeAttribute?: boolean;
+  /**
+   * Keep each async block's output between draws, as the editor's canvas does
+   * for its page, so drawing again does not run the block again and blink it
+   * out while the new output settles.
+   *
+   * On wherever `nodeAttribute` is. This turns it on for an editor surface that
+   * draws without node addresses: a Layout's header and footer around the
+   * canvas, a page's small preview. The outputs are kept per `context`, so the
+   * surface hands the same context to each draw. Never on a published page,
+   * which is rendered per request: an output kept across requests would serve
+   * one request's data to the next.
+   */
+  keepAsyncOutputs?: boolean;
   /**
    * What the page's bindings read, already read with the public's access.
    *
@@ -653,6 +667,7 @@ export function PageRenderer({
   styleContext,
   siteStyles,
   nodeAttribute,
+  keepAsyncOutputs,
   blockFallback,
   limits,
   hostPolicy,
@@ -1066,14 +1081,21 @@ export function PageRenderer({
   // `--site-*` onto a host that asked this renderer for markup alone. It is also
   // what stops a stylesheet withheld as untrustworthy from acquiring a companion
   // sheet that the withholding was meant to suppress.
+  //
+  // Kept by what it is compiled from (`keptSiteSheet`), so drawing the page
+  // again for a selection, a hover or an insert does not compile it again.
   const siteSheet =
     siteStyles === false
       ? undefined
       : siteBreakpoints === undefined
         ? css === ""
           ? undefined
-          : compileSiteTokenSheet(siteSheetInput)
-        : compileSiteSheet(
+          : keptSiteSheet(
+              { siteInput, styleContext, fetchPolicyId, parts: undefined },
+              () => compileSiteTokenSheet(siteSheetInput)
+            )
+        : keptPageSiteSheet(
+            { siteInput, styleContext, fetchPolicyId },
             { ...siteSheetInput, breakpoints: siteBreakpoints },
             // The parts of the types this page draws, over the composed tree
             // the page sheet reads, so the classes in the shared sheet route a
@@ -1113,11 +1135,114 @@ export function PageRenderer({
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(keepAsyncOutputs === true ? { keepAsyncOutputs } : {})}
         {...(boundaryBindings === undefined
           ? {}
           : { bindings: boundaryBindings })}
         conditions={boundaryConditions}
       />
     </div>
+  );
+}
+
+/** What a site sheet was compiled from, beyond what every draw shares. */
+interface SiteSheetKey {
+  /** The site's own input, as the host handed it. */
+  readonly siteInput: SiteSheetInput | undefined;
+  /** The route's compile context, as the host handed it. */
+  readonly styleContext: StyleCompileContext | undefined;
+  /**
+   * The fetch policy the sheet is judged by. A predicate derived from the
+   * host's patterns is a new function per draw, so it is kept by the label
+   * that names those patterns; a caller's own predicate rides on one of the
+   * two inputs above, kept by their identity.
+   */
+  readonly fetchPolicyId: string | undefined;
+  /** The parts of the types drawn, as text, or none for the token tier. */
+  readonly parts: string | undefined;
+}
+
+interface KeptSiteSheet extends SiteSheetKey {
+  readonly sheet: SiteSheetArtifact;
+}
+
+/**
+ * The site sheets compiled, kept by what each was compiled from, so a page
+ * drawn again from the same inputs is not compiled again. The editor draws its
+ * page, and the header and footer around it, again for a selection, a hover or
+ * an insert, and none of those changes the site's styles; compiling the sheet
+ * on each of them was the costliest part of a header's draw.
+ *
+ * Kept under the site's input (or the route's compile context, where the host
+ * gives no site input) and weakly, so a sheet goes when what it was compiled
+ * from does. The compile context is compared field by field: a surface
+ * drawing a page and its regions rebuilds each part's scoped context with
+ * the same values whenever its other inputs are handed again. The inputs are read as values: a host hands a new object for a
+ * new style, as the page builder does, rather than changing one in place. A
+ * sheet is CSS text, the same for every request with the same inputs, so
+ * keeping it shares nothing between visitors.
+ */
+const KEPT_SITE_SHEETS = new WeakMap<object, KeptSiteSheet[]>();
+
+/** How many sheets one input keeps: a page and its regions, each scoped. */
+const KEPT_PER_INPUT = 4;
+
+/** The sheet compiled from `key`, compiling it only the first time. */
+function keptSiteSheet(
+  key: SiteSheetKey,
+  compile: () => SiteSheetArtifact
+): SiteSheetArtifact {
+  const owner = key.siteInput ?? key.styleContext;
+  if (owner === undefined) return compile();
+  const kept = KEPT_SITE_SHEETS.get(owner) ?? [];
+  const found = kept.find(
+    entry =>
+      entry.siteInput === key.siteInput &&
+      sameFields(entry.styleContext, key.styleContext) &&
+      entry.fetchPolicyId === key.fetchPolicyId &&
+      entry.parts === key.parts
+  );
+  if (found !== undefined) return found.sheet;
+  const sheet = compile();
+  // Newest first, the oldest dropped past the bound.
+  KEPT_SITE_SHEETS.set(
+    owner,
+    [{ ...key, sheet }, ...kept].slice(0, KEPT_PER_INPUT)
+  );
+  return sheet;
+}
+
+/** Whether two compile contexts hold the same values under the same keys. */
+function sameFields(
+  before: StyleCompileContext | undefined,
+  after: StyleCompileContext | undefined
+): boolean {
+  if (before === after) return true;
+  if (before === undefined || after === undefined) return false;
+  const keys = Object.keys(before) as (keyof StyleCompileContext)[];
+  return (
+    keys.length === Object.keys(after).length &&
+    keys.every(key => Object.hasOwn(after, key) && before[key] === after[key])
+  );
+}
+
+/**
+ * The full site sheet for `input` and the parts of the types drawn, kept by
+ * the parts' text. Parts that cannot be written as text (a cycle, a bigint)
+ * are compiled afresh rather than kept.
+ */
+function keptPageSiteSheet(
+  key: Omit<SiteSheetKey, "parts">,
+  input: SiteSheetInput,
+  parts: Parameters<typeof compileSiteSheet>[1]
+): SiteSheetArtifact {
+  let text: string;
+  try {
+    text = JSON.stringify(parts);
+  } catch {
+    return compileSiteSheet(input, parts);
+  }
+  return keptSiteSheet({ ...key, parts: text }, () =>
+    compileSiteSheet(input, parts)
   );
 }
