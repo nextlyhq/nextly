@@ -21,7 +21,7 @@ import { MoveHarness, newProbe } from "./move-harness";
 /** The rule's whole answer, every change of container included. */
 const WHOLE: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
   containerChanges: true,
   describeFieldGroup: slug =>
     slug === "seo"
@@ -31,7 +31,7 @@ const WHOLE: MoveContext = {
 /** What the Builder asks today. */
 const TODAY: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
 };
 
 function setup(context: MoveContext) {

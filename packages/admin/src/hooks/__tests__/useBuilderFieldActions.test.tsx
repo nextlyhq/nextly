@@ -155,8 +155,9 @@ describe("handleDuplicateField", () => {
       field("body"),
       field("Body_2"),
       field("foo_bar"),
-      // Sent by the save as foo_bar_2: the column a copy named foo_bar_2 would take.
-      field("foo-bar_2"),
+      // A plugin's camelCase name, whose column is foo_bar_2: the column a copy named foo_bar_2
+      // would take.
+      field("fooBar_2"),
     ]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
@@ -165,14 +166,14 @@ describe("handleDuplicateField", () => {
     expect(builder.fields[1].name).toBe("body_3");
 
     result.current.handleDuplicateField("field_foo_bar");
-    // foo_bar_2 is the name foo-bar_2 is sent as, so it is taken.
+    // foo_bar_2 becomes the column fooBar_2 holds, so it is taken.
     expect(names(builder.fields)).toEqual([
       "body",
       "body_3",
       "Body_2",
       "foo_bar",
       "foo_bar_3",
-      "foo-bar_2",
+      "fooBar_2",
     ]);
   });
 
@@ -182,7 +183,7 @@ describe("handleDuplicateField", () => {
 
     result.current.handleDuplicateField("field_body", {
       heldNames: new Map([["", ["body_2"]]]),
-      topLevelReservesNames: true,
+      surface: "collection",
     });
     expect(builder.fields[1].name).toBe("body_3");
   });

@@ -33,17 +33,48 @@ describe("pushCarriesValues", () => {
     expect(liveTable).not.toHaveBeenCalled();
   });
 
-  it("runs the file for a translated entity's field added, renamed or kept translated", async () => {
+  it("runs the file for a translated entity's field added, a shared one renamed, or a translated one kept", async () => {
     expect(
       await pushCarriesValues(
         save({
           oldFields: [translated("title"), shared("body")],
-          newFields: [translated("headline"), shared("body"), translated("x")],
+          newFields: [translated("title"), shared("text"), translated("x")],
+          wasStored: true,
+          isStored: true,
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("keeps the push for a translated field renamed, its companion column renamed", async () => {
+    expect(
+      await pushCarriesValues(
+        save({
+          oldFields: [translated("title"), shared("body")],
+          newFields: [translated("headline"), shared("body")],
           wasStored: true,
           isStored: true,
           renamed: { from: "title", to: "headline" },
         })
       )
+    ).toBe(true);
+  });
+
+  it("keeps the push for a translated field removed, its companion column dropped", async () => {
+    const removed = save({
+      oldFields: [translated("title"), shared("body")],
+      newFields: [translated("headline"), shared("body")],
+      wasStored: true,
+      isStored: true,
+    });
+    expect(await pushCarriesValues(removed)).toBe(true);
+    // A shared field removed leaves the companion alone.
+    expect(
+      await pushCarriesValues({
+        ...removed,
+        oldFields: [translated("title"), shared("body")],
+        newFields: [translated("title")],
+      })
     ).toBe(false);
   });
 
@@ -92,20 +123,78 @@ describe("pushCarriesValues", () => {
     ).toBe(true);
   });
 
-  it("keeps the push for a field leaving translation under its rename, judged as the preflight judges it", async () => {
-    const leaving = save({
-      oldFields: [translated("title")],
-      newFields: [shared("headline")],
-      wasStored: true,
-      isStored: true,
-      renamed: { from: "title", to: "headline" },
-    });
-    expect(await pushCarriesValues(leaving)).toBe(true);
-    // Without the rename the shared field is a new one, and no field leaves: the rename is what
-    // tells the move.
-    expect(await pushCarriesValues({ ...leaving, renamed: undefined })).toBe(
-      false
+  it.each([
+    ["under its own name", "title", undefined],
+    ["under its rename", "headline", { from: "title", to: "headline" }],
+  ] as const)(
+    "keeps the push for a field leaving translation %s",
+    async (_how, name, renamed) => {
+      expect(
+        await pushCarriesValues(
+          save({
+            oldFields: [translated("title")],
+            newFields: [shared(name)],
+            wasStored: true,
+            isStored: true,
+            renamed,
+          })
+        )
+      ).toBe(true);
+    }
+  );
+
+  describe("a field new to a Single's table, which its row is filled in", () => {
+    const fills = (field: FieldDefinition) =>
+      (field as { required?: boolean }).required === true ||
+      (field as { default?: unknown }).default !== undefined;
+    const added = (field: FieldDefinition, holds = true) =>
+      save({
+        oldFields: [shared("heading")],
+        newFields: [shared("heading"), field],
+        singleRow: {
+          renamedTo: [],
+          fills,
+          holdsRow: () => Promise.resolve(holds),
+        },
+      });
+
+    it.each([
+      ["a required field", field("tagline", { required: true })],
+      [
+        "an optional field with a default",
+        field("motto", { default: "Be kind" }),
+      ],
+    ])(
+      "keeps the push for %s while the table holds its row",
+      async (_what, f) => {
+        expect(await pushCarriesValues(added(f))).toBe(true);
+      }
     );
+
+    it("runs the file for a field that fills nothing, or a table holding no row", async () => {
+      expect(await pushCarriesValues(added(shared("plain")))).toBe(false);
+      expect(
+        await pushCarriesValues(
+          added(field("tagline", { required: true }), false)
+        )
+      ).toBe(false);
+    });
+
+    it("runs the file for a field renamed onto a required one, its column keeping its value", async () => {
+      expect(
+        await pushCarriesValues(
+          save({
+            oldFields: [shared("heading")],
+            newFields: [field("headline", { required: true })],
+            singleRow: {
+              renamedTo: ["headline"],
+              fills,
+              holdsRow: () => Promise.resolve(true),
+            },
+          })
+        )
+      ).toBe(false);
+    });
   });
 
   it("keeps the push for a relationship switched between one entry and many", async () => {

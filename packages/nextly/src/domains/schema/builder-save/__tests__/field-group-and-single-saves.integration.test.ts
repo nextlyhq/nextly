@@ -8,7 +8,7 @@
  * file, left that table on no record: the next migration, a collection's
  * included, was then refused with "table 'comp_<slug>' present in DB".
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -642,7 +642,120 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedFiles(t)).not.toContain(update);
     });
 
+    it("adopts a field group table no migration records through the push once, then runs its file", async () => {
+      const t = await boot();
+      const save = async (fields: unknown[]) =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "meta" },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: (
+              await t
+                .getService("fieldGroupRegistryService")
+                .getComponent("meta")
+            ).schemaVersion,
+          }
+        );
+      const exec = (sql: string) =>
+        (
+          t.adapter as unknown as {
+            executeQuery(sql: string): Promise<unknown[]>;
+          }
+        ).executeQuery(sql);
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const fields = [
+        { name: "note", type: "text" },
+        { name: "count", type: "number" },
+      ];
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "meta", label: "Meta", fields }
+      );
+      // As an earlier Nextly left it: the table, and no migration recording it.
+      rmSync(join(t.basePath, "database", "history"), {
+        recursive: true,
+        force: true,
+      });
+      await exec(
+        `DELETE FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply'`
+      );
+      expect(latestSnapshotTables(t)).not.toContain("comp_meta");
+
+      await save([...fields, { name: "byline", type: "text" }]);
+
+      // The save adopted the table: it is on record, every file applied.
+      expect(latestSnapshotTables(t)).toContain("comp_meta");
+      expect((await appliedFiles(t)).sort()).toEqual(migrationFiles(t).sort());
+
+      // A default given by hand, which no snapshot records: the next save runs its file, which
+      // finds the table differs from its record and is refused, where the push would restate it.
+      if (dialect === "sqlite") {
+        const [info] = (await exec(
+          `SELECT type FROM pragma_table_info('comp_meta') WHERE name = 'count'`
+        )) as { type: string }[];
+        await exec(`ALTER TABLE "comp_meta" DROP COLUMN "count"`);
+        await exec(
+          `ALTER TABLE "comp_meta" ADD COLUMN "count" ${info!.type} DEFAULT 5`
+        );
+      } else {
+        await exec(
+          `ALTER TABLE ${q("comp_meta")} ALTER COLUMN ${q("count")} SET DEFAULT 5`
+        );
+      }
+      await expect(
+        save([
+          ...fields,
+          { name: "byline", type: "text" },
+          { name: "extra", type: "text" },
+        ])
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+    });
+
     it("keeps a field group change's files, recorded nowhere, when its companion fails after the push", async () => {
+      const t = await boot({ translated: true });
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const component = await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("meta");
+
+      companionFails.component = true;
+      // Translation turned on: the save carries values to the companion, so the push applies it.
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "meta" },
+          {
+            fields: [
+              { name: "note", type: "text" },
+              { name: "byline", type: "text" },
+            ],
+            localized: true,
+            confirmed: true,
+            schemaVersion: component.schemaVersion,
+          }
+        )
+      ).rejects.toBeDefined();
+
+      // The push changed the table: its file stays, for `nextly migrate` to
+      // name, and is recorded applied nowhere.
+      const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("records a field group change's file applied, and fails, when its companion fails after the file ran", async () => {
       const t = await boot();
       await dispatchComponents(
         "createComponent",
@@ -658,6 +771,7 @@ describe.each(getConfiguredTestDialects())(
         .getComponent("meta");
 
       companionFails.component = true;
+      // A save that moves no values runs its own file, then the companion step.
       await expect(
         dispatchComponents(
           "applyComponentSchemaChanges",
@@ -673,11 +787,10 @@ describe.each(getConfiguredTestDialects())(
         )
       ).rejects.toBeDefined();
 
-      // The push changed the table: its file stays, for `nextly migrate` to
-      // name, and is recorded applied nowhere.
+      // The file ran whole, so it is recorded applied; the companion's failure is still reported.
       const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
       expect(update).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(update);
+      expect(await appliedFiles(t)).toContain(update);
     });
 
     /** A translated Single whose heading leaves translation as Required. */

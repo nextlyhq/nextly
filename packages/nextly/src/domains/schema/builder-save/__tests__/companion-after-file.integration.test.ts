@@ -1,8 +1,9 @@
 /**
  * A translated Single's or field group's Builder save that moves no values runs its own migration
  * file, which changes the companion `<table>_locales` too; the companion step that runs after it
- * then finds the companion already in step and plans nothing, so no statement runs twice. A field
- * renamed while translated keeps every language's value.
+ * then finds the companion already in step and plans nothing, so no statement runs twice. A
+ * translated field renamed or removed keeps the push (`pushCarriesValues`), its companion judged
+ * against the companion as it stands.
  *
  * Every plan the companion step makes is recorded (`buildCompanionTransitionStatements`): a save
  * the push applied instead would plan the companion's change itself, as the push leaves the
@@ -259,23 +260,30 @@ for (const dialect of getConfiguredTestDialects()) {
         }
       );
 
-      it("renames a translated field, keeping every language's value, the companion step planning nothing after the file", async () => {
+      it("renames a shared field, keeping its value and every language's, the companion step planning nothing after the file", async () => {
         await kind.create();
         await kind.seed(t);
         await plansNothingDuring(() =>
           kind.save(
-            [{ name: "title2", type: "text", localized: true }, TRANSLATED[1]!],
+            [
+              TRANSLATED[0]!,
+              { name: "hits", type: "number", localized: false },
+            ],
             [
               {
-                tableName: `${kind.table}_locales`,
-                fromColumn: "heading",
-                toColumn: "title2",
+                tableName: kind.table,
+                fromColumn: "views",
+                toColumn: "hits",
                 choice: "rename",
               },
             ]
           )
         );
-        expect(await companionValues(kind.table, "title2")).toEqual({
+        const kept = await exec<{ hits: unknown }>(
+          `SELECT ${q("hits")} AS hits FROM ${q(kind.table)}`
+        );
+        expect(kept.map(row => Number(row.hits))).toEqual([7]);
+        expect(await companionValues(kind.table, "heading")).toEqual({
           en: "Hello",
           es: "Hola",
         });

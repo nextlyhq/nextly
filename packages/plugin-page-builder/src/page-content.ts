@@ -24,7 +24,6 @@ import {
   TEMPLATES_SLUG,
 } from "./collections/templates";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
-import { fieldOf } from "./spacing-mode-reader";
 import { drawingDesign } from "./templates/entry-designs";
 
 export type { ContentAddressHolder } from "./address-claims/content-addresses";
@@ -277,4 +276,10 @@ function addressServiceOf(
   throw new Error(
     "[page-builder] the content route reads addresses through the page builder plugin, which this Nextly instance does not have installed."
   );
+}
+
+/** One field of a value read as an object, or `undefined` when it is not one. */
+function fieldOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return (value as Readonly<Record<string, unknown>>)[key];
 }
