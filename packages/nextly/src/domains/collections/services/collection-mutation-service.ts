@@ -506,6 +506,7 @@ import {
   entryStillReferenced,
   referrersHolding,
 } from "./entry-still-referenced";
+import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
 import {
@@ -11070,6 +11071,48 @@ export class CollectionMutationService extends BaseService {
           }
         }
 
+        // The publish gate's verdict, asked on this transaction once the entry is locked: the
+        // early answer came before the transaction, and this is the one the move keeps to. It is
+        // told the parts this move puts live or takes down, and what was live as this lock reads
+        // it. A part held back refuses the whole move, before anything is written.
+        const gateDirection =
+          direction.nextStatus === "published" ? "publish" : "unpublish";
+        const gateParts: PublishPart[] = [
+          ...(this.localization?.locales ?? [])
+            .map(language => language.code)
+            .filter(locale => movesLanguage(params.parts, locale))
+            .map(locale => ({ kind: "language" as const, locale })),
+          ...(movesShared(params.parts) ? [{ kind: "shared" as const }] : []),
+        ];
+        const gateVerdict = await publishGate().judge(tx, {
+          scope: { kind: "collection", slug: params.collectionName },
+          entryId: params.entryId,
+          direction: gateDirection,
+          parts: gateParts,
+          live: {
+            languages: [...priorCompanionStatuses]
+              .filter(([, status]) => status === "published")
+              .map(([locale]) => locale),
+            shared: lockedPreviousStatus === "published",
+          },
+          caller: publishCallerOf(params),
+          ...(params.actor === undefined ? {} : { actor: params.actor }),
+          ...(params.withoutReview === undefined
+            ? {}
+            : { withoutReview: params.withoutReview }),
+        });
+        if (gateVerdict.refusals.length > 0) {
+          const refusal = NextlyError.validation({
+            errors: gateVerdict.refusals.map(({ part, code, message }) =>
+              part.kind === "shared"
+                ? { path: "shared", code, message }
+                : { path: part.locale, code, locale: part.locale, message }
+            ),
+          });
+          publishRefused = refusal;
+          throw refusal;
+        }
+
         // One instant for everything this attempt writes.
         const publishNow = new Date();
         const configuredLocales = new Set(
@@ -11985,6 +12028,10 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: {},
         });
+        // What the gate's verdict started is finished on this transaction, now the parts are
+        // written and before it commits: a publish only, since an unpublish closes no review. A
+        // gate that finds what it judged has changed throws, and the whole move rolls back.
+        if (gateDirection === "publish") await gateVerdict.settle();
       }, transactionOptions);
 
       // The entry was deleted out from under the publish: nothing was written or

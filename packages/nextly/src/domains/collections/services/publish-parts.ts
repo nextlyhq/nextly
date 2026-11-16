@@ -21,6 +21,7 @@
  *
  * @module domains/collections/services/publish-parts
  */
+import type { RequestActor } from "../../../auth/request-actor";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
@@ -134,6 +135,10 @@ export interface PublishPartsEngines {
    */
   scopeKind?: "collection" | "single";
   caller: PublishCaller;
+  /** Who makes the move, as its write records it, so the gate names the same actor. */
+  actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the gate. */
+  withoutReview?: { reason: string };
   /**
    * The transition of `parts` (every part, where absent) in `direction`, in one transaction; or,
    * where `describe`, what a publish of them would do, changing nothing.
@@ -311,6 +316,10 @@ async function gateIssues(
       shared: state.sharedLive,
     },
     caller: engines.caller,
+    ...(engines.actor === undefined ? {} : { actor: engines.actor }),
+    ...(engines.withoutReview === undefined
+      ? {}
+      : { withoutReview: engines.withoutReview }),
   });
   return held.map(({ part, code, message }) =>
     part.kind === "shared"

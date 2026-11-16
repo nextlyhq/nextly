@@ -279,6 +279,9 @@ function partsLifecycle(
           routeAuthorized: false,
           authenticatedScope: readAuthenticatedScope(),
           data: versionInputOf(body),
+          ...(parts.withoutReview === undefined
+            ? {}
+            : { withoutReview: parts.withoutReview }),
         },
         {
           direction,
