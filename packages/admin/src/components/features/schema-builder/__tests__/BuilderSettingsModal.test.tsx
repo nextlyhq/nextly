@@ -5,9 +5,9 @@
 // was passed via `initialValues`. Tab content rendering is left to BasicsTab /
 // AdvancedTab tests in their own files; this file only verifies the wiring.
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 
 import {
   BuilderSettingsModal,
@@ -16,6 +16,22 @@ import {
 import type { BuilderConfig } from "../builder-config";
 
 import type { StoredHookConfig } from "@admin/types/collection";
+
+/** What the server's address check refuses, by address. */
+let refusals: Record<string, { code: string; message: string }> = {};
+const check = vi.fn(
+  async (kind: string, address: string, _pending?: unknown) => ({
+    kind,
+    address,
+    refusal: refusals[address] ?? null,
+  })
+);
+vi.mock("@admin/services/addressCheckApi", () => ({
+  addressCheckApi: {
+    check: (kind: string, address: string, pending?: unknown) =>
+      check(kind, address, pending),
+  },
+}));
 
 const collectionConfig: BuilderConfig = {
   kind: "collection",
@@ -354,5 +370,157 @@ describe("BuilderSettingsModal — a collection's stored hooks", () => {
     expect(
       screen.getByRole("heading", { name: "Set Audit Fields" })
     ).toBeInTheDocument();
+  });
+});
+
+// Once saved, an address names the entity's routes, its table and what refers
+// to it, so it is fixed, and the settings say what changing it would break.
+// Before the first save nothing refers to it yet, so it stays editable,
+// checked as it is typed against everything else that holds an address.
+describe("BuilderSettingsModal — the address", () => {
+  const singleConfig: BuilderConfig = {
+    kind: "single",
+    basicsFields: ["singularName", "slug", "description", "icon"],
+    advancedFields: ["status", "i18n"],
+    toolbar: { previewSchemaChange: true },
+    picker: {},
+  };
+  const SAVED: BuilderSettingsValues = {
+    singularName: "Post",
+    pluralName: "Posts",
+    slug: "posts",
+    description: "",
+    icon: "FileText",
+  };
+
+  beforeEach(() => {
+    refusals = {};
+    check.mockClear();
+  });
+
+  it.each([
+    [
+      "collection",
+      collectionConfig,
+      undefined,
+      "Fixed once saved: its API routes, and every client that calls them, use this address.",
+    ],
+    [
+      "Single",
+      singleConfig,
+      undefined,
+      "Fixed once saved: its API routes, and every client that calls them, use this address.",
+    ],
+    [
+      "field group",
+      componentConfig,
+      3,
+      "Fixed once saved: the fields that use this field group refer to it by this address. Used in 3 places.",
+    ],
+  ] as const)(
+    "a saved collection's, Single's and field group's address is fixed (%s)",
+    (_kind, config, usedByCount, says) => {
+      render(
+        <BuilderSettingsModal
+          open
+          mode="edit"
+          config={config}
+          initialValues={SAVED}
+          usedByCount={usedByCount}
+          onCancel={vi.fn()}
+          onSubmit={vi.fn()}
+        />
+      );
+      const address = screen.getByLabelText("Slug");
+      expect(address).toHaveAttribute("readonly");
+      expect(address).toHaveAccessibleDescription(says);
+    }
+  );
+
+  it("keeps a saved entity's address when its name changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={SAVED}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const name = screen.getByLabelText("Singular name");
+    await user.clear(name);
+    await user.type(name, "Article");
+    expect(screen.getByLabelText("Slug")).toHaveValue("posts");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSubmit.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ singularName: "Article", slug: "posts" })
+    );
+  });
+
+  it("keeps an unsaved entity's address editable, checked as typed, its own not counted against it", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    refusals = {
+      articles: { code: "DUPLICATE", message: "Resource already exists." },
+    };
+    const others = [{ kind: "collection", address: "drafts" }];
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={SAVED}
+        unsavedAddress={{ otherAddresses: others }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const address = screen.getByLabelText("Slug");
+    expect(address).not.toHaveAttribute("readonly");
+
+    await user.clear(address);
+    await user.type(address, "articles");
+    await waitFor(() =>
+      expect(address).toHaveAccessibleDescription(
+        "A collection or Single already uses this address."
+      )
+    );
+    expect(check).toHaveBeenLastCalledWith("collection", "articles", others);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await user.clear(address);
+    await user.type(address, "stories");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled()
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSubmit.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ slug: "stories" })
+    );
+  });
+
+  it("a plugin's collection offers no editable setting", () => {
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={SAVED}
+        readOnly
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    for (const control of [
+      ...screen.getAllByRole("textbox"),
+      ...screen.queryAllByRole("switch"),
+    ]) {
+      expect(control).toBeDisabled();
+    }
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 });
