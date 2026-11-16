@@ -193,18 +193,20 @@ export function useSchemaSave({
       try {
         const previewed = await preview(fields);
         if (!mounted.current) return;
-        if (!previewed.hasChanges) {
-          onNoChanges(fields);
-          return;
-        }
-        // A rename the preview does not offer as one would drop the field's values, so nothing is
-        // put in front of the person to confirm.
+        // A rename the preview does not offer as one would not keep the field's values with it, so
+        // nothing is put in front of the person to confirm. Judged before a preview with no change
+        // is saved as settings alone: two fields trading names leave the same columns, which the
+        // preview sees as no change, and saving their definitions would swap their values.
         const { missing } = renameAnswers(
           draftRenames,
           previewed.renamed ?? []
         );
         if (missing) {
           toast.error(renameNotOffered(missing));
+          return;
+        }
+        if (!previewed.hasChanges) {
+          onNoChanges(fields);
           return;
         }
         previewedFields.current.set(

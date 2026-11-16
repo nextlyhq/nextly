@@ -91,8 +91,16 @@ export function BuilderSchemaChangeDialogs({
 
   if (!previewed) return null;
   // The Builder's own renames are decided, not asked: shown as renames whose values are kept.
-  const decided = renameAnswers(draftRenames, previewed.renamed ?? []).decided;
-  const preview = previewWithDecidedRenames(previewed, decided);
+  const { decided, sameColumn } = renameAnswers(
+    draftRenames,
+    previewed.renamed ?? []
+  );
+  const preview = previewWithDecidedRenames(previewed, decided, sameColumn);
+  // Each rename the save keeps, by its columns, and one that keeps its column by its names.
+  const keptRenames = [
+    ...decided,
+    ...sameColumn.map(r => ({ from: r.previousName, to: r.name })),
+  ];
 
   if (creating) {
     return (
@@ -109,7 +117,7 @@ export function BuilderSchemaChangeDialogs({
     );
   }
 
-  if (isSafeChange(preview) && decided.length === 0) {
+  if (isSafeChange(preview) && keptRenames.length === 0) {
     return (
       <SafeChangeConfirmDialog
         key={previewId}
@@ -135,7 +143,7 @@ export function BuilderSchemaChangeDialogs({
       classification={preview.classification}
       changes={preview.changes}
       renamed={preview.renamed}
-      decidedRenames={decided}
+      decidedRenames={keptRenames}
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}

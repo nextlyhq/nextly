@@ -56,8 +56,11 @@ interface SchemaChangeDialogProps {
   // F4 Option E PR 5: rename candidates from the preview endpoint.
   // Empty array (or undefined) = no candidates, no rename UI rendered.
   renamed?: SchemaPreviewRenameCandidate[];
-  /** Renames the Builder decided itself: shown as renames whose values are kept, not asked. */
-  decidedRenames?: readonly SchemaPreviewRenameCandidate[];
+  /**
+   * Renames the Builder decided itself, from what to what: shown as renames whose values are kept,
+   * not asked.
+   */
+  decidedRenames?: readonly KeptRename[];
   warnings: string[];
   interactiveFields: InteractiveField[];
   // Fields that stop being translated: what moves to the archive, or why the change is refused.
@@ -617,10 +620,16 @@ function SchemaChangeDialogFooter({
  * The renames the Builder decided, once each: a field renamed on its own table and its
  * translations table is one rename to the person.
  */
+/** A rename the save keeps: its column's old and new names, or the field's when the column stays. */
+interface KeptRename {
+  from: string;
+  to: string;
+}
+
 function DecidedRenames({
   renames,
 }: {
-  renames: readonly SchemaPreviewRenameCandidate[];
+  renames: readonly KeptRename[];
 }): JSX.Element | null {
   const once = [
     ...new Map(renames.map(c => [`${c.from}->${c.to}`, c])).values(),
