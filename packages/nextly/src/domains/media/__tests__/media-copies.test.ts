@@ -441,9 +441,10 @@ describe("an original past the read cap", () => {
     });
     expect(reads.filter(path => path === item.filename)).toHaveLength(1);
 
-    expect(await copyBytesOf(item, 640, null, { storage, processor })).toEqual({
-      kind: "original",
-    });
+    // Nor for another width or format: the original is past the cap for all.
+    expect(
+      await copyBytesOf(item, 320, "image/webp", { storage, processor })
+    ).toEqual({ kind: "original" });
     expect(reads.filter(path => path === item.filename)).toHaveLength(1);
     expect(resize).not.toHaveBeenCalled();
   });
@@ -582,11 +583,37 @@ describe("a copy that could not be kept", () => {
     const processor = new ImageProcessor({ copyPixelLimit: 1000 });
     const resize = vi.spyOn(processor, "copyAtWidth");
 
-    for (let ask = 0; ask < 3; ask++) {
+    for (const [width, accept] of [
+      [640, null],
+      [640, null],
+      [320, "image/webp"],
+      [96, "image/avif"],
+    ] as const) {
       expect(
-        await copyBytesOf(item, 640, null, { storage, processor })
+        await copyBytesOf(item, width, accept, { storage, processor })
       ).toEqual({ kind: "original" });
     }
     expect(resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a copy kept since, though its own write failed", async () => {
+    const { item, bytes } = await itemWithPhoto();
+    const { storage, held } = memoryStorage({ [item.filename]: bytes });
+    const failing: CopyStorage = {
+      ...storage,
+      uploadAt: async () => {
+        throw new Error("timed out after the write landed");
+      },
+    };
+    const processor = new ImageProcessor();
+    const deps = { storage: failing, processor };
+
+    const first = await copyBytesOf(item, 240, null, deps);
+    expect(first.kind).toBe("copy");
+    if (first.kind !== "copy") return;
+    // The write landed after all, or another server kept the same copy.
+    held.set(`${item.filename}.w240.jpg`, first.bytes);
+
+    expect(await copyBytesOf(item, 240, null, deps)).toEqual(first);
   });
 });

@@ -52,7 +52,7 @@ export const NOT_AGAIN_FOR_MS = 60_000;
  * The most copies remembered as not to be tried again. The oldest go first
  * past it: forgetting one early costs a single attempt more.
  */
-const REMEMBERED_AT_MOST = 1000;
+export const REMEMBERED_AT_MOST = 1000;
 
 let making = 0;
 const waiting: Array<() => void> = [];

@@ -28,7 +28,7 @@ import {
   keepsCopies,
   type CopyKeepingStorage,
 } from "../../../storage/keeps-copies";
-import { StorageReadTooLargeError } from "../../../storage/read-errors";
+import { isStorageReadTooLarge } from "../../../storage/read-errors";
 import {
   readStoredMediaBytes,
   type StoredMediaSource,
@@ -201,7 +201,7 @@ async function readOrNull(
   try {
     return await readStoredMediaBytes(storage, path, cap);
   } catch (error) {
-    if (error instanceof StorageReadTooLargeError) onTooLarge?.();
+    if (isStorageReadTooLarge(error)) onTooLarge?.();
     (deps.logger ?? consoleLogger).warn("Could not read a stored image", {
       path,
       error: error instanceof Error ? error.message : String(error),
@@ -209,6 +209,16 @@ async function readOrNull(
     return null;
   }
 }
+
+/**
+ * What is remembered as not to be tried again for a while: one copy, whose
+ * write failed or which came out past the read cap, or a whole original,
+ * which could not be read within its cap or resized at all, so no copy of it
+ * is tried in any width or format. Apart, so a copy's key that is also some
+ * item's own file names one or the other.
+ */
+const copyMemoryKey = (key: string) => `copy:${key}`;
+const originalMemoryKey = (filename: string) => `original:${filename}`;
 
 /** A storage that can both read an original and keep a copy beside it. */
 type KeepingStorage = CopyKeepingStorage<CopyStorage>;
@@ -232,12 +242,20 @@ export async function copyBytesOf(
   const snapped = copyWidthOf(item, width);
   if (snapped === null) return ORIGINAL;
   const key = copyPathOf(item.filename, snapped, format);
-  // A copy that could not be kept a moment ago is not tried again yet.
-  if (notTriedAgainYet(key)) return ORIGINAL;
 
+  // Read before anything remembered is asked: a copy kept by another
+  // process, or by a write that failed only after it landed, is served.
   const kept = await readOrNull(storage, key, copyReadCap(item), deps);
   if (kept !== null) {
     return { kind: "copy", bytes: kept, mimeType: format.mimeType };
+  }
+  // A copy, or an original, that could not be kept or resized a moment ago
+  // is not tried again yet.
+  if (
+    notTriedAgainYet(copyMemoryKey(key)) ||
+    notTriedAgainYet(originalMemoryKey(item.filename))
+  ) {
+    return ORIGINAL;
   }
 
   // A burst of asks for the same copy, as a page with one image in many
@@ -267,7 +285,7 @@ async function makeCopy(
     item.filename,
     Math.max(DEFAULT_READ_MAX_BYTES, item.size),
     deps,
-    () => notAgainForAWhile(key)
+    () => notAgainForAWhile(originalMemoryKey(item.filename))
   );
   if (original === null) return ORIGINAL;
 
@@ -278,9 +296,12 @@ async function makeCopy(
   );
   if (made.kind !== "made") {
     // An original refused (animated, past the pixel limit, not an image) is
-    // refused again on the next ask, so it is not read and tried for a while.
-    // A missing image library is not remembered: installing it is enough.
-    if (made.kind === "refused") notAgainForAWhile(key);
+    // refused again in any width or format, so it is not read and tried for a
+    // while. A missing image library is not remembered: installing it is
+    // enough.
+    if (made.kind === "refused") {
+      notAgainForAWhile(originalMemoryKey(item.filename));
+    }
     return ORIGINAL;
   }
   const served: ServedCopy = {
@@ -291,7 +312,7 @@ async function makeCopy(
   // Too large to read back: served this once, not kept, and not made again
   // for a while, since it would come out as large.
   if (made.bytes.byteLength > copyReadCap(item)) {
-    notAgainForAWhile(key);
+    notAgainForAWhile(copyMemoryKey(key));
     return served;
   }
 
@@ -301,7 +322,7 @@ async function makeCopy(
     // The copy is made, so this request is served it. The next asks are
     // served the original for a while, rather than each paying for a resize
     // a storage refusing writes would not keep either.
-    notAgainForAWhile(key);
+    notAgainForAWhile(copyMemoryKey(key));
     logger.warn("Could not keep a resized copy", {
       mediaId: item.id,
       key,
