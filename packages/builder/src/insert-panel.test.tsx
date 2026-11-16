@@ -169,7 +169,7 @@ function placementLine(): string | null {
  * `mouseDown` because that is what the tab primitive activates on; a `click`
  * alone never reaches its handler.
  */
-function openTab(name: "Blocks" | "Sections"): void {
+function openTab(name: "Blocks" | "Saved sections"): void {
   fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 });
 }
 
@@ -953,7 +953,7 @@ describe("the panel's frame", () => {
     ).toBe("true");
     expect(
       screen
-        .getByRole("tab", { name: "Sections" })
+        .getByRole("tab", { name: "Saved sections" })
         .getAttribute("aria-selected")
     ).toBe("false");
   });
@@ -973,13 +973,15 @@ describe("the panel's frame", () => {
         .getAttribute("placeholder")
     ).toBe("Search blocks and components");
 
-    // The Sections tab searches sections, and says so.
-    openTab("Sections");
+    // The Saved sections tab searches saved sections, and says so.
+    openTab("Saved sections");
     expect(
       screen
         .getByRole("combobox", { name: "Insert a block" })
         .getAttribute("placeholder")
-    ).toBe("Search sections");
+    ).toBe("Search saved sections");
+    // An empty tab says so once, in the tab's own name.
+    expect(screen.getByText("No saved sections yet.")).toBeTruthy();
   });
 
   it("draws the library's categories by name, a plugin's as written, and a block with none under More blocks", () => {
@@ -1684,7 +1686,7 @@ describe("InsertPanel and the pattern tier", () => {
     expect(screen.queryByRole("option", { name: "Hero" })).toBeNull();
 
     // Sections holds the patterns, and only them.
-    openTab("Sections");
+    openTab("Saved sections");
     expect(tile("Hero")).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Text" })).toBeNull();
   });
@@ -1703,7 +1705,7 @@ describe("InsertPanel and the pattern tier", () => {
       />
     );
 
-    openTab("Sections");
+    openTab("Saved sections");
     fireEvent.click(tile("Hero"));
 
     // `applyAll` and not `apply`: a pattern is a forest, and placing it as
@@ -1745,7 +1747,7 @@ describe("InsertPanel and the pattern tier", () => {
       />
     );
 
-    openTab("Sections");
+    openTab("Saved sections");
     expect(tile("Hero")).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Broken" })).toBeNull();
   });
@@ -1821,7 +1823,7 @@ describe("the component tier", () => {
       />
     );
 
-    openTab("Sections");
+    openTab("Saved sections");
     const wrapped = tile("Wrapped column");
     expect(wrapped.getAttribute("data-refused")).toBe("true");
     expect(describedBy(wrapped)).toContain("A Column has to go inside");
@@ -1888,7 +1890,7 @@ describe("the component tier", () => {
       />
     );
 
-    openTab("Sections");
+    openTab("Saved sections");
     fireEvent.click(screen.getByRole("option", { name: /Row of one/ }));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -2213,7 +2215,7 @@ describe("when the library was cut, or could not be read", () => {
       />
     );
     // Patterns are offered on the Sections tab, so that is where it is said.
-    openTab("Sections");
+    openTab("Saved sections");
 
     const [status] = notices();
     expect(status?.textContent).toContain("some patterns are not offered");
@@ -2236,7 +2238,7 @@ describe("when the library was cut, or could not be read", () => {
     );
     expect(notices()[0]?.textContent).not.toContain("patterns");
 
-    openTab("Sections");
+    openTab("Saved sections");
     expect(notices()).toHaveLength(1);
     expect(notices()[0]?.textContent).toContain(
       "some patterns are not offered"
@@ -2263,7 +2265,7 @@ describe("when the library was cut, or could not be read", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledTimes(1);
 
-    openTab("Sections");
+    openTab("Saved sections");
     const [cut] = notices();
     expect(cut?.textContent).toContain("some patterns are not offered");
   });
@@ -2298,7 +2300,7 @@ describe("when the library was cut, or could not be read", () => {
         library={{ patterns: "stale" }}
       />
     );
-    openTab("Sections");
+    openTab("Saved sections");
 
     expect(notices()[0]?.textContent).toContain(
       "patterns could not be reloaded"

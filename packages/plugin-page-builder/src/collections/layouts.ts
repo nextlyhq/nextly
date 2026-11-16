@@ -110,7 +110,7 @@ function rejectRepeatedAreas(value: RepeaterFieldValue): string | true {
 export function layoutsCollection(): CollectionConfig {
   return defineCollection({
     slug: LAYOUTS_SLUG,
-    labels: { singular: "Layout", plural: "Layouts" },
+    labels: { singular: "Header & footer set", plural: "Header & footer" },
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),

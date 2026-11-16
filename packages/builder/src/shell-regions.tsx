@@ -38,6 +38,7 @@ import {
   type ShellPreferences,
 } from "./shell-state";
 import {
+  PANEL_DIVIDER_CLASS,
   SIDE_PANEL_CLASS,
   useDesignSystemStylesheet,
 } from "./shell-stylesheet";
@@ -275,7 +276,11 @@ export function ShellRegions({
                   The panel side is named by its role rather than by which
                   panel is open, because the name would otherwise change under
                   a user who is standing on it. */}
-              <ResizableHandle withGrip aria-label="Panel and canvas" />
+              <ResizableHandle
+                withGrip
+                aria-label="Panel and canvas"
+                className={PANEL_DIVIDER_CLASS}
+              />
             </>
           ) : null}
 
@@ -293,7 +298,11 @@ export function ShellRegions({
 
           {inspectorShown ? (
             <>
-              <ResizableHandle withGrip aria-label="Canvas and inspector" />
+              <ResizableHandle
+                withGrip
+                aria-label="Canvas and inspector"
+                className={PANEL_DIVIDER_CLASS}
+              />
 
               <ResizablePanel
                 id="inspector"
@@ -324,7 +333,7 @@ export function ShellRegions({
         names itself ("Current location"), which is the thing a
         reader actually lands on.
       */}
-      <footer className="border-[color:var(--nx-builder-border)] text-[color:var(--nx-builder-text-muted)] flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs">
+      <footer className="border-[color:var(--nx-builder-divider)] text-[color:var(--nx-builder-text-muted)] flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs">
         {breadcrumb}
       </footer>
     </div>

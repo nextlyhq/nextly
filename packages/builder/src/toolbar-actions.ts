@@ -51,6 +51,7 @@ import {
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
 import type { RefusalWording } from "./drag-refusal";
+import { CONVERSION_WORDS } from "./editor-words";
 import {
   compositionEntryContentRefusal,
   duplicationRefusal,
@@ -185,9 +186,9 @@ export interface ComponentVerbsOffer {
   readonly mayUpdatePattern?: boolean;
 }
 
-/** What an author without the grant to update a pattern is told. */
+/** What an author without the grant to update a saved section is told. */
 const UPDATE_PATTERN_GRANT_REFUSAL =
-  "You do not have permission to update and publish patterns.";
+  "You do not have permission to update and publish saved sections.";
 
 /** What an author without the grant to make a component is told. */
 const MAKE_COMPONENT_GRANT_REFUSAL =
@@ -267,7 +268,7 @@ function componentActions(
   if (offer === undefined) return [];
   const turn: ToolbarAction = {
     id: "turn-into-component",
-    label: "Turn into component…",
+    label: CONVERSION_WORDS.turnIntoComponent,
     enabled: true,
     inMenu: true,
   };
@@ -379,7 +380,7 @@ function detachAction(
 ): ToolbarAction {
   const detach: ToolbarAction = {
     id: "detach-component",
-    label: "Detach from component",
+    label: CONVERSION_WORDS.detachFromComponent,
     enabled: true,
     inMenu: true,
   };
@@ -404,7 +405,7 @@ function updatePatternAction(
   if (offer?.mayUpdatePattern === undefined) return [];
   const action: ToolbarAction = {
     id: "update-pattern",
-    label: "Update a pattern",
+    label: "Update a saved section",
     enabled: true,
     inMenu: true,
   };
@@ -620,7 +621,7 @@ function moveAction(
  * and the drift would be invisible — each reads correctly on its own.
  */
 export const SAVE_PATTERN_GRANT_REFUSAL =
-  "You do not have permission to save patterns.";
+  "You do not have permission to save to Saved sections.";
 
 function saveAction(
   document: BlockDocument,
@@ -629,7 +630,7 @@ function saveAction(
   mayCreate: boolean,
   planned: boolean
 ): ToolbarAction {
-  const label = "Save as pattern";
+  const label = CONVERSION_WORDS.saveAsSection;
   // The GRANT first, and it is the one refusal not asked of the planner —
   // because it is not about this selection. Every other reason a save is
   // refused describes the blocks in hand, so a planner that learns a new one

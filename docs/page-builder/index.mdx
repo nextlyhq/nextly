@@ -105,8 +105,8 @@ builder opens.
 
 The Page Builder has its own item in the admin's rail, right after **Forms** (after
 **Media** on a site without the form builder). Its panel lists the libraries pages are
-built from, each with how many you can see: **Patterns**, **Components**, **Layouts** and
-**Templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
+built from, each with how many you can see: **Saved sections**, **Components**, **Header & footer** and
+**Collection templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
 needs fixing.
 
 Clicking the item opens the **Page Builder** overview
@@ -607,7 +607,7 @@ deleted has no address left, so none of its entries is served, own design or not
 #### Collections made in the Schema Builder
 
 A collection made in the Schema Builder has no code to declare its address in, so
-its template stores it. Open **Templates** in the Page Builder's panel, open the
+its template stores it. Open **Collection templates** in the Page Builder's panel, open the
 collection's template and set its **Address**; once the template is published its
 entries are served there, with no restart. The same rules apply as to an address
 declared in code, and an address declared in code wins over a stored one. When you
@@ -692,7 +692,7 @@ One list on a page can be split into pages, so the page's address names one list
 The save is refused, naming the reason, for a second list split into pages on the same
 page, a list split into pages inside another list (it repeats once per outer entry, with no
 address of its own), a list of related entries (they have no count of pages), and a list in
-a component or a Layout region (each shows on many pages). A list on a Single's page shows
+a component or a header & footer set region (each shows on many pages). A list on a Single's page shows
 its first page only, since a Single's route serves no later pages.
 
 The loop reads through the route's **public reader**, which every blocks route binds to each

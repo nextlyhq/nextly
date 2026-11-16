@@ -463,9 +463,9 @@ export function BuilderShell({
               {props.onExit ? (
                 <>
                   <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-                    Editing a layout needs at least {MIN_SHELL_WIDTH}px of
-                    width. In a narrower space you can still edit this
-                    page&apos;s content from the admin.
+                    The editor needs at least {MIN_SHELL_WIDTH}px of width. In a
+                    narrower space you can still edit this page&apos;s content
+                    from the admin.
                   </p>
                   <button
                     type="button"
@@ -477,7 +477,7 @@ export function BuilderShell({
                 </>
               ) : (
                 <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-                  Editing a layout needs at least {MIN_SHELL_WIDTH}px of width.
+                  The editor needs at least {MIN_SHELL_WIDTH}px of width.
                 </p>
               )}
             </div>
