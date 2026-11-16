@@ -151,8 +151,9 @@ async function postgresUniqueConstraints(
 
 /**
  * The indexes of a MySQL table, each with its columns in order, whether it is unique over whole
- * values, and whether its leading part is a whole column: a prefix or an expression keys only part
- * of what it covers.
+ * values, and whether it can serve a foreign key on its leading column: a B-tree whose leading part
+ * is that whole column. A prefix or an expression keys only part of what it covers, and InnoDB keys
+ * a foreign key by a B-tree alone, never a FULLTEXT or SPATIAL index.
  */
 async function mysqlIndexes(
   db: unknown,
@@ -162,7 +163,7 @@ async function mysqlIndexes(
     name: string;
     columns: string[];
     uniqueWhole: boolean;
-    leadingWhole: boolean;
+    servesForeignKey: boolean;
   }[]
 > {
   const rows = await querySqlRows<{
@@ -170,11 +171,13 @@ async function mysqlIndexes(
     column: string | null;
     nonUnique: number | string;
     subPart: number | string | null;
+    indexType: string;
   }>(
     db,
     "mysql",
     sql`SELECT INDEX_NAME AS ${sql.identifier("name")}, COLUMN_NAME AS ${sql.identifier("column")},
-          NON_UNIQUE AS ${sql.identifier("nonUnique")}, SUB_PART AS ${sql.identifier("subPart")}
+          NON_UNIQUE AS ${sql.identifier("nonUnique")}, SUB_PART AS ${sql.identifier("subPart")},
+          INDEX_TYPE AS ${sql.identifier("indexType")}
         FROM information_schema.STATISTICS
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table}
         ORDER BY INDEX_NAME, SEQ_IN_INDEX`
@@ -185,7 +188,7 @@ async function mysqlIndexes(
       name: string;
       columns: string[];
       uniqueWhole: boolean;
-      leadingWhole: boolean;
+      servesForeignKey: boolean;
     }
   >();
   for (const row of rows) {
@@ -194,7 +197,10 @@ async function mysqlIndexes(
       columns: [],
       uniqueWhole: Number(row.nonUnique) === 0,
       // Rows come in key order, so the first one read is the leading part.
-      leadingWhole: row.column !== null && row.subPart === null,
+      servesForeignKey:
+        row.indexType === "BTREE" &&
+        row.column !== null &&
+        row.subPart === null,
     };
     if (row.column === null || row.subPart !== null) index.uniqueWhole = false;
     if (row.column !== null) index.columns.push(row.column.toLowerCase());
@@ -248,12 +254,12 @@ async function mysqlInlineUniques(
       index.uniqueWhole &&
       index.columns.length === 1 &&
       index.name.toLowerCase() === column;
-    // Only an index whose leading part is the whole column serves the foreign key: MySQL cannot
-    // use a prefix of it.
+    // Only a B-tree whose leading part is the whole column serves the foreign key: MySQL cannot
+    // use a prefix of it, nor a FULLTEXT index.
     const served = indexes.some(
       other =>
         other.name !== index.name &&
-        other.leadingWhole &&
+        other.servesForeignKey &&
         other.columns[0] === column
     );
     if (!inline || !served) return [];

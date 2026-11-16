@@ -1501,6 +1501,24 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    // A FULLTEXT index leading with the column cannot serve the foreign key: InnoDB keys one only
+    // by a B-tree.
+    it.runIf(dialect === "mysql")(
+      "keeps the inline UNIQUE where the column's other index is a FULLTEXT one",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `DROP INDEX ${q(`idx_${PROFILES}_person`)} ON ${q(PROFILES)}`,
+          `CREATE FULLTEXT INDEX ${q("person_words")} ON ${q(PROFILES)} (${q("person")})`,
+        ]);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+      },
+      120_000
+    );
+
     /** The schema an unqualified name reaches on this connection. */
     async function ownSchema(): Promise<string> {
       if (dialect === "sqlite") return "main";
