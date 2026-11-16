@@ -878,6 +878,16 @@ export interface PageContext {
    */
   firstBlockId?: string;
   /**
+   * The class the page's root carries beside `nx-pb-page` when its rules are
+   * scoped (a page drawn inside its Layout), so a block writing a rule of its
+   * own anchors it as the page's rules are. Set by the renderer, only on a
+   * page that sizes images.
+   *
+   * @internal
+   * @experimental
+   */
+  pageScope?: string;
+  /**
    * The site's IANA time zone, in which a list's date filter compares whole
    * days for a field holding an instant. UTC when absent.
    *

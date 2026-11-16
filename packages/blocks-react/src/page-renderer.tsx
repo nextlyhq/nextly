@@ -1130,7 +1130,7 @@ export function PageRenderer({
       ) : null}
       <BlockList
         nodes={bound.nodes}
-        context={pageContext}
+        context={blockContextOf(pageContext, scope)}
         blocks={resolver}
         classes={classes}
         fallback={blockFallback}
@@ -1144,6 +1144,19 @@ export function PageRenderer({
       />
     </div>
   );
+}
+
+/**
+ * The context the page's blocks draw with: the page's own, plus the scope its
+ * rules are anchored under where the page sizes images, so the first block's
+ * background copies are written at the page's own anchor (`image-sources`).
+ */
+function blockContextOf(
+  pageContext: PageContext,
+  scope: string | undefined
+): PageContext {
+  if (pageContext.imageCopies === undefined || !scope) return pageContext;
+  return { ...pageContext, pageScope: scope };
 }
 
 /** What a site sheet was compiled from, beyond what every draw shares. */

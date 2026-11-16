@@ -223,9 +223,11 @@ interface SizedNode {
  */
 export function childImageContext<
   C extends { imageSlot?: ImageSlot; firstBlockId?: string },
->(ctx: C, node: SizedNode): C | undefined {
-  const slot = ctx.imageSlot;
-  if (slot === undefined) return undefined;
+>(ctx: C | undefined, node: SizedNode | undefined): C | undefined {
+  const slot = ctx?.imageSlot;
+  if (ctx === undefined || node === undefined || slot === undefined) {
+    return undefined;
+  }
   let next = narrowForOwnSize(slot, node.styles);
   if (node.type === COLUMNS_TYPE) {
     const children = recordOf(node.slots)?.children;
@@ -234,6 +236,8 @@ export function childImageContext<
       Array.isArray(children) ? children.length : 0
     );
   }
-  const eager = slot.eager === true || node.id === ctx.firstBlockId;
+  const eager =
+    slot.eager === true ||
+    (node.id !== undefined && node.id === ctx.firstBlockId);
   return { ...ctx, imageSlot: eager ? { ...next, eager: true } : next };
 }

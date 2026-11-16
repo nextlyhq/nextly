@@ -323,6 +323,19 @@ function pictureAttributes(
 }
 
 /**
+ * Whether the picture is in the page's first block, so it loads at once and
+ * before other images. Read with care: a block drawn on its own, outside a
+ * page, is handed no context or node, and loads as the author chose.
+ */
+function loadsFirst(
+  ctx: PageContext | undefined,
+  node: BlockNode | undefined
+): boolean {
+  if (ctx?.imageSlot?.eager === true) return true;
+  return node?.id !== undefined && node.id === ctx?.firstBlockId;
+}
+
+/**
  * The picture's sources, sized to the slot it is drawn in.
  *
  * Where the page sizes images, the site's copies no wider than twice the
@@ -335,15 +348,17 @@ function pictureAttributes(
  */
 async function sizedPicture(
   picture: Picture,
-  ctx: PageContext,
-  node: BlockNode,
+  ctx: PageContext | undefined,
+  node: BlockNode | undefined,
   fetchable: (value: unknown) => string | undefined
 ): Promise<SizedPicture> {
-  const slot = ctx.imageSlot;
-  const eager = slot?.eager === true || node.id === ctx.firstBlockId;
-  const original: SizedPicture = { src: picture.src, eager };
-  if (slot === undefined || ctx.imageCopies === undefined) return original;
-  const drawn = narrowForOwnSize(slot, node.styles);
+  const slot = ctx?.imageSlot;
+  const original: SizedPicture = {
+    src: picture.src,
+    eager: loadsFirst(ctx, node),
+  };
+  if (slot === undefined || ctx?.imageCopies === undefined) return original;
+  const drawn = narrowForOwnSize(slot, node?.styles);
   const upTo = copiesWantedUpTo(drawn);
   const copies = await ctx
     .imageCopies(picture.source, upTo)
@@ -361,7 +376,7 @@ async function sizedPicture(
     src: widest.url,
     srcSet: usable.map(copy => `${copy.url} ${copy.width}w`).join(", "),
     sizes: sizesFor(drawn),
-    eager,
+    eager: original.eager,
   };
 }
 
