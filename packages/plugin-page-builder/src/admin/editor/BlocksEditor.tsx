@@ -79,7 +79,6 @@ import {
 import { siteSheet } from "../../site-style";
 import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
-import { siteTimeZoneFor } from "../canvas-bindings-client";
 import { ComponentActionPrompt } from "../ComponentActionPrompt";
 import { ComponentFromSelectionPrompt } from "../ComponentFromSelectionPrompt";
 import { contributedInspector } from "../contributed-blocks";
@@ -100,7 +99,7 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
 import { bindingSourcePath, type OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
-import { canvasListSample, listEntryCollectionOf } from "./canvas-page-context";
+import { listEntryCollectionOf } from "./canvas-page-context";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { useConditionedPage, type ConditionedPage } from "./conditioned-page";
 import {
@@ -127,6 +126,7 @@ import {
 } from "./page-conditions-read";
 import { PageReadMeter } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
+import { pickerPreviewServices } from "./picker-previews";
 import { PreviewButton } from "./preview-button";
 import { recentIconsStore } from "./recent-icons-store";
 import { useReveal, type Reveal } from "./reveal-hidden";
@@ -618,19 +618,15 @@ function servicesFor(
       // The fields a binding can read, as this author reads them, kept a
       // short while: the picker opens on every bindable prop.
       listBindingFields: bindingFieldsReader(binding.entry, locale, userId),
-      // The values of a list's first entry, beside its item's fields in the
-      // picker: the canvas's own read of the list, as the canvas draws it
-      // for this author, related lists reading the canvas's entry.
-      readListSample: props =>
-        canvasListSample(props, locale, userId, {
-          entryCollection:
-            binding.canvas?.kind === "collection"
-              ? binding.canvas.slug
-              : undefined,
-          entryId: binding.canvas?.documentId,
-        }),
-      // The picker's previews in the canvas's language and the site's zone.
-      ...previewServices(passages, binding.canvas, userId, formatLocale),
+      // The picker's previews: the canvas's language, the site's zone, and
+      // the values of a list's first entry beside its item's fields.
+      ...pickerPreviewServices({
+        passages,
+        canvas: binding.canvas,
+        userId,
+        formatLocale,
+        locale,
+      }),
       // An unbind's plan against the document the editor holds, by the same
       // decision as the page actions API's.
       ...withPlanUnbind(unbindPlanner(binding.page, locale)),
@@ -644,28 +640,6 @@ function servicesFor(
     byLocale.set(key, services);
   }
   return services;
-}
-
-/**
- * The language and zone the binding picker previews a date or a number in,
- * so it reads as the page shows it: the canvas's language, and the site's
- * zone, read when a picker first opens and once for this editor (its
- * passages), never on a canvas load: the canvas reads it only for a page
- * that already formats a date. No zone is read without an entry to ask for
- * or a person to ask as.
- */
-function previewServices(
-  passages: OpenPassages,
-  canvas: DocumentIdentity | null,
-  userId: string | null,
-  formatLocale: string | undefined
-): Pick<ContentServices, "bindingLocale" | "readSiteTimeZone"> {
-  return {
-    ...(formatLocale === undefined ? {} : { bindingLocale: formatLocale }),
-    ...(canvas === null || userId === null
-      ? {}
-      : { readSiteTimeZone: () => siteTimeZoneFor(passages, canvas, userId) }),
-  };
 }
 
 /** The unbind planner as a service member, absent where none can be planned. */

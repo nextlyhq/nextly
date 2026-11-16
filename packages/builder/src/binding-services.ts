@@ -9,7 +9,11 @@
  *
  * @module binding-services
  */
-import type { BindingFieldShape, BlockDocument } from "@nextlyhq/blocks-engine";
+import type {
+  Binding,
+  BindingFieldShape,
+  BlockDocument,
+} from "@nextlyhq/blocks-engine";
 
 import type { KeptProps } from "./binding-ops";
 import type { UnbindAnswer, UnbindKeep } from "./composition-actions";
@@ -108,3 +112,56 @@ export interface UnbindAsk {
 export type UnbindPlanAnswer =
   | { readonly kept: KeptProps; readonly answer: UnbindAnswer }
   | { readonly refusal: string };
+
+/**
+ * What the binding controls read and do through the host: the fields, their
+ * previews and an unbind's plan. Part of the editor's content services.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export interface BindingServices {
+  /**
+   * The fields a binding can read, for the inspector's picker: the entry's,
+   * each Single's and the site settings', only those the signed-in author may
+   * read, each marked by whether visitors may and previewed as the author
+   * reads it. Absent, a prop offers no binding.
+   */
+  readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
+  /**
+   * The start of each field's value in the first entry a list shows, read
+   * as the canvas reads that list, for the picker's samples beside a list
+   * item's fields. Takes the list's stored props. `undefined` for a list the
+   * canvas reads no entry of. Absent, the item's fields show no samples.
+   *
+   * @experimental Settles with the editor's binding controls.
+   */
+  readonly readListSample?: (
+    props: Readonly<Record<string, unknown>>
+  ) => Promise<ListSample | undefined>;
+  /**
+   * The page's language, as the canvas's render formats bound values in it,
+   * so the picker previews a date or a number as the page shows it. Resolved
+   * as a render resolves it (`bindingFormatEnv`): absent, English.
+   */
+  readonly bindingLocale?: string;
+  /**
+   * The site's time zone, as a published page shows its date-times in it,
+   * read when a binding picker opens: `undefined` for a site with none set.
+   * Until it is in, or where it is absent or fails, previews are in UTC, as
+   * a page rendered with no zone.
+   */
+  readonly readSiteTimeZone?: () => Promise<string | undefined>;
+  /**
+   * An unbind's plan, made against the document the editor holds by the same
+   * decision the page actions API takes: what to write in the binding's place
+   * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
+   */
+  readonly planUnbind?: (ask: UnbindAsk) => Promise<UnbindPlanAnswer>;
+  /**
+   * Where a binding's source is edited in the admin: the entry's edit
+   * screen, the Single's, or the site settings. `undefined` for a source the
+   * host has no screen for, such as a list's item, which leaves a bound
+   * prop's menu without "Open source".
+   */
+  readonly sourceHref?: (binding: Binding) => string | undefined;
+}

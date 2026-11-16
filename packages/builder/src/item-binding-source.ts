@@ -23,6 +23,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import type { BindingFieldChoice, ListSample } from "./binding-services";
 import { useLoopCollections } from "./collection-loop-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
 import { useCustomSources } from "./list-query-controls";
@@ -162,4 +163,30 @@ export function useItemSource(
   // An item binding outside every list still names its source, with no
   // fields to name its field from: the save refuses it there.
   return { name: "Each entry in the list", one: "entry", fields: [], loading: false };
+}
+
+/**
+ * A list item's fields as the picker lists them: each one visitors may read
+ * (only those are listed for an item), with its value in the list's first
+ * entry where the host read one, one step into a group or a relation.
+ */
+export function itemChoices(
+  fields: readonly ItemField[],
+  sample: ListSample | undefined,
+  parent?: string
+): readonly BindingFieldChoice[] {
+  return fields.map(field => {
+    const { fields: inside, ...own } = field;
+    const path = parent === undefined ? field.name : `${parent}.${field.name}`;
+    const preview = sample?.[path];
+    return {
+      ...own,
+      public: true,
+      ...(preview === undefined ? {} : { preview }),
+      // One step in, as the host lists a source's fields.
+      ...(inside === undefined || parent !== undefined
+        ? {}
+        : { fields: itemChoices(inside, sample, path) }),
+    };
+  });
 }

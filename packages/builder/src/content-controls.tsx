@@ -27,7 +27,6 @@ import {
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   richTextToPlainText,
-  type Binding,
   type BlockDocument,
   type FieldStoragePrimitive,
 } from "@nextlyhq/blocks-engine";
@@ -47,12 +46,7 @@ import {
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import type {
-  BindingFieldSource,
-  ListSample,
-  UnbindAsk,
-  UnbindPlanAnswer,
-} from "./binding-services";
+import type { BindingServices } from "./binding-services";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
@@ -223,9 +217,11 @@ export interface ListEntriesCount {
  * cannot reach itself. Each is optional, and a control whose service is absent
  * says so rather than offering a button that does nothing.
  *
+ * The binding controls' share is {@link BindingServices}.
+ *
  * @experimental Grows with the controls registry.
  */
-export interface ContentServices {
+export interface ContentServices extends BindingServices {
   /** The admin's media library, as a dialog the control opens. */
   readonly MediaPicker?: React.ComponentType<MediaPickerProps>;
   /** The shared rich-text editor, loaded when a passage is first focused. */
@@ -257,50 +253,6 @@ export interface ContentServices {
    * collections and related entries only.
    */
   readonly listCustomSources?: () => Promise<readonly CustomSource[]>;
-  /**
-   * The fields a binding can read, for the inspector's picker: the entry's,
-   * each Single's and the site settings', only those the signed-in author may
-   * read, each marked by whether visitors may and previewed as the author
-   * reads it. Absent, a prop offers no binding.
-   */
-  readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
-  /**
-   * The start of each field's value in the first entry a list shows, read
-   * as the canvas reads that list, for the picker's samples beside a list
-   * item's fields. Takes the list's stored props. `undefined` for a list the
-   * canvas reads no entry of. Absent, the item's fields show no samples.
-   *
-   * @experimental Settles with the editor's binding controls.
-   */
-  readonly readListSample?: (
-    props: Readonly<Record<string, unknown>>
-  ) => Promise<ListSample | undefined>;
-  /**
-   * The page's language, as the canvas's render formats bound values in it,
-   * so the picker previews a date or a number as the page shows it. Resolved
-   * as a render resolves it (`bindingFormatEnv`): absent, English.
-   */
-  readonly bindingLocale?: string;
-  /**
-   * The site's time zone, as a published page shows its date-times in it,
-   * read when a binding picker opens: `undefined` for a site with none set.
-   * Until it is in, or where it is absent or fails, previews are in UTC, as
-   * a page rendered with no zone.
-   */
-  readonly readSiteTimeZone?: () => Promise<string | undefined>;
-  /**
-   * An unbind's plan, made against the document the editor holds by the same
-   * decision the page actions API takes: what to write in the binding's place
-   * and why, or why it can't be kept. Absent, a bound prop offers no unbind.
-   */
-  readonly planUnbind?: (ask: UnbindAsk) => Promise<UnbindPlanAnswer>;
-  /**
-   * Where a binding's source is edited in the admin: the entry's edit
-   * screen, the Single's, or the site settings. `undefined` for a source the
-   * host has no screen for, such as a list's item, which leaves a bound
-   * prop's menu without "Open source".
-   */
-  readonly sourceHref?: (binding: Binding) => string | undefined;
   /**
    * How many entries a list's stored query matches as the canvas reads them,
    * and how many of those its window shows, from one count read. Asked only

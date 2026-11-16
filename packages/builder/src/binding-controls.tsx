@@ -26,7 +26,6 @@ import {
   type Binding,
   type BindingFieldShape,
   type BindingFormat,
-  type BindingRunInput,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -60,6 +59,12 @@ import {
   previewWithFormat,
 } from "./binding-format-field";
 import { bindOp, unbindOp } from "./binding-ops";
+import {
+  useBindingSources,
+  useListSample,
+  usePreviewFormatIn,
+  type PreviewFormatIn,
+} from "./binding-picker-reads";
 import type {
   BindingFieldChoice,
   BindingFieldSource,
@@ -73,9 +78,9 @@ import type { ContentServices } from "./content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
 import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 import {
+  itemChoices,
   useItemSource,
   useListItem,
-  type ItemField,
   type ItemSource,
 } from "./item-binding-source";
 import { withArticle } from "./with-article";
@@ -452,135 +457,6 @@ function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
   );
 }
 
-/** The language and time zone the picker previews a formatted value in. */
-type PreviewFormatIn = Pick<BindingRunInput, "locale" | "timeZone">;
-
-/**
- * The language and zone the picker previews in: the page's language, and the
- * site's zone, asked of the host when the picker opens rather than with the
- * canvas, which reads it only for a page already formatting a date. Until
- * the zone is in, and where the host has none or its read fails, the preview
- * is in UTC, as a page rendered with no zone; it is drawn again once it is.
- */
-function usePreviewFormatIn(
-  services: ContentServices | undefined
-): PreviewFormatIn {
-  const locale = services?.bindingLocale;
-  const readZone = services?.readSiteTimeZone;
-  const [read, setRead] = React.useState<{
-    readonly from: () => Promise<string | undefined>;
-    readonly zone: string | undefined;
-  }>();
-  React.useEffect(() => {
-    if (readZone === undefined) return;
-    let current = true;
-    readZone().then(
-      zone => {
-        if (current) setRead({ from: readZone, zone });
-      },
-      () => {
-        // No zone to show: the previews stay in UTC.
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [readZone]);
-  // Only the zone this host's read gave, so another host's is never shown.
-  const timeZone = read?.from === readZone ? read?.zone : undefined;
-  return React.useMemo(
-    () => ({
-      ...(locale === undefined ? {} : { locale }),
-      ...(timeZone === undefined ? {} : { timeZone }),
-    }),
-    [locale, timeZone]
-  );
-}
-
-/** The host's read of the fields a binding can read. */
-type ListBindingFields = () => Promise<readonly BindingFieldSource[]>;
-
-/**
- * The read in flight, per host function, shared only while it runs, as the
- * list controls share theirs (`collection-loop-controls`): the controls drawn
- * together for one block (a bound image's chip and its alt note) make one
- * read and see one answer, so they can't disagree. Dropped once it settles:
- * an answer is one signed-in author's, read with their access.
- */
-const sourcesInFlight = new WeakMap<
-  ListBindingFields,
-  Promise<readonly BindingFieldSource[]>
->();
-
-/** The host's binding sources, one read shared by every control asking at once. */
-function readBindingSources(
-  list: ListBindingFields
-): Promise<readonly BindingFieldSource[]> {
-  const held = sourcesInFlight.get(list);
-  if (held !== undefined) return held;
-  const answer = list();
-  sourcesInFlight.set(list, answer);
-  const settle = (): void => {
-    if (sourcesInFlight.get(list) === answer) sourcesInFlight.delete(list);
-  };
-  answer.then(settle, settle);
-  return answer;
-}
-
-/** The fields a binding can read, as the host reads them; read once per open. */
-function useBindingSources(
-  services: ContentServices | undefined,
-  wanted: boolean
-): readonly BindingFieldSource[] | "loading" | "failed" {
-  const [sources, setSources] = React.useState<
-    readonly BindingFieldSource[] | "loading" | "failed"
-  >("loading");
-  const list = services?.listBindingFields;
-  React.useEffect(() => {
-    if (!wanted || list === undefined) return;
-    let current = true;
-    setSources("loading");
-    readBindingSources(list).then(
-      read => {
-        if (current) setSources(read);
-      },
-      () => {
-        if (current) setSources("failed");
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [list, wanted]);
-  return sources;
-}
-
-/**
- * A list item's fields as the picker lists them: each one visitors may read
- * (only those are listed for an item), with its value in the list's first
- * entry where the host read one, one step into a group or a relation.
- */
-function itemChoices(
-  fields: readonly ItemField[],
-  sample: ListSample | undefined,
-  parent?: string
-): readonly BindingFieldChoice[] {
-  return fields.map(field => {
-    const { fields: inside, ...own } = field;
-    const path = parent === undefined ? field.name : `${parent}.${field.name}`;
-    const preview = sample?.[path];
-    return {
-      ...own,
-      public: true,
-      ...(preview === undefined ? {} : { preview }),
-      // One step in, as the host lists a source's fields.
-      ...(inside === undefined || parent !== undefined
-        ? {}
-        : { fields: itemChoices(inside, sample, path) }),
-    };
-  });
-}
-
 /**
  * The list item as a source the picker lists first, named for the list's
  * entries ("Each post"); `undefined` outside every list.
@@ -595,45 +471,6 @@ function itemPickerSource(
     label: `Each ${item.one}`,
     fields: itemChoices(item.fields, sample),
   };
-}
-
-/**
- * The samples of a list's first entry, as the host reads them for the list
- * `list`: `undefined` until read, where the host has none, or where the read
- * fails, so the item's fields are then listed with no values. Read again only
- * when the list's stored props change.
- */
-function useListSample(
-  read: ContentServices["readListSample"],
-  list: ItemSource["list"]
-): ListSample | undefined {
-  const props = list?.props;
-  // By value: the document is a new object after every edit elsewhere.
-  const key = props === undefined ? undefined : JSON.stringify(props);
-  const [found, setFound] = React.useState<{
-    readonly read: NonNullable<typeof read>;
-    readonly key: string;
-    readonly sample: ListSample | undefined;
-  }>();
-  React.useEffect(() => {
-    if (read === undefined || key === undefined) return;
-    let live = true;
-    read(JSON.parse(key) as Readonly<Record<string, unknown>>).then(
-      sample => {
-        if (live) setFound({ read, key, sample });
-      },
-      () => {
-        // No samples to show: the fields are listed without values.
-      }
-    );
-    return () => {
-      live = false;
-    };
-  }, [read, key]);
-  // Only the answer for this host and this list, never a previous one's.
-  return found !== undefined && found.read === read && found.key === key
-    ? found.sample
-    : undefined;
 }
 
 /**
