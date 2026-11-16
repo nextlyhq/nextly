@@ -127,7 +127,7 @@ export default function FieldGroupBuilderEditPage({
     resolver: zodResolver(componentFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -175,9 +175,11 @@ export default function FieldGroupBuilderEditPage({
     fieldGroup?.migrationStatus === "diverged" ||
     fieldGroup?.migrationStatus === "failed";
 
-  // The schema landed. Unlike the other kinds there is no separate settings
-  // write here: a field group's save always carries its fields, so the settings
-  // went with them and both baselines move together.
+  // The schema landed. The apply carries the fields (and `localized`) only, so
+  // the other settings are persisted here, WITHOUT `fields`, as for the other
+  // kinds: otherwise a name, description, icon or category changed in the same
+  // save as a field would be pinned as saved while the registry kept the old
+  // values.
   const onSchemaApplied = useCallback(
     async (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
@@ -193,7 +195,32 @@ export default function FieldGroupBuilderEditPage({
       // The fields are pinned above regardless: they landed, and the baseline
       // has to move with them or the page reports unsaved work that is saved.
       if (!settings) return;
-      pinSettings(settings);
+
+      updateFieldGroup(
+        {
+          fieldGroupSlug: slug,
+          updates: {
+            label: settings.singularName,
+            description: settings.description,
+            admin: {
+              category: settings.category,
+              icon: settings.icon,
+            },
+          },
+        },
+        {
+          // The baseline moves only once the write lands. Clearing it first
+          // would show a clean form over a registry that still holds the old
+          // settings, with no way to retry.
+          onSuccess: () => pinSettings(settings),
+          onError: err => {
+            const m = (err as { message?: string })?.message;
+            toast.error(
+              `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
+            );
+          },
+        }
+      );
 
       await mirrorSchemaFile(
         () =>
@@ -203,7 +230,7 @@ export default function FieldGroupBuilderEditPage({
         "Field group applied to the database"
       );
     },
-    [slug, settings, pinFields, pinSettings]
+    [slug, settings, updateFieldGroup, pinFields, pinSettings]
   );
 
   const saveSettingsOnly = useCallback(
@@ -251,7 +278,9 @@ export default function FieldGroupBuilderEditPage({
     missingSlugMessage: "Field group slug is missing",
     label: displayLabel(settings, entitySlug),
     confirmation,
-    getValidatedFields,
+    // Judged against the fields as last saved, so a draft that changes a
+    // saved field's storage level is refused before it can lose values.
+    getValidatedFields: () => getValidatedFields(pending.saved),
     // The i18n flag, as for the other kinds: the preview reports what a field
     // leaving translation moves to the archive, which depends on it.
     preview: fields =>
@@ -308,7 +337,6 @@ export default function FieldGroupBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         /* This page is where the refusal actually happens: a diverged field group loads and
            edits normally, and only the SAVE is refused. An affordance living only on the list

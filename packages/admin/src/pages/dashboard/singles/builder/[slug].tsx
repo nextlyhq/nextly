@@ -114,7 +114,7 @@ export default function SingleBuilderEditPage({
     resolver: zodResolver(singleFormSchema),
     defaultValues: { singularName: "" },
   });
-  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+  const { handleDuplicateField, getValidatedFields } =
     useBuilderFieldActions(builder);
 
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
@@ -146,6 +146,9 @@ export default function SingleBuilderEditPage({
   // fallback below is only ever satisfying the type.
   const entitySlug = slug ?? "";
   const localized = settings?.i18n === true;
+  // The pending Draft/Published toggle rides with the fields, as `localized` does, so the save
+  // refuses a field taking one of the lifecycle's names in the save that turns it on.
+  const drafts = settings?.status === true;
 
   // The schema landed. The apply carries fields only, so a save that also
   // changed the settings would otherwise clear the dirty badge while the
@@ -163,6 +166,12 @@ export default function SingleBuilderEditPage({
           updates: {
             label: settings.singularName,
             description: settings.description,
+            // The icon, as the settings-only save sends it: without it an icon
+            // changed in the same save as a field never reached the server.
+            // Group and order stay unwritten, so code-first values survive.
+            admin: {
+              icon: settings.icon,
+            },
             status: settings.status === true,
             localized: settings.i18n === true,
             versions: settings.versions === true,
@@ -273,9 +282,11 @@ export default function SingleBuilderEditPage({
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
     confirmation,
-    getValidatedFields,
+    // Judged against the fields as last saved, so a draft that changes a
+    // saved field's storage level is refused before it can lose values.
+    getValidatedFields: () => getValidatedFields(pending.saved),
     preview: fields =>
-      singleApi.previewSchemaChanges(entitySlug, fields, localized),
+      singleApi.previewSchemaChanges(entitySlug, fields, localized, drafts),
     apply: (fields, version, resolutions, renames) =>
       singleApi.applySchemaChanges(
         entitySlug,
@@ -283,7 +294,8 @@ export default function SingleBuilderEditPage({
         version,
         resolutions,
         renames,
-        localized
+        localized,
+        drafts
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
@@ -328,7 +340,6 @@ export default function SingleBuilderEditPage({
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
-      onRowDragEnd={handleRowDragEnd}
       beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}

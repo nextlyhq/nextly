@@ -33,7 +33,11 @@ import * as React from "react";
 
 import type { EditorState } from "./editor-state";
 import { observeRenderedTree } from "./rendered-tree";
-import { orientationOfElement, type SideOrientation } from "./side-orientation";
+import {
+  orientationOfElement,
+  siteOrientationOf,
+  type SideOrientation,
+} from "./side-orientation";
 import { markedElementOf } from "./style-subject";
 
 /**
@@ -187,28 +191,59 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
 }
 
 /**
- * Read the selected node's tag and axes from the canvas, keeping them current.
+ * The selected node's reading, measured once: found by its id, then asked
+ * for its tag, its axes and its picture.
+ */
+function readSelected(
+  canvasRoot: HTMLElement | null | undefined,
+  selectedId: string | null
+): CanvasReading {
+  const element = markedElementOf(canvasRoot, selectedId);
+  // Found once: the address and the placement are of the same picture.
+  const image = ownImage(element);
+  return {
+    tag: element?.tagName.toLowerCase(),
+    orientation: orientationOfElement(element),
+    picture: addressOf(image),
+    picturePosition: positionOf(image),
+  };
+}
+
+/**
+ * One answer measured from the canvas, kept current as the canvas changes.
+ *
+ * The one place the canvas is watched for a reading, so the selected block's
+ * reading and the site's direction are re-read on the same events: a change
+ * in the drawn tree, a resize of the canvas, and every restyle signal.
  *
  * @param canvasRoot - the canvas root the page is drawn under
- * @param selectedId - the block being edited
- * @param document - the editor's document, so a commit re-reads
- * @returns the tag and orientation, each `undefined` when unreadable
+ * @param selectedId - the block measured, or `null` for the canvas root itself
+ * @param restyledBy - what can restyle the page without moving an element
+ * @param measure - the reading, a module-level function so it never changes
+ * @param sameAs - whether two readings say the same thing
+ * @param initial - the answer on the first render, before the effect measures;
+ *   given the root, so a reading cheap enough to take during render can be
+ *   right from the first paint
+ * @returns the newest reading
  */
-export function useCanvasReading(
+function useObservedReading<T>(
   canvasRoot: HTMLElement | null | undefined,
   selectedId: string | null,
-  restyledBy: RestyleSignals
-): CanvasReading {
+  restyledBy: RestyleSignals,
+  measure: (root: HTMLElement | null | undefined, id: string | null) => T,
+  sameAs: (a: T, b: T) => boolean,
+  initial: (root: HTMLElement | null | undefined) => T
+): T {
   const { document, state, breakpoint, cascade, previewContainer } = restyledBy;
-  const [reading, setReading] = React.useState<CanvasReading>(NOTHING);
+  const [reading, setReading] = React.useState<T>(() => initial(canvasRoot));
 
   React.useEffect(() => {
     /*
-     * ONE walk for both answers. `markedElementOf` compares ids as strings over
-     * the marked elements rather than building a selector, because a node id is
-     * author data and `querySelector` throws on invalid syntax instead of
-     * missing — so finding the element twice would also be paying that walk
-     * twice.
+     * ONE walk for every answer. `markedElementOf` compares ids as strings
+     * over the marked elements rather than building a selector, because a
+     * node id is author data and `querySelector` throws on invalid syntax
+     * instead of missing — so finding the element twice would also be paying
+     * that walk twice.
      *
      * Compared by VALUE before storing, here and in the observer: the canvas
      * mutates on every keystroke that reaches it, and storing a fresh object
@@ -216,16 +251,8 @@ export function useCanvasReading(
      * that had not moved.
      */
     const read = () => {
-      const element = markedElementOf(canvasRoot, selectedId);
-      // Found once: the address and the placement are of the same picture.
-      const image = ownImage(element);
-      const next: CanvasReading = {
-        tag: element?.tagName.toLowerCase(),
-        orientation: orientationOfElement(element),
-        picture: addressOf(image),
-        picturePosition: positionOf(image),
-      };
-      setReading(current => (same(current, next) ? current : next));
+      const next = measure(canvasRoot, selectedId);
+      setReading(current => (sameAs(current, next) ? current : next));
     };
     read();
 
@@ -270,7 +297,62 @@ export function useCanvasReading(
     breakpoint,
     cascade,
     previewContainer,
+    measure,
+    sameAs,
   ]);
 
   return reading;
+}
+
+/**
+ * Read the selected node's tag and axes from the canvas, keeping them current.
+ *
+ * @param canvasRoot - the canvas root the page is drawn under
+ * @param selectedId - the block being edited
+ * @param restyledBy - what can restyle the page without moving an element
+ * @returns the tag and orientation, each `undefined` when unreadable
+ */
+export function useCanvasReading(
+  canvasRoot: HTMLElement | null | undefined,
+  selectedId: string | null,
+  restyledBy: RestyleSignals
+): CanvasReading {
+  return useObservedReading(
+    canvasRoot,
+    selectedId,
+    restyledBy,
+    readSelected,
+    same,
+    // Nothing known until the effect has found the selected element.
+    () => NOTHING
+  );
+}
+
+/** Whether two site orientations name the same axes. */
+function sameAxes(a: SideOrientation, b: SideOrientation): boolean {
+  return a.writingMode === b.writingMode && a.direction === b.direction;
+}
+
+/**
+ * The site's own direction, read from the canvas root and kept current, for
+ * editing with no element of its own on the canvas (a look).
+ *
+ * @param canvasRoot - the canvas root the page is drawn under
+ * @param restyledBy - what can restyle the page without moving an element
+ * @returns the site's writing mode and direction, left to right where unread
+ */
+export function useSiteOrientation(
+  canvasRoot: HTMLElement | null | undefined,
+  restyledBy: RestyleSignals
+): SideOrientation {
+  return useObservedReading(
+    canvasRoot,
+    null,
+    restyledBy,
+    siteOrientationOf,
+    sameAxes,
+    // Measured on the first render too: one computed-style read of the root,
+    // so a right-to-left site's box is never first painted left to right.
+    siteOrientationOf
+  );
 }

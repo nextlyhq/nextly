@@ -337,20 +337,7 @@ function everywhere(
   );
 }
 
-const FK_TYPES: DynamicFieldType[] = ["upload", "relationship"];
-
 const ACCEPTED = byAspect([
-  // --- Required foreign keys: nullability ----------------------------------
-  // The descriptor states that every FK column is nullable and that requiredness is enforced above
-  // the database. Both generators emit NOT NULL, so a row the application would have rejected with
-  // a field-level message is refused by the database with a driver error instead.
-  ...everywhere(
-    FK_TYPES,
-    ["required"],
-    "nullability",
-    "generator emits NOT NULL for a required FK column; descriptor calls every FK column nullable"
-  ),
-
   // --- 🔴 Many values in one column ----------------------------------------
   // A field that holds MANY values stores them as a JSON array, and the descriptor says so for
   // every one of them. The collection generator does not ask the question for a number: it routes

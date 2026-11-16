@@ -24,6 +24,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -64,7 +65,9 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-t
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
+  fieldsAsStored,
   recordedFieldsOf,
+  refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -339,6 +342,24 @@ function parseTogetherParam(value: string | undefined): string[] {
 }
 
 /**
+ * A collection update as it is written: the fields it sends (a settings save sends them as the
+ * editor read them) with each earlier-shaped relationship back in its stored shape, as the schema
+ * apply writes them (`fieldsAsStored`). An update without a field list, or for a collection the
+ * registry does not hold, is passed on as sent, for the service to judge.
+ */
+async function withFieldsAsStored(
+  collectionName: string,
+  body: object
+): Promise<object> {
+  const sent = (body as { fields?: unknown }).fields;
+  if (!Array.isArray(sent)) return body;
+  const collection =
+    await getCollectionRegistryFromDI()?.getCollectionBySlug(collectionName);
+  if (!collection) return body;
+  return { ...body, fields: fieldsAsStored(sent, collection) };
+}
+
+/**
  * Version-history reads for a collection entry.
  *
  * Split out so the dispatcher registration and the auth method set in
@@ -434,6 +455,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` discards the shared part's pending change alone.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),
@@ -683,7 +706,12 @@ const COLLECTIONS_METHODS: Record<
       const [marked] = await withRemovedFromCodeMarks("collection", [
         collectionWithViews as unknown as Record<string, unknown>,
       ]);
-      return respondDoc(marked as unknown);
+      // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
+      // target and the Unique mark the editor reads (`withEditorRelationshipShape`).
+      const { withEditorRelationshipShape } = await import(
+        "../../domains/schema/services/editor-relationship-fields"
+      );
+      return respondDoc(withEditorRelationshipShape(marked) as unknown);
     },
   },
   updateCollection: {
@@ -698,7 +726,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
-        body
+        await withFieldsAsStored(p.collectionName, body)
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -775,17 +803,22 @@ const COLLECTIONS_METHODS: Record<
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
       refuseChangeDefinedInCode(collection, "collection", p.collectionName);
-      const { fields } = body as { fields: unknown[] };
-      if (!fields) throw new Error("fields is required in request body");
+      const { fields: sentFields } = body as { fields: unknown[] };
+      if (!sentFields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the collection already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, {
+      assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: collection.fields ?? [],
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          collection.status === true || readRequestedLifecycle(body) === true,
       });
+      // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
+      const fields = fieldsAsStored(sentFields, collection);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -900,7 +933,7 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("Collection registry not initialized");
       }
       const {
-        fields,
+        fields: sentFields,
         confirmed,
         schemaVersion,
         resolutions,
@@ -940,11 +973,14 @@ const COLLECTIONS_METHODS: Record<
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
       }
-      if (!fields) throw new Error("fields is required in request body");
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, {
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
+      assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
       });
@@ -983,9 +1019,23 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // An earlier-shaped relationship the editor read is written back in its stored shape,
+          // through a rename the save makes, against the row this save is checked and written
+          // against.
+          const fields = fieldsAsStored(
+            sentFields,
+            collection,
+            renameResolutions
+          );
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, collection.fields ?? []);
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
+          assertBuilderFieldNames(fields, collection.fields ?? [], {
+            surface: "collection",
+            lifecycleEnabled:
+              collection.status === true || requestedLifecycle === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.
@@ -1059,6 +1109,17 @@ const COLLECTIONS_METHODS: Record<
             },
             { collection: p.collectionName }
           );
+          // A column made unique over entries that already repeat a value is refused before
+          // anything runs, on either road below: the save writer runs no push that would ask it.
+          await refuseUniqueOverRepeats({
+            adapter,
+            tableName,
+            oldFields: collection.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            renames: renameResolutions,
+          });
 
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy

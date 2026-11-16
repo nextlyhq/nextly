@@ -116,6 +116,21 @@ const ROW_WRITE_WORDS = new Set([
 /** First words of a statement whose reach is not read: it may write rows of any table. */
 const UNREAD_WRITE_WORDS = new Set(["DO", "CALL", "WITH", "LOAD", "EXECUTE"]);
 
+/**
+ * How a statement writes rows, read from its first word as this module reads it: `"named"` for a
+ * row writer whose table follows (`ROW_WRITE_WORDS`), `"unread"` for one whose reach is not read
+ * (`UNREAD_WRITE_WORDS`), and undefined for a statement that writes no rows.
+ */
+export function rowWriteOf(
+  statement: string,
+  dialect: SupportedDialect
+): "named" | "unread" | undefined {
+  const first = cursorOf(statement, dialect).peek();
+  if (typeof first !== "string") return undefined;
+  if (UNREAD_WRITE_WORDS.has(first)) return "unread";
+  return ROW_WRITE_WORDS.has(first) ? "named" : undefined;
+}
+
 /** Words that start an item of a table body, or an `ADD` clause, that is not a column. */
 const NON_COLUMN_WORDS = new Set([
   "CONSTRAINT",
