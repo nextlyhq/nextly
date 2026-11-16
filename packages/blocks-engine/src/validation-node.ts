@@ -5,6 +5,7 @@
  *
  * @module validation-node
  */
+import { checkCssClassNames } from "./css-class-names";
 import {
   type BlockNode,
   COMPONENT_INSTANCE_TYPE,
@@ -13,7 +14,6 @@ import {
   renderedDomId,
   STYLE_STATES,
 } from "./document";
-import { checkCssClassNames } from "./css-class-names";
 import { describeValue, pointer } from "./issue-text";
 import { documentTooLargeMessage, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentSurvey } from "./measure-bytes";
