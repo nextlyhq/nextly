@@ -197,6 +197,19 @@ describe("the connection string is kept secret", () => {
     for (const secret of SECRETS) expect(allOutput()).not.toContain(secret);
   });
 
+  it("a connection string given to another flag is masked in a runtime error", async () => {
+    // --local-template takes a path, so the error quotes the value back, with
+    // its `//` collapsed: no URL pattern finds it there.
+    const code = await runCli(
+      [...FLAGS, "--local-template", URL_WITH_SECRETS],
+      { cwd: work }
+    );
+
+    expect(code).toBe(1);
+    const said = allOutput();
+    for (const secret of SECRETS) expect(said).not.toContain(secret);
+  });
+
   for (const password of ['pa"ss', "pa'ss", "pa ss"]) {
     it(`a misspelt --database-urll=<url> with ${JSON.stringify(password)} in the password prints none of it`, async () => {
       const url = `postgresql://dbuser:${password}@db.example.com/app`;

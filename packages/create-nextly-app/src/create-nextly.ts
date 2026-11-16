@@ -33,7 +33,11 @@ import {
 } from "./installers/initial-migration";
 import { recordLaunchingPackageManager } from "./installers/package-manager-field";
 import { DATABASES, connectionMismatch } from "./lib/choices";
-import { holdsCredentials, redactConnection } from "./lib/connection-string";
+import {
+  holdsCredentials,
+  redactConnection,
+  scrubbed,
+} from "./lib/connection-string";
 import {
   resolveTemplateSource,
   cleanupDownload,
@@ -114,14 +118,20 @@ function cwdProjectName(cwd: string): string {
 function stopAtConfig(
   error: unknown,
   startedAt: number,
-  databaseUrl: string | undefined
+  databaseUrl: string | undefined,
+  commandArguments: readonly string[]
 ): never {
   telemetry.capture("scaffold_failed", {
     stage: "config",
     error_code: classifyError(error, "config"),
     duration_ms: Date.now() - startedAt,
   });
-  p.cancel(redactConnection((error as Error).message, databaseUrl));
+  p.cancel(
+    scrubbed(
+      redactConnection((error as Error).message, databaseUrl),
+      commandArguments
+    )
+  );
   process.exit(1);
 }
 
@@ -178,6 +188,8 @@ export async function createNextly(
   options: CreateNextlyOptions = {}
 ): Promise<void> {
   const { defaults = false, skipInstall = false, useYalc = false } = options;
+  // Masked in every message: an error can echo back any of them.
+  const commandArguments = options.commandArguments ?? process.argv.slice(2);
   // Where the project's Nextly packages come from, decided once: this CLI's
   // own release unless a source was asked for (see NextlySource).
   const source = nextlySource({
@@ -606,7 +618,12 @@ export async function createNextly(
         agentSkills = await readBundledSkills();
         agentSkillsVersion = bundledSkillsVersion(agentSkills);
       } catch (error) {
-        p.cancel(redactConnection((error as Error).message, databaseUrl));
+        p.cancel(
+          scrubbed(
+            redactConnection((error as Error).message, databaseUrl),
+            commandArguments
+          )
+        );
         process.exit(1);
       }
     }
@@ -703,7 +720,12 @@ export async function createNextly(
         error_code: classifyError(error, "template-download"),
         duration_ms: Date.now() - overallStartedAt,
       });
-      p.cancel(redactConnection((error as Error).message, databaseUrl));
+      p.cancel(
+        scrubbed(
+          redactConnection((error as Error).message, databaseUrl),
+          commandArguments
+        )
+      );
       process.exit(1);
     } finally {
       // Clean up temporary download directory
@@ -739,7 +761,12 @@ export async function createNextly(
         error_code: classifyError(error, "config"),
         duration_ms: Date.now() - overallStartedAt,
       });
-      p.cancel(redactConnection((error as Error).message, databaseUrl));
+      p.cancel(
+        scrubbed(
+          redactConnection((error as Error).message, databaseUrl),
+          commandArguments
+        )
+      );
       process.exit(1);
     }
   }
@@ -786,7 +813,7 @@ export async function createNextly(
         resolveTemplatePath(options.localTemplatePath)
       );
     } catch (error) {
-      stopAtConfig(error, overallStartedAt, databaseUrl);
+      stopAtConfig(error, overallStartedAt, databaseUrl, commandArguments);
     }
   }
 
@@ -836,7 +863,12 @@ export async function createNextly(
         duration_ms: Date.now() - installStartedAt,
         error_code: classifyError(error, "install"),
       });
-      p.cancel(redactConnection((error as Error).message, databaseUrl));
+      p.cancel(
+        scrubbed(
+          redactConnection((error as Error).message, databaseUrl),
+          commandArguments
+        )
+      );
       process.exit(1);
     }
   }
@@ -907,12 +939,12 @@ export async function createNextly(
       reportGeneratedFiles(
         envResult ? [...reported, envResult.files] : reported,
         [...(envResult?.warnings ?? []), ...warnings].map(warning =>
-          redactConnection(warning, databaseUrl)
+          scrubbed(redactConnection(warning, databaseUrl), commandArguments)
         )
       );
     } catch (error) {
       s.stop("Failed to generate configuration");
-      stopAtConfig(error, overallStartedAt, databaseUrl);
+      stopAtConfig(error, overallStartedAt, databaseUrl, commandArguments);
     }
   }
 
@@ -937,7 +969,7 @@ export async function createNextly(
       // The project is whole without it; the build's `nextly migrate` needs
       // it, so the command is named for the person to run.
       p.log.warn(
-        `${redactConnection(failed, databaseUrl)}\nRun ${initialMigrationCommand(projectInfo.packageManager)} in the project before its first build.`
+        `${scrubbed(redactConnection(failed, databaseUrl), commandArguments)}\nRun ${initialMigrationCommand(projectInfo.packageManager)} in the project before its first build.`
       );
     }
   }

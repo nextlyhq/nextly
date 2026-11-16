@@ -169,3 +169,34 @@ function safeDecode(value: string): string {
     return value;
   }
 }
+
+/**
+ * The argument values that may be a connection string: any holding `://`
+ * (whole, and after `=` in `--flag=value`), and the value given to any flag
+ * spelt like `--database-url`, misspelt or not. Masked whole wherever a
+ * message quotes them, since a fragment cut at a quote or a space would
+ * otherwise slip through a URL pattern.
+ */
+function secretArguments(args: readonly string[]): string[] {
+  const secrets: string[] = [];
+  args.forEach((arg, index) => {
+    const equals = arg.indexOf("=");
+    const flag = equals < 0 ? arg : arg.slice(0, equals);
+    const value = equals < 0 ? arg : arg.slice(equals + 1);
+    if (flag.startsWith("--database-url")) {
+      if (equals >= 0) secrets.push(value);
+      else if (args[index + 1] !== undefined) secrets.push(args[index + 1]);
+    }
+    if (arg.includes("://")) secrets.push(arg, value);
+  });
+  return secrets.filter(secret => secret.length > 0 && secret !== "-");
+}
+
+/** `text` with every secret argument and every URL masked. */
+export function scrubbed(text: string, args: readonly string[]): string {
+  let out = text;
+  for (const secret of secretArguments(args)) {
+    out = redactConnection(out, secret);
+  }
+  return redactUrlsIn(out);
+}

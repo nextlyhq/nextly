@@ -118,6 +118,12 @@ export interface CreateNextlyOptions {
    * and process lists keep it, rather than from standard input.
    */
   databaseUrlInArguments?: boolean;
+  /**
+   * The command's own arguments. Every message masks any of them that may be
+   * a connection string, whichever flag it was given to, since an error can
+   * echo an argument back. Defaults to the process's arguments.
+   */
+  commandArguments?: readonly string[];
   /** `--package-manager`: installs with it and pins its own version. */
   packageManager?: PackageManager;
   /** false for `--no-git`; acted on where the scaffold makes a repository. */
