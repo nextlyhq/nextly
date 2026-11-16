@@ -37,7 +37,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
 import { container } from "../../di/container";
-import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
@@ -80,10 +79,8 @@ import {
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import {
-  pluginsRecordedNotInstalled,
-  seedAccessOnCommandConnection,
-} from "../../domains/schema/migrate/command-access";
+import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
+import { deployStepDeps } from "../../domains/schema/migrate/deploy-step-deps";
 import {
   planCoreDeletions,
   planCoreReconcile,
@@ -109,7 +106,6 @@ import {
   runStatements,
 } from "../../domains/schema/migrate/file-deletions";
 import {
-  configurationRegistryRows,
   configurationRowsMessage,
   declaredRowCount,
   firstRunOf,
@@ -132,8 +128,6 @@ import {
   type OldBuilderLedger,
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
-  keepingUnrecordedPlugins,
-  leavingPluginsNotInstalled,
   orphanScopeOf,
   type MigrationOrphanScope,
 } from "../../domains/schema/migrate/permission-orphans";
@@ -270,7 +264,6 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
-import { withCommandServicesLent } from "../utils/lend-command-services";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   migrationFilesInRunOrder,
@@ -731,61 +724,27 @@ export async function runMigrate(
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // The first run's record, the orphan marks an applied migration sets, and the refusal of
+        // a translations column that cannot hold a newly translated field: the same for the
+        // migrations at start (`deployStepDeps`).
+        ...deployStepDeps({
+          adapter: adapter as unknown as DrizzleAdapter,
+          db,
+          dialect,
+          migrationsDir: appMigrationsDir,
+          logger,
+          declared,
+          config: configResult.config,
+          recordedBefore,
+        }),
         // A production start does not add permissions or set grants, so the deploy step does:
         // through the services a start seeds with, on this command's connection and config.
-        // A database with no registry record has its first run on this release: the record is
-        // written once, and where no migration carries the registry, the rows come from this
-        // configuration, as the starts before this release wrote them.
-        firstRun: {
-          configurationRows: () =>
-            configurationRegistryRows(configResult.config),
-        },
         seedPermissions: () =>
           seedAccessOnCommandConnection(
             adapter as unknown as DrizzleAdapter,
             configResult,
             logger
           ),
-        // A permission leaves when the recorded migration whose snapshot drops it applies, on
-        // this command's connection, keeping its grants.
-        markOrphanedPermissions: async (scope, migration) => {
-          const dz = adapter as unknown as DrizzleAdapter;
-          await markOrphansOnCommandConnection(
-            dz,
-            // A configured plugin the migration does not record keeps its permissions, even one
-            // stored under the app's own owner key; one recorded uninstalled is not declared by
-            // it, so the marks its uninstall wrote stay.
-            leavingPluginsNotInstalled(
-              keepingUnrecordedPlugins(scope, configResult.config),
-              await pluginsRecordedNotInstalled(dz)
-            ),
-            migration,
-            logger
-          );
-        },
-        // A translations column already in place that cannot hold a field the config newly
-        // translates, judged as the files left it and before the registry records them: refused
-        // here, the registry keeps its definitions and the next run is refused the same way.
-        // Judged only once no file is pending, since a later one may still change the column.
-        beforeMetadata: async () => {
-          const pending = await findPendingFiles(
-            adapter,
-            db,
-            dialect,
-            appMigrationsDir,
-            logger,
-            declared
-          );
-          if (pending.length > 0) return;
-          const { refuseCompanionColumnsThatCannotHold } = await import(
-            "../../domains/i18n/runtime/companion-io"
-          );
-          await refuseCompanionColumnsThatCannotHold(
-            adapter as unknown as DrizzleAdapter,
-            configResult.config,
-            recordedBefore
-          );
-        },
       });
 
       logger.newline();
@@ -986,39 +945,6 @@ export async function runMigrate(
     logger.success(`migrate completed in ${formatDuration(duration)}`);
   } finally {
     await adapter.disconnect();
-  }
-}
-
-/**
- * What an applied migration orphans (`MigrateCoreDeps.markOrphanedPermissions`), on the command's
- * own connection, lent to the services a permission write retires the cached answers through
- * (`withCommandServicesLent`), as Phase 4 writes. Each mark set or cleared is logged with the
- * grants the permission keeps (`logOrphanMarkChange`), at the operator's level, since a permission
- * leaving the role editor is what the operator needs to hear of. A mark that could not be written
- * is warned of by the service and named here with its migration.
- */
-async function markOrphansOnCommandConnection(
-  adapter: DrizzleAdapter,
-  scope: MigrationOrphanScope,
-  migration: string,
-  logger: CommandContext["logger"]
-): Promise<void> {
-  const serviceLogger = {
-    debug: (message: string) => logger.debug(message),
-    info: (message: string) => logger.info(message),
-    warn: (message: string) => logger.warn(message),
-    error: (message: string) => logger.error(message),
-  };
-  const result = await withCommandServicesLent(adapter, serviceLogger, () =>
-    new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
-      scope.declared,
-      scope
-    )
-  );
-  if (result.errors > 0) {
-    logger.warn(
-      `The orphan marks of the permissions ${migration}.sql no longer declares were not all written; those not written stay as they were.`
-    );
   }
 }
 

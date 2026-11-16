@@ -17,6 +17,7 @@ import {
   busyTableBounds,
   type BusyTableBounds,
 } from "../domains/schema/busy-table/bounds";
+import type { MigrateCoreDeps } from "../cli/commands/migrate";
 import type { RecordedEntities } from "../domains/i18n/migration/recorded-before";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
@@ -84,6 +85,12 @@ interface MigrateCoreLike {
     declaredPlugins?: ReadonlySet<string>;
     /** See `MigrateCoreDeps.seedPermissions`. */
     seedPermissions?: () => Promise<void>;
+    /** Spread in by `deployStepDeps`, checked here for the reason above. */
+    firstRun?: MigrateCoreDeps["firstRun"];
+    /** Spread in by `deployStepDeps`, checked here for the reason above. */
+    markOrphanedPermissions?: MigrateCoreDeps["markOrphanedPermissions"];
+    /** Spread in by `deployStepDeps`, checked here for the reason above. */
+    beforeMetadata?: MigrateCoreDeps["beforeMetadata"];
     /** See `MigrateCoreDeps.busyTable`. */
     busyTable?: { bounds: BusyTableBounds; notify: (line: string) => void };
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
@@ -344,9 +351,10 @@ async function applyBootMigrations(
   });
   // Compiled from this call's config, as every migrate entry point
   // compiles it; see `MigrateCoreDeps.extensionSchema`.
-  const { compileExtensionSchema } = await import(
-    "../domains/schema/extension/publish"
-  );
+  const [{ compileExtensionSchema }, { deployStepDeps }] = await Promise.all([
+    import("../domains/schema/extension/publish"),
+    import("../domains/schema/migrate/deploy-step-deps"),
+  ]);
   const extensionSchema = await compileExtensionSchema({
     dialect: adapter.dialect,
     plugins: args.config.plugins ?? [],
@@ -389,6 +397,22 @@ async function applyBootMigrations(
     // The access `nextly migrate` adds once the registry rows are written:
     // a production start adds none, so these migrations are the deploy step.
     seedPermissions: startAccessSeeder(adapter, args.served, run.coreLogger),
+    // The first run's record, the orphan marks an applied migration sets, and
+    // the refusal of a translations column that cannot hold a newly translated
+    // field, as `nextly migrate` hands them (`deployStepDeps`).
+    ...deployStepDeps({
+      adapter: adapter as never,
+      db: adapter.getDrizzle(),
+      dialect: adapter.dialect,
+      migrationsDir: run.migrationsDir,
+      logger: run.coreLogger as never,
+      declared: {
+        junctions: resolvedSchema.junctionsByEntity,
+        tables: resolvedSchema.declaredTables,
+      },
+      config: args.served as never,
+      recordedBefore,
+    }),
   });
   // REFUSES rather than serving. A held lock no longer comes back as
   // `ran: false` (the lock throws `NEXTLY_MIGRATE_LOCK_BUSY`, which the

@@ -19,6 +19,11 @@
  *   step applies it, and the database matches the command's.
  * - In both, no write outside the step but the start's own: the setup token,
  *   SQLite's journal mode, and the work after the start.
+ * - A migration that drops a collection: the step marks its permissions
+ *   orphaned, as the command does.
+ * - A field newly translated over a leftover translations column that cannot
+ *   hold it: the step refuses it before the registry records the field, as
+ *   the command does, and the start goes on.
  * - An older build, against a database a newer build migrated: the step
  *   writes nothing, a warning names the migration the build lacks, and the
  *   start goes on and serves what the database holds.
@@ -282,13 +287,19 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly migrate:create`, which must succeed. */
-    async function migrateCreate(name: string, config: unknown): Promise<void> {
+    async function migrateCreate(
+      name: string,
+      config: unknown,
+      // Where nobody can be asked, a file that drops a table is written only
+      // under consent naming it, as `--accept-data-loss` gives it.
+      consent: { acceptDataLoss?: string } = {}
+    ): Promise<void> {
       state.config = config;
       tick();
       const { context, said } = command();
       setNonInteractive(true);
       const code = await exiting(() =>
-        runMigrateCreate(name, { cwd: state.dir }, context)
+        runMigrateCreate(name, { cwd: state.dir, ...consent }, context)
       ).finally(() => setNonInteractive(false));
       expect(code, said.join("\n")).toBeUndefined();
     }
@@ -395,9 +406,17 @@ describe.each(getConfiguredTestDialects())(
           field(row, "table_name"),
           field(row, "migration_status"),
         ]);
+        // Each with its orphan mark, set when an applied migration stops
+        // declaring it.
         out["permissions"] = (
-          await rowsOf(adapter, "SELECT slug FROM permissions ORDER BY slug")
-        ).map(row => field(row, "slug"));
+          await rowsOf(
+            adapter,
+            "SELECT slug, orphaned_at FROM permissions ORDER BY slug"
+          )
+        ).map(
+          row =>
+            `${String(field(row, "slug"))}${field(row, "orphaned_at") == null ? "" : " (orphaned)"}`
+        );
         out["grants"] = (
           await rowsOf(
             adapter,
@@ -543,6 +562,96 @@ describe.each(getConfiguredTestDialects())(
       expect(
         started.warnings.filter(line => line.includes("Run `nextly migrate`"))
       ).toEqual([]);
+    }, 600_000);
+
+    it("orphans a dropped collection's permissions as nextly migrate does", async () => {
+      const viaStart = await emptyDatabase();
+      const viaCommand = await emptyDatabase();
+      use(viaCommand);
+      await migrateCreate("initial", migratedAtStart(POSTS, ADDED));
+      await migrate(viaStart, migratedByCommand(POSTS, ADDED));
+      await migrate(viaCommand, migratedByCommand(POSTS, ADDED));
+      await migrateCreate("dropped", migratedAtStart(POSTS), {
+        acceptDataLoss: "dc_mas_added",
+      });
+
+      const started = await productionStart(
+        viaStart,
+        migratedAtStart(POSTS),
+        "mas-posts"
+      );
+      await migrate(viaCommand, migratedByCommand(POSTS));
+      await productionStart(viaCommand, migratedByCommand(POSTS), "mas-posts");
+
+      expect(started.refusal).toBeUndefined();
+      const command = await contents(viaCommand);
+      // The control: the command marks them, so there is a mark to compare.
+      expect(command["permissions"]).toContain("read-mas-added (orphaned)");
+      expect((await contents(viaStart))["permissions"]).toEqual(
+        command["permissions"]
+      );
+    }, 600_000);
+
+    it("refuses a field newly translated over a column that cannot hold it, as nextly migrate does", async () => {
+      const slug = "mas-french";
+      const companion = "dc_mas_french_locales";
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const translated = (code: boolean) =>
+        defineConfig({
+          localization: { locales: ["en", "fr"], defaultLocale: "en" },
+          collections: [
+            defineCollection({
+              slug,
+              localized: true,
+              fields: [
+                { name: "title", type: "text", localized: true },
+                ...(code ? [{ name: "code", type: "text", localized: true }] : []),
+              ] as never,
+            }),
+          ],
+          db: {
+            migrationsDir: join(state.dir, "migrations"),
+            runMigrationsOnBoot: true,
+          },
+        });
+      const database = await emptyDatabase();
+      use(database);
+      await migrateCreate("initial", translated(false));
+      await migrate(database, translated(false));
+      // Another field's leftover in the translations table, of a type the
+      // newly translated text field does not fit.
+      const adapter = await open(database);
+      const fieldsOf = async (): Promise<unknown> => {
+        const [row] = await rowsOf(
+          adapter,
+          `SELECT ${q("fields")} AS f FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${slug}'`
+        );
+        const value = field(row ?? {}, "f");
+        return typeof value === "string" ? JSON.parse(value) : value;
+      };
+      try {
+        await adapter.executeQuery(
+          `ALTER TABLE ${q(companion)} ADD COLUMN ${q("code")} INTEGER`
+        );
+        const before = await fieldsOf();
+        await migrateCreate("code", translated(true));
+
+        const started = await productionStart(
+          database,
+          translated(true),
+          slug
+        );
+
+        expect(started.refusal).toBeUndefined();
+        expect(started.warnings.join("\n")).toMatch(
+          /column \\?"code\\?" \(.+\) that cannot hold every value code allows/
+        );
+        // The registry keeps what it held.
+        expect(await fieldsOf()).toEqual(before);
+      } finally {
+        await adapter.disconnect().catch(() => undefined);
+      }
     }, 600_000);
 
     it("writes nothing for an older build, names the migration it lacks, and starts", async () => {

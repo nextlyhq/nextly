@@ -606,12 +606,14 @@ describe.each(getConfiguredTestDialects())(
         };
         vi.stubEnv("NODE_ENV", "production");
         try {
+          const config = declaring({
+            runMigrationsOnBoot: true,
+            migrationsDir: join(dir, "migrations"),
+            uiSchemaFile: join(dir, "ui-schema.json"),
+          }) as never;
           await runProdMigrationsIfEnabled({
-            config: declaring({
-              runMigrationsOnBoot: true,
-              migrationsDir: join(dir, "migrations"),
-              uiSchemaFile: join(dir, "ui-schema.json"),
-            }) as never,
+            config,
+            served: config,
             adapter: Object.assign(instance!.adapter, { dialect }) as never,
             logger: { debug: keep, info: keep, warn: keep, error: keep },
           }).catch(keep);
