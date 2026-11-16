@@ -1,19 +1,11 @@
 /**
- * Walking and finding: positions, walk options, `walkNodes`, `findNode` and
+ * Walking and finding: walk options, `walkNodes`, `findNode` and
  * `locateNode`.
  *
  * @module tree-walk
  */
 import type { BlockNode } from "./document";
 import { isDescendable, walkForest } from "./forest-walk";
-
-/** Where an insert or move lands: a parent's slot, or the top level when `parentId` is absent. */
-export interface TreePosition {
-  parentId?: string;
-  /** Required when `parentId` is set; ignored for top-level positions. */
-  slot?: string;
-  index: number;
-}
 
 /** How a caller narrows the walk. */
 export interface WalkOptions {
@@ -137,7 +129,7 @@ export function walkNodes(
     if (read >= limit) spent = true;
     // The WALK's own classification, not a second one beside it. An entry the
     // walk declined to descend into is exactly an entry no caller can read
-    // fields off, and the two spellings this module used to carry differed in
+    // fields off, and the two spellings `tree.ts` used to carry differed in
     // nothing but which of them a hostile entry crashed in.
     if (!isDescendable(entry.node)) return read >= limit ? "stop" : "skip";
 

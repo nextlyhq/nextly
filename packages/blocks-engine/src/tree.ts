@@ -88,10 +88,11 @@ export {
   removeNode,
   updateNode,
 } from "./tree-edits";
+export type { TreePosition } from "./tree-edits";
 export { expandSlotDefaults } from "./tree-slot-defaults";
 export type { SlotDefaultSource } from "./tree-slot-defaults";
 export { findNode, locateNode, walkNodes } from "./tree-walk";
-export type { NodeLocation, TreePosition, WalkOptions } from "./tree-walk";
+export type { NodeLocation, WalkOptions } from "./tree-walk";
 export {
   ID_REFERENCE_ATTRIBUTES,
   duplicateNode,

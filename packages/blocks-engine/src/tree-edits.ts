@@ -1,7 +1,7 @@
 /**
- * Building and editing the forest: a fresh id and node, the shared rebuild
- * every edit goes through (`mapForest`), insert, remove and move, and patching
- * a node's own fields.
+ * Building and editing the forest: a fresh id and node, where an insert or
+ * move lands, the shared rebuild the edits and copies use (`mapForest`),
+ * insert, remove and move, and patching a node's own fields.
  *
  * @module tree-edits
  */
@@ -9,7 +9,7 @@ import type { BlockNode } from "./document";
 import { isDescendable } from "./forest-walk";
 import { defineEntry, ownEntry } from "./safe-record";
 import { assembleSlots } from "./structural-sharing";
-import { findNode, type TreePosition, walkNodes } from "./tree-walk";
+import { findNode, walkNodes } from "./tree-walk";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
 export function newId(): string {
@@ -26,6 +26,14 @@ export function makeNode(
   const node: BlockNode = { id: newId(), type, version, props };
   if (slots) node.slots = slots;
   return node;
+}
+
+/** Where an insert or move lands: a parent's slot, or the top level when `parentId` is absent. */
+export interface TreePosition {
+  parentId?: string;
+  /** Required when `parentId` is set; ignored for top-level positions. */
+  slot?: string;
+  index: number;
 }
 
 /**
