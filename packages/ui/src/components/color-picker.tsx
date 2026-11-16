@@ -601,7 +601,9 @@ export function ColorPicker<TValue = string>({
   return (
     <div
       ref={rootRef}
-      className={cn("w-64 space-y-3", className)}
+      // Fills the popup it sits in, up to its own width, so a narrower popup
+      // never leaves the picker overflowing it.
+      className={cn("w-full max-w-64 space-y-3", className)}
       /*
        * The finish that focus can express, watched at the PICKER rather than at
        * the field. `onBlur` is delivered from the bubbling `focusout`, so this

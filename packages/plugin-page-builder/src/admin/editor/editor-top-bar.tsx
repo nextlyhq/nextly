@@ -1,0 +1,177 @@
+"use client";
+
+/**
+ * The editor's top bar: the page's title and state with its history at the
+ * start, the devices in the centre, and search, Preview and the document's
+ * actions at the end.
+ *
+ * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
+ */
+import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
+import {
+  DocumentPrimaryAction,
+  DocumentSaveIndicator,
+} from "@nextlyhq/plugin-sdk/admin";
+
+import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
+import { DocumentStatusPill } from "../DocumentStatusPill";
+import { OwnDesignsChip } from "../TemplateOwnDesigns";
+
+import { SearchButton } from "./editor-search";
+import type { EditorView } from "./editor-view";
+import { HistoryButtons } from "./history-buttons";
+import { PageReadMeter } from "./page-read-meter";
+import { PageTitleSwitcher } from "./page-title-switcher";
+import { PreviewButton } from "./preview-button";
+import { siteStyleStatus } from "./site-style-studios";
+
+/**
+ * The top bar's items: the document's state, and the breakpoints.
+ *
+ * Called as a function rather than rendered as a component, here and for the
+ * inspector and the canvas region in their own modules, so the tree the shell
+ * receives is the one it always received.
+ */
+/**
+ * What the editor puts in the shell's top bar, by column: the document's
+ * history and state at the start, the devices in the centre, and Preview and
+ * the document's actions at the end.
+ */
+/**
+ * Which field of the page the editor is open on, beside the page's title, for
+ * a field below the top level: `Sections · Hero banner · Body`. Inside a
+ * repeater the row is named by its title, as the form's row header names it,
+ * so the author can tell which row's layout this is; the way back to the
+ * entry is the exit at the start of the bar.
+ */
+function FieldLocation({ location }: { location: string }): React.JSX.Element {
+  return (
+    <span
+      // The whole of it on hover, where the bar's width cuts it short.
+      title={location}
+      className="min-w-0 max-w-[20rem] shrink truncate text-sm text-muted-foreground"
+      data-testid="builder-field-location"
+    >
+      {location}
+    </span>
+  );
+}
+
+export function editorTopBar(
+  view: EditorView,
+  /**
+   * The page's title as the form has it now, the field being edited by its
+   * address, where that field sits in words when below the top level, and
+   * the canvas, which a binding's Select brings its block into view in.
+   */
+  page: {
+    title: string | undefined;
+    field: string;
+    location?: string | undefined;
+    canvas: HTMLElement | null;
+  }
+): {
+  topBar: React.JSX.Element;
+  topBarCenter: React.JSX.Element;
+  topBarEnd: React.JSX.Element;
+} {
+  const {
+    canvasRender,
+    siteStylePending,
+    siteStyleError,
+    editedBreakpoint,
+    chooseDevice,
+    editor,
+    inline,
+  } = view;
+  return {
+    topBar: (
+      <>
+        {/* As the agreed bar has it: the title as a switcher, the status,
+            then undo and redo. */}
+        <PageTitleSwitcher
+          title={page.title ?? ""}
+          current={
+            view.pages.currentPage === null
+              ? null
+              : {
+                  ...view.pages.currentPage,
+                  field: page.field,
+                  title: page.title ?? "",
+                }
+          }
+          userId={view.userId}
+          onAllPages={() => view.requestPanel("pages")}
+        />
+        {page.location === undefined ? null : (
+          <FieldLocation location={page.location} />
+        )}
+        <DocumentStatusPill />
+        {/* The page's bindings that no longer fit, beside its status: shown
+            only when it has one. */}
+        <BindingsToFixChip
+          editor={editor}
+          field={page.field}
+          canvas={page.canvas}
+          requestPanel={view.requestPanel}
+        />
+        {/* On a collection's template, how many of its entries have their
+            own design, opening the list; nothing on any other document. */}
+        <OwnDesignsChip />
+        <HistoryButtons editor={editor} inline={inline} />
+        {/* What the page costs to read, against its allowance: a page's
+            alone, since a component is read as part of each page placing it. */}
+        {view.initialDocument.kind === "page" ? (
+          <PageReadMeter
+            editor={editor}
+            drawnWith={view.canvasRender}
+            regions={view.canvasRegions}
+            componentTitle={view.componentLibrary.titleOf}
+          />
+        ) : null}
+      </>
+    ),
+    topBarCenter: (
+      <>
+        {/*
+         * Beside the manager, and gated on the same read for the same
+         * reason it is: until the stored style has answered, the set in
+         * hand is the host's config defaults, so a device chosen against it
+         * could name a breakpoint the site never had.
+         *
+         * The device chosen is the breakpoint being edited. The choice goes
+         * to the shell, which stores it with the author's preferences and
+         * reports it back, so this shows the device the edits go to.
+         */}
+        <BreakpointSwitcher
+          breakpoints={canvasRender.styleContext.breakpoints}
+          selected={editedBreakpoint}
+          onSelect={chooseDevice}
+          status={siteStyleStatus(siteStylePending, siteStyleError)}
+        />
+      </>
+    ),
+    topBarEnd: (
+      <>
+        {/* Whether the work is stored, beside the verbs that store it: the
+          header's own chip, which reads the field's held work too. Its text
+          sits against Preview, so the width it reserves for its longest
+          state opens towards the panel buttons rather than between it and
+          what it describes. Reserved only where the bar has the room: below
+          1400px it takes what it shows, as the device labels give way there,
+          so the end column never runs into the zoom. Set in the bar's own
+          text size, as Preview beside it is. */}
+        {/* First in the group, as the agreed bar has it: one search for
+          blocks, the page, other pages and commands, also on ⌘K. */}
+        <SearchButton onOpen={() => view.search.setOpen(true)} />
+        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
+        <PreviewButton />
+        {/* Last, at the bar's far end where the header kept them: the
+          document's leading action with its other ways to publish on its
+          arrow, which the builder's taking the window would otherwise leave
+          reachable only from the keyboard. */}
+        <DocumentPrimaryAction />
+      </>
+    ),
+  };
+}
