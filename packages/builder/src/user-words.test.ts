@@ -103,7 +103,7 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "columns-layout-field.tsx": ["A layout of its own, written as CSS below."],
   "columns-layout.ts": ["Not a layout."],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
-  "inserter.ts": ["Layout"],
+  "inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.
   "inspector-sections.ts": ["Layout"],
   // A header or footer the site's own code draws around the canvas.
