@@ -61,6 +61,77 @@ describe("validateCrossFile", () => {
     ).toBe(true);
   });
 
+  // The earlier Builder's shape keeps the target in `options.target`, which the parser accepts and
+  // the generator keys a column to, so it is judged as `relationTo` is.
+  it("flags an options.target that points at no known target", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "owner",
+              type: "relationship",
+              options: { target: "ghosts" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(validateCrossFile({ codeCollectionSlugs: [], manifest })).toEqual([
+      {
+        code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+        message: "events.owner relates to unknown target 'ghosts'",
+      },
+    ]);
+  });
+
+  it("flags a relationship nested in a group, named by its path", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "meta",
+              type: "group",
+              fields: [
+                { name: "owner", type: "relationship", relationTo: "ghosts" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(validateCrossFile({ codeCollectionSlugs: [], manifest })).toEqual([
+      {
+        code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+        message: "events.meta.owner relates to unknown target 'ghosts'",
+      },
+    ]);
+  });
+
+  it("names a target once when relationTo and options.target agree", () => {
+    const manifest = uiSchemaManifest.parse({
+      collections: [
+        {
+          slug: "events",
+          fields: [
+            {
+              name: "owner",
+              type: "relationship",
+              relationTo: "ghosts",
+              options: { target: "ghosts" },
+            },
+          ],
+        },
+      ],
+    });
+    expect(
+      validateCrossFile({ codeCollectionSlugs: [], manifest })
+    ).toHaveLength(1);
+  });
+
   it("accepts relationTo pointing at a core table (users/media)", () => {
     const manifest = uiSchemaManifest.parse({
       collections: [

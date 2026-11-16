@@ -36,10 +36,8 @@ import {
   resolveComponentTableName,
 } from "../utils/resolve-table-name";
 
-import {
-  BUILDER_DEFINITION_MISSING_ISSUE,
-  validateCrossFile,
-} from "./cross-file";
+import { validateCrossFile } from "./cross-file";
+import { BUILDER_DEFINITION_MISSING_ISSUE } from "./definition-issues";
 import { loadUiSchema } from "./loader";
 import {
   applyDeferredExtendsToManifest,

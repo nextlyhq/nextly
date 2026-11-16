@@ -231,6 +231,40 @@ describe("a Builder definition whose relationship target is missing", () => {
     expect(sqlFiles()).toEqual([]);
   });
 
+  it("is refused by both commands when the earlier Builder's options.target names it", async () => {
+    useDialect("sqlite");
+    // The shape the parser accepts and the generator keys a column to.
+    await writeDefinitions({
+      collections: [
+        {
+          slug: "posts",
+          fields: [
+            {
+              name: "author",
+              type: "relationship",
+              options: { target: "authors" },
+            },
+          ],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+
+    const checked = await check(EMPTY);
+    const created = await create(EMPTY);
+
+    expect(checked.code).toBe(1);
+    expect(created.code).toBe(1);
+    const refusal = checked.printed.join("\n");
+    expect(refusal).toContain("BUILDER_RELATION_TARGET_UNKNOWN");
+    expect(refusal).toContain(
+      "posts.author relates to unknown target 'authors'"
+    );
+    expect(created.printed.join("\n")).toBe(refusal);
+    expect(sqlFiles()).toEqual([]);
+  });
+
   it("is reported by a dry run in the words the real run prints, and nothing is written", async () => {
     useDialect("sqlite");
     await writeDefinitions(MANIFEST);

@@ -97,7 +97,7 @@ import type {
 import {
   BUILDER_DEFINITION_MISSING_ISSUE,
   RELATION_TARGET_MISSING_ISSUE,
-} from "../../domains/schema/ui-schema/cross-file";
+} from "../../domains/schema/ui-schema/definition-issues";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";

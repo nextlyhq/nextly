@@ -15,7 +15,7 @@
 import {
   BUILDER_DEFINITION_MISSING_ISSUE,
   RELATION_TARGET_MISSING_ISSUE,
-} from "../../../domains/schema/ui-schema/cross-file";
+} from "../../../domains/schema/ui-schema/definition-issues";
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes, type FromError } from "../define";
