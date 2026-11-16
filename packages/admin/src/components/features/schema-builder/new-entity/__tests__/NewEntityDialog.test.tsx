@@ -182,6 +182,10 @@ describe("NewEntityDialog", () => {
         expect(addressInput()).toHaveAccessibleDescription(shown)
       );
       expect(createButton()).toBeDisabled();
+      // In the error text colour the admin's form messages use, which reads at
+      // 4.5:1 in both schemes; the destructive action colour does not in light.
+      expect(screen.getByText(shown)).toHaveClass("text-danger-text");
+      expect(screen.getByText(shown)).not.toHaveClass("text-destructive");
     }
   );
 
