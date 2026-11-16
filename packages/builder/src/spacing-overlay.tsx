@@ -304,6 +304,36 @@ export function isReplaced(element: Element): boolean {
 }
 
 /**
+ * The physical margins the cascade left at `auto`.
+ *
+ * An `auto` margin is space the browser works out, usually to centre a block,
+ * not a value an author or a default set. The panel shows such a margin as
+ * unset, so the canvas draws no band and writes no number for it either: a
+ * "32" there would name a value nobody can find to change.
+ *
+ * Asked of the COMPUTED value rather than the used one. `getComputedStyle`
+ * answers margins with the used value, so a centred block's `auto` comes back
+ * as pixels and cannot be told from a set margin. Typed OM's
+ * `computedStyleMap()` keeps the keyword. A browser without it (Firefox, at the
+ * time of writing) reads every margin as set, as before: the bands there still
+ * describe the space, only the `auto` ones keep a number.
+ */
+function autoMargins(block: Element): EdgeApplicability {
+  if (!("computedStyleMap" in block)) {
+    return { top: false, right: false, bottom: false, left: false };
+  }
+  const computed = block.computedStyleMap();
+  const isAuto = (property: string): boolean =>
+    computed.get(property)?.toString() === "auto";
+  return {
+    top: isAuto("margin-top"),
+    right: isAuto("margin-right"),
+    bottom: isAuto("margin-bottom"),
+    left: isAuto("margin-left"),
+  };
+}
+
+/**
  * The spacing this block can actually be drawn with, on each side.
  *
  * Two separate reasons zero a side, and they are both here so that no caller
@@ -344,11 +374,12 @@ function drawableBoxes(
     style.writingMode,
     isReplaced(block)
   );
+  const auto = autoMargins(block);
   const margin: EdgeApplicability = {
-    top: applies.margin.top && !scale.selfMoved.top,
-    bottom: applies.margin.bottom && !scale.selfMoved.bottom,
-    left: applies.margin.left && !scale.selfMoved.left,
-    right: applies.margin.right && !scale.selfMoved.right,
+    top: applies.margin.top && !scale.selfMoved.top && !auto.top,
+    bottom: applies.margin.bottom && !scale.selfMoved.bottom && !auto.bottom,
+    left: applies.margin.left && !scale.selfMoved.left && !auto.left,
+    right: applies.margin.right && !scale.selfMoved.right && !auto.right,
   };
   const measured = boxesOf(style);
   return {
