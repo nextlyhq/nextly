@@ -289,6 +289,28 @@ describe("the reference doc and the catalog agree", () => {
       ).toEqual([...tokenKindsForProperty(property as string)].sort());
     }
   });
+
+  it("documents where each property has an effect", () => {
+    // The column a reader trusts to say whether a setting does anything: a
+    // row left at `always` after the catalog narrowed it would mislead.
+    let rows = 0;
+    for (const line of doc.split("\n")) {
+      const cells = /^\|\s*`([a-zA-Z]+)`\s*\|/.test(line)
+        ? line.split("|").map(cell => cell.trim())
+        : undefined;
+      if (cells === undefined) continue;
+      const property = (cells[1] ?? "").replaceAll("`", "");
+      const entry = getStyleProperty(property);
+      const fields = Object.entries(entry?.fieldAppliesWhen ?? {}).map(
+        ([field, answer]) => `\`${field}\`: ${answer.join(", ")}`
+      );
+      expect(cells[6], `applies-when of "${property}"`).toBe(
+        [(entry?.appliesWhen ?? ["always"]).join(", "), ...fields].join("; ")
+      );
+      rows += 1;
+    }
+    expect(rows).toBe(STYLE_CATALOG.length);
+  });
 });
 
 describe("values a leaf accepts in place of its own value type", () => {
