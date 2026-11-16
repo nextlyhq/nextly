@@ -46,6 +46,7 @@ import {
 } from "@admin/hooks/useSchemaSave";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
+import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
@@ -358,6 +359,11 @@ export default function SingleBuilderEditPage({
     [settings, entitySlug]
   );
 
+  // The saved fields the draft renamed, which the save answers as renames itself.
+  const draftRenames = useMemo(
+    () => draftRenamesOf(pending.changes),
+    [pending.changes]
+  );
   const { handleSave, confirmApply } = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
@@ -385,6 +391,7 @@ export default function SingleBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    draftRenames,
   });
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
@@ -467,6 +474,7 @@ export default function SingleBuilderEditPage({
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs
+        draftRenames={draftRenames}
         confirmation={confirmation}
         kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}

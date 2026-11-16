@@ -631,3 +631,78 @@ describe("a rename that keeps the rows but converts their values", () => {
     );
   });
 });
+
+// A rename the Builder made is its own to answer (`useSchemaSave` sends it as one), so the dialog
+// shows it as a rename whose values are kept: not as a field removed beside one added, not as a
+// choice between renaming and losing the values, and not as a save that deletes data.
+describe("a rename the Builder made", () => {
+  const renaming = preview({
+    hasDestructiveChanges: true,
+    classification: "destructive",
+    changes: {
+      added: [
+        {
+          name: "abstract",
+          type: "text",
+          required: false,
+          hasDefault: false,
+          classification: "safe",
+        },
+      ],
+      removed: [
+        {
+          name: "summary",
+          type: "text",
+          rowCount: 3,
+          classification: "destructive",
+        },
+      ],
+      changed: [],
+      unchanged: [],
+    },
+    renamed: [
+      {
+        table: "dc_posts",
+        from: "summary",
+        to: "abstract",
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        preservesValues: true,
+        defaultSuggestion: "rename",
+      },
+    ],
+  });
+
+  it("shows it as a rename whose values are kept, with nothing to choose and nothing lost", () => {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(renaming)}
+        kind="collection"
+        entityName="posts"
+        onConfirm={vi.fn()}
+        draftRenames={[
+          { label: "Summary", previousName: "summary", name: "abstract" },
+        ]}
+      />
+    );
+    expect(
+      screen.getByText(/renamed to/i).closest("li, p, div")
+    ).toHaveTextContent(/summary.*renamed to.*abstract.*values are kept/is);
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.queryByText("removed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/rows have non-null data/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Remove it and add a new field/)
+    ).not.toBeInTheDocument();
+  });
+
+  // The control: without the Builder's rename, the same preview asks, and shows the removal.
+  it("still asks about the pair when the Builder did not rename the field", () => {
+    renderDialogs(renaming);
+    expect(screen.getAllByRole("radio").length).toBeGreaterThan(0);
+    expect(screen.getByText("removed")).toBeInTheDocument();
+  });
+});

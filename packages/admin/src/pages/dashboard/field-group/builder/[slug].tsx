@@ -51,6 +51,7 @@ import {
 } from "@admin/hooks/useSchemaSave";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
+import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
   removeUnsavedEntity,
@@ -354,6 +355,11 @@ export default function FieldGroupBuilderEditPage({
     [settings, entitySlug]
   );
 
+  // The saved fields the draft renamed, which the save answers as renames itself.
+  const draftRenames = useMemo(
+    () => draftRenamesOf(pending.changes),
+    [pending.changes]
+  );
   const { handleSave, confirmApply } = useSchemaSave({
     slug,
     missingSlugMessage: "Field group slug is missing",
@@ -383,6 +389,7 @@ export default function FieldGroupBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    draftRenames,
   });
 
   // Discard all on an unsaved field group discards the field group itself: it
@@ -507,6 +514,7 @@ export default function FieldGroupBuilderEditPage({
       />
 
       <BuilderSchemaChangeDialogs
+        draftRenames={draftRenames}
         confirmation={confirmation}
         kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}

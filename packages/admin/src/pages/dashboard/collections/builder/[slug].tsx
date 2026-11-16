@@ -52,6 +52,7 @@ import {
 } from "@admin/hooks/useSchemaSave";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
+import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
@@ -403,6 +404,11 @@ export default function CollectionBuilderEditPage({
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
+  // The saved fields the draft renamed, which the save answers as renames itself.
+  const draftRenames = useMemo(
+    () => draftRenamesOf(pending.changes),
+    [pending.changes]
+  );
   const { handleSave, confirmApply } = useSchemaSave({
     slug,
     missingSlugMessage: "Collection slug is missing",
@@ -430,6 +436,7 @@ export default function CollectionBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    draftRenames,
   });
 
   // Discard all on an unsaved collection discards the collection itself: it
@@ -519,6 +526,7 @@ export default function CollectionBuilderEditPage({
       savingLabel="Saving collection changes…"
     >
       <BuilderSchemaChangeDialogs
+        draftRenames={draftRenames}
         confirmation={confirmation}
         kind={COLLECTION_BUILDER_CONFIG.kind}
         entityName={slug}

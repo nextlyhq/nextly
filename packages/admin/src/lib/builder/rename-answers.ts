@@ -19,8 +19,12 @@ import { fieldColumnName } from "nextly/config";
 
 import type {
   SchemaPreviewRenameCandidate,
+  SchemaPreviewResponse,
   SchemaRenameResolution,
 } from "@admin/services/schemaApi";
+
+import type { PendingChange } from "./pending-changes";
+import { reviewDeletesData } from "./review-deletes-data";
 
 /** A saved field the draft renamed. */
 export interface DraftRename {
@@ -30,6 +34,19 @@ export interface DraftRename {
   previousName: string;
   /** Its name in the draft. */
   name: string;
+}
+
+/** The renames among a draft's pending changes: every saved field whose name changed. */
+export function draftRenamesOf(
+  changes: readonly PendingChange[]
+): DraftRename[] {
+  return changes
+    .filter(change => change.kind === "renamed")
+    .map(change => ({
+      label: change.label || change.name,
+      previousName: change.previousName ?? "",
+      name: change.name,
+    }));
 }
 
 /**
@@ -110,4 +127,41 @@ export function renameNotOffered(rename: DraftRename): string {
     "does not see the two as one field, so saving would drop its values. Save the rename on its " +
     "own, before other changes to the field."
   );
+}
+
+/**
+ * `preview` as the schema dialog shows it once the Builder's renames are decided: a decided rename
+ * is no field removed beside one added, and no pair left to choose for, so its columns leave those
+ * lists, and the save is called destructive only when something else still deletes values.
+ */
+export function previewWithDecidedRenames(
+  preview: SchemaPreviewResponse,
+  decided: readonly SchemaPreviewRenameCandidate[]
+): SchemaPreviewResponse {
+  if (decided.length === 0) return preview;
+  const fromColumns = new Set(decided.map(c => c.from));
+  const toColumns = new Set(decided.map(c => c.to));
+  const decidedDrops = new Set(decided.map(c => `${c.table}::${c.from}`));
+  const changes = {
+    ...preview.changes,
+    removed: preview.changes.removed.filter(
+      field => !fromColumns.has(fieldColumnName(field.name))
+    ),
+    added: preview.changes.added.filter(
+      field => !toColumns.has(fieldColumnName(field.name))
+    ),
+  };
+  const deletesData = reviewDeletesData(changes);
+  return {
+    ...preview,
+    changes,
+    renamed: (preview.renamed ?? []).filter(
+      c => !decidedDrops.has(`${c.table}::${c.from}`)
+    ),
+    hasDestructiveChanges: preview.hasDestructiveChanges && deletesData,
+    classification:
+      preview.classification === "destructive" && !deletesData
+        ? "safe"
+        : preview.classification,
+  };
 }

@@ -12,6 +12,11 @@
  */
 import type { JSX } from "react";
 
+import {
+  previewWithDecidedRenames,
+  renameAnswers,
+  type DraftRename,
+} from "@admin/lib/builder/rename-answers";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -44,6 +49,8 @@ type Props = {
    * review says what will be created, rather than judging a change.
    */
   creating?: boolean;
+  /** The saved fields the draft renamed, which the save answers as renames itself. */
+  draftRenames?: readonly DraftRename[];
 };
 
 /**
@@ -72,10 +79,20 @@ export function BuilderSchemaChangeDialogs({
   entityName,
   onConfirm,
   creating = false,
+  draftRenames = [],
 }: Props): JSX.Element | null {
-  const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
+  const {
+    preview: previewed,
+    previewId,
+    isOpen,
+    isApplying,
+    setOpen,
+  } = confirmation;
 
-  if (!preview) return null;
+  if (!previewed) return null;
+  // The Builder's own renames are decided, not asked: shown as renames whose values are kept.
+  const decided = renameAnswers(draftRenames, previewed.renamed ?? []).decided;
+  const preview = previewWithDecidedRenames(previewed, decided);
 
   if (creating) {
     return (
@@ -92,7 +109,7 @@ export function BuilderSchemaChangeDialogs({
     );
   }
 
-  if (isSafeChange(preview)) {
+  if (isSafeChange(preview) && decided.length === 0) {
     return (
       <SafeChangeConfirmDialog
         key={previewId}
@@ -118,6 +135,7 @@ export function BuilderSchemaChangeDialogs({
       classification={preview.classification}
       changes={preview.changes}
       renamed={preview.renamed}
+      decidedRenames={decided}
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
       leavingTranslation={preview.leavingTranslation}
