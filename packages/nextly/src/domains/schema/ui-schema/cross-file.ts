@@ -1,27 +1,50 @@
 /**
  * Cross-file validation for `ui-schema.json` vs `nextly.config.ts`
- * (spec §4.14.5/4.14.6). These checks span both schema sources, so they
- * live outside the per-file Zod schema (D1) and run at CI / dev-API time.
+ * (spec §4.14.6). This check spans both schema sources, so it lives outside
+ * the per-file Zod schema (D1).
  *
- *   - Slug collision: no slug appears in both code config and the manifest.
  *   - Relation target: every `relationTo` points at a real collection —
- *     code-first, UI-built, or a known core table (`users`, `media`).
+ *     code-first, UI-built, or one Nextly provides (`users`, `media`).
  *
- * Pure: returns a list of issues; callers decide how to surface them
- * (migrate:check prints + exits; the D3 dev API maps to NextlyError).
+ * A slug both files declare is not an issue here: the code-first entity of
+ * that kind shadows the Builder's, which the merge reports per kind
+ * (`mergeUiEntities`) and the migrate commands warn about.
+ *
+ * Pure: returns a list of issues; `readBuilderDefinitions` refuses them for
+ * both migrate commands.
  *
  * @module domains/schema/ui-schema/cross-file
  * @since v0.0.3-alpha (Plan D2)
  */
 import type { UiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 
-/** Core tables a UI field may relate to without being a user collection. */
-const CORE_RELATION_TARGETS = new Set(["users", "media"]);
+/**
+ * The collections Nextly provides itself, which a relationship or upload may
+ * name without the configuration declaring them. Only these: another core
+ * table's name, such as `audit_log`, is no relationship's target, and a
+ * collection of that slug is one like any other. The one list every reader of
+ * a relationship's target uses.
+ */
+export const BUILT_IN_RELATION_TARGETS: ReadonlySet<string> = new Set([
+  "users",
+  "media",
+]);
+
+/** The issue code of a relationship whose target neither file declares. */
+export const RELATION_TARGET_MISSING_ISSUE =
+  "NEXTLY_SCHEMA_RELATION_TARGET_MISSING";
+
+/**
+ * The issue code of a Builder entity the newest snapshot records and neither
+ * file declares now (`assertBuilderDefinitionsKept`). Kept here, beside the
+ * other issue the Builder's definitions are refused with, so the CLI maps both
+ * without loading the reader.
+ */
+export const BUILDER_DEFINITION_MISSING_ISSUE =
+  "NEXTLY_SCHEMA_BUILDER_DEFINITION_MISSING";
 
 export interface CrossFileIssue {
-  code:
-    | "NEXTLY_SCHEMA_SLUG_COLLISION"
-    | "NEXTLY_SCHEMA_RELATION_TARGET_MISSING";
+  code: typeof RELATION_TARGET_MISSING_ISSUE;
   message: string;
 }
 
@@ -35,28 +58,18 @@ export function validateCrossFile(
   args: ValidateCrossFileArgs
 ): CrossFileIssue[] {
   const issues: CrossFileIssue[] = [];
-  const codeSlugs = new Set(args.codeCollectionSlugs);
-
-  // Every entity across the manifest, for slug-collision detection.
+  // Every entity across the manifest, each of whose fields may name a target.
   const manifestEntities = [
     ...args.manifest.collections,
     ...args.manifest.singles,
     ...args.manifest.components,
   ];
-  for (const e of manifestEntities) {
-    if (codeSlugs.has(e.slug)) {
-      issues.push({
-        code: "NEXTLY_SCHEMA_SLUG_COLLISION",
-        message: `slug '${e.slug}' is defined in both nextly.config.ts and ui-schema.json`,
-      });
-    }
-  }
 
-  // Valid relation targets: code collections + UI collections + core tables.
+  // Valid relation targets: code collections + UI collections + Nextly's own.
   const validTargets = new Set<string>([
     ...args.codeCollectionSlugs,
     ...args.manifest.collections.map(c => c.slug),
-    ...CORE_RELATION_TARGETS,
+    ...BUILT_IN_RELATION_TARGETS,
   ]);
   for (const e of manifestEntities) {
     for (const f of e.fields) {
@@ -70,7 +83,7 @@ export function validateCrossFile(
       for (const target of targets) {
         if (!validTargets.has(target)) {
           issues.push({
-            code: "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+            code: RELATION_TARGET_MISSING_ISSUE,
             message: `${e.slug}.${f.name} relates to unknown target '${target}'`,
           });
         }

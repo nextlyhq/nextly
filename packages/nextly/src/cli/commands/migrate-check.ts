@@ -80,7 +80,6 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -100,19 +99,12 @@ import { describeOp } from "../../domains/schema/pipeline/diff/describe-operatio
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
-import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
-import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import {
-  applyDeferredExtendsToManifest,
-  mergeUiEntities,
-} from "../../domains/schema/ui-schema/merge";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../../domains/schema/utils/resolve-table-name";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+  assertBuilderDefinitionsKept,
+  type MergedEntities,
+  readBuilderDefinitions,
+} from "../../domains/schema/ui-schema/builder-definitions";
 import { addressRefusalsError } from "../../shared/address-rule";
-import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   type CliError,
   configDeclarationError,
@@ -126,7 +118,6 @@ import {
   settingsChangeWithoutMigration,
   snapshotWithoutMigration,
 } from "../errors/areas/migrations";
-import { builderSchemaConflict } from "../errors/areas/plugin-config";
 import { createContext, type CommandContext } from "../program";
 import type { SupportedDialect } from "../utils/adapter";
 import {
@@ -195,78 +186,24 @@ export async function runMigrateCheck(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  // Layer 5: load + validate ui-schema.json (intra-file via loadUiSchema's Zod).
-  let manifest;
+  // The Builder's definitions, read and judged by the rules `migrate:create`
+  // reads them by (`readBuilderDefinitions`): the same definition is refused
+  // by both with the same message, and a shadowed entity is warned about,
+  // naming its kind. Plugin extends that target a Builder entity are
+  // materialised, so the drift comparison below sees the schema
+  // `migrate:create` would produce.
+  let merged: MergedEntities;
   try {
-    manifest = await loadUiSchema({
+    ({ merged } = await readBuilderDefinitions({
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends ?? [],
       projectRoot: cwd,
-      uiSchemaFile: configResult.config.db.uiSchemaFile,
-    });
-  } catch (error) {
-    exitWithError(logger, error);
-  }
-
-  // Materialize plugin extends that target Builder-made entities (P8) so the
-  // drift comparison below sees the same schema migrate:create would produce.
-  manifest = applyDeferredExtendsToManifest(
-    manifest,
-    configResult.deferredExtends ?? []
-  );
-
-  // The manifest gets the same check the code-first config got above, once its
-  // deferred extends are materialized: a Builder-owned entity can carry a
-  // plugin field too, and a plugin extending one contributes its fields here
-  // rather than in the config. Only entities a code-first entity does not
-  // shadow are checked, because a shadowed one never reaches the snapshot.
-  const surviving = <T extends { slug: string }>(
-    list: readonly T[] | undefined,
-    codeFirst: ReadonlyArray<{ slug: string }> | undefined
-  ): T[] => {
-    const shadowed = new Set((codeFirst ?? []).map(e => e.slug));
-    return (list ?? []).filter(e => !shadowed.has(e.slug));
-  };
-
-  try {
-    assertPluginFieldDeclarations({
-      collections: surviving(
-        manifest.collections,
-        configResult.config.collections
-      ),
-      singles: surviving(manifest.singles, configResult.config.singles),
-      fieldGroups: surviving(
-        manifest.components,
-        configResult.config.fieldGroups
-      ),
-    });
+      judgeRelationTargets: true,
+      logger,
+    }));
   } catch (error) {
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
-
-  // Cross-file checks (slug collision, relation targets).
-  const crossIssues = validateCrossFile({
-    codeCollectionSlugs: configResult.config.collections.map(
-      (c: { slug: string }) => c.slug
-    ),
-    manifest,
-  });
-  if (crossIssues.length > 0) {
-    exitWithError(logger, builderSchemaConflict(crossIssues));
-  }
-
-  // Merge code + UI entities (code-first wins) for the drift comparison.
-  const merged = mergeUiEntities({
-    codeCollections: toMinimalEntities(configResult.config.collections, e =>
-      resolveCollectionTableName(e.slug, e.dbName)
-    ),
-    codeSingles: toMinimalEntities(configResult.config.singles ?? [], e =>
-      resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-    ),
-    codeComponents: toMinimalEntities(
-      configResult.config.fieldGroups ?? [],
-      e => resolveComponentTableName(e.slug)
-    ),
-    manifest,
-  });
 
   // Built once the latest snapshot is read, as `migrate:create` builds it:
   // a field a plugin holds back from a type switched off keeps its column
@@ -306,6 +243,7 @@ export async function runMigrateCheck(
     // Each entity with its settings, as `migrate:create` records them; the
     // merge sets a Builder entity's (`uiToMinimal`).
     entities: merged,
+    definitionFile: configResult.config.db.uiSchemaFile,
     logger,
   });
 }
@@ -347,6 +285,12 @@ export async function runChecks(args: {
     singles: readonly MinimalConfigEntity[];
     components: readonly MinimalConfigEntity[];
   };
+  /**
+   * `db.uiSchemaFile`, as the configuration names it. With `entities`, a
+   * Builder entity the newest snapshot records and neither declares is refused
+   * naming it, as `migrate:create` refuses it. Omitted, that is not checked.
+   */
+  definitionFile?: string;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -461,6 +405,20 @@ export async function runChecks(args: {
       return exitWithError(logger, migrationSnapshotInvalid(err.message));
     }
     throw err;
+  }
+
+  // A Builder entity the definition file lost, before the drift that shows it
+  // as a drop: `migrate:create` refuses to write that drop, with this message.
+  if (args.entities !== undefined && args.definitionFile !== undefined) {
+    try {
+      assertBuilderDefinitionsKept({
+        recorded: latest?.data.entities,
+        merged: args.entities,
+        definitionFile: args.definitionFile,
+      });
+    } catch (error) {
+      return exitWithError(logger, error);
+    }
   }
 
   // Addresses, by the one address rule, before the drift a new entity also

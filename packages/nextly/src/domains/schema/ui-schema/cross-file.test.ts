@@ -28,7 +28,9 @@ describe("validateCrossFile", () => {
     expect(issues).toEqual([]);
   });
 
-  it("flags a slug present in both code and UI", () => {
+  // A slug in both is the code-first entity shadowing the Builder's, which the merge reports per
+  // kind (`mergeUiEntities`' `shadowed`) and the commands warn about; it refuses nothing here.
+  it("raises no issue for a slug present in both code and UI", () => {
     const manifest = uiSchemaManifest.parse({
       collections: [{ slug: "posts", fields: [{ name: "x", type: "text" }] }],
     });
@@ -36,9 +38,7 @@ describe("validateCrossFile", () => {
       codeCollectionSlugs: ["posts"],
       manifest,
     });
-    expect(issues.some(i => i.code === "NEXTLY_SCHEMA_SLUG_COLLISION")).toBe(
-      true
-    );
+    expect(issues).toEqual([]);
   });
 
   it("flags a relationTo that points at no known target", () => {

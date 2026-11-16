@@ -22,21 +22,15 @@ import type {
 } from "../../../schemas/_zod/ui-schema";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
-import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import { loadUiSchema } from "../ui-schema/loader";
 import {
-  applyDeferredExtendsToManifest,
-  mergeUiEntities,
-} from "../ui-schema/merge";
+  assertBuilderDefinitionsKept,
+  readBuilderDefinitions,
+} from "../ui-schema/builder-definitions";
 import {
   buildCollectionMetadataUpsert,
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../ui-schema/metadata-sql";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../utils/resolve-table-name";
 
 import { assertMigrationAddresses, type JudgedEntity } from "./addresses";
 import {
@@ -44,7 +38,6 @@ import {
   hasAppStreamTables,
   type AppStreamTables,
 } from "./app-stream";
-import { toMinimalEntities } from "./config-entities";
 import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
 import { removedEntityTables, type MinimalConfigEntity } from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
@@ -127,98 +120,39 @@ export async function appMigrationInputs(
   input: AppMigrationInputsArgs
 ): Promise<AppMigrationInputs> {
   const { config, dialect, logger } = input;
-  // Convert config entries to the minimal shape the orchestrator needs. Each
-  // kind resolves its table name through the same helper the runtime uses, so
-  // generated names match the live database (collections, singles, and
-  // components each normalize differently).
-  const codeCollections = toMinimalEntities(config.collections, e =>
-    resolveCollectionTableName(e.slug, e.dbName)
-  );
-  const codeSingles = toMinimalEntities(config.singles ?? [], e =>
-    resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-  );
-  const codeComponents = toMinimalEntities(config.fieldGroups ?? [], e =>
-    resolveComponentTableName(e.slug)
-  );
-
-  // Load + merge UI-built entities (code-first wins on slug collision).
-  let manifest =
-    input.manifest ??
-    (await loadUiSchema({
-      projectRoot: input.projectRoot,
-      uiSchemaFile: config.db.uiSchemaFile,
-    }));
-
-  // Materialize plugin extends that target Builder-made entities (P8): append
-  // the deferred extend fields onto the matching ui-schema entity so they land
-  // in BOTH the table diff (below) and the dynamic_collections.fields metadata.
-  manifest = applyDeferredExtendsToManifest(
-    manifest,
-    input.deferredExtends ?? []
-  );
-
-  const merged = mergeUiEntities({
-    codeCollections,
-    codeSingles,
-    codeComponents,
-    manifest,
-  });
-  for (const slug of merged.droppedUiSlugs) {
-    logger.warn(
-      `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
-    );
-  }
+  // The Builder's definitions, read and judged as `migrate:check` reads them
+  // (`readBuilderDefinitions`), merged with the configuration's entities.
   // Each Builder entity carries its manifest entry as its settings, as each
-  // code-first one carries its config entry, so the snapshot records both;
-  // the merge sets them (`uiToMinimal`).
-  const { collections, singles, components } = merged;
-
-  // Checked on the config's and the manifest's own entries rather than the
-  // merged ones: the merge has already dropped shadowed Builder entities by
-  // slug, and those are filtered per kind below instead.
+  // code-first one carries its config entry, so the snapshot records both; the
+  // merge sets them (`uiToMinimal`).
   //
   // A migration is the one artifact that outlives the process that wrote it, so
   // a declaration its own field type rejects would become a deployment that
-  // materializes the schema and then cannot boot on it.
-  //
-  // A Builder entity shadowed by a code-first one of the same slug contributes
-  // nothing to this migration, so it is skipped rather than failed on — a
-  // cleanup that changes no DDL is not worth blocking on.
-  // Shadowing is per KIND: the manifest allows the same slug on a collection, a
-  // single and a field group, and the merge resolves each kind separately. A
-  // single set of dropped slugs would filter out an unshadowed single named
-  // `home` because a collection of that name was shadowed, and it would then
-  // reach the migration unchecked.
-  const survivingOf = <T extends { slug: string }>(
-    list: readonly T[],
-    codeFirst: ReadonlyArray<{ slug: string }>
-  ): T[] => {
-    const shadowed = new Set(codeFirst.map(e => e.slug));
-    return list.filter(e => !shadowed.has(e.slug));
-  };
-
+  // materializes the schema and then cannot boot on it: the configuration's
+  // declarations are checked here, the definition's by the reader.
   assertPluginFieldDeclarations({
     collections: config.collections,
     singles: config.singles,
     fieldGroups: config.fieldGroups,
   });
-  assertPluginFieldDeclarations({
-    collections: survivingOf(manifest.collections, config.collections),
-    singles: survivingOf(manifest.singles, config.singles ?? []),
-    fieldGroups: survivingOf(manifest.components, config.fieldGroups ?? []),
+  const definitions = await readBuilderDefinitions({
+    config,
+    ...(input.deferredExtends === undefined
+      ? {}
+      : { deferredExtends: input.deferredExtends }),
+    projectRoot: input.projectRoot,
+    ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
+    judgeRelationTargets: input.judged === undefined,
+    logger,
   });
+  const { merged } = definitions;
+  const { collections, singles, components } = merged;
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
-  // survived the merge (code-first wins → shadowed UI slugs are skipped).
-  // Shadowing is per kind, as above: `merged.droppedUiSlugs` is one list for
-  // every kind, and filtering by it would leave out the row of an unshadowed
-  // Single whose slug a shadowed collection shares.
+  // survived the merge (code-first wins, per kind, so an unshadowed Single
+  // whose slug a shadowed collection shares keeps its row).
   const metadataUpserts = builderMetadataUpserts(
-    {
-      collections: survivingOf(manifest.collections, config.collections),
-      singles: survivingOf(manifest.singles, config.singles ?? []),
-      components: survivingOf(manifest.components, config.fieldGroups ?? []),
-    },
+    definitions.surviving,
     dialect
   );
 
@@ -232,6 +166,18 @@ export async function appMigrationInputs(
   // extension-only configuration wrote no migration at all and production
   // never received the table.
   const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
+
+  // A Builder entity the newest snapshot records and nothing declares now was
+  // lost from the definition file, and the drop below would take its table.
+  // A save writing one entity's migration holds the definition it writes, its
+  // own delete included, so only an unscoped run asks.
+  if (input.judged === undefined) {
+    assertBuilderDefinitionsKept({
+      recorded: latest?.data.entities,
+      merged,
+      definitionFile: config.db.uiSchemaFile,
+    });
+  }
 
   // Before the app stream compiles: a plugin hook still extending a removed
   // collection's, Single's or field group's table would stop that compile with

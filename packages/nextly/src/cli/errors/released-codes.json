@@ -9,6 +9,7 @@
   "BLOCK_MANIFEST_STALE": "The committed block manifest does not match what the configuration generates.",
   "BLOCK_MANIFEST_UNREADABLE": "The block manifest exists but could not be read.",
   "BLOCK_SCHEMA_DERIVATION_FAILED": "The block document schema could not be derived, because something in the process extended `Object.prototype`.",
+  "BUILDER_DEFINITION_MISSING": "The newest migration snapshot records a Schema Builder entity that neither `nextly.config.ts` nor `ui-schema.json` declares.",
   "BUILDER_MIGRATION_SNAPSHOT_MISSING": "A migration file the Schema Builder wrote has no snapshot beside it, so `nextly migrate` does not apply it.",
   "BUILDER_RELATION_TARGET_UNKNOWN": "A relationship field in `ui-schema.json` names a collection that neither file declares.",
   "BUILDER_SLUG_COLLISION": "An entity in `ui-schema.json` has the slug of a collection in `nextly.config.ts`.",

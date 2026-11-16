@@ -109,7 +109,7 @@ import {
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
 } from "../errors/areas/migrate-create";
-import { exitWithError } from "../errors/index";
+import { configDeclarationError, exitWithError } from "../errors/index";
 import {
   type CLIDatabaseAdapter,
   createCliAdapter,
@@ -674,7 +674,9 @@ export async function runMigrateCreate(
   } catch (error) {
     stopOnPlanError(error, logger, options.dryRun, () => {
       if (dryRunRefusalOf(error) !== undefined) throw error;
-      exitWithError(logger, error);
+      // A field declaration Nextly cannot use reads as `migrate:check` reads
+      // it, so one definition ends both commands with one message.
+      exitWithError(logger, configDeclarationError(error) ?? error);
     });
   }
   const {
