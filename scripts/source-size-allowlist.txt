@@ -28,7 +28,6 @@ packages/blocks-engine/src/style/dtcg.ts 2362
 
 packages/blocks-engine/src/tree.ts 1944
 
-packages/blocks-engine/src/validation.ts 3573
 
 
 
