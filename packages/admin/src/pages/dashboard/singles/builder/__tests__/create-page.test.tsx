@@ -8,13 +8,19 @@ import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
+import type { FieldDefinition } from "@admin/types/collection";
 
-let submit: ((values: BuilderSettingsValues) => void) | undefined;
+let submit:
+  | ((values: BuilderSettingsValues, templateFields: FieldDefinition[]) => void)
+  | undefined;
 vi.mock(
   "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
     NewEntityDialog: (props: {
-      onCreate: (values: BuilderSettingsValues) => void;
+      onCreate: (
+        values: BuilderSettingsValues,
+        templateFields: FieldDefinition[]
+      ) => void;
     }) => {
       submit = props.onCreate;
       return null;
@@ -62,7 +68,7 @@ afterEach(() => removeUnsavedEntity("single", "home-page"));
 describe("Single create page", () => {
   it("keeps the Single unsaved, with the starting field its answer names", () => {
     render(<SingleBuilderPage />);
-    submit?.(values("blocks"));
+    submit?.(values("blocks"), []);
 
     expect(unsavedEntity("single", "home-page")).toEqual({
       // The store gives each entity a token of its own.
@@ -81,14 +87,24 @@ describe("Single create page", () => {
 
   it("keeps a Single with no starting field for standard fields", () => {
     render(<SingleBuilderPage />);
-    submit?.(values(null));
+    submit?.(values(null), []);
 
     expect(unsavedEntity("single", "home-page")?.fields).toEqual([]);
   });
 
+  it("keeps the template's fields after the starting field", () => {
+    render(<SingleBuilderPage />);
+    submit?.(values("blocks"), [{ name: "lede", type: "text" }]);
+
+    expect(unsavedEntity("single", "home-page")?.fields).toEqual([
+      { name: "blocks", type: "blocks" },
+      { name: "lede", type: "text" },
+    ]);
+  });
+
   it("creates nothing on the server, and opens the Single's editor", () => {
     render(<SingleBuilderPage />);
-    submit?.(values(null));
+    submit?.(values(null), []);
 
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith(
