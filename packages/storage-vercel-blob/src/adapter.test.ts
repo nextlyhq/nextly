@@ -444,6 +444,46 @@ describe("VercelBlobStorageAdapter.uploadAt", () => {
     expect(result).toEqual({ url: key, path: key });
   });
 
+  it("refuses a blob URL on another store's host, writing nothing", async () => {
+    vi.mocked(put).mockClear();
+    for (const key of [
+      "https://other.public.blob.vercel-storage.com/media/photo-Ab12.jpg.w640.webp",
+      "https://test.private.blob.vercel-storage.com/media/photo-Ab12.jpg.w640.webp",
+      "https://test.public.blob.vercel-storage.com.evil.example/media/photo.jpg.w640.webp",
+    ]) {
+      await expect(
+        adapter.uploadAt(key, Buffer.from("x"), { mimeType: "image/webp" })
+      ).rejects.toThrow();
+    }
+    expect(vi.mocked(put)).not.toHaveBeenCalled();
+  });
+
+  it("matches the store's host whatever case the token names its store in", async () => {
+    const mixedCase = new VercelBlobStorageAdapter({
+      token: "vercel_blob_rw_TeSt_dummy",
+      collections: { media: true },
+    });
+    vi.mocked(put).mockClear();
+    await mixedCase.uploadAt(`${original}.w320.webp`, Buffer.from("x"), {
+      mimeType: "image/webp",
+    });
+    expect(vi.mocked(put)).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses every key when the token names no store, writing nothing", async () => {
+    const unnamed = new VercelBlobStorageAdapter({
+      token: "not-a-blob-token",
+      collections: { media: true },
+    });
+    vi.mocked(put).mockClear();
+    await expect(
+      unnamed.uploadAt(`${original}.w320.webp`, Buffer.from("x"), {
+        mimeType: "image/webp",
+      })
+    ).rejects.toThrow();
+    expect(vi.mocked(put)).not.toHaveBeenCalled();
+  });
+
   it("refuses a key that is not one of this store's blob URLs", async () => {
     vi.mocked(put).mockClear();
     await expect(

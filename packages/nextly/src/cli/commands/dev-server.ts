@@ -806,6 +806,8 @@ export async function performAutoSync(
         databaseName,
         // A field the config makes translated keeps its value as this language's.
         defaultLocale: config.localization?.defaultLocale ?? "en",
+        // A refused type change ends with the step that tries it again: this command.
+        nextStep: "run db:sync again",
       });
     },
     // db-sync runs before any UI version-conflict-relevant state — these

@@ -271,7 +271,11 @@ describeEachDialect("the app's override of a generated column", dialect => {
       expect(narrowed.success, JSON.stringify(narrowed)).toBe(true);
     } else {
       expect(narrowed.success).toBe(false);
-      expect(JSON.stringify(narrowed)).toContain("NARROWING_WOULD_TRUNCATE");
+      // Judged by the repair command's rule, as every code-first push judges a type change.
+      expect(JSON.stringify(narrowed)).toContain("CONVERSION_BLOCKED");
+      expect(JSON.stringify(narrowed)).toContain(
+        "values longer than the new type holds would be cut"
+      );
       await expectWidth(dialect, POSTS_TABLE, "city", 10);
       const kept = (await nextly.findByID({
         collection: "co_posts",

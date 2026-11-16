@@ -13,6 +13,7 @@
 
 import type { default as SharpDefault } from "sharp";
 
+import { isAnimatedPng } from "./animated-png";
 import { loadSharp } from "./sharp-loader";
 import type { ImageMetadata, ProcessedImage } from "./types";
 
@@ -234,8 +235,13 @@ export class ImageProcessor {
         limitInputPixels: this.deps.copyPixelLimit ?? COPY_PIXEL_LIMIT,
       };
       // An animated original (WebP or PNG with several frames) would come out
-      // as its first frame alone, so it is sent as it is instead.
-      if (((await sharp(buffer, limits).metadata()).pages ?? 1) > 1) {
+      // as its first frame alone, so it is sent as it is instead. The library
+      // counts an animated WebP's frames but reads an APNG as one, so an APNG
+      // is told by its own animation chunk.
+      if (
+        isAnimatedPng(buffer) ||
+        ((await sharp(buffer, limits).metadata()).pages ?? 1) > 1
+      ) {
         return { kind: "refused" };
       }
       const resized = sharp(buffer, limits)
