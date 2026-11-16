@@ -175,9 +175,11 @@ export default function FieldGroupBuilderEditPage({
     fieldGroup?.migrationStatus === "diverged" ||
     fieldGroup?.migrationStatus === "failed";
 
-  // The schema landed. Unlike the other kinds there is no separate settings
-  // write here: a field group's save always carries its fields, so the settings
-  // went with them and both baselines move together.
+  // The schema landed. The apply carries the fields (and `localized`) only, so
+  // the other settings are persisted here, WITHOUT `fields`, as for the other
+  // kinds: otherwise a name, description, icon or category changed in the same
+  // save as a field would be pinned as saved while the registry kept the old
+  // values.
   const onSchemaApplied = useCallback(
     async (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
@@ -193,7 +195,32 @@ export default function FieldGroupBuilderEditPage({
       // The fields are pinned above regardless: they landed, and the baseline
       // has to move with them or the page reports unsaved work that is saved.
       if (!settings) return;
-      pinSettings(settings);
+
+      updateFieldGroup(
+        {
+          fieldGroupSlug: slug,
+          updates: {
+            label: settings.singularName,
+            description: settings.description,
+            admin: {
+              category: settings.category,
+              icon: settings.icon,
+            },
+          },
+        },
+        {
+          // The baseline moves only once the write lands. Clearing it first
+          // would show a clean form over a registry that still holds the old
+          // settings, with no way to retry.
+          onSuccess: () => pinSettings(settings),
+          onError: err => {
+            const m = (err as { message?: string })?.message;
+            toast.error(
+              `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
+            );
+          },
+        }
+      );
 
       await mirrorSchemaFile(
         () =>
@@ -203,7 +230,7 @@ export default function FieldGroupBuilderEditPage({
         "Field group applied to the database"
       );
     },
-    [slug, settings, pinFields, pinSettings]
+    [slug, settings, updateFieldGroup, pinFields, pinSettings]
   );
 
   const saveSettingsOnly = useCallback(
