@@ -20,7 +20,6 @@ packages/blocks-engine/src/list-query.ts 1933
 
 packages/blocks-engine/src/ops.ts 3953
 
-packages/blocks-engine/src/resolve-instances.ts 4215
 
 packages/blocks-engine/src/style/compile-page.ts 2761
 
@@ -64,7 +63,6 @@ packages/builder/src/shared-styles-panel.tsx 1643
 
 packages/builder/src/style-inspector-panel.tsx 7077
 
-packages/builder/src/styles/builder-chrome.css 12065
 
 packages/plugin-page-builder/src/address-claims/entry-claims-hook.ts 1576
 

@@ -1,0 +1,443 @@
+/*
+ * The Advanced tab's attribute rows.
+ *
+ * A LIST, because that is what it is: an author adds and removes rows, and a
+ * screen reader announcing "list, 3 items" is the only thing that tells them
+ * how many they have without tabbing through. The markers are removed and the
+ * semantics are not.
+ *
+ * The inspector's controls a lock holds sit in a fieldset too, only so that
+ * disabling it disables every control inside; it draws nothing of its own.
+ */
+.nx-attributes,
+/*
+ * Also the fieldsets that hold a locked block's style controls and class
+ * chips: a fieldset draws a border, padding and a minimum width by default,
+ * and none of that belongs where it only groups.
+ */
+.nx-inspector__held,
+.nx-style-inspector__classes,
+fieldset.nx-inspector__fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.nx-attributes__legend {
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--nx-foreground);
+}
+
+.nx-attributes__rows {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/*
+ * Name, value and Remove on one line where there is room, wrapping rather than
+ * shrinking the inputs below what a `data-` attribute needs to be readable in.
+ */
+.nx-attributes__pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nx-attributes__pair > input {
+  flex: 1 1 8rem;
+  min-inline-size: 0;
+}
+
+/*
+ * Column headings for the rows below, shown once. Laid out on the same flex
+ * basis as the inputs so the words sit over the fields they name.
+ */
+.nx-attributes__head {
+  display: flex;
+  gap: 0.25rem;
+  margin-block-end: 0.25rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+.nx-attributes__head > span {
+  flex: 1 1 8rem;
+  min-inline-size: 0;
+}
+
+/*
+ * The reason a row will not reach the page. Coloured with the theme's own
+ * destructive token so it reads as a refusal in both light and dark, and given
+ * the row's full width so a sentence is not squeezed beside three controls.
+ */
+.nx-attributes__problem {
+  flex: 1 1 100%;
+  margin: 0.25rem 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-destructive);
+}
+
+.nx-inspector__hint {
+  margin: 0.25rem 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * Where a control's value came from, as a dot beside its label.
+ *
+ * Two states are drawn and a third is not: a property nothing set gets no dot,
+ * because eight empty dots per section is the shape that trains an author to
+ * stop reading the panel. The dot is EMPTY and drawn here, so its meaning
+ * travels in the accessible label the component sets rather than in the mark.
+ *
+ * The colours are chart tokens rather than semantic status ones, and WHICH chart
+ * tokens is load-bearing. Inheriting a value is the ordinary, correct state for
+ * most controls on most blocks, so the destructive ramp would read as something
+ * being wrong with a page that is fine — `--nx-chart-5` is red-500 and is not
+ * used here for that reason.
+ *
+ * `--nx-chart-1` is not used either, and it is the trap: it resolves to
+ * `--nx-primary`, which is BLACK in light mode and WHITE in dark. A dot drawn in
+ * it is the same colour as the label text beside it in both themes, so the one
+ * state an author most needs to spot reads as a full stop.
+ *
+ * What is left is the pair the affordance actually wants: `--nx-chart-2` for a
+ * value set here and `--nx-chart-4` for one arriving from elsewhere — the
+ * blue-and-orange distinction the prior art established, in tokens that are
+ * retuned with the theme rather than pinned to a hex.
+ *
+ * Deliberately named by SLOT rather than by ramp step. Both resolve to a
+ * different step per mode — amber-700 and cyan-600 on the light surface here,
+ * the 500s on the dark one — because this inspector's background is
+ * `--nx-builder-surface`, an alias of `--nx-muted`, and a 6px dot has to clear
+ * the non-text minimum against it in both. Writing the step into the prose is
+ * what made this comment wrong the first time the two modes diverged.
+ */
+.nx-style-inspector__provenance {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-inline-start: 0.375rem;
+  border-radius: 50%;
+  /* Aligned to the text rather than the line box, so it sits with the label's
+     letters instead of riding the descender space below them. */
+  vertical-align: middle;
+  /*
+   * Pointer-REACHABLE, deliberately. The dot carries its meaning in a `title`,
+   * and `pointer-events: none` removes the span from hit testing — so the hover
+   * lands on the surrounding label instead and shows that label's own summary,
+   * or nothing. The one path a mouse user has to the answer is closed by the
+   * very property meant to keep the dot out of the way.
+   *
+   * Nothing is lost by leaving it hittable. The dot sits INSIDE the control's
+   * `<label>`, and a press on any of a label's content still activates the
+   * label, so the field is focused either way.
+   */
+  /*
+   * Shown when its field is pointed at or focused. The section heading's dot
+   * says which sections hold values at a glance, and a dot beside every field
+   * as well was the noise the design leaves out. Faded rather than hidden, so
+   * the dot keeps its place (nothing shifts when it appears) and its spoken
+   * label, which `visibility` or `display` would take away.
+   */
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.nx-inspector__field:hover .nx-style-inspector__provenance,
+.nx-inspector__field:focus-within .nx-style-inspector__provenance {
+  opacity: 1;
+}
+
+.nx-style-inspector__provenance[data-provenance="authored"] {
+  background-color: var(--nx-chart-2);
+}
+
+.nx-style-inspector__provenance[data-provenance="inherited"] {
+  background-color: var(--nx-chart-4);
+}
+
+/*
+ * The provenance sentence in text, for someone who tabs rather than points.
+ *
+ * Hidden with `display: none` rather than clipped off-screen, because the dot
+ * beside it already carries this string for assistive technology — a
+ * screen-reader-visible copy here would announce the same sentence twice on
+ * every control that has one.
+ *
+ * Revealed from `:focus-within` on the FIELD, not on the label: the thing that
+ * takes focus is the input, and the label is its sibling. Scoping the reveal to
+ * the label would never fire.
+ */
+.nx-style-inspector__provenance-text {
+  display: none;
+}
+
+/*
+ * Where an inherited value comes from, in brief, always in sight: the value
+ * the control shows greyed is half an answer without it. Muted and small, at
+ * the end of the label's row. Up to two lines, since one line of the label
+ * column cut "From section · Tablet" short; past two it ends in an ellipsis,
+ * its whole sentence in its `title`.
+ */
+.nx-style-inspector__provenance-source {
+  display: -webkit-box;
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * Beside its control, a label has a 7rem column, which it and its source
+ * cannot share on one line: the source takes a line of its own under the
+ * label there, which the 40px control beside it leaves room for, and the
+ * stacked layout below puts it back on the label's row.
+ */
+.nx-style-inspector .nx-inspector__field > label {
+  flex-wrap: wrap;
+  row-gap: 0.125rem;
+}
+
+/*
+ * A number field's label drags its value: the resize cursor says so, and the
+ * words are not selected by the drag. Touch is left to scroll and tap.
+ *
+ * A plain declaration is enough: a draggable label carries no
+ * `data-slot="label"` (`label-scrub.tsx`), so the admin's pointer cursor for
+ * every such label does not reach it.
+ */
+.nx-style-inspector .nx-inspector__field > label[data-scrub] {
+  cursor: ew-resize;
+  user-select: none;
+  /* A pen's horizontal drag is the scrub's, where the browser would take it
+     and cancel the pointer; a finger still scrolls the panel and taps. */
+  touch-action: pan-y;
+}
+
+.nx-style-inspector
+  .nx-inspector__field
+  > label
+  > .nx-style-inspector__provenance-source {
+  flex-basis: 100%;
+  margin-inline-start: 0;
+}
+
+/*
+ * Shown above the label while the field has focus, as a small tooltip, so
+ * the words reach a keyboard user without taking room in the label's column,
+ * where they pushed the label onto a second line.
+ */
+.nx-style-inspector .nx-inspector__field {
+  position: relative;
+}
+
+.nx-inspector__field:focus-within .nx-style-inspector__provenance-text {
+  /* Held back (none) by a row whose value has just changed, until the author
+     focuses the field again; see `--nx-provenance-caption` on the row. */
+  display: var(--nx-provenance-caption, block);
+  position: absolute;
+  z-index: 2;
+  inset-block-end: 100%;
+  inset-inline-start: 0;
+  padding: 0.125rem 0.375rem;
+  white-space: nowrap;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  background: var(--nx-popover);
+  color: var(--nx-popover-foreground);
+}
+
+/*
+ * A style field's row: its label, its control, then a fixed slot for the
+ * reset, on one line at the panel's default width as the design draws it.
+ *
+ * The label column is at most 7rem: wide enough for the longest common label
+ * ("Justify content"), and narrow enough that the widest icon strip (five
+ * icons and More) beside it starts where every other control does at the
+ * default width. It gives way to a control that needs more room:
+ * an icon strip never shrinks, so its column is at least its own width, and a
+ * text field, which can shrink, takes what is left. A longer label is cut with
+ * an ellipsis, its whole name still the field's accessible name.
+ *
+ * The reset's slot is kept whether or not the row has one, so every control
+ * ends at one edge and none changes width when a value is set or reset.
+ */
+.nx-style-inspector .nx-inspector__field {
+  grid-template-columns: minmax(0, 7rem) minmax(min-content, 1fr) 1.5rem;
+}
+
+/*
+ * Placed by name rather than left to the shared rules, which below 18rem send
+ * every child to column 1 and would stack a style row the panel still has room
+ * to draw on one line.
+ */
+.nx-style-inspector .nx-inspector__field > * {
+  grid-column: 2;
+}
+
+.nx-style-inspector .nx-inspector__field > label,
+.nx-style-inspector .nx-inspector__field > .nx-inspector__field-name {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+/*
+ * A set value's reset, in its slot at the end of its control's row: an icon,
+ * where a "Reset to unset" line under every set control made each one two
+ * rows. A jump to another tier, or a refusal, still reads under the control.
+ */
+.nx-style-inspector .nx-inspector__field > [data-action="reset"] {
+  display: inline-grid;
+  place-items: center;
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  margin: 0;
+  padding: 0;
+}
+
+.nx-style-inspector .nx-inspector__field > [data-action="jump"],
+.nx-style-inspector .nx-inspector__field > .nx-inspector__error {
+  grid-column: 2 / -1;
+}
+
+/*
+ * Where a value stands between the block and its shared style: the words on
+ * one line and the action (Reset, Move to) on its own line under them, so no
+ * separator is left ending a line.
+ */
+.nx-style-inspector__shared-line {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.125rem;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * A jump to the tier a value comes from names that source ("From Desktop"),
+ * so it sits where every other source is named: under the label, its words
+ * starting where the label's do. The control and its reset span both lines
+ * beside it, so it costs no row.
+ */
+.nx-style-inspector .nx-inspector__field > [data-action="jump"] {
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: start;
+  padding-inline: 0;
+}
+
+.nx-style-inspector
+  .nx-inspector__field:has(> [data-action="jump"])
+  > :not(label, [data-action="jump"], .nx-inspector__error) {
+  grid-row: 1 / span 2;
+}
+
+/*
+ * A single control under its form toggle: the toggle's row already names the
+ * property, so the control's own label is kept for assistive technology and
+ * clipped from sight rather than said twice.
+ */
+label[data-named-above] .nx-style-inspector__field-label-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.nx-style-inspector .nx-style-inspector__field-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Narrow, a style field stacks: its label on a line of its own, then its
+ * control with the reset's slot at that line's end. Only below 17rem, near the
+ * inspector's narrowest (16rem of fields at its 280px minimum), where a 7rem
+ * label beside a control leaves the control too little room. Above it, a wide
+ * control narrows the label column instead.
+ */
+@container nx-inspector-fields (max-width: 17rem) {
+  .nx-style-inspector .nx-inspector__field {
+    grid-template-columns: minmax(0, 1fr) 1.5rem;
+  }
+
+  .nx-style-inspector .nx-inspector__field > * {
+    grid-column: 1;
+  }
+
+  /* Stacked, the jump follows its control again, across the row. */
+  .nx-style-inspector
+    .nx-inspector__field:has(> [data-action="jump"])
+    > :not(label, [data-action="jump"], .nx-inspector__error) {
+    grid-row: auto;
+  }
+
+  .nx-style-inspector .nx-inspector__field > [data-action="jump"] {
+    grid-row: auto;
+  }
+
+  .nx-style-inspector .nx-inspector__field > label,
+  .nx-style-inspector .nx-inspector__field > .nx-inspector__field-name {
+    grid-column: 1 / -1;
+  }
+
+  .nx-style-inspector
+    .nx-inspector__field
+    > .nx-style-inspector__breakpoint-action[data-action="reset"] {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .nx-style-inspector .nx-inspector__field > [data-action="jump"],
+  .nx-style-inspector .nx-inspector__field > .nx-inspector__error {
+    grid-column: 1 / -1;
+  }
+
+  .nx-style-inspector
+    .nx-inspector__field
+    > label
+    > .nx-style-inspector__provenance-source {
+    flex-basis: auto;
+    margin-inline-start: auto;
+  }
+}
+
+/*
+ * An open section shows what overflows it: the shared accordion clips its
+ * content, which it needs while it animates open or shut, and that cut off a
+ * field's focus tooltip drawn above the section's first row.
+ */
+.nx-style-inspector [data-slot="accordion-content"][data-state="open"] {
+  overflow: visible;
+}
