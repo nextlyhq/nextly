@@ -37,6 +37,16 @@ function isServerBaseline(value: string): value is ServerBaseline {
 }
 
 /**
+ * Whether a comparison's start is a baseline only the server resolves, which
+ * it can pair with a version of its own choosing when the address names none.
+ */
+export function namesServerBaseline(
+  from: ComparisonFrom
+): from is ServerBaseline {
+  return typeof from === "string" && from !== PREVIOUS_VERSION;
+}
+
+/**
  * A comparison's `from`: a version number, as `readVersionParam` reads one, or
  * a named baseline. A repeated parameter takes its first value.
  */
@@ -109,7 +119,7 @@ export function resolvePair(
   hasMore: boolean
 ): PairResolution {
   // Only the server knows what is published, drafted or last looked at.
-  if (typeof from === "string" && from !== PREVIOUS_VERSION) {
+  if (from !== undefined && namesServerBaseline(from)) {
     return to === undefined
       ? { kind: "baseline", baseline: from }
       : { kind: "baseline", baseline: from, to };

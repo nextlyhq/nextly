@@ -43,7 +43,11 @@ import {
 } from "./history-layout";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { predecessorOf, type PairResolution } from "./version-pairing";
-import { resolvePair, type ComparisonFrom } from "./version-search-params";
+import {
+  namesServerBaseline,
+  resolvePair,
+  type ComparisonFrom,
+} from "./version-search-params";
 import { versionsHref } from "./versions-href";
 import { VersionTimelineRail } from "./VersionTimelineRail";
 
@@ -337,7 +341,15 @@ export function VersionComparePage({
     (next: { from?: ComparisonFrom; view?: "inline" | "side" }) => {
       const nextFrom = next.from ?? from ?? shown?.from;
       if (nextFrom === undefined) return;
-      const nextTo = shown?.to ?? to;
+      // A baseline the server resolves keeps the address's own target, and
+      // one the address left to the server stays so, whether the view or the
+      // baseline changes. Pinning the version the server chose would ask a
+      // different question: "the version you last looked at", asked about the
+      // version this page has just marked seen, has nothing earlier to compare
+      // with, so the comparison would vanish on a change of layout. A pair of
+      // versions, or "the version before", is drawn on the client from the
+      // version it ends at, so that one names the version on screen.
+      const nextTo = namesServerBaseline(nextFrom) ? to : (shown?.to ?? to);
       navigateTo(
         versionsHref(
           scope,

@@ -230,6 +230,65 @@ describe("VersionComparePage, its choices", () => {
     );
   });
 
+  it("keeps a baseline the server pairs with its own choice of version without one when the view changes", () => {
+    // Pinned to the version it chose, "the version last looked at" would be
+    // asked again with that version as the target, after the page had marked
+    // it seen: the server then has nothing earlier to compare with.
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "last-viewed", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+    renderPage({ from: "last-viewed", view: "inline" });
+
+    const props = diffMountMock.mock.calls.at(-1)?.[0] as {
+      onViewChange?: (layout: "inline" | "split") => void;
+    };
+    props.onViewChange?.("split");
+
+    expect(navigateMock).toHaveBeenLastCalledWith(
+      versionsHref(scope, { from: "last-viewed" }, undefined, "side")
+    );
+  });
+
+  it("leaves the server its own choice of version when the reader compares with another baseline", async () => {
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "last-viewed", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+    renderPage({ from: "last-viewed" });
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Compare with" }),
+      "published"
+    );
+
+    expect(navigateMock).toHaveBeenLastCalledWith(
+      versionsHref(scope, { from: "published" })
+    );
+  });
+
+  it("keeps the version on screen when the reader asks for the change it made", async () => {
+    // "The version before" is drawn on the client from the version it ends
+    // at, so it needs that version named.
+    baselineMock.mockReturnValue({
+      data: { from: 3, to: 5, baseline: { name: "last-viewed", versionNo: 3 } },
+      isLoading: false,
+      isError: false,
+    });
+    renderPage({ from: "last-viewed" });
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Compare with" }),
+      "previous"
+    );
+
+    expect(navigateMock).toHaveBeenLastCalledWith(
+      versionsHref(scope, { from: "previous", to: 5 })
+    );
+  });
+
   it("marks the newer of the two versions seen, whichever side it is on", () => {
     renderPage({ from: 4, to: 5 });
     expect(seenMock).toHaveBeenLastCalledWith(scope, expect.any(String), 5);
