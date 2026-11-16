@@ -262,7 +262,7 @@ const route = createPublicBlocksPage({
 The copies are the resized versions your site's media already keeps, from 96 to 1920
 pixels wide and never wider than the upload. With the option set:
 
-- **An Image block offers its copies with `srcset` and `sizes`.** How wide it is drawn on
+- **An Image block from the media library offers its copies with `srcset` and `sizes`.** How wide it is drawn on
   each device comes from your breakpoints: the whole width at the top of the page,
   shared out across a row of Columns, and narrowed by a width or maximum width the block
   sets for itself on every device. No copy more than twice the widest of those is sent.
@@ -280,7 +280,8 @@ pixels wide and never wider than the upload. With the option set:
 The original is drawn as it always was when:
 
 - the route has no `imageCopies`;
-- the image is an address on another site, or your storage keeps no resized copies;
+- the image is given by its address rather than picked from the media library, so its
+  width and height are not known; or your storage keeps no resized copies;
 - the upload is narrower than the smallest copy, or the lookup fails;
 - for the background, its address is not the media route's (`/api/media/<id>/raw`), so
   no media item is named by it; it is drawn at the image's own size (no size, or

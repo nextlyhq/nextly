@@ -130,4 +130,18 @@ describe("a container's children", () => {
     };
     expect(narrowForOwnSize(root, varies)).toBe(root);
   });
+
+  it("resolves a width and a maximum width each against the container", () => {
+    const root = rootImageSlot(BREAKPOINTS);
+    // CSS draws `width: 50%; max-width: 50%` at half the container, not a
+    // quarter: the maximum is a share of the container, not of the width.
+    const halves = { base: { base: { width: "50%", maxWidth: "50%" } } };
+    expect(narrowForOwnSize(root, halves).devices.map(d => d.width)).toEqual([
+      960, 512, 320,
+    ]);
+    const capped = { base: { base: { width: "80%", maxWidth: "600px" } } };
+    expect(narrowForOwnSize(root, capped).devices.map(d => d.width)).toEqual([
+      600, 600, 512,
+    ]);
+  });
 });

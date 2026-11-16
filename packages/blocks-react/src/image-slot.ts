@@ -249,7 +249,25 @@ export function narrowForOwnSize(slot: ImageSlot, styles: unknown): ImageSlot {
     }
   }
   const base = recordOf(breakpoints.base);
-  return narrowToWidth(narrowToWidth(slot, base?.width), base?.maxWidth);
+  // Each against the block's container, as CSS resolves both, then the
+  // narrower: a percentage maximum is a share of the container, never of the
+  // width the block's own `width` already gave it.
+  return narrowerOf(
+    narrowToWidth(slot, base?.width),
+    narrowToWidth(slot, base?.maxWidth)
+  );
+}
+
+/** Two bounds on one slot, device by device, the narrower of each. */
+function narrowerOf(a: ImageSlot, b: ImageSlot): ImageSlot {
+  if (a === b) return a;
+  return {
+    ...a,
+    devices: a.devices.map((device, index) => ({
+      ...device,
+      width: Math.min(device.width, b.devices[index]?.width ?? device.width),
+    })),
+  };
 }
 
 /** What `childImageContext` reads of a container. */

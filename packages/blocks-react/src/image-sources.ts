@@ -11,9 +11,13 @@
  * stylesheet draws it, since a copy chosen for one of those cases would be
  * wrong in another.
  *
- * Each device gets the narrowest copy at least twice its slot's width, which a
- * screen at twice the density draws sharply; where none is that wide, the
- * widest the site keeps. The copy is set by one rule per device, anchored like
+ * Each device gets the narrowest copy at least twice the width the background
+ * is drawn at there, which a screen at twice the density draws sharply; where
+ * none is that wide, the widest the site keeps. That width is the box's for
+ * `cover` and `contain`, and the stated width for a length or a percentage. A
+ * `cover` image in a box taller than the image's proportions is drawn wider
+ * than the box, which only its height decides: sized by the box's width, as
+ * an `<img>`'s `sizes` is, it can be drawn a little larger than its copy. The copy is set by one rule per device, anchored like
  * the page's own rules and carrying the node's class twice, so it outranks the
  * node's resting rule and still yields to its hover and focus rules, which
  * weigh the same and come later in the page. The same copies are preloaded with each
@@ -89,33 +93,59 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** One length a `background-size` component can be read as. */
+const SIZE_LENGTH = /^(\d+(?:\.\d+)?|\.\d+)(px|rem|%)$/;
+
+/** CSS pixels in a `rem`, at the browser's default root size. */
+const REM = 16;
+
 /**
- * Whether a `background-size` draws the image at a size of its own rather
- * than at the image's: `cover`, `contain`, or one or two lengths of which at
- * least one is not `auto`. An image drawn at its intrinsic size (no size, or
- * `auto`) would be drawn smaller from a narrower copy, so it is left as it is.
+ * How wide a background is drawn in a box `width` wide, or `undefined` where
+ * that cannot be told from its `background-size`:
+ * - `cover` and `contain`: the box's width. A `cover` image can be drawn wider
+ *   than the box, where the box is taller than the image's proportions, and
+ *   is sized by the width as `sizes` sizes an image; see the module doc.
+ * - a width as a length or a percentage, with or without a height: that width.
+ * - no size, `auto`, or `auto` then a height: the image's own width or one set
+ *   by its height, neither known here, so the background is left as it is.
  */
-function sizedByBox(size: unknown): boolean {
-  if (typeof size !== "string") return false;
+function drawnWidth(size: unknown, width: number): number | undefined {
+  if (typeof size !== "string") return undefined;
   const parts = size.trim().toLowerCase().split(/\s+/);
   if (parts.length === 1 && (parts[0] === "cover" || parts[0] === "contain")) {
-    return true;
+    return width;
   }
-  return (
-    parts.length <= 2 &&
-    parts.some(part => part !== "auto" && part !== "") &&
-    !parts.includes("cover") &&
-    !parts.includes("contain")
-  );
+  return parts.length <= 2 ? lengthWidth(parts[0], width) : undefined;
 }
 
-/** The image address one breakpoint's values set, or `undefined` if none. */
-function layerUrl(values: Record<string, unknown>): string | undefined {
+/** A width stated as a length or a share of the box, or `undefined`. */
+function lengthWidth(
+  part: string | undefined,
+  width: number
+): number | undefined {
+  const match = SIZE_LENGTH.exec(part ?? "");
+  if (match === null) return undefined;
+  const amount = Number(match[1]);
+  if (match[2] === "%") return Math.ceil((width * amount) / 100);
+  return Math.ceil(match[2] === "rem" ? amount * REM : amount);
+}
+
+/** A background image as one breakpoint's values set it. */
+interface StatedBackground {
+  readonly url: string;
+  readonly size: unknown;
+}
+
+/** The background image one breakpoint's values set, or `undefined` if none. */
+function layerOf(
+  values: Record<string, unknown>
+): StatedBackground | undefined {
   if (values.backgroundGradient !== undefined) return undefined;
   const background = recordOf(values.background);
-  if (!sizedByBox(background?.size)) return undefined;
   const url = background?.url;
-  return typeof url === "string" && url !== "none" ? url : undefined;
+  return typeof url === "string" && url !== "none"
+    ? { url, size: background?.size }
+    : undefined;
 }
 
 /** Every breakpoint's values a block stores, with its state and breakpoint. */
@@ -135,13 +165,13 @@ function storedValues(
  * base breakpoint of its resting state, with no gradient, and set at no other
  * breakpoint or state. `undefined` otherwise.
  */
-function soleBackgroundUrl(styles: unknown): string | undefined {
+function soleBackground(styles: unknown): StatedBackground | undefined {
   const layered = storedValues(styles).filter(({ values }) =>
     IMAGE_LAYERS.some(layer => values[layer] !== undefined)
   );
   const [only] = layered;
   if (layered.length !== 1 || only?.at !== "base/base") return undefined;
-  return layerUrl(only.values);
+  return layerOf(only.values);
 }
 
 /**
@@ -307,6 +337,20 @@ function bandsOf(
 }
 
 /**
+ * How wide the background is drawn on each device of the box's slot, or
+ * `undefined` where its size leaves that unknown on any of them.
+ */
+function drawnSlot(slot: ImageSlot, size: unknown): ImageSlot | undefined {
+  const devices: SlotDevice[] = [];
+  for (const device of slot.devices) {
+    const width = drawnWidth(size, device.width);
+    if (width === undefined || width <= 0) return undefined;
+    devices.push({ ...device, width });
+  }
+  return { ...slot, devices };
+}
+
+/**
  * The address of a background this page sizes: the first top-level block's,
  * stated once, with no custom CSS beside it, on a page that offers copies.
  * Asked before anything is awaited, so a block that sizes nothing draws
@@ -315,7 +359,7 @@ function bandsOf(
 export function firstBackgroundSource(
   page: BackgroundPage | undefined,
   node: BackgroundNode | undefined
-): string | undefined {
+): StatedBackground | undefined {
   if (page?.imageCopies === undefined || page.imageSlot === undefined) {
     return undefined;
   }
@@ -324,7 +368,7 @@ export function firstBackgroundSource(
   if (typeof node.customCss === "string" && node.customCss.trim() !== "") {
     return undefined;
   }
-  return soleBackgroundUrl(node.styles);
+  return soleBackground(node.styles);
 }
 
 /**
@@ -345,12 +389,16 @@ export async function sizedFirstBackground(
   const { imageCopies, imageSlot } = page;
   if (original === undefined || nodeClass === undefined) return undefined;
   if (imageCopies === undefined || imageSlot === undefined) return undefined;
-  if (!mayFetchUrl(original)) return undefined;
-  const slot = narrowForOwnSize(imageSlot, node.styles);
+  if (!mayFetchUrl(original.url)) return undefined;
+  const slot = drawnSlot(
+    narrowForOwnSize(imageSlot, node.styles),
+    original.size
+  );
+  if (slot === undefined) return undefined;
   const upTo = copiesWantedUpTo(slot);
   const copies = await fetchableCopies(
     imageCopies,
-    original,
+    original.url,
     upTo,
     mayFetchUrl
   );

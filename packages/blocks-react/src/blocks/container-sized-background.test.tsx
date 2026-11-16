@@ -226,6 +226,12 @@ describe("the first section's background", () => {
           base: { base: { background: { url: PHOTO, size: "auto auto" } } },
         }),
       ],
+      // Its width set by its height and the image's proportions.
+      [
+        section("hero", {
+          base: { base: { background: { url: PHOTO, size: "auto 480px" } } },
+        }),
+      ],
     ];
     for (const nodes of cases) {
       const { head } = await render(nodes);
@@ -235,14 +241,39 @@ describe("the first section's background", () => {
   });
 
   it("is sized wherever the box sets the image's size", async () => {
-    for (const size of ["contain", "100% auto", "auto 480px", "50%"]) {
+    for (const size of ["contain", "100% auto", "50%", "300px 200px"]) {
       const { head } = await render([
         section("hero", {
           base: { base: { background: { url: PHOTO, size } } },
         }),
       ]);
-      expect(preloadsOf(head), size).toHaveLength(2);
+      // How many copies depends on the width drawn; every size here has one.
+      expect(preloadsOf(head).length, size).toBeGreaterThan(0);
     }
+  });
+
+  it("is sized by the width it is drawn at, wider than its box or not", async () => {
+    // 2000px wide on every device: twice that is past every copy, so each
+    // device draws the widest the site keeps, one copy for all.
+    const { head } = await render([
+      section("hero", {
+        base: { base: { background: { url: PHOTO, size: "2000px auto" } } },
+      }),
+    ]);
+    expect(preloadsOf(head).map(link => link.href)).toEqual([
+      "/media/hero-1920.webp",
+    ]);
+    // A quarter of the box: 480 on a desktop, 256 on a tablet, 160 on a phone.
+    const quarter = await render([
+      section("hero", {
+        base: { base: { background: { url: PHOTO, size: "25%" } } },
+      }),
+    ]);
+    expect(preloadsOf(quarter.head).map(link => link.href)).toEqual([
+      "/media/hero-960.webp",
+      "/media/hero-640.webp",
+      "/media/hero-320.webp",
+    ]);
   });
 
   it("names its rules by what they say, so changed rules replace the old", async () => {

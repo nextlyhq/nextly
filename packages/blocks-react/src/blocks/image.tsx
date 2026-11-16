@@ -322,6 +322,16 @@ function pictureAttributes(
   };
 }
 
+/** Whether a media record states the picture's width and height. */
+function hasDimensions(record: ResolvedMedia | null): boolean {
+  return (
+    typeof record?.width === "number" &&
+    record.width > 0 &&
+    typeof record.height === "number" &&
+    record.height > 0
+  );
+}
+
 /**
  * Whether the picture is in the page's first block, so it loads at once and
  * before other images. Read with care: a block drawn on its own, outside a
@@ -358,6 +368,11 @@ async function sizedPicture(
     eager: loadsFirst(ctx, node),
   };
   if (slot === undefined || ctx?.imageCopies === undefined) return original;
+  // Only where the media record gives the picture's width and height, which
+  // the `<img>` then carries. Without them, `srcset` with `sizes` would set
+  // its intrinsic width to the slot's, and a small picture drawn at its own
+  // width would grow to fill its container.
+  if (!hasDimensions(picture.record)) return original;
   const drawn = narrowForOwnSize(slot, node?.styles);
   const upTo = copiesWantedUpTo(drawn);
   const copies = await ctx

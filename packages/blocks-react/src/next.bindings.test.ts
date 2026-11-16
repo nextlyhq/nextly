@@ -1082,10 +1082,17 @@ describe("a routed page's bindings", () => {
       kind: "page",
       nodes: [
         {
-          id: "pic",
-          type: "core/image",
+          // A first section's background: looked up by its address.
+          id: "hero",
+          type: "core/section",
           version: 1,
-          props: { src: "/media/a.jpg", alt: "A view" },
+          props: {},
+          styles: {
+            base: {
+              base: { background: { url: "/media/a.jpg", size: "cover" } },
+            },
+          },
+          slots: { children: [] },
         },
       ],
     };

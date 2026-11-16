@@ -159,6 +159,21 @@ describe("an Image block's sources", () => {
     expect(img.sizes).toBeUndefined();
   });
 
+  it("is drawn from its original where its size is not known", async () => {
+    // An address on this site has copies, but no record gives the picture's
+    // width and height, and a slot-based `sizes` would then set the size it
+    // is drawn at.
+    const { html, asked } = await render([
+      box("intro", []),
+      image("pic", { src: "/media/photo.jpg" }),
+    ]);
+    const img = imgOf(html);
+    expect(img.src).toBe("/media/photo.jpg");
+    expect(img.srcset).toBeUndefined();
+    expect(img.sizes).toBeUndefined();
+    expect(asked).toEqual([]);
+  });
+
   it("is drawn as always where the site offers no copies", async () => {
     const { html, asked } = await render(
       [box("intro", []), image("pic", { mediaId: "photo" })],
