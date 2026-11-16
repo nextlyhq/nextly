@@ -11,13 +11,20 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { BuilderFieldPicker } from "@admin/components/features/schema-builder/BuilderFieldPicker";
 import { toSnakeName } from "@admin/lib/builder";
 import { insertField } from "@admin/lib/builder/insert-field";
 import {
   addUnsavedEntity,
+  releaseUnsavedFieldGroupsOf,
   removeUnsavedEntity,
   unsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
@@ -538,6 +545,31 @@ describe("the Schema Builder's field picker", () => {
       })
     );
     expect(unsavedEntity("field-group", "hero")).toBeUndefined();
+  });
+
+  it("lists a field group another host's picker made once that host is left", async () => {
+    addUnsavedEntity({
+      kind: "field-group",
+      address: "promo",
+      settings: { singularName: "Promo", slug: "promo", icon: "" },
+      fields: [],
+      ownedBy: { kind: "collection", address: "pages" },
+    });
+    const first = renderBuilderPicker();
+    await first.user.click(screen.getByRole("option", { name: /Field group/ }));
+    // Still the other host's: not offered here.
+    expect(screen.queryByRole("option", { name: /promo/ })).toBeNull();
+    cleanup();
+
+    releaseUnsavedFieldGroupsOf({ kind: "collection", address: "pages" });
+
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    expect(
+      screen.getByRole("option", {
+        name: "Promo (Field group, slug: promo) · not saved yet",
+      })
+    ).toBeInTheDocument();
   });
 
   it("lists the unsaved field groups it may embed, marked as not saved yet", async () => {
