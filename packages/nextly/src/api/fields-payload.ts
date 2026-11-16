@@ -238,6 +238,12 @@ function fieldNames(list: unknown): readonly FieldName[] {
     : [];
 }
 
+/** `fields` in the payload schema's shape, as the save keeps them, or as given when they do not parse. */
+function fieldsAsSaved(fields: unknown): unknown {
+  const parsed = fieldsArraySchema.safeParse(fields);
+  return parsed.success ? parsed.data : fields;
+}
+
 /**
  * What a kept name breaks only because the save gives it a column it did not have: a field
  * stored as a field-group reference, a many-to-many relationship or a virtual field, saved as
@@ -285,7 +291,12 @@ export function assertBuilderFieldNames(
   for (const field of fieldNames(stored)) {
     if (typeof field.name === "string") held.set(field.name, field);
   }
-  fieldNames(fields).forEach((field, index) => {
+  // Judged as the save keeps them: the payload schema's shape, which the stored definition and
+  // the columns follow. A key the schema does not declare, such as a root `virtual`, does not
+  // survive the save, so it cannot spare a name the rules a column brings. Parsed once, at the
+  // top; nested lists arrive already parsed.
+  const asSaved = path === "" ? fieldsAsSaved(fields) : fields;
+  fieldNames(asSaved).forEach((field, index) => {
     const at = `${path}${index}`;
     const kept =
       typeof field.name === "string" ? held.get(field.name) : undefined;
