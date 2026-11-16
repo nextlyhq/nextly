@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The page builder's Design panel no longer shows "Space between blocks" above the spacing variables. Spacing is set per container (Gap) and by the spacing variables, and the canvas's spacing overlay shows container gaps. `@nextlyhq/builder/shell` no longer exports the `SpacingModeControl` type, and `TokensPanel` no longer takes a `spacing` prop: a host that passed one can remove it, since there is no site-wide spacing switch to show.
+The page builder's Design panel no longer shows "Space between blocks" above the spacing variables. Spacing is set per container (Gap) and by the spacing variables, and the canvas's spacing overlay shows container gaps. `@nextlyhq/builder/shell` no longer exports the `SpacingModeControl` type, and `TokensPanel` no longer takes a `spacing` prop: a TypeScript host that still passes one gets a type error and should remove it (an untyped host has it ignored), since there is no site-wide spacing switch to show.
