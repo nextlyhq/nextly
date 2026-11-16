@@ -1,6 +1,10 @@
 import { test } from "vitest";
 
+import { byteCapRefusal } from "./byte-cap";
+import { keptJsonBytes } from "./kept-sizes";
+import { countNodes, DEFAULT_LIMITS, treeDepth } from "./limits";
 import { migrateDocument } from "./migration";
+import { applyOp } from "./ops";
 import {
   SCALE_BREAKPOINTS,
   fiveThousandNodePage,
@@ -62,5 +66,63 @@ test("migrate", async ({ bench }) => {
     bench("4000 nodes, every node one version behind", () => {
       migrateDocument(staleFourThousand, source);
     })
+  );
+});
+
+// One editor edit checked against the caps, on a 4-block and a 150-block page.
+// Each document's own size is kept first, as an editor holding it already has,
+// so this is the per-edit cost: the target is under 2 ms at 1x on 150 blocks,
+// within 2x of the 4-block page.
+const fourBlocks = scaleDocument({ nodes: 4 });
+const longPage = scaleDocument({ nodes: 150 });
+keptJsonBytes(fourBlocks);
+keptJsonBytes(longPage);
+let edit = 0;
+const updateFirst = (document: typeof longPage) =>
+  applyOp(document, {
+    kind: "update",
+    id: "n0",
+    patch: { props: { text: `edit ${String((edit += 1))}` } },
+  });
+
+test("one edit's cap check", async ({ bench }) => {
+  await bench.compare(
+    bench("4 blocks", () => {
+      updateFirst(fourBlocks);
+    }),
+    bench("150 blocks", () => {
+      updateFirst(longPage);
+    })
+  );
+});
+
+// The cap check alone: a fresh edit each run (the first block's text, the rest
+// shared), then the node count, the depth and the byte cap it must fit, as
+// `assertFitsCaps` asks them. The edited path is measured; the rest is kept.
+const freshEdit = (document: typeof longPage) => {
+  const [first, ...rest] = document.nodes;
+  if (first === undefined) return document;
+  return {
+    ...document,
+    nodes: [
+      { ...first, props: { text: `edit ${String((edit += 1))}` } },
+      ...rest,
+    ],
+  };
+};
+countNodes(fourBlocks.nodes);
+countNodes(longPage.nodes);
+
+const capCheck = (document: typeof longPage) => () => {
+  const result = freshEdit(document);
+  countNodes(result.nodes);
+  treeDepth(result.nodes);
+  byteCapRefusal(document, result, DEFAULT_LIMITS.maxBytes, "update");
+};
+
+test("the cap check alone", async ({ bench }) => {
+  await bench.compare(
+    bench("4 blocks", capCheck(fourBlocks)),
+    bench("150 blocks", capCheck(longPage))
   );
 });

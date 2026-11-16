@@ -13,7 +13,7 @@ import type { BlockNode } from "./document";
 import { defineEntry } from "./safe-record";
 
 /** Whether two lists hold the same entries, by identity, in the same order. */
-export function sameEntries(a: readonly unknown[], b: unknown): boolean {
+function sameEntries(a: readonly unknown[], b: unknown): boolean {
   return (
     Array.isArray(b) &&
     a.length === b.length &&

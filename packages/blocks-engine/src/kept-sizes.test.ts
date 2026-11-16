@@ -11,8 +11,10 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument, BlockNode } from "./document";
 import { documentWork } from "./document-walks";
-import { keptJsonBytes } from "./kept-sizes";
+import { walkForest } from "./forest-walk";
+import { keptForestShape, keptJsonBytes } from "./kept-sizes";
 import {
+  countNodes,
   DEFAULT_LIMITS,
   documentTooLargeMessage,
   type DocumentLimits,
@@ -21,6 +23,24 @@ import { measureBytes } from "./measure-bytes";
 import { applyOp, type BuilderOp } from "./ops";
 import { scaleDocument } from "./scale.fixtures";
 import { validate } from "./validation";
+
+/** The node count and depth by the engine's forest walk, nothing kept. */
+function walkedCount(nodes: readonly BlockNode[]): number {
+  let count = 0;
+  walkForest(nodes, () => {
+    count += 1;
+    return "descend";
+  });
+  return count;
+}
+function walkedDepth(nodes: readonly BlockNode[]): number {
+  let deepest = 0;
+  walkForest(nodes, entry => {
+    deepest = Math.max(deepest, entry.depth);
+    return "descend";
+  });
+  return deepest;
+}
 
 /** The serialized size the writer would produce, measured in full. */
 const fullBytes = (document: BlockDocument): number =>
@@ -42,6 +62,49 @@ const ids = (nodes: readonly BlockNode[]): string[] =>
     node.id,
     ...Object.values(node.slots ?? {}).flatMap(children => ids(children)),
   ]);
+
+/** The edit's result, or nothing when the engine refuses it at the default caps. */
+function tryApply(
+  document: BlockDocument,
+  op: BuilderOp,
+  limits: DocumentLimits = DEFAULT_LIMITS
+): BlockDocument | undefined {
+  try {
+    return applyOp(document, op, limits).document;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Kept bytes, count and depth are the full measurement's and the walk's. */
+function expectKeptMatchesWalk(document: BlockDocument, at: string): void {
+  expect(keptJsonBytes(document), at).toBe(fullBytes(document));
+  const shape = keptForestShape(document.nodes);
+  expect(shape?.count, at).toBe(walkedCount(document.nodes));
+  expect(shape?.depth, at).toBe(walkedDepth(document.nodes));
+}
+
+/**
+ * Caps either side of the result: the editor refuses exactly the edits the
+ * full measurement says take the document past a cap it was inside, or make an
+ * overage worse.
+ */
+function expectSameVerdicts(
+  document: BlockDocument,
+  op: BuilderOp,
+  applied: BlockDocument,
+  at: string
+): void {
+  const before = fullBytes(document);
+  const after = fullBytes(applied);
+  for (const maxBytes of [after - 1, after, before - 1, before + 1]) {
+    if (maxBytes < 2) continue;
+    const ceiling = before > maxBytes ? before : maxBytes;
+    const refused = after > ceiling;
+    const result = tryApply(document, op, { ...DEFAULT_LIMITS, maxBytes });
+    expect(result === undefined, `${at} cap ${String(maxBytes)}`).toBe(refused);
+  }
+}
 
 /** A small deterministic generator, so a failure names a reproducible seed. */
 function random(seed: number): () => number {
@@ -101,38 +164,19 @@ describe("a cap check over kept sizes", () => {
       let document = scaleDocument({ nodes: 150 });
       for (let step = 0; step < 60; step++) {
         const op = randomOp(document, next);
-        let applied: BlockDocument | undefined;
-        try {
-          applied = applyOp(document, op).document;
-        } catch {
-          continue;
-        }
-        const before = fullBytes(document);
-        const after = fullBytes(applied);
-        expect(
-          keptJsonBytes(applied),
+        const applied = tryApply(document, op);
+        if (applied === undefined) continue;
+        expectKeptMatchesWalk(
+          applied,
           `seed ${String(seed)} step ${String(step)}`
-        ).toBe(after);
-        // Caps either side of the result: the editor refuses exactly the edits
-        // the full measurement says take the document past a cap it was inside,
-        // or make an overage worse.
-        for (const maxBytes of [after - 1, after, before - 1, before + 1]) {
-          if (maxBytes < 2) continue;
-          const limits: DocumentLimits = { ...DEFAULT_LIMITS, maxBytes };
-          const refused =
-            after > Math.max(maxBytes, before > maxBytes ? before : maxBytes);
-          let threw = false;
-          try {
-            applyOp(document, op, limits);
-          } catch {
-            threw = true;
-          }
-          if (op.kind !== "remove") {
-            expect(
-              threw,
-              `seed ${String(seed)} step ${String(step)} cap ${String(maxBytes)}`
-            ).toBe(refused);
-          }
+        );
+        if (op.kind !== "remove") {
+          expectSameVerdicts(
+            document,
+            op,
+            applied,
+            `seed ${String(seed)} step ${String(step)}`
+          );
         }
         document = applied;
       }
@@ -142,8 +186,10 @@ describe("a cap check over kept sizes", () => {
   it("does the same work on a 150-block page as on a 4-block one", () => {
     const measure = (nodes: number) => {
       const document = scaleDocument({ nodes });
-      // The starting size, as an editor holding the document already knows it.
+      // The starting size and shape, as an editor holding the document already
+      // knows them from its first check.
       keptJsonBytes(document);
+      countNodes(document.nodes);
       const op: BuilderOp = {
         kind: "update",
         id: "n0",

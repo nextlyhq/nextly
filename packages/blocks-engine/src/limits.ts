@@ -4,6 +4,7 @@
  */
 import type { BlockDocument, BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { keptForestShape } from "./kept-sizes";
 
 /** Maximum nesting depth of nodes (top-level nodes are depth 1). */
 export const MAX_DEPTH = 12;
@@ -233,6 +234,10 @@ function walkBounded(
 
 /** Total node count across the forest, slots included. */
 export function countNodes(nodes: BlockNode[]): number {
+  // From the shapes kept for a forest of plain nodes, which an edit shares with
+  // the document before it, so only the edited path is counted afresh.
+  const kept = keptForestShape(nodes);
+  if (kept !== undefined && kept.count <= MAX_VALUE_PARTS) return kept.count;
   let count = 0;
   // EVERY entry counts, malformed ones included: the cap exists to reject a
   // document by its real element count, so an array padded with junk must not
@@ -245,6 +250,10 @@ export function countNodes(nodes: BlockNode[]): number {
 
 /** Deepest nesting level in the forest; an empty forest is depth 0. */
 export function treeDepth(nodes: BlockNode[]): number {
+  // From the kept shapes, as `countNodes`; the walk answers anything else,
+  // including a forest past what it will walk, which it refuses.
+  const kept = keptForestShape(nodes);
+  if (kept !== undefined && kept.count <= MAX_VALUE_PARTS) return kept.depth;
   let deepest = 0;
   walkBounded(nodes, "this forest", depth => {
     if (depth > deepest) deepest = depth;

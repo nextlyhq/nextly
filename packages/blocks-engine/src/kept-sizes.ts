@@ -145,3 +145,103 @@ function recordBytes(
   }
   return total + Math.max(0, written - 1);
 }
+
+/** A node's subtree: how many nodes it holds, itself included, and how tall. */
+interface Shape {
+  count: number;
+  height: number;
+}
+
+/** Kept shapes, `null` for a node that has none. */
+const SHAPES = new WeakMap<object, Shape | null>();
+
+/**
+ * How many nodes a forest holds and how deep it nests, from the shape kept for
+ * each node, or nothing when a node is not plain data.
+ *
+ * The same answers `countNodes` and `treeDepth` give for a forest of plain
+ * nodes, whose `slots` is a record of plain lists. Anything else (a node that
+ * is not a record, an accessor, a cycle) has no kept shape, and those functions walk it instead.
+ */
+export function keptForestShape(
+  nodes: unknown
+): { count: number; depth: number } | undefined {
+  const shape = listShape(nodes, 0, new Set<object>());
+  return shape === undefined
+    ? undefined
+    : { count: shape.count, depth: shape.height };
+}
+
+/** A list's total count and its tallest entry; an empty list is height 0. */
+function listShape(
+  list: unknown,
+  depth: number,
+  open: Set<object>
+): Shape | undefined {
+  if (!Array.isArray(list) || Object.getPrototypeOf(list) !== Array.prototype) {
+    return undefined;
+  }
+  let count = 0;
+  let height = 0;
+  for (const entry of list) {
+    const shape = nodeShape(entry, depth, open);
+    if (shape === undefined) return undefined;
+    count += shape.count;
+    height = Math.max(height, shape.height);
+  }
+  return { count, height };
+}
+
+function nodeShape(
+  node: unknown,
+  depth: number,
+  open: Set<object>
+): Shape | undefined {
+  if (typeof node !== "object" || node === null) return undefined;
+  const kept = SHAPES.get(node);
+  if (kept !== undefined) return kept ?? undefined;
+  if (depth > MAX_KEPT_DEPTH || open.has(node)) return undefined;
+  open.add(node);
+  const shape = freshShape(node, depth, open);
+  open.delete(node);
+  countMeasuredObject();
+  SHAPES.set(node, shape ?? null);
+  return shape;
+}
+
+function freshShape(
+  node: object,
+  depth: number,
+  open: Set<object>
+): Shape | undefined {
+  const slots = plainSlotsOf(node);
+  if (slots === undefined) return undefined;
+  let count = 1;
+  let height = 1;
+  for (const list of Object.values(slots)) {
+    const children = listShape(list, depth + 1, open);
+    if (children === undefined) return undefined;
+    count += children.count;
+    height = Math.max(height, 1 + children.height);
+  }
+  return { count, height };
+}
+
+/**
+ * A plain node's slots as a record of lists (`{}` for a node with none, since a
+ * falsy `slots` holds no children as the forest walk reads it), or nothing for
+ * a node that is not plain data.
+ */
+function plainSlotsOf(node: object): Record<string, unknown> | undefined {
+  const prototype = Object.getPrototypeOf(node);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const held = Object.getOwnPropertyDescriptor(node, "slots");
+  if (held !== undefined && !("value" in held)) return undefined;
+  const slots: unknown = held?.value;
+  if (!slots) return {};
+  return typeof slots === "object" &&
+    !Array.isArray(slots) &&
+    Object.getPrototypeOf(slots) === Object.prototype
+    ? (slots as Record<string, unknown>)
+    : undefined;
+}

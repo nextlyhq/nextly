@@ -1,6 +1,10 @@
 import { countDocumentWalk } from "./document-walks";
 import { isPlainRecord } from "./plain-record";
 
+// The count of these walks, published beside them: read it before and after a
+// call to show whether the call walked a whole document.
+export { documentWork } from "./document-walks";
+
 /**
  * Bounded serialized-size measurement.
  *
