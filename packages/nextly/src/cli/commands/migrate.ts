@@ -187,7 +187,10 @@ import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
 } from "../../domains/schema/migrate/server-constructs";
-import { proveStatements } from "../../domains/schema/migrate/snapshot-proof";
+import {
+  danglingOnAddedKeys,
+  proveStatements,
+} from "../../domains/schema/migrate/snapshot-proof";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -195,6 +198,7 @@ import {
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
   adoptUniqueIndexesAlreadyThere,
@@ -4855,6 +4859,18 @@ export async function runFileMigrations(args: {
             },
           }),
           recordedChecksum: targetFile?.migrationHash ?? "",
+          // SQLite enforces a foreign key only as a run's check finds it; a record without running
+          // is held to the same check, for the keys this file adds.
+          dangling:
+            dialect === "sqlite"
+              ? danglingOnAddedKeys(
+                  { before, target },
+                  await danglingReferences({
+                    read: <T>(statement: string) =>
+                      dz.executeQuery<T>(statement),
+                  })
+                )
+              : [],
         }),
       });
       applied++;

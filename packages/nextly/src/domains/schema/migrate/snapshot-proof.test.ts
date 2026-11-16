@@ -13,6 +13,7 @@ import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { generateStatements } from "../pipeline/sql-templates";
 
 import {
+  danglingOnAddedKeys,
   proveStatements,
   refuseUnlessProven,
   statementsShownBySnapshot,
@@ -581,6 +582,80 @@ describe("proveStatements: rows a statement fills with its default", () => {
     );
     expect(message).toContain(
       'ALTER TABLE "dc_posts" ADD COLUMN "note" varchar (rows it fills with its default are still NULL)'
+    );
+  });
+});
+
+describe("constraints a file adds that the database holds but does not enforce", () => {
+  const fk = {
+    name: "dc_posts_author_fk",
+    columns: ["author"],
+    referencesTable: "users",
+    referencesColumns: ["id"],
+    onDelete: "no action" as const,
+    onUpdate: "no action" as const,
+  };
+  const withKey = {
+    before: { tables: [] },
+    target: { tables: [{ ...posts("title"), foreignKeys: [fk] }] },
+  };
+
+  it("does not prove a CREATE TABLE whose inline foreign key the database has not validated", async () => {
+    const statuses = async (validated: boolean) =>
+      (
+        await proveStatements({
+          statements: [
+            'CREATE TABLE "dc_posts" ("id" text PRIMARY KEY, "title" text, "author" text, CONSTRAINT "dc_posts_author_fk" FOREIGN KEY ("author") REFERENCES "users" ("id"))',
+          ],
+          dialect: "postgresql",
+          sides: withKey,
+          live: {
+            schema: {
+              hasTable: () => true,
+              hasColumn: () => true,
+              hasIndex: () => true,
+              hasConstraint: () => true,
+              usable: object =>
+                validated ||
+                !(object.kind === "constraint" && object.name === fk.name),
+            },
+            nullsIn: () => Promise.resolve(0),
+          },
+        })
+      ).map(proof => proof.status);
+    expect(await statuses(false)).toEqual(["not-done"]);
+    expect(await statuses(true)).toEqual(["shown"]);
+  });
+
+  it("refuses rows dangling through a foreign key the file adds, and only those", () => {
+    const dangling = [
+      { table: "dc_posts", parent: "users", rows: 2 },
+      { table: "dc_pages", parent: "users", rows: 5 },
+    ];
+    expect(danglingOnAddedKeys(withKey, dangling)).toEqual([dangling[0]]);
+    // A key the database already had is not the file's: its rows do not refuse it.
+    expect(
+      danglingOnAddedKeys(
+        { before: withKey.target, target: withKey.target },
+        dangling
+      )
+    ).toEqual([]);
+    let error: unknown;
+    try {
+      refuseUnlessProven({
+        file: { filename: "20261116_add_author.sql", sha256: CHECKSUM },
+        proof: {
+          statements: [],
+          recordedChecksum: CHECKSUM,
+          dangling: [dangling[0]],
+        },
+        attempt: undefined,
+      });
+    } catch (thrown) {
+      error = thrown;
+    }
+    expect((error as NextlyError).publicMessage).toContain(
+      "the database holds 2 row(s) referencing rows that do not exist through a foreign key it adds (dc_posts → users)"
     );
   });
 });

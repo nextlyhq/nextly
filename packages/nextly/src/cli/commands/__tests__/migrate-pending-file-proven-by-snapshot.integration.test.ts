@@ -363,18 +363,68 @@ describe.each(getConfiguredTestDialects())(
     );
 
     /** `name`'s snapshot, its table as the live database holds it now: where the file ends. */
-    async function retarget(name: string): Promise<void> {
+    async function retarget(
+      name: string,
+      tables: string[] = [TABLE]
+    ): Promise<void> {
       const file = JSON.parse(await readFile(snapshotPath(name), "utf8")) as {
         snapshot: NextlySchemaSnapshot;
       };
-      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
-        TABLE,
-      ]);
-      file.snapshot.tables = file.snapshot.tables.map(table =>
-        table.name === TABLE ? live.tables[0] : table
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect,
+        tables
       );
+      file.snapshot.tables = [
+        ...file.snapshot.tables.filter(table => !tables.includes(table.name)),
+        ...live.tables,
+      ];
       await writeFile(snapshotPath(name), JSON.stringify(file, null, 2));
     }
+
+    it.runIf(dialect !== "mysql")(
+      "refuses a file whose new foreign key the database holds but does not enforce",
+      async () => {
+        await dbSync(true);
+        const tags = `${SLUG}_tags`;
+        const fk = `${tags}_note_fk`;
+        const createTags = `CREATE TABLE ${q(tags)} (${q("id")} varchar(36) PRIMARY KEY, ${q("note_id")} varchar(36), CONSTRAINT ${q(fk)} FOREIGN KEY (${q("note_id")}) REFERENCES ${q(TABLE)} (${q("id")}))`;
+        // The database at the file's end, the key's rows not checked: on PostgreSQL the key added
+        // NOT VALID over a row it would refuse; on SQLite a row written with enforcement off.
+        if (dialect === "postgresql") {
+          await query(
+            `CREATE TABLE ${q(tags)} (${q("id")} varchar(36) PRIMARY KEY, ${q("note_id")} varchar(36))`
+          );
+          await query(
+            `INSERT INTO ${q(tags)} (${q("id")}, ${q("note_id")}) VALUES ('t1', 'missing')`
+          );
+          await query(
+            `ALTER TABLE ${q(tags)} ADD CONSTRAINT ${q(fk)} FOREIGN KEY (${q("note_id")}) REFERENCES ${q(TABLE)} (${q("id")}) NOT VALID`
+          );
+        } else {
+          await query(createTags);
+          await query("PRAGMA foreign_keys = OFF");
+          await query(
+            `INSERT INTO ${q(tags)} (${q("id")}, ${q("note_id")}) VALUES ('t1', 'missing')`
+          );
+          await query("PRAGMA foreign_keys = ON");
+        }
+        const text = await withUp(two, [createTags]);
+        await writeFile(sqlPath(two), text);
+        await rehash(two, text);
+        await retarget(two, [TABLE, tags]);
+
+        const error = await refusal();
+        expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
+        expect(error.publicMessage).toContain(
+          dialect === "postgresql"
+            ? "(the database does not stand as it leaves it)"
+            : `referencing rows that do not exist through a foreign key it adds (${tags} → ${TABLE})`
+        );
+        expect(await ledger(two)).toEqual([]);
+        await query(`DROP TABLE ${q(tags)}`);
+      }
+    );
 
     it.each([
       ["refuses it where rows it would have filled are still NULL", "nulled"],

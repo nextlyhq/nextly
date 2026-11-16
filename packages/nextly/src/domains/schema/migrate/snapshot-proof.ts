@@ -109,6 +109,14 @@ export async function proveStatements(args: {
     args.sides,
     judgeStatements(statements, dialect, live.schema)
   );
+  for (const [at, proof] of proofs.entries()) {
+    if (
+      proof.status === "shown" &&
+      !inlineConstraintsUsable(statements[at], dialect, args.sides, live.schema)
+    ) {
+      proofs[at] = { ...proof, status: "not-done" };
+    }
+  }
   const filled = columnsFilledBy(statements, dialect);
   for (const [at, proof] of proofs.entries()) {
     if (proof.status !== "shown") continue;
@@ -120,6 +128,33 @@ export async function proveStatements(args: {
     }
   }
   return proofs;
+}
+
+/**
+ * Whether the foreign keys and checks a `CREATE TABLE` declares in its body, as the target snapshot
+ * records them, are ones the live database can use: on PostgreSQL a constraint added `NOT VALID`
+ * is there but unvalidated, which the snapshot comparison cannot see (`LiveSchema.usable`). True
+ * for any other statement.
+ */
+function inlineConstraintsUsable(
+  statement: string,
+  dialect: SupportedDialect,
+  sides: { target: NextlySchemaSnapshot },
+  schema: LiveSchema
+): boolean {
+  const name = createdTable(statement, dialect);
+  const table = sides.target.tables.find(
+    each => each.name.toLowerCase() === name
+  );
+  if (table === undefined) return true;
+  return [...(table.foreignKeys ?? []), ...(table.checks ?? [])].every(
+    constraint =>
+      schema.usable({
+        kind: "constraint",
+        table: table.name,
+        name: constraint.name,
+      })
+  );
 }
 
 /**
@@ -827,6 +862,8 @@ interface UnprovenReasons {
   changed?: { checksum: string; recorded: string };
   /** Its unresolved attempt's outcome: failed, or none recorded. */
   attempt?: "failed" | "no-outcome";
+  /** Rows dangling through a foreign key it adds (`SnapshotProof.dangling`). */
+  dangling?: readonly DanglingReference[];
 }
 
 /** The first characters of a checksum, enough to tell two apart. */
@@ -863,6 +900,15 @@ function reasonsOf(
       reasons.attempt === "failed"
         ? "its last attempt failed"
         : "its last attempt recorded no outcome"
+    );
+  }
+  if (reasons.dangling !== undefined) {
+    const rows = reasons.dangling.reduce((sum, entry) => sum + entry.rows, 0);
+    why.push(
+      `the database holds ${rows} row(s) referencing rows that do not exist through a foreign key it adds (${reasons.dangling
+        .slice(0, 5)
+        .map(entry => `${entry.table} → ${entry.parent}`)
+        .join(", ")}), which a run of it would refuse`
     );
   }
   const count = (status: StatementProof["status"]) =>
@@ -941,6 +987,45 @@ function notProvenError(args: {
 export interface SnapshotProof {
   statements: readonly StatementProof[];
   recordedChecksum: string;
+  /**
+   * On SQLite, the rows referencing rows that do not exist through a foreign key the file adds
+   * (`danglingOnAddedKeys`): a run of the file is refused for them, as for any reference it leaves
+   * dangling (`refusingNewDanglingReferences`), so its record without running is too.
+   */
+  dangling?: readonly DanglingReference[];
+}
+
+/** Rows of `table` referencing rows of `parent` that do not exist. */
+interface DanglingReference {
+  table: string;
+  parent: string;
+  rows: number;
+}
+
+/**
+ * The dangling references through a foreign key the file adds: one its target snapshot declares
+ * on a table and its earlier snapshot does not. Rows that dangle through a key the database already
+ * had are not the file's doing, and a run of it would not be refused for them either.
+ */
+export function danglingOnAddedKeys(
+  sides: { before: NextlySchemaSnapshot; target: NextlySchemaSnapshot },
+  dangling: readonly DanglingReference[]
+): DanglingReference[] {
+  const earlier = new Set(
+    sides.before.tables.flatMap(table =>
+      (table.foreignKeys ?? []).map(key => `${table.name}\u0000${key.name}`)
+    )
+  );
+  const added = new Set(
+    sides.target.tables.flatMap(table =>
+      (table.foreignKeys ?? [])
+        .filter(key => !earlier.has(`${table.name}\u0000${key.name}`))
+        .map(key => `${table.name}\u0000${key.referencesTable}`.toLowerCase())
+    )
+  );
+  return dangling.filter(entry =>
+    added.has(`${entry.table}\u0000${entry.parent}`.toLowerCase())
+  );
 }
 
 /**
@@ -963,9 +1048,13 @@ export function refuseUnlessProven(args: {
   if (attempt !== undefined) {
     reasons.attempt = attempt.status === "failed" ? "failed" : "no-outcome";
   }
+  if (proof.dangling !== undefined && proof.dangling.length > 0) {
+    reasons.dangling = proof.dangling;
+  }
   const proven =
     reasons.changed === undefined &&
     reasons.attempt === undefined &&
+    reasons.dangling === undefined &&
     proof.statements.every(statement => statement.status === "shown");
   if (proven) return;
   throw notProvenError({
