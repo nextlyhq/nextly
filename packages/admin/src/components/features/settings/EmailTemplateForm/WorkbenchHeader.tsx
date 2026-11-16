@@ -132,6 +132,12 @@ function StateLine({
     ...(record.sentBy?.referenced ?? []),
   ];
   const summary = senders.length > 0 ? senders.join(", ") : record.description;
+  // Said beside whatever was checked, and instead of a plain description
+  // when nothing was: an unanswered plugin must not read as quiet.
+  const incomplete = record.referencesComplete === false;
+  const summaryText = incomplete
+    ? `${summary} · some senders couldn't be checked`
+    : summary;
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
       <Badge variant="outline" className="shrink-0">
@@ -145,8 +151,8 @@ function StateLine({
       <span className="shrink-0" data-testid="workbench-owner">
         {nameOwner(record)}
       </span>
-      {tier === "desktop" && summary ? (
-        <span className="truncate">· {summary}</span>
+      {tier === "desktop" && summaryText ? (
+        <span className="truncate">· {summaryText}</span>
       ) : null}
     </div>
   );

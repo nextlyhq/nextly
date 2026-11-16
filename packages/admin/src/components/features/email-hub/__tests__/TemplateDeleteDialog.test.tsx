@@ -57,6 +57,38 @@ describe("TemplateDeleteDialog", () => {
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
 
+  it("holds deletion when a plugin failed to contribute, and says so", () => {
+    useTemplateSenders.mockReturnValue({
+      data: {
+        declared: ["Form: Contact us"],
+        referenced: [],
+        complete: false,
+      },
+      isPending: false,
+      isFetching: false,
+      isError: false,
+    });
+
+    render(
+      <TemplateDeleteDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        template={{ id: "t1", name: "Custom email" }}
+        onConfirm={vi.fn()}
+        isLoading={false}
+      />
+    );
+
+    // The request succeeded; the answer is not whole. A referencing plugin
+    // that failed to answer must not read as nothing referencing it.
+    expect(
+      screen.getByText(
+        "Some references couldn't be checked, so deletion waits until every check answers."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+  });
+
   it("holds deletion when the check fails, and says so", () => {
     useTemplateSenders.mockReturnValue({
       data: undefined,
@@ -139,8 +171,11 @@ describe("TemplateDeleteDialog", () => {
     );
 
     expect(
-      screen.getByText("Some references couldn't be checked.")
+      screen.getByText(
+        "Some references couldn't be checked, so deletion waits until every check answers."
+      )
     ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
   });
 
   it("allows cancelling or confirming the delete", () => {

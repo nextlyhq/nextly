@@ -422,6 +422,7 @@ export function EmailTemplateForm({
               ownsContent={owns}
               carriesSecret={template?.carriesSecret === true}
               sentBy={template?.sentBy}
+              sendersIncomplete={template?.referencesComplete === false}
             />
           }
           phoneBar={

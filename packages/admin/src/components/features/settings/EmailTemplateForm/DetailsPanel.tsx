@@ -117,6 +117,7 @@ export function DetailsPanel({
   ownsContent,
   carriesSecret,
   sentBy,
+  sendersIncomplete,
 }: TemplateSettingsProps & {
   declared: TemplateFormVariable[];
   onInsert: (name: string) => void;
@@ -126,22 +127,31 @@ export function DetailsPanel({
   carriesSecret: boolean;
   /** What sends the template, if declared or referenced. */
   sentBy?: { declared: string[]; referenced: string[] } | undefined;
+  /** False when a plugin could not be asked what sends the template. */
+  sendersIncomplete?: boolean;
 }): JSX.Element {
   const senders = [...(sentBy?.declared ?? []), ...(sentBy?.referenced ?? [])];
 
   return (
     <div className="flex flex-col gap-6" data-testid="details-panel">
-      {senders.length > 0 && (
+      {(senders.length > 0 || sendersIncomplete) && (
         <section className="space-y-1.5" aria-label="What sends this email">
           <span className={sectionLabel}>What sends this email</span>
-          <ul className="space-y-1 text-sm text-muted-foreground">
-            {senders.map((sender, idx) => (
-              <li key={idx} className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 shrink-0" />
-                <span>{sender}</span>
-              </li>
-            ))}
-          </ul>
+          {senders.length > 0 ? (
+            <ul className="space-y-1 text-sm text-muted-foreground">
+              {senders.map((sender, idx) => (
+                <li key={idx} className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 shrink-0" />
+                  <span>{sender}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {sendersIncomplete ? (
+            <p className="text-xs text-muted-foreground">
+              Some references couldn&apos;t be checked.
+            </p>
+          ) : null}
         </section>
       )}
 

@@ -70,7 +70,10 @@ export function TemplateDeleteDialog({
   // The check decides what the person is about to destroy, so deletion waits
   // for it — loading, a background refetch of a cached answer, and a failed
   // request alike: a silent failure must not read as permission to proceed.
+  // An answer a plugin failed to contribute to is the same failure wearing
+  // a successful request, so it holds too.
   const checking = isPending || isFetching || isError;
+  const incomplete = senders !== undefined && senders.complete === false;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -108,9 +111,10 @@ export function TemplateDeleteDialog({
             </p>
           </div>
         ) : null}
-        {senders && !senders.complete ? (
+        {incomplete ? (
           <p className="text-xs text-muted-foreground">
-            Some references couldn&apos;t be checked.
+            Some references couldn&apos;t be checked, so deletion waits until
+            every check answers.
           </p>
         ) : null}
         <DialogFooter>
@@ -124,7 +128,7 @@ export function TemplateDeleteDialog({
           <Button
             variant="destructive"
             onClick={onConfirm}
-            disabled={isLoading || checking}
+            disabled={isLoading || checking || incomplete}
           >
             {isLoading ? (
               <>
