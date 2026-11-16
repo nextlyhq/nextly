@@ -86,7 +86,10 @@ import { DocumentStatusPill } from "../DocumentStatusPill";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";
 import { canvasListReadsIn } from "../list-entries-client";
-import { listLoopCollections } from "../loop-collections-client";
+import {
+  listLoopCollections,
+  loopCollectionsIn,
+} from "../loop-collections-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -491,33 +494,6 @@ type ContentServices = NonNullable<
 >;
 
 let contentServices: ContentServices | undefined;
-
-/** Each person's read of the loop collections, one function per language. */
-const loopCollectionReads = new Map<
-  string,
-  NonNullable<ContentServices["listLoopCollections"]>
->();
-
-/**
- * The read of the collections a list or condition may name, in a language:
- * the same function for every caller, so the inspector and the canvas's
- * condition badges share one read and one answer (`useLoopCollections`
- * shares a read by the function's identity).
- */
-function loopCollectionsIn(
-  locale: string | undefined,
-  userId: string | null
-): NonNullable<ContentServices["listLoopCollections"]> {
-  // Per person too: the answer is read with their access, and a read still in
-  // flight when one person signs out must never be handed to the next.
-  const key = JSON.stringify([locale ?? "", userId]);
-  let read = loopCollectionReads.get(key);
-  if (read === undefined) {
-    read = () => listLoopCollections(locale);
-    loopCollectionReads.set(key, read);
-  }
-  return read;
-}
 
 /**
  * What the inspector's Content tab borrows from the admin: the media library,

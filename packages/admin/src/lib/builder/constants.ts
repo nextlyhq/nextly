@@ -27,34 +27,9 @@ export const DEFAULT_SYSTEM_FIELDS: BuilderField[] = [
 /**
  * The names the system fields above occupy. Derived rather than restated so a
  * change to that list cannot leave a loader filtering one set and a save
- * filtering another. Narrower than RESERVED_NAMES, which also covers columns
- * the builder never renders.
+ * filtering another. Which names a field may not take is the save's own
+ * field-name rule (`fieldNameProblem` on `nextly/config`), not a list here.
  */
 export const SYSTEM_FIELD_NAMES: string[] = DEFAULT_SYSTEM_FIELDS.map(
   f => f.name
 );
-
-/**
- * Single source of truth for reserved field names.
- * New user-defined fields cannot use these names because they collide with
- * built-in or framework-managed columns. Replaces ad-hoc per-call filtering
- * (e.g. `[slug].tsx` filtering by name vs by isSystem) noted in the audit.
- */
-export const RESERVED_NAMES = [
-  "id",
-  "title",
-  "slug",
-  "createdAt",
-  "updatedAt",
-  "status",
-] as const;
-
-export type ReservedFieldName = (typeof RESERVED_NAMES)[number];
-
-/**
- * Case-sensitive check — `Title` is allowed, `title` is reserved.
- * The DB columns are camelCase, so case-sensitivity is the right safety bar.
- */
-export function isReservedFieldName(name: string): name is ReservedFieldName {
-  return (RESERVED_NAMES as readonly string[]).includes(name);
-}

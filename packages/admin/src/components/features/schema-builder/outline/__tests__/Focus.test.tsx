@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 import type { MoveContext } from "@admin/lib/builder/move-rule";
 
+import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
 import type { BlockCatalog } from "@admin/lib/builder/outline/block-rows";
 
 import {
@@ -24,13 +25,17 @@ import { MoveHarness, newProbe, plain } from "./move-harness";
 /** The rule's whole answer, every change of container included. */
 const WHOLE: MoveContext = {
   entityReadOnly: false,
-  topLevelReservesNames: true,
+  surface: "collection",
   containerChanges: true,
 };
 
 function setup(
   initial: BuilderField[] = nestedFixtureFields(),
-  blockCatalogs: Map<string, BlockCatalog> = nestedFixtureBlockCatalogsAllMatched()
+  blockCatalogs: Map<
+    string,
+    BlockCatalog
+  > = nestedFixtureBlockCatalogsAllMatched(),
+  errors: ReadonlyMap<string, BuilderFieldError> = new Map()
 ) {
   const probe = newProbe();
   render(
@@ -39,6 +44,7 @@ function setup(
       context={WHOLE}
       fieldGroups={nestedFixtureFieldGroups()}
       blockCatalogs={blockCatalogs}
+      errors={errors}
       probe={probe}
     />
   );
@@ -180,6 +186,38 @@ describe("Focus", () => {
     // Items, the container that was focused, is folded inside Sections.
     expect(rowAt("sections/items")).toBeNull();
     expect(rowAt("sections")).toHaveFocus();
+  });
+
+  it("keeps the tab stop on a first-level row when Left is pressed in a focused view", async () => {
+    // Its container is not drawn, so Left has no row to go up to.
+    const { user } = setup();
+    await focusOn(user, "meta");
+    rowAt("meta/rating")?.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(rowAt("meta/rating")).toHaveFocus();
+    expect(rowAt("meta/rating")).toHaveAttribute("tabindex", "0");
+  });
+
+  it("says in the breadcrumb that the focused container has an error of its own", async () => {
+    const { user } = setup(
+      nestedFixtureFields(),
+      nestedFixtureBlockCatalogsAllMatched(),
+      new Map([
+        [
+          "f-meta",
+          {
+            kind: "unnamed",
+            message: "Name is required",
+          } satisfies BuilderFieldError,
+        ],
+      ])
+    );
+    await focusOn(user, "meta");
+    // Its row, which carried the badge, is not drawn while it is focused.
+    expect(within(crumbs()).getByText("Has an error")).toHaveAttribute(
+      "title",
+      "Name is required"
+    );
   });
 
   it("puts keyboard focus on Exit focus when the focused container draws no row", async () => {

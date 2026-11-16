@@ -11,7 +11,6 @@
 # cleanly, so delete only the entry's own line and leave the blank lines.
 # When a file shrinks, its count may be lowered to its new size.
 
-packages/blocks-engine/src/composition-planners.ts 4288
 
 packages/blocks-engine/src/document.ts 1543
 
@@ -19,9 +18,7 @@ packages/blocks-engine/src/index.ts 1533
 
 packages/blocks-engine/src/list-query.ts 1933
 
-packages/blocks-engine/src/ops.ts 3953
 
-packages/blocks-engine/src/resolve-instances.ts 4215
 
 packages/blocks-engine/src/style/compile-page.ts 2761
 
@@ -31,7 +28,6 @@ packages/blocks-engine/src/style/dtcg.ts 2362
 
 packages/blocks-engine/src/tree.ts 1944
 
-packages/blocks-engine/src/validation.ts 3573
 
 
 
@@ -66,13 +62,11 @@ packages/builder/src/shared-styles-panel.tsx 1643
 packages/builder/src/style-inspector-panel.tsx 7077
 
 
-packages/plugin-page-builder/src/address-claims/entry-claims-hook.ts 1576
 
 packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
 
 packages/plugin-page-builder/src/admin/editor/site-style-studios.tsx 2038
 
-packages/plugin-page-builder/src/fields/blocks-composition.ts 2427
 
 packages/plugin-page-builder/src/pages-search-route.ts 1561
 
