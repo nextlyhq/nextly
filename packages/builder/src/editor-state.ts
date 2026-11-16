@@ -51,13 +51,13 @@ import {
   type DocumentLimits,
   type LocatedPlacementBreak,
   type LockSources,
-  type NestingSource,
   type RepairPlan,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { compositionRefusal, type CompositionRefusal } from "./inserter";
+import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
   lockRefusalWording,
@@ -65,6 +65,7 @@ import {
   type LockEditRefusal,
   type LockRefusalFacts,
 } from "./lock-refusal";
+import { hostLocksOf, lockSourcesOf, useLockDefinitions } from "./lock-sources";
 import { refusalAnnouncement } from "./move-refusal";
 import { applyOps, type BuilderOp } from "./op-vocabulary";
 import {
@@ -634,17 +635,6 @@ function atApply(
   };
 }
 
-/**
- * The definitions lock questions are judged by: the host's own, or the live
- * registry. Held per source, so the store keeps its identity across renders.
- */
-function useLockDefinitions(
-  locks: UseEditorStateArgs["locks"]
-): SlotDefaultSource {
-  const host = locks?.definitions;
-  return useMemo(() => host ?? registryBlockSource(), [host]);
-}
-
 /** The rules a repair runs, in order. */
 const REPAIR_RULES = [lockRepairRule, placementRepairRule] as const;
 
@@ -673,20 +663,29 @@ function useLockQuestions(
   // surface asking once per store asks again.
   const definitions = locks?.definitions;
   const nesting = locks?.nesting;
+  // Kept per document version and edit, and dropped with the inputs above.
+  const kept = useMemo(
+    () => keptLockAnswers(),
+    [limits, baseline, definitions, nesting]
+  );
   const lockRefusalFor = useCallback(
     (ops: readonly BuilderOp[]): LockRefusalFacts | undefined => {
       // Read at the question, as the apply reads it.
-      const componentName = composition.current.componentName;
-      return lockAnswerFor(latestDocument.current, ops, baseline, {
-        locks: hostLocksOf(definitions, nesting),
-        limits,
-        compose: composerNow(),
-        componentName,
-      });
+      const { componentName, definitions: components } = composition.current;
+      const document = latestDocument.current;
+      return kept.answer(document, ops, [components, componentName], () =>
+        lockAnswerFor(document, ops, baseline, {
+          locks: hostLocksOf(definitions, nesting),
+          limits,
+          compose: composerNow(),
+          componentName,
+        })
+      );
     },
     [
       latestDocument,
       composition,
+      kept,
       limits,
       composerNow,
       baseline,
@@ -713,17 +712,6 @@ function useLockQuestions(
   );
   const lockDefinitions = useLockDefinitions(locks);
   return { composerNow, lockRefusalFor, planRepair, composed, lockDefinitions };
-}
-
-/**
- * The host's lock sources as `UseEditorStateArgs` spells them: none without
- * definitions of its own, which then come from the live registry.
- */
-function hostLocksOf(
-  definitions: SlotDefaultSource | undefined,
-  nesting: NestingSource | undefined
-): UseEditorStateArgs["locks"] {
-  return definitions === undefined ? undefined : { definitions, nesting };
 }
 
 /**
@@ -887,25 +875,6 @@ function heldKey(lock: NonNullable<CompositionFault["lock"]>): string {
   const held = lock.held.map(type => type ?? "\u0001");
   if (lock.lock === "insert") held.sort();
   return held.join("\u0002");
-}
-
-/**
- * What every lock question here is judged by: the host's definitions and
- * nesting rules, or the live registry's, the document as last saved, and the
- * caps every edit is applied under, so a lock walk and a repair plan are
- * bounded as the apply they stand for is.
- */
-function lockSourcesOf(
-  locks: UseEditorStateArgs["locks"],
-  stored: BlockDocument,
-  limits: DocumentLimits
-): LockSources {
-  return {
-    definitions: locks?.definitions ?? registryBlockSource(),
-    nesting: locks?.nesting ?? registryNestingSource(),
-    stored: [stored],
-    limits,
-  };
 }
 
 /**
