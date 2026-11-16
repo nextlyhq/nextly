@@ -61,13 +61,14 @@ const op = (
 /** The push's classifier over `ops`, each judged as `judged` says (absent: no rule given). */
 function classify(
   ops: ChangeColumnTypeOp[],
-  judged?: (op: ChangeColumnTypeOp) => JudgedTypeChange | null
+  judged?: (op: ChangeColumnTypeOp) => JudgedTypeChange | null,
+  dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
 ) {
   return new RealClassifier().classify({
     operations: ops,
     countNulls: () => Promise.resolve(1),
     countRows: () => Promise.resolve(3),
-    dialect: "postgresql",
+    dialect,
     ...(judged
       ? {
           judgeConversion: (o: ChangeColumnTypeOp) =>
@@ -214,6 +215,51 @@ describe("the push's type-change offer and the repair's rule", () => {
     // countRows 3, countNulls 1: two rows hold a value.
     expect(event.rowsHoldingValue).toBe(2);
     expect(result.level).toBe("destructive");
+  });
+
+  it("judges a widening too: a SQLite integer becoming a real is lossy where a row holds a word", async () => {
+    const judgement = await judgeColumn(
+      {
+        dialect: "sqlite",
+        from: { type: "integer", nullable: true },
+        to: { type: "real", nullable: true },
+        compareAs: "number",
+      },
+      [
+        { key: { id: "p0" }, text: "3", storage: "integer" },
+        { key: { id: "p1" }, text: "word", storage: "text" },
+      ]
+    );
+    expect(judgement.class).toBe("lossy");
+
+    const result = await classify(
+      [op("price", "integer", "real")],
+      () => ({ judgement, keyedBy: "id", cleared: [{ id: "p1" }] }),
+      "sqlite"
+    );
+    const [event] = result.events as TypeChangeEvent[];
+    expect(event.lossy?.judgement).toBe(judgement);
+  });
+
+  it("makes a widening the rule has no conversion for without a word, as before", async () => {
+    const judgement = await judgeColumn(
+      {
+        dialect: "mysql",
+        from: { type: "tinyint", nullable: true },
+        to: { type: "int", nullable: true },
+        compareAs: "number",
+      },
+      []
+    );
+    expect(judgement.reasons.map(r => r.kind)).toEqual(["no-conversion"]);
+
+    const result = await classify(
+      [op("rank", "tinyint", "int")],
+      () => ({ judgement, keyedBy: "id", cleared: [] }),
+      "mysql"
+    );
+    expect(result.events).toEqual([]);
+    expect(result.safeConversions).toEqual([]);
   });
 
   it("offers a type change as before where no rule is given (a Schema Builder save)", async () => {

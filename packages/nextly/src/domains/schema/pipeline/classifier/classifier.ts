@@ -149,11 +149,15 @@ export class RealClassifier implements Classifier {
         // Everything else surfaces a per-dialect warning so silent coercion
         // (MySQL/SQLite) and hard-failure (PG without USING) are loud.
         const widening = isWideningChange(op.fromType, op.toType, args.dialect);
-        // Judged by the repair command's rule where the caller gives it, every type change but a
-        // widening, which keeps every value whatever the rows hold and is made without a word.
+        // Judged by the repair command's rule where the caller gives it. A widening is judged too:
+        // on SQLite a value its old column kept as text can stay unreadable in the new one. One the
+        // rule has no conversion for stays a widening, made without a word as before.
         const ruled =
-          args.judgeConversion !== undefined && ruleJudges(op) && !widening
-            ? await this.judgeTypeChange(op, args.judgeConversion, args)
+          args.judgeConversion !== undefined && ruleJudges(op)
+            ? await this.judgeTypeChange(op, args.judgeConversion, {
+                ...args,
+                widening,
+              })
             : { kind: "unjudged" as const };
         if (ruled.kind === "safe") {
           safeConversions.push(ruled.safe);
@@ -293,7 +297,8 @@ export class RealClassifier implements Classifier {
   /**
    * One type change judged by the repair command's rule: safe goes ahead, lossy is an event its
    * consent decides, blocked is refused. A pair the rule has no conversion for, or a column the
-   * judge cannot find, is offered as before; the former with how many rows hold a value.
+   * judge cannot find, is offered as before; the former with how many rows hold a value, unless it
+   * is a widening, which is made as before without one.
    */
   private async judgeTypeChange(
     op: ChangeColumnTypeOp,
@@ -302,6 +307,7 @@ export class RealClassifier implements Classifier {
       countNulls: (table: string, column: string) => Promise<number>;
       countRows: (table: string) => Promise<number>;
       dialect: SupportedDialect;
+      widening: boolean;
     }
   ): Promise<RuledTypeChange> {
     const judged = await judge(op);
@@ -319,6 +325,7 @@ export class RealClassifier implements Classifier {
       dialect: args.dialect,
     };
     if (judgement.reasons.some(reason => reason.kind === "no-conversion")) {
+      if (args.widening) return { kind: "unjudged" };
       const rows = await args.countRows(op.tableName);
       const nulls = await args.countNulls(op.tableName, op.columnName);
       return {

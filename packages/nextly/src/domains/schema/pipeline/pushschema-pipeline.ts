@@ -84,6 +84,12 @@ import {
   countRows as countRowsHelper,
   querySqlRows,
 } from "./classifier/count-helpers";
+import {
+  convertingColumns,
+  lateValueFailure,
+  type ConvertingColumn,
+} from "./classifier/conversion-refusal";
+import { typeChangeJudge } from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
@@ -762,8 +768,14 @@ export class PushSchemaPipeline {
      * caller of the pipeline waits in bounded tries without passing anything.
      */
     busyTable?: PipelineBusyTable;
+    /**
+     * The step that tries a refused type change again, which a code-first apply's refusals end
+     * with: `db:sync` says "run db:sync again". Absent, the development push's step.
+     */
+    nextStep?: string;
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
+    const nextStep = args.nextStep ?? "save nextly.config.ts again";
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -864,6 +876,10 @@ export class PushSchemaPipeline {
       batch: source === "code" ? -1 : undefined,
     });
 
+    // The type changes this apply judged by the conversion rule and goes on to make (safe, or
+    // cleared under consent): a statement the database refuses over a value written after they
+    // were judged is reported naming them, not as its own error (`lateValueFailure`).
+    let converting: ConvertingColumn[] = [];
     try {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
@@ -1118,6 +1134,20 @@ export class PushSchemaPipeline {
           // "Fill with one value" is not offered for a column the schema makes unique.
           isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
           dialect,
+          // `db:sync` and the development push judge each type change by the repair command's
+          // rule, from the rows the live column holds. A Schema Builder save offers it as before.
+          ...(source === "code"
+            ? {
+                judgeConversion: typeChangeJudge({
+                  db,
+                  dialect,
+                  live: liveSnapshot,
+                  expected: snapshotBeforeRenames,
+                  schema: desired,
+                }),
+                nextStep,
+              }
+            : {}),
         });
 
         // Drops that have a rename candidate are resolved by the
@@ -1152,6 +1182,18 @@ export class PushSchemaPipeline {
         // Honor abort: short-circuit before any DDL fires.
         if (!dispatchResult.proceed) {
           throw new PromptCancelledError();
+        }
+
+        // A safe conversion goes ahead without a question, said as it is made; a lossy one goes
+        // ahead only where its clearing was consented to, which the dispatcher has answered.
+        converting = convertingColumns(
+          classificationResult,
+          dispatchResult.clearing ?? []
+        );
+        for (const safe of classificationResult.safeConversions ?? []) {
+          consoleLogger.info(
+            `[Nextly schema] ${safe.tableName}.${safe.columnName}: ${safe.fromType} -> ${safe.toType}, safe (rows checked: ${String(safe.rowsChecked)}).`
+          );
         }
 
         // F5 PR 4: patch desired.collections inline for make_optional
@@ -1485,6 +1527,7 @@ export class PushSchemaPipeline {
             assertPreCleanupAccepted({
               resolutions: dispatchResult.resolutions,
               events: classificationResult.events,
+              clearing: dispatchResult.clearing,
               fields: aggregatedFields,
               desiredSnapshot,
               dialect,
@@ -1581,6 +1624,7 @@ export class PushSchemaPipeline {
               operations: resolvedOps,
               fields: aggregatedFields,
               dialect,
+              clearing: dispatchResult.clearing,
             });
           } catch (err) {
             // PromptCancelledError from abort is not a DDL failure — let it
@@ -2201,7 +2245,8 @@ export class PushSchemaPipeline {
         // render an admin toast like "1 field added, 1 renamed".
         summary,
       };
-    } catch (err) {
+    } catch (caught) {
+      const err = lateValueFailure(caught, converting, nextStep) ?? caught;
       const code = this.classifyErrorCode(err);
       // A refused precondition carries its subject in the payload, not in the message: the
       // validation factory sets a deliberately generic public message. Reading `err.message` here
@@ -2748,6 +2793,7 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
   const askedEvents = new Set<string>();
   const confirmed = new Map<string, RenameCandidate>();
   const resolutions = new Map<string, Resolution>();
+  const clearing = new Set<string>();
   const remember = (
     asked: Parameters<PromptDispatcher["dispatch"]>[0],
     answer: PromptDispatchResult
@@ -2762,6 +2808,7 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
     for (const resolution of answer.resolutions) {
       resolutions.set(resolution.eventId, resolution);
     }
+    for (const eventId of answer.clearing ?? []) clearing.add(eventId);
   };
   return {
     async dispatch(args) {
@@ -2792,6 +2839,9 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
           const answered = resolutions.get(event.id);
           return answered === undefined ? [] : [answered];
         }),
+        clearing: args.events
+          .filter(event => clearing.has(event.id))
+          .map(event => event.id),
       };
     },
   };

@@ -31,7 +31,14 @@ import {
   resolveDataLossConsent,
   type Deletion,
 } from "../../migrate/data-loss-consent";
+import { consentForColumn } from "../../repair-columns/consent";
+import {
+  describeClassed,
+  describeRowCount,
+} from "../../value-conversion/describe";
 import { nonEmptyValuesOf } from "../classifier/classifier";
+import { lossyConsentRefusal } from "../classifier/conversion-refusal";
+import type { TypeChangeEvent } from "../resolution/types";
 import type {
   ClassifierEvent,
   DestructiveDropEvent,
@@ -79,6 +86,30 @@ function keptDrops(
 
 function isDrop(event: ClassifierEvent): event is DestructiveDropEvent {
   return event.kind === "destructive_drop";
+}
+
+/** A type change the conversion rule judged lossy, with the rows its consent would clear. */
+type LossyTypeChange = TypeChangeEvent & {
+  lossy: NonNullable<TypeChangeEvent["lossy"]>;
+};
+
+function isLossyTypeChange(event: ClassifierEvent): event is LossyTypeChange {
+  return event.kind === "type_change" && event.lossy !== undefined;
+}
+
+/**
+ * What the database does with a type change: the line of the database being changed, or every
+ * database's where the event does not say which (an event made without the conversion rule).
+ */
+function warningOf(event: TypeChangeEvent): string {
+  const { pg, mysql, sqlite } = event.perDialectWarning;
+  if (event.dialect === undefined) return [pg, mysql, sqlite].join("\n");
+  return { postgresql: pg, mysql, sqlite }[event.dialect];
+}
+
+/** "t.c: from -> to is <class>: <reasons with their rows>.", in the repair report's words. */
+function describeLossy(event: LossyTypeChange): string {
+  return `${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType} is ${describeClassed(event.lossy.judgement)}.`;
 }
 
 /** Whether an event makes a column NOT NULL over rows: made required, or added required. */
@@ -205,6 +236,79 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }));
   }
 
+  /**
+   * The lossy type changes judged by the data-loss consent, by the repair command's rule: only the
+   * consent naming the column (`--accept-data-loss=table.column`, or `NEXTLY_ACCEPT_DATA_LOSS`)
+   * covers clearing its values; the form without a list and one naming only the table do not, and
+   * say so. Covered, the clearing is listed and agreed without a question. Otherwise, at a
+   * terminal, each column is asked about, defaulting to no; a no stops the apply (null). With no
+   * terminal, every column not covered is refused at once, naming its rows and the consent that
+   * would cover it, before any statement. Returns the ids of the events whose values to clear.
+   */
+  private async judgeLossyTypeChanges(
+    events: readonly ClassifierEvent[],
+    interactive: boolean
+  ): Promise<string[] | null> {
+    const lossy = events.filter(isLossyTypeChange);
+    if (lossy.length === 0) return [];
+    const consent = resolveDataLossConsent({
+      env: process.env,
+      honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
+    });
+    const judged = lossy.map(event => ({
+      event,
+      consent: consentForColumn(
+        consent,
+        event.tableName,
+        event.columnName,
+        "a type change"
+      ),
+    }));
+    const uncovered = judged.filter(({ consent: c }) => !c.covered);
+    if (!interactive && uncovered.length > 0) {
+      throw lossyConsentRefusal(
+        uncovered.map(({ event, consent: c }) => ({
+          conversion: {
+            tableName: event.tableName,
+            columnName: event.columnName,
+            fromType: event.fromType,
+            toType: event.toType,
+            judgement: event.lossy.judgement,
+          },
+          consent: c,
+        }))
+      );
+    }
+    const clearing: string[] = [];
+    for (const { event, consent: c } of judged) {
+      const column = `${event.tableName}.${event.columnName}`;
+      const values = describeRowCount(event.lossy.cleared.length);
+      if (c.covered) {
+        this.print(
+          `${describeLossy(event)} Clearing the value in ${values}, under the consent naming the column.`
+        );
+      } else {
+        if (c.notice !== null) this.print(`${c.notice}.`);
+        clack.note(
+          [describeLossy(event), warningOf(event)].join("\n"),
+          `Lossy type change on ${column}`
+        );
+        const clear = await answeredOrClosed(
+          await clack.confirm({
+            message: `Clear the value in ${values} named above and convert ${column}?`,
+            initialValue: false,
+          })
+        );
+        if (!clear) {
+          clack.outro("Cancelled");
+          return null;
+        }
+      }
+      clearing.push(event.id);
+    }
+    return clearing;
+  }
+
   async dispatch(args: {
     candidates: RenameCandidate[];
     events: ClassifierEvent[];
@@ -231,14 +335,22 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       // unanswered: the push counts the rows in its way before anything runs and refuses naming
       // the entity, the field and the count (`refuseRequiredColumnsOverNulls`), or goes ahead when
       // no row is in the way any more. Refused here instead, it named none of them.
+      //
+      // A lossy type change is the consent's to judge too: cleared under the consent naming its
+      // column, refused, naming its rows, without one.
       if (
         candidates.length === 0 &&
-        events.every(e => isDrop(e) || makesColumnRequired(e))
+        events.every(
+          e => isDrop(e) || makesColumnRequired(e) || isLossyTypeChange(e)
+        )
       ) {
+        const clearing =
+          (await this.judgeLossyTypeChanges(events, false)) ?? [];
         return {
           confirmedRenames: [],
           resolutions:
             (await this.judgeDrops(events.filter(isDrop), false)) ?? [],
+          clearing,
           proceed: true,
         };
       }
@@ -322,6 +434,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     return {
       confirmedRenames: renameResult.confirmedRenames,
       resolutions: eventResult.resolutions,
+      clearing: eventResult.clearing,
       proceed: eventResult.proceed,
     };
   }
@@ -336,7 +449,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       answered: [],
       unasked: [],
     }
-  ): Promise<{ resolutions: Resolution[]; proceed: boolean }> {
+  ): Promise<{
+    resolutions: Resolution[];
+    proceed: boolean;
+    clearing?: string[];
+  }> {
     if (
       events.length === 0 &&
       kept.answered.length === 0 &&
@@ -357,15 +474,25 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
 
     clack.intro("Schema change requires confirmation");
 
+    // Lossy type changes first, each cleared only under the consent naming it or a yes here.
+    const clearing = await this.judgeLossyTypeChanges(others, true);
+    if (clearing === null) return { resolutions, proceed: false };
+
     for (const event of others) {
+      if (isLossyTypeChange(event)) continue;
       if (event.kind === "type_change") {
-        // Render the per-dialect warning text and ask Y/N.
+        // What the database being changed does with the pair, and, for a pair the conversion
+        // rule has no conversion for, how many rows hold a value it would touch. Then Y/N.
+        const held =
+          event.rowsHoldingValue === undefined
+            ? []
+            : [
+                event.rowsHoldingValue === 1
+                  ? "1 row holds a value."
+                  : `${String(event.rowsHoldingValue)} rows hold a value.`,
+              ];
         clack.note(
-          [
-            event.perDialectWarning.pg,
-            event.perDialectWarning.mysql,
-            event.perDialectWarning.sqlite,
-          ].join("\n"),
+          [warningOf(event), ...held].join("\n"),
           `Type change on ${event.tableName}.${event.columnName}: ${event.fromType} -> ${event.toType}`
         );
         const proceed = await answeredOrClosed(
@@ -457,7 +584,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }
 
     clack.outro("Resolutions confirmed");
-    return { resolutions, proceed: true };
+    return { resolutions, proceed: true, clearing };
   }
 
   // Walks candidates in a shrinking-pool pattern:

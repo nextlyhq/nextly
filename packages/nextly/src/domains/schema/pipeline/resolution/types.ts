@@ -33,9 +33,6 @@ export type Resolution =
   // name, type, and row count in the prompt. Pipeline keeps the
   // corresponding drop_column op.
   | { kind: "confirm_drop"; eventId: string }
-  // A lossy type change the consent naming its column covers, or the person at the terminal
-  // agreed to: the rows its judgement named are cleared before the column is converted.
-  | { kind: "clear_values"; eventId: string }
   | { kind: "abort"; eventId: string };
 
 export type ClassifierEventKind =

@@ -9,6 +9,8 @@
 //     after an ADD COLUMN that creates it nullable, since the column does not
 //     exist yet; the rest of the apply then only makes it NOT NULL
 //     (`withAddedColumnsLeftToTighten`).
+//   - a lossy type change in `clearing`: UPDATE <table> SET <col> = NULL WHERE <key> IN (...),
+//     exactly the rows its judgement named, by key, before the type change runs
 //   - make_optional         no SQL; patch desired snapshot to keep nullable=true
 //   - abort                 throw PromptCancelledError; pipeline short-circuits
 //
@@ -21,6 +23,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { clearingStatements } from "../../repair-columns/clearing";
 import { toSnakeCase } from "../../services/field-column-descriptor";
 import { runStatement } from "../_internal/run-statement";
 import { countRowsBreakingNotNull } from "../classifier/count-helpers";
@@ -73,6 +76,8 @@ function assertSafeIdent(name: string): void {
 export function assertPreCleanupAccepted(args: {
   resolutions: Resolution[];
   events: ClassifierEvent[];
+  /** The lossy type changes whose named values to clear. */
+  clearing?: readonly string[];
   fields: PreCleanupField[];
   /** The schema being applied: a fill's column and its type. */
   desiredSnapshot: NextlySchemaSnapshot;
@@ -101,6 +106,7 @@ export function assertPreCleanupAccepted(args: {
   }
 
   assertResolutionsOffered(args);
+  clearedTypeChanges(args);
 
   for (const { resolution, event } of sideEffectResolutions(args)) {
     if (resolution.kind === "provide_default") {
@@ -262,6 +268,44 @@ function assertResolutionsOffered(args: {
       },
     });
   }
+}
+
+/**
+ * The lossy type changes whose clearing was consented to (`clearing`). An id naming an event that
+ * is not one, or one whose rows cannot be named by a key, is refused: clearing it would clear rows
+ * no judgement named, or none, and leave the conversion to fail.
+ */
+function clearedTypeChanges(args: {
+  clearing?: readonly string[];
+  events: ClassifierEvent[];
+}): Array<
+  Extract<ClassifierEvent, { kind: "type_change" }> & {
+    lossy: NonNullable<Extract<ClassifierEvent, { kind: "type_change" }>["lossy"]>;
+  }
+> {
+  const eventById = new Map(args.events.map(e => [e.id, e]));
+  return (args.clearing ?? []).flatMap(eventId => {
+    const event = eventById.get(eventId);
+    if (
+      event?.kind !== "type_change" ||
+      event.lossy === undefined ||
+      event.lossy.keyedBy === "none"
+    ) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `schema.${eventId}`,
+            code: "RESOLUTION_NOT_OFFERED",
+            message: `${eventId} cannot be answered by clearing values: no judgement named rows to clear. Nothing was changed.`,
+          },
+        ],
+        logContext: { reason: "clear-without-rows", eventId },
+      });
+    }
+    assertSafeIdent(event.tableName);
+    assertSafeIdent(event.columnName);
+    return [{ ...event, lossy: event.lossy }];
+  });
 }
 
 function sideEffectResolutions(args: {
@@ -478,6 +522,7 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
     operations: readonly Operation[];
     fields: PreCleanupField[];
     dialect: SupportedDialect;
+    clearing?: readonly string[];
   }): Promise<NextlySchemaSnapshot> {
     assertPreCleanupAccepted(args);
     // Rendered up front so a column the desired schema lacks is refused
@@ -499,6 +544,19 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
           ? sql`UPDATE ${sql.identifier(event.tableName)} SET ${sql.identifier(event.columnName)} = ${resolution.value} WHERE ${sql.identifier(event.columnName)} IS NULL`
           : sql`DELETE FROM ${sql.identifier(event.tableName)} WHERE ${sql.identifier(event.columnName)} IS NULL`;
       await runStatement(args.tx, args.dialect, stmt);
+    }
+    // A lossy type change consented to: the values its judgement named are cleared, by key, so
+    // the conversion that follows meets only values the new type holds. Never by a predicate, so
+    // a value written since is not cleared under a consent given for the rows named.
+    for (const event of clearedTypeChanges(args)) {
+      for (const statement of clearingStatements({
+        table: event.tableName,
+        column: event.columnName,
+        keyedBy: event.lossy.keyedBy,
+        keys: event.lossy.cleared,
+      })) {
+        await runStatement(args.tx, args.dialect, statement);
+      }
     }
     // make_optional is handled via snapshot patching below.
 
