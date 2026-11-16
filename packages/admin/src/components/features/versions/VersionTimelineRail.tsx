@@ -28,8 +28,11 @@ const SUMMARISED_ROWS = 12;
 export interface VersionTimelineRailProps {
   scope: VersionScope;
   versions: readonly VersionMeta[];
-  /** The newer half of the pair on screen, which marks the active row. */
-  selected: number | null;
+  /**
+   * The two versions of the comparison on screen, whose rows are marked, or
+   * null while there is none.
+   */
+  compared: { from: number; to: number } | null;
   onSelect: (versionNo: number) => void;
   isLoading?: boolean;
   /**
@@ -151,19 +154,36 @@ function LoadMoreFooter({
   );
 }
 
+/** Which side of the comparison on screen a row is, in words. */
+const COMPARED_SIDE_TEXT = {
+  from: "Compared from",
+  to: "Compared to",
+} as const;
+
+/** Which side of the comparison on screen a version is, or null for neither. */
+function comparedSide(
+  versionNo: number | null,
+  compared: { from: number; to: number } | null
+): keyof typeof COMPARED_SIDE_TEXT | null {
+  if (versionNo === null || compared === null) return null;
+  if (versionNo === compared.to) return "to";
+  return versionNo === compared.from ? "from" : null;
+}
+
 /** One version in the rail. */
 function TimelineRow({
   scope,
   version,
   previous,
-  active,
+  side,
   summarised,
   onSelect,
 }: {
   scope: VersionScope;
   version: VersionMeta;
   previous: Predecessor;
-  active: boolean;
+  /** Which side of the comparison on screen this row is, if either. */
+  side: keyof typeof COMPARED_SIDE_TEXT | null;
   summarised: boolean;
   onSelect: (versionNo: number) => void;
 }) {
@@ -181,17 +201,25 @@ function TimelineRow({
     <li>
       <button
         type="button"
-        aria-current={active ? "true" : undefined}
+        // Both sides of the comparison are current, each saying which side
+        // it is below: the older side is often not the row just under the
+        // newer one, so marking only one left the other to be hunted for.
+        aria-current={side ? "true" : undefined}
         disabled={versionNo === null || unpairable !== null}
         onClick={() =>
           versionNo !== null && unpairable === null && onSelect(versionNo)
         }
         className={`w-full border-b border-border px-4 py-3 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 ${
-          active ? "bg-muted" : ""
+          side ? "bg-muted" : ""
         }`}
       >
         <RowHeading version={version} />
         <span className="mt-0.5 flex flex-col gap-0.5">
+          {side ? (
+            <span className="text-xs font-medium text-foreground">
+              {COMPARED_SIDE_TEXT[side]}
+            </span>
+          ) : null}
           {/* Rendered as text rather than a `title` tooltip. The button is
               disabled, so it is not focusable and no tooltip is reachable by
               keyboard; a touch user has no hover to reveal one either. Left
@@ -221,7 +249,7 @@ function TimelineRow({
 export function VersionTimelineRail({
   scope,
   versions,
-  selected,
+  compared,
   onSelect,
   isLoading = false,
   isError = false,
@@ -269,9 +297,7 @@ export function VersionTimelineRail({
               version.versionNo ?? -1,
               hasNextPage
             )}
-            active={
-              version.versionNo !== null && version.versionNo === selected
-            }
+            side={comparedSide(version.versionNo, compared)}
             summarised={index < SUMMARISED_ROWS}
             onSelect={onSelect}
           />

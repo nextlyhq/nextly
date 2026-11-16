@@ -246,7 +246,9 @@ describe("VersionComparePage, a baseline comparison it marks as seen", () => {
 
     rerender(baselinePage(other, "published"));
     await waitFor(() =>
-      expect(baselineDiffMock).toHaveBeenCalledWith(other, "published", 5)
+      expect(baselineDiffMock).toHaveBeenCalledWith(other, "published", {
+        to: 5,
+      })
     );
 
     expect(screen.queryByText(/Comparing version/)).toBeNull();
