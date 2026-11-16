@@ -33,6 +33,7 @@ import {
 } from "../../domains/webhooks/recording-activation";
 import { WebhookDeliveryQueryService } from "../../domains/webhooks/services/webhook-delivery-query-service";
 import { WebhookEndpointService } from "../../domains/webhooks/services/webhook-endpoint-service";
+import { awaitStartInFlight } from "../../init/start-in-flight";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
@@ -63,15 +64,24 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   // skip events no endpoint would receive. Audit forces recording regardless;
   // endpoint presence is refreshed from the shared registry on a POOLED
   // connection (never a content transaction) at boot, on endpoint CRUD, and on a
-  // stale background reload. Prime it now, non-awaited so registration is not
-  // blocked on the read; the flag fails open until it lands.
+  // stale background reload. Primed non-awaited so registration is not blocked
+  // on the read; the flag fails open until it lands.
   setWebhookAuditEnabled(ctx.config.webhookAuditEnabled ?? false);
   setEndpointPresenceRefresher(() =>
     container
       .get<WebhookEndpointRegistry>("webhookEndpointRegistry")
       .hasEnabledEndpoints()
   );
-  void refreshEndpointPresence();
+  // The prime is begun once the start in flight, if any, has handed its
+  // instance over, and then after that turn, as the other post-start work is.
+  // Registration runs part way through a start, and a read begun here held a
+  // pooled client while the start's own reads went on: when the start next
+  // sent several reads at once, one of them found no free client and waited
+  // for a new connection first, or not, by the machine's timing. Nothing the
+  // start does needs the flag, which fails open meanwhile.
+  void awaitStartInFlight()
+    .then(() => new Promise<void>(resolve => setImmediate(resolve)))
+    .then(refreshEndpointPresence);
 
   container.registerSingleton<WebhookEndpointService>(
     "webhookEndpointService",
