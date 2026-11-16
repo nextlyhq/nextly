@@ -286,7 +286,13 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
   ): Promise<UploadResult> {
     const fullPath = this.resolveAndValidate(filePath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
-    const partial = `${fullPath}.${randomUUID()}.partial`;
+    // A short name of its own beside the file, rather than the file's name
+    // with more added: a name near the 255-byte limit fits as the file, but
+    // not with a suffix on it.
+    const partial = path.join(
+      path.dirname(fullPath),
+      `.${randomUUID()}.partial`
+    );
     try {
       await fs.writeFile(partial, buffer);
       await fs.rename(partial, fullPath);

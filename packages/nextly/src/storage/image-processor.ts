@@ -216,9 +216,9 @@ export class ImageProcessor {
    * more bytes with no more detail. Metadata is not carried over, so a
    * photo's location never reaches a copy.
    *
-   * An original past the pixel limit, or bytes that are not an image, are
-   * `refused` rather than thrown: the caller answers with the original
-   * instead, and a bad file must not take the request down.
+   * An original past the pixel limit, an animated one, or bytes that are not
+   * an image, are `refused` rather than thrown: the caller answers with the
+   * original instead, and a bad file must not take the request down.
    *
    * @experimental
    */
@@ -230,9 +230,15 @@ export class ImageProcessor {
     const sharp = await this.sharp();
     if (!sharp) return { kind: "unavailable" };
     try {
-      const resized = sharp(buffer, {
+      const limits = {
         limitInputPixels: this.deps.copyPixelLimit ?? COPY_PIXEL_LIMIT,
-      })
+      };
+      // An animated original (WebP or PNG with several frames) would come out
+      // as its first frame alone, so it is sent as it is instead.
+      if (((await sharp(buffer, limits).metadata()).pages ?? 1) > 1) {
+        return { kind: "refused" };
+      }
+      const resized = sharp(buffer, limits)
         .rotate()
         .resize({ width, withoutEnlargement: true });
       const encoded =
@@ -317,8 +323,12 @@ export class ImageProcessor {
       // as a failure, so an upload proceeds without it.
       if (!sharp) return null;
       const metadata = await sharp(buffer).metadata();
-      if (metadata.width && metadata.height) {
-        return { width: metadata.width, height: metadata.height };
+      // As the picture is shown, upright: a photo whose camera recorded it
+      // turned a quarter (EXIF orientation 5 to 8) is stored on its side, and
+      // every browser, resized copy and layout reads it turned back.
+      const shown = metadata.autoOrient ?? metadata;
+      if (shown.width && shown.height) {
+        return { width: shown.width, height: shown.height };
       }
       return null;
     } catch {

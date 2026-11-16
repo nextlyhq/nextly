@@ -110,4 +110,37 @@ describe("ImageProcessor.copyAtWidth", () => {
     );
     expect(result).toEqual({ kind: "unavailable" });
   });
+
+  it("sends an animated original as it is, rather than its first frame", async () => {
+    // Two frames, joined into one animated WebP.
+    const frame = (background: string) =>
+      sharp({ create: { width: 40, height: 10, channels: 4, background } })
+        .png()
+        .toBuffer();
+    const animated = await sharp([await frame("#f00"), await frame("#00f")], {
+      join: { animated: true },
+    })
+      .webp({ loop: 0 })
+      .toBuffer();
+    expect((await sharp(animated).metadata()).pages).toBe(2);
+    expect(await processor.copyAtWidth(animated, 96, "webp")).toEqual({
+      kind: "refused",
+    });
+  });
+});
+
+describe("ImageProcessor.getDimensions", () => {
+  it("answers a photo's size as it is shown, turned upright", async () => {
+    // Stored 400 wide by 200 high, shown a quarter turn round.
+    const dimensions = await new ImageProcessor().getDimensions(
+      await photo(400, 200, { orientation: 6 })
+    );
+    expect(dimensions).toEqual({ width: 200, height: 400 });
+  });
+
+  it("answers an unturned photo's size as stored", async () => {
+    expect(
+      await new ImageProcessor().getDimensions(await photo(400, 200))
+    ).toEqual({ width: 400, height: 200 });
+  });
 });

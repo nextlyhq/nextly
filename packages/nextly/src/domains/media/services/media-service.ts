@@ -51,6 +51,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../../auth/resource-readable";
+import { SYSTEM_READ_POLICY } from "../../../domains/auth/system-write-policy";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
@@ -663,6 +665,16 @@ export class MediaService {
       // is not found, as `findById` answers.
       if ("url" in source && NextlyError.isNotFound(error)) return null;
       throw error;
+    }
+    // A copy's address is on the public media route, which serves copies
+    // only while a visitor may read media. Where one may not, the address
+    // could never load, so the original is used as it is.
+    if (
+      !(await visitorReadsSystemResource(
+        SYSTEM_READ_POLICY.media.read.resource
+      ))
+    ) {
+      return null;
     }
     return await copyOfMedia(item, width, {
       storage: mediaCopyStorage(),

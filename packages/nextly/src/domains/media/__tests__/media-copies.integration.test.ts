@@ -197,6 +197,11 @@ describe.each(getConfiguredTestDialects())(
         expect(await mediaStorage().exists(`${item.filename}.w240.jpg`)).toBe(
           false
         );
+        // A trusted call is answered no copy: its address is on the public
+        // route, which a visitor may not read now, so it could never load.
+        expect(
+          await t.nextly.media.copyOf({ id: item.id, width: 240 })
+        ).toBeNull();
         // A checked Direct API call naming nobody is refused the same way.
         await expect(
           new Nextly({ overrideAccess: false }).media.copyOf({

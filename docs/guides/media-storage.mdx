@@ -475,7 +475,8 @@ const src = copy?.url ?? media.url;
 ```
 
 It answers `null` for an address that is not one of your media items (an image on
-another site, or an item since deleted), for a width past the original's, for a
+another site, or an item since deleted), for a width past the original's, while
+visitors may not read media (the copy's address is on the public route), for a
 type that is not resized (GIF, SVG, any file that is not an
 image), when the image library `sharp` is not installed, and when the storage
 cannot keep copies.
@@ -492,8 +493,14 @@ answers, with the new picture, and is checked again rather than kept.
 | Uploadthing       | No: it chooses every file's key, so the original is served |
 
 When a copy cannot be made at the moment it is asked for (an original too large
-to resize, a file missing from storage, or storage not answering), the route
+to resize, an animated WebP or PNG, which is sent whole rather than as its first
+frame, a file missing from storage, or storage not answering), the route
 redirects to the original, so the image still shows.
+
+A photo's `width` and `height` are recorded as it is shown: one its camera marked
+as turned a quarter is stored on its side, and recorded turned upright, as every
+browser and copy shows it. An image uploaded before this release keeps the size
+it was recorded with.
 
 ## Upgrading from a release with image sizes
 
