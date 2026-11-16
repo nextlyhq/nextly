@@ -24,7 +24,11 @@ import { Copy, ExternalLink, Pencil } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
-import { addressChipText, type EntryAddress } from "./entry-details-read";
+import {
+  addressChipText,
+  type AddressChipText,
+  type EntryAddress,
+} from "./entry-details-read";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 
 /** The slug the chip edits, and what decides whether it may be edited. */
@@ -63,7 +67,6 @@ export function DocumentAddressChip({
   const edit = useSlugEdit(slugName);
   if (!form) return null;
 
-  const readOnly = slug?.locked === true;
   const text = addressChipText({
     address,
     slug: slug ? (edit.liveValue ?? "") : undefined,
@@ -71,65 +74,111 @@ export function DocumentAddressChip({
   });
   if (!text) return null;
 
-  const editing = slug !== undefined && edit.editing && !readOnly;
+  // Editable only where there is a slug and nothing holds it read-only; a
+  // claim arriving mid-edit closes the input, as read-only wins.
+  const editable = slug !== undefined && slug.locked !== true;
+  const editing = editable && edit.editing;
   return (
     <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       <div
         data-testid="document-address"
         className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-border bg-card py-0.5 pl-2.5 pr-0.5 font-mono text-xs text-muted-foreground"
       >
-        <span
-          className={cn(
-            "min-w-0 whitespace-nowrap",
-            // Cut short only while read; an open input is never clipped.
-            !editing && "truncate"
-          )}
-          title={text.copied}
-        >
-          {text.before}
-          {/* A claim arriving mid-edit closes the input: read-only wins. */}
-          {editing ? (
-            <SlugEditInput
-              value={edit.draft}
-              invalid={Boolean(edit.errorMsg)}
-              onChange={edit.setDraft}
-              onCommit={edit.commit}
-              onCancel={edit.cancel}
-            />
-          ) : text.slug !== undefined ? (
-            <span className="text-foreground">{text.slug || "(unset)"}</span>
-          ) : null}
-          {text.after}
-        </span>
-        {/* Nothing to copy until there is an address. */}
-        {text.copied === "" ? null : <CopyAddressButton text={text.copied} />}
-        {slug === undefined || readOnly || editing ? null : (
-          <ChipButton label="Edit address" onClick={edit.startEdit}>
-            <Pencil className="h-3 w-3" aria-hidden="true" />
-          </ChipButton>
-        )}
-        {text.live === undefined ? null : (
-          <a
-            href={text.live}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Open live page"
-            title="Open live page"
-            className={CHIP_BUTTON}
-          >
-            <ExternalLink className="h-3 w-3" aria-hidden="true" />
-          </a>
-        )}
+        <AddressText
+          text={text}
+          slugPart={
+            editing ? (
+              <SlugEditInput
+                value={edit.draft}
+                invalid={Boolean(edit.errorMsg)}
+                onChange={edit.setDraft}
+                onCommit={edit.commit}
+                onCancel={edit.cancel}
+              />
+            ) : undefined
+          }
+        />
+        <ChipButtons
+          text={text}
+          onEdit={editable && !editing ? edit.startEdit : undefined}
+        />
       </div>
       {slug === undefined ? null : (
         <SlugNote
           errorMsg={edit.errorMsg}
-          readOnly={readOnly}
+          readOnly={!editable}
           slugName={slugName}
           warnOnChange={slug.hasPublicAddress === true}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The address as text, the slug picked out in it; `slugPart`, where given,
+ * takes the slug's place (the open input).
+ */
+function AddressText({
+  text,
+  slugPart,
+}: {
+  text: AddressChipText;
+  slugPart: ReactNode;
+}) {
+  const slug =
+    slugPart ??
+    (text.slug === undefined ? null : (
+      <span className="text-foreground">{text.slug || "(unset)"}</span>
+    ));
+  return (
+    <span
+      className={cn(
+        "min-w-0 whitespace-nowrap",
+        // Cut short only while read; an open input is never clipped.
+        slugPart === undefined && "truncate"
+      )}
+      title={text.copied}
+    >
+      {text.before}
+      {slug}
+      {text.after}
+    </span>
+  );
+}
+
+/**
+ * Copy, where there is something to copy; Edit, where `onEdit` is given;
+ * and Open live page, where the address is live.
+ */
+function ChipButtons({
+  text,
+  onEdit,
+}: {
+  text: AddressChipText;
+  onEdit: (() => void) | undefined;
+}) {
+  return (
+    <>
+      {text.copied === "" ? null : <CopyAddressButton text={text.copied} />}
+      {onEdit === undefined ? null : (
+        <ChipButton label="Edit address" onClick={onEdit}>
+          <Pencil className="h-3 w-3" aria-hidden="true" />
+        </ChipButton>
+      )}
+      {text.live === undefined ? null : (
+        <a
+          href={text.live}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open live page"
+          title="Open live page"
+          className={CHIP_BUTTON}
+        >
+          <ExternalLink className="h-3 w-3" aria-hidden="true" />
+        </a>
+      )}
+    </>
   );
 }
 
