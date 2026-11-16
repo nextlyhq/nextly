@@ -1209,6 +1209,9 @@ async function ensureLocalizedCompanionsForReload(
   // apply run for these: the copy is the only thing standing between the apply's DROP and the
   // values it would take with it.
   const preservationFailed: string[] = [];
+  // Whether any translations table was refused or could not be brought into step this reload, in
+  // either phase: what the date-column conversion after the pass waits on.
+  let companionRefused = false;
   // Entities whose content could not be copied BACK onto main when localization was turned off.
   // The caller must not publish the non-localized configuration for these: the app would read the
   // stale main values, accept edits on them, and a later successful retry would copy the
@@ -1419,6 +1422,7 @@ async function ensureLocalizedCompanionsForReload(
         },
         error => {
           if (phase === "beforeApply") preservationFailed.push(entity.slug!);
+          companionRefused = true;
           consoleLogger.warn(
             `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
               `Writes in a non-default locale will be refused until it exists: ` +
@@ -1460,6 +1464,7 @@ async function ensureLocalizedCompanionsForReload(
           recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
         },
         error => {
+          companionRefused = true;
           consoleLogger.warn(
             `[nextly] Could not update the translations table for "${entity.slug}". ` +
               `Newly translatable fields may fail to save until it is in step: ` +
@@ -1474,7 +1479,10 @@ async function ensureLocalizedCompanionsForReload(
       );
       // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
       // not after a column failure: a refused column is not the field's to index.
-      if (!columnsInStep) continue;
+      if (!columnsInStep) {
+        companionRefused = true;
+        continue;
+      }
       const { reconcileCompanionUniqueIndexes } = await import(
         "../domains/i18n/runtime/companion-unique-reconcile"
       );
@@ -1486,6 +1494,7 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
         },
         error => {
+          companionRefused = true;
           consoleLogger.warn(
             `[nextly] Could not index the translations table for "${entity.slug}". ` +
               `Unique translated fields are not enforced in each language until it is: ` +
@@ -1498,8 +1507,12 @@ async function ensureLocalizedCompanionsForReload(
 
   // Each translated date column an earlier release made with a time zone, of every entity the
   // registry holds, converted as the development sync converts it, once this pass refused
-  // nothing. Best-effort like the rest of the reload: a failure is told, and the next one retries.
-  if (preservationFailed.length === 0 && restoreFailed.length === 0) {
+  // nothing and brought every translations table into step. Best-effort like the rest of the reload: a failure is told, and the next one retries.
+  if (
+    !companionRefused &&
+    preservationFailed.length === 0 &&
+    restoreFailed.length === 0
+  ) {
     try {
       const { convertZonedDateCompanions } = await import(
         "../domains/i18n/runtime/zoned-date-companions"
