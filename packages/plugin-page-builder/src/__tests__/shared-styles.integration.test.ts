@@ -450,7 +450,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("removes an unused style only once the index is whole, and never a used one", async () => {
+    it("judges a removal on whole counts, counting the pages first, and never removes a used one", async () => {
       const { t, tick } = await boot();
       await t.nextly.create({
         collection: "pages",
@@ -461,11 +461,11 @@ describe.each(getConfiguredTestDialects())(
       const remove = (ids: string[]) =>
         call("POST", route("remove"), designer, { ids });
 
-      const early = await remove(["c-spare"]);
-      expect(early.status).toBe(409);
-      expect(JSON.stringify(early.body)).toContain(
-        "Some pages haven't been counted yet, so no shared style can be removed."
-      );
+      // Nothing has counted the page: the removal counts it first, and finds
+      // the use, rather than refusing as not counted.
+      const early = await remove(["c-hero"]);
+      expect(early.status).toBe(400);
+      expect(JSON.stringify(early.body)).toContain('"code":"IN_USE"');
 
       await tick();
       // CONTROL: the index now reads as whole, so what follows is the count's

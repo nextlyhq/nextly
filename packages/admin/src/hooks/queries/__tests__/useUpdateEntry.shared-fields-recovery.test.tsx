@@ -38,7 +38,7 @@ vi.mock("@admin/hooks/useLocalization", () => ({
       ({ en: { label: "English" }, es: { label: "Spanish" } })[code],
   }),
 }));
-vi.mock("@admin/components/ui", () => ({ toast }));
+vi.mock("@admin/components/ui/toaster", () => ({ toast }));
 
 import { useUpdateEntry } from "../useUpdateEntry";
 

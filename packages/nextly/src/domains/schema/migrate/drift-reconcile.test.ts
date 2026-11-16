@@ -35,6 +35,8 @@ type FakeRepo = ReconcileRepo & {
    */
   startedThrough: unknown[];
   failed: number;
+  /** How many attempts ended with nothing applied. */
+  nothingApplied: number;
   /** Attempts deleted after a lost race rolled back whole. */
   discarded: number;
   superseded: Array<{ supersededEventIds: string[]; byEventId: string }>;
@@ -53,6 +55,7 @@ function fakeRepo(
   const state = {
     starts: 0,
     failed: 0,
+    nothingApplied: 0,
     discarded: 0,
     bound: [] as unknown[],
     startedThrough: [] as unknown[],
@@ -77,6 +80,10 @@ function fakeRepo(
     },
     markFailed: () => {
       repo.failed++;
+      return Promise.resolve();
+    },
+    markNothingApplied: () => {
+      repo.nothingApplied++;
       return Promise.resolve();
     },
     discardAttempt: () => {
@@ -628,6 +635,35 @@ describe("reconcileFile (Phase 2 three-state)", () => {
       ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
       expect(repo.starts).toBe(1);
       expect(repo.failed).toBe(1);
+    }
+  );
+
+  it.each([
+    ["nothing changed", { kind: "nothing-changed" }, 1, 0],
+    ["stopped part-way", { kind: "part-way", committed: [1] }, 0, 1],
+  ] as const)(
+    "ends a busy-table stop's attempt that %s as nothing applied only where nothing stayed",
+    async (_, outcome, nothingApplied, failed) => {
+      const repo = fakeRepo();
+      const busy = new NextlyError({
+        code: "NEXTLY_TABLE_BUSY",
+        publicMessage: "0006_x.sql stopped: table busy.",
+        logContext: { reason: "table busy", stop: { outcome } },
+      });
+      await expect(
+        reconcileFile({
+          file: { ...file, transaction: false },
+          // A busy-table stop on SQLite, as the file's other no-transaction cases run.
+          dialect: "sqlite",
+          before: snap("a"),
+          target: snap("a", "b"),
+          live: snap("a"),
+          repo,
+          executeSql: vi.fn().mockRejectedValue(busy),
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+      expect(repo.nothingApplied).toBe(nothingApplied);
+      expect(repo.failed).toBe(failed);
     }
   );
 

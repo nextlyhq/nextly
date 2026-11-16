@@ -176,22 +176,26 @@ vi.mock("../../domains/field-groups/storage/resolve-storage-names", () => ({
   resolveRegistryNameFromCatalog: () => Promise.resolve("nextly_field_groups"),
 }));
 
-// The reconcile asks before its destructive change, and refuses as the real
-// one does when the answer is no; `reconciled` records that it went ahead.
-vi.mock("../../domains/schema/migrate/core-reconcile", () => ({
-  reconcileCore: async (deps: {
-    confirmDestructive: (reasons: string[]) => Promise<boolean>;
-  }) => {
-    if (!(await deps.confirmDestructive(["drop column nextly_users.legacy"]))) {
-      throw new NextlyError({
-        code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
-        publicMessage:
-          "Core schema reconciliation aborted: destructive operations were not confirmed: drop column nextly_users.legacy.",
-      });
-    }
-    seen.reconciled();
-  },
-}));
+// The core upgrade would delete one column; the command lists it and asks, or
+// refuses with no terminal, before the reconcile runs. The reconcile judges it
+// again, as the real one does, and `reconciled` records that it went ahead.
+vi.mock("../../domains/schema/migrate/core-reconcile", () => {
+  const legacy = {
+    kind: "column" as const,
+    table: "nextly_users",
+    column: "legacy",
+    core: true,
+  };
+  return {
+    planCoreDeletions: async () => [legacy],
+    reconcileCore: async (deps: {
+      judgeDeletions?: (deletions: readonly unknown[]) => Promise<void>;
+    }) => {
+      await deps.judgeDeletions?.([legacy]);
+      seen.reconciled();
+    },
+  };
+});
 
 /**
  * A readline interface that answers `typed`, or, for `CANCEL`, receives
@@ -584,7 +588,7 @@ describe("a cancelled prompt exits 130 and changes nothing", () => {
     });
 
     it("a cancel at the --reconcile-core question exits 130 and reconciles nothing", async () => {
-      seen.createInterface.mockImplementation(readlineTyping(CANCEL));
+      seen.confirm.mockResolvedValue(CANCEL);
       await run(() =>
         upgradeAction({ reconcileCore: true }, {
           optsWithGlobals: () => ({}),
@@ -595,12 +599,13 @@ describe("a cancelled prompt exits 130 and changes nothing", () => {
     });
 
     it("a no at the --reconcile-core question still ends as a refusal, exit 1", async () => {
-      seen.createInterface.mockImplementation(readlineTyping("n"));
+      seen.confirm.mockResolvedValue(false);
       await upgradeAction({ reconcileCore: true }, {
         optsWithGlobals: () => ({}),
       } as unknown as Command);
       expect(exits).toEqual([]);
       expect(process.exitCode).toBe(1);
+      expect(printedError()).toContain("(DATA_LOSS_DECLINED)");
       expect(seen.reconciled).not.toHaveBeenCalled();
     });
   });

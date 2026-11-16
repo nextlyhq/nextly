@@ -49,11 +49,11 @@ import {
   liveRecoveryOffer,
   LiveDocumentRecoveryOffer,
 } from "./AutosaveRecoveryBanner";
+import { useConditionValues } from "./document-view-field-gate";
 import {
-  useConditionValues,
   viewFieldRefusal,
   type ViewFieldRefusal,
-} from "./document-view-field-gate";
+} from "./document-view-field-refusal";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import {
   DocumentRestoreProvider,

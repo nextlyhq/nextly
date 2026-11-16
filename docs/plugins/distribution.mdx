@@ -3,7 +3,7 @@ title: Publishing & distribution
 description: How to publish a Nextly plugin, how plugins are discovered, and the trust model behind v1.
 ---
 
-Nextly plugins are plain npm packages, registered in code (D0). There is **no
+Nextly plugins are plain npm packages, registered in code. There is **no
 marketplace, no UI-install, and no runtime sandbox in v1** — distribution and trust ride
 entirely on npm.
 
@@ -92,7 +92,7 @@ secrets from the environment, as below.
 
 Plugin options are passed where the plugin is registered
 (`defineConfig({ plugins: [myPlugin({ ... })] })`). For sensitive values, read from the
-environment and wrap them with `secret()` (D37) so they auto-redact in logs, JSON, and
+environment and wrap them with `secret()` so they auto-redact in logs, JSON, and
 inspection — the real value is only available via `.reveal()`:
 
 ```ts
@@ -103,7 +103,7 @@ myPlugin({ apiKey: secret(process.env.ACME_API_KEY) });
 `secret()` is currently [`@experimental`](/docs/plugins/stability). Never hard-code
 secrets in config or commit them.
 
-## Discovery (D42)
+## Discovery
 
 In v1, plugins are found through:
 
@@ -115,7 +115,7 @@ In v1, plugins are found through:
 
 There is intentionally no in-app gallery or one-click install yet.
 
-## Trust model (D34)
+## Trust model
 
 v1 is **full-trust**: a plugin runs with the same access as your application code. There
 is **no sandbox and no verification gate** — installing a plugin is exactly as much a

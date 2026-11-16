@@ -3,9 +3,11 @@
  * message a delete of it gets, and writes the drop once nothing does.
  *
  * A field group removed from the configuration is still placed by a remaining collection or field
- * group, or a plugin declares a foreign key into its table, or adds a column and an index to it; a
- * Single removed from the configuration has a plugin's foreign key into its table, or a plugin's
- * column on it. Each is refused before a file is written. A field group removed together with the
+ * group, or the app declares a foreign key into its table, or a plugin adds a column and an index to
+ * it; a Single removed from the configuration has the app's foreign key into its table, or a
+ * plugin's column on it. Each is refused before a file is written. The keys are the app's: a
+ * plugin's migrations run before the app's, which create these tables, so a plugin's key to one is
+ * refused at boot. A field group removed together with the
  * only collection that places it, and a field group or Single nothing depends on, are dropped.
  *
  * The command connects to no database, so the dialect is read from a URL nothing connects to.
@@ -29,13 +31,13 @@ import {
   HOME,
   HOME_TABLE,
   LANGUAGES,
-  LINKS_PLUGIN,
+  LINKS_OWNER,
   LINKS_TABLE,
   MARKER_COLUMN,
   MARKER_PLUGIN,
   SEO,
   SEO_TABLE,
-  linksPluginTo,
+  linksTo,
   markerPluginOn,
   plainHome,
   plainSeoGroup,
@@ -220,17 +222,17 @@ describeEachDialect(
       expect(await migrationFiles()).toHaveLength(2);
     });
 
-    it("refuses to drop a field group a plugin's declared key points at, naming the plugin and its table", async () => {
-      const links = linksPluginTo(SEO_TABLE);
+    it("refuses to drop a field group a declared key points at, naming its owner and table", async () => {
+      const links = { schema: { extend: [linksTo(SEO_TABLE)] } };
       await generate(dialect, "initial", {
         fieldGroups: [plainSeoGroup],
-        plugins: [links],
+        db: links,
       });
       const before = await migrationFiles();
 
       const run = await generate(dialect, "drop_seo", {
         fieldGroups: [],
-        plugins: [links],
+        db: links,
       });
 
       expect(run.exited).toBe("process.exit(1)");
@@ -238,7 +240,7 @@ describeEachDialect(
       expect(said).toContain(
         `"${SEO}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
       );
-      expect(said).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+      expect(said).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
       expect(await migrationFiles()).toEqual(before);
     });
 
@@ -262,17 +264,17 @@ describeEachDialect(
       expect(await migrationFiles()).toEqual(before);
     });
 
-    it("refuses to drop a Single a plugin's declared key points at", async () => {
-      const links = linksPluginTo(HOME_TABLE);
+    it("refuses to drop a Single a declared key points at", async () => {
+      const links = { schema: { extend: [linksTo(HOME_TABLE)] } };
       await generate(dialect, "initial", {
         singles: [plainHome],
-        plugins: [links],
+        db: links,
       });
       const before = await migrationFiles();
 
       const run = await generate(dialect, "drop_home", {
         singles: [],
-        plugins: [links],
+        db: links,
       });
 
       expect(run.exited).toBe("process.exit(1)");
@@ -280,22 +282,22 @@ describeEachDialect(
       expect(said).toContain(
         `"${HOME}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
       );
-      expect(said).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+      expect(said).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
       expect(await migrationFiles()).toEqual(before);
     });
 
-    it("refuses to drop a translated field group a plugin's declared key into its translation table points at", async () => {
-      const links = linksPluginTo(`${SEO_TABLE}_locales`);
+    it("refuses to drop a translated field group a declared key into its translation table points at", async () => {
+      const links = { schema: { extend: [linksTo(`${SEO_TABLE}_locales`)] } };
       await generate(dialect, "initial", {
         fieldGroups: [seoGroup],
-        plugins: [links],
+        db: links,
         localization: LANGUAGES,
       });
       const before = await migrationFiles();
 
       const run = await generate(dialect, "drop_seo", {
         fieldGroups: [],
-        plugins: [links],
+        db: links,
         localization: LANGUAGES,
       });
 
@@ -304,22 +306,22 @@ describeEachDialect(
       expect(said).toContain(
         `"${SEO}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
       );
-      expect(said).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+      expect(said).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
       expect(await migrationFiles()).toEqual(before);
     });
 
-    it("refuses to drop a translated Single a plugin's declared key into its translation table points at", async () => {
-      const links = linksPluginTo(`${HOME_TABLE}_locales`);
+    it("refuses to drop a translated Single a declared key into its translation table points at", async () => {
+      const links = { schema: { extend: [linksTo(`${HOME_TABLE}_locales`)] } };
       await generate(dialect, "initial", {
         singles: [translatedHome],
-        plugins: [links],
+        db: links,
         localization: LANGUAGES,
       });
       const before = await migrationFiles();
 
       const run = await generate(dialect, "drop_home", {
         singles: [],
-        plugins: [links],
+        db: links,
         localization: LANGUAGES,
       });
 
@@ -328,7 +330,7 @@ describeEachDialect(
       expect(said).toContain(
         `"${HOME}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
       );
-      expect(said).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+      expect(said).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
       expect(await migrationFiles()).toEqual(before);
     });
 

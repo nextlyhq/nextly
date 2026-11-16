@@ -347,7 +347,7 @@ s3Storage({
 | Option               | Type      | Default | Description                                              |
 |----------------------|-----------|---------|----------------------------------------------------------|
 | `prefix`             | `string`  | --      | Folder prefix for this collection's uploads.             |
-| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). |
+| `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). S3 only. The file's name, type and size are checked before the URL is signed, and the URL binds the type and exact size; SVGs always go through the standard upload. See [Media upload security](/docs/configuration/media-upload-security). |
 | `signedDownloads`    | `boolean` | `false` | Issue signed URLs for download.                          |
 | `signedUrlExpiresIn` | `number`  | `3600`  | Signed-URL expiry in seconds.                            |
 

@@ -62,3 +62,15 @@ export function announceServicesRegistered(): void {
   waiting.__nextly_registeredWaiters = [];
   for (const resolve of waiters) resolve();
 }
+
+/**
+ * The registration running now, or undefined when none is. `register.ts` keeps it on `globalThis`
+ * while an attempt runs, its plugins' start-up included, and clears it before the attempt settles.
+ */
+export function registrationInFlight(): Promise<void> | undefined {
+  return (
+    globalThis as unknown as {
+      __nextly_registrationInFlight?: Promise<void>;
+    }
+  ).__nextly_registrationInFlight;
+}

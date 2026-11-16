@@ -153,6 +153,11 @@ interface Mark {
   /** The block a hovered mark points at, by its address, for its name tag. */
   readonly hoveredAddress?: string;
   /**
+   * The hovered block is marked never to be quoted, read off the element the
+   * page renders (`data-nosnippet`), so its tag says so.
+   */
+  readonly notQuoted?: boolean;
+  /**
    * A hovered block's tag is drawn inside its outline: the outline's top is
    * too close to the top of what is on screen for a tag above it to show.
    */
@@ -264,6 +269,7 @@ function markKey(mark: Mark): string {
     placementTagInside,
     hoveredAddress,
     hoverTagInside,
+    notQuoted,
     condition,
     entryContent,
     tabsAt,
@@ -289,6 +295,7 @@ function markKey(mark: Mark): string {
     placementTagInside,
     hoveredAddress,
     hoverTagInside,
+    notQuoted === true,
     condition,
     entryContent,
     tabsAt,
@@ -780,6 +787,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
         hoveredAddress: hovered,
         // From the top of what is on screen, as the placement's tag is.
         hoverTagInside: outline.rect.y - onScreen.y < MARK_TAG_HEIGHT,
+        notQuoted: candidate.hasAttribute(NOT_QUOTED_ATTRIBUTE),
       });
     });
   }
@@ -1119,6 +1127,22 @@ function dimmedBesideEditing(marks: Mark[]): Mark[] {
   );
 }
 
+/** The attribute a block marked never to be quoted carries on the page. */
+const NOT_QUOTED_ATTRIBUTE = "data-nosnippet";
+
+/**
+ * A hovered block's tag: its name, and for a block marked never to be
+ * quoted, that it is not quoted in search. None without a name.
+ */
+function hoverLabel(
+  name: string | undefined,
+  notQuoted: boolean | undefined
+): string | undefined {
+  const named = name?.trim();
+  if (named === undefined || named === "") return undefined;
+  return notQuoted === true ? `${named} · not quoted in search` : named;
+}
+
 /**
  * The marks over the canvas's blocks.
  *
@@ -1250,7 +1274,7 @@ export function CanvasMarks({
           data-hover-label={
             mark.hoveredAddress === undefined
               ? undefined
-              : nameOf?.(mark.hoveredAddress)?.trim() || undefined
+              : hoverLabel(nameOf?.(mark.hoveredAddress), mark.notQuoted)
           }
           data-hover-tag-inside={mark.hoverTagInside === true ? "" : undefined}
           {...atRestAttributes(mark)}

@@ -235,6 +235,10 @@ describe("reporting content no scope can cover", () => {
     // No scope — and the reason no scope exists is now visible.
     expect(survey.scopes).toEqual([]);
     expect(survey.unaddressable).toBe(true);
+    // Named, so a removal can read that type's documents itself.
+    expect(survey.unaddressableTypes).toEqual([
+      { scope: "collection", slug: "pages" },
+    ]);
   });
 
   it("reports one that sits BESIDE a field it can address", async () => {
@@ -258,6 +262,10 @@ describe("reporting content no scope can cover", () => {
 
     expect(survey.scopes.length).toBe(1);
     expect(survey.unaddressable).toBe(true);
+    // Every document of it is covered only in part, so it is named whole.
+    expect(survey.unaddressableTypes).toEqual([
+      { scope: "collection", slug: "pages" },
+    ]);
   });
 
   it("reports a Single whose blocks field is nested", async () => {
@@ -280,6 +288,9 @@ describe("reporting content no scope can cover", () => {
     );
 
     expect(survey.unaddressable).toBe(true);
+    expect(survey.unaddressableTypes).toEqual([
+      { scope: "single", slug: "home" },
+    ]);
   });
 
   describe("a Single referencing a field group", () => {
@@ -306,6 +317,7 @@ describe("reporting content no scope can cover", () => {
         })
       );
       expect(survey.unaddressable).toBe(false);
+      expect(survey.unaddressableTypes).toEqual([]);
     });
 
     it("stays out of reach when the declared group holds a blocks field", async () => {

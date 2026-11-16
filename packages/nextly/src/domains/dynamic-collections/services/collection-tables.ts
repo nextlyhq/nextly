@@ -14,6 +14,8 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
+
 /**
  * The registry's table name for each collection slug.
  *
@@ -35,7 +37,11 @@ export interface CollectionTables extends ReadonlyMap<string, string> {
 export function builderKeyTables(
   tables: Iterable<readonly [string, string]>
 ): CollectionTables {
-  return Object.assign(new Map(tables), { keysRelationTo: true as const });
+  // Users are a target the admin's relationship picker offers beside the collections, stored in
+  // the core `users` table; set last, so no collection's row can take the slug's place.
+  const map = new Map(tables);
+  map.set("users", "users");
+  return Object.assign(map, { keysRelationTo: true as const });
 }
 
 /** Whether `field` names one target a key could point at, by `relationTo` or `options.target`. */
@@ -61,7 +67,10 @@ export async function collectionTablesBySlug(
   options: { builder?: boolean } = {}
 ): Promise<CollectionTables | undefined> {
   const builder = options.builder === true;
-  if (!fields.some(field => namesOneTarget(field, builder))) return undefined;
+  // A relationship inside a group with no name is a column of the row with a key like any other
+  // (`fieldsStoredOnRow`), so its target is asked for too.
+  if (!fieldsStoredOnRow(fields).some(field => namesOneTarget(field, builder)))
+    return undefined;
   const rows = await reader.select<{ slug: string; tableName: string }>(
     "dynamic_collections",
     { columns: ["slug", "tableName"] }

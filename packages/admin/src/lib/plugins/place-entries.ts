@@ -59,6 +59,23 @@ function drawableHere(
   item: DeliveredAdminContribution,
   { context, entry }: PlaceView
 ): boolean {
+  return (
+    offeredHere(item, context) &&
+    (item.visibleWhen === undefined ||
+      (entry !== undefined && rowMatches(item.visibleWhen, entry)))
+  );
+}
+
+/**
+ * Whether a contribution is offered on this page, before its rule is judged:
+ * once the page knows its ids, on a collection or Single it is offered on.
+ * Where a page starts a contribution's reads before its entry has arrived,
+ * this is all it can judge, so a contribution with a rule is started anyway.
+ */
+export function offeredHere(
+  item: DeliveredAdminContribution,
+  context: unknown
+): boolean {
   if (context === null || context === undefined) return false;
   if (item.collections !== undefined) {
     const collection = pageCollection(context);
@@ -70,10 +87,7 @@ function drawableHere(
     const single = pageSingle(context);
     if (single === undefined || !item.singles.includes(single)) return false;
   }
-  return (
-    item.visibleWhen === undefined ||
-    (entry !== undefined && rowMatches(item.visibleWhen, entry))
-  );
+  return true;
 }
 
 /** The document fields a delivered tab edits, where it names any. */
@@ -129,4 +143,26 @@ export function entriesDrawnHere(
     if ("builtIn" in item || drawableHere(item, view)) return [item];
     return item.replaces === undefined ? [] : [{ builtIn: item.replaces }];
   });
+}
+
+/**
+ * The fields a plugin's switch keeps off this page (`withheldFields` in the
+ * workspace metadata, keyed `collection:<slug>` or `single:<slug>`): fields
+ * the plugin added to the page's type and has switched off there. The page
+ * draws them nowhere, and their stored values are left as they are.
+ */
+export function fieldsWithheldHere(
+  withheld: Readonly<Record<string, readonly string[]>> | undefined,
+  context: unknown
+): ReadonlySet<string> {
+  if (withheld === undefined) return new Set();
+  const collection = pageCollection(context);
+  const single = pageSingle(context);
+  const key =
+    collection !== undefined
+      ? `collection:${collection}`
+      : single !== undefined
+        ? `single:${single}`
+        : undefined;
+  return new Set(key === undefined ? [] : (withheld[key] ?? []));
 }

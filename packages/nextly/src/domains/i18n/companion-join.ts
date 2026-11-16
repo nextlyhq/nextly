@@ -411,6 +411,8 @@ export async function selectRowsWithCompanion(args: {
 export async function selectEntryWithCompanion(args: {
   db: unknown;
   mainTable: unknown;
+  /** What is selected of the main table; the whole table when absent. */
+  projection?: Record<string, unknown>;
   where: SQL | SQLWrapper | undefined;
   companionTable: unknown;
   localeChain: string[];

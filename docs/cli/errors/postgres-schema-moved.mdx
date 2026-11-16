@@ -1,0 +1,24 @@
+---
+title: POSTGRES_SCHEMA_MOVED
+description: "`db.postgres.schema` names a PostgreSQL schema holding no Nextly installation, while another schema of the same database holds one."
+---
+
+## Cause
+
+`db.postgres.schema` names a PostgreSQL schema holding no Nextly installation, while another schema of the same database holds one.
+
+This is almost always a setting changed, or removed, on an existing site. Starting would create a second, empty installation in the newly named schema and serve it, so the site would look as if its content had been deleted. The message names both schemas.
+
+## Fix
+
+- To keep using the existing installation, point `db.postgres.schema` back at the schema it is in, or remove the setting when that schema is `public`.
+- To start a second, separate installation in the new schema on purpose (two sites sharing one database), set `NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1` for its first start or its first `nextly migrate`. Once that schema holds its own history the flag is no longer read, so it can stay set or be removed.
+
+## Example
+
+```text
+✗ db.postgres.schema is "tenant_a", but this database's Nextly installation is in "public".
+  Why:  Starting would create a second, empty installation in "tenant_a" and serve it instead of the existing one.
+  Next: To keep using the existing installation, remove db.postgres.schema. To start a separate installation in "tenant_a" on purpose, set NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1 for its first start.
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-moved  (POSTGRES_SCHEMA_MOVED)
+```

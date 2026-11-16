@@ -50,6 +50,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import { useSingleEditorDocument } from "@admin/hooks/queries/useSingleEditorDocument";
 import {
   singleDocumentKeys,
@@ -134,6 +135,18 @@ export default function SingleEditPage({
   params,
 }: SingleEditPageProps): React.ReactElement {
   const slug = params?.slug;
+  // What the parts plugins add to this page read as they open, started as
+  // the page first renders, as the entry editor's are.
+  // The page's own place, and the form inside its editor, whose document id
+  // is not known until the Single has loaded: a read naming it is not
+  // started, and its part reads it on mounting.
+  const partsStartup = usePlaceStartupReads([
+    { place: "single.edit", ids: slug === undefined ? null : { single: slug } },
+    {
+      place: "entry.form",
+      ids: slug === undefined ? null : { kind: "single", slug, entryId: null },
+    },
+  ]);
 
   // i18n: active content language for this editor. `undefined` = the app's default locale (the
   // backend resolves it). Switching triggers a refetch (useSingleDocument is keyed by locale) and
@@ -380,6 +393,8 @@ export default function SingleEditPage({
         <MeasuredPageFrame contentCarriesMeasure>
           {schedule.dialog}
           <SingleForm
+            revealOutline={<SingleEditPageSkeleton />}
+            revealWaiting={partsStartup.pending}
             /* Under the editor's header, for the reason the entry editor
              gives. */
             documentBanner={

@@ -19,6 +19,7 @@ import {
 import { ADDRESS_RECORD_CACHE_PART } from "../address-record/store";
 import { seoSettingsCacheTags } from "../settings/single";
 
+import { displayDirectives } from "./display";
 import { resolveOrder, type SeoAnswer } from "./order";
 import { levelsOf, NO_RULES, type SiteRules } from "./page-levels";
 
@@ -71,7 +72,11 @@ export function answerOf(
     ...(answer.title ? { title: answer.title.value } : {}),
     ...(answer.description ? { description: answer.description.value } : {}),
     ...(answer.canonical ? { canonical: answer.canonical.value } : {}),
-    robots: answer.robots.value,
+    // How results may show the page is said only of a page they list.
+    robots:
+      answer.robots.value.index && answer.display !== undefined
+        ? { ...answer.robots.value, ...displayDirectives(answer.display) }
+        : answer.robots.value,
     ...(Object.keys(social).length > 0 ? { social } : {}),
   };
 }

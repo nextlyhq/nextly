@@ -18,7 +18,7 @@
 import { sql } from "drizzle-orm";
 
 import {
-  isLeavingSettingsRefusal,
+  companionReconcileFailure,
   leavingSettingsStep,
 } from "../../../dispatcher/helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../../../dispatcher/helpers/desired-schema";
@@ -335,8 +335,9 @@ export interface CollectionSchemaChange {
  * refused at once, with nothing written.
  *
  * @throws {NextlyError} `NEXTLY_MIGRATION_APPLY_FAILED` with the pipeline's own words when the
- *   push is refused, the refusal of a leaving field's settings as it is, and `INTERNAL_ERROR` when
- *   the push landed and the companion could not be brought in step
+ *   push is refused, the refusal of a leaving field's settings as it is, `NEXTLY_TABLE_BUSY` as it
+ *   is when the companion's change stopped on a busy table, and `INTERNAL_ERROR` when the push
+ *   landed and the companion could not be brought in step otherwise
  */
 export async function applyCollectionSchemaChange(
   change: CollectionSchemaChange
@@ -843,19 +844,13 @@ async function reconcileCompanion(args: {
       tableName,
     });
   } catch (err) {
-    // A refused setting names the field, and nothing has been dropped by then, so it is passed
-    // on as it is rather than as a companion out of step.
-    if (isLeavingSettingsRefusal(err)) throw err;
-    // The main-table apply already committed, so this is surfaced loudly rather than leaving
-    // the collection half-migrated in silence.
-    throw NextlyError.internal({
-      cause: err instanceof Error ? err : undefined,
-      logContext: {
-        op: "companionReconcile",
-        collection: slug,
-        detail: err instanceof Error ? err.message : String(err),
-        note: "main table updated but localized companion out of sync; re-apply to retry",
-      },
+    // A refused setting and a busy-table stop are passed on as they are. Anything else: the
+    // main-table apply already committed, so this is surfaced loudly rather than leaving the
+    // collection half-migrated in silence.
+    throw companionReconcileFailure(err, {
+      op: "companionReconcile",
+      slug,
+      note: "main table updated but localized companion out of sync; re-apply to retry",
     });
   }
 }

@@ -149,6 +149,9 @@ export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
     // The address an operator publishes to an agent, not one buried under this
     // plugin's own name.
     mount: "root" as const,
+    // Read-only, and each tool answers what this caller may read: the handler
+    // judges every caller, so signing in is required and nothing more is.
+    checksAccess: true as const,
     handler: serve,
   }));
 }

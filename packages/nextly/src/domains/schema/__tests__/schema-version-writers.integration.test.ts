@@ -438,11 +438,13 @@ describe.each(getConfiguredTestDialects())(
 /**
  * The Schema Builder's saves, driven through the handlers the admin calls:
  * creating a Single, a field group and a collection, and confirming a
- * collection's schema change. Each runs its schema statements, then writes
- * its registry row and the stored schema version in one transaction; with
- * `nextly_meta` taken away for the save, the version's write fails at the
- * end of that transaction, which the save's error, its logged warning or the
- * schema statements it left behind show it reached; the row is not written.
+ * collection's schema change. Each writes its registry row and the stored
+ * schema version in one transaction, after its schema statements where it
+ * runs them (outside development a Single's or a field group's create writes
+ * its migration for `nextly migrate` and runs none); with `nextly_meta` taken
+ * away for the save, the version's write fails at the end of that
+ * transaction, which the save's error or its logged warning show it reached;
+ * the row is not written.
  * The committed save of the same kind writes both.
  * A save whose registry write did not share the version's transaction keeps
  * its row when the version cannot be written, and fails here.
@@ -533,8 +535,11 @@ describe.each(getConfiguredTestDialects())(
         dispatchSingles("createSingle", {}, { slug, label: slug, fields });
       const failed = `svb_single_fail_${suffix}`;
       const before = await versionOf(t);
-      await savedWithoutTheVersionTable(t, () => create(failed));
-      expect(await t.adapter.tableExists(`single_${failed}`)).toBe(true);
+      // The save failed at the version's write, the last of its
+      // transaction: it reached its registry write.
+      expect(
+        await savedWithoutTheVersionTable(t, () => create(failed))
+      ).toContain("nextly_meta");
       expect(await rowOf(t, "dynamic_singles", failed)).toBeNull();
       expect(await versionOf(t)).toEqual(before);
 
@@ -555,8 +560,11 @@ describe.each(getConfiguredTestDialects())(
         );
       const failed = `svb_group_fail_${suffix}`;
       const before = await versionOf(t);
-      await savedWithoutTheVersionTable(t, () => create(failed));
-      expect(await t.adapter.tableExists(`comp_${failed}`)).toBe(true);
+      // The save failed at the version's write, the last of its
+      // transaction: it reached its registry write.
+      expect(
+        await savedWithoutTheVersionTable(t, () => create(failed))
+      ).toContain("nextly_meta");
       expect(await rowOf(t, table, failed)).toBeNull();
       expect(await versionOf(t)).toEqual(before);
 

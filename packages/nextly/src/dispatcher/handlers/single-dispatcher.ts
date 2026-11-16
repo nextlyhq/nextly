@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
   assertBuilderFieldNames,
+  assertTopLevelFieldsNamed,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
 } from "../../api/fields-payload";
@@ -67,10 +68,7 @@ import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-c
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import {
-  resolveSingleTableName,
-  singleTableFamiliesCollide,
-} from "../../domains/singles/services/resolve-single-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -144,10 +142,12 @@ import {
 } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import { assertSingleTablesUnowned } from "./single-table-family";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
@@ -570,6 +570,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  // What creating a Single under an address would answer, for the Builder's new-entity dialog;
+  // writes nothing.
+  checkSingleAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("single", body),
+  },
   createSingle: {
     execute: async (svc, _, body) => {
       const b = body as
@@ -596,11 +601,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           }
         | undefined;
 
-      if (!b?.slug) throw new Error("Single slug is required");
       // Judged by the one address rule every road shares, before the DDL below runs, so a refused
       // address leaves no `single_<slug>` table behind. A system resource's name is among its
-      // refusals: it seeds the same permission rows that resource's routes check.
-      assertAddressAllowed("single", b.slug);
+      // refusals: it seeds the same permission rows that resource's routes check. A missing or
+      // empty address is the rule's refusal too, so a save answers it as the Builder's address
+      // check does, with the rule's reason.
+      assertAddressAllowed("single", b?.slug);
+      if (!b?.slug) throw new Error("Single slug is required");
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
@@ -632,25 +639,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         });
       }
 
-      // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
-      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
-      // while looking like two free slugs — and a Single's storage spans its main table AND the
-      // `_locales` companion beside it, so `foo-locales` collides with `foo` the same way. The
-      // registry's own check runs after the DDL, by which point the create has already acted
-      // against the table that exists and rebound the runtime to this request's fields.
-      const owner = (await svc.registry.getAllSingles()).find(s =>
-        singleTableFamiliesCollide(s.tableName, tableName)
-      );
-      if (owner) {
-        throw NextlyError.duplicate({
-          logContext: {
-            reason: "single-table-conflict",
-            slug: b.slug,
-            tableName,
-            ownedBy: owner.slug,
-          },
-        });
-      }
+      // Refused before any DDL runs, by the table family another Single holds; the Builder's
+      // address check asks the same function.
+      await assertSingleTablesUnowned(svc.registry, b.slug, tableName);
 
       // i18n: a localized single stores translatable values via the app's
       // `localization` config; creating one without that config would split
@@ -849,11 +840,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishAllSingleLocales: {
     // Publish every language of a Single in one transaction. The Single
     // equivalent of the collection entry's publish-all.
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
         user,
+        // The request the publish's update hooks are told about.
+        request,
         // Who performed the publish, recorded on the outbox events: an API-key
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
@@ -1187,6 +1180,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // the DB and the committed manifest diverge silently.
       // A field name the Single already holds keeps working whatever its case.
       assertValidFieldsPayload(fields, { stored: single.fields ?? [] });
+      // Only named fields at the top level, as every road that saves a Single takes them.
+      assertTopLevelFieldsNamed(fields);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -1317,6 +1312,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // Only named fields at the top level, as every road that saves a Single takes them.
+      assertTopLevelFieldsNamed(fields);
 
       // Everything above reads the request alone, so it is decided before the lock is taken: a
       // malformed save is answered as one, not with a lock refusal or a lock table created on the

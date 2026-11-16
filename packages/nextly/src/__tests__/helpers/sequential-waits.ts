@@ -1,13 +1,16 @@
 /**
  * How many times code waits on the database one after another: every round trip the driver
- * makes (each statement, and each new connection it opens) is held for a fixed time, as a
- * database that far away would hold it, and recorded with when it began and ended. The waits
- * one after another are then the longest chain of round trips in which each began after the one
- * before it ended. Round trips sent together overlap, so a chain counts them once; SQLite's
- * driver blocks, so there every statement is a wait of its own.
+ * makes (each statement, and each new connection it opens) is answered a fixed time after it was
+ * sent, as a database that far away would answer it, and recorded with when it began and ended.
+ * The waits one after another are then the longest chain of round trips in which each began after
+ * the one before it ended. Round trips sent together overlap, so a chain counts them once;
+ * SQLite's driver blocks, so there every statement is a wait of its own.
  *
  * Counted from the round trips themselves rather than from the wall time, so time the code
- * spends computing, which varies from machine to machine, never reads as a wait.
+ * spends computing, which varies from machine to machine, never reads as a wait. Nor does the
+ * time the database under the test takes: an answer it gives sooner than the fixed time is held
+ * until then, so two round trips sent together come back in the order they were sent, however
+ * the database's own speed varies between them.
  *
  * @module __tests__/helpers/sequential-waits
  */
@@ -40,14 +43,32 @@ function blockFor(ms: number): void {
 }
 
 /**
- * Hold every round trip the driver under `adapter` makes for `delayMs`, and record it, from now
- * until `uninstall`, whichever connection of that driver makes it.
+ * Answer every round trip the driver under `adapter` makes `delayMs` after it was sent, and record
+ * it, from now until `uninstall`, whichever connection of that driver makes it. A new connection is
+ * answered after `connectionDelayMs` where given: a pool hands a waiting statement whichever client
+ * is free first, a released one or a newly connected one, and where both are held alike they come
+ * free at the same moment and the machine's timing decides which, and with it the chain.
+ *
+ * The round trip is sent at once and its answer held until it is due, rather than held before it
+ * is sent: held before, its answer came at the delay plus the time the database took, so of two
+ * round trips sent together the one the database happened to answer a millisecond sooner came
+ * back first, and with it which statement found a client free and which waited for a new
+ * connection. Each answer's timer is set as its round trip is sent, so answers due together come
+ * back in the order they were sent. A database slower than the delay still answers when it does.
  */
 export async function recordRoundTrips(
   adapter: DrizzleAdapter,
   dialect: TestDialect,
-  options: { delayMs: number; context?: () => unknown }
+  options: {
+    delayMs: number;
+    connectionDelayMs?: number;
+    context?: () => unknown;
+  }
 ): Promise<RoundTripRecorder> {
+  const holdOf = (kind: RoundTrip["kind"]): number =>
+    kind === "connection"
+      ? (options.connectionDelayMs ?? options.delayMs)
+      : options.delayMs;
   const trips: RoundTrip[] = [];
   const restores: Array<() => void> = [];
   const begin = (kind: RoundTrip["kind"], text: string): RoundTrip => {
@@ -76,7 +97,7 @@ export async function recordRoundTrips(
       owner[method] = original;
     });
   };
-  /** An asynchronous call held for the delay before it is sent. */
+  /** An asynchronous call sent at once, its answer held until the delay after it was sent. */
   const heldAsync =
     (
       kind: RoundTrip["kind"],
@@ -87,42 +108,73 @@ export async function recordRoundTrips(
         const text = textOf(args);
         if (text === undefined) return original.apply(this, args);
         const trip = begin(kind, text);
+        // Set now, so answers due at the same moment come back in the order they were sent.
+        const due = new Promise<void>(resolve =>
+          setTimeout(resolve, holdOf(kind))
+        );
+        const whenDue =
+          (deliver: (...result: unknown[]) => unknown) =>
+          (...result: unknown[]): void => {
+            void due.then(() => {
+              end(trip);
+              deliver(...result);
+            });
+          };
         const last = args[args.length - 1];
         if (typeof last === "function") {
-          args[args.length - 1] = (...result: unknown[]) => {
-            end(trip);
-            return (last as (...a: unknown[]) => unknown)(...result);
-          };
-          setTimeout(() => original.apply(this, args), options.delayMs);
-          return undefined;
+          args[args.length - 1] = whenDue(
+            last as (...result: unknown[]) => unknown
+          );
+          return original.apply(this, args);
         }
-        const first = args[0] as { once?: unknown } | undefined;
+        const first = args[0] as
+          | {
+              once?: unknown;
+              emit?: (event: string, ...rest: unknown[]) => boolean;
+              onResult?: (...result: unknown[]) => unknown;
+            }
+          | undefined;
         if (
           first &&
           typeof first === "object" &&
-          typeof first.once === "function"
+          typeof first.once === "function" &&
+          typeof first.emit === "function"
         ) {
-          // mysql2's pool hands the connection a ready query command and reads the
-          // return value at once: the command now, sent after the delay.
-          (first as { once(event: string, f: () => void): void }).once(
-            "end",
-            () => end(trip)
-          );
-          setTimeout(() => original.apply(this, args), options.delayMs);
+          // mysql2's pool hands the connection a ready query command and reads the return value
+          // at once. The command calls its own result callback and then says `end`, on which the
+          // pool takes the connection back: both wait until the answer is due.
+          const command = first as {
+            emit: (event: string, ...rest: unknown[]) => boolean;
+            onResult?: (...result: unknown[]) => unknown;
+          };
+          const emit = command.emit;
+          command.emit = function (
+            this: unknown,
+            event: string,
+            ...rest: unknown[]
+          ): boolean {
+            if (event !== "end") return emit.call(this, event, ...rest);
+            whenDue(() => emit.call(this, event, ...rest))();
+            return true;
+          };
+          const onResult = command.onResult;
+          if (typeof onResult === "function") {
+            command.onResult = (...result: unknown[]) => {
+              void due.then(() => onResult.apply(command, result));
+            };
+          }
+          original.apply(this, args);
           return first;
         }
-        return new Promise(resolve => setTimeout(resolve, options.delayMs))
-          .then(() => original.apply(this, args))
-          .then(
-            value => {
-              end(trip);
-              return value;
-            },
-            (error: unknown) => {
-              end(trip);
-              throw error;
-            }
-          );
+        let sent: unknown;
+        try {
+          sent = original.apply(this, args);
+        } catch (error) {
+          sent = Promise.reject(error);
+        }
+        return new Promise((resolve, reject) => {
+          Promise.resolve(sent).then(whenDue(resolve), whenDue(reject));
+        });
       };
   const textOfStatement = (args: unknown[]): string | undefined => {
     const [first] = args;

@@ -176,6 +176,11 @@ describe("which relationships carry a key", () => {
     type: "relationship",
     relationTo: "users",
   } as unknown as FieldDefinition;
+  const toSingle = {
+    name: "settings",
+    type: "relationship",
+    relationTo: "site-settings",
+  } as unknown as FieldDefinition;
   const multiValue = {
     name: "authors",
     type: "relationship",
@@ -235,8 +240,17 @@ describe("which relationships carry a key", () => {
     expect(keysFor(adminShape)).toEqual([]);
   });
 
+  it("keys a relationship to Users everywhere, to the core users table", () => {
+    expect(keysFor(toUsers, builderTables)).toEqual([
+      "described users",
+      "created",
+      "added",
+      "planned",
+    ]);
+  });
+
   it("keys a relationTo to a target the registry does not hold nowhere", () => {
-    expect(keysFor(toUsers, builderTables)).toEqual([]);
+    expect(keysFor(toSingle, builderTables)).toEqual([]);
   });
 
   it("keys a relationship holding a list, or naming several targets, nowhere", () => {

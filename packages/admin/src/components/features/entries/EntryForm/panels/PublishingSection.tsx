@@ -146,7 +146,7 @@ function ScheduleButton({
 }: {
   /**
    * Whether this only holds the button's place while the schedule is checked:
-   * the same button, unseen and out of reach, with no reason line under it.
+   * the same button and the reason line under it, unseen and out of reach.
    */
   holdingPlace?: boolean;
 }) {
@@ -165,18 +165,31 @@ function ScheduleButton({
   }
   const reason = reasonFor(action, binding);
   if (holdingPlace) {
+    // The reason the offer is off is known before the schedule is (a
+    // colleague holds the document), and the answer draws it under the
+    // button: its place is held too, so the sections below stay put.
     return (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled
-        tabIndex={-1}
-        aria-hidden="true"
-        className="invisible"
-      >
-        {action.label}
-      </Button>
+      <>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled
+          tabIndex={-1}
+          aria-hidden="true"
+          className="invisible"
+        >
+          {action.label}
+        </Button>
+        {reason === undefined ? null : (
+          <p
+            aria-hidden="true"
+            className="invisible text-xs text-muted-foreground"
+          >
+            {reason}
+          </p>
+        )}
+      </>
     );
   }
   return (

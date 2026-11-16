@@ -64,6 +64,7 @@ import { Outline } from "../outline/Outline";
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import { BuilderSettingsModal } from "../BuilderSettingsModal";
 import { BuilderToolbar } from "../BuilderToolbar";
+import { NO_PENDING_CHANGES } from "./no-pending-changes";
 import type { BuilderConfig, BuilderKind } from "../builder-config";
 import { BuilderFieldPicker } from "../BuilderFieldPicker";
 import { BuilderFieldSettings } from "../BuilderFieldSettings";
@@ -194,9 +195,12 @@ function confirmation(
     previewId: 1,
     isOpen: true,
     isApplying: false,
+    isBusy: false,
     request: () => {},
     setOpen: () => {},
     settle: () => {},
+    beginPreview: () => {},
+    endPreview: () => {},
     beginApply: () => {},
     endApply: () => {},
   };
@@ -504,6 +508,7 @@ const SURFACES: readonly Surface[] = [
           config={configFor(kind)}
           name="Posts"
           unsavedCount={1}
+          pending={NO_PENDING_CHANGES}
           onAddField={() => {}}
           onOpenSettings={() => {}}
           onSave={() => {}}

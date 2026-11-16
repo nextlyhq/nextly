@@ -28,16 +28,26 @@ import {
 } from "../../media/retired-image-sizes-constants";
 import { kindAndSizes, toSnakeCase } from "../services/field-column-descriptor";
 
-import type { TableRelationInput, ColumnBuilder, TableDefinition } from "./dsl";
-import { defineTable } from "./dsl";
+import type {
+  ColumnBuilder,
+  TableCheckInput,
+  TableDefinition,
+  TableForeignKeyInput,
+  TableRelationInput,
+} from "./dsl";
+import { defineTable, resolveTableConstraints } from "./dsl";
 import {
   assertAddableToExistingRows,
   assertMayAddColumns,
+  assertMayOverride,
   EXTENDABLE_CORE_TABLES,
   type ExtensionTarget,
+  type OverrideStorage,
+  resolveColumnOverride,
 } from "./extension-columns";
 import {
   assertIndexBuildable,
+  assertMysqlRowFits,
   assertUsableAppTableName,
   pluginTableName,
   PREFIX_SEPARATOR,
@@ -45,6 +55,7 @@ import {
 import type {
   DeclaredCheck,
   DeclaredForeignKey,
+  DeclaredRelation,
   ExtensionColumn,
   ExtensionIndex,
   SchemaOwner,
@@ -86,7 +97,7 @@ interface DraftTable {
   indexes: ExtensionIndex[];
   foreignKeys?: DeclaredForeignKey[];
   checks?: DeclaredCheck[];
-  relations?: TableRelationInput[];
+  relations?: DeclaredRelation[];
   /**
    * Seeded columns known by NAME only — a core table's, or an entity system
    * column the seed could not type. They take part in the duplicate-name rule
@@ -94,6 +105,18 @@ interface DraftTable {
    * over the kind they were given, because that kind is a stand-in.
    */
   opaqueColumns?: ReadonlySet<string>;
+  /** An entity's columns its own fields generate (`SeedEntityTable` `field`). */
+  fieldColumns?: ReadonlySet<string>;
+  /** An entity's own indexes (`SeedEntityTable` `ownIndexes`). */
+  ownIndexes?: readonly ExtensionIndex[];
+}
+
+/** The app's override of one column's storage, as the store records it. */
+export interface ColumnOverride extends OverrideStorage {
+  /** The column's SQL name. */
+  column: string;
+  /** Always the app: only the app may override, and the element is its. */
+  owner: SchemaOwner;
 }
 
 export interface SchemaDraft {
@@ -106,14 +129,30 @@ export interface SchemaDraft {
    * owned by the plugin, so there is nothing for it to adopt.
    */
   adoptTable(def: TableDefinition): void;
-  /** Adds columns (own tables only) and indexes (own and entity tables). */
+  /**
+   * Adds columns and indexes to a table, and foreign keys, checks and
+   * relations to a plugin's or the app's own: the caller's own, or another
+   * owner's for the app or a plugin naming the owner in `dependsOn`. Each
+   * element added to someone else's table is recorded as the caller's.
+   */
   extendTable(
     name: string,
     ext: {
       columns?: Record<string, ColumnBuilder>;
       indexes?: { columns: string[]; unique?: boolean; name?: string }[];
+      foreignKeys?: TableForeignKeyInput[];
+      checks?: TableCheckInput[];
+      relations?: TableRelationInput[];
     }
   ): void;
+  /**
+   * Changes the storage of a column a collection's, Single's or component's
+   * own fields generate, within its value family: a string's width or kind,
+   * a whole number to `bigint`, a decimal's precision and scale. App only.
+   * The column keeps its name, nullability, default and keys; the override
+   * is recorded as the app's, and every push and migration keeps it.
+   */
+  overrideColumn(table: string, column: string, storage: ColumnBuilder): void;
   getTable(name: string): DraftTableView | undefined;
   tables(): readonly DraftTableView[];
 }
@@ -144,7 +183,18 @@ export interface SeedEntityTable {
     precision?: number;
     scale?: number;
     nullable: boolean;
+    /**
+     * Whether one of the entity's own fields generates the column, rather
+     * than the entity kind (its id, timestamps, status, title or slug).
+     * Only such a column may be overridden.
+     */
+    field?: boolean;
   }[];
+  /**
+   * The indexes the entity's own fields and config give its table, by column
+   * (`entitySeed`), so an override is judged against them.
+   */
+  ownIndexes?: { columns: string[]; unique: boolean }[];
 }
 
 /**
@@ -202,6 +252,27 @@ function describeOwner(owner: DraftOwner): string {
     case "entity":
       return `the ${owner.entityKind} "${owner.slug}"`;
   }
+}
+
+/**
+ * The plugin a table belongs to: its owner when that is a plugin, or the
+ * plugin that declared the entity it holds. `undefined` for core, the app
+ * and an entity the app declared.
+ */
+function pluginOf(owner: DraftOwner): string | undefined {
+  if (owner.kind === "plugin") return owner.id;
+  if (owner.kind === "entity") return owner.plugin;
+  return undefined;
+}
+
+/**
+ * A table name as a refusal shows it: the name asked for, and the existing
+ * spelling too when the two differ only in case.
+ */
+function spelledAs(asked: string, existing: string): string {
+  return asked === existing
+    ? `"${asked}"`
+    : `"${asked}" (the same table as "${existing}" once case is ignored)`;
 }
 
 function sameOwner(a: DraftOwner, b: DraftOwner): boolean {
@@ -269,6 +340,14 @@ export class SchemaDraftStore {
             .filter(column => column.kind === undefined)
             .map(column => column.name)
         ),
+        fieldColumns: new Set(
+          entity.columns
+            .filter(column => column.field === true)
+            .map(column => column.name)
+        ),
+        ...(entity.ownIndexes !== undefined
+          ? { ownIndexes: entity.ownIndexes }
+          : {}),
       });
     }
   }
@@ -301,6 +380,11 @@ export class SchemaDraftStore {
         // access and relations, so one that moves between builds moves what
         // the runtime serves.
         adopted: [...this.adopted.values()].sort(byName),
+        // Overrides too: they change what the entity's table stores, so one
+        // that moves between builds moves what a push applies.
+        overrides: [...this.overrides.entries()].sort(([a], [b]) =>
+          a.localeCompare(b)
+        ),
       },
       (_key, value: unknown) => {
         if (value instanceof Set) {
@@ -336,16 +420,17 @@ export class SchemaDraftStore {
         "Only the app may adopt an existing table; a plugin's tables are created and owned by the plugin."
       );
     }
-    if (this.tables.has(def.name)) {
+    const same = this.sameNameAs(def.name);
+    if (same !== undefined && !same.adopted) {
       refuse(
         `app.db.schema.adoptTable.${def.name}`,
-        `"${def.name}" is a managed table and cannot be adopted; adoptTable is for tables Nextly does not own.`
+        `${spelledAs(def.name, same.table.name)} is a managed table and cannot be adopted; adoptTable is for tables Nextly does not own.`
       );
     }
-    if (this.adopted.has(def.name)) {
+    if (same !== undefined) {
       refuse(
         `app.db.schema.adoptTable.${def.name}`,
-        `"${def.name}" is already adopted.`
+        `${spelledAs(def.name, same.table.name)} is already adopted.`
       );
     }
     this.adopted.set(def.name, {
@@ -362,12 +447,125 @@ export class SchemaDraftStore {
     return [...this.adopted.values()];
   }
 
+  /** The app's overrides, by table, in the order they were declared. */
+  private readonly overrides = new Map<string, ColumnOverride[]>();
+
+  recordOverride(table: string, override: ColumnOverride): void {
+    this.overrides.set(table, [...(this.overrides.get(table) ?? []), override]);
+  }
+
+  overridesOf(table: string): readonly ColumnOverride[] {
+    return this.overrides.get(table) ?? [];
+  }
+
+  /** Every override, by table: what the compiled schema carries. */
+  columnOverrides(): Map<string, ColumnOverride[]> {
+    return new Map(
+      [...this.overrides.entries()].map(([table, list]) => [table, [...list]])
+    );
+  }
+
   all(): DraftTable[] {
     return [...this.tables.values()];
   }
 
   get(name: string): DraftTable | undefined {
     return this.tables.get(name);
+  }
+
+  /**
+   * The table, managed or adopted, whose name is `name` once case is ignored.
+   *
+   * SQLite resolves table names without regard to case, and so does MySQL
+   * wherever `lower_case_table_names` is set (the default on Windows and
+   * macOS), so `Notes` and `notes` are one table there however each
+   * declaration spells it. A declaration has to be valid on every dialect, so
+   * two names that differ only in case collide everywhere. `get` stays exact:
+   * it finds the table a caller names, and the name it carries is the one the
+   * DDL uses.
+   */
+  sameNameAs(
+    name: string
+  ): { table: DraftTable; adopted: boolean } | undefined {
+    const folded = name.toLowerCase();
+    for (const table of this.tables.values()) {
+      if (table.name.toLowerCase() === folded) return { table, adopted: false };
+    }
+    for (const table of this.adopted.values()) {
+      if (table.name.toLowerCase() === folded) return { table, adopted: true };
+    }
+    return undefined;
+  }
+
+  /**
+   * The tables plugins' contributed keys and relations point at, judged once
+   * every hook has run (`assertContributedTargetsReachable`): the app
+   * declares its tables after every plugin, and a plugin may name a table a
+   * later plugin declares, so a lookup while the hook runs finds neither.
+   */
+  private readonly contributedTargets: ContributedTarget[] = [];
+
+  recordContributedTarget(target: ContributedTarget): void {
+    this.contributedTargets.push(target);
+  }
+
+  /**
+   * Refuse a plugin's key or relation pointing at a table its migrations and
+   * queries cannot rely on: the app's, whose stream runs after every
+   * plugin's, or another plugin's it does not depend on, which nothing orders
+   * before it or keeps installed. Asked of what a plugin declares on its own
+   * tables as well as what it adds to another owner's: a relation is the
+   * same dependency wherever it is written. Another plugin's table includes
+   * the table of a collection, Single or field group that plugin declared. A
+   * core table, or one no hook declared, is judged by the compile and the
+   * database as any key's target is.
+   */
+  assertContributedTargetsReachable(): void {
+    for (const entry of this.contributedTargets) {
+      const target = this.tables.get(entry.target);
+      if (target === undefined) continue;
+      const path = entry.own
+        ? `plugin.${entry.contributor}.schema.${entry.table}`
+        : `plugin.${entry.contributor}.schema.extendTable.${entry.table}`;
+      const lead = `The ${entry.element} plugin "${entry.contributor}" ${entry.own ? "declares on" : "adds to"} "${entry.table}" points at "${entry.target}"`;
+      if (target.owner.kind === "app") {
+        refuse(
+          path,
+          `${lead}, which the app declares. The app's schema runs after every plugin's, so a plugin's ${entry.element} cannot rely on it.`
+        );
+      }
+      const targetPlugin = pluginOf(target.owner);
+      const dependsOn = this.input.dependencies?.get(entry.contributor);
+      if (
+        targetPlugin !== undefined &&
+        targetPlugin !== entry.contributor &&
+        dependsOn?.has(targetPlugin) !== true
+      ) {
+        refuse(
+          path,
+          `${lead}, which belongs to ${describeOwner(target.owner)}${target.owner.kind === "entity" ? `, declared by plugin "${targetPlugin}"` : ""}. Name "${targetPlugin}" in dependsOn (or optionalDependsOn), so it is installed first and cannot be uninstalled while the ${entry.element} needs it.`
+        );
+      }
+    }
+  }
+
+  /**
+   * Refuse an entity table whose row MySQL cannot hold, judged once every
+   * hook has run, so the order a hook overrides a column and adds another in
+   * does not decide it. Weighed over the columns the seed types, the app's
+   * overrides and the hidden columns hooks added included: a column known by
+   * name only (a component's own) is left out, so the sum is the least the
+   * row can be, and a refusal here is one MySQL would make too.
+   */
+  assertEntityRowsFit(): void {
+    for (const table of this.tables.values()) {
+      if (table.owner.kind !== "entity") continue;
+      const opaque = table.opaqueColumns ?? new Set<string>();
+      assertMysqlRowFits({
+        name: table.name,
+        columns: table.columns.filter(column => !opaque.has(column.name)),
+      });
+    }
   }
 
   set(table: DraftTable): void {
@@ -513,22 +711,24 @@ function assertMayExtendEntity(table: DraftTable, scope: ExtendScope): void {
 }
 
 /**
- * Refuse a plugin's index over a column a THIRD owner contributed, unless the
- * plugin names that contributor among its dependencies.
+ * Refuse a plugin's element over a column a THIRD owner contributed — an
+ * index, a foreign key or a relation — unless the plugin names that
+ * contributor among its dependencies.
  *
  * The column exists only while its contributor is installed, and arrives in
  * the contributor's migrations. Without the dependency nothing orders the two
- * plugins, so the index could be created before the column it names, and the
- * contributor could be uninstalled from under it. The app is exempt: its
+ * plugins, so the element could be created before the column it names, and
+ * the contributor could be uninstalled from under it. The app is exempt: its
  * stream runs after every plugin's, and it may build on anything.
  */
-function assertIndexColumnsReachable(
-  index: ExtensionIndex,
+function assertColumnsReachable(
+  columns: readonly string[],
+  element: "index" | "foreign key" | "relation",
   table: DraftTable,
   scope: ExtendScope
 ): void {
   if (scope.owner.kind !== "plugin") return;
-  for (const name of index.columns) {
+  for (const name of columns) {
     const contributor = table.columns.find(
       column => column.name === name
     )?.contributedBy;
@@ -543,7 +743,7 @@ function assertIndexColumnsReachable(
     }
     refuse(
       `${scope.ownerPath}.extendTable.${table.name}`,
-      `${describeOwner(scope.owner)} may not index the column "${name}" on "${table.name}": ${describeOwner(contributor)} contributed it. Name it in dependsOn (or optionalDependsOn), so its migrations run first and it can't be uninstalled from under the index.`
+      `The ${element} ${describeOwner(scope.owner)} adds to "${table.name}" uses the column "${name}", which ${describeOwner(contributor)} contributed. Name it in dependsOn (or optionalDependsOn), so its migrations run first and it can't be uninstalled from under the ${element}.`
     );
   }
 }
@@ -718,9 +918,185 @@ function addIndexes(
       );
     }
     const resolved = contributedIndexOf(index, scope);
-    assertIndexColumnsReachable(resolved, table, scope);
+    assertColumnsReachable(resolved.columns, "index", table, scope);
     assertSeededIndexBuildable(resolved, table);
     table.indexes.push(resolved);
+  }
+}
+
+/** A plugin's contributed key or relation, and the table it points at. */
+interface ContributedTarget {
+  contributor: string;
+  table: string;
+  element: "foreign key" | "relation";
+  target: string;
+  /** Declared on the plugin's own table, rather than added to another's. */
+  own?: boolean;
+}
+
+/** What `extendTable` takes beyond columns and indexes. */
+interface ConstraintInputs {
+  foreignKeys?: TableForeignKeyInput[];
+  checks?: TableCheckInput[];
+  relations?: TableRelationInput[];
+}
+
+/**
+ * Refuse foreign keys, checks and relations on a table this caller may not
+ * give them to.
+ *
+ * Only a plugin's or the app's own table takes them: an entity's or a core
+ * table's elements ride the app's stream whoever adds them, and a key or a
+ * check there would constrain rows the entity's own writes do not expect.
+ * On those tables a hidden column and an index stay the way to extend.
+ * Otherwise the column rule applies: the owner, the app on a plugin's table,
+ * or a plugin naming the owner in `dependsOn`.
+ */
+function assertMayAddConstraints(table: DraftTable, scope: ExtendScope): void {
+  const path = `${scope.ownerPath}.extendTable.${table.name}`;
+  if (table.owner.kind === "entity" || table.owner.kind === "core") {
+    refuse(
+      path,
+      `Foreign keys, checks and relations can be added only to a plugin's or the app's own tables; "${table.name}" belongs to ${describeOwner(table.owner)}. Add a hidden column or an index there instead.`
+    );
+  }
+  const appOnPluginTable =
+    scope.owner.kind === "app" && table.owner.kind === "plugin";
+  if (
+    scope.isOwn ||
+    appOnPluginTable ||
+    isPluginOnDependencyTable(table, scope)
+  ) {
+    return;
+  }
+  refuse(
+    path,
+    `${describeOwner(scope.owner)} may not add foreign keys, checks or relations to "${table.name}", which belongs to ${describeOwner(table.owner)}. Name the owner in dependsOn (or optionalDependsOn) to extend its tables.`
+  );
+}
+
+/** Refuse a relation whose name the table already gives a relation or a column. */
+function assertRelationNamesFree(
+  table: DraftTable,
+  relations: readonly TableRelationInput[],
+  scope: ExtendScope
+): void {
+  const taken = new Set([
+    ...(table.relations ?? []).map(relation => relation.name),
+    ...table.columns.map(column => column.key),
+  ]);
+  for (const relation of relations) {
+    if (taken.has(relation.name)) {
+      refuse(
+        `${scope.ownerPath}.extendTable.${table.name}`,
+        `"${table.name}" already has a relation or a column named "${relation.name}"; name the relation for what it points at.`
+      );
+    }
+    // Added as it is judged, so two relations of one name in the same call
+    // are refused too: the registry would keep only the last.
+    taken.add(relation.name);
+  }
+}
+
+/**
+ * Add foreign keys, checks and relations, validated as a declared table's
+ * are (`resolveTableConstraints`), each recorded as the caller's when the
+ * table is someone else's. A key or check so recorded travels in the
+ * caller's migrations and is owned per element, so the table's owner never
+ * sees it as drift and the caller's uninstall removes only what it added.
+ */
+function addConstraints(
+  table: DraftTable,
+  inputs: ConstraintInputs,
+  scope: ExtendScope,
+  record: (target: ContributedTarget) => void
+): void {
+  if (constraintCount(inputs) === 0) return;
+  assertMayAddConstraints(table, scope);
+  const resolved = resolveTableConstraints(table.name, table.columns, inputs);
+  assertContributedKeysReach(resolved.foreignKeys, table, scope, record);
+  assertContributedRelationsReach(resolved.relations, table, scope, record);
+  assertRelationNamesFree(table, resolved.relations, scope);
+  appendConstraints(table, resolved, scope);
+}
+
+/** How many keys, checks and relations a call asks for. */
+function constraintCount(inputs: ConstraintInputs): number {
+  return (
+    (inputs.foreignKeys?.length ?? 0) +
+    (inputs.checks?.length ?? 0) +
+    (inputs.relations?.length ?? 0)
+  );
+}
+
+/** Each key's columns, and a contributed key's target, as the caller may use them. */
+function assertContributedKeysReach(
+  keys: readonly DeclaredForeignKey[],
+  table: DraftTable,
+  scope: ExtendScope,
+  record: (target: ContributedTarget) => void
+): void {
+  for (const fk of keys) {
+    assertColumnsReachable(fk.columns, "foreign key", table, scope);
+    // A key on the plugin's own table is judged with every declared key by
+    // the compile (`assertForeignKeyTargetsExist`, which orders the
+    // migration streams); only one added to another owner's table is here.
+    if (scope.isOwn || scope.owner.kind !== "plugin") continue;
+    record({
+      contributor: scope.owner.id,
+      table: table.name,
+      element: "foreign key",
+      target: fk.referencesTable,
+    });
+  }
+}
+
+/** Each relation's column, and a contributed relation's target, likewise. */
+function assertContributedRelationsReach(
+  relations: readonly TableRelationInput[],
+  table: DraftTable,
+  scope: ExtendScope,
+  record: (target: ContributedTarget) => void
+): void {
+  for (const relation of relations) {
+    if (relation.fromColumn !== undefined) {
+      assertColumnsReachable([relation.fromColumn], "relation", table, scope);
+    }
+    if (scope.owner.kind !== "plugin") continue;
+    record({
+      contributor: scope.owner.id,
+      table: table.name,
+      element: "relation",
+      target: relation.targetTable,
+      own: scope.isOwn,
+    });
+  }
+}
+
+/** Put the resolved elements on the table, each the caller's when it is foreign. */
+function appendConstraints(
+  table: DraftTable,
+  resolved: ReturnType<typeof resolveTableConstraints>,
+  scope: ExtendScope
+): void {
+  const by = scope.isOwn ? {} : { contributedBy: scope.owner };
+  if (resolved.foreignKeys.length > 0) {
+    table.foreignKeys = [
+      ...(table.foreignKeys ?? []),
+      ...resolved.foreignKeys.map(fk => ({ ...fk, ...by })),
+    ];
+  }
+  if (resolved.checks.length > 0) {
+    table.checks = [
+      ...(table.checks ?? []),
+      ...resolved.checks.map(check => ({ ...check, ...by })),
+    ];
+  }
+  if (resolved.relations.length > 0) {
+    table.relations = [
+      ...(table.relations ?? []),
+      ...resolved.relations.map(relation => ({ ...relation, ...by })),
+    ];
   }
 }
 
@@ -758,12 +1134,145 @@ function assertSeededIndexBuildable(
     }
   }
   const opaque = table.opaqueColumns ?? new Set<string>();
+  // Weighed whole where the seed types every column the index names, so its
+  // key width is summed, an override's width included whichever was declared
+  // first. A column known by name only leaves the width unknown.
   assertIndexBuildable(
     index,
     table.columns.filter(column => !opaque.has(column.name)),
     table.name,
-    false
+    table.columns.length > 0 &&
+      index.columns.every(
+        name => !opaque.has(name) && table.columns.some(c => c.name === name)
+      )
   );
+}
+
+/**
+ * The app's override of an entity column's storage: judged, recorded as the
+ * app's, and applied to the draft's copy of the table.
+ *
+ * Judged before anything changes, so a refused override leaves the table as
+ * it was. The column is replaced in the draft too, so a hook running after
+ * the override, and the index and key rules judging it, see the storage the
+ * table will have.
+ */
+function overrideColumn(
+  store: SchemaDraftStore,
+  owner: SchemaOwner,
+  name: string,
+  column: string,
+  storage: ColumnBuilder
+): void {
+  const ownerPath =
+    owner.kind === "plugin" ? `plugin.${owner.id}.schema` : "app.db.schema";
+  const path = `${ownerPath}.overrideColumn.${name}`;
+  assertMayOverride(owner, name, column);
+  const table = store.get(name);
+  if (table?.owner.kind !== "entity") {
+    refuse(
+      path,
+      `"${name}" is not a collection's, a Single's or a component's table${table === undefined ? "" : `; it belongs to ${describeOwner(table.owner)}`}. Only a column an entity's own fields generate can be overridden.`
+    );
+  }
+  const sqlName = toSnakeCase(column);
+  const at = table.columns.findIndex(existing => existing.name === sqlName);
+  const seeded = table.columns[at];
+  if (seeded === undefined) {
+    refuse(
+      path,
+      `"${name}" has no column "${sqlName}". A field kept per language stores its values on the language table, which an override does not reach.`
+    );
+  }
+  assertOverridable(store, table, seeded, path);
+  const target = resolveColumnOverride(seeded, storage, name, sqlName);
+  const replaced: ExtensionColumn = {
+    key: seeded.key,
+    name: seeded.name,
+    nullable: seeded.nullable,
+    ...kindAndSizes({ ...target, kind: target.kind }),
+  };
+  assertOverriddenIndexesBuildable(table, replaced);
+  store.recordOverride(name, { column: sqlName, ...target, owner });
+  table.columns[at] = replaced;
+}
+
+/**
+ * Refuse an override of a column that is not the entity's own field column,
+ * or that something else depends on the storage of.
+ */
+function assertOverridable(
+  store: SchemaDraftStore,
+  table: DraftTable,
+  column: ExtensionColumn,
+  path: string
+): void {
+  if (column.contributedBy !== undefined) {
+    refuse(
+      path,
+      `Column "${column.name}" was added to "${table.name}" by ${describeOwner(column.contributedBy)}, and only its contributor changes it.`
+    );
+  }
+  if (table.fieldColumns?.has(column.name) !== true) {
+    refuse(
+      path,
+      `Column "${column.name}" is one "${table.name}" keeps for itself, not one its fields generate, so its storage cannot be overridden.`
+    );
+  }
+  // A single relationship's or upload's key holds the id of the row it
+  // points at, and its storage is that id's.
+  if ((column.kind as string) === "fkSingle") {
+    refuse(
+      path,
+      `Column "${column.name}" holds the id a relationship or upload points at, so its storage is the target's id, and cannot be overridden.`
+    );
+  }
+  if (store.overridesOf(table.name).some(o => o.column === column.name)) {
+    refuse(path, `Column "${column.name}" is already overridden.`);
+  }
+  const referencedBy = store
+    .extensionTables()
+    .find(other =>
+      (other.foreignKeys ?? []).some(
+        key =>
+          key.referencesTable === table.name &&
+          key.referencesColumns.includes(column.name)
+      )
+    );
+  if (referencedBy !== undefined) {
+    refuse(
+      path,
+      `Column "${column.name}" is referenced by a foreign key on "${referencedBy.name}", whose column must keep the storage it points at.`
+    );
+  }
+}
+
+/**
+ * Refuse an override that leaves an index over the column unbuildable on
+ * some dialect: an unbounded string, or a width past MySQL's key limit. Both
+ * the indexes hooks added and the entity's own (a unique or indexed field, a
+ * compound index its config declares) are judged.
+ */
+function assertOverriddenIndexesBuildable(
+  table: DraftTable,
+  replaced: ExtensionColumn
+): void {
+  const columns = table.columns.map(existing =>
+    existing.name === replaced.name ? replaced : existing
+  );
+  const opaque = table.opaqueColumns ?? new Set<string>();
+  for (const index of [...table.indexes, ...(table.ownIndexes ?? [])]) {
+    if (!index.columns.includes(replaced.name)) continue;
+    // Weighed whole where every column it names is typed, so the key width
+    // the override gives it is summed: a hook's index over a field widened
+    // past MySQL's key limit is refused here rather than by the server.
+    assertIndexBuildable(
+      index,
+      columns.filter(existing => !opaque.has(existing.name)),
+      table.name,
+      index.columns.every(name => !opaque.has(name))
+    );
+  }
 }
 
 /**
@@ -812,14 +1321,22 @@ export function createOwnerDraft(
     },
 
     addTable(def: TableDefinition): void {
-      const name = resolveOwnName(def.name);
-      const existing = store.get(name);
-      if (existing) {
+      // Judged before the app's naming rules, so an app table named like a
+      // collection's or a core table is refused naming that owner, rather
+      // than by a rule about the name's shape that leaves the operator
+      // guessing whose it is.
+      const name = owner.kind === "app" ? def.name : resolveOwnName(def.name);
+      const same = store.sameNameAs(name);
+      if (same !== undefined) {
+        const holder = same.adopted
+          ? "adopted by the app"
+          : `already declared by ${describeOwner(same.table.owner)}`;
         refuse(
           `${ownerPath}.${def.name}`,
-          `Table "${name}" is already declared by ${describeOwner(existing.owner)}; ${describeOwner(owner)} cannot declare it again.`
+          `Table ${spelledAs(name, same.table.name)} is ${holder}; ${describeOwner(owner)} cannot declare it again.`
         );
       }
+      if (owner.kind === "app") resolveOwnName(def.name);
 
       const columns: ExtensionColumn[] = def.columns.map(column => ({
         ...column,
@@ -843,6 +1360,22 @@ export function createOwnerDraft(
         ...(def.checks.length > 0 ? { checks: [...def.checks] } : {}),
         ...(def.relations.length > 0 ? { relations: [...def.relations] } : {}),
       });
+      // Every relation a plugin's table declares (a `ref()` column's
+      // included) is judged once every hook has run, as one it adds to
+      // another owner's table is: a later plugin, or the app, may declare
+      // the table it points at. Its keys are judged by the compile with
+      // every declared key (`assertForeignKeyTargetsExist`).
+      if (owner.kind === "plugin") {
+        for (const relation of def.relations) {
+          store.recordContributedTarget({
+            contributor: owner.id,
+            table: name,
+            element: "relation",
+            target: relation.targetTable,
+            own: true,
+          });
+        }
+      }
     },
 
     extendTable(name, ext): void {
@@ -873,6 +1406,14 @@ export function createOwnerDraft(
       if (contributes) assertMayExtendEntity(table, scope);
       addColumns(table, ext.columns, scope);
       addIndexes(table, ext.indexes ?? [], scope);
+      // After the columns, so a key may stand on a column added with it.
+      addConstraints(table, ext, scope, target =>
+        store.recordContributedTarget(target)
+      );
+    },
+
+    overrideColumn(name, column, storage): void {
+      overrideColumn(store, owner, name, column, storage);
     },
 
     getTable(name): DraftTableView | undefined {

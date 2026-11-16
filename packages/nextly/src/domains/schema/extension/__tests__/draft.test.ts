@@ -117,7 +117,7 @@ describe("addTable", () => {
     const draft = createOwnerDraft(store(), { kind: "app" });
     expect(
       refusal(() => draft.addTable(defineTable("users", { id: col.id() })))
-    ).toMatch(/is a core table/);
+    ).toMatch(/"users" is already declared by core; the app cannot declare it/);
   });
 });
 

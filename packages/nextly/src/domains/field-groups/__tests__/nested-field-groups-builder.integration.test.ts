@@ -12,8 +12,14 @@
  * rows are, not only where a current definition places them.
  *
  * The Builder's field groups are made on one start, and the collection placing them is defined in
- * code on the next start over the same database, as an app would be.
+ * code on the next start over the same database, as an app would be. Each case runs as a
+ * development server does, where a Builder save applies its migration at once, so the field
+ * groups' tables stand when the collection writes to them.
  */
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -104,6 +110,9 @@ type Plaque = {
 for (const dialect of getConfiguredTestDialects()) {
   describe(`field groups made in the Schema Builder, placed in one another — ${dialect}`, () => {
     let database: CaseDatabase;
+    // The app's own folder, which every start of one case shares as an app's restarts do: the
+    // migrations its Builder saves write stay beside the ledger that records them applied.
+    let folder: string;
 
     /** Start the app over this case's database, with `collections` defined in code. */
     async function start(
@@ -116,11 +125,15 @@ for (const dialect of getConfiguredTestDialects()) {
       return createTestNextly({
         adapter: database.adapter as never,
         collections,
+        basePath: folder,
       });
     }
 
     beforeEach(async () => {
       database = await openDatabase(dialect);
+      folder = await mkdtemp(join(tmpdir(), "nextly-fgb-"));
+      // Development, where a field group's Builder create applies its table.
+      vi.stubEnv("NODE_ENV", "development");
     });
 
     afterEach(async () => {
@@ -128,6 +141,7 @@ for (const dialect of getConfiguredTestDialects()) {
       vi.unstubAllEnvs();
       _resetEnvCache();
       await database?.close();
+      await rm(folder, { recursive: true, force: true });
     });
 
     it("stores, reads, clears and removes one placed inside a group with no name, at every level", async () => {

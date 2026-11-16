@@ -256,6 +256,14 @@ export interface RecordedWriteOptions<TRecord> {
    * in the Builder travels like any other settings change.
    */
   cleared?: ReadonlySet<UnsaidSetting>;
+  /**
+   * Answer what the write would do, writing nothing: `created` for a row the
+   * registry lacks, `updated` for one that differs, `unchanged` for one that
+   * matches. The read-only comparison of the registry with the newest applied
+   * snapshot (`registry-consistency`) asks the writer itself, so a row it
+   * reports as differing is exactly one `nextly migrate` would rewrite.
+   */
+  judgeOnly?: boolean;
 }
 
 /** A setting a Builder record may leave unsaid (`RecordedWriteOptions.leavesUnsaid`). */
@@ -1176,6 +1184,10 @@ export class CollectionRegistryService extends BaseRegistryService<
     const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash, desiredTableName } = decision;
     if (decision.step === "unchanged") return "unchanged";
+    // Judged, not written (`RecordedWriteOptions.judgeOnly`).
+    if (options.judgeOnly === true) {
+      return decision.step === "create" ? "created" : "updated";
+    }
     if (decision.step === "create") {
       await this.registerCollection({
         ...declaredRegistration(config, schemaHash, desiredTableName),
