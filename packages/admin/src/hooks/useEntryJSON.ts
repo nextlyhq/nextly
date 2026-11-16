@@ -18,6 +18,25 @@ import { entryApi } from "@admin/services/entryApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { Entry } from "@admin/types/collection";
 
+/**
+ * The address "View API response" reads a document at, without its depth:
+ * the one spelling the dialog and the document panel's API line both show,
+ * so the two can never name different addresses.
+ */
+export function documentApiAddress({
+  scope = "collection",
+  collectionSlug,
+  entryId,
+}: {
+  scope?: "collection" | "single";
+  collectionSlug: string;
+  entryId?: string | undefined;
+}): string {
+  return scope === "single"
+    ? `/admin/api/singles/${collectionSlug}`
+    : `/admin/api/collections/${collectionSlug}/entries/${entryId ?? ""}`;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -132,11 +151,7 @@ export function useEntryJSON({
   //    handler, so the dialog's "Open" button always 404'd. APIPlayground
   //    and other admin services already use /admin/api/* — this brings
   //    the dialog in line.
-  const depthSuffix = `?depth=${depth}`;
-  const apiUrl =
-    scope === "single"
-      ? `/admin/api/singles/${collectionSlug}${depthSuffix}`
-      : `/admin/api/collections/${collectionSlug}/entries/${entryId}${depthSuffix}`;
+  const apiUrl = `${documentApiAddress({ scope, collectionSlug, entryId })}?depth=${depth}`;
 
   // Format JSON string with pretty printing
   const jsonString = data ? JSON.stringify(data, null, 2) : "";
