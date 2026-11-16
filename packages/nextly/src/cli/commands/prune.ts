@@ -49,6 +49,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
@@ -754,11 +755,12 @@ export async function runPruneCommand(
       keptColumns: kept.live,
       releasedByMigration: kept.inMigration,
       dryRun: options.dryRun === true,
-      // Each drop waits for a busy table in tries; each try's notice goes to standard error.
+      // Each drop waits for a busy table in tries; each try's notice goes to standard error, kept
+      // back under --quiet.
       busyTable: {
         adapter: drizzleAdapter,
         bounds,
-        notify: line => process.stderr.write(`${line}\n`),
+        notify: busyTableNotices(logger),
       },
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
