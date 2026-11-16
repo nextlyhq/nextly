@@ -323,9 +323,11 @@ test.describe("where a clicked block lands", () => {
   }) => {
     const id = await createPage(page.request, false, true);
     await openBuilder(page, id);
-    await page
-      .getByRole("button", { name: "Add a section after Hero" })
-      .click();
+    // Pressed from the keyboard: the "+" is a button an author can tab to,
+    // and Enter runs the press a click does, wherever the pointer is.
+    const gap = page.getByRole("button", { name: "Add a section after Hero" });
+    await gap.focus();
+    await page.keyboard.press("Enter");
     await expect(placementLine(page)).toHaveText(
       "Adding between Hero and Pricing"
     );
