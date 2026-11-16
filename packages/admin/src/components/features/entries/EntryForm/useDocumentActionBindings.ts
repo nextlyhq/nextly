@@ -1398,6 +1398,34 @@ function useKeepOfferedChanges({
     }
   };
 
+  /*
+   * Nothing was restored. An edit made since (while the point was checked,
+   * or one the restore declined to write over) is what Save stores, as it
+   * would be had it come before the press; otherwise the chip says why
+   * nothing was saved. A point that changed is no longer offered either way.
+   */
+  const settleUnrestored = (
+    outcome: Exclude<KeepOutcome, "restored">,
+    offer: PendingRecovery
+  ): Promise<DocumentActionOutcome> => {
+    if (outcome === "changed") offer.dismiss();
+    if (outcome === "edited" || dirtyNow.current) {
+      return (latest.current.save ?? unavailableSave)();
+    }
+    const message = KEEP_REFUSED[outcome];
+    setRefusal(
+      outcome === "unchecked"
+        ? { message, retry: () => runLatest(latest, "save") }
+        : { message }
+    );
+    return Promise.resolve({
+      ok: false,
+      reason: "refused",
+      message,
+      reported: true,
+    });
+  };
+
   const keepThenSave = async (
     offer: PendingRecovery
   ): Promise<DocumentActionOutcome> => {
@@ -1412,22 +1440,7 @@ function useKeepOfferedChanges({
     // Moved to another document or language meanwhile: whatever the answer,
     // it is about the one left behind, so nothing is saved or said here.
     if (!samePage()) return pageChanged();
-    // Edited while it was checked, and nothing restored over it: that edit
-    // is what Save stores, as it would be had it come before the press.
-    if (outcome === "edited" || (outcome !== "restored" && dirtyNow.current)) {
-      if (outcome === "changed") offer.dismiss();
-      return (latest.current.save ?? unavailableSave)();
-    }
-    if (outcome !== "restored") {
-      if (outcome === "changed") offer.dismiss();
-      const message = KEEP_REFUSED[outcome];
-      setRefusal(
-        outcome === "unchecked"
-          ? { message, retry: () => runLatest(latest, "save") }
-          : { message }
-      );
-      return { ok: false, reason: "refused", message, reported: true };
-    }
+    if (outcome !== "restored") return settleUnrestored(outcome, offer);
     await new Promise<void>(resolve => {
       landed.current = resolve;
       setPhase("landing");
