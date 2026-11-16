@@ -19,7 +19,7 @@
  *   step applies it, and the database matches the command's.
  * - In both, no write outside the step but the start's own: the setup token,
  *   SQLite's journal mode, and the work after the start.
- * - A migration that drops a collection: the step marks its permissions
+ * - A migration that drops one of the app's permissions: the step marks it
  *   orphaned, as the command does.
  * - A field newly translated over a leftover translations column that cannot
  *   hold it: the step refuses it before the registry records the field, as
@@ -304,14 +304,36 @@ describe.each(getConfiguredTestDialects())(
       expect(code, said.join("\n")).toBeUndefined();
     }
 
-    /** `nextly migrate` against `url`, which must succeed. */
-    async function migrate(url: string, config: unknown): Promise<void> {
+    /** `nextly migrate` against `url`: its exit code and what it said. */
+    async function migrateRun(
+      url: string,
+      config: unknown
+    ): Promise<{ code: number | undefined; said: string }> {
       use(url);
       state.config = config;
       tick();
       const { context, said } = command();
-      const code = await exiting(() => runMigrate({ cwd: state.dir }, context));
-      expect(code, said.join("\n")).toBeUndefined();
+      // A refusal ends in the CLI's error shape, which goes to standard
+      // error through `console.error`, not through the logger.
+      const stderr = vi
+        .spyOn(console, "error")
+        .mockImplementation((...parts: unknown[]) => {
+          said.push(parts.map(String).join(" "));
+        });
+      try {
+        const code = await exiting(() =>
+          runMigrate({ cwd: state.dir }, context)
+        );
+        return { code, said: said.join("\n") };
+      } finally {
+        stderr.mockRestore();
+      }
+    }
+
+    /** `nextly migrate` against `url`, which must succeed. */
+    async function migrate(url: string, config: unknown): Promise<void> {
+      const { code, said } = await migrateRun(url, config);
+      expect(code, said).toBeUndefined();
     }
 
     /** `collections`, migrated at start from the test's migrations folder. */
@@ -564,29 +586,41 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([]);
     }, 600_000);
 
-    it("orphans a dropped collection's permissions as nextly migrate does", async () => {
+    it("orphans a permission an applied migration drops, as nextly migrate does", async () => {
+      // The app's own permission, declared and then dropped by a recorded
+      // migration: no table goes, so no data-loss consent is involved.
+      const withExport = (atStart: boolean, exports: boolean) =>
+        defineConfig({
+          collections: [POSTS],
+          permissions: exports
+            ? [{ action: "export", resource: "mas-posts" }]
+            : [],
+          db: atStart
+            ? {
+                migrationsDir: join(state.dir, "migrations"),
+                runMigrationsOnBoot: true,
+              }
+            : { migrationsDir: "./migrations" },
+        });
       const viaStart = await emptyDatabase();
       const viaCommand = await emptyDatabase();
       use(viaCommand);
-      await migrateCreate("initial", migratedAtStart(POSTS, ADDED));
-      await migrate(viaStart, migratedByCommand(POSTS, ADDED));
-      await migrate(viaCommand, migratedByCommand(POSTS, ADDED));
-      await migrateCreate("dropped", migratedAtStart(POSTS), {
-        acceptDataLoss: "dc_mas_added",
-      });
+      await migrateCreate("initial", withExport(true, true));
+      await migrate(viaStart, withExport(false, true));
+      await migrate(viaCommand, withExport(false, true));
+      await migrateCreate("dropped", withExport(true, false));
 
       const started = await productionStart(
         viaStart,
-        migratedAtStart(POSTS),
+        withExport(true, false),
         "mas-posts"
       );
-      await migrate(viaCommand, migratedByCommand(POSTS));
-      await productionStart(viaCommand, migratedByCommand(POSTS), "mas-posts");
+      await migrate(viaCommand, withExport(false, false));
 
       expect(started.refusal).toBeUndefined();
       const command = await contents(viaCommand);
-      // The control: the command marks them, so there is a mark to compare.
-      expect(command["permissions"]).toContain("read-mas-added (orphaned)");
+      // The control: the command marks it, so there is a mark to compare.
+      expect(command["permissions"]).toContain("export-mas-posts (orphaned)");
       expect((await contents(viaStart))["permissions"]).toEqual(
         command["permissions"]
       );
@@ -615,43 +649,53 @@ describe.each(getConfiguredTestDialects())(
             runMigrationsOnBoot: true,
           },
         });
-      const database = await emptyDatabase();
-      use(database);
+      const refusal =
+        /column \\?"code\\?" \(.+\) that cannot hold every value code allows/;
+      const viaStart = await emptyDatabase();
+      const viaCommand = await emptyDatabase();
+      use(viaCommand);
       await migrateCreate("initial", translated(false));
-      await migrate(database, translated(false));
-      // Another field's leftover in the translations table, of a type the
-      // newly translated text field does not fit.
-      const adapter = await open(database);
-      const fieldsOf = async (): Promise<unknown> => {
-        const [row] = await rowsOf(
-          adapter,
-          `SELECT ${q("fields")} AS f FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${slug}'`
-        );
-        const value = field(row ?? {}, "f");
-        return typeof value === "string" ? JSON.parse(value) : value;
+      /** The registry's fields for the collection on `url`, after `run`. */
+      const fieldsOf = async (url: string): Promise<unknown> => {
+        const adapter = await open(url);
+        try {
+          const [row] = await rowsOf(
+            adapter,
+            `SELECT ${q("fields")} AS f FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${slug}'`
+          );
+          const value = field(row ?? {}, "f");
+          return typeof value === "string" ? JSON.parse(value) : value;
+        } finally {
+          await adapter.disconnect().catch(() => undefined);
+        }
       };
-      try {
-        await adapter.executeQuery(
-          `ALTER TABLE ${q(companion)} ADD COLUMN ${q("code")} INTEGER`
-        );
-        const before = await fieldsOf();
-        await migrateCreate("code", translated(true));
-
-        const started = await productionStart(
-          database,
-          translated(true),
-          slug
-        );
-
-        expect(started.refusal).toBeUndefined();
-        expect(started.warnings.join("\n")).toMatch(
-          /column \\?"code\\?" \(.+\) that cannot hold every value code allows/
-        );
-        // The registry keeps what it held.
-        expect(await fieldsOf()).toEqual(before);
-      } finally {
-        await adapter.disconnect().catch(() => undefined);
+      for (const url of [viaStart, viaCommand]) {
+        await migrate(url, translated(false));
+        // Another field's leftover in the translations table, of a type the
+        // newly translated text field does not fit.
+        const adapter = await open(url);
+        try {
+          await adapter.executeQuery(
+            `ALTER TABLE ${q(companion)} ADD COLUMN ${q("code")} INTEGER`
+          );
+        } finally {
+          await adapter.disconnect().catch(() => undefined);
+        }
       }
+      const before = await fieldsOf(viaStart);
+      await migrateCreate("code", translated(true));
+
+      const started = await productionStart(viaStart, translated(true), slug);
+      const command = await migrateRun(viaCommand, translated(true));
+
+      // The control: the command refuses it, keeping the registry.
+      expect(command.code).toBe(1);
+      expect(command.said).toMatch(refusal);
+      expect(await fieldsOf(viaCommand)).toEqual(before);
+      // The start refuses it the same way, logs it, and goes on.
+      expect(started.refusal).toBeUndefined();
+      expect(started.warnings.join("\n")).toMatch(refusal);
+      expect(await fieldsOf(viaStart)).toEqual(before);
     }, 600_000);
 
     it("writes nothing for an older build, names the migration it lacks, and starts", async () => {

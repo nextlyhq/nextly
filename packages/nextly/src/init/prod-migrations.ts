@@ -26,6 +26,7 @@ import {
 } from "../domains/schema/migrate/plugin/run-plugin-migrations";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
 import { NextlyError } from "../errors";
+import { describeError } from "../errors/describe-error";
 import type { PluginDefinition } from "../plugins/plugin-context";
 
 import {
@@ -522,10 +523,11 @@ function settleFailedBootMigrations(
     logger.error(`[Nextly] ${fatal.publicMessage}`);
     throw fatal;
   }
+  // The operator's rendering, with the code and the context that say why: a
+  // refusal's reasons travel in its context, as the command prints them.
   logger.error(
-    `[Nextly] Boot migrations failed: ${
-      err instanceof Error ? err.message : String(err)
-    }. The app will continue; run \`nextly migrate\` to resolve.`
+    `[Nextly] Boot migrations failed: ${describeError(err)}. The app will ` +
+      "continue; run `nextly migrate` to resolve."
   );
 
   // The app continues on this path, so the gate must open — a swallowed

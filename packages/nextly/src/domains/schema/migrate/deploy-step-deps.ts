@@ -127,7 +127,6 @@ export function deployStepDeps(
         logger,
         run.declared
       );
-      console.log(`DEBUG1492 pending=${pending.length} recordedBefore=${run.recordedBefore === undefined ? "undef" : run.recordedBefore.size}`);
       if (pending.length > 0) return;
       await refuseCompanionColumnsThatCannotHold(
         adapter,
