@@ -36,7 +36,10 @@
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { SchemaEventRow } from "../events/schema-events-repository";
-import { rebuildCopyStatements } from "../ownership/drop-guard";
+import {
+  createsEmptyTable,
+  rebuildCopyStatements,
+} from "../ownership/drop-guard";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import {
   MYSQL_LIVE_RUN_LENGTH,
@@ -233,28 +236,46 @@ function goneBy(
     cursor.acceptCondition();
     return cursor.names() ?? [];
   }
-  if (cursor.accept("ALTER", "TABLE")) {
-    // Read as `alterTableShown` reads it, so the two never disagree on which table it names.
-    cursor.acceptCondition();
-    if (dialect === "postgresql") cursor.accept("ONLY");
-    const from = cursor.name();
-    if (from === undefined || !cursor.accept("RENAME")) return [];
-    if (!cursor.accept("TO")) cursor.accept("AS");
-    const to = cursor.name();
-    return to !== undefined && cursor.done() && tables.has(to) ? [from] : [];
-  }
+  const renames = tableRenamesOf(cursor, dialect);
+  if (renames === undefined) return [];
+  return renames.filter(([, to]) => tables.has(to)).map(([from]) => from);
+}
+
+/**
+ * The tables a statement renames, as `[from, to]` pairs: `ALTER TABLE [IF EXISTS] [ONLY] a RENAME
+ * TO|AS b`, or MySQL's `RENAME TABLE a TO b[, c TO d]`. Undefined for any other statement, or one
+ * that does more. The one reading of a rename, for what is gone and for what is shown.
+ */
+function tableRenamesOf(
+  cursor: StatementCursor,
+  dialect: SupportedDialect
+): Array<[string, string]> | undefined {
   if (dialect === "mysql" && cursor.accept("RENAME", "TABLE")) {
-    const gone: string[] = [];
-    do {
-      const from = cursor.name();
-      if (from === undefined || !cursor.accept("TO")) return [];
-      const to = cursor.name();
-      if (to === undefined) return [];
-      if (tables.has(to)) gone.push(from);
-    } while (cursor.accept(","));
-    return cursor.done() ? gone : [];
+    return renamePairs(cursor);
   }
-  return [];
+  if (!cursor.accept("ALTER", "TABLE")) return undefined;
+  cursor.acceptCondition();
+  if (dialect === "postgresql") cursor.accept("ONLY");
+  const from = cursor.name();
+  if (from === undefined || !cursor.accept("RENAME")) return undefined;
+  if (!cursor.accept("TO")) cursor.accept("AS");
+  const to = cursor.name();
+  return to !== undefined && cursor.done() ? [[from, to]] : undefined;
+}
+
+/** `a TO b[, c TO d]`, the whole rest of the statement, or undefined. */
+function renamePairs(
+  cursor: StatementCursor
+): Array<[string, string]> | undefined {
+  const pairs: Array<[string, string]> = [];
+  do {
+    const from = cursor.name();
+    if (from === undefined || !cursor.accept("TO")) return undefined;
+    const to = cursor.name();
+    if (to === undefined) return undefined;
+    pairs.push([from, to]);
+  } while (cursor.accept(","));
+  return cursor.done() ? pairs : undefined;
 }
 
 /** The table a `CREATE TABLE` creates, or undefined for any other statement. */
@@ -303,74 +324,82 @@ function isOwnRegistryRow(
   return keys !== undefined && objects.tables.has(keys.table_name);
 }
 
+/** One kind of statement on the closed list: its leading words, and how the rest is judged. */
+type StatementReader = readonly [
+  readonly string[],
+  (cursor: StatementCursor, file: FileContext, statement: string) => boolean,
+];
+
+/** The statements on the closed list, by their leading words, longest first where two share some. */
+const STATEMENT_READERS: readonly StatementReader[] = [
+  [["CREATE", "TABLE"], createTableShown],
+  [["CREATE", "UNIQUE", "INDEX"], createIndexShown],
+  [["CREATE", "INDEX"], createIndexShown],
+  [["DROP", "TABLE"], dropTablesShown],
+  [["DROP", "INDEX"], dropIndexShown],
+  [["INSERT", "INTO"], guardRowsShown],
+];
+
 /** Whether one statement, read alone, is on the closed list (see the module comment). */
 function statementShown(statement: string, file: FileContext): boolean {
-  const { dialect } = file;
-  const cursor = cursorOf(statement, dialect, EXACT);
-  if (cursor.accept("CREATE", "TABLE")) return createTableShown(cursor, file);
-  if (
-    cursor.accept("CREATE", "UNIQUE", "INDEX") ||
-    cursor.accept("CREATE", "INDEX")
-  ) {
-    return createIndexShown(cursor, file);
-  }
-  if (cursor.accept("DROP", "TABLE")) {
-    cursor.acceptCondition();
-    const names = cursor.names();
-    if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
-    return (
-      names !== undefined &&
-      cursor.done() &&
-      names.every(name => known(name, file))
-    );
-  }
-  if (cursor.accept("DROP", "INDEX")) return dropIndexShown(cursor, file);
+  const renames = tableRenamesOf(
+    cursorOf(statement, file.dialect, EXACT),
+    file.dialect
+  );
+  if (renames !== undefined)
+    return renames.every(pair => renameShown(pair, file));
+  const cursor = cursorOf(statement, file.dialect, EXACT);
+  const reader = STATEMENT_READERS.find(([words]) => cursor.accept(...words));
+  if (reader !== undefined) return reader[1](cursor, file, statement);
   if (cursor.accept("ALTER", "TABLE")) return alterTableShown(cursor, file);
-  if (dialect === "mysql" && cursor.accept("RENAME", "TABLE")) {
-    return renameTablesShown(cursor, file);
-  }
-  if (cursor.accept("INSERT", "INTO")) {
-    // Rows written into a table the file created and drops again: a rebuild's guard.
-    const into = cursor.name();
-    return (
-      into !== undefined &&
-      file.created.has(into) &&
-      !file.objects.tables.has(into) &&
-      file.goneLater.has(into)
-    );
-  }
-  return isSessionSetting(cursor, dialect);
+  return isSessionSetting(cursor, file.dialect);
 }
 
-/** `CREATE TABLE [IF NOT EXISTS] t (...)`, empty, of a table the snapshot holds or scaffolding. */
-function createTableShown(cursor: StatementCursor, file: FileContext): boolean {
-  cursor.acceptCondition();
-  const name = cursor.name();
-  if (name === undefined || !cursor.isWord("(")) return false;
-  if (!createsNoRows(cursor)) return false;
-  return file.objects.tables.has(name) || file.goneLater.has(name);
+/** A table renamed from one the file may change into one the snapshot holds, or scaffolding. */
+function renameShown([from, to]: [string, string], file: FileContext): boolean {
+  return (
+    known(from, file) && (file.objects.tables.has(to) || file.goneLater.has(to))
+  );
 }
 
 /**
- * Whether what follows a `CREATE TABLE`'s name is a body alone: no query after it (`AS`, MySQL's
- * `SELECT`, `VALUES` or `TABLE`), which would fill the table with rows.
+ * `CREATE TABLE [IF NOT EXISTS] t ...` creating its table empty (`createsEmptyTable`), of a table
+ * the snapshot holds or scaffolding the file removes or moves into place again.
  */
-function createsNoRows(cursor: StatementCursor): boolean {
-  let depth = 0;
-  while (!cursor.done()) {
-    const token = cursor.peek();
-    if (token === "(") depth += 1;
-    if (token === ")") depth -= 1;
-    if (
-      depth === 0 &&
-      typeof token === "string" &&
-      ["AS", "SELECT", "VALUES", "TABLE"].includes(token)
-    ) {
-      return false;
-    }
-    cursor.at += 1;
+function createTableShown(
+  cursor: StatementCursor,
+  file: FileContext,
+  statement: string
+): boolean {
+  cursor.acceptCondition();
+  const name = cursor.name();
+  if (name === undefined || !createsEmptyTable(statement, file.dialect)) {
+    return false;
   }
-  return true;
+  return file.objects.tables.has(name) || file.goneLater.has(name);
+}
+
+/** `DROP TABLE [IF EXISTS] a[, b...] [CASCADE|RESTRICT]`, of tables the file may change. */
+function dropTablesShown(cursor: StatementCursor, file: FileContext): boolean {
+  cursor.acceptCondition();
+  const names = cursor.names();
+  if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
+  return (
+    names !== undefined &&
+    cursor.done() &&
+    names.every(name => known(name, file))
+  );
+}
+
+/** Rows written into a table the file created and drops again: a rebuild's guard. */
+function guardRowsShown(cursor: StatementCursor, file: FileContext): boolean {
+  const into = cursor.name();
+  return (
+    into !== undefined &&
+    file.created.has(into) &&
+    !file.objects.tables.has(into) &&
+    file.goneLater.has(into)
+  );
 }
 
 /** `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] n ON [ONLY] t ...`. */
@@ -396,73 +425,76 @@ function dropIndexShown(cursor: StatementCursor, file: FileContext): boolean {
   return shown && cursor.done();
 }
 
-/** MySQL's `RENAME TABLE a TO b[, c TO d]`. */
-function renameTablesShown(
-  cursor: StatementCursor,
-  file: FileContext
-): boolean {
-  do {
-    const from = cursor.name();
-    if (!known(from, file) || !cursor.accept("TO")) return false;
-    const to = cursor.name();
-    if (to === undefined) return false;
-    if (!file.objects.tables.has(to) && !file.goneLater.has(to)) return false;
-  } while (cursor.accept(","));
-  return cursor.done();
-}
-
 /** `ALTER TABLE [IF EXISTS] [ONLY] t <clause>[, <clause>...]`, every clause on the list. */
 function alterTableShown(cursor: StatementCursor, file: FileContext): boolean {
   cursor.acceptCondition();
   if (file.dialect === "postgresql") cursor.accept("ONLY");
   const name = cursor.name();
   if (!known(name, file)) return false;
-  const clauses = cursor.clauses();
-  return clauses.every(tokens =>
-    alterClauseShown(new StatementCursor(tokens), file, clauses.length)
-  );
+  return cursor
+    .clauses()
+    .every(tokens => alterClauseShown(new StatementCursor(tokens), file));
 }
 
-/** One `ALTER TABLE` clause: what it changes is a column, constraint, index or key, or the name. */
-function alterClauseShown(
+/** One `ALTER TABLE` clause's reader: whether what it changes is one the snapshot records. */
+type ClauseReader = readonly [
+  readonly string[],
+  (clause: StatementCursor, file: FileContext) => boolean,
+];
+
+/**
+ * The `ALTER TABLE` clauses on the list, by their leading words. A table rename is not among them:
+ * it must be a statement's only clause, and is read as a rename (`tableRenamesOf`).
+ */
+const CLAUSE_READERS: readonly ClauseReader[] = [
+  [["ADD"], (clause, file) => elementFollows(clause, file, true)],
+  [["DROP"], (clause, file) => elementFollows(clause, file, false)],
+  [["ALTER"], columnChangeShown],
+  [["MODIFY"], restatedColumnShown],
+  [["CHANGE"], restatedColumnShown],
+  [["VALIDATE", "CONSTRAINT"], (_clause, file) => file.dialect !== "mysql"],
+  [["RENAME"], elementRenameShown],
+];
+
+/** One `ALTER TABLE` clause: what it changes is a column, constraint, index or key. */
+function alterClauseShown(clause: StatementCursor, file: FileContext): boolean {
+  const reader = CLAUSE_READERS.find(([words]) => clause.accept(...words));
+  return reader !== undefined && reader[1](clause, file);
+}
+
+/**
+ * `ALTER [COLUMN] c` then what the snapshot records of a column: its type (converted by a plain
+ * cast of itself, `castsItself`), whether it is nullable, its default.
+ */
+function columnChangeShown(clause: StatementCursor): boolean {
+  clause.accept("COLUMN");
+  const column = clause.name();
+  if (column === undefined) return false;
+  const change = COLUMN_CHANGES.find(words => clause.accept(...words));
+  if (change === undefined) return false;
+  return change.at(-1) !== "TYPE" || castsItself(clause.rest(), column);
+}
+
+/** MySQL's `MODIFY [COLUMN] c ...` and `CHANGE [COLUMN] a b ...`: a column's definition restated. */
+function restatedColumnShown(
   clause: StatementCursor,
-  file: FileContext,
-  clauseCount: number
+  file: FileContext
 ): boolean {
-  const mysql = file.dialect === "mysql";
-  if (clause.accept("ADD")) return elementFollows(clause, mysql, true);
-  if (clause.accept("DROP")) return elementFollows(clause, mysql, false);
-  if (clause.accept("ALTER")) {
-    clause.accept("COLUMN");
-    const column = clause.name();
-    if (column === undefined) return false;
-    const change = COLUMN_CHANGES.find(words => clause.accept(...words));
-    if (change === undefined) return false;
-    return change.at(-1) !== "TYPE" || castsItself(clause.rest(), column);
-  }
-  if (mysql && (clause.accept("MODIFY") || clause.accept("CHANGE"))) {
-    clause.accept("COLUMN");
-    return clause.name() !== undefined;
-  }
-  if (clause.accept("VALIDATE", "CONSTRAINT")) return !mysql;
-  if (clause.accept("RENAME")) {
-    if (clause.accept("TO") || clause.accept("AS")) {
-      const to = clause.name();
-      return (
-        clauseCount === 1 &&
-        clause.done() &&
-        to !== undefined &&
-        (file.objects.tables.has(to) || file.goneLater.has(to))
-      );
-    }
-    if (!(mysql && (clause.accept("INDEX") || clause.accept("KEY")))) {
-      clause.accept("COLUMN");
-    }
-    const from = clause.name();
-    if (from === undefined || !clause.accept("TO")) return false;
-    return clause.name() !== undefined && clause.done();
-  }
-  return false;
+  if (file.dialect !== "mysql") return false;
+  clause.accept("COLUMN");
+  return clause.name() !== undefined;
+}
+
+/** `RENAME [COLUMN] a TO b`, or MySQL's `RENAME INDEX|KEY a TO b`, as the whole clause. */
+function elementRenameShown(
+  clause: StatementCursor,
+  file: FileContext
+): boolean {
+  const index =
+    file.dialect === "mysql" &&
+    (clause.accept("INDEX") || clause.accept("KEY"));
+  if (!index) clause.accept("COLUMN");
+  return renamePairs(clause)?.length === 1;
 }
 
 /**
@@ -471,21 +503,33 @@ function alterClauseShown(
  */
 function elementFollows(
   clause: StatementCursor,
-  mysql: boolean,
+  file: FileContext,
   adding: boolean
 ): boolean {
+  if (adding && clause.accept("CONSTRAINT"))
+    return namedConstraintAdded(clause);
   const next = clause.peek();
   if (typeof next !== "string") return clause.name() !== undefined;
-  // A named constraint added must be of a kind the snapshot records: not an `EXCLUDE`, say.
-  if (adding && clause.accept("CONSTRAINT")) {
-    if (clause.name() === undefined) return false;
-    const kind = clause.peek();
-    return typeof kind === "string" && CONSTRAINT_KINDS.has(kind);
-  }
-  if (ELEMENT_WORDS.has(next) || (mysql && MYSQL_ELEMENT_WORDS.has(next))) {
-    return true;
-  }
-  return /^[A-Z_][A-Z0-9_$]*$/.test(next) && !NOT_A_COLUMN.has(next);
+  return elementWord(next, file.dialect) || plainColumnName(next);
+}
+
+/** A named constraint added must be of a kind the snapshot records: not an `EXCLUDE`, say. */
+function namedConstraintAdded(clause: StatementCursor): boolean {
+  if (clause.name() === undefined) return false;
+  return nextIn(clause, CONSTRAINT_KINDS);
+}
+
+/** A word naming the element an `ADD` or `DROP` clause changes. */
+function elementWord(word: string, dialect: SupportedDialect): boolean {
+  return (
+    ELEMENT_WORDS.has(word) ||
+    (dialect === "mysql" && MYSQL_ELEMENT_WORDS.has(word))
+  );
+}
+
+/** A plain word read as a column's name: not a keyword of another clause. */
+function plainColumnName(word: string): boolean {
+  return /^[A-Z_][A-Z0-9_$]*$/.test(word) && !NOT_A_COLUMN.has(word);
 }
 
 /** The kinds of constraint the snapshot records. */
@@ -536,14 +580,18 @@ function isSessionSetting(
 ): boolean {
   if (cursor.accept("SAVEPOINT") || cursor.accept("RELEASE")) return true;
   if (cursor.accept("ROLLBACK", "TO")) return true;
-  if (dialect === "sqlite" && cursor.accept("PRAGMA")) {
-    const name = cursor.peek();
-    return typeof name === "string" && REBUILD_PRAGMAS.has(name);
+  if (cursor.accept("PRAGMA")) {
+    return dialect === "sqlite" && nextIn(cursor, REBUILD_PRAGMAS);
   }
   if (!cursor.accept("SET")) return false;
   if (!cursor.accept("LOCAL")) cursor.accept("SESSION");
-  const name = cursor.peek();
-  return typeof name === "string" && SESSION_SETTINGS.has(name);
+  return nextIn(cursor, SESSION_SETTINGS);
+}
+
+/** Whether the next token is a word in `words`. */
+function nextIn(cursor: StatementCursor, words: ReadonlySet<string>): boolean {
+  const next = cursor.peek();
+  return typeof next === "string" && words.has(next);
 }
 
 /** Why a pending file at its end is not recorded without running: each condition it fails. */
