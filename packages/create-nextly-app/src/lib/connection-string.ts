@@ -102,7 +102,9 @@ function querySecrets(query: string): string[] {
     ...query.split("&").flatMap(pair => {
       const equals = pair.indexOf("=");
       const value = equals < 0 ? "" : pair.slice(equals + 1);
-      const bare = [value, safeDecode(value)].filter(
+      // As written, percent-decoded, and form-decoded (`+` read as a space),
+      // since a driver's query parser may report the value in any of them.
+      const bare = [value, safeDecode(value), formDecode(value)].filter(
         form => form.length >= SHORTEST_BARE_QUERY_VALUE
       );
       return [pair, ...bare];
@@ -179,6 +181,11 @@ function safeDecode(value: string): string {
   } catch {
     return value;
   }
+}
+
+/** `value` decoded as an `application/x-www-form-urlencoded` query value. */
+function formDecode(value: string): string {
+  return safeDecode(value.replace(/\+/g, " "));
 }
 
 /**
