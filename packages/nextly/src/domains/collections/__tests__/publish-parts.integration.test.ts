@@ -1322,7 +1322,7 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
   // What the gate's judgement started is finished on the move's own transaction once the parts are
   // written, and a gate that finds what it judged has changed takes the whole move back.
-  it("settles the gate once a publish has written its parts, and keeps nothing when settling throws", async () => {
+  it("settles the gate once a publish has written its parts", async () => {
     await boot(posts());
     const id = await entry({ es: { title: "Hola" } });
     const seen = judgeOnTheMove([]);
@@ -1336,21 +1336,26 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
     expect(seen.settled).toBe(1);
     expect((await states(id)).es).toBe("published");
+  });
 
-    const other = await entry({ es: { title: "Hola" } });
-    const before = await states(other);
-    judgeOnTheMove([], true);
+  it("keeps nothing of a publish whose gate throws as it settles", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const before = await states(id);
+    const seen = judgeOnTheMove([], true);
+
     const refusal = await refusalOf(
       t!.nextly.publish({
         collection: "posts",
-        id: other,
+        id,
         locales: "all",
         data: { _overwrite: true },
       })
     );
 
+    expect(seen.settled).toBeGreaterThan(0);
     expect(refusal).not.toBe("");
-    expect(await states(other)).toEqual(before);
+    expect(await states(id)).toEqual(before);
   });
 
   // A publish made without review says so, with its reason, from the REST body to the gate: its
@@ -1411,6 +1416,53 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
       "Fixing a typo on the live page",
     ]);
     expect((await states(id)).es).toBe("published");
+  });
+
+  // Unpublishing is never gated: a gate that holds every part back is not asked of a takedown, and
+  // the language goes down.
+  it("never asks the gate of an unpublish", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    let asked = 0;
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: question => {
+        asked += 1;
+        return Promise.resolve(
+          question.parts.map(part => ({
+            part,
+            code: "NOT_APPROVED" as const,
+            message: "Waiting for approval.",
+          }))
+        );
+      },
+      judge: (_tx, question) => {
+        asked += 1;
+        return Promise.resolve({
+          refusals: question.parts.map(part => ({
+            part,
+            code: "NOT_APPROVED" as const,
+            message: "Waiting for approval.",
+          })),
+          settle: () => Promise.resolve(),
+        });
+      },
+    }));
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      data: { _overwrite: true },
+    });
+
+    expect(asked).toBe(0);
+    expect((await states(id)).es).toBe("draft");
   });
 
   // A description changes nothing, and an unpublish closes no review: neither is settled.
