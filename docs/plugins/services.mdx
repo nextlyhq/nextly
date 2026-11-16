@@ -886,17 +886,22 @@ for the widths, formats and storages.
 `srcset` can be built from the same widths the server keeps:
 
 ```ts
-import { MEDIA_COPY_WIDTHS } from "@nextlyhq/plugin-sdk";
+import { MEDIA_COPY_WIDTHS, type PluginContext } from "@nextlyhq/plugin-sdk";
 
-const shown = 400;
-const wanted = MEDIA_COPY_WIDTHS.filter(width => width <= shown * 2);
-const copies = await Promise.all(
-  wanted.map(width => ctx.services.media.copyOf({ id: mediaId }, width))
-);
-const srcset = copies
-  .filter(copy => copy !== null)
-  .map(copy => `${copy.url} ${copy.width}w`)
-  .join(", ");
+/** A `srcset` for an image shown `shown` pixels wide, up to twice that. */
+export async function srcsetOf(
+  ctx: PluginContext,
+  mediaId: string,
+  shown: number
+): Promise<string> {
+  const wanted = MEDIA_COPY_WIDTHS.filter(width => width <= shown * 2);
+  const copies = await Promise.all(
+    wanted.map(width => ctx.services.media.copyOf({ id: mediaId }, width))
+  );
+  return copies
+    .flatMap(copy => (copy === null ? [] : [`${copy.url} ${copy.width}w`]))
+    .join(", ");
+}
 ```
 
 ## Freeing media nothing uses

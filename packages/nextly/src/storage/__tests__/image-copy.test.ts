@@ -25,7 +25,11 @@ describe("ImageProcessor.copyAtWidth", () => {
   const processor = new ImageProcessor();
 
   it("makes a copy at the width asked for, keeping the proportions", async () => {
-    const result = await processor.copyAtWidth(await photo(2200, 1100), 640, "webp");
+    const result = await processor.copyAtWidth(
+      await photo(2200, 1100),
+      640,
+      "webp"
+    );
     expect(result.kind).toBe("made");
     if (result.kind !== "made") return;
     const meta = await sharp(result.bytes).metadata();
@@ -50,7 +54,11 @@ describe("ImageProcessor.copyAtWidth", () => {
   });
 
   it("never enlarges: a narrower original keeps its own width", async () => {
-    const result = await processor.copyAtWidth(await photo(500, 250), 1920, "jpeg");
+    const result = await processor.copyAtWidth(
+      await photo(500, 250),
+      1920,
+      "jpeg"
+    );
     expect(result.kind).toBe("made");
     if (result.kind !== "made") return;
     expect((await sharp(result.bytes).metadata()).width).toBe(500);
@@ -76,7 +84,11 @@ describe("ImageProcessor.copyAtWidth", () => {
 
   it("refuses an original past the pixel limit, without throwing", async () => {
     const limited = new ImageProcessor({ copyPixelLimit: 1000 * 1000 });
-    const result = await limited.copyAtWidth(await photo(1200, 1000), 640, "webp");
+    const result = await limited.copyAtWidth(
+      await photo(1200, 1000),
+      640,
+      "webp"
+    );
     expect(result).toEqual({ kind: "refused" });
   });
 
@@ -91,7 +103,11 @@ describe("ImageProcessor.copyAtWidth", () => {
 
   it("says no copy can be made when the image library is not installed", async () => {
     const without = new ImageProcessor({ loader: async () => null });
-    const result = await without.copyAtWidth(await photo(800, 400), 640, "webp");
+    const result = await without.copyAtWidth(
+      await photo(800, 400),
+      640,
+      "webp"
+    );
     expect(result).toEqual({ kind: "unavailable" });
   });
 });

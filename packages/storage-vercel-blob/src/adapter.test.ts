@@ -422,7 +422,8 @@ describe("VercelBlobStorageAdapter.uploadAt", () => {
     token: "vercel_blob_rw_test_dummy_token_for_unit_tests",
     collections: { media: true },
   });
-  const original = "https://test.public.blob.vercel-storage.com/media/photo-Ab12.jpg";
+  const original =
+    "https://test.public.blob.vercel-storage.com/media/photo-Ab12.jpg";
 
   it("writes at the blob the key names, with no random suffix, so its URL is the key", async () => {
     const key = `${original}.w640.webp`;

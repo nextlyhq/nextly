@@ -15,7 +15,10 @@
  * @experimental
  */
 import { getService } from "../di";
-import { copyVersionOf, parseCopyWidth } from "../domains/media/copies/copy-rules";
+import {
+  copyVersionOf,
+  parseCopyWidth,
+} from "../domains/media/copies/copy-rules";
 import {
   copyBytesOf,
   mediaCopyStorage,
@@ -74,7 +77,8 @@ export async function handleServeMediaCopy(
   }
 
   const current =
-    new URL(request.url).searchParams.get("v") === copyVersionOf(media.filename);
+    new URL(request.url).searchParams.get("v") ===
+    copyVersionOf(media.filename);
   return new Response(new Uint8Array(served.bytes), {
     status: 200,
     headers: {

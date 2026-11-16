@@ -21,12 +21,12 @@ import {
   runWithCallerScope,
 } from "../../auth/caller-scope";
 import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import type { MediaCopy } from "../../domains/media/copies/media-copies";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
   MediaFolder,
 } from "../../services/media/media-service";
-import type { MediaCopy } from "../../domains/media/copies/media-copies";
 import { z } from "../../zod";
 import type {
   BulkDeleteMediaArgs,

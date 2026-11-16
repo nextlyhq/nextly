@@ -16,6 +16,7 @@
  * @module domains/media/copies/media-copies
  * @experimental
  */
+import { consoleLogger, type Logger } from "../../../shared/types";
 import { DEFAULT_READ_MAX_BYTES } from "../../../storage/fetch-stored-bytes";
 import type {
   ImageCopyFormat,
@@ -27,7 +28,6 @@ import {
 } from "../../../storage/read-stored-media";
 import { getMediaStorage } from "../../../storage/storage";
 import type { IStorageAdapter } from "../../../storage/types";
-import { consoleLogger, type Logger } from "../../../shared/types";
 
 import {
   copyFormatsOf,
@@ -108,9 +108,7 @@ type KeepingStorage = CopyStorage &
  * at a key of core's choosing. A storage that serves only by URL, or chooses
  * every key itself, cannot.
  */
-function keepsCopies(
-  storage: CopyStorage | null
-): storage is KeepingStorage {
+function keepsCopies(storage: CopyStorage | null): storage is KeepingStorage {
   return (
     storage !== null &&
     typeof storage.read === "function" &&

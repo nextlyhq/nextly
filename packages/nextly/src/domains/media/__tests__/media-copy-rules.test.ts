@@ -21,7 +21,9 @@ import {
 
 describe("the widths a copy can have", () => {
   it("is the fixed set, narrowest first", () => {
-    expect(MEDIA_COPY_WIDTHS).toEqual([96, 160, 240, 320, 640, 960, 1280, 1920]);
+    expect(MEDIA_COPY_WIDTHS).toEqual([
+      96, 160, 240, 320, 640, 960, 1280, 1920,
+    ]);
   });
 
   it("answers an allowed width with itself", () => {
@@ -116,9 +118,12 @@ describe("the formats a copy can have", () => {
   });
 
   it("sends AVIF to a browser that names it, else WebP, else the original format", () => {
-    const chrome = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
+    const chrome =
+      "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
     expect(negotiateCopyFormat("image/jpeg", chrome)?.ext).toBe("avif");
-    expect(negotiateCopyFormat("image/png", "image/webp,*/*")?.ext).toBe("webp");
+    expect(negotiateCopyFormat("image/png", "image/webp,*/*")?.ext).toBe(
+      "webp"
+    );
     expect(negotiateCopyFormat("image/jpeg", "image/*,*/*;q=0.8")?.ext).toBe(
       "jpg"
     );
@@ -143,7 +148,9 @@ describe("the formats a copy can have", () => {
   });
 
   it("answers nothing for a type it does not resize", () => {
-    expect(negotiateCopyFormat("image/gif", "image/avif,image/webp")).toBeNull();
+    expect(
+      negotiateCopyFormat("image/gif", "image/avif,image/webp")
+    ).toBeNull();
   });
 });
 
@@ -171,9 +178,9 @@ describe("where a copy is stored", () => {
   });
 
   it("lists none for an original it never copies", () => {
-    expect(copyPathsOf({ filename: "doc.pdf", mimeType: "application/pdf" })).toEqual(
-      []
-    );
+    expect(
+      copyPathsOf({ filename: "doc.pdf", mimeType: "application/pdf" })
+    ).toEqual([]);
   });
 
   it("can only ever name a key in that list", () => {

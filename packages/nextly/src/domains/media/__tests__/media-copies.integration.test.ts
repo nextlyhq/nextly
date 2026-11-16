@@ -25,7 +25,7 @@ import {
 import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { Bucket } from "../../../storage/__tests__/stand-in-bucket";
 import { getMediaStorage } from "../../../storage/storage";
-import type { IStorageAdapter } from "../../../storage/types";
+import type { IStorageAdapter, StorageType } from "../../../storage/types";
 import { copyPathsOf, copyVersionOf } from "../copies/copy-rules";
 import { MEDIA_USAGE_RECORDED_KEY } from "../usage/media-usage-store";
 
@@ -64,7 +64,7 @@ function mediaStorage(): IStorageAdapter {
 }
 
 /** Routes the media collection's files to `adapter`. */
-function storeMediaIn(adapter: IStorageAdapter, type: string): void {
+function storeMediaIn(adapter: IStorageAdapter, type: StorageType): void {
   getMediaStorage().registerPlugin({
     name: `copies-test-${type}`,
     type,
@@ -276,7 +276,9 @@ describe.each(getConfiguredTestDialects())(
       expect(stale.status).toBe(200);
       // Revalidated, and drawn from the new file.
       expect(stale.headers.get("cache-control")).toBe("private, no-cache");
-      const meta = await sharp(Buffer.from(await stale.arrayBuffer())).metadata();
+      const meta = await sharp(
+        Buffer.from(await stale.arrayBuffer())
+      ).metadata();
       expect(meta.height).toBe(640);
       const current = await t.nextly.media.copyOf({ id: item.id, width: 640 });
       expect(current?.url).toContain(`?v=${copyVersionOf(replaced.filename)}`);

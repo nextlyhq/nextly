@@ -23,10 +23,7 @@ function memoryStorage(files: Record<string, Buffer> = {}) {
   const storage: CopyStorage = {
     getPublicUrl: path => `/uploads/${path}`,
     read: async path => held.get(path) ?? null,
-    uploadAt: async (
-      path: string,
-      buffer: Buffer
-    ): Promise<UploadResult> => {
+    uploadAt: async (path: string, buffer: Buffer): Promise<UploadResult> => {
       written.push(path);
       held.set(path, buffer);
       return { url: `/uploads/${path}`, path };
@@ -243,7 +240,9 @@ describe("copyOfMedia", () => {
         processor,
       })
     ).toBeNull();
-    expect(await copyOfMedia(ITEM, 640, { storage: null, processor })).toBeNull();
+    expect(
+      await copyOfMedia(ITEM, 640, { storage: null, processor })
+    ).toBeNull();
     expect(
       await copyOfMedia(ITEM, 640, {
         storage,
