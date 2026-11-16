@@ -66,14 +66,21 @@ function Tab({
   switchedOff = [],
   saved = [],
   canChange = true,
+  structuredData,
 }: {
   types: SeoContentType[];
   switchedOff?: SwitchedOffType[];
   saved?: string[];
   canChange?: boolean;
+  /** The structured data rules the settings hold, where any. */
+  structuredData?: Record<string, unknown>;
 }): JSX.Element {
   const [draft, setDraft] = useState(() =>
-    draftOf({ id: "s1", typesWithSeoOff: saved })
+    draftOf({
+      id: "s1",
+      typesWithSeoOff: saved,
+      ...(structuredData === undefined ? {} : { structuredData }),
+    })
   );
   latest = draft;
   return (
@@ -105,6 +112,38 @@ describe("the Content types tab", () => {
     );
     expect(within(row("Authors")).getByText("Title pattern")).toBeTruthy();
     expect(within(row("Posts")).queryByText("Title pattern")).toBeNull();
+  });
+
+  it("declares a type's questions an FAQ section of its pages, and takes it back", () => {
+    render(<Tab types={[posts]} />);
+    fireEvent.click(
+      within(row("Posts")).getByRole("button", { name: /Posts/ })
+    );
+    const faq = screen.getByRole("switch", {
+      name: "FAQ section for Posts",
+    });
+    expect(faq.getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(faq);
+    expect(latest.structuredData.posts).toEqual({ faqSection: true });
+
+    fireEvent.click(faq);
+    expect(latest.structuredData.posts).toEqual({});
+  });
+
+  it("offers no FAQ section on a type whose pages are Questions and answers already", () => {
+    render(
+      <Tab types={[posts]} structuredData={{ posts: { type: "faqPage" } }} />
+    );
+    fireEvent.click(
+      within(row("Posts")).getByRole("button", { name: /Posts/ })
+    );
+    expect(within(row("Posts")).getByText("Structured data")).toBeTruthy();
+    expect(
+      screen.queryByRole("switch", {
+        name: "FAQ section for Posts",
+      })
+    ).toBeNull();
   });
 
   it("says where each type was made, and lists Singles in their own group", () => {

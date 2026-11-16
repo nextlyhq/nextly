@@ -18,7 +18,6 @@ import type { ReactElement } from "react";
 import type { BlockRenderArgs, PageContext, ResolvedIcon } from "../context";
 
 import { MEDIA } from "./categories";
-import { libraryDefinition } from "./classic-spacing";
 import {
   canLink,
   isPresent,
@@ -158,47 +157,45 @@ const ICON_BASE_STYLES = {
 
 // Defined against the ENGINE's `defineBlock`, as every core block is, so the
 // library carries no dependency on the plugin SDK.
-export const icon: BlockDefinition<IconProps, PageContext> = libraryDefinition(
-  defineBlock({
-    name: ICON_TYPE,
-    version: 1,
-    description: "A symbol, decorative or labelled.",
-    editor: {
-      label: "Icon",
-      icon: "star",
-      category: MEDIA,
-      keywords: ["symbol", "glyph", "svg"],
+export const icon: BlockDefinition<IconProps, PageContext> = defineBlock({
+  name: ICON_TYPE,
+  version: 1,
+  description: "A symbol, decorative or labelled.",
+  editor: {
+    label: "Icon",
+    icon: "star",
+    category: MEDIA,
+    keywords: ["symbol", "glyph", "svg"],
+  },
+  baseStyles: ICON_BASE_STYLES,
+  props: {
+    icon: { label: "Icon", role: "content", type: "icon" },
+    label: {
+      label: "Screen reader label",
+      role: "content",
+      type: "text",
+      hint: "Read out in place of the icon. Leave empty when the text beside it already says the same.",
     },
-    baseStyles: ICON_BASE_STYLES,
-    props: {
-      icon: { label: "Icon", role: "content", type: "icon" },
-      label: {
-        label: "Screen reader label",
-        role: "content",
-        type: "text",
-        hint: "Read out in place of the icon. Leave empty when the text beside it already says the same.",
-      },
-      ...LINK_PROPS,
-    },
-    defaultProps: { icon: "lucide:star", label: "" },
-    example: { props: { icon: "lucide:star", label: "" } },
-    supports: {
-      typography: true,
-      color: true,
-      background: true,
-      spacing: true,
-      dimensions: true,
-      border: true,
-      effects: true,
-      position: true,
-    },
-    // Phrasing, so it sits on a line beside words; interactive only when it
-    // links, so an unlinked icon can still go inside a link.
-    contentModel: props =>
-      canLink(props)
-        ? { is: ["flow", "phrasing", "interactive"] }
-        : { is: ["flow", "phrasing"] },
-    rendersNothing: props => text(props.icon) === "",
-    render: renderIcon,
-  })
-);
+    ...LINK_PROPS,
+  },
+  defaultProps: { icon: "lucide:star", label: "" },
+  example: { props: { icon: "lucide:star", label: "" } },
+  supports: {
+    typography: true,
+    color: true,
+    background: true,
+    spacing: true,
+    dimensions: true,
+    border: true,
+    effects: true,
+    position: true,
+  },
+  // Phrasing, so it sits on a line beside words; interactive only when it
+  // links, so an unlinked icon can still go inside a link.
+  contentModel: props =>
+    canLink(props)
+      ? { is: ["flow", "phrasing", "interactive"] }
+      : { is: ["flow", "phrasing"] },
+  rendersNothing: props => text(props.icon) === "",
+  render: renderIcon,
+});

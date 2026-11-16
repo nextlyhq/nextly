@@ -245,6 +245,58 @@ describe("the list", () => {
     expect(screen.getByText("5 pages")).toBeTruthy();
   });
 
+  it("says which build file the server couldn't read, and marks the pages it can't confirm", async () => {
+    const unconfirmed: SiteAddress = {
+      path: "/integrations/webflow",
+      name: "Webflow",
+      source: "dynamic",
+      from: "app/integrations/[name]/page.tsx",
+      standing: "unconfirmed",
+      title: "Webflow | Acme",
+      sources: { title: "code" },
+      seo: {
+        typed: { hidden: false },
+        automatic: { title: { value: "Webflow | Acme", from: "code" } },
+        siteName: "Acme",
+      },
+    };
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? PROBLEMS
+          : args.path === "/pages/build"
+            ? {
+                unreadable: {
+                  file: ".next/prerender-manifest.json",
+                  problem: "missing",
+                },
+              }
+            : { items: [...ITEMS, unconfirmed] },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).toContain(".next/prerender-manifest.json");
+    expect(banner.textContent).toContain("is missing on this server");
+    expect(banner.textContent).toContain("Unconfirmed");
+    expect(rowOf("Webflow").getByText("Unconfirmed")).toBeTruthy();
+
+    await editSeo("Webflow");
+    const panel = screen.getByRole("dialog", {
+      name: "SEO for /integrations/webflow",
+    });
+    expect(within(panel).getByText(/isn't confirmed/)).toBeTruthy();
+  });
+
+  it("says nothing of the build where the server read it", () => {
+    render(<SeoPagesPage />);
+    expect(screen.queryByText(/prerender-manifest/)).toBeNull();
+  });
+
   it("says each status is unknown, and why, where the problem list can't be read", () => {
     vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) =>
       args.path === "/problems"
@@ -315,6 +367,30 @@ describe("the list", () => {
     expect(rowOf("Blog").getByText("Warning")).toBeTruthy();
     // A page built in code isn't checked page by page either way.
     expect(rowOf("Pricing").getByText("Not connected")).toBeTruthy();
+  });
+
+  it("shows how many pages link to each page and it links to", () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? {
+              ...PROBLEMS,
+              checked: [
+                { type: "pages", id: "8", links: { inbound: 4, outbound: 2 } },
+              ],
+            }
+          : { items: listed },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+    expect(table().getByRole("columnheader", { name: "Links" })).toBeTruthy();
+    expect(rowOf("Blog").getByText("4 in · 2 out")).toBeTruthy();
+    // A page built in code, and one not counted, show no counts.
+    expect(rowOf("Pricing").queryByText(/ in · /)).toBeNull();
+    expect(rowOf("Home").queryByText(/ in · /)).toBeNull();
   });
 
   it("finds a page by part of its address or name", async () => {
@@ -449,7 +525,9 @@ describe("Edit mode", () => {
     expect(screen.getAllByText("Pattern: {Title} | {Site name}")).toBeTruthy();
 
     fireEvent.change(home, { target: { value: "Acme, the maker" } });
-    expect(screen.getByText("15 characters · Good · changed")).toBeTruthy();
+    expect(
+      screen.getByText("Fits · 151 of 600 px · 15 characters · changed")
+    ).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("1 page changed");
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));

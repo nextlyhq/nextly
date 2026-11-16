@@ -116,6 +116,13 @@ export interface PageStructuredDataHints {
   items?: readonly PageListItem[];
   /** The questions the page answers, in the order shown. */
   questions?: readonly PageQuestion[];
+  /**
+   * Whether the page's questions are a section of it, such as an FAQ block
+   * under a pricing table, rather than its whole subject: a provider then
+   * describes them as a part of the page, whatever kind of page it is. The
+   * questions are the ones above, or the ones the page's own fields hold.
+   */
+  faqSection?: boolean;
 }
 
 /** @experimental What a resolver is asked about one page. */
@@ -192,6 +199,11 @@ export interface PageMetadataAnswer {
     /** The page's language as the social card states it, e.g. `en_US`. */
     locale?: string;
     type?: "website" | "article";
+    /**
+     * The X (Twitter) account of the site, as `@handle`, such as `@example`:
+     * the card's `twitter:site`. Open Graph has no such tag.
+     */
+    xAccount?: string;
   };
   /** The page's address in each language, keyed by language code. */
   languages?: Record<string, string>;

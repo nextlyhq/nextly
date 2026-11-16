@@ -2,7 +2,7 @@
   "racy": {},
   "sqlite": {
     "start": {
-      "statements": 109
+      "statements": 71
     },
     "screens": {
       "login": {
@@ -91,7 +91,7 @@
   },
   "postgresql": {
     "start": {
-      "statements": 113
+      "statements": 71
     },
     "screens": {
       "login": {
@@ -180,7 +180,7 @@
   },
   "mysql": {
     "start": {
-      "statements": 122
+      "statements": 80
     },
     "screens": {
       "login": {

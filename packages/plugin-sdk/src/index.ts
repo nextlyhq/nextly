@@ -845,6 +845,24 @@ export type {
 export { getCachedNextly } from "nextly";
 
 /**
+ * @experimental Whether a failure means Nextly is unavailable (its start
+ *   failed, the database is busy or could not be reached, a service is
+ *   unavailable), and the render policy that follows: in production, a page
+ *   render fails rather than being served without what Nextly gives it, so
+ *   Next.js keeps the page's last good render and a build fails instead of
+ *   shipping such pages; in development, and for any other failure, the
+ *   caller's fallback runs. Core's route helpers follow it for a page's head;
+ *   a plugin rendering part of a page from Nextly calls
+ *   `failRenderWhenUnavailable(error)` in its catch, before its fallback, so
+ *   the same failure is answered the same way.
+ *
+ *   From core's root rather than `nextly/runtime`, so it pulls no runtime
+ *   barrel into a plugin. Intended to become stable with the page-metadata
+ *   contract, which `@nextlyhq/plugin-seo` exercises.
+ */
+export { failRenderWhenUnavailable, isNextlyUnavailable } from "nextly";
+
+/**
  * @experimental The cache tag `ctx.cache.tag(part)` gives, for code that
  * renders a plugin's data outside its context (a route an app owns), so the
  * read it caches carries the tag `ctx.cache.expire(part)` clears. Intended to

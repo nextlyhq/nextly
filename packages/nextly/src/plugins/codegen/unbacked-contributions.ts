@@ -30,6 +30,7 @@ import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { PluginDefinition } from "../plugin-context";
 
 import { componentUses, type ComponentMapEntry } from "./component-import-map";
+import { packageInstalled } from "./installed-package";
 
 /** Whether a module specifier reaches a file, as far as this can tell. */
 export type ModulePresence = "present" | "absent" | "unknown";
@@ -494,25 +495,14 @@ function packageNameOf(specifier: string): string | undefined {
 }
 
 /**
- * Whether a bare specifier names a package installed in a `node_modules` on
- * the way up from `cwd`. Only asked of an alias whose targets are missing:
- * TypeScript then falls back to the package, which is left to the build.
+ * Whether a bare specifier names a package installed for the app, read from
+ * its root by {@link packageInstalled}, the one answer the generator also asks
+ * of the admin. Only asked of an alias whose targets are missing: TypeScript
+ * then falls back to the package, which is left to the build.
  */
 function isInstalledPackage(specifier: string, cwd: string): boolean {
   const name = packageNameOf(specifier);
-  return name !== undefined && findPackageDir(name, cwd) !== undefined;
-}
-
-/** The folder of package `name` in the nearest `node_modules` from `cwd` up. */
-function findPackageDir(name: string, cwd: string): string | undefined {
-  let dir = resolve(cwd);
-  for (;;) {
-    const candidate = join(dir, "node_modules", name);
-    if (isFile(join(candidate, "package.json"))) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
+  return name !== undefined && packageInstalled(name, cwd);
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

@@ -82,36 +82,61 @@ describe("pageProblems", () => {
     expect(problems).toEqual([]);
   });
 
-  it("reports a title past 60 characters and a description past 160, not at them", () => {
-    const at = pageProblems(
+  it("judges a title and description by how wide Google draws them, not by characters", () => {
+    // 65 characters of narrow letters fit Google's 600 px, and 176 of a
+    // narrow description fit its 920 px: a character count would flag both.
+    const narrow = pageProblems(
       withAnswer({
-        title: { value: "t".repeat(60), from: "page" },
-        description: { value: "d".repeat(160), from: "page" },
+        title: {
+          value:
+            "Little tips: fill it in, lift it, tilt it, till it is still. jilt",
+          from: "page",
+        },
+        description: { value: "lilt it ".repeat(22), from: "page" },
       })
+    );
+    expect(narrow).toEqual([]);
+    // 50 characters of wide capitals and 70 of "W" are cut: a character
+    // count would pass both.
+    const wide = pageProblems(
+      withAnswer({
+        title: {
+          value: "WOMEN'S WORKWEAR MADE WELL: MEMBER OFFERS AND NEWS",
+          from: "page",
+        },
+        description: { value: "W".repeat(70), from: "page" },
+      })
+    );
+    expect(kinds(wide)).toEqual(["longTitle", "longDescription"]);
+    // A warning with the width measured and the characters as a hint: the
+    // value is saved and served.
+    expect(wide[0]?.what).toBe("646 of 600 px · 50 characters");
+    expect(wide[1]?.what).toBe("925 of 920 px · 70 characters");
+  });
+
+  it("reports a title one pixel past what Google shows, not at it", () => {
+    // "i" draws 4.443 px: 135 of them are 600 px, 136 are 604.
+    const at = pageProblems(
+      withAnswer({ title: { value: "i".repeat(135), from: "page" } })
     );
     expect(at).toEqual([]);
     const past = pageProblems(
-      withAnswer({
-        title: { value: "t".repeat(61), from: "page" },
-        description: { value: "d".repeat(161), from: "page" },
-      })
+      withAnswer({ title: { value: "i".repeat(136), from: "page" } })
     );
-    expect(kinds(past)).toEqual(["longTitle", "longDescription"]);
-    // A warning with the length measured: the value is saved and served.
-    expect(past[0]?.what).toBe("61 characters, Google shows about 60");
-    expect(past[1]?.what).toBe("161 characters, Google shows about 160");
+    expect(kinds(past)).toEqual(["longTitle"]);
   });
 
-  it("counts characters, not UTF-16 units, so emoji are not counted twice", () => {
+  it("measures an emoji once, not as its two UTF-16 units", () => {
+    // 30 emoji draw one em each, 600 px; counted per unit they would be 60.
     const problems = pageProblems(
-      withAnswer({ title: { value: "😀".repeat(60), from: "page" } })
+      withAnswer({ title: { value: "😀".repeat(30), from: "page" } })
     );
     expect(problems).toEqual([]);
   });
 
   it("sends a title only the route's code sets to a developer", () => {
     const problems = pageProblems(
-      withAnswer({ title: { value: "t".repeat(70), from: "code" } })
+      withAnswer({ title: { value: "W".repeat(40), from: "code" } })
     );
     expect(problems[0]?.fix.place).toBe("developer");
   });

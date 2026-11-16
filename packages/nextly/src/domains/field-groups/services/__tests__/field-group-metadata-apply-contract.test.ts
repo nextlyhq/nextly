@@ -63,10 +63,16 @@ vi.mock("../field-group-table-provisioning", () => ({
   // is the state the partial-failure tests below are about; the test that cares about the other
   // answer sets it explicitly rather than letting this double decide.
   reconcileComponentCompanion: vi.fn(async () => true),
-  // The update path probes which discriminator column the existing table carries before it moves
-  // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
-  // accepted, and a real probe would make every one of them a test of the catalog instead.
-  resolveComponentTypeColumn: vi.fn(async () => "type"),
+  // The update path probes the existing table before it moves anything: which discriminator column
+  // it carries, and the columns it holds. Stubbed to the current spelling and to no column listing:
+  // these tests are about which field CHANGES are accepted, and a real probe would make every one
+  // of them a test of the catalog instead. `columns: undefined` is the answer that leaves the
+  // runtime table every declared column (`RuntimeSchemaOptions.heldColumns`), so no fixture here
+  // loses a field to a held-column filter it is not about.
+  resolveComponentTableColumns: vi.fn(async () => ({
+    typeColumn: "type",
+    columns: undefined,
+  })),
 }));
 
 // Enabling localization is gated on the app declaring a `localization` block, and that gate runs

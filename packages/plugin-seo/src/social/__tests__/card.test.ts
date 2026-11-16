@@ -103,6 +103,23 @@ describe("a page's social card", () => {
     expect(answer.social?.siteName).toBe("From settings");
   });
 
+  it("names the site's X account on every card the rules name one for", () => {
+    const answer = completeSocialCard(
+      { title: "Harbour" },
+      {},
+      { xAccount: "@example" }
+    );
+    expect(answer.social).toEqual({ xAccount: "@example" });
+    // An answer that already names an account keeps its own.
+    expect(
+      completeSocialCard(
+        { social: { xAccount: "@harbour" } },
+        {},
+        { xAccount: "@example" }
+      ).social?.xAccount
+    ).toBe("@harbour");
+  });
+
   it("adds no card to an answer that has nothing to put on one", () => {
     const answer: PageMetadataAnswer = { title: "T" };
     expect(completeSocialCard(answer, {}, {})).toBe(answer);
@@ -166,6 +183,51 @@ describe("socialCardRulesFromOptions", () => {
     expect(() =>
       socialCardRulesFromOptions(undefined, { language: "english please" })
     ).toThrow(/not a language tag/);
+  });
+
+  it("names no X account where the options give none", async () => {
+    const read = socialCardRulesFromOptions(undefined, { siteName: "Acme" });
+    expect(await read(siteIn("en"), undefined)).not.toHaveProperty("xAccount");
+    // Blank, as an unset environment variable reads, is none too.
+    const blank = socialCardRulesFromOptions(undefined, { xAccount: "  " });
+    expect(await blank(siteIn("en"), undefined)).not.toHaveProperty("xAccount");
+  });
+
+  it("reads the site's X account as its @handle, from a handle or a profile address", async () => {
+    const accountOf = async (xAccount: string) =>
+      (
+        await socialCardRulesFromOptions(undefined, { xAccount })(
+          siteIn("en"),
+          undefined
+        )
+      ).xAccount;
+    expect(await accountOf("@example")).toBe("@example");
+    expect(await accountOf("example")).toBe("@example");
+    expect(await accountOf(" @Example_1 ")).toBe("@Example_1");
+    expect(await accountOf("https://x.com/example")).toBe("@example");
+    expect(await accountOf("https://www.x.com/example/")).toBe("@example");
+    expect(await accountOf("https://twitter.com/example")).toBe("@example");
+    expect(await accountOf("https://mobile.twitter.com/example?lang=en")).toBe(
+      "@example"
+    );
+  });
+
+  it("refuses an X account that is no handle or profile address when the plugin is created", () => {
+    for (const xAccount of [
+      "@",
+      "two words",
+      "@sixteen_letters_",
+      "ex-ample",
+      "https://x.com/example/status/1",
+      "https://x.com/",
+      "https://facebook.com/example",
+      "ftp://x.com/example",
+    ]) {
+      expect(
+        () => socialCardRulesFromOptions(undefined, { xAccount }),
+        xAccount
+      ).toThrow(/socialCard\.xAccount .* is not an X account/);
+    }
   });
 
   it("reads the site's origin from baseUrl", async () => {

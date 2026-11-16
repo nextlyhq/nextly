@@ -92,10 +92,14 @@ describe("the problems an answer shows", () => {
   const title = (value: string) => ({ value, from: "content" as const });
 
   it("finds none in a page whose title and description fit", () => {
+    // Fit by width: 65 and 176 characters of narrow letters draw 369 and
+    // 616 px, inside the 600 and 920 px Google shows.
     expect(
       seoProblems({
-        title: title("A".repeat(60)),
-        description: title("B".repeat(160)),
+        title: title(
+          "Little tips: fill it in, lift it, tilt it, till it is still. jilt"
+        ),
+        description: title("lilt it ".repeat(22)),
         robots: { value: { index: true, follow: true }, from: "site" },
       })
     ).toEqual([]);

@@ -17,12 +17,9 @@ import {
   resultsAddress,
   shareImageFit,
 } from "../tab/display";
-import { DESCRIPTION_LIMIT } from "../tab/problems";
+import { cutToFit } from "../tab/problems";
 
 import { cx } from "./parts";
-
-/** About how many characters of a title a results page shows, with its cut. */
-const RESULTS_TITLE_CUT = 61;
 
 /** One of the two preview cards: its small heading, and what it shows. */
 function PreviewFrame({
@@ -111,17 +108,19 @@ export function PreviewCard({
 
 /**
  * The text under the result's link: none where the page asks for none, else
- * its description cut where Google cuts it, or sooner where the page set a
- * shorter limit.
+ * its description cut at the width Google shows, and sooner where the page
+ * set a limit in characters (`max-snippet`, which Google counts so).
  */
 function resultText(answer: SeoAnswer): string {
   if (answer.display?.nosnippet) return "No text under the link";
   if (answer.description === undefined) {
     return "Google will pick text from the page, since nothing is set.";
   }
-  return cutAt(
-    answer.description.value,
-    Math.min(answer.display?.maxSnippet ?? DESCRIPTION_LIMIT, DESCRIPTION_LIMIT)
+  const limit = answer.display?.maxSnippet;
+  const text = answer.description.value;
+  return cutToFit(
+    "description",
+    limit === undefined ? text : cutAt(text, limit)
   );
 }
 
@@ -154,7 +153,7 @@ function SearchResult({
       >
         {answer.title === undefined
           ? name
-          : cutAt(answer.title.value, RESULTS_TITLE_CUT)}
+          : cutToFit("title", answer.title.value)}
       </div>
       <div
         data-testid="seo-search-description"

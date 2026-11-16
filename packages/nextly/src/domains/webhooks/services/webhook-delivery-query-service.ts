@@ -317,14 +317,12 @@ export class WebhookDeliveryQueryService extends BaseService {
       lastStatusCode: row.lastStatusCode,
       lastLatencyMs: row.lastLatencyMs,
       lastError: row.lastError,
-      // Dialect-aware instant recovery: a SQLite epoch Date is already correct,
-      // while a naive Postgres/MySQL Date is reinterpreted as UTC. Returning the
-      // corrected Date lets the response layer serialize the right ISO-8601
-      // instant on every dialect, on a UTC or non-UTC server alike.
-      nextAttemptAt: dbTimestampToInstant(row.nextAttemptAt, this.dialect),
-      eventCreatedAt: dbTimestampToInstant(row.eventCreatedAt, this.dialect),
-      createdAt: dbTimestampToInstant(row.createdAt, this.dialect),
-      updatedAt: dbTimestampToInstant(row.updatedAt, this.dialect),
+      // The adapter hands back each stamp as the instant stored, on every
+      // dialect and in any server time zone; an invalid one reads as none.
+      nextAttemptAt: dbTimestampToInstant(row.nextAttemptAt),
+      eventCreatedAt: dbTimestampToInstant(row.eventCreatedAt),
+      createdAt: dbTimestampToInstant(row.createdAt),
+      updatedAt: dbTimestampToInstant(row.updatedAt),
     };
   }
 
