@@ -8,7 +8,8 @@
  * (developer and older Nextly names included). Arrow keys move, Enter picks,
  * Escape closes. Picking a type asks only for a label, with the name derived
  * and shown; picking the field-group type first asks which existing field
- * group. "Add field" and "Add and add another" hand the choice to the host,
+ * group, or, where the surface can make one, for a new one the host makes.
+ * "Add field" and "Add and add another" hand the choice to the host,
  * which decides where the field goes and how it is stored: the picker writes
  * nothing.
  *
@@ -74,6 +75,15 @@ export interface FieldPickerConfig {
     type: string;
     options: readonly FieldGroupOption[];
     loading?: boolean;
+    /**
+     * Makes a new field group, where the surface can: the chooser offers "New field group", and
+     * the group this resolves with is chosen, as if picked from the list. `null` when the person
+     * makes none, which leaves the chooser as it was. The host makes the group, so the picker
+     * still writes nothing.
+     *
+     * @experimental
+     */
+    onNew?: () => Promise<FieldGroupOption | null>;
   };
 }
 
@@ -232,6 +242,7 @@ function PickerBody({
       <FieldGroupStep
         options={config.fieldGroups?.options ?? []}
         loading={config.fieldGroups?.loading === true}
+        onNew={config.fieldGroups?.onNew}
         onBack={back}
         onPick={fieldGroup =>
           setStep({ kind: "label", type: step.type, fieldGroup })
@@ -405,16 +416,30 @@ function TypeStep({
 function FieldGroupStep({
   options,
   loading,
+  onNew,
   onBack,
   onPick,
 }: {
   options: readonly FieldGroupOption[];
   loading: boolean;
+  onNew?: () => Promise<FieldGroupOption | null>;
   onBack: () => void;
   onPick: (option: FieldGroupOption) => void;
 }) {
   const listId = useId();
   const [query, setQuery] = useState("");
+  // While the host is making a group, a second click would ask it for a second one.
+  const [making, setMaking] = useState(false);
+  const makeNew = async () => {
+    if (!onNew) return;
+    setMaking(true);
+    try {
+      const made = await onNew();
+      if (made) onPick(made);
+    } finally {
+      setMaking(false);
+    }
+  };
   const q = query.trim().toLowerCase();
   const matches = options.filter(option =>
     option.text.toLowerCase().includes(q)
@@ -487,6 +512,16 @@ function FieldGroupStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
+        {onNew && (
+          <Button
+            variant="outline"
+            disabled={making}
+            // The host's dialog settles it; nothing here waits on the click.
+            onClick={() => void makeNew()}
+          >
+            New field group
+          </Button>
+        )}
       </DialogFooter>
     </>
   );

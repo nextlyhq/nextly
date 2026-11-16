@@ -19,6 +19,8 @@ import type { BuilderSettingsValues } from "@admin/components/features/schema-bu
 import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { toSnakeName } from "./field-transformers";
+
 /** An entity created in the dialog and not saved yet. */
 export interface UnsavedEntity {
   kind: BuilderKind;
@@ -31,6 +33,32 @@ export interface UnsavedEntity {
    * server's shape, as the editor loads a saved entity's.
    */
   fields: FieldDefinition[];
+  /**
+   * The entity whose field picker made it, for a field group made there: that
+   * entity's save creates it, and its Discard all lets it go. Absent for one
+   * made from its own create page, whose editor's first save creates it.
+   */
+  ownedBy?: { kind: BuilderKind; address: string };
+}
+
+/**
+ * A field group as the new-entity dialog set it, not saved yet: named by the
+ * dialog's address (or the name's snake_case form when the address is blank),
+ * with no fields, which are added in its editor.
+ */
+export function unsavedFieldGroupFrom(
+  values: BuilderSettingsValues,
+  ownedBy?: UnsavedEntity["ownedBy"]
+): UnsavedEntity {
+  const singularName = values.singularName.trim();
+  const address = values.slug?.trim() || toSnakeName(singularName);
+  return {
+    kind: "field-group",
+    address,
+    settings: { ...values, singularName, slug: address },
+    fields: [],
+    ...(ownedBy ? { ownedBy } : {}),
+  };
 }
 
 /** The address check's name for each kind. */
@@ -128,16 +156,32 @@ export function useUnsavedEntity(
 
 const NOTHING_HELD: ReadonlyMap<string, UnsavedEntity> = new Map();
 
-/**
- * Every unsaved entity's address, kept current, for the dialog's address
- * check. Derived from the store's own snapshot (a new Map on each change), so
- * the list is a new value exactly when the store changes.
- */
-export function useUnsavedAddresses(): readonly PendingAddress[] {
-  const held = useSyncExternalStore(
+/** The store's snapshot, kept current: a new Map exactly when the store changes. */
+function useHeld(): ReadonlyMap<string, UnsavedEntity> {
+  return useSyncExternalStore(
     subscribeUnsavedEntities,
     () => entities,
     () => NOTHING_HELD
   );
+}
+
+/**
+ * Every unsaved entity's address, kept current, for the dialog's address
+ * check. Derived from the store's own snapshot, so the list is a new value
+ * exactly when the store changes.
+ */
+export function useUnsavedAddresses(): readonly PendingAddress[] {
+  const held = useHeld();
   return useMemo(() => addressesOf(held), [held]);
+}
+
+/** Every unsaved entity of `kind`, in the order made, kept current. */
+export function useUnsavedEntitiesOf(
+  kind: BuilderKind
+): readonly UnsavedEntity[] {
+  const held = useHeld();
+  return useMemo(
+    () => [...held.values()].filter(entity => entity.kind === kind),
+    [held, kind]
+  );
 }
