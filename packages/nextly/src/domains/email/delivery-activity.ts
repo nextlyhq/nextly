@@ -47,6 +47,8 @@ import { NextlyError } from "../../errors";
 
 import { deliveriesTableFor } from "./deliveries-table";
 import type {
+  DeliveryFailureKind,
+  DeliveryTemplateVersion,
   EmailDeliveryRecipientKind,
   EmailDeliveryStatus,
 } from "./delivery-record";
@@ -59,6 +61,7 @@ import {
 import {
   standingOf,
   storedFailureOf,
+  templateCausedOf,
   type QueueDialect,
   type QueuedEmailStanding,
 } from "./queued-send-read";
@@ -89,6 +92,57 @@ export interface DeliveryActivity {
   namedPerson: boolean;
   /** Whether this recipient has been erased since. */
   erased: boolean;
+  /** The queued email this was an attempt of, when it was one. */
+  queuedId: string | null;
+  templateVersion: DeliveryTemplateVersionRead;
+  /** The provider's answer to a failure, structured: never its own text. */
+  failureKind: DeliveryFailureKind | null;
+  failureStatus: number | null;
+}
+
+/**
+ * @experimental Which version of its template a delivery sent: the
+ * template's owner, whether the site had overridden it, and a digest of the
+ * version as saved; `none` for a send without a template; `not-recorded`
+ * for a delivery from before versions were recorded.
+ */
+export type DeliveryTemplateVersionRead =
+  | DeliveryTemplateVersion
+  | "not-recorded";
+
+/** @experimental One attempt on a detail sheet's timeline. */
+export interface DeliveryAttempt {
+  id: string;
+  createdAt: Date;
+  outcome: DeliveryOutcome;
+  recipientKind: EmailDeliveryRecipientKind;
+  provider: { id: string | null; type: string };
+  /** The provider's answer, structured: never its own text. */
+  failureKind: DeliveryFailureKind | null;
+  failureStatus: number | null;
+  /** Core's sentence for the failure, with anything address-shaped removed. */
+  failureReason: string | null;
+  /** The provider's own id for the message, when it gave one. */
+  providerMessageId: string | null;
+  templateVersion: DeliveryTemplateVersionRead;
+  erased: boolean;
+}
+
+/** @experimental A delivery's detail sheet. */
+export interface DeliveryDetail extends DeliveryActivity {
+  providerMessageId: string | null;
+  /** Its attempts, oldest first: the queued email's, or itself alone. */
+  timeline: DeliveryAttempt[];
+}
+
+/** @experimental A queued email's detail sheet. */
+export interface QueuedEmailDetail extends QueuedEmailActivity {
+  /** Whether its last failure came from its template, for "Fix template". */
+  templateCaused: boolean;
+  /** The template version its latest attempt sent; null before any. */
+  templateVersion: DeliveryTemplateVersionRead | null;
+  /** Every delivery its attempts recorded, oldest first. */
+  timeline: DeliveryAttempt[];
 }
 
 /** @experimental One queued email, as Activity lists it. */
@@ -154,6 +208,8 @@ export interface QueuedEmailOverdue {
 /** The longest page a list returns. */
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 50;
+/** The most delivery records one timeline reads. */
+const MAX_ATTEMPT_ROWS = 500;
 /** The most templates one last-sent read names. */
 const MAX_SLUGS = 200;
 
@@ -178,7 +234,11 @@ const DELIVERY_FILTER = z.object({
   outcome: z.enum(["sent", "failed"]).optional(),
   // A stored provider's id is a UUID, and PostgreSQL refuses anything else
   // in that column rather than matching nothing, as the other dialects do.
-  providerId: z.string().uuid().optional(),
+  providerId: z
+    .string()
+    .uuid()
+    .transform(id => id.toLowerCase())
+    .optional(),
   providerType: z.string().min(1).max(50).optional(),
   ...common,
 });
@@ -278,7 +338,7 @@ function decodeCursor(text: string | undefined): Cursor | undefined {
       ],
     });
   }
-  return { at: read.data[0], id: read.data[1] };
+  return { at: read.data[0], id: read.data[1].toLowerCase() };
 }
 
 /**
@@ -434,7 +494,26 @@ export class EmailDeliveryActivity {
         : undefined,
     ].filter(condition => condition !== undefined);
 
-    const rows = (await this.run(() =>
+    const rows = await this.queueRows(conditions, limit + 1);
+    const jobs = await this.jobsOf(
+      rows.slice(0, limit).flatMap(row => (row.jobId ? [row.jobId] : []))
+    );
+    return pageOf(
+      rows,
+      limit,
+      after !== undefined,
+      row => ({ at: Number(row.createdAt), id: row.id }),
+      row => queuedOf(row, row.jobId ? jobs.get(row.jobId) : undefined)
+    );
+  }
+
+  /** Queued email rows matching every one of `conditions`, newest first. */
+  private async queueRows(
+    conditions: SQL[],
+    limit: number
+  ): Promise<QueueRow[]> {
+    const queue = loadedDialect(this.dialect).tables.emailQueue;
+    return (await this.run(() =>
       this.db
         .select({
           id: queue.id,
@@ -452,19 +531,66 @@ export class EmailDeliveryActivity {
         .from(queue)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(queue.createdAt), desc(queue.id))
-        .limit(limit + 1)
+        .limit(limit)
     )) as QueueRow[];
+  }
 
-    const jobs = await this.jobsOf(
-      rows.slice(0, limit).flatMap(row => (row.jobId ? [row.jobId] : []))
-    );
-    return pageOf(
-      rows,
-      limit,
-      after !== undefined,
-      row => ({ at: Number(row.createdAt), id: row.id }),
-      row => queuedOf(row, row.jobId ? jobs.get(row.jobId) : undefined)
-    );
+  /**
+   * One delivery record, with the timeline of attempts it belongs to: for
+   * an attempt of a queued email, that email's attempts to the same
+   * recipient, oldest first; else the record alone. Null for an id that
+   * names none, whatever its shape.
+   */
+  async findDelivery(given: string): Promise<DeliveryDetail | null> {
+    if (!isUuid(given)) return null;
+    const id = given.toLowerCase();
+    const [record] = await this.deliveries.list({ id, limit: 1 });
+    if (!record) return null;
+    const timeline = record.queuedId
+      ? (
+          await this.deliveries.list({
+            queuedId: record.queuedId,
+            limit: MAX_ATTEMPT_ROWS,
+          })
+        ).filter(
+          other =>
+            other.recipientKind === record.recipientKind &&
+            other.recipientHash === record.recipientHash
+        )
+      : [record];
+    return {
+      ...deliveryOf(record),
+      providerMessageId: record.messageId,
+      timeline: [...timeline].reverse().map(attemptOf),
+    };
+  }
+
+  /**
+   * One queued email, with every delivery its attempts recorded, oldest
+   * first, whether its last failure came from its template, and the
+   * template version its latest attempt sent. Null for an id that names
+   * none, whatever its shape.
+   */
+  async findQueuedEmail(given: string): Promise<QueuedEmailDetail | null> {
+    if (!isUuid(given)) return null;
+    const id = given.toLowerCase();
+    const queue = loadedDialect(this.dialect).tables.emailQueue;
+    const [row] = await this.queueRows([eq(queue.id, id)], 1);
+    if (!row) return null;
+    const jobs = await this.jobsOf(row.jobId ? [row.jobId] : []);
+    const attempts = [
+      ...(await this.deliveries.list({
+        queuedId: row.id,
+        limit: MAX_ATTEMPT_ROWS,
+      })),
+    ].reverse();
+    const latest = attempts.at(-1);
+    return {
+      ...queuedOf(row, row.jobId ? jobs.get(row.jobId) : undefined),
+      templateCaused: templateCausedOf(row.failure),
+      templateVersion: latest ? latest.templateVersion : null,
+      timeline: attempts.map(attemptOf),
+    };
   }
 
   /** The attempt counts and due times of the jobs `ids`, by id. */
@@ -538,8 +664,9 @@ export class EmailDeliveryActivity {
   async overdue(now: Date = new Date()): Promise<QueuedEmailOverdue> {
     const count = await this.run(() => lateQueuedEmails(this.adapter, now));
     return {
-      overdue: count,
-      capped: count >= LATE_QUEUED_EMAIL_COUNTED,
+      // Counted one past the ceiling, so an exact ceiling is not capped.
+      overdue: Math.min(count, LATE_QUEUED_EMAIL_COUNTED),
+      capped: count > LATE_QUEUED_EMAIL_COUNTED,
       warningAfterMinutes: LATE_QUEUED_EMAIL_MS / 60_000,
     };
   }
@@ -561,7 +688,36 @@ function deliveryOf(record: EmailDeliveryRecord): DeliveryActivity {
     namedPerson: record.namedPerson,
     // The reader gives an erased recipient's digest as null.
     erased: record.recipientHash === null,
+    queuedId: record.queuedId,
+    templateVersion: record.templateVersion,
+    failureKind: record.failure?.kind ?? null,
+    failureStatus: record.failure?.status ?? null,
   };
+}
+
+/** A delivery record as one attempt on a timeline. */
+function attemptOf(record: EmailDeliveryRecord): DeliveryAttempt {
+  const delivery = deliveryOf(record);
+  return {
+    id: delivery.id,
+    createdAt: delivery.createdAt,
+    outcome: delivery.outcome,
+    recipientKind: delivery.recipientKind,
+    provider: delivery.provider,
+    failureKind: delivery.failureKind,
+    failureStatus: delivery.failureStatus,
+    failureReason: delivery.failureReason,
+    providerMessageId: record.messageId,
+    templateVersion: delivery.templateVersion,
+    erased: delivery.erased,
+  };
+}
+
+const UUID = z.string().uuid();
+
+/** Whether `id` can name a record: every one is a UUID. */
+function isUuid(id: string): boolean {
+  return UUID.safeParse(id).success;
 }
 
 /** A queued email's row and its job as Activity lists them. */

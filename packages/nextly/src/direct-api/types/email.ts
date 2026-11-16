@@ -642,11 +642,24 @@ export interface EmailLastSentArgs extends DirectAPIConfig {
  */
 export type EmailOverdueArgs = DirectAPIConfig;
 
+/**
+ * @experimental Arguments for `nextly.emailDeliveries.findByID()` and
+ * `findQueuedByID()`. A call that checks access needs
+ * `read-email-deliveries`.
+ */
+export interface FindEmailDeliveryByIDArgs extends DirectAPIConfig {
+  id: string;
+}
+
 export type {
   ActivityPage,
   DeliveryActivity,
+  DeliveryAttempt,
+  DeliveryDetail,
   DeliveryOutcome,
+  DeliveryTemplateVersionRead,
   QueuedEmailActivity,
+  QueuedEmailDetail,
   QueuedEmailOverdue,
   TemplateLastSent,
   TemplatesLastSent,

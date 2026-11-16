@@ -58,6 +58,9 @@ import {
   recipientDigests,
   storableError,
   templateVersionColumns,
+  type DeliveryFailure,
+  type DeliveryFailureKind,
+  type DeliveryTemplateVersion,
   type EmailDeliveryInput,
   type EmailDeliveryRecipientKind,
   type EmailDeliveryStatus,
@@ -128,6 +131,12 @@ interface EmailDeliveryRow {
   error: string | null;
   messageId: string | null;
   principalKind: string | null;
+  queuedId: string | null;
+  templateOwner: string | null;
+  templateOverridden: boolean | number | null;
+  templateDigest: string | null;
+  failureKind: string | null;
+  failureStatus: number | null;
   createdAt: Date;
 }
 
@@ -153,6 +162,15 @@ export interface EmailDeliveryRecord {
   messageId: string | null;
   /** Whether the send named a plugin-defined person as this recipient. */
   namedPerson: boolean;
+  /** The queued email this was an attempt of, when it was one. */
+  queuedId: string | null;
+  /**
+   * Which version of its template was sent, `none` for a send without one,
+   * or `not-recorded` for a record written before versions were.
+   */
+  templateVersion: DeliveryTemplateVersion | "not-recorded";
+  /** The provider's structured answer, for a failed recipient. */
+  failure: DeliveryFailure | null;
   createdAt: Date;
 }
 
@@ -182,12 +200,44 @@ function toDeliveryRecord(row: EmailDeliveryRow): EmailDeliveryRecord {
     error: row.error,
     messageId: row.messageId,
     namedPerson: row.principalKind !== null,
+    queuedId: row.queuedId,
+    templateVersion: templateVersionOf(row),
+    failure: failureOfRow(row),
     createdAt: row.createdAt,
+  };
+}
+
+/** A row's template version, as its columns record it. */
+function templateVersionOf(
+  row: EmailDeliveryRow
+): DeliveryTemplateVersion | "not-recorded" {
+  if (row.templateOwner === null) return "not-recorded";
+  if (row.templateOwner === "none") return "none";
+  return {
+    owner: row.templateOwner,
+    // A boolean on PostgreSQL, 0 or 1 on MySQL and SQLite.
+    overridden: Boolean(Number(row.templateOverridden ?? 0)),
+    digest: row.templateDigest,
+  };
+}
+
+/** A row's structured failure, when it recorded one. */
+function failureOfRow(row: EmailDeliveryRow): DeliveryFailure | null {
+  if (row.failureKind === null) return null;
+  return {
+    kind: row.failureKind as DeliveryFailureKind,
+    ...(row.failureStatus !== null
+      ? { status: Number(row.failureStatus) }
+      : {}),
   };
 }
 
 /** How a caller narrows a listing. */
 export interface ListDeliveriesOptions {
+  /** One record, by its id. */
+  id?: string;
+  /** The attempts of one queued email. */
+  queuedId?: string;
   /** Hash of the address to look for; callers pass an address, not a hash. */
   recipient?: string;
   status?: EmailDeliveryStatus;
@@ -934,6 +984,10 @@ export class EmailDeliveryService extends BaseService {
         : undefined,
       options.providerType !== undefined
         ? eq(this.deliveries.providerType, options.providerType)
+        : undefined,
+      options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
+      options.queuedId !== undefined
+        ? eq(this.deliveries.queuedId, options.queuedId)
         : undefined,
       options.templateSlug !== undefined
         ? eq(this.deliveries.templateSlug, options.templateSlug)

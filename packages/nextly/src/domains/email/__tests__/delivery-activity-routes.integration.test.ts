@@ -37,13 +37,17 @@ type Headers = Record<string, string>;
 const DELIVERY_FIELDS = [
   "createdAt",
   "erased",
+  "failureKind",
   "failureReason",
+  "failureStatus",
   "id",
   "namedPerson",
   "outcome",
   "provider",
+  "queuedId",
   "recipientKind",
   "templateSlug",
+  "templateVersion",
 ].sort();
 
 /** What a queued email reads as, and nothing else. */
@@ -346,6 +350,31 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     });
 
+    it("lets a reader open a delivery's and a queued email's detail, and refuses the rest", async () => {
+      const [delivery] = itemsOf((await read("email-deliveries", reader)).body);
+      const details = [
+        `email-deliveries/${String(delivery.id)}`,
+        `email-deliveries/queued/${failedQueuedId}`,
+      ];
+      for (const path of details) {
+        const { body, text } = await read(path, reader);
+        expectNothingPersonal(text);
+        expect(body).toMatchObject({ timeline: expect.any(Array) });
+        expect((await get(path, root)).status, path).toBe(200);
+        for (const caller of [manager, stranger, selfRegistered]) {
+          expect(REFUSED, path).toContain((await get(path, caller)).status);
+        }
+      }
+      // An id that names nothing, whatever its shape, is not found.
+      for (const path of [
+        "email-deliveries/00000000-0000-4000-8000-000000000000",
+        "email-deliveries/not-an-id",
+        "email-deliveries/queued/not-an-id",
+      ]) {
+        expect((await get(path, reader)).status, path).toBe(404);
+      }
+    });
+
     it("refuses each read to a manager without the read grant, a user with no email grant, and a self-registered account", async () => {
       for (const path of READS) {
         for (const caller of [manager, stranger, selfRegistered]) {
@@ -374,6 +403,10 @@ for (const dialect of getConfiguredTestDialects()) {
           failureReason: "The email provider refused the message.",
           namedPerson: false,
           erased: true,
+          queuedId: null,
+          templateVersion: "not-recorded",
+          failureKind: null,
+          failureStatus: null,
         },
         {
           id: expect.any(String),
@@ -385,6 +418,10 @@ for (const dialect of getConfiguredTestDialects()) {
           failureReason: null,
           namedPerson: true,
           erased: false,
+          queuedId: null,
+          templateVersion: "not-recorded",
+          failureKind: null,
+          failureStatus: null,
         },
         {
           id: expect.any(String),
@@ -396,6 +433,10 @@ for (const dialect of getConfiguredTestDialects()) {
           failureReason: expect.not.stringContaining("carol"),
           namedPerson: false,
           erased: false,
+          queuedId: null,
+          templateVersion: "not-recorded",
+          failureKind: null,
+          failureStatus: null,
         },
         expect.objectContaining({
           createdAt: "2026-11-01T10:00:00.000Z",
@@ -437,6 +478,10 @@ for (const dialect of getConfiguredTestDialects()) {
           s.startsWith("failed")
         )
       ).toEqual([]);
+      // A provider id in capitals names the same provider on every dialect.
+      expect(await slugsOf(`providerId=${providerId.toUpperCase()}`)).toEqual(
+        await slugsOf(`providerId=${providerId}`)
+      );
       expect(await slugsOf("providerType=smtp")).toEqual([
         "failed:welcome",
         "sent:null",

@@ -31,6 +31,7 @@ import { runJobsPass } from "../../jobs/jobs-runner";
 import { withEmailFailure } from "../failure";
 import { defineEmailProvider } from "../provider-definition";
 import type { EmailDeliveryService } from "../services/email-delivery-service";
+import type { EmailTemplateService } from "../services/email-template-service";
 import { versionDigest } from "../template-ownership";
 import type { EmailProviderAdapter } from "../types";
 
@@ -180,6 +181,10 @@ for (const dialect of getConfiguredTestDialects()) {
 
     it("records an owned template as its owner's, and as overridden once the site edits it", async () => {
       const t = await boot(dialect);
+      // Core's own templates, as the first boot on a site stores them.
+      await (
+        t.getService("emailTemplateService") as unknown as EmailTemplateService
+      ).ensureBuiltInTemplates();
       const reset = await t.nextly.emailTemplates.findBySlug({
         slug: "password-reset",
       });
@@ -226,7 +231,7 @@ for (const dialect of getConfiguredTestDialects()) {
         failureStatus: 550,
       });
       const detail = await t.nextly.emailDeliveries.findByID({ id: item.id });
-      expect(detail?.attempts).toEqual([
+      expect(detail?.timeline).toEqual([
         expect.objectContaining({
           outcome: "failed",
           failureKind: "refused",
@@ -265,7 +270,7 @@ for (const dialect of getConfiguredTestDialects()) {
         templateVersion: "none",
       });
       expect(
-        detail?.attempts.map(a => [a.outcome, a.failureKind ?? null])
+        detail?.timeline.map(a => [a.outcome, a.failureKind ?? null])
       ).toEqual([
         ["failed", "retryable"],
         ["sent", null],
@@ -276,7 +281,22 @@ for (const dialect of getConfiguredTestDialects()) {
       const sent = await t.nextly.emailDeliveries.findByID({
         id: items[0].id,
       });
-      expect(sent?.attempts.map(a => a.outcome)).toEqual(["failed", "sent"]);
+      expect(sent?.timeline.map(a => a.outcome)).toEqual(["failed", "sent"]);
+      // Its id in capitals names the same delivery, and the same email.
+      expect(
+        (
+          await t.nextly.emailDeliveries.findByID({
+            id: items[0].id.toUpperCase(),
+          })
+        )?.id
+      ).toBe(items[0].id);
+      expect(
+        (
+          await t.nextly.emailDeliveries.findQueuedByID({
+            id: queued.id.toUpperCase(),
+          })
+        )?.id
+      ).toBe(queued.id);
       expect(JSON.stringify(detail)).not.toContain("dana@example.com");
     });
 
@@ -303,7 +323,7 @@ for (const dialect of getConfiguredTestDialects()) {
         state: "failed",
         templateCaused: true,
         messageHeld: true,
-        attempts: [],
+        timeline: [],
       });
 
       // A provider's refusal is not the template's.
@@ -320,10 +340,7 @@ for (const dialect of getConfiguredTestDialects()) {
 
     it("answers null for an id it does not know, whatever its shape", async () => {
       const t = await boot(dialect);
-      for (const id of [
-        "00000000-0000-4000-8000-000000000000",
-        "not-an-id",
-      ]) {
+      for (const id of ["00000000-0000-4000-8000-000000000000", "not-an-id"]) {
         expect(await t.nextly.emailDeliveries.findByID({ id })).toBeNull();
         expect(
           await t.nextly.emailDeliveries.findQueuedByID({ id })
@@ -332,4 +349,3 @@ for (const dialect of getConfiguredTestDialects()) {
     });
   });
 }
-

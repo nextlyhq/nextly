@@ -211,6 +211,10 @@ import type {
   FindEmailTemplateByIDArgs,
   FindEmailTemplateBySlugArgs,
   FindEmailTemplatesArgs,
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
   FindFormBySlugArgs,
   FindFormsArgs,
   FindMediaArgs,
@@ -1333,14 +1337,20 @@ export const nextly = {
 
   /** @experimental */
   emailDeliveries: {
-    find: async args =>
+    // Optional, as the namespace declares them: `satisfies` alone would
+    // infer required parameters that merely accept undefined.
+    find: async (args?: FindEmailDeliveriesArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.find(args),
-    findQueued: async args =>
+    findQueued: async (args?: FindQueuedEmailsArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.findQueued(args),
-    lastSent: async args =>
+    lastSent: async (args?: EmailLastSentArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.lastSent(args),
-    overdue: async args =>
+    overdue: async (args?: EmailOverdueArgs) =>
       (await requireNextlyOnceStarted()).emailDeliveries.overdue(args),
+    findByID: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findByID(args),
+    findQueuedByID: async args =>
+      (await requireNextlyOnceStarted()).emailDeliveries.findQueuedByID(args),
   } satisfies EmailDeliveriesNamespace,
 
   userFields: {

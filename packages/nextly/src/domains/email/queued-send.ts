@@ -80,6 +80,7 @@ import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";
 import { notAcceptedFailure } from "./services/send-failures";
+import { isTemplateCaused } from "./template-failure";
 
 /**
  * Where a queued email stands.
@@ -598,7 +599,7 @@ export type QueuedEmailSender = Pick<
   EmailService,
   "send" | "sendWithTemplate" | "withTemplateCopies"
 > &
-  Partial<Pick<EmailService, "withRecipientReport">>;
+  Partial<Pick<EmailService, "withRecipientReport" | "withQueuedAttempt">>;
 
 /** What an attempt needs. */
 export interface QueuedAttemptDeps {
@@ -620,6 +621,9 @@ export function queuedEmailKey(id: string): string {
   return `queued-email:${id}`;
 }
 
+/** Failures an attempt's template caused (`thrownAttemptFailure`). */
+const TEMPLATE_FAILURES = new WeakSet<EmailFailure>();
+
 /**
  * The failure an attempt that threw is recorded with.
  *
@@ -632,6 +636,16 @@ export function queuedEmailKey(id: string): string {
  * removed.
  */
 export function thrownAttemptFailure(error: unknown): EmailFailure {
+  const failure = classifiedThrow(error);
+  // Kept beside the failure, never in it: `storedFailure` records it on the
+  // email's row for "Fix template", and the failure a plugin is told of
+  // stays as it was.
+  if (isTemplateCaused(error)) TEMPLATE_FAILURES.add(failure);
+  return failure;
+}
+
+/** The failure a thrown attempt is recorded with, before its cause is kept. */
+function classifiedThrow(error: unknown): EmailFailure {
   if (!(error instanceof NextlyError)) {
     return {
       retryable: true,
@@ -675,7 +689,10 @@ async function sendOnce(
   id: string,
   report: (recipients: FinalRecipient[]) => void
 ): Promise<EmailFailure | undefined> {
-  const reporting = sender.withRecipientReport?.(report) ?? sender;
+  // Each delivery it records names this email, so its attempts read as one
+  // timeline.
+  const attempting = sender.withQueuedAttempt?.(id) ?? sender;
+  const reporting = attempting.withRecipientReport?.(report) ?? attempting;
   try {
     const outcome =
       message.kind === "template"
@@ -702,12 +719,16 @@ async function sendOnce(
   }
 }
 
-/** A failure as the queue's row records it, with no address. */
+/**
+ * A failure as the queue's row records it, with no address, and whether
+ * the template caused it.
+ */
 function storedFailure(failure: EmailFailure): string {
   return JSON.stringify({
     retryable: failure.retryable,
     ...(failure.status !== undefined ? { status: failure.status } : {}),
     reason: storableError(failure.reason),
+    ...(TEMPLATE_FAILURES.has(failure) ? { template: true } : {}),
   });
 }
 
