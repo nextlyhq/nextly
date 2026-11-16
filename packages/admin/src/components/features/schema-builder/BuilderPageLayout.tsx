@@ -131,6 +131,16 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     pageBuilderHref,
     children,
   } = props;
+  // The fields the save would refuse, from the map the outline marks its rows from, in its order.
+  const errorIds = useMemo(
+    () => [
+      ...builderFieldErrors(
+        builder.fields.filter(field => !field.isSystem),
+        builder.fields
+      ).keys(),
+    ],
+    [builder.fields]
+  );
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
   // The guard is the admin's one, which entries use too. A read-only entity
@@ -156,6 +166,8 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
           pageBuilderHref={pageBuilderHref}
+          errorIds={errorIds}
+          onShowError={fieldId => onActiveChange({ kind: "edit", fieldId })}
         />
         <BuilderWorkspace {...props} />
 

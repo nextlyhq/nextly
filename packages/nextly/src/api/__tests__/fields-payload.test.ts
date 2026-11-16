@@ -40,6 +40,62 @@ describe("assertValidFieldsPayload", () => {
     ).toThrow(NextlyError);
   });
 
+  // Two options of one value are one choice the stored value cannot tell apart. The save refuses
+  // them, naming the field and the value; values are compared exactly as stored, so two that
+  // differ only in letter case are two values.
+  it("refuses a select or radio whose options repeat a value, naming the field and the value", () => {
+    const repeated = (type: "select" | "radio") => [
+      {
+        name: "choice",
+        type,
+        options: [
+          { label: "A", value: "a" },
+          { label: "B", value: "a" },
+        ],
+      },
+    ];
+    for (const type of ["select", "radio"] as const) {
+      try {
+        assertValidFieldsPayload(repeated(type));
+        expect.unreachable("should have thrown");
+      } catch (error) {
+        expect(error).toBeInstanceOf(NextlyError);
+        const errors = (
+          (error as NextlyError).publicData as {
+            errors: Array<{ path: string; message: string }>;
+          }
+        ).errors;
+        expect(
+          errors.some(
+            e => e.path.includes("choice") && e.message.includes('"a"')
+          ),
+          JSON.stringify(errors)
+        ).toBe(true);
+      }
+    }
+    expect(() =>
+      assertValidFieldsPayload([
+        {
+          name: "items",
+          type: "repeater",
+          fields: repeated("select"),
+        },
+      ])
+    ).toThrow(NextlyError);
+    expect(() =>
+      assertValidFieldsPayload([
+        {
+          name: "choice",
+          type: "select",
+          options: [
+            { label: "A", value: "a" },
+            { label: "B", value: "A" },
+          ],
+        },
+      ])
+    ).not.toThrow();
+  });
+
   it("does not mutate or strip the payload (validation-only)", () => {
     const payload = [
       {
