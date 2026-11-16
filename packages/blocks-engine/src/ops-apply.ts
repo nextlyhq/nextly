@@ -406,7 +406,7 @@ function assertDocumentIdentity(document: BlockDocument): void {
  * several edits could have produced the difference, and for a move between two
  * positions holding identical nodes there is no unique answer.
  */
-// RELOCATED, not written here — see the module docblock. the op dispatch itself: one branch per kind, each delegating.
+// RELOCATED, not written here — see the docblock of `ops.ts`. the op dispatch itself: one branch per kind, each delegating.
 // fallow-ignore-next-line complexity
 export function applyOp(
   document: BlockDocument,

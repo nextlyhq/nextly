@@ -53,7 +53,7 @@ export function assertPositionContainer(at: unknown, verb: string): void {
   }
 }
 
-// RELOCATED, not written here — see the module docblock. one refusal per malformed position field.
+// RELOCATED, not written here — see the docblock of `ops.ts`. one refusal per malformed position field.
 // fallow-ignore-next-line complexity
 export function assertPosition(at: TreePosition, verb: string): void {
   // The container first. Every read below goes through `at`, so a `null` or a
@@ -75,8 +75,9 @@ export function assertPosition(at: TreePosition, verb: string): void {
   // after a restart.
   //
   // Read through `ownValue`, not checked beside each read: the list-bound shape
-  // in this file reached nine sites because each round added a guard next to
-  // whichever instance it was shown, and this is the ownership class's fifth.
+  // in this module's parts reached nine sites because each round added a guard
+  // next to whichever instance it was shown, and this is the ownership class's
+  // fifth.
   for (const field of ["index", "parentId", "slot"] as const) {
     if (inheritedValueWouldBeLost(at, field)) {
       throw new OpError(

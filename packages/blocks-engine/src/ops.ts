@@ -32,7 +32,7 @@
  *
  * They cannot be tested down. The health check scores CRAP against a flat
  * coverage estimate, so the threshold fails at cyclomatic 10 whatever the tests
- * do — and this file's tests are thorough. Reducing them means restructuring
+ * do — and the op tests are thorough. Reducing them means restructuring
  * the editor's core mutation path, which is not a safe companion to a move
  * whose whole value is being provably behaviour-preserving.
  *

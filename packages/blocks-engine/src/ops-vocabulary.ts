@@ -1,8 +1,9 @@
 /**
  * The op vocabulary itself: positions, slot addresses, the `BuilderOp` union,
  * the envelope fields an op may set, `OpError`, and how a value is quoted in
- * an error's message. A module of its own so the other parts of ops import it
- * and never each other in a cycle.
+ * an error's message, with the helpers that read an op's own fields. A module
+ * of its own so the parts of ops that use the vocabulary import it rather than
+ * each other; it depends only on `ops-fields`.
  *
  * @module ops-vocabulary
  */

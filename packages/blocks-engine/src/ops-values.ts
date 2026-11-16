@@ -113,7 +113,7 @@ export function assertUsableLimits(limits: DocumentLimits): void {
  * `countNodes` and `treeDepth` refuse a forest whose entries outrun
  * {@link MAX_VALUE_PARTS} rather than answering from a partial walk, and
  * that refusal has to arrive here wearing this module's error type. Six
- * `...Refusal` helpers in this file are written as
+ * `...Refusal` helpers in `ops.ts` are written as
  * `catch (error) { if (error instanceof OpError) return error.message; throw error; }`
  * — so an error of any other type is rethrown, and a helper whose whole purpose
  * is to hand back a reason instead throws at its caller.
@@ -288,7 +288,7 @@ function ownDataPair(
   return [leftPart.value, rightPart.value];
 }
 
-// RELOCATED, not written here — see the module docblock. structural equality, one arm per comparable shape.
+// RELOCATED, not written here — see the docblock of `ops.ts`. structural equality, one arm per comparable shape.
 // fallow-ignore-next-line complexity
 export function equalWithin(
   a: unknown,
@@ -485,7 +485,7 @@ export function areJsonValues(values: readonly unknown[]): boolean {
   return walkIsJson(seed, new Set<object>());
 }
 
-// RELOCATED, not written here — see the module docblock. the JSON-value predicate: one arm per type the format admits.
+// RELOCATED, not written here — see the docblock of `ops.ts`. the JSON-value predicate: one arm per type the format admits.
 // fallow-ignore-next-line complexity
 function walkIsJson(
   pending: { value: unknown; depth: number; exiting?: object }[],
@@ -575,7 +575,7 @@ function isArrayIndex(key: string): boolean {
   return /^(?:0|[1-9]\d*)$/.test(key) && Number(key) <= 4294967294;
 }
 
-// RELOCATED, not written here — see the module docblock. an own-key scan with one guard per disallowed key kind.
+// RELOCATED, not written here — see the docblock of `ops.ts`. an own-key scan with one guard per disallowed key kind.
 // fallow-ignore-next-line complexity
 export function hasOnlyJsonOwnKeys(value: object): boolean {
   // Counted while enumerating, for the reason {@link MAX_VALUE_PARTS} exists:

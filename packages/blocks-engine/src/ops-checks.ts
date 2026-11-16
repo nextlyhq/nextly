@@ -89,7 +89,7 @@ export function accepted(
  * - a name that is not a field at all — `__proto__`, `constructor`,
  *   `prototype`. These reach an object's machinery rather than its data.
  */
-// RELOCATED, not written here — see the module docblock. one refusal per unpatchable field name.
+// RELOCATED, not written here — see the docblock of `ops.ts`. one refusal per unpatchable field name.
 // fallow-ignore-next-line complexity
 export function assertPatchNames(
   op: Extract<BuilderOp, { kind: "update" }>
@@ -248,7 +248,7 @@ export function assertPatchNames(
  * engine's `validate()`, which the editor runs where a block registry is in
  * hand. See {@link NODE_FIELDS} for why the split is there.
  */
-// RELOCATED, not written here — see the module docblock. one refusal per malformed field, flat and exhaustive by design.
+// RELOCATED, not written here — see the docblock of `ops.ts`. one refusal per malformed field, flat and exhaustive by design.
 // fallow-ignore-next-line complexity
 export function assertNodeShape(
   node: BlockNode,
@@ -562,7 +562,7 @@ export function assertListIsData(list: unknown, subject: string): void {
   }
 }
 
-// RELOCATED, not written here — see the module docblock. one refusal per way a forest entry can be unusable.
+// RELOCATED, not written here — see the docblock of `ops.ts`. one refusal per way a forest entry can be unusable.
 // fallow-ignore-next-line complexity
 export function assertForestEntries(nodes: BlockNode[]): void {
   // Filled by loop rather than spread: `[...nodes]` is fine, but the pushes
@@ -843,7 +843,7 @@ export function assertFitsCaps(
  * nothing checked it. A slot name reaching the prototype is the sharp case: the
  * deletion would run against an inherited member rather than an own key.
  */
-// RELOCATED, not written here — see the module docblock. one refusal per malformed slot address.
+// RELOCATED, not written here — see the docblock of `ops.ts`. one refusal per malformed slot address.
 // fallow-ignore-next-line complexity
 export function assertDropSlot(address: unknown, verb: string): void {
   if (address === undefined) return;
@@ -1051,7 +1051,7 @@ function omitSlots(node: BlockNode): BlockNode {
   return rest;
 }
 
-// RELOCATED, not written here — see the module docblock. a duplicate-id walk over a subtree.
+// RELOCATED, not written here — see the docblock of `ops.ts`. a duplicate-id walk over a subtree.
 // fallow-ignore-next-line complexity
 export function assertSubtreeIdsAreUnique(
   nodes: BlockNode[],
@@ -1102,7 +1102,7 @@ export function assertSubtreeIdsAreUnique(
   }
 }
 
-// RELOCATED, not written here — see the module docblock. an id collector over a subtree.
+// RELOCATED, not written here — see the docblock of `ops.ts`. an id collector over a subtree.
 // fallow-ignore-next-line complexity
 function subtreeIds(root: BlockNode): string[] {
   const ids: string[] = [];
