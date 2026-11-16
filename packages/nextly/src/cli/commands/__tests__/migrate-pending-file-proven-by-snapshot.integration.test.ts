@@ -408,7 +408,7 @@ describe.each(getConfiguredTestDialects())(
         const error = await refusal();
         expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
         expect(error.publicMessage).toContain(
-          `ADD COLUMN ${q("note")} varchar(32) DEFAULT (rows it fills with its default are still NULL)`
+          `ADD COLUMN ${q("note")} varchar (rows it fills with its default are still NULL)`
         );
         expect(await ledger(two)).toEqual([]);
       }

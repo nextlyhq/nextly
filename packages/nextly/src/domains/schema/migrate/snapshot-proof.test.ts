@@ -505,17 +505,41 @@ describe("proveStatements: rows a statement fills with its default", () => {
     ).toEqual({ statuses: ["shown", "shown", "shown"], counted: [] });
   });
 
-  it("counts a SQLite rebuild's new column its copy leaves to the default", async () => {
-    const statements = [
+  it("never passes rows written into a table moved into place, unless a rebuild copies its own", async () => {
+    // At the file's end the twin is gone and the table stands in its place.
+    const live: LiveSchema = {
+      ...everything,
+      hasTable: name => !name.startsWith("__new_"),
+    };
+    const block = (copy: string) => [
       `CREATE TABLE "__new_dc_posts" ("id" text NOT NULL, "title" text, "note" text DEFAULT 'n')`,
-      'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"',
+      copy,
       'DROP TABLE "dc_posts"',
       'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
     ];
-    expect(await prove(statements, "sqlite", 1)).toEqual({
-      statuses: ["shown", "unfilled", "shown", "shown"],
-      counted: ["dc_posts.note"],
-    });
+    const statuses = async (statements: string[]) =>
+      (
+        await proveStatements({
+          statements,
+          dialect: "sqlite",
+          sides,
+          live: { schema: live, nullsIn: () => Promise.resolve(0) },
+        })
+      ).map(proof => proof.status);
+    // A copy that leaves `note` to its default is no rebuild: its rows are not shown.
+    expect(
+      await statuses(
+        block(
+          'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"'
+        )
+      )
+    ).toEqual(["shown", "unshown", "shown", "shown"]);
+    // Nor are rows of its own the file puts in the twin.
+    expect(
+      await statuses(
+        block(`INSERT INTO "__new_dc_posts" ("id") VALUES ('seeded')`)
+      )
+    ).toEqual(["shown", "unshown", "shown", "shown"]);
   });
 
   it("names such a statement in the refusal", async () => {
@@ -542,7 +566,7 @@ describe("proveStatements: rows a statement fills with its default", () => {
       "the database holds rows 1 statement would have filled with its default, still NULL"
     );
     expect(message).toContain(
-      'ALTER TABLE "dc_posts" ADD COLUMN "note" varchar(32) DEFAULT (rows it fills with its default are still NULL)'
+      'ALTER TABLE "dc_posts" ADD COLUMN "note" varchar (rows it fills with its default are still NULL)'
     );
   });
 });

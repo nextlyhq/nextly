@@ -124,25 +124,18 @@ export async function proveStatements(args: {
 
 /**
  * For each statement, the nullable columns it fills with a default in every row its table holds:
- * an `ALTER TABLE ... ADD [COLUMN] c ... DEFAULT <value>`, and a column with a default that a SQLite
- * rebuild's twin has and its copy does not fill. A NOT NULL column holds no NULL to find, so it is
- * not counted.
+ * `ALTER TABLE ... ADD [COLUMN] c ... DEFAULT <value>`. A SQLite rebuild fills none: its copy
+ * carries every column of its twin (`rebuildCopyStatements`), and a twin with a column the copy
+ * leaves out is no rebuild, so its rows are not shown at all. A NOT NULL column holds no NULL to
+ * find, so it is not counted.
  */
 function columnsFilledBy(
   statements: readonly string[],
   dialect: SupportedDialect
 ): FilledColumn[][] {
-  const filled = statements.map(statement =>
+  return statements.map(statement =>
     columnsAddedWithDefault(statement, dialect)
   );
-  for (const at of rebuildCopyStatements(statements, dialect)) {
-    filled[at] = twinColumnsLeftToDefault(
-      statements[at - 1],
-      statements[at],
-      dialect
-    );
-  }
-  return filled;
 }
 
 /** `ALTER TABLE t ADD [COLUMN] [IF NOT EXISTS] c ... DEFAULT <value>` clauses, nullable ones. */
@@ -166,64 +159,6 @@ function columnsAddedWithDefault(
       ? [{ table, column }]
       : [];
   });
-}
-
-/**
- * The columns of a SQLite rebuild's twin (`create`) that have a default and that its copy
- * (`copy`) does not fill: every row the table held takes the default in them.
- */
-function twinColumnsLeftToDefault(
-  create: string,
-  copy: string,
-  dialect: SupportedDialect
-): FilledColumn[] {
-  const twin = createdTable(create, dialect);
-  const copied = new Set(copiedColumns(copy, dialect));
-  if (twin === undefined) return [];
-  const table = twin.replace(/^__new_/, "");
-  return columnDefinitions(create, dialect)
-    .filter(([column, rest]) => !copied.has(column) && fillsWithDefault(rest))
-    .map(([column]) => ({ table, column }));
-}
-
-/** Each column a `CREATE TABLE` body defines, with the tokens after its name. */
-function columnDefinitions(
-  create: string,
-  dialect: SupportedDialect
-): Array<[string, StatementToken[]]> {
-  const cursor = cursorOf(create, dialect, EXACT);
-  cursor.accept("CREATE", "TABLE");
-  cursor.acceptCondition();
-  if (cursor.name() === undefined || !cursor.accept("(")) return [];
-  const body = cursor.rest();
-  const close = body.lastIndexOf(")");
-  return new StatementCursor(body.slice(0, close)).clauses().flatMap(tokens => {
-    const definition = new StatementCursor(tokens);
-    const first = definition.peek();
-    if (typeof first === "string" && TABLE_CONSTRAINT_WORDS.has(first)) {
-      return [];
-    }
-    const column = definition.name();
-    return column === undefined ? [] : [[column, definition.rest()]];
-  });
-}
-
-/** Words opening a table constraint in a `CREATE TABLE` body, not a column. */
-const TABLE_CONSTRAINT_WORDS = new Set([
-  "CONSTRAINT",
-  "PRIMARY",
-  "UNIQUE",
-  "FOREIGN",
-  "CHECK",
-]);
-
-/** The columns an `INSERT INTO t (a, b) ...` names. */
-function copiedColumns(copy: string, dialect: SupportedDialect): string[] {
-  const cursor = cursorOf(copy, dialect, EXACT);
-  if (!cursor.accept("INSERT", "INTO") || cursor.name() === undefined) {
-    return [];
-  }
-  return cursor.accept("(") ? (cursor.names() ?? []) : [];
 }
 
 /**
@@ -319,6 +254,8 @@ interface FileContext {
   created: ReadonlySet<string>;
   /** Tables a later statement drops, or renames into a table the snapshot holds. */
   goneLater: ReadonlySet<string>;
+  /** Tables a later statement drops: gone by the end, with any rows written into them. */
+  droppedLater: ReadonlySet<string>;
 }
 
 /** A table the statement may change: the snapshot holds it, or the file itself created it. */
@@ -349,7 +286,12 @@ export function statementsShownBySnapshot(
   const shown = statements.map(() => false);
   const runs = mysqlRunsAt(statements, dialect, objects);
   const copies = rebuildCopyStatements(statements, dialect);
-  const goneAfter = tablesGoneAfter(statements, dialect, objects);
+  const goneAfter = tablesAfter(statements, statement =>
+    goneBy(statement, dialect, objects.tables)
+  );
+  const droppedAfter = tablesAfter(statements, statement =>
+    droppedBy(statement, dialect)
+  );
   const created = new Set<string>();
   statements.forEach((statement, at) => {
     const file: FileContext = {
@@ -357,6 +299,7 @@ export function statementsShownBySnapshot(
       objects,
       created,
       goneLater: goneAfter[at],
+      droppedLater: droppedAfter[at],
     };
     shown[at] =
       runs.has(at) ||
@@ -396,23 +339,16 @@ function mysqlRunsAt(
   return positions;
 }
 
-/**
- * For each statement, the tables a statement after it drops, or renames into a table the snapshot
- * holds: a table the file creates is scaffolding only when it is gone or in place by the end.
- */
-function tablesGoneAfter(
+/** For each statement, the tables `read` names in the statements after it. */
+function tablesAfter(
   statements: readonly string[],
-  dialect: SupportedDialect,
-  objects: SnapshotObjects
+  read: (statement: string) => string[]
 ): ReadonlySet<string>[] {
   const after: ReadonlySet<string>[] = [];
-  let gone = new Set<string>();
+  let later = new Set<string>();
   for (let at = statements.length - 1; at >= 0; at -= 1) {
-    after[at] = gone;
-    gone = new Set([
-      ...gone,
-      ...goneBy(statements[at], dialect, objects.tables),
-    ]);
+    after[at] = later;
+    later = new Set([...later, ...read(statements[at])]);
   }
   return after;
 }
@@ -423,14 +359,19 @@ function goneBy(
   dialect: SupportedDialect,
   tables: ReadonlySet<string>
 ): string[] {
-  const cursor = cursorOf(statement, dialect, EXACT);
-  if (cursor.accept("DROP", "TABLE")) {
-    cursor.acceptCondition();
-    return cursor.names() ?? [];
-  }
-  const renames = tableRenamesOf(cursor, dialect);
+  const dropped = droppedBy(statement, dialect);
+  if (dropped.length > 0) return dropped;
+  const renames = tableRenamesOf(cursorOf(statement, dialect, EXACT), dialect);
   if (renames === undefined) return [];
   return renames.filter(([, to]) => tables.has(to)).map(([from]) => from);
+}
+
+/** The tables a `DROP TABLE` drops; none for any other statement. */
+function droppedBy(statement: string, dialect: SupportedDialect): string[] {
+  const cursor = cursorOf(statement, dialect, EXACT);
+  if (!cursor.accept("DROP", "TABLE")) return [];
+  cursor.acceptCondition();
+  return cursor.names() ?? [];
 }
 
 /**
@@ -591,14 +532,18 @@ function dropTablesShown(cursor: StatementCursor, file: FileContext): boolean {
   );
 }
 
-/** Rows written into a table the file created and drops again: a rebuild's guard. */
+/**
+ * Rows written into a table the file created and drops again: a rebuild's guard. A table renamed
+ * into place keeps its rows, so rows written into one are not shown, unless they are a rebuild's
+ * copy of the table's own (`rebuildCopyStatements`).
+ */
 function guardRowsShown(cursor: StatementCursor, file: FileContext): boolean {
   const into = cursor.name();
   return (
     into !== undefined &&
     file.created.has(into) &&
     !file.objects.tables.has(into) &&
-    file.goneLater.has(into)
+    file.droppedLater.has(into)
   );
 }
 
