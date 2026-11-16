@@ -41,14 +41,23 @@ describe("validateCollectionConfig: unique on a relation holding a list", () => 
         options: { relationType: "manyToMany" },
       },
     ],
-  ])("refuses %s marked unique, naming the field", (_label, shape) => {
-    expect(errorsFor({ name: "links", ...shape, unique: true })).toContainEqual(
-      expect.objectContaining({
-        path: "fields[1].unique",
-        code: "UNIQUE_NOT_ON_LIST",
-      })
-    );
-  });
+  ])(
+    "refuses %s marked unique, naming the field and the fix",
+    (_label, shape) => {
+      expect(
+        errorsFor({ name: "links", ...shape, unique: true })
+      ).toContainEqual(
+        expect.objectContaining({
+          path: "fields[1].unique",
+          code: "UNIQUE_NOT_ON_LIST",
+          // The same words the Schema Builder refuses it with.
+          message: expect.stringContaining(
+            'Turn Unique off on "links", or make it a single link.'
+          ),
+        })
+      );
+    }
+  );
 
   it.each([
     ["a relation to one entry", { type: "relationship", relationTo: "tags" }],
