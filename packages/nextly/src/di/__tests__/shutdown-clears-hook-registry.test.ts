@@ -6,9 +6,13 @@
 // of every configured handler, running alongside the dead instance's own -- the
 // same hazard the webhook recording policy and activation are cleared for.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { clearServices } from "../register";
+import {
+  afterDeleteWindow,
+  stopDeleteWindowTimers,
+} from "../../domains/media/delete-window-timers";
 import {
   getHookRegistry,
   HookRegistry,
@@ -83,5 +87,32 @@ describe("clearing services clears the hook registry", () => {
 
     expect(custom.hasHooks("beforeCreate", SLUG)).toBe(false);
     marker.__nextly_activeHookRegistry = undefined;
+  });
+});
+
+// A media delete's own timer finishes through the services too, so a clear
+// stops it: run later, it would work through an empty container, or the next
+// registration's. Here rather than beside the timers, so that file stays
+// clear of the service registry's module graph.
+describe("clearing services stops a media delete's own timer", () => {
+  it("never runs a finish armed before the clear", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const finish = vi.fn(async () => undefined);
+      const control = vi.fn(async () => undefined);
+      // The control: a timer armed after the clear still runs, so "never
+      // ran" is the clear's doing, not a timer that could not fire.
+      afterDeleteWindow(10_500, finish);
+      clearServices();
+      afterDeleteWindow(10_500, control);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(finish).not.toHaveBeenCalled();
+      expect(control).toHaveBeenCalledTimes(1);
+    } finally {
+      stopDeleteWindowTimers();
+      vi.useRealTimers();
+    }
   });
 });

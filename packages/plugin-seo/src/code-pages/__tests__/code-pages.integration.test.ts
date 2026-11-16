@@ -26,13 +26,18 @@ import {
 import { defineCollection, defineSingle, text } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { DEFAULT_TITLE_PATTERN } from "../../settings/patterns";
 import { seoPlugin } from "../../plugin";
-import { coverageGroupOf, coverageOf, type SiteAddress } from "../contract";
+import {
+  coverageGroupOf,
+  coverageOf,
+  type BuildStatusBody,
+  type SiteAddress,
+} from "../contract";
 import { seoMetadata, seoStructuredData } from "../metadata";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
@@ -78,16 +83,34 @@ writeFileSync(
   })
 );
 
+/**
+ * The same site's build where its prerender manifest is missing, as a host
+ * that ships only part of `.next` leaves it: the app paths read, the
+ * addresses its routes with a variable part declared not.
+ */
+const PARTIAL = mkdtempSync(join(tmpdir(), "seo-code-pages-partial-"));
+mkdirSync(join(PARTIAL, "server"), { recursive: true });
+writeFileSync(
+  join(PARTIAL, "server/app-paths-manifest.json"),
+  JSON.stringify({
+    "/(site)/pricing/page": "app/(site)/pricing/page.js",
+    "/(site)/integrations/[name]/page":
+      "app/(site)/integrations/[name]/page.js",
+  })
+);
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
   delete process.env.NEXT_PHASE;
+  vi.restoreAllMocks();
 });
 
 afterAll(() => {
   rmSync(BUILD, { recursive: true, force: true });
+  rmSync(PARTIAL, { recursive: true, force: true });
 });
 
 /** A signed-in person holding exactly `permissions`, or every one. */
@@ -136,18 +159,32 @@ async function personWith(
   return `nextly_session=${token}`;
 }
 
-/** The addresses the screen lists, as `cookie`. */
-async function addressesFor(cookie: string) {
-  const segments = ["plugins", ...PLUGIN.split("/"), "pages"];
-  const res = await createDynamicHandlers().GET(
+/** A GET of the plugin's route at `path` under it, as `cookie`. */
+function pluginGet(cookie: string, path: readonly string[]) {
+  const segments = ["plugins", ...PLUGIN.split("/"), ...path];
+  return createDynamicHandlers().GET(
     new Request(`${SITE}/api/${segments.join("/")}`, {
       headers: { cookie },
     }),
     { params: Promise.resolve({ params: segments }) }
   );
+}
+
+/** The addresses the screen lists, as `cookie`. */
+async function addressesFor(cookie: string) {
+  const res = await pluginGet(cookie, ["pages"]);
   if (!res.ok) return { status: res.status, items: undefined };
   const body = (await res.json()) as { items: SiteAddress[] };
   return { status: res.status, items: body.items };
+}
+
+/** What the screen is told of the build, as `cookie`. */
+async function buildFor(cookie: string) {
+  const res = await pluginGet(cookie, ["pages", "build"]);
+  return {
+    status: res.status,
+    body: res.ok ? ((await res.json()) as BuildStatusBody) : undefined,
+  };
 }
 
 /** The sitemap's addresses. */
@@ -203,14 +240,14 @@ const typed = (path: string, values: Record<string, unknown> = {}) => ({
 describe.each(getConfiguredTestDialects())(
   "pages with no entry (%s)",
   (dialect: TestDialect) => {
-    async function boot() {
+    async function boot(nextBuildDir = BUILD) {
       current = await createTestNextly({
         dialect,
         plugins: [
           seoPlugin({
             collections: [PAGES],
             baseUrl: SITE,
-            nextBuildDir: BUILD,
+            nextBuildDir,
           }),
         ],
         collections: [
@@ -647,6 +684,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await save(reader, typed("/pricing", { title: "No" }))).toBe(403);
       expect((await addressesFor(reader)).status).toBe(403);
       expect((await addressesFor(manager)).status).toBe(200);
+      expect((await buildFor(reader)).status).toBe(403);
+      expect((await buildFor(manager)).status).toBe(200);
       expect(await save(manager, typed("/contact", { title: "Yes" }))).toBe(
         200
       );
@@ -655,6 +694,81 @@ describe.each(getConfiguredTestDialects())(
         (await seoMetadata("/pricing", { metadata: { title: "Pricing" } }))
           .title
       ).toBe("Pricing");
+    });
+
+    it("lists a page its route recorded as unconfirmed where the build's prerender manifest can't be read, and says why", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const t = await boot(PARTIAL);
+      const owner = await personWith(t, "owner", "all");
+      // Recorded while the site was built, as every page the build renders.
+      process.env.NEXT_PHASE = "phase-production-build";
+      await seoMetadata("/integrations/wordpress", {
+        metadata: { title: "WordPress" },
+      });
+      await seoMetadata("/retired");
+      delete process.env.NEXT_PHASE;
+
+      const { status, items } = await addressesFor(owner);
+
+      expect(status).toBe(200);
+      expect((await buildFor(owner)).body).toEqual({
+        unreadable: {
+          file: join(PARTIAL, "prerender-manifest.json"),
+          problem: "missing",
+        },
+      });
+      expect(
+        items?.map(({ path, source, from, standing }) => ({
+          path,
+          source,
+          from,
+          standing,
+        }))
+      ).toEqual([
+        { path: "/about", source: "entry", from: "Pages", standing: "listed" },
+        {
+          path: "/integrations/wordpress",
+          source: "dynamic",
+          from: "app/(site)/integrations/[name]/page",
+          standing: "unconfirmed",
+        },
+        {
+          path: "/pricing",
+          source: "built",
+          from: "app/(site)/pricing/page",
+          standing: "not-connected",
+        },
+      ]);
+      expect(
+        items?.find(item => item.path === "/integrations/wordpress")?.title
+      ).toBe("WordPress");
+
+      // What search engines and AI tools are given stays confirmed pages only.
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, llmsTxt: true },
+      });
+      expect(await listed()).not.toContain(`${SITE}/integrations/wordpress`);
+      const llms = await (
+        await createDynamicHandlers().GET(
+          new Request(`${SITE}/admin/api/llms.txt`),
+          { params: Promise.resolve({ params: ["llms.txt"] }) }
+        )
+      ).text();
+      expect(llms).not.toContain(`${SITE}/integrations/wordpress`);
+    });
+
+    it("says nothing of the build, and lists only its routes, where its prerender manifest is read", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      process.env.NEXT_PHASE = "phase-production-build";
+      await seoMetadata("/retired");
+      delete process.env.NEXT_PHASE;
+
+      const { items } = await addressesFor(owner);
+
+      expect((await buildFor(owner)).body).toEqual({});
+      expect(items?.some(item => item.path === "/retired")).toBe(false);
     });
 
     it("lists a connected page in the sitemap, and leaves out one hidden or not connected", async () => {

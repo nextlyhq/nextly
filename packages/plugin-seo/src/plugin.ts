@@ -54,7 +54,7 @@ import {
 } from "./code-pages/connections";
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
-import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
+import { readCodeBuild, type CodeRoute } from "./code-pages/routes";
 import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
@@ -68,6 +68,7 @@ import {
 } from "./connections/search-console-send";
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { watchContentDates } from "./content-dates/hooks";
+import { startFingerprintUpgrade } from "./content-dates/upgrade";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -233,12 +234,13 @@ export interface SeoPluginOptions {
    */
   fields?: FieldConfig[];
   /**
-   * Refuse a save of a title longer than 60 characters or a description
-   * longer than 160, the lengths Google shows about as much of. Off by
-   * default: search engines cut a longer one to fit rather than refusing it,
-   * so a long value is saved and named as a warning in the SEO tab and the
-   * problem list. Applies to the default fields; a site passing its own
-   * `fields` sets `maxLength` on them itself.
+   * Refuse a save of a title or description wider than Google shows of it:
+   * about 600 px of a title and 920 px of a description, measured in the
+   * font Google draws them in, the measure the SEO tab and the problem list
+   * warn by. Off by default: search engines cut a wider one to fit rather
+   * than refusing it, so it is saved and named as a warning in the SEO tab
+   * and the problem list. Applies to the default fields; a site passing its
+   * own `fields` sets its own `validate` or `maxLength` on them.
    */
   hardLengthLimits?: boolean;
   /**
@@ -335,15 +337,15 @@ export interface SeoPluginOptions {
   structuredData?: StructuredDataOptions;
   /**
    * @experimental What every page's social card states beyond the page:
-   * the site's name, until one is saved in the SEO settings, and the
-   * language of a page the route read in no particular language, as a
-   * language tag.
+   * the site's name, until one is saved in the SEO settings, the language
+   * of a page the route read in no particular language, as a language tag,
+   * and the site's X account, as `twitter:site`.
    *
    * ```ts
    * seoPlugin({
    *   collections: ["posts"],
    *   baseUrl: "https://example.com",
-   *   socialCard: { siteName: "Example", language: "en-US" },
+   *   socialCard: { siteName: "Example", language: "en-US", xAccount: "@example" },
    * });
    * ```
    *
@@ -735,12 +737,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const redirectKeys = heldRedirectKeys();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
-  const codeRoutes = () =>
-    readCodeRoutes(
+  const codeBuild = () =>
+    readCodeBuild(
       options.nextBuildDir === undefined
         ? {}
         : { buildDir: options.nextBuildDir }
     );
+  const codeRoutes = () => codeBuild().routes;
   // The site's configured origin, where the sitemap is served and a baseUrl
   // is set, for every output that names the site's addresses.
   const siteOrigin = configuredOrigin(
@@ -751,6 +754,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // answers them and the head that links them make one decision.
   const plainCopies = {
     readRules,
+    // A page built in code is copied too, from the page as it renders.
+    codeRoutes,
     ...siteOrigin,
     ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
   };
@@ -1130,7 +1135,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // entry's SEO.
     ...codePageRoutes({
       readRules,
-      routes: codeRoutes,
+      build: codeBuild,
       origin: () =>
         options.baseUrl === undefined
           ? undefined
@@ -1251,10 +1256,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // plugin does not run: pages saved meanwhile reach no record. Both
     // forget the catch-up's fingerprint, so the first start after the
     // install records them. A full uninstall drops the record instead.
+    //
+    // Each first waits for the catch-up under way: the command that runs the
+    // hook boots the app for it, which starts one, and tears that boot down
+    // once the hook returns. Left running, the catch-up would read services
+    // the teardown has taken away, store its fingerprint after the hook
+    // forgot it, or write to a record an uninstall is dropping.
     async onInstall(ctx) {
+      await lastCatchUp();
       await forgetCatchUpFingerprint(ctx);
     },
     async onUninstall(ctx, { keepData }) {
+      await lastCatchUp();
       if (keepData) await forgetCatchUpFingerprint(ctx);
     },
     async destroy() {
@@ -1275,6 +1288,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Started, not awaited, for the same reason: the content fingerprints
+      // an earlier release kept, brought up to date while the field group
+      // rows they were taken from are as they were, so a save that rewrites
+      // them does not move a page's date. One read once that is done.
+      void startFingerprintUpgrade(ctx);
       // The not-found log an earlier version kept in a collection, moved to
       // the plugin's table; one count once there is nothing left to move.
       // Bounded as the catch-up's are: it runs unawaited, and a function
@@ -1299,6 +1317,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         async () => {
           await lastCatchUp();
           await startCatchUp(ctx);
+          await startFingerprintUpgrade(ctx);
           await ctx.db.withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
             moveLoggedRows(ctx)
           );

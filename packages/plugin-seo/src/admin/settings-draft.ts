@@ -427,8 +427,12 @@ function sorted(value: unknown): unknown {
 const sameRule = (a: StructuredDataTypeRule, b: StructuredDataTypeRule) =>
   JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 
+// A rule declaring only an FAQ section is a choice the site made, so it is
+// not empty.
 const isEmptyRule = (rule: StructuredDataTypeRule): boolean =>
-  rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
+  rule.type === undefined &&
+  rule.faqSection === undefined &&
+  Object.keys(rule.details ?? {}).length === 0;
 
 /**
  * The rules the site saves: those that differ from the plugin's, so a type
@@ -458,6 +462,25 @@ export function withStructuredType(
 ): SettingsDraft {
   const { type: _previous, ...rest } = draft.structuredData[key] ?? {};
   return withRule(draft, key, type === undefined ? rest : { ...rest, type });
+}
+
+/** Whether the type `key` declares its pages' questions an FAQ section. */
+export function faqSectionOf(draft: SettingsDraft, key: string): boolean {
+  return draft.structuredData[key]?.faqSection === true;
+}
+
+/**
+ * `draft` with the type `key`'s pages' questions declared an FAQ section of
+ * each page, or not: off is no declaration at all rather than `false`, so a
+ * type left alone and one switched back read the same.
+ */
+export function withFaqSection(
+  draft: SettingsDraft,
+  key: string,
+  on: boolean
+): SettingsDraft {
+  const { faqSection: _previous, ...rest } = draft.structuredData[key] ?? {};
+  return withRule(draft, key, on ? { ...rest, faqSection: true } : rest);
 }
 
 /** The fields the type `key` reads each detail of `type` from. */

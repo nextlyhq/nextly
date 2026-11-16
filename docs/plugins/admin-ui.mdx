@@ -53,6 +53,10 @@ The app commits both. `nextly generate:types` writes them, and `next dev` rewrit
 they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
 checkout or a test run, and the server log then names each missing component and the switch.
 
+An app that has not installed `@nextlyhq/admin` still gets both files, but its map imports
+nothing from the admin and registers nothing, so the app type-checks without it. After you
+install the admin, run `npx nextly generate:types` again so the map registers its components.
+
 Check the committed map in CI with `nextly generate:types --check`. It writes nothing, and
 exits 2 naming each missing component and each path no longer declared, or 1 when it cannot
 load the config:

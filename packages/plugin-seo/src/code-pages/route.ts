@@ -8,6 +8,7 @@
  */
 import {
   NextlyError,
+  respondDoc,
   respondList,
   respondMutation,
   type PluginRoute,
@@ -25,17 +26,20 @@ import { siteAddresses, type ReadableEntries } from "./addresses";
 import { heldByDocuments } from "./answers";
 import {
   ADDRESSES_ROUTE_PATH,
+  BUILD_ROUTE_PATH,
   CODE_PAGE_SEO_ROUTE_PATH,
   LONGEST_SEO_TEXT,
+  type BuildStatusBody,
   type CodePageSeoInput,
 } from "./contract";
-import type { CodeRoute } from "./routes";
+import type { CodeBuild } from "./routes";
 import { codeAddressOf, readCodePage, saveTypedValues } from "./store";
 
 /** What the routes read with. */
 export interface CodePageRoutesConfig {
   readRules: ReadRules;
-  routes: () => readonly CodeRoute[];
+  /** What the running app's build says of its pages, read when asked. */
+  build: () => CodeBuild;
   /** The site's production origin, where the plugin was given one. */
   origin: () => string | undefined;
 }
@@ -119,7 +123,7 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
     handler: async (req, ctx) => {
       const items = await siteAddresses(ctx, {
         origin: originFor(req, config),
-        routes: config.routes(),
+        build: config.build(),
         readRules: config.readRules,
         readable: await readableBy(ctx),
       });
@@ -131,6 +135,26 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
         hasNext: false,
         hasPrev: false,
       });
+    },
+  });
+}
+
+/**
+ * The route that says whether the running server could read the build's
+ * list of the addresses routes with a variable part declared, and if not,
+ * which file and why: what the list's unconfirmed pages are explained by.
+ */
+function buildRoute(config: CodePageRoutesConfig): PluginRoute {
+  return siteWide({
+    method: "GET",
+    path: BUILD_ROUTE_PATH,
+    requiredPermission: MANAGE_SEO_PERMISSION,
+    // Read from files, so nothing is awaited; the route's answer is a promise.
+    handler: () => {
+      const { unreadable } = config.build();
+      const body: BuildStatusBody =
+        unreadable === undefined ? {} : { unreadable };
+      return Promise.resolve(respondDoc(body));
     },
   });
 }
@@ -161,7 +185,7 @@ async function isCodePage(
   // Who holds it is read in the address's own language, as the list reads
   // it, so the screen offers only what a save takes.
   if ((await heldByDocuments(ctx, [path], origin)).has(path)) return false;
-  if (config.routes().some(route => route.path === path)) return true;
+  if (config.build().routes.some(route => route.path === path)) return true;
   return (await readCodePage(ctx, path)) !== undefined;
 }
 
@@ -200,5 +224,5 @@ function saveRoute(config: CodePageRoutesConfig): PluginRoute {
 
 /** The routes Pages reads and saves through. */
 export function codePageRoutes(config: CodePageRoutesConfig): PluginRoute[] {
-  return [addressesRoute(config), saveRoute(config)];
+  return [addressesRoute(config), buildRoute(config), saveRoute(config)];
 }

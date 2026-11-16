@@ -1,6 +1,7 @@
 // Auto-detects PostgreSQL provider from DATABASE_URL pattern
 // and returns appropriate connection defaults.
 // Standard pg driver works with all providers - only config changes.
+import { SERVERLESS_POOL_DEFAULTS } from "@nextlyhq/adapter-drizzle/serverless";
 
 export type PostgresProvider = "standard" | "neon" | "supabase";
 
@@ -42,10 +43,37 @@ export function detectPostgresProvider(
   return "standard";
 }
 
-// Get connection defaults for a provider
+/** Where the pool runs, as far as its defaults depend on it. */
+export interface ProviderDefaultsOptions {
+  /**
+   * The pool runs inside serverless functions (Vercel's), whose suspended
+   * instances keep their open connections: the pool size and idle timeout
+   * come from `SERVERLESS_POOL_DEFAULTS` instead of the provider's, whatever
+   * the provider, since a suspended instance holds a Neon or Supabase
+   * connection as surely as any other. The provider keeps every other
+   * setting: SSL, the connection and statement timeouts, the connect retries.
+   */
+  serverless?: boolean;
+}
+
+// Get connection defaults for a provider, for a pool that runs where
+// `options` says.
 export function getProviderDefaults(
-  provider: PostgresProvider
+  provider: PostgresProvider,
+  options: ProviderDefaultsOptions = {}
 ): ProviderDefaults {
+  const defaults = providerOwnDefaults(provider);
+  if (!options.serverless) return defaults;
+  return {
+    ...defaults,
+    poolMax: SERVERLESS_POOL_DEFAULTS.max,
+    poolMin: SERVERLESS_POOL_DEFAULTS.min,
+    idleTimeoutMs: SERVERLESS_POOL_DEFAULTS.idleTimeoutMs,
+  };
+}
+
+// The provider's own defaults, for a long-running server.
+function providerOwnDefaults(provider: PostgresProvider): ProviderDefaults {
   switch (provider) {
     case "neon":
       // Neon: serverless PG with auto-suspend, cold starts need more retries

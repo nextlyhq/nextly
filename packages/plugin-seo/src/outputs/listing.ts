@@ -659,12 +659,16 @@ async function listedVersionOf(
  * it, or null where no page listed there holds it: one read of who holds the
  * address and one of that page, rather than the whole listing. Decided by
  * the same steps as the listing, so a page is found here exactly where the
- * listing lists it.
+ * listing lists it. `served` is the address as the site serves it, its
+ * language prefix and all, which is how a page built in code is known.
  */
 export async function listedPageAt(
   ctx: PluginContext,
-  path: string,
-  language: string,
+  {
+    path,
+    language,
+    served,
+  }: { path: string; language: string; served: string },
   options: ListingOptions
 ): Promise<ListedPage | null> {
   const at = { path, language, recordIn: await recordLanguage(ctx) };
@@ -672,5 +676,23 @@ export async function listedPageAt(
     const page = await listedVersionOf(ctx, holder, at, options);
     if (page !== null) return page;
   }
-  return null;
+  // A page built in code, found by the path its route serves, which keeps
+  // any language prefix, and listed in the site's language as the listing
+  // lists every such page: only that route is read.
+  const routes = options.codeRoutes?.().filter(route => route.path === served);
+  if (routes === undefined || routes.length === 0) return null;
+  const found = { pages: [] as ListedPage[], problems: [] as ListingProblem[] };
+  await listCodePages(
+    ctx,
+    routes,
+    {
+      origin: options.origin,
+      language: at.recordIn,
+      ...(options.readRules === undefined
+        ? {}
+        : { readRules: options.readRules }),
+    },
+    found
+  );
+  return found.pages[0] ?? null;
 }

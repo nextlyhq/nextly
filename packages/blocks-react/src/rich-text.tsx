@@ -8,7 +8,6 @@ import {
   isRichTextValue,
   TEXT_FORMAT,
   type RichTextNode,
-  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
 import type { CSSProperties, ReactNode } from "react";
 
@@ -238,13 +237,9 @@ function formatted(
   return out;
 }
 
-/**
- * What a passage is drawn under: the host's policy for the media inside it,
- * and the site's spacing model, which decides a media wrapper's margin.
- */
+/** What a passage is drawn under: the host's policy for the media inside it. */
 interface DrawSettings {
   readonly host: BlockHostPolicy | undefined;
-  readonly spacingMode: SpacingMode | undefined;
   /**
    * What each node draws of its children, read once per node for the whole
    * render: the views take their children only from it, and so does the walk
@@ -1018,20 +1013,6 @@ const MAX_IMAGE_EDGE = 20000;
  */
 const MEDIA_FIGURE_STYLE: CSSProperties = { marginInline: 0 };
 
-/**
- * The same wrapper's margin under the classic spacing model, where nothing
- * spaces a passage's elements but their own margins: the editor's own `my-4`
- * above and below, and the inline reset.
- */
-const CLASSIC_MEDIA_FIGURE_STYLE: CSSProperties = { margin: "1rem 0" };
-
-/** A rich-media wrapper's margin under the spacing model in force. */
-function mediaFigureStyle(draw: DrawSettings): CSSProperties {
-  return draw.spacingMode === "classic"
-    ? CLASSIC_MEDIA_FIGURE_STYLE
-    : MEDIA_FIGURE_STYLE;
-}
-
 function ImageElement({
   src,
   node,
@@ -1125,7 +1106,7 @@ function ImageView({
   const src = fetchableUrl(node.src, draw.host?.remotePatterns);
   if (src === undefined) return null;
   return (
-    <figure className="nextly-rich-text-image" style={mediaFigureStyle(draw)}>
+    <figure className="nextly-rich-text-image" style={MEDIA_FIGURE_STYLE}>
       <ImageElement src={src} node={node} />
       <CaptionView value={node.caption} />
     </figure>
@@ -1238,7 +1219,7 @@ function GalleryView({
     gap: "0.5rem",
   };
   return (
-    <figure className="nextly-rich-text-gallery" style={mediaFigureStyle(draw)}>
+    <figure className="nextly-rich-text-gallery" style={MEDIA_FIGURE_STYLE}>
       {/*
        * HOISTED and DEDUPED by React: `href` plus `precedence` lifts this out
        * of the figure and collapses every gallery on the page to one copy —
@@ -1659,12 +1640,6 @@ export interface RichTextProps {
    */
   hostPolicy?: BlockHostPolicy;
   /**
-   * The site's spacing model. Under `classic` an image or gallery in the
-   * passage keeps the vertical margin it carried before container gaps.
-   * Absent is the engine's default, `gaps`.
-   */
-  spacingMode?: SpacingMode;
-  /**
    * Whether each heading is drawn with an id, so a link (a table of contents
    * among them) can reach it. Absent is none: a passage drawn somewhere other
    * than a page, such as an email, keeps its markup as it was.
@@ -1684,7 +1659,6 @@ export interface RichTextProps {
 export function RichText({
   value,
   hostPolicy,
-  spacingMode,
   anchorHeadings,
 }: RichTextProps): ReactNode {
   if (!isRichTextValue(value)) return null;
@@ -1693,7 +1667,6 @@ export function RichText({
   const parts = partsReader();
   const draw: DrawSettings = {
     host: hostPolicy,
-    spacingMode,
     parts,
     ...(anchorHeadings === true
       ? { anchors: anchorIds(headingsOf(value.root.children, parts)) }
