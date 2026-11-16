@@ -11,8 +11,11 @@ import { createRequire } from "node:module";
 
 import {
   definePlugin,
+  EXTENSION_SWITCH_SERVICE,
   group,
   isSecret,
+  NextlyError,
+  type ExtensionSwitch,
   type FieldConfig,
   type PageMetadataResolver,
   type PluginContext,
@@ -23,6 +26,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import {
+  CATCH_UP_TRANSACTION_BOUNDS,
   forgetCatchUpFingerprint,
   lastCatchUp,
   startCatchUp,
@@ -50,7 +54,8 @@ import {
 } from "./code-pages/connections";
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
-import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
+import { readCodeBuild, type CodeRoute } from "./code-pages/routes";
+import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
   watchForIndexNow,
@@ -62,6 +67,8 @@ import {
   type GoogleClient,
 } from "./connections/search-console-send";
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
+import { watchContentDates } from "./content-dates/hooks";
+import { startFingerprintUpgrade } from "./content-dates/upgrade";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -69,8 +76,10 @@ import { notFoundCollection } from "./not-found/collection";
 import { moveLoggedRows } from "./not-found/log";
 import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
+import { withCopyLink } from "./outputs/copy-link";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
+import { siteServesOwnRobots } from "./outputs/robots-owner";
 import {
   rootFileRoutes,
   sitemapResponse,
@@ -81,6 +90,7 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { withVerification } from "./outputs/verification";
 import { checklistRoutes } from "./overview/checklist";
 import {
   IMPORT_PAGE,
@@ -97,32 +107,50 @@ import {
 import { problemsForCard } from "./problems/card-source";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
-import { singleKey } from "./problems/page-types";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
+import { verificationCheckRoute } from "./received/verification-check";
 import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
-import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import {
+  redirectsProxyHandler,
+  type GoneAnswerOptions,
+} from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
+import type { SiteRules } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
+import { withSeoOff } from "./resolver/seo-off";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
+import {
+  seoExtendClauses,
+  seoTypesOf,
+  typesLeftOut,
+  type SeoTypes,
+} from "./seo-types";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
 } from "./settings/content-types-route";
 import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
+  listingOrigins,
+  robotsRulesCheckRoute,
+  sitemapPaths,
+} from "./settings/robots-rules-route";
+import {
   readBrandFacts,
   readSeoRules,
+  readVerificationTags,
   rememberSettingsSingle,
   setupWaiting,
 } from "./settings/rules";
+import { seoOffKeys, seoOffTypes } from "./settings/seo-off";
 import { seoSettingsSingle } from "./settings/single";
 import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
@@ -142,13 +170,17 @@ import { withStructuredData } from "./structured-data/provider";
 import {
   checkedTypeRules,
   rulesFromOptions,
+  type ReadStructuredDataRules,
   type StructuredDataOptions,
+  type StructuredDataBrand,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
+import { SEO_GROUP } from "./tab/typed";
 import { PAGE_BUILDER_TAB } from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
 import {
   SEO_PROBLEMS_ATTENTION_ID,
+  seoIssuesSetup,
   seoIssuesWidget,
   seoProblemsAttentionItem,
 } from "./widget-card";
@@ -162,15 +194,38 @@ const { version: PLUGIN_VERSION } = require("../package.json") as {
 
 export interface SeoPluginOptions {
   /**
-   * The collections to extend with the SEO field group. SEO is added ONLY to
-   * these — collections you do not name are untouched.
+   * The collections to extend with the SEO field group, where the site names
+   * its types. SEO is then added ONLY to these and to `singles`: types you do
+   * not name are untouched.
+   *
+   * Leave both `collections` and `singles` out to add SEO to every collection
+   * and Single the site defines, in code or in the Schema Builder, now or
+   * later, and to a plugin's collection that holds the site's pages (such as
+   * Page Builder's `pages`). Users, media and plugins' other collections never
+   * get it. Removing a list moves a site to every type: run
+   * `nextly migrate:create` and `nextly migrate` after.
    */
-  collections: string[];
+  collections?: string[];
   /**
-   * The Singles to extend with the SEO field group, such as a homepage. None
-   * when absent. A Single's page gets the same SEO tab a collection's has.
+   * The Singles to extend with the SEO field group, such as a homepage, where
+   * the site names its types. None when absent and `collections` is given. A
+   * Single's page gets the same SEO tab a collection's has.
    */
   singles?: string[];
+  /**
+   * @experimental Where the site names no `collections` or `singles`: types
+   * to leave without SEO, by slug, such as an internal log. A type left out
+   * before its first migration gets no SEO column; one left out later keeps
+   * its column and values, unused, until `nextly prune` drops them.
+   */
+  exclude?: string[];
+  /**
+   * @experimental Where the site names no `collections` or `singles`: a
+   * plugin's collections to add SEO to as well, by slug. For a plugin
+   * collection whose pages are public but which its plugin does not mark as
+   * the site's content; Page Builder's `pages` needs no entry here.
+   */
+  include?: string[];
   /**
    * The fields placed INSIDE the `seo` group. Defaults to
    * {@link defaultSeoFields}. Custom fields are still nested under `seo` (e.g. a `focusKeyword`
@@ -179,12 +234,13 @@ export interface SeoPluginOptions {
    */
   fields?: FieldConfig[];
   /**
-   * Refuse a save of a title longer than 60 characters or a description
-   * longer than 160, the lengths Google shows about as much of. Off by
-   * default: search engines cut a longer one to fit rather than refusing it,
-   * so a long value is saved and named as a warning in the SEO tab and the
-   * problem list. Applies to the default fields; a site passing its own
-   * `fields` sets `maxLength` on them itself.
+   * Refuse a save of a title or description wider than Google shows of it:
+   * about 600 px of a title and 920 px of a description, measured in the
+   * font Google draws them in, the measure the SEO tab and the problem list
+   * warn by. Off by default: search engines cut a wider one to fit rather
+   * than refusing it, so it is saved and named as a warning in the SEO tab
+   * and the problem list. Applies to the default fields; a site passing its
+   * own `fields` sets its own `validate` or `maxLength` on them.
    */
   hardLengthLimits?: boolean;
   /**
@@ -281,15 +337,15 @@ export interface SeoPluginOptions {
   structuredData?: StructuredDataOptions;
   /**
    * @experimental What every page's social card states beyond the page:
-   * the site's name, until one is saved in the SEO settings, and the
-   * language of a page the route read in no particular language, as a
-   * language tag.
+   * the site's name, until one is saved in the SEO settings, the language
+   * of a page the route read in no particular language, as a language tag,
+   * and the site's X account, as `twitter:site`.
    *
    * ```ts
    * seoPlugin({
    *   collections: ["posts"],
    *   baseUrl: "https://example.com",
-   *   socialCard: { siteName: "Example", language: "en-US" },
+   *   socialCard: { siteName: "Example", language: "en-US", xAccount: "@example" },
    * });
    * ```
    *
@@ -318,6 +374,16 @@ export interface SeoPluginOptions {
    * for Pages and the sitemap.
    */
   nextBuildDir?: string;
+  /**
+   * @experimental The address of the site's own page to show for an address
+   * made Gone on SEO › Redirects, such as `"/gone"`. The Proxy reads that
+   * page and answers with it and status 410, so a visitor following an old
+   * link sees the site's design; search engines read the status alone.
+   * Without it, or where the page can't be read or doesn't answer 200, the
+   * answer is a short plain page, with status 410 all the same. Keep the
+   * page itself out of search: hide it on SEO › Pages.
+   */
+  gonePage?: string;
   /**
    * @experimental The Google sign-in Search Console is connected with, from
    * a Google Cloud OAuth client of the "Web application" kind. Without it,
@@ -412,13 +478,16 @@ function sitemapLimits(sitemap: SeoPluginOptions["sitemap"]): SitemapLimits {
  */
 function subsetOf(
   sitemap: SeoPluginOptions["sitemap"],
-  targets: readonly string[]
+  types: SeoTypes
 ): string[] | undefined {
   if (typeof sitemap !== "object" || sitemap.collections === undefined) {
     return undefined;
   }
   const subset = [...new Set(sitemap.collections)];
-  const unknown = subset.filter(slug => !targets.includes(slug));
+  // Every type's list is known only once the site starts, so only a named
+  // list is checked here.
+  if (!types.named) return subset;
+  const unknown = subset.filter(slug => !types.collections.includes(slug));
   if (unknown.length > 0) {
     throw new Error(
       `seoPlugin: sitemap.collections must be a subset of collections; ` +
@@ -435,17 +504,35 @@ function subsetOf(
  * every output and one production address answers for all of them. The
  * robots.txt route falls back to the plugin's own AI crawler option.
  */
-function rulesReader(options: { hiddenTypes?: readonly string[] }): ReadRules {
+function rulesReader(
+  options: { hiddenTypes?: readonly string[] },
+  types: Pick<SeoTypes, "keys">
+): ReadRules {
   const hiddenTypes = [...new Set(options.hiddenTypes ?? [])];
   return async (ctx, locale) => {
     const saved = await readSeoRules(ctx, locale);
+    // The switch read once for every output: only types with SEO can be
+    // off, so a stale key is ignored by the head, the listings and the
+    // problems alike, as the admin's switch ignores it.
+    const { typesWithSeoOff: _saved, ...rest } = saved;
+    const off = seoOffKeys(saved, types, message => ctx.logger.warn(message));
     return {
-      ...saved,
+      ...rest,
+      ...(off.length > 0 ? { typesWithSeoOff: off } : {}),
       ...(saved.hiddenTypes === undefined && hiddenTypes.length > 0
         ? { hiddenTypes }
         : {}),
     };
   };
+}
+
+/** What the sitemap lists, for the problem checks; nothing where it is off. */
+function sitemapScopeOf(
+  options: SeoPluginOptions,
+  collections: readonly string[] | undefined
+): { sitemap?: { collections?: readonly string[] } } {
+  if (options.sitemap === false) return {};
+  return { sitemap: collections === undefined ? {} : { collections } };
 }
 
 /** What the sitemap is served with, or nothing where it is turned off. */
@@ -482,14 +569,17 @@ function configuredOrigin(
  */
 function rootFilesConfig(
   options: SeoPluginOptions,
-  readRules: ReadRules,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+  },
   collections: readonly string[] | undefined,
   codeRoutes: () => readonly CodeRoute[]
 ): RootFilesConfig {
   const sitemap = sitemapConfig(options, collections);
   return {
     ...configuredOrigin(options, sitemap),
-    readRules,
+    ...readers,
     codeRoutes,
     ...(sitemap === undefined ? {} : { sitemap }),
     ...(options.robots === false
@@ -505,11 +595,14 @@ function rootFilesConfig(
  */
 function siteFileRoutes(
   options: SeoPluginOptions,
-  readRules: ReadRules,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+  },
   collections: readonly string[] | undefined,
   codeRoutes: () => readonly CodeRoute[]
 ): PluginRoute[] {
-  const config = rootFilesConfig(options, readRules, collections, codeRoutes);
+  const config = rootFilesConfig(options, readers, collections, codeRoutes);
   const routes = rootFileRoutes(config);
   const { sitemap } = config;
   if (sitemap !== undefined) {
@@ -521,6 +614,51 @@ function siteFileRoutes(
     });
   }
   return routes;
+}
+
+/**
+ * The route behind "Block these N pages anyway": the sitemap listed at each
+ * of the site's origins with the rules the draft reads by, and judged only
+ * where the plugin serves both robots.txt and the sitemap.
+ */
+function ownRulesCheckRoute(
+  options: SeoPluginOptions,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+    codeRoutes: () => readonly CodeRoute[];
+    sitemapSubset: readonly string[] | undefined;
+  }
+): PluginRoute {
+  const { codeRoutes, sitemapSubset } = readers;
+  return robotsRulesCheckRoute({
+    readRules: readers.readRules,
+    aiCrawlers: options.aiCrawlers,
+    servesBoth: options.robots !== false && options.sitemap !== false,
+    siteServesOwnRobots: rules =>
+      siteServesOwnRobots({ rules, baseUrl: options.baseUrl }),
+    listPaths: async (ctx, readRules) => {
+      const paths: string[] = [];
+      // Each origin's sitemap, as the root sitemap answers on that host.
+      for (const origin of await listingOrigins(
+        ctx,
+        readRules,
+        options.baseUrl
+      )) {
+        const { pages } = await listPages(ctx, {
+          origin,
+          readRules,
+          readStructuredDataRules: readers.readStructuredDataRules,
+          codeRoutes,
+          ...(sitemapSubset === undefined
+            ? {}
+            : { collections: sitemapSubset }),
+        });
+        paths.push(...sitemapPaths(pages));
+      }
+      return paths;
+    },
+  });
 }
 
 /**
@@ -536,6 +674,33 @@ function siteFileRoutes(
  * });
  * ```
  */
+/** The brand facts the options give, as the settings screen is handed them. */
+function codeBrandOption(options: SeoPluginOptions): StructuredDataBrand {
+  // A plain JSON copy: a client config must survive a JSON round trip, and
+  // the options may hold a key set to undefined or a list shared by two facts.
+  return JSON.parse(
+    JSON.stringify(options.structuredData?.brand ?? {})
+  ) as StructuredDataBrand;
+}
+
+/**
+ * How the Proxy answers an address made Gone: with the site's own page,
+ * named as an address from the site's root, where the site names one.
+ *
+ * @throws NextlyError when `page` is not an address from the site's root.
+ */
+function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
+  if (page === undefined) return {};
+  const address = codeAddressOf(page);
+  if (address === undefined) {
+    throw NextlyError.invalidInput({
+      message: `seoPlugin: gonePage "${page}" is not an address from the site's root, such as "/gone".`,
+      logContext: { gonePage: page },
+    });
+  }
+  return { gonePage: address };
+}
+
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
@@ -543,6 +708,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.fields ??
     defaultSeoFields({ hardLengthLimits: options.hardLengthLimits === true });
   const pagePermissions = options.pagePermissions === true;
+  const goneAnswer = goneAnswerOf(options.gonePage);
   const seoGroup = group({
     name: "seo",
     label: "SEO",
@@ -559,34 +725,40 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       : {}),
   });
 
-  // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
-  // twice (a duplicate-field error), and would list the same URLs twice in the
-  // sitemap.
-  const targets = [...new Set(options.collections)];
-  const singleTargets = [...new Set(options.singles ?? [])];
-  // Every type SEO is added to by the key bulk edit and the problem list
-  // name it by: a collection's slug, or `single:<slug>`.
-  const pageTypeKeys = [...targets, ...singleTargets.map(singleKey)];
+  // Which types carry the group: the ones the site names, or every type,
+  // read from what the start added it to. Every part below reads it when
+  // asked, so a Schema Builder type is answered once it has the group.
+  const types = seoTypesOf(options);
 
-  const sitemapSubset = subsetOf(options.sitemap, targets);
-  const readRules = rulesReader(options);
+  const sitemapSubset = subsetOf(options.sitemap, types);
+  const readRules = rulesReader(options, types);
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
   const redirectKeys = heldRedirectKeys();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
-  const codeRoutes = () =>
-    readCodeRoutes(
+  const codeBuild = () =>
+    readCodeBuild(
       options.nextBuildDir === undefined
         ? {}
         : { buildDir: options.nextBuildDir }
     );
+  const codeRoutes = () => codeBuild().routes;
   // The site's configured origin, where the sitemap is served and a baseUrl
   // is set, for every output that names the site's addresses.
   const siteOrigin = configuredOrigin(
     options,
     sitemapConfig(options, sitemapSubset)
   );
+  // What the plain-text copies are served and linked by: the Proxy that
+  // answers them and the head that links them make one decision.
+  const plainCopies = {
+    readRules,
+    // A page built in code is copied too, from the page as it renders.
+    codeRoutes,
+    ...siteOrigin,
+    ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
+  };
   const googleClient = googleClientOf(options);
   // Stops noting changes for IndexNow when the plugin is taken down.
   let stopIndexNow: (() => Promise<void>) | undefined;
@@ -605,8 +777,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // The SEO tab on each page the group is added to, and the route it reads
   // a page's automatic values from.
   const tab = seoTabParts({
-    collections: targets,
-    singles: singleTargets,
+    types,
     fields: seoFields,
     baseUrl: options.baseUrl,
     readRules,
@@ -618,25 +789,59 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Every page's head, worked out by the one order of who wins, with its
   // links to its other languages, its social card completed, and its
   // structured data, worked out from that same answer and the settings'
-  // brand facts, with the plugin's options where the settings say nothing.
+  // brand facts, with the plugin's options where the settings say nothing;
+  // the home page also carries the verification codes the settings hold,
+  // and, where plain-text copies are on, a listed page links its copy.
   // What the site's routes are answered, and what the check of what search
   // engines received compares each page with.
+  // A page of a type whose SEO is switched off is answered nothing, so its
+  // route serves only what its own code sets. The verification codes are
+  // the site's, not the type's, so the home page keeps them either way.
   const pageMetadata = (ctx: PluginContext): PageMetadataResolver =>
-    withStructuredData(
-      ctx,
-      withSocialCard(
+    withVerification(
+      withSeoOff(
         ctx,
-        withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-        readSocialCardRules
+        withCopyLink(
+          ctx,
+          withStructuredData(
+            ctx,
+            withSocialCard(
+              ctx,
+              withLanguageLinks(
+                ctx,
+                seoPageMetadata(ctx, readRules),
+                readRules
+              ),
+              readSocialCardRules
+            ),
+            structuredDataFromSettings(readStructuredDataRules)
+          ),
+          plainCopies
+        ),
+        readRules
       ),
-      structuredDataFromSettings(readStructuredDataRules)
+      () => readVerificationTags(ctx)
     );
 
   // What the problem list checks, read with the rules every page's head is
   // worked out by, so the list and the page never disagree.
   const problemChecks = {
-    targets,
-    singles: singleTargets,
+    // Read on each check, as the types are.
+    get targets() {
+      return types.collections;
+    },
+    get singles() {
+      return types.singles;
+    },
+    // The pages built in code the sitemap lists, and what it lists, for the
+    // check of its dates.
+    codeRoutes,
+    ...sitemapScopeOf(options, sitemapSubset),
+    // Whether the plugin serves robots.txt, so its rules can block a page.
+    servesRobots: options.robots !== false,
+    // Whether a robots.txt of the site's own wins over the plugin's.
+    siteServesOwnRobots: (rules: Pick<SiteRules, "productionAddresses">) =>
+      siteServesOwnRobots({ rules, baseUrl: options.baseUrl }),
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -650,11 +855,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // problem list finds as each person may read it, so the dashboard and the
   // list never disagree; the line's count is the
   // Problems menu item's badge too. Withheld where no collection carries SEO (see
-  // `widget-card`).
-  const issues = {
-    collections: targets,
-    problemsFor: problemsForCard(problemChecks),
-  };
+  // `widget-card`). Where SEO is on every type, which types those are is
+  // known only once the site starts, so whoever manages site-wide SEO is
+  // shown them instead.
+  const issues = seoIssuesSetup(types, problemsForCard(problemChecks));
   const issuesCard = seoIssuesWidget(issues);
   const issuesItem = seoProblemsAttentionItem(issues);
 
@@ -664,13 +868,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // problem list's; all added below.
   const routes: PluginRoute[] = [];
 
+  // Add the SEO group to each named type, or to every type. The admin is
+  // told which types these leave out, read from the same clauses.
+  const extend = seoExtendClauses(options, types, [seoGroup]);
   const contributes: PluginContributions = {
-    // Add the SEO group to each named collection.
-    extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
+    extend,
     // Site-wide SEO, the check of what search engines received, and, where
-    // the site asks for it, each content type's page SEO.
+    // the site asks for it, each named content type's page SEO.
     permissions: seoPermissionDeclarations({
-      types: [...targets, ...singleTargets],
+      types: types.named ? [...types.collections, ...types.singles] : [],
       pagePermissions,
     }),
     // The redirects whose From addresses the address record holds, the log
@@ -704,11 +910,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pageMetadata: ctx =>
         withCodePageConnections(
           ctx,
-          withRouteValues(ctx, pageMetadata(ctx), {
-            collections: targets,
-            singles: singleTargets,
-          })
+          withRouteValues(ctx, pageMetadata(ctx), types)
         ),
+      // Which types' SEO the settings switch off: the admin then draws no
+      // SEO tab or group on their pages, and nothing else changes.
+      [EXTENSION_SWITCH_SERVICE]: (ctx): ExtensionSwitch => ({
+        switchedOff: async field =>
+          field === SEO_GROUP
+            ? seoOffTypes(await readRules(ctx, undefined), types, message =>
+                ctx.logger.warn(message)
+              )
+            : [],
+      }),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({
@@ -716,6 +929,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           listPages(ctx, {
             origin,
             readRules,
+            readStructuredDataRules:
+              problemChecks.readers.readStructuredDataRules,
             codeRoutes,
             ...(sitemapSubset === undefined
               ? {}
@@ -731,12 +946,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // answered here too, each at its own address only.
     proxy: [
       stagingGuard(readRules),
-      redirectsProxyHandler(redirectKeys),
-      plainCopyProxyHandler({
-        readRules,
-        ...siteOrigin,
-        ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
-      }),
+      redirectsProxyHandler(redirectKeys, undefined, goneAnswer),
+      plainCopyProxyHandler(plainCopies),
       indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
     ],
     // The optional connections' own state, their credentials sealed: core
@@ -771,9 +982,20 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Each type's structured data choice the options make, which the
         // screen shows until the site chooses its own.
         structuredData: checkedTypeRules(options.structuredData?.types),
+        // The brand facts the options give, which the Organization tab shows
+        // where the settings hold none of their own. Every one is public
+        // already: each page's structured data states it.
+        brand: codeBrandOption(options),
         // The collections whose pages the SEO tab edits, so the tab in the
         // Page Builder's Settings knows a page it has a group to edit.
         tabCollections: tab.tabCollections,
+        // Where SEO is on every type, the tab there edits each page whose
+        // type has the group, which only the page's own fields say.
+        tabEveryType: tab.tabEveryType,
+        // The types the site's code leaves out where SEO is on every type, so
+        // the tab there says SEO is off for a page of one rather than asking
+        // for an SEO answer its type does not have.
+        tabExcluded: typesLeftOut(extend),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each
@@ -851,7 +1073,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // What an import reads and writes with, from the Import screen and the
   // Overview's checklist alike.
   const importSetup = {
-    targets: pageTypeKeys,
+    get targets() {
+      return types.keys;
+    },
     readRules,
     checks: problemChecks,
     pagePermissions,
@@ -860,23 +1084,48 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   routes.push(
     // The Connections tab's reads, and Search Console's sign-in.
     ...searchConsoleRoutes({ readRules, client: googleClient, ...siteOrigin }),
-    ...siteFileRoutes(options, readRules, sitemapSubset, codeRoutes),
+    ...siteFileRoutes(
+      options,
+      {
+        readRules,
+        readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
+      },
+      sitemapSubset,
+      codeRoutes
+    ),
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
-    contentTypesRoute(targets),
+    contentTypesRoute(types),
+    // Which sitemap pages the own robots.txt rules being typed would block.
+    ownRulesCheckRoute(options, {
+      readRules,
+      readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
+      codeRoutes,
+      sitemapSubset,
+    }),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),
     // What Inspect checks.
     ...receivedRoutes({
-      collections: targets,
-      singles: singleTargets,
+      get collections() {
+        return types.collections;
+      },
+      get singles() {
+        return types.singles;
+      },
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       readRules,
       pageMetadata,
       structuredDataReaders: problemChecks.readers,
       aiCrawlers: options.aiCrawlers,
+    }),
+    // Whether the live home page carries the saved verification codes.
+    verificationCheckRoute({
+      baseUrl: options.baseUrl,
+      readRules,
+      readTags: readVerificationTags,
     }),
     ...tab.routes,
     // What a Page Builder template's SEO panel reads.
@@ -886,7 +1135,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // entry's SEO.
     ...codePageRoutes({
       readRules,
-      routes: codeRoutes,
+      build: codeBuild,
       origin: () =>
         options.baseUrl === undefined
           ? undefined
@@ -895,7 +1144,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The bulk edit table, and the import beside it, over every type SEO is
     // added to: each collection, and each Single as `single:<slug>`.
     ...bulkRoutes({
-      targets: pageTypeKeys,
+      get targets() {
+        return types.keys;
+      },
       readRules,
       checks: problemChecks,
       pagePermissions,
@@ -903,7 +1154,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     ...importRoutes(importSetup),
     // The Overview's setup checklist, read from what the plugin stores.
     ...checklistRoutes({
-      types: pageTypeKeys,
+      get types() {
+        return types.keys;
+      },
       readRules,
       readBrand: ctx => readBrandFacts(ctx),
       readSetupWaiting: setupWaiting,
@@ -993,22 +1246,28 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
+      // Each saved page's sitemap date moved only where its content changed.
+      watchContentDates(ctx, types);
       keepCodeRoutes(codeRoutes);
       // Changed pages noted for IndexNow, told once they settle.
-      stopIndexNow = watchForIndexNow(
-        ctx,
-        { readRules, ...siteOrigin },
-        targets
-      );
+      stopIndexNow = watchForIndexNow(ctx, { readRules, ...siteOrigin }, types);
     },
     // Between an uninstall that keeps the data and the next install, the
     // plugin does not run: pages saved meanwhile reach no record. Both
     // forget the catch-up's fingerprint, so the first start after the
     // install records them. A full uninstall drops the record instead.
+    //
+    // Each first waits for the catch-up under way: the command that runs the
+    // hook boots the app for it, which starts one, and tears that boot down
+    // once the hook returns. Left running, the catch-up would read services
+    // the teardown has taken away, store its fingerprint after the hook
+    // forgot it, or write to a record an uninstall is dropping.
     async onInstall(ctx) {
+      await lastCatchUp();
       await forgetCatchUpFingerprint(ctx);
     },
     async onUninstall(ctx, { keepData }) {
+      await lastCatchUp();
       if (keepData) await forgetCatchUpFingerprint(ctx);
     },
     async destroy() {
@@ -1029,14 +1288,26 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Started, not awaited, for the same reason: the content fingerprints
+      // an earlier release kept, brought up to date while the field group
+      // rows they were taken from are as they were, so a save that rewrites
+      // them does not move a page's date. One read once that is done.
+      void startFingerprintUpgrade(ctx);
       // The not-found log an earlier version kept in a collection, moved to
       // the plugin's table; one count once there is nothing left to move.
-      void moveLoggedRows(ctx).catch((error: unknown) => {
-        ctx.logger.error(
-          "The SEO plugin could not move its not-found log to its table",
-          { error }
-        );
-      });
+      // Bounded as the catch-up's are: it runs unawaited, and a function
+      // frozen with one of its transactions open must not keep that
+      // transaction's locks.
+      void ctx.db
+        .withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
+          moveLoggedRows(ctx)
+        )
+        .catch((error: unknown) => {
+          ctx.logger.error(
+            "The SEO plugin could not move its not-found log to its table",
+            { error }
+          );
+        });
       // Both again once, a while later, unawaited and never keeping the
       // process alive: a process of the earlier version still serving
       // during a deploy may write after this start, and a long-running
@@ -1046,7 +1317,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         async () => {
           await lastCatchUp();
           await startCatchUp(ctx);
-          await moveLoggedRows(ctx);
+          await startFingerprintUpgrade(ctx);
+          await ctx.db.withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
+            moveLoggedRows(ctx)
+          );
         },
         (error: unknown) => {
           ctx.logger.error(

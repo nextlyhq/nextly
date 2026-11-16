@@ -1002,12 +1002,14 @@ function refusedAction(messages: readonly string[]): NextlyError {
 /** The page actions route declaration. */
 export function pageActionsRoute(setup: PageActionsSetup = {}): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: PAGE_ACTIONS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // Signed in is all reaching the route asks: which collection a page lives
     // in is in the body, so the handler asks for update on that collection
     // before it reads anything, and core judges the write itself.

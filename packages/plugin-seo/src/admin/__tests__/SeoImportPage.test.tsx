@@ -3,7 +3,7 @@
 /**
  * Import as a person uses it: this site's field group first, matched field
  * by field with an example of each, values a page's own code overrides
- * skipped as never served unless included, the dry run's counts and each
+ * skipped unless included, the dry run's counts and each
  * page's result, then the import applied, or refused with nothing written;
  * and a file from another tool, read and summed up, or refused with one
  * notice. What each request sends is read from the request itself.
@@ -92,7 +92,7 @@ function dryRun(include: boolean): DryRunBody {
         outcome: "skipped",
         neverServed: ["title"],
         values: { title: "Old changelog" },
-        reason: "Never served",
+        reason: "The page's code sets its own value now.",
       });
   return {
     checked: 9,
@@ -248,7 +248,12 @@ describe("importing this site's own field group", () => {
     });
     expect(
       screen.getByText(
-        "1 page's values are never served, so they'll be skipped"
+        "1 page sets its own values in code, so they'll be skipped"
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Changelog sets its own title and description in its code now, so importing the values stored in SEO (old) would change what the page shows. Include them if the page showed them before and should again."
       )
     ).toBeTruthy();
 

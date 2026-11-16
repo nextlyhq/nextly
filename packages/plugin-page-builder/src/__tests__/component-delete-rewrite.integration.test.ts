@@ -256,6 +256,7 @@ function harness(
     contributes: {
       routes: [
         {
+          siteWide: false,
           method: "POST",
           path: "/open",
           handler: async (req, ctx) => {
@@ -272,6 +273,7 @@ function harness(
           },
         },
         {
+          siteWide: false,
           method: "POST",
           path: "/rewrite",
           handler: async (req, ctx) => {

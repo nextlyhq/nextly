@@ -70,7 +70,6 @@ import {
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 import { busyTableBounds } from "../../schema/busy-table/bounds";
-import { runStatementsInTries } from "../../schema/busy-table/run-on-session";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
@@ -1026,6 +1025,11 @@ export class CollectionSyncService extends BaseService {
                 deletedEntityIntent("collection", slug, record.revalidate)
               )
               .catch(() => undefined);
+            // Loaded here, not at the top: the tries' engine is needed only once a drop is sent,
+            // and every path that imports this service would otherwise load it too.
+            const { runStatementsInTries } = await import(
+              "../../schema/busy-table/run-on-session"
+            );
             applied.push(
               ...(await runStatementsInTries(this.adapter, [sql], {
                 change,
@@ -1056,7 +1060,13 @@ export class CollectionSyncService extends BaseService {
               mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
             };
             const { expire } = await this.adapter.transaction(tx =>
-              deleteEntityRegistryRow(tx, "collection", slug, tables)
+              deleteEntityRegistryRow(
+                tx,
+                "collection",
+                slug,
+                tables,
+                this.adapter.getCapabilities().dialect
+              )
             );
             // Expired above once the table was dropped; here only where its setting could not be
             // read then.

@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import {
   assertBuilderFieldNames,
+  assertTopLevelFieldsNamed,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
 } from "../../api/fields-payload";
@@ -835,11 +836,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishAllSingleLocales: {
     // Publish every language of a Single in one transaction. The Single
     // equivalent of the collection entry's publish-all.
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
         user,
+        // The request the publish's update hooks are told about.
+        request,
         // Who performed the publish, recorded on the outbox events: an API-key
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
@@ -1173,6 +1176,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // the DB and the committed manifest diverge silently.
       // A field name the Single already holds keeps working whatever its case.
       assertValidFieldsPayload(fields, { stored: single.fields ?? [] });
+      // Only named fields at the top level, as every road that saves a Single takes them.
+      assertTopLevelFieldsNamed(fields);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -1303,6 +1308,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // Only named fields at the top level, as every road that saves a Single takes them.
+      assertTopLevelFieldsNamed(fields);
 
       // Everything above reads the request alone, so it is decided before the lock is taken: a
       // malformed save is answered as one, not with a lock refusal or a lock table created on the

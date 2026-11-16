@@ -214,7 +214,10 @@ export async function addressFingerprint(): Promise<string> {
     for (const language of languages) {
       const declared = await declaredFor(type, language, row);
       parts.push(
-        `${type.kind}:${type.slug}|${language}|${declared?.template ?? ""}|${declared?.pathFields.join(",") ?? ""}`
+        // The field holding entries' own addresses changes every address
+        // too, so it is part of the fingerprint; added only where named, so
+        // a declaration without one keeps the fingerprint it had.
+        `${type.kind}:${type.slug}|${language}|${declared?.template ?? ""}|${declared?.pathFields.join(",") ?? ""}${declared?.entryField === undefined ? "" : `|own:${declared.entryField}`}`
       );
     }
   }

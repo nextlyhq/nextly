@@ -87,6 +87,7 @@ const accounts = {
       },
       // A route asking for no kind and naming no permission.
       {
+        siteWide: false,
         method: "GET",
         path: "/staff",
         handler: (_req: Request, ctx: PluginRouteContext) =>

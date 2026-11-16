@@ -1,11 +1,11 @@
 /**
- * The registry list's slug denylist: the slugs a list leaves out, as a
- * condition on the query both the count and the page read.
+ * The registry list's slug denylist: the slugs a list leaves out, before the
+ * total is counted and the page cut.
  *
- * The property is what the ADAPTER is asked for. A list that dropped the
- * denied rows from the page it was sent would answer with the same rows on a
- * short registry, and with a `total` that still counts them -- so the
- * assertions are on the where clause each read is given, and on the total.
+ * The list is derived from the registry's listing (one read of every row,
+ * `listStoredRegistry`), so the property is what it answers: a list that
+ * dropped the denied rows only from the page would still count them in
+ * `total`, and the assertions are on both.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -38,68 +38,56 @@ function registryOver(select: ReturnType<typeof vi.fn>): ProbeRegistry {
   );
 }
 
-/** The where clause each adapter read was given, in call order. */
-function wheresOf(select: ReturnType<typeof vi.fn>): unknown[] {
-  return select.mock.calls.map(call => (call[1] as { where?: unknown }).where);
-}
+/** The registry's listing, oldest first, as the adapter's read answers it. */
+const LISTING = [
+  { id: "1", slug: "about", createdAt: new Date(1) },
+  { id: "2", slug: "form-settings", createdAt: new Date(2) },
+  { id: "3", slug: "home", createdAt: new Date(3) },
+];
 
-const SLUG_NOT_IN = (slugs: string[]) => ({
-  column: "slug",
-  op: "NOT IN",
-  value: slugs,
-});
+const slugsOf = (result: { data: BaseRegistryRecord[] }) =>
+  result.data.map(record => record.slug);
 
 describe("BaseRegistryService.listRecords — slugDenylist", () => {
   it("leaves the denied slugs out of the count and the page alike", async () => {
-    const select = vi
-      .fn()
-      // The count's read, then the page's.
-      .mockResolvedValueOnce([{ id: "1" }, { id: "2" }])
-      .mockResolvedValueOnce([{ slug: "about" }, { slug: "home" }]);
+    const select = vi.fn().mockResolvedValue(LISTING);
 
     const result = await registryOver(select).list({
       slugDenylist: ["form-settings"],
-      limit: 10,
+      limit: 1,
     });
 
     expect(result.total).toBe(2);
-    expect(result.data).toHaveLength(2);
-    const wheres = wheresOf(select);
-    expect(wheres).toHaveLength(2);
-    for (const where of wheres) {
-      expect(where).toEqual({ and: [SLUG_NOT_IN(["form-settings"])] });
-    }
+    expect(slugsOf(result)).toEqual(["about"]);
+    // One read of the listing, with no condition: the list is cut from it.
+    expect(select).toHaveBeenCalledTimes(1);
   });
 
-  it("puts no constraint on the query for an empty denylist", async () => {
-    // Never a `NOT IN ()`: its meaning differs by dialect, and an empty
-    // denylist denies nothing, so the honest query has no slug condition.
-    const select = vi.fn().mockResolvedValue([]);
+  it("denies nothing for an empty denylist", async () => {
+    const select = vi.fn().mockResolvedValue(LISTING);
 
-    await registryOver(select).list({ slugDenylist: [], limit: 10 });
-
-    expect(wheresOf(select)).toEqual([undefined, undefined]);
-  });
-
-  it("narrows an allowlist and never widens it", async () => {
-    // Both conditions, ANDed: a denylist only ever removes rows from what the
-    // allowlist already admits.
-    const select = vi.fn().mockResolvedValue([]);
-
-    await registryOver(select).list({
-      slugAllowlist: ["about", "form-settings"],
-      slugDenylist: ["form-settings"],
+    const result = await registryOver(select).list({
+      slugDenylist: [],
       limit: 10,
     });
 
-    for (const where of wheresOf(select)) {
-      expect(where).toEqual({
-        and: [
-          { column: "slug", op: "IN", value: ["about", "form-settings"] },
-          SLUG_NOT_IN(["form-settings"]),
-        ],
-      });
-    }
+    expect(result.total).toBe(3);
+    expect(slugsOf(result)).toEqual(["about", "form-settings", "home"]);
+  });
+
+  it("narrows an allowlist and never widens it", async () => {
+    // Both apply: a denylist only ever removes rows from what the allowlist
+    // already admits.
+    const select = vi.fn().mockResolvedValue(LISTING);
+
+    const result = await registryOver(select).list({
+      slugAllowlist: ["about", "form-settings"],
+      slugDenylist: ["form-settings", "home"],
+      limit: 10,
+    });
+
+    expect(result.total).toBe(1);
+    expect(slugsOf(result)).toEqual(["about"]);
   });
 
   it("still answers nothing for an empty allowlist, whatever the denylist", async () => {

@@ -15,7 +15,10 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { BrowserRenameResolution } from "../pipeline/prompt-dispatcher/browser";
 import { PromptCancelledError } from "../pipeline/prompt-dispatcher/errors";
 import { parseEventId, type Resolution } from "../pipeline/resolution/types";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import {
+  fieldsStoredOnRow,
+  toSnakeCase,
+} from "../services/field-column-descriptor";
 
 import type { CollectionSave } from "./collection-save";
 
@@ -92,13 +95,17 @@ export function saveOfSchemaChange(args: {
       labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
       fields: args.row.fields ?? [],
     } satisfies UiSchemaEntity);
-  const answers = answersOf(args.answers, { now: args.fields }, args.table);
+  // Answers name columns of the row, a field inside a group with no name included: it is a
+  // column there (`fieldsStoredOnRow`), and its change is asked about like one beside the group.
+  const answers = answersOf(
+    args.answers,
+    { now: fieldsStoredOnRow(args.fields) },
+    args.table
+  );
   const optional = new Set(
     answers.filter(a => a.kind === "make_optional").map(a => a.field)
   );
-  const fields = args.fields.map(field =>
-    optional.has(field.name) ? { ...field, required: false } : field
-  );
+  const fields = withOptional(args.fields, optional);
   const entity: UiSchemaEntity = {
     ...previous,
     localized: args.localized,
@@ -129,6 +136,28 @@ export function saveOfSchemaChange(args: {
       ...(args.keys === undefined ? {} : { keys: args.keys }),
     },
   };
+}
+
+/**
+ * `fields` with each field named in `optional` made optional, wherever it is stored on the row: at
+ * the top level, or inside a group with no name, whose fields are columns of the row too.
+ */
+function withOptional(
+  fields: readonly FieldDefinition[],
+  optional: ReadonlySet<string>
+): FieldDefinition[] {
+  return fields.map(field => {
+    if (typeof field.name !== "string" || field.name.length === 0) {
+      const inside = (field as { fields?: unknown }).fields;
+      return Array.isArray(inside)
+        ? {
+            ...field,
+            fields: withOptional(inside as FieldDefinition[], optional),
+          }
+        : field;
+    }
+    return optional.has(field.name) ? { ...field, required: false } : field;
+  });
 }
 
 /**

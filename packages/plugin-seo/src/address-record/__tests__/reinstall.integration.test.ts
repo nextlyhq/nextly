@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { seoPlugin } from "../../plugin";
 import { addressClaims } from "../../schema/tables";
-import { catchUp, lastCatchUp } from "../catch-up";
+import { catchUp, forgetCatchUpFingerprint, lastCatchUp } from "../catch-up";
 import { claimKey } from "../rows";
 
 import { recordedRows, seoContext } from "./record-tables";
@@ -130,6 +130,62 @@ describe.each(getConfiguredTestDialects())(
         `posts:${gap}`
       );
     });
+
+    // A lifecycle command boots the app to run the hook, the boot starts a
+    // catch-up of its own, and the command tears the boot down once the hook
+    // returns. A catch-up still running then reads services already gone,
+    // and stores its fingerprint after the hook forgot it.
+    it.each([
+      // An install keeps the record, as an uninstall keeping the data does.
+      ["onInstall", { install: true, keepData: true }],
+      ["onUninstall keeping the data", { install: false, keepData: true }],
+      ["onUninstall dropping the data", { install: false, keepData: false }],
+    ] as const)(
+      "%s returns only once the catch-up under way has finished",
+      async (_hook, { install, keepData }) => {
+        const { plugin, ctx } = await boot(dialect);
+        // A catch-up that runs, held once it has listed every page.
+        await forgetCatchUpFingerprint(ctx);
+        let listed!: () => void;
+        const reached = new Promise<void>(resolve => {
+          listed = resolve;
+        });
+        let release!: () => void;
+        const held = new Promise<void>(resolve => {
+          release = resolve;
+        });
+        const running = catchUp({
+          afterListing: () => {
+            listed();
+            return held;
+          },
+        });
+        await reached;
+
+        let returned = false;
+        const hook = (
+          install
+            ? plugin.onInstall?.(ctx)
+            : plugin.onUninstall?.(ctx, { keepData })
+        )?.then(() => {
+          returned = true;
+        });
+        // Long enough for a hook that does not wait to return.
+        await Promise.race([
+          hook,
+          new Promise(resolve => setTimeout(resolve, 250)),
+        ]);
+        const returnedWhileRunning = returned;
+        release();
+        await hook;
+
+        expect(returnedWhileRunning).toBe(false);
+        expect((await running).ran).toBe(true);
+        // The fingerprint stays forgotten, so the start after the command
+        // runs the whole catch-up; a full uninstall drops the record.
+        if (keepData) expect((await catchUp()).ran).toBe(true);
+      }
+    );
 
     it("leaves the record alone on a full uninstall, which drops it", async () => {
       const { t, plugin, ctx } = await boot(dialect);

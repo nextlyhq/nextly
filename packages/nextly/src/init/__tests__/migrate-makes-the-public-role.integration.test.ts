@@ -23,6 +23,8 @@
  * - A plugin declaring a public grant on the collection it contributes: the
  *   `nextly migrate` that adds the collection, with the plugin recorded
  *   uninstalled, grants nothing for it; the plugin's install grants it.
+ * - Another plugin's install, which declares no public grant, leaves that
+ *   grant with the Public role, and a visitor still reads the collection.
  * - The languages stored in Settings, with none in the configuration, are the
  *   ones a rule is told where the seeding runs inside a transaction: the
  *   first `nextly migrate` run on this release of a database an earlier one
@@ -181,6 +183,16 @@ const FORMS = definePlugin({
       }),
     ],
     publicGrants: [{ collection: "mpr-entries", action: "read" }],
+  },
+});
+
+/** A plugin declaring a permission of its own and no public grant. */
+const DIGEST = definePlugin({
+  name: "@test/mpr-digest",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    permissions: [{ action: "send", resource: "mpr-digest", label: "Send" }],
   },
 });
 
@@ -717,6 +729,40 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await publicHolds()).toContain("read-mpr-entries");
       expect((await asVisitor(withPlugin, ["mpr-entries"])).statuses).toEqual({
+        "mpr-entries": 200,
+      });
+    }, 240_000);
+
+    it("keeps a plugin's public grant when another plugin is installed after it", async () => {
+      const without = configOf(OPEN);
+      await migrateCreate("initial", without);
+      await migrate(without);
+
+      // Both join the configuration having been uninstalled before, so each
+      // is declared by its own install, as `nextly plugins install --all` does.
+      const adapter = await open();
+      for (const plugin of [FORMS, DIGEST]) {
+        await recordPluginLifecycle(
+          new SchemaEventsRepository(adapter.getDrizzle(), dialect),
+          plugin.name,
+          { state: "uninstalled" }
+        );
+      }
+      await adapter.disconnect().catch(() => undefined);
+      const withPlugins = { ...configOf(OPEN), plugins: [FORMS, DIGEST] };
+      await migrateCreate("plugins", withPlugins);
+      await migrate(withPlugins);
+
+      state.config = withPlugins;
+      tick();
+      await runPluginInstall(FORMS.name, {}, command().context);
+      expect(await publicHolds()).toContain("read-mpr-entries");
+
+      tick();
+      await runPluginInstall(DIGEST.name, {}, command().context);
+
+      expect(await publicHolds()).toContain("read-mpr-entries");
+      expect((await asVisitor(withPlugins, ["mpr-entries"])).statuses).toEqual({
         "mpr-entries": 200,
       });
     }, 240_000);

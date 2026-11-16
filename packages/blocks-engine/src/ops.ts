@@ -160,6 +160,7 @@ const NODE_FIELDS: {
   name: { holds: isString, optional: true },
   customCss: { holds: isString, optional: true },
   cssId: { holds: isString, optional: true },
+  nosnippet: { holds: isBoolean, optional: true },
   attributes: { holds: isStringRecord, optional: true },
   migrationFailed: { holds: isBoolean, optional: true },
   origin: { holds: isBlockOrigin, optional: true },
@@ -189,6 +190,7 @@ const PATCH_FIELDS: { readonly [K in keyof Required<NodePatch>]: true } = {
   name: true,
   customCss: true,
   cssId: true,
+  nosnippet: true,
   attributes: true,
   migrationFailed: true,
   // Patchable, like `migrationFailed`, rather than sealed. Provenance is a

@@ -48,17 +48,11 @@ import {
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import {
-  writeCollectionSave,
-  type BuilderSaveSetup,
-  type CollectionSaveDeps,
+import type {
+  BuilderSaveSetup,
+  CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
-import {
-  checkEntitySaveHistory,
-  entitySaveDeps,
-  previousEntity,
-  writeEntitySave,
-} from "../../schema/builder-save/entity-save";
+import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { fieldGroupEntity } from "../../schema/builder-save/stored-entity";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
@@ -69,6 +63,15 @@ import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 import { recordStrandedTransition } from "./record-stranded-transition";
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a read, or a save with no writer set up, never
+ * needs.
+ */
+const loadEntitySave = () => import("../../schema/builder-save/entity-save");
+const loadCollectionSave = () =>
+  import("../../schema/builder-save/collection-save");
 
 /**
  * 🔴 The schema service and the table provisioning are loaded on demand, NOT at the top of this
@@ -506,7 +509,10 @@ export class FieldGroupMetadataService {
     // before the first write (the archive of a field leaving translation, just below). A
     // code-first sync writes none: its migrations are the developer's.
     const deps = input.source === "code" ? undefined : this.saveDeps();
-    await checkEntitySaveHistory(deps);
+    if (deps !== undefined) {
+      const { checkEntitySaveHistory } = await loadEntitySave();
+      await checkEntitySaveHistory(deps);
+    }
 
     // A field leaving, joining or replaced in translation has preconditions of its own, asked by
     // the same preflight as the collection and Single settings saves, before the companion changes.
@@ -637,6 +643,7 @@ export class FieldGroupMetadataService {
     },
     move: () => Promise<void>
   ): Promise<void> {
+    const { previousEntity, writeEntitySave } = await loadEntitySave();
     const { existing, input } = edit;
     const stored = fieldGroupEntity(existing);
     // Held in an object, as `move` runs from inside the writer.
@@ -754,7 +761,7 @@ export class FieldGroupMetadataService {
     const { buildDesiredTableFromComponentFields } = await import(
       "../../schema/pipeline/diff/build-from-fields"
     );
-    const { getColumnDescriptor } = await import(
+    const { fieldsStoredOnRow, getColumnDescriptor } = await import(
       "../../schema/services/field-column-descriptor"
     );
     const { isFieldLocalized } = await import("../../i18n/classify-fields");
@@ -787,7 +794,9 @@ export class FieldGroupMetadataService {
      * never appear here.
      */
     const fieldNameByColumn = new Map<string, string>();
-    for (const field of [...oldFields, ...args.fields]) {
+    // Through `fieldsStoredOnRow`, as the desired table reads them: a field inside a group with no
+    // name owns its column on the row, and the group itself has no column, nor a name to spell one.
+    for (const field of fieldsStoredOnRow([...oldFields, ...args.fields])) {
       const column = getColumnDescriptor(field, dialect, "fieldGroup");
       if (column) fieldNameByColumn.set(column.name, field.name);
     }
@@ -1112,7 +1121,7 @@ export class FieldGroupMetadataService {
     const {
       reconcileComponentCompanion,
       registerComponentRuntimeSchema,
-      resolveComponentTypeColumn,
+      resolveComponentTableColumns,
     } = await import("./field-group-table-provisioning");
 
     // 🔴 Probed BEFORE the transition, which is the helper's own documented contract. Resolving it
@@ -1120,10 +1129,14 @@ export class FieldGroupMetadataService {
     // already committed — an enable that dropped the main table's columns while the registry still
     // records the group as non-localized. The discriminator is unaffected by the transition, so
     // asking first is equivalent and fails while nothing has moved.
-    const typeColumn = await resolveComponentTypeColumn(
-      adapter,
-      args.existing.tableName
-    );
+    //
+    // With the columns the main table holds, read by the same listing. This path issues no DDL to
+    // the main table, so a field inside a group with no name whose column the table lacks yet is
+    // still missing after it, and the runtime table registered below leaves it out
+    // (`RuntimeSchemaOptions.heldColumns`); the companion move changes only translated columns,
+    // which such a field never is.
+    const { typeColumn, columns: heldColumns } =
+      await resolveComponentTableColumns(adapter, args.existing.tableName);
 
     const moved = await reconcileComponentCompanion({
       busyTable: { adapter, notify: line => this.logger.warn(line) },
@@ -1145,7 +1158,8 @@ export class FieldGroupMetadataService {
       // migration may have moved it, so which discriminator column it carries is a fact about the
       // database rather than something this code can infer from its own version.
       typeColumn,
-      args.localized
+      args.localized,
+      heldColumns
     );
 
     return moved;
@@ -1276,9 +1290,12 @@ export class FieldGroupMetadataService {
     if (twin) throw addressRefusalError(twin, slug);
     // A field group already under this address, whatever table it was recorded with: an older one
     // may keep a table name of its own, which the table check below cannot see. Refused here,
-    // before any DDL, rather than by the registry after the new table is built.
+    // before any DDL, rather than by the registry after the new table is built. Worded as the
+    // table check below words it, naming the address the caller sent: the bare "Resource already
+    // exists." left a person creating a field group under a taken name not knowing which name.
     if (held.some(existing => existing.slug === slug)) {
       throw NextlyError.duplicate({
+        message: `The field group "${slug}" could not be created: its name is already taken.`,
         logContext: { reason: "field-group-address-taken", slug },
       });
     }
@@ -1368,6 +1385,7 @@ export class FieldGroupMetadataService {
     deps: CollectionSaveDeps,
     input: CreateFieldGroupInput
   ): Promise<FieldGroupMigrationStatus> {
+    const { writeCollectionSave } = await loadCollectionSave();
     await writeCollectionSave(deps, {
       kind: "fieldGroup",
       slug: input.slug,

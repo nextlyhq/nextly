@@ -40,6 +40,10 @@ interface PluginDefinition {
     ctx: PluginContext,
     opts: { keepData: boolean }
   ) => void | Promise<void>; // `nextly plugins uninstall`, before its DOWN migrations; @experimental
+  onMigrate?: (
+    ctx: PluginContext,
+    run: { applied: number }
+  ) => void | Promise<void>; // after a `nextly migrate` that left nothing pending; @experimental
   destroy?: (ctx: PluginContext) => void | Promise<void>;
   rename?: (map: Record<string, string>) => PluginDefinition; // integrator-side remap
 }
@@ -72,7 +76,7 @@ interface PluginContributions {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission?, startupReads? }
     settings?: { component: ComponentPath };
-    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
+    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions, panelSections and foldedPanel, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level, inside named groups, or in a repeater's rows
     places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
     filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
@@ -1024,6 +1028,9 @@ contributes: {
         label: "SLA",
         component: "@acme/support/admin#Sla",
         after: "status", // after the built-in Status section, as close as it can
+        // @experimental: the reads the section makes as it opens, started with the page
+        // (collection.edit, single.edit and entry.form only; refused elsewhere)
+        startupReads: [{ path: "/sla?collection={collection}&entry={entryId}" }],
       },
       {
         id: "acme-support.escalate",
@@ -1107,6 +1114,15 @@ only what they may see:
   read, and a rule needing it does not match, `exists` and `not` included. A
   contribution whose rule names such a field is not sent to that reader at
   all.
+- `extendedWith` (`@experimental`) names fields the plugin's own `extend`
+  adds. The contribution is then offered only on the collections, or on a
+  Single's page the Singles, where the start added every one of them: a tab
+  that edits a field a scope adds follows it to Schema Builder types, and
+  skips a type that kept a field of its own by that name. With `collections`
+  or `singles` too, it is offered where both agree. Where the plugin's
+  extension switch has one of those fields off on a type
+  (`EXTENSION_SWITCH_SERVICE`, see [Schema](/docs/plugins/schema)), it is not
+  offered there, and the field is drawn nowhere in that type's editors.
 
 The admin draws blocks and tabs at settings, a user's detail page, the account
 page, the entry form, the login page, both edit pages and the dashboard, in the order sent,
@@ -1321,6 +1337,12 @@ plugins uninstall` calls `onUninstall` before its DOWN migrations, with
 `{ keepData }`. Write both so they can run again: an install can be retried
 after a failure part-way through. Work that must happen on every start, rather
 than once per install, belongs in `init`.
+
+`onMigrate` (`@experimental`) runs after a `nextly migrate` (or
+`nextly migrate:fresh`) that left nothing pending, for an enabled plugin
+installed on the database, with `{ applied }`, the number of migrations the
+run applied (0 when there was nothing to apply). It runs after migrate's lock
+is released, so write it to be safe when two runs call it at once.
 
 Before either command shuts the runtime down, it waits for the event handlers
 the hook set off, including those of the follow-up events they emit, for at

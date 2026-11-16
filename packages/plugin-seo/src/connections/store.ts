@@ -6,10 +6,10 @@
  * paths, and the settings' read route reports a secret as set, never its
  * value, so none of them reaches the admin or any API.
  *
- * What is not a credential (who is connected, how the last attempt went) is
- * kept beside them in plain text, for the Connections tab to show, with the
- * little the Overview keeps: whether its checklist is hidden, and when old
- * SEO values were last imported.
+ * What is not a credential (who is connected, how the last attempt went, the
+ * last Search Console report) is kept beside them in plain text, for the
+ * Connections tab to show, with the little the Overview keeps: whether its
+ * checklist is hidden, and when old SEO values were last imported.
  *
  * @module connections/store
  */
@@ -20,7 +20,11 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "nextly/zod";
 
-import type { ConnectionAttempt, ConnectionResult } from "./contract";
+import type {
+  ConnectionAttempt,
+  ConnectionResult,
+  SearchConsoleReportBody,
+} from "./contract";
 
 const RESULTS = [
   "sent",
@@ -35,6 +39,36 @@ const attempt = z.object({
   at: z.string(),
   result: z.enum(RESULTS),
   urls: z.number().int().nonnegative().optional(),
+});
+
+const counted = { clicks: z.number(), impressions: z.number() };
+
+/** A Search Console report, as the report route answered it. */
+const report = z.object({
+  from: z.string(),
+  to: z.string(),
+  clicks: z.number(),
+  pages: z.array(z.object({ page: z.string(), ...counted })),
+  queries: z.array(z.object({ query: z.string(), ...counted })),
+  otherAddress: z.array(
+    z.object({
+      page: z.string(),
+      declared: z.string().optional(),
+      chosen: z.string(),
+    })
+  ),
+  checked: z.number(),
+  readAt: z.string(),
+});
+
+/**
+ * The last report read, the property it was read for, and the connection it
+ * was read through: a fingerprint of that connection's token, never the token.
+ */
+const keptReport = z.object({
+  property: z.string(),
+  connection: z.string(),
+  report,
 });
 
 /** The plugin's settings, as stored. */
@@ -62,6 +96,12 @@ const schema = z.object({
     .optional(),
   /** Search Console's last attempt that failed, and what to tell the person. */
   searchConsoleFailed: attempt.extend({ message: z.string() }).optional(),
+  /**
+   * The last Search Console report, read back below on its own: one kept by
+   * an earlier version in another shape is then simply not there, and never
+   * stops the rest of the connections being read.
+   */
+  searchConsoleReport: z.unknown().optional(),
   /** The Overview's setup checklist is hidden, until someone shows it again. */
   checklistHidden: z.boolean().optional(),
   /** When an import of old SEO values was last applied, as an ISO time. */
@@ -80,6 +120,11 @@ export interface ConnectionSettings {
     expiresAt: string;
   };
   searchConsoleFailed?: ConnectionAttempt & { message: string };
+  searchConsoleReport?: {
+    property: string;
+    connection: string;
+    report: SearchConsoleReportBody;
+  };
   checklistHidden?: boolean;
   importedAt?: string;
 }
@@ -110,7 +155,14 @@ function settingsOf(ctx: Pick<PluginContext, "settings">): PluginSettingsApi {
 export async function readConnections(
   ctx: Pick<PluginContext, "settings">
 ): Promise<ConnectionSettings> {
-  const stored: ConnectionSettings = schema.parse(await settingsOf(ctx).get());
+  const { searchConsoleReport, ...rest } = schema.parse(
+    await settingsOf(ctx).get()
+  );
+  const kept = keptReport.safeParse(searchConsoleReport);
+  const stored: ConnectionSettings = {
+    ...rest,
+    ...(kept.success ? { searchConsoleReport: kept.data } : {}),
+  };
   return stored;
 }
 

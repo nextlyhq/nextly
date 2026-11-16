@@ -37,6 +37,50 @@ const change = (answers: SchemaChangeAnswers) =>
   });
 
 describe("a field change's answers", () => {
+  it("fill and make optional a field inside a group with no name, a column of the row", () => {
+    const { save, fields: saved } = saveOfSchemaChange({
+      slug: "people",
+      table: "dc_people",
+      definition,
+      row: { fields: [] },
+      fields: [
+        {
+          type: "group",
+          label: "Name",
+          fields: [
+            { name: "firstName", type: "text", required: true },
+            { name: "lastName", type: "text", required: true },
+          ],
+        } as unknown as FieldDefinition,
+      ],
+      localized: false,
+      answers: {
+        eventResolutions: [
+          {
+            kind: "provide_default",
+            eventId: "add_required_field_no_default:dc_people.first_name",
+            value: "Ann",
+          },
+          {
+            kind: "make_optional",
+            eventId: "add_required_field_no_default:dc_people.last_name",
+          },
+        ],
+      },
+      junctions: { up: [], down: [] },
+      keys: { before: [], after: [] },
+    });
+
+    expect(save.resolutions).toEqual([
+      { column: "firstName", kind: "fill", value: "Ann" },
+    ]);
+    const inside = (
+      saved[0] as unknown as { fields: { name: string; required: boolean }[] }
+    ).fields;
+    expect(inside.find(f => f.name === "lastName")?.required).toBe(false);
+    expect(inside.find(f => f.name === "firstName")?.required).toBe(true);
+  });
+
   it("fill a camelCase field, and make one optional, by the field's own name", () => {
     const { save, fields: saved } = change({
       eventResolutions: [

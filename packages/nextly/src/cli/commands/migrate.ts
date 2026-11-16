@@ -71,6 +71,7 @@ import type {
   ExtensionSchema,
   ServerConstructCapabilities,
 } from "../../domains/schema/extension/build-extension-schema";
+import { overriddenColumns } from "../../domains/schema/extension/entity-contributions";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import {
   appliedChecksums,
@@ -156,6 +157,7 @@ import {
 } from "../../domains/schema/migrate/reconcile-metadata";
 import {
   findRegistryDisagreements,
+  migrationsToCompare,
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
 import {
@@ -279,6 +281,7 @@ import {
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
 import { commandRun } from "./command-run";
+import { runPluginsOnMigrate } from "./migrate-hooks";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -420,6 +423,58 @@ function busyTableBoundsOf(
     },
     env: process.env,
   });
+}
+
+/**
+ * The plugins' `onMigrate` (`migrate-hooks`), handed what this run loaded and
+ * opened: the config as written for their boot, and the database's record
+ * of which plugins are installed. Answers the failure the run ends with.
+ */
+async function pluginsOnMigrateStep(args: {
+  configResult: Awaited<ReturnType<typeof loadConfig>>;
+  adapter: DrizzleAdapter;
+  db: ReturnType<DrizzleAdapter["getDrizzle"]>;
+  dialect: SupportedDialect;
+  logger: CommandContext["logger"];
+  applied: number;
+}): Promise<NextlyError | null> {
+  const { configResult, db, dialect } = args;
+  return runPluginsOnMigrate({
+    plugins: configResult.config.plugins ?? [],
+    applied: args.applied,
+    boot: {
+      appConfig: configResult.appConfig,
+      pluginConsent: configResult.pluginConsent,
+      adapter: args.adapter,
+      logger: args.logger,
+      projectRoot: configResult.projectRoot,
+    },
+    lifecycle: async () => {
+      const { SchemaOwnersRepository: OwnersRepo } = await import(
+        "../../domains/schema/ownership/schema-owners-repository"
+      );
+      const { readPluginLifecycle } = await import(
+        "../../domains/schema/ownership/plugin-lifecycle-state"
+      );
+      return readPluginLifecycle(
+        new SchemaEventsRepository(db, dialect),
+        await new OwnersRepo(db, dialect).read()
+      );
+    },
+    logger: args.logger,
+  });
+}
+
+/**
+ * End the run through `fail` where a plugin's `onMigrate` failed, once every
+ * other step has run: the schema it applied stays applied, and running it
+ * again runs the hook again.
+ */
+function endIfHooksFailed(
+  failure: NextlyError | null,
+  fail: (error: unknown) => never
+): void {
+  if (failure !== null) fail(failure);
 }
 
 /** `read`'s value, or the run ended through `fail` with what it threw. */
@@ -617,6 +672,10 @@ export async function runMigrate(
     // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
+    // What this run applied, handed to the plugins' `onMigrate` once it is
+    // done, and the failure a hook of theirs ends the command with.
+    let appliedThisRun = 0;
+    let hooksFailed: NextlyError | null = null;
     try {
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
         extensionSchema,
@@ -731,6 +790,7 @@ export async function runMigrate(
       // Both streams count: a run that executed only plugin modules did
       // migrate, and saying "nothing to migrate" after it is untrue.
       const ran = applied + pluginModulesApplied;
+      appliedThisRun = ran;
       logger.success(
         ran === 0
           ? metadata.stillPending > 0 ||
@@ -824,6 +884,17 @@ export async function runMigrate(
             error: (message: string) => logger.error(message),
           }
         );
+        // The plugins' own deploy work, last, once every step above has
+        // left the schema in step (`migrate-hooks`). Not where migrations
+        // are still pending, as none of the steps above are.
+        hooksFailed = await pluginsOnMigrateStep({
+          configResult,
+          adapter: adapter as unknown as DrizzleAdapter,
+          db,
+          dialect,
+          logger,
+          applied: appliedThisRun,
+        });
       }
     } catch (err) {
       fail(err);
@@ -841,6 +912,13 @@ export async function runMigrate(
           dialect,
           declared: resolvedSchema.entities,
           logger,
+          // The rows this run wrote, against the record it wrote them from:
+          // a row still behind it is one the run could not write.
+          migrations: migrationsToCompare(
+            adapter as unknown as DrizzleAdapter,
+            dialect,
+            appMigrationsDir
+          ),
         })
       )) {
         logger.warn(line);
@@ -857,7 +935,12 @@ export async function runMigrate(
     // succeeded. Here in the CLI run only, never in the core a boot shares.
     try {
       const notice = plainTextPasswordNotice(
-        (await plainTextPasswordCleanup(adapter).find()).length
+        (
+          await plainTextPasswordCleanup(
+            adapter,
+            configResult.config.auth?.passwordHasher
+          ).find()
+        ).length
       );
       if (notice) logger.warn(notice);
     } catch (err) {
@@ -882,6 +965,9 @@ export async function runMigrate(
         `Could not check for passwords stored before this release: ${describeError(err)}`
       );
     }
+
+    // Last, once the read-only notices above have run.
+    endIfHooksFailed(hooksFailed, fail);
 
     const duration = Date.now() - startTime;
     logger.divider();
@@ -2306,6 +2392,7 @@ async function runMigrationStreams(
           // A file's busy-table stop names the plugin modules this run applied before it too.
           appliedBefore: pluginOutcome.ran,
         }),
+    columnOverrides: overriddenColumns(deps.extensionSchema),
   });
   return { pluginModulesApplied, applied };
 }
@@ -4149,6 +4236,11 @@ export async function runFileMigrations(args: {
    * first by a busy table's report as the changes before the one that stopped.
    */
   appliedBefore?: readonly string[];
+  /**
+   * The columns whose storage the app overrides (`overriddenColumns`): the
+   * one in-place change to another owner's column its files may make.
+   */
+  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -4278,6 +4370,7 @@ export async function runFileMigrations(args: {
         // Read before each file, after the files before it have run.
         liveTables: await readLiveTables(db, dialect, [upStatements]),
         liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
+        columnOverrides: args.columnOverrides,
       });
       assertRunnableStatements(upStatements, dialect, filename, {
         transaction: m.transaction,

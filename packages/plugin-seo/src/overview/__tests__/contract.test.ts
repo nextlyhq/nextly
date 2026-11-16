@@ -204,16 +204,20 @@ describe("page coverage", () => {
       listed("pattern", "site"),
       listed("page", "content"),
       listed("page", "page", "hidden"),
+      // A page of a type with SEO off is its own group, whatever its sources.
+      listed("page", "page", "seo-off"),
     ]);
     expect(coverage).toEqual({
-      total: 5,
+      total: 6,
+      seoOff: 1,
       hidden: 1,
       bothSet: 2,
       bothWorkedOut: 1,
       oneOfEach: 1,
     });
     expect(
-      coverage.hidden +
+      coverage.seoOff +
+        coverage.hidden +
         coverage.bothSet +
         coverage.bothWorkedOut +
         coverage.oneOfEach

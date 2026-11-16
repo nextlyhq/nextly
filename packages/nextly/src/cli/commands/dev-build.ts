@@ -1021,7 +1021,7 @@ async function handleRemovedSingles(
         mediaUsagePresent: await mediaUsageTablePresent(adapter),
       };
       await adapter.transaction(tx =>
-        deleteEntityRegistryRow(tx, "single", slug, tables)
+        deleteEntityRegistryRow(tx, "single", slug, tables, dialect)
       );
       applied.push(
         `${change}: the registry entry of single ${JSON.stringify(slug)}`
