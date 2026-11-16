@@ -136,6 +136,17 @@ export interface UseSchemaSaveOptions {
    * as the review showed them.
    */
   settingChanges?: readonly SettingChange[];
+  /**
+   * The field groups not saved yet that the fields use, which the save creates
+   * before the entity: listed in the review, and created by `create` once it
+   * is confirmed, so cancelling the review creates nothing. `create` answers
+   * why one was refused, which stops the save before the entity; null when
+   * every one was created.
+   */
+  fieldGroupsFirst?: {
+    creates: readonly { address: string; label: string }[];
+    create: () => Promise<string | null>;
+  };
 }
 
 /** One empty list, so a page passing none keeps one value between renders. */
@@ -163,7 +174,14 @@ export function useSchemaSave({
   onApplied,
   previewedWith,
   settingChanges = NO_SETTING_CHANGES,
+  fieldGroupsFirst,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
+  // The groups the save creates first, by address: part of what a review agrees to, as the
+  // fields are, so a confirmation creates exactly the groups the review listed.
+  const creates = JSON.stringify(
+    (fieldGroupsFirst?.creates ?? []).map(group => group.address)
+  );
+  const createsAny = (fieldGroupsFirst?.creates.length ?? 0) > 0;
   const { startRestart, stopRestart } = useRestart();
   // The fields and settings each preview was made from. The dialog shows that
   // preview, so those are what a confirmation agrees to: an edit, an undo or a
@@ -196,14 +214,18 @@ export function useSchemaSave({
       try {
         const previewed = await preview(fields);
         if (!mounted.current) return;
-        // Nothing to migrate and no setting changed: nothing to review.
-        if (!previewed.hasChanges && settingChanges.length === 0) {
+        // Nothing to migrate, no setting changed and no field group to create: nothing to review.
+        if (
+          !previewed.hasChanges &&
+          settingChanges.length === 0 &&
+          !createsAny
+        ) {
           onNoChanges(fields);
           return;
         }
         previewedFields.current.set(
           previewed,
-          JSON.stringify({ fields, previewedWith, settingChanges })
+          JSON.stringify({ fields, previewedWith, settingChanges, creates })
         );
         confirmation.request(previewed);
       } catch (err) {
@@ -221,6 +243,8 @@ export function useSchemaSave({
     confirmation,
     previewedWith,
     settingChanges,
+    createsAny,
+    creates,
   ]);
 
   const confirmApply = useCallback(
@@ -234,7 +258,8 @@ export function useSchemaSave({
       const shown = previewedFields.current.get(previewed);
       if (
         shown !== undefined &&
-        shown !== JSON.stringify({ fields, previewedWith, settingChanges })
+        shown !==
+          JSON.stringify({ fields, previewedWith, settingChanges, creates })
       ) {
         confirmation.settle();
         toast.error(
@@ -243,11 +268,26 @@ export function useSchemaSave({
         return;
       }
 
-      // Only settings changed: the review was of them, and its confirmation
-      // saves them. Nothing is migrated, so nothing restarts.
+      // Only settings changed, or field groups to create: the review was of
+      // them, and its confirmation creates the groups and saves the settings.
+      // Nothing is migrated, so nothing restarts.
       if (!previewed.hasChanges) {
-        confirmation.settle();
-        onNoChanges(fields);
+        void (async () => {
+          confirmation.beginApply();
+          try {
+            const refused = await fieldGroupsFirst?.create();
+            if (refused) {
+              toast.error(refused);
+              return;
+            }
+            confirmation.settle();
+            onNoChanges(fields);
+          } catch (err) {
+            toast.error(apiErrorMessage(err, "Failed to save the changes"));
+          } finally {
+            confirmation.endApply();
+          }
+        })();
         return;
       }
 
@@ -255,6 +295,13 @@ export function useSchemaSave({
         confirmation.beginApply();
         startRestart();
         try {
+          // The groups the fields use exist before the entity names them; a refused one stops
+          // here, before the entity, with every change still pending.
+          const refused = await fieldGroupsFirst?.create();
+          if (refused) {
+            stopRestart(false, refused);
+            return;
+          }
           const result = await apply(
             fields,
             previewed.schemaVersion,
@@ -302,6 +349,8 @@ export function useSchemaSave({
       previewedWith,
       settingChanges,
       onNoChanges,
+      fieldGroupsFirst,
+      creates,
     ]
   );
 
