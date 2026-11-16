@@ -525,16 +525,50 @@ describe.each(LOCK_DIALECTS)(
           expect(await databaseState()).toEqual(before);
         }
 
-        // The operator reverses what of it ran, takes the file out, and
-        // records it rolled back: the baseline adopts the database.
         if (dialect === "mysql") {
+          // The operator reverses what of it ran, takes the file out, and
+          // records it rolled back.
           await adapter.executeQuery(`DROP TABLE ${P}_three`);
+          rmSync(path(THREE));
+          await resolveFile("rolled-back", THREE, true);
+        } else {
+          // The step the refusal names. The attempt is cleared and the file
+          // is pending: no longer refused as an attempt, it is history of the
+          // folder's, until it is taken out.
+          await resolveFile("failed-cleanup", THREE);
+          expect(await baseline()).toEqual({
+            kind: "history-not-empty",
+            history: [
+              { filename: `${THREE}.sql`, inFolder: true, applied: false },
+            ],
+          });
+          rmSync(path(THREE));
         }
-        rmSync(path(THREE));
-        await resolveFile("rolled-back", THREE, true);
         expect(await baseline()).toMatchObject({
           kind: "baselined",
           tableCount: 1,
+        });
+      }, 240_000);
+
+      it("lists a migration kept as dialect variants once, by the name its ledger rows carry", async () => {
+        // ONE as the build holds it now: one variant per dialect, the
+        // running dialect's identical to the file that ran.
+        const text = readFileSync(path(ONE), "utf8");
+        rmSync(path(ONE));
+        for (const variant of ["postgresql", "mysql", "sqlite"]) {
+          writeFileSync(
+            join(migrationsDir, `${ONE}.${variant}.sql`),
+            text,
+            "utf8"
+          );
+        }
+
+        expect(await baseline()).toEqual({
+          kind: "history-not-empty",
+          history: [
+            { filename: `${ONE}.sql`, inFolder: true, applied: true },
+            { filename: `${TWO}.sql`, inFolder: true, applied: true },
+          ],
         });
       }, 240_000);
     });

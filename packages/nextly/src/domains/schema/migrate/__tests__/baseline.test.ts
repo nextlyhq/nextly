@@ -347,11 +347,19 @@ describe("the refusal over an attempt a transaction undid", () => {
     expect(message).toContain("the migration stays applied");
   });
 
-  it("says when an attempt recorded no outcome", () => {
-    expect(
-      refusal([{ filename: "1_init.sql", direction: "up", failed: false }])
-        .publicMessage
-    ).toContain("recorded no outcome");
+  it("never calls an attempt with no outcome undone, since its run may still be going", () => {
+    // A dry run takes no lock, so the row can be a run in progress: clearing
+    // it then would clear a live attempt.
+    const message = refusal([
+      { filename: "1_init.sql", direction: "up", failed: false },
+    ]).publicMessage;
+
+    expect(message).toContain("recorded no outcome");
+    expect(message).toContain("or is still running");
+    expect(message).toContain("if it stopped, the database undid it whole");
+    expect(message).toContain(
+      "Once no run is in progress, record that with `nextly migrate:resolve --failed-cleanup 1_init.sql`."
+    );
   });
 
   it("names every migration when there are several", () => {

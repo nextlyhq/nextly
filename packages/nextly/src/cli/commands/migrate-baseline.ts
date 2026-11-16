@@ -23,7 +23,7 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -38,6 +38,7 @@ import {
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../domains/i18n/migration/generate-up";
 import { RETAINED_SIZES_COLUMN } from "../../domains/media/retired-image-sizes-constants";
+import { ledgerFilename } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -112,6 +113,7 @@ import { createContext, type CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import { openMigrationCommand } from "../utils/command-prerequisites";
 import {
+  getSortedBaseNames,
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
@@ -153,31 +155,27 @@ async function listTableNames(adapter: CLIDatabaseAdapter): Promise<string[]> {
 }
 
 /**
- * The migration files already on disk, earliest first, old Schema Builder
- * files left out as every reader leaves them out: one is no history.
+ * The migrations already on disk, earliest first, each by the name the ledger
+ * records it under (`<name>.sql`), as the folder's one reading groups them
+ * (`readMigrationFolder`). A migration kept as dialect variants
+ * (`<name>.postgresql.sql`, `<name>.mysql.sql`) is one migration, and the same
+ * one its ledger rows name; old Schema Builder files are left out as every
+ * reader leaves them out: one is no history.
  *
- * A missing directory is a project that has never generated one, which is the
- * normal state for everything this command exists to adopt.
+ * A missing directory reads as empty: a project that has never generated one,
+ * which is the normal state for everything this command exists to adopt.
  */
 async function listMigrationFiles(
   migrationsDir: string,
   dialect: SupportedDialect,
   declared: DeclaredNames | undefined
 ): Promise<string[]> {
-  let entries: string[];
-  try {
-    entries = await readdir(migrationsDir);
-  } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return [];
-    throw err;
-  }
-  const { oldBuilderFiles } = await readMigrationFolder(
+  const { groups } = await readMigrationFolder(
     migrationsDir,
     dialect,
     declared
   );
-  const ignored = new Set(oldBuilderFiles.map(f => f.file));
-  return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
+  return getSortedBaseNames(groups).map(ledgerFilename);
 }
 
 /**
@@ -1050,18 +1048,24 @@ export async function baselineCore(
       // Recorded as applied without executing: the tables it describes are
       // already standing. Doing this in the same command is the point — the
       // file alone would be re-run against a database that already has them.
-      const eventId = await repo.recordStart({
+      //
+      // One write, already applied: nothing runs between an attempt and its
+      // outcome here, so recording the two apart would only open a window in
+      // which a stop leaves an attempt with no outcome, which every later
+      // command refuses on until an operator resolves it. The file's name is
+      // new, taken from this run's clock under the migrate lock, so no other
+      // applied row for it can exist.
+      await repo.insertEvent({
         eventType: "file_apply",
+        status: "applied",
         source: "cli-migrate",
         filename: `${baseName}.sql`,
         // The checksum of the text written, as a run records it, so a later
         // edit to the baseline stops `nextly migrate` and reads as modified
         // in `migrate:status`.
         sha256: checksumOf(sqlContent),
-      });
-      await repo.markApplied(eventId, {
         statementsExecuted: 0,
-        uniqueFilename: `${baseName}.sql`,
+        endedAt: new Date(),
       });
 
       logger.debug(`Baseline recorded as applied: ${baseName}.sql`);

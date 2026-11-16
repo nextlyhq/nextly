@@ -27,7 +27,7 @@
  * @module domains/schema/migrate/baseline
  */
 import { NextlyError } from "../../../errors";
-import { isPluginLedgerRow } from "../events/ledger-scope";
+import { scopeLedgerRows } from "../events/ledger-scope";
 import { standingsByFilename } from "../events/migration-state";
 import type { SchemaEventRow } from "../events/schema-events-repository";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -42,9 +42,9 @@ export type LedgerRow = Pick<
   "eventType" | "status" | "startedAt" | "filename" | "supersededEventIds"
 >;
 
-/** Each app migration's standing, a plugin's rows left to its own stream. */
+/** Each app migration's standing, a plugin's rows left to its own stream (`scopeLedgerRows`). */
 function appStandings(rows: readonly LedgerRow[]) {
-  return standingsByFilename(rows.filter(r => !isPluginLedgerRow(r.filename)));
+  return standingsByFilename(scopeLedgerRows(rows));
 }
 
 /**
@@ -88,10 +88,12 @@ export function openAttempts(rows: readonly LedgerRow[]): OpenAttempt[] {
 /**
  * The refusal over an unresolved attempt the shared check let through
  * (`assertAppHistoryHolds`, which runs first): one it judged to have left
- * nothing, because it ran inside a transaction the database undid whole.
- * A baseline still waits for it: it adopts the database as the
- * history's start, which it cannot do while that history has an attempt no
- * one has said how it ended. Worded as the shared refusal is, so the CLI reads
+ * nothing, because it ran inside a transaction the database undoes whole.
+ * A baseline still waits for it: it records the database as it stands as
+ * applied history, which it cannot do while that history has an attempt no
+ * one has said how it ended. An attempt that recorded no outcome may belong to
+ * a run still going (a dry run takes no lock), so it is never said to be
+ * undone, and is cleared only once no run is. Worded as the shared refusal is, so the CLI reads
  * it the same way (`unfinishedAttemptParts`): what stopped, why, ending "so it
  * is not run again.", then what to do.
  */
@@ -109,7 +111,7 @@ export function undoneAttemptRefusal(
   const next = attempts.map(cleanupStep).join(" ");
   return new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-    publicMessage: `${what} ${why} A baseline adopts the database as the start of its history, so it waits until every attempt is recorded resolved; nothing is adopted or run, so it is not run again. ${next}`,
+    publicMessage: `${what} ${why} A baseline records the database as it stands as applied history, so it waits until every attempt is recorded resolved; nothing is adopted or run, so it is not run again. ${next}`,
     logContext: {
       source: names.join(", "),
       reason: "partially-applied",
@@ -123,17 +125,20 @@ function sectionOf(attempt: OpenAttempt): string {
 }
 
 function undoneSentence(attempt: OpenAttempt): string {
-  const ended = attempt.failed
-    ? "failed inside a transaction"
-    : "recorded no outcome, and it ran inside a transaction";
-  return `The attempt at ${attempt.filename}'s ${sectionOf(attempt)} ${ended}, which the database undoes whole, so none of it stayed.`;
+  const at = `The attempt at ${attempt.filename}'s ${sectionOf(attempt)}`;
+  return attempt.failed
+    ? `${at} failed inside a transaction, which the database undoes whole, so none of it stayed.`
+    : `${at} recorded no outcome: the process running it stopped, or is still running. It runs inside a transaction, so if it stopped, the database undid it whole and none of it stayed.`;
 }
 
 function cleanupStep(attempt: OpenAttempt): string {
   const step = `\`nextly migrate:resolve --failed-cleanup ${attempt.filename}\``;
+  const when = attempt.failed
+    ? "Record that"
+    : "Once no run is in progress, record that";
   return attempt.direction === "up"
-    ? `Record that with ${step}.`
-    : `Record that with ${step}; the migration stays applied.`;
+    ? `${when} with ${step}.`
+    : `${when} with ${step}; the migration stays applied.`;
 }
 
 /** A migration a baseline counts as history, and where it is counted from. */
