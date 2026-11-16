@@ -157,6 +157,29 @@ export const MEDIA_USAGE_INDEXES = [
   { name: "nextly_media_usage_media_idx", columns: ["mediaId"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const TRANSLATION_PROVENANCE_INDEXES = [
+  // One row per field of a language of a document, live or drafted. It also
+  // serves reading or replacing a document's rows by its leading columns.
+  {
+    name: "nextly_translation_provenance_uidx",
+    columns: [
+      "scopeKind",
+      "scopeSlug",
+      "entryId",
+      "locale",
+      "partState",
+      "fieldPath",
+    ],
+    unique: true,
+  },
+  // The source language's row for one field of a document, which judges
+  // whether every other language's value made from it is out of date.
+  {
+    name: "nextly_translation_provenance_field_idx",
+    columns: ["scopeKind", "scopeSlug", "entryId", "fieldPath", "partState"],
+  },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const DASHBOARD_PREFERENCES_INDEXES = [
   // One value per reader per key.
   {

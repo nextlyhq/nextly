@@ -1517,11 +1517,6 @@
         "count": 1
       }
     },
-    "packages/builder/src/builder-shell.tsx": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
     "packages/builder/src/canvas.tsx": {
       "complexity_high": {
         "count": 1
@@ -1537,6 +1532,11 @@
         "count": 1
       },
       "crap_moderate": {
+        "count": 1
+      }
+    },
+    "packages/builder/src/shell-regions.tsx": {
+      "complexity_moderate": {
         "count": 1
       }
     },

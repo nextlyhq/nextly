@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useSnapshotAutosave } from "@admin/hooks/useSnapshotAutosave";
 
+import { copiedValuesFor } from "../../copied-values";
 import { submitDocument } from "../submit-document";
 
 const DEBOUNCE = 2000;
@@ -132,5 +133,47 @@ describe("submitDocument and restored values", () => {
 
     await expect(outcome).resolves.toMatchObject({ ok: false });
     expect(restore.saved).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitDocument and values copied from another language", () => {
+  /** A form whose title a copy from Spanish filled, then saved. */
+  function saveAfterCopy(edit?: string) {
+    const form = renderHook(() =>
+      useForm<Record<string, unknown>>({ defaultValues: { title: "Hola" } })
+    ).result.current;
+    copiedValuesFor(form.control).record({ title: "Hola" }, "es");
+    if (edit !== undefined) form.setValue("title", edit);
+    const sent: Record<string, unknown>[] = [];
+    const outcome = submitDocument({
+      form,
+      toPayload: v => v,
+      write: vi.fn(async (payload: Record<string, unknown>) => {
+        sent.push(payload);
+        return { item: { id: "e1" }, stored: payload };
+      }),
+      recordingsFor: null,
+    });
+    return { form, sent, outcome };
+  }
+
+  it("says each copied field came from that language, then forgets the copy", async () => {
+    const { form, sent, outcome } = saveAfterCopy();
+
+    await expect(outcome).resolves.toMatchObject({ ok: true });
+    expect(sent[0]).toMatchObject({
+      title: "Hola",
+      _provenance: { title: { origin: "copy", sourceLocale: "es" } },
+    });
+    expect(
+      copiedValuesFor(form.control).provenanceForSave({ title: "Hola" })
+    ).toBeUndefined();
+  });
+
+  it("claims nothing for a copied field the person edited before saving", async () => {
+    const { sent, outcome } = saveAfterCopy("Hola, editado");
+
+    await expect(outcome).resolves.toMatchObject({ ok: true });
+    expect(sent[0]).not.toHaveProperty("_provenance");
   });
 });

@@ -265,6 +265,17 @@ import {
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
+  assertClaimsAllowed,
+  provenanceClaimsOf,
+  type ProvenanceClaims,
+} from "../../i18n/provenance/provenance-claims";
+import {
+  discardDraftProvenance,
+  forgetDocumentProvenance,
+  recordWrittenValues,
+  translationProvenancePresent,
+} from "../../i18n/provenance/record-provenance";
+import {
   isValidLocale,
   resolveLocaleChain,
   resolveRequestedLocale,
@@ -1156,6 +1167,8 @@ interface PendingPromotion {
     companionTableName: string;
     writeLocale: string;
     companionData: Record<string, unknown>;
+    /** The same values by field name, which provenance is recorded by. */
+    localizedFieldValues: Record<string, unknown>;
   } | null;
   componentFieldData: Record<string, unknown>;
   manyToManyData: Record<string, string[]>;
@@ -3529,9 +3542,12 @@ export class CollectionMutationService extends BaseService {
       companionTableName: string;
       writeLocale: string;
       companionData: Record<string, unknown>;
+      localizedFieldValues: Record<string, unknown>;
     },
     parentId: unknown,
-    savedBy: RequestActor
+    savedBy: RequestActor,
+    /** The collection and the create's claims, its values recorded by. */
+    provenance: { collectionName: string; claims?: ProvenanceClaims }
   ): Promise<void> {
     await tx.insert(
       localizedWrite.companionTableName,
@@ -3560,6 +3576,14 @@ export class CollectionMutationService extends BaseService {
         ],
       }
     );
+    // Where the values just inserted came from, beside them on the create's
+    // transaction: a new document's values are live from the start.
+    await this.recordWrittenProvenance(tx, {
+      entryId: String(parentId),
+      translation: localizedWrite,
+      savedBy,
+      provenance: { ...provenance, promotesDraft: false },
+    });
   }
 
   /**
@@ -6194,6 +6218,14 @@ export class CollectionMutationService extends BaseService {
                   : {}),
             }
           );
+          // What the draft said about where its values came from goes with
+          // it; the live values keep their own record.
+          if (draftLocale !== null && (await this.provenanceRecorded(tx))) {
+            await discardDraftProvenance(tx, {
+              ...discardedRef,
+              locale: draftLocale,
+            });
+          }
           // The discarded part has nothing unpublished left to review: its
           // review closes with the draft, in this transaction.
           await closeReviewOnDiscard(
@@ -7423,6 +7455,12 @@ export class CollectionMutationService extends BaseService {
       columns,
       translation,
       savedBy: args.actor,
+      // Where the rewritten value came from, as any live write records it:
+      // a rewrite of a source value puts its translations out of date.
+      provenance: {
+        collectionName: params.collectionName,
+        promotesDraft: false,
+      },
       // The language row's version is claimed where the version given names
       // it; the main row's was judged under the lock already.
       ...(translation &&
@@ -8554,6 +8592,13 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // What the create claims about where its translated values came from,
+    // read before the key is dropped with the version.
+    const provenance = this.provenanceOf(
+      body,
+      actorForWrite(params.actor, params.user)
+    );
+    if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
     // Set once the outbox event is appended (below), so the catch can report a
@@ -9090,7 +9135,8 @@ export class CollectionMutationService extends BaseService {
             tx,
             localizedWrite,
             entry.id,
-            actorForWrite(params.actor, params.user)
+            actorForWrite(params.actor, params.user),
+            { collectionName: params.collectionName, claims: provenance.claims }
           );
           // The localized values were split out of the main insert, so the
           // returned main row lacks them. Merge them back (camelCase keys) so
@@ -11308,6 +11354,12 @@ export class CollectionMutationService extends BaseService {
                 columns: promoted.columns,
                 translation: promoted.translation,
                 savedBy: actorForWrite(params.actor, params.user),
+                // The held draft's record of where its values came from goes
+                // live with them.
+                provenance: {
+                  collectionName: params.collectionName,
+                  promotesDraft: true,
+                },
               });
               await this.writeRelations(tx, {
                 collectionName: params.collectionName,
@@ -13851,7 +13903,19 @@ export class CollectionMutationService extends BaseService {
         companionTableName: string;
         writeLocale: string;
         companionData: Record<string, unknown>;
+        /** The same values by field name, which provenance is recorded by. */
+        localizedFieldValues?: Record<string, unknown>;
       } | null;
+      /**
+       * Where the translated values came from, recorded with them
+       * (`recordWrittenValues`): the collection, the write's claims,
+       * and whether the write puts a held draft live, whose rows then move.
+       */
+      provenance?: {
+        collectionName: string;
+        claims?: ProvenanceClaims;
+        promotesDraft: boolean;
+      };
       /**
        * Who the write is made as: recorded on the translation row, whose
        * counter the upsert moves with it.
@@ -13906,10 +13970,54 @@ export class CollectionMutationService extends BaseService {
         undefined,
         { savedBy: args.savedBy, revisionClaimed: claim?.claimed === true }
       );
+      await this.recordWrittenProvenance(tx, args);
     }
     // The translation row as it was before this write, read by the claim:
     // for an overwrite, what it replaced.
     return claim?.before;
+  }
+
+  /**
+   * Where the translated values a write put down came from, recorded on its
+   * transaction (`recordWrittenValues`): live, or as the language's held
+   * draft. Nothing is recorded until the table is there.
+   */
+  private async recordWrittenProvenance(
+    tx: TransactionContext,
+    args: {
+      entryId: string;
+      translation: {
+        writeLocale: string;
+        localizedFieldValues?: Record<string, unknown>;
+      } | null;
+      savedBy: RequestActor;
+      provenance?: {
+        collectionName: string;
+        claims?: ProvenanceClaims;
+        promotesDraft: boolean;
+        /** The part written: live by default, or the language's held draft. */
+        partState?: "live" | "draft";
+      };
+    }
+  ): Promise<void> {
+    const { translation, provenance } = args;
+    if (!translation || !provenance || !this.localization) return;
+    if (!(await this.provenanceRecorded(tx))) return;
+    const document = {
+      scopeKind: "collection" as const,
+      scopeSlug: provenance.collectionName,
+      entryId: args.entryId,
+      locale: translation.writeLocale,
+    };
+    await recordWrittenValues(tx, {
+      ...document,
+      partState: provenance.partState ?? "live",
+      values: translation.localizedFieldValues ?? {},
+      promotesDraft: provenance.promotesDraft,
+      defaultLocale: this.localization.defaultLocale,
+      savedBy: args.savedBy,
+      claims: provenance.claims,
+    });
   }
 
   /**
@@ -15395,6 +15503,44 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether provenance is recorded on `tx`: the table is there, asked on the
+   * transaction's own connection (see `translationProvenancePresent`).
+   */
+  private provenanceRecorded(tx: TransactionContext): Promise<boolean> {
+    return translationProvenancePresent(
+      this.adapter,
+      this.logger,
+      transactionTableProbe(this.adapter, tx)
+    );
+  }
+
+  /**
+   * What the save claims about where its translated values came from, read
+   * before the key is dropped with the version: a claim that is not one, or
+   * one the writer may not make (`assertClaimsAllowed`), is refused.
+   */
+  private provenanceOf(
+    body: Record<string, unknown>,
+    savedBy: RequestActor
+  ):
+    | { claims: ProvenanceClaims | undefined }
+    | { refused: CollectionServiceResult } {
+    try {
+      const claims = provenanceClaimsOf(body);
+      assertClaimsAllowed(claims, savedBy);
+      return { claims };
+    } catch (error) {
+      return {
+        refused: errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+      };
+    }
+  }
+
+  /**
    * The refusal of a save whose version is below the one the entry already
    * holds, before any hook runs: a counter only goes up, so such a version is
    * certainly out of date. Null otherwise, for the row lock to decide.
@@ -15626,6 +15772,14 @@ export class CollectionMutationService extends BaseService {
     const restored = this.restoredFromOf(rawParams, body);
     if ("refused" in restored) return restored.refused;
     const restoredFrom = restored.sources;
+    // What the save claims about where its translated values came from, read
+    // before the key is dropped below.
+    const provenance = this.provenanceOf(
+      body,
+      actorForWrite(rawParams.actor, rawParams.user)
+    );
+    if ("refused" in provenance) return provenance.refused;
+    const provenanceClaims = provenance.claims;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
@@ -17388,6 +17542,11 @@ export class CollectionMutationService extends BaseService {
             entryId: params.entryId,
             columns,
             savedBy: actorForWrite(params.actor, params.user),
+            provenance: {
+              collectionName: params.collectionName,
+              claims: provenanceClaims,
+              promotesDraft: Boolean(promotedDraft),
+            },
             // The language's version, judged by the save's first write of
             // its row: a refusal rolls the whole save back.
             judge: {
@@ -17774,6 +17933,19 @@ export class CollectionMutationService extends BaseService {
               // Refused as a write moving the entry out of its filter is,
               // before anything of the edit is held.
               refuseWith(await this.heldEditRefusal(draftWrite));
+              // Where the held values came from, recorded as the language's
+              // draft: what is live keeps its own record until a publish.
+              await this.recordWrittenProvenance(tx, {
+                entryId: params.entryId,
+                translation: localizedUpdate,
+                savedBy: actorForWrite(params.actor, params.user),
+                provenance: {
+                  collectionName: params.collectionName,
+                  claims: provenanceClaims,
+                  promotesDraft: false,
+                  partState: "draft",
+                },
+              });
               workingDraftDocument = draftWrite.workingDraftDocument;
               priorWorkingDraftDocument = draftWrite.priorWorkingDraftDocument;
             }
@@ -20397,6 +20569,15 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         });
+        // And the record of where its translated values came from, in every
+        // language and part.
+        if (await this.provenanceRecorded(tx)) {
+          await forgetDocumentProvenance(tx, {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          });
+        }
 
         // The document's last history event: the whole document, every
         // language, is gone. Its history is kept for the activity log's window
@@ -20668,6 +20849,13 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
       executor: tx.getDrizzle(),
     });
+    // What the create claims about where its translated values came from,
+    // read before the key is dropped with the version.
+    const provenance = this.provenanceOf(
+      body,
+      actorForWrite(params.actor, params.user)
+    );
+    if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
     // Computed right after the row is written (before response redaction can
@@ -21085,7 +21273,11 @@ export class CollectionMutationService extends BaseService {
               tx,
               localizedWrite,
               (entry as { id: string }).id,
-              actorForWrite(params.actor, params.user)
+              actorForWrite(params.actor, params.user),
+              {
+                collectionName: params.collectionName,
+                claims: provenance.claims,
+              }
             );
           } catch (error: unknown) {
             throw markWriteIntegrityFailure(error);
@@ -21453,6 +21645,13 @@ export class CollectionMutationService extends BaseService {
       body
     );
     if ("success" in versionCheck) return versionCheck;
+    // What the write claims about where its translated values came from,
+    // read before the key is dropped with the version.
+    const provenance = this.provenanceOf(
+      body,
+      actorForWrite(params.actor, params.user)
+    );
+    if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
     body = withoutDocumentVersionKeys(body);
     // Computed right after the row is updated (before redaction can strip the
@@ -22272,6 +22471,17 @@ export class CollectionMutationService extends BaseService {
               revisionClaimed: languageJudged.claimed,
             }
           );
+          // Where the values came from, beside them on this transaction.
+          await this.recordWrittenProvenance(tx, {
+            entryId,
+            translation: localizedUpdate,
+            savedBy: actorForWrite(params.actor, params.user),
+            provenance: {
+              collectionName: params.collectionName,
+              claims: provenance.claims,
+              promotesDraft: false,
+            },
+          });
         } catch (error: unknown) {
           throw markWriteIntegrityFailure(error);
         }
@@ -23388,6 +23598,14 @@ export class CollectionMutationService extends BaseService {
         scopeSlug: params.collectionName,
         entryId,
       });
+      // Where its translated values came from; see the single-delete path.
+      if (await this.provenanceRecorded(tx)) {
+        await forgetDocumentProvenance(tx, {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId,
+        });
+      }
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {

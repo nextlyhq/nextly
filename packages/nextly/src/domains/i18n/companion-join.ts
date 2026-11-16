@@ -25,6 +25,13 @@ import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
+import {
+  documentLanguageKey,
+  fieldProvenanceOf,
+  languageOutOfDateSql,
+  type FieldProvenance,
+  type ProvenanceScope,
+} from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
 import type { TranslationFilterState } from "./translation-filter-states";
@@ -884,6 +891,11 @@ export function buildTranslationStatusCondition(args: {
   defaultLocale: string;
   filter: TranslationStatusFilter;
   /**
+   * The collection or Single, where its values' provenance is recorded (the table is there):
+   * `stale` then judges a language by its recorded values where it has any.
+   */
+  provenance?: ProvenanceScope;
+  /**
    * The states the `published` filter counts as published: the workflow's
    * public states, as a public read resolved them. Absent, the one state
    * named `published`.
@@ -965,6 +977,7 @@ export function buildTranslationStatusCondition(args: {
         locale,
         defaultLocale,
         nonBlankOn,
+        provenance: args.provenance,
       });
     default:
       return undefined;
@@ -1013,6 +1026,7 @@ function buildStaleCondition(args: {
   locale: string;
   defaultLocale: string;
   nonBlankOn: (ref: CompanionTableRef) => SQL;
+  provenance?: ProvenanceScope;
 }): SQL {
   const { table, mainIdColumn, locale, defaultLocale, nonBlankOn } = args;
   // Prefixed, because an alias shares a namespace with the caller's own tables and a bare `src`
@@ -1027,13 +1041,39 @@ function buildStaleCondition(args: {
     WHERE ${tgt}.${parent} = ${mainIdColumn}
     AND ${tgt}.${localeCol} = ${locale}
     AND (${nonBlankOn(tgt)})
-    AND EXISTS (
-      SELECT 1 FROM ${table} ${src}
-      WHERE ${src}.${parent} = ${mainIdColumn}
-      AND ${src}.${localeCol} = ${defaultLocale}
-      AND ${sourceMovedAfterTarget(src, tgt)}
-    )
+    AND ${languageStale({
+      byStamp: sql`EXISTS (
+        SELECT 1 FROM ${table} ${src}
+        WHERE ${src}.${parent} = ${mainIdColumn}
+        AND ${src}.${localeCol} = ${defaultLocale}
+        AND ${sourceMovedAfterTarget(src, tgt)}
+      )`,
+      entryId: sql`${tgt}.${parent}`,
+      locale: sql`${locale}`,
+      provenance: args.provenance,
+    })}
   )`;
+}
+
+/**
+ * Whether a document's language is stale: by its recorded values where provenance is recorded
+ * (`languageOutOfDateSql`), else by `byStamp` alone. ONE composition, used by the filter arm
+ * and by {@link readStaleLocales}, so the worklist and the overview cannot disagree.
+ */
+function languageStale(args: {
+  byStamp: SQL;
+  entryId: SQL;
+  locale: SQL;
+  provenance: ProvenanceScope | undefined;
+}): SQL {
+  return args.provenance
+    ? languageOutOfDateSql({
+        scope: args.provenance,
+        entryId: args.entryId,
+        locale: args.locale,
+        byStamp: args.byStamp,
+      })
+    : args.byStamp;
 }
 
 /** A table alias as `sql.identifier` produces it — derived, so it cannot drift from that call. */
@@ -1108,8 +1148,20 @@ export interface LocaleTranslationMeta {
    * what does not apply — and here the distinction carries weight, because "not stale" and "no
    * timestamps to compare" are different answers and only one of them is a claim about the
    * content. A row written before `_updated_at` existed is unknown, never up to date.
+   *
+   * Where the language's values have a recorded origin, it is decided by them instead
+   * (`languageOutOfDateSql`): stale exactly when one of its fields is out of date (`fields`),
+   * whatever the stamps say.
    */
   stale?: boolean;
+  /**
+   * Where each of this language's values came from, by field name, and whether its source changed
+   * since (`outOfDate`). Absent where nothing is recorded for the language: values written before
+   * origins were recorded, or a site whose table is not there yet.
+   *
+   * @experimental Until per-field provenance is complete.
+   */
+  fields?: Record<string, FieldProvenance>;
 }
 
 export interface TranslationStatusArgs {
@@ -1134,6 +1186,13 @@ export interface TranslationStatusArgs {
    * is known — never that everything is current.
    */
   staleness?: { companionTableName: string; dialect: SupportedDialect };
+  /**
+   * The collection or Single the rows are of, where its values' provenance is recorded (the table
+   * is there): each language is then judged by its recorded values where it has any
+   * (`languageOutOfDateSql`), and each one's fields are reported. Omitted, every language is
+   * judged by its stamp alone.
+   */
+  provenance?: ProvenanceScope & { dialect: SupportedDialect };
   idKey?: string;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
@@ -1222,7 +1281,8 @@ async function readStaleLocales(
   dialect: SupportedDialect,
   ids: (string | number)[],
   locales: string[],
-  defaultLocale: string
+  defaultLocale: string,
+  provenance?: ProvenanceScope
 ): Promise<Set<string>> {
   const out = new Set<string>();
   if (ids.length === 0 || locales.length === 0) return out;
@@ -1244,12 +1304,17 @@ async function readStaleLocales(
         and(
           inArray(stamp.parent as never, ids),
           inArray(stamp.locale as never, locales),
-          sql`EXISTS (
-            SELECT 1 FROM ${target} ${source}
-            WHERE ${source}.${parent} = ${target}.${parent}
-            AND ${source}.${localeCol} = ${defaultLocale}
-            AND ${sourceMovedAfterTarget(source, target)}
-          )`
+          languageStale({
+            byStamp: sql`EXISTS (
+              SELECT 1 FROM ${target} ${source}
+              WHERE ${source}.${parent} = ${target}.${parent}
+              AND ${source}.${localeCol} = ${defaultLocale}
+              AND ${sourceMovedAfterTarget(source, target)}
+            )`,
+            entryId: sql`${target}.${parent}`,
+            locale: sql`${target}.${localeCol}`,
+            provenance,
+          })
         )
       );
   } catch (error) {
@@ -1318,9 +1383,19 @@ export async function populateTranslationStatus(
         args.staleness.dialect,
         ids,
         locales,
-        defaultLocale
+        defaultLocale,
+        args.provenance
       )
     : new Set<string>();
+  // Each language's fields' provenance, for the page in one read.
+  const fieldProvenance = args.provenance
+    ? await fieldProvenanceOf(
+        db,
+        args.provenance.dialect,
+        args.provenance,
+        ids.map(String)
+      )
+    : undefined;
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -1335,6 +1410,9 @@ export async function populateTranslationStatus(
         statusValues: args.statusValues,
         isStale: (locale: string) =>
           staleKeys.has(`${String(row[idKey])}::${locale}`),
+        fields: fieldProvenance?.get(
+          documentLanguageKey(String(row[idKey]), code)
+        ),
       });
     }
     markPendingChanges(
@@ -1460,6 +1538,8 @@ function buildLocaleMeta(args: {
    * for, and the answer to both is the same — do not mark it.
    */
   isStale: (locale: string) => boolean;
+  /** The language's fields' provenance, where recorded. */
+  fields?: Record<string, FieldProvenance>;
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
@@ -1485,6 +1565,9 @@ function buildLocaleMeta(args: {
   // same-second writes would make every source locale report itself stale — so the state the
   // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
   // none can while both hold.
+  // Only beside a row this read may see: a language's provenance tells what its values are, so a
+  // row a status-scoped read hides (a draft on a published read) hides its provenance too.
+  if (args.fields !== undefined && companionRow) entry.fields = args.fields;
   if (code !== defaultLocale && hasContent && args.isStale(code)) {
     entry.stale = true;
   }
