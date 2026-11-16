@@ -21663,8 +21663,11 @@ export class CollectionMutationService extends BaseService {
       body
     );
     if ("success" in versionCheck) return versionCheck;
+    // A publish made without review, read off the body for the publish gate; see updateEntry.
+    const withoutReview = withoutReviewOfBody(body);
     // A version sent with the body is the server's to decide; see updateEntry.
-    body = withoutDocumentVersionKeys(body);
+    body = withoutDocumentVersionKeys({ ...body });
+    delete body[WITHOUT_REVIEW_KEY];
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
     // return, so a committed item whose after-hook then throws still surfaces
@@ -22201,6 +22204,35 @@ export class CollectionMutationService extends BaseService {
       if (transitionDenied) {
         return transitionDenied;
       }
+      // The publish gate's verdict on this item, on the caller's transaction now its row is
+      // locked: a write made on a transaction it was handed has no moment before one, so this is
+      // its only ask. It names no language, so it moves the entry's own status, as the default
+      // language's save does. Settled once the item is written, below.
+      const itemSave = await this.statusSaveOf(
+        { ...params, entryId },
+        {
+          status: finalData.status,
+          locale: undefined,
+          everyLanguage: false,
+          withoutReview,
+        }
+      );
+      const settleItemGate = itemSave
+        ? await judgeStatusSave(
+            tx,
+            itemSave,
+            await this.livePartsOn(tx, {
+              collectionName: params.collectionName,
+              entryId,
+              mainStatus: (
+                await tx.selectOne<{ status?: unknown }>(tableName, {
+                  columns: ["status"],
+                  where: { and: [{ column: "id", op: "=", value: entryId }] },
+                })
+              )?.status,
+            })
+          )
+        : undefined;
 
       // Same rule as every other update seam. Read under the lock the transition gate above
       // already holds, so the prior status and stored marker are the committed ones, and only
@@ -23091,6 +23123,9 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         context: sharedContext,
       });
+      // What the gate's verdict on this item started is settled now it is written, on the
+      // caller's transaction before it commits; a gate that throws takes the write back.
+      if (settleItemGate) await settleItemGate();
 
       // The collection event, held for the caller's commit, as on create.
       // Skipped for a held draft edit, which leaves the live row unchanged, as

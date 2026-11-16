@@ -13,6 +13,10 @@ import { container } from "../../../di/container";
 import { defineCollection, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
+  definePlugin,
+  type PluginContext,
+} from "../../../plugins/plugin-context";
+import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
@@ -22,6 +26,9 @@ describeEachDialect(
   "a save that names a status asks the publish gate",
   dialect => {
     let t: TestNextly | undefined;
+    // The services a plugin is handed, for the doors only a plugin reaches: an update of several
+    // entries in one batch, and a save on a transaction the plugin opened.
+    let services: PluginContext["services"] | undefined;
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -33,6 +40,16 @@ describeEachDialect(
     async function boot(): Promise<TestNextly> {
       t = await createTestNextly({
         dialect,
+        plugins: [
+          definePlugin({
+            name: "@test/save-door-probe",
+            version: "1.0.0",
+            nextly: ">=0.0.0",
+            init: context => {
+              services = context.services;
+            },
+          }),
+        ],
         collections: [
           defineCollection({
             slug: "posts",
@@ -232,6 +249,52 @@ describeEachDialect(
 
       expect(refusal).toMatch(/NOT_APPROVED/);
       expect(rows).toHaveLength(0);
+    });
+
+    it("holds back a batch update that publishes", async () => {
+      await boot();
+      const id = await draftNote();
+      const seen = heldUnlessWithoutReview();
+
+      await services!.collections
+        .updateMany(
+          "notes",
+          [{ id, data: { status: "published", _overwrite: true } }],
+          {} as never
+        )
+        .catch(() => undefined);
+
+      expect(seen.judged.map(question => question.parts)).toEqual([
+        [{ kind: "shared" }],
+      ]);
+      expect(await mainStatus("dc_notes", id)).toBe("draft");
+    });
+
+    it("holds back a save on a transaction it was handed", async () => {
+      await boot();
+      const id = await draftNote();
+      const seen = heldUnlessWithoutReview();
+
+      let refused: unknown;
+      await services!.collections
+        .withTransaction(tx =>
+          services!.collections.updateEntryInTransaction(
+            tx,
+            "notes",
+            id,
+            { status: "published", _overwrite: true },
+            {} as never
+          )
+        )
+        .catch((error: unknown) => {
+          refused = error;
+        });
+
+      expect(
+        seen.judged.map(question => question.parts),
+        `refused with: ${String(refused)} ${JSON.stringify((refused as { publicData?: unknown } | undefined)?.publicData ?? null)}`
+      ).toEqual([[{ kind: "shared" }]]);
+      expect(await mainStatus("dc_notes", id)).toBe("draft");
     });
 
     // Unpublishing is never gated: a save that takes an entry down is not held back.
