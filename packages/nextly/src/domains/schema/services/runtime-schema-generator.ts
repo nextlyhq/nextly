@@ -797,6 +797,43 @@ export function systemColumnDriverValue(
   return columns.column.mapToDriverValue(value);
 }
 
+/**
+ * `value` as a translation table's column of `kind` stores it (`generateCompanionRuntimeSchema`),
+ * for a statement that binds a field's value itself rather than through that table: a `Date`
+ * bound bare on PostgreSQL is the Node process's local wall clock, while the column, as the main
+ * table's, holds the UTC one. Built from the same descriptor and builder as that column, so the
+ * two cannot encode differently.
+ */
+export function fieldColumnDriverValue(
+  dialect: SupportedDialect,
+  kind: ColumnDescriptor["kind"],
+  value: unknown
+): unknown {
+  const key = `${dialect}\u0000field:${kind}`;
+  let table = encoderTables.get(key);
+  if (table === undefined) {
+    const record = {
+      column: buildUserDrizzleColumn(
+        { name: "column", dialectType: "", nullable: true, kind },
+        dialect
+      ),
+    };
+    table = (
+      dialect === "postgresql"
+        ? pgTable("__nextly_encode", record as never)
+        : dialect === "mysql"
+          ? mysqlTable("__nextly_encode", record as never)
+          : sqliteTable("__nextly_encode", record as never)
+    ) as Record<string, unknown>;
+    encoderTables.set(key, table);
+  }
+  const columns = getColumns(table as never) as Record<
+    string,
+    { mapToDriverValue(value: unknown): unknown }
+  >;
+  return columns.column.mapToDriverValue(value);
+}
+
 const languageRevisionTables = new Map<string, Record<string, unknown>>();
 
 /**
