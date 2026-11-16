@@ -39,6 +39,7 @@ function screen(name, groups = {}, fetchable = [EDITOR_SHEET]) {
       "site-code section": empty,
       "icon set": empty,
       "font studio": empty,
+      "builder fonts panel": empty,
       ...groups,
     },
   };
