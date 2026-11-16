@@ -638,6 +638,36 @@ function interpretReadResult(
   });
 }
 
+/** An entity's current schema, as redaction reads it. */
+export interface RedactionSchema {
+  fields: FieldConfig[];
+  componentFields: Awaited<ReturnType<typeof currentComponentFields>>;
+}
+
+/**
+ * The entity's current fields and the components they reach, as redaction
+ * judges a snapshot against them. The STRICT resolver: `null` means the
+ * lookup failed, which is refused rather than read as an entity with no
+ * fields, since skipping redaction then would hand back what a live read
+ * hides.
+ */
+export async function currentRedactionSchema(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<RedactionSchema> {
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "version-redaction-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
+  return { fields, componentFields: await currentComponentFields(fields) };
+}
+
 /**
  * Strip fields the caller may not read from a stored snapshot, using the same
  * field-level `access.read` rules a normal read applies. Mutates in place.
@@ -666,7 +696,13 @@ export async function redactSnapshotForUser(
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /**
+   * The entity's current schema, already resolved (`currentRedactionSchema`):
+   * a caller judging many snapshots of one document reads it once rather than
+   * once per snapshot. Resolved here when absent.
+   */
+  schema?: RedactionSchema
 ): Promise<ReadonlySet<string>> {
   const withheld = new Set<string>();
   if (typeof snapshot !== "object" || snapshot === null) return withheld;
@@ -683,23 +719,8 @@ export async function redactSnapshotForUser(
   // two would skip redaction entirely on a transient failure and hand back a
   // value the live read hides -- an assertion satisfied by absence, in the one
   // place where absence must stop the read.
-  const fields = await tryResolveCurrentFields(scopeKind, slug);
-  if (fields === null) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "version-redaction-field-resolution-failed",
-        scopeKind,
-        scopeSlug: slug,
-      },
-    });
-  }
-  // Through component REFERENCES as well. A `component` field carries only a
-  // slug, so a walker given the top-level list alone sees a leaf: a password
-  // declared inside a referenced component would be handed back even though
-  // the live read hides it. Same reasoning as the field converted to
-  // `password` after the fact -- the CURRENT schema decides, wherever the
-  // field is declared. The same map takes the read rules into components.
-  const componentFields = await currentComponentFields(fields);
+  const { fields, componentFields } =
+    schema ?? (await currentRedactionSchema(scopeKind, slug));
   if (fields.length > 0) {
     stripPasswordsThroughComponents(entry, fields, componentFields);
   }
@@ -1053,6 +1074,14 @@ export async function readableFieldSources<
       Object.keys(row.fieldSources).length > 0
   );
   if (naming.length === 0) return [...rows];
+  // The schema read once for the page, not once per row. Only a collection or
+  // a Single has one; another scope is left to `redactSnapshotForUser`, which
+  // withholds every field of it.
+  const { scopeKind, scopeSlug } = args.ref;
+  const schema =
+    scopeKind === "collection" || scopeKind === "single"
+      ? await currentRedactionSchema(scopeKind, scopeSlug)
+      : undefined;
   const snapshots = await new VersionsRepository(
     getService("adapter")
   ).snapshotsByVersionNo(
@@ -1079,7 +1108,8 @@ export async function readableFieldSources<
         args.ref.scopeKind,
         args.ref.scopeSlug,
         args.user,
-        args.authenticatedScope
+        args.authenticatedScope,
+        schema
       );
       const readable = Object.entries(sources).filter(
         ([name]) => !withheld.has(name)

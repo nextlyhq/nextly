@@ -66,6 +66,7 @@ import {
 } from "../../domains/schema/pipeline/schema-lock";
 import { describeError, immediateMessage } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
@@ -450,8 +451,8 @@ async function dropAndReapply(
     logger,
     {
       bounds,
-      // Each try's notice goes to standard error, as `nextly migrate`'s do.
-      notify: line => process.stderr.write(`${line}\n`),
+      // Each try's notice goes to standard error, as `nextly migrate`'s do, kept back under --quiet.
+      notify: busyTableNotices(logger),
     }
   );
 

@@ -281,6 +281,28 @@ describe("tableBusyError", () => {
       expect(error.publicMessage).not.toContain("--failed-cleanup");
     });
 
+    it("names the files rolled back before it as rolled back, not applied", () => {
+      const error = tableBusyError(
+        stopWith({
+          direction: "down",
+          appliedBefore: ["0009_add_tags.sql", "0008_add_authors.sql"],
+        })
+      );
+      expect(error.publicMessage).toContain(
+        "Rolled back before it in this run: `0009_add_tags.sql`, `0008_add_authors.sql`."
+      );
+      expect(error.publicMessage).not.toContain("Applied before it");
+    });
+
+    it("says nothing was rolled back before a DOWN that stopped first", () => {
+      const error = tableBusyError(
+        stopWith({ direction: "down", appliedBefore: [] })
+      );
+      expect(error.publicMessage).toContain(
+        "Nothing was rolled back before it in this run."
+      );
+    });
+
     it("keeps its direction in the log context", () => {
       const stop = stopWith({ direction: "down" });
       expect(tableBusyError(stop).logContext?.stop).toEqual(stop);

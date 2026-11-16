@@ -18,13 +18,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
+import { registerHook, unregisterHook } from "../../../hooks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -41,8 +42,33 @@ import {
 } from "../../__tests__/checked-access-fixtures";
 
 const ORIGIN = "http://localhost";
+// The snapshot redaction a checked read of a version makes, made to fail by the
+// one test that needs it to: every other test runs the real one.
+const redactionFails = vi.hoisted(() => ({ on: false }));
+vi.mock("../../../api/versions-access", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../../api/versions-access")>();
+  return {
+    ...real,
+    redactSnapshotForUser: (
+      ...args: Parameters<typeof real.redactSnapshotForUser>
+    ) => {
+      if (redactionFails.on) {
+        return Promise.reject(new Error("the read rule could not run"));
+      }
+      return real.redactSnapshotForUser(...args);
+    },
+  };
+});
+
 const POSTS = "dav_posts";
 const ADMIN = "dav-admin";
+/** A collection everyone may read, whose documents only the admin may. */
+const PRIVATE = "dav_private";
+/** A Single nothing has written yet, so no row backs it. */
+const NOTICE = "dav_notice";
+/** A collection with a field only the admin may read. */
+const RULED = "dav_ruled";
 
 /** The namespace as these tests call it. */
 interface VersionsNamespace {
@@ -56,7 +82,7 @@ interface VersionsNamespace {
   compare(args: Record<string, unknown>): Promise<unknown>;
   name(
     args: Record<string, unknown>
-  ): Promise<{ item: { label: string | null } }>;
+  ): Promise<{ item: { label: string | null; snapshot?: unknown } }>;
   restore(
     args: Record<string, unknown>
   ): Promise<{ item: { restoredFrom: number } }>;
@@ -167,6 +193,44 @@ describe.each(getConfiguredTestDialects())(
             versions: { drafts: true },
             fields: [text({ name: "title" })],
           }),
+          defineCollection({
+            slug: PRIVATE,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              // A filter no document matches, for anyone but the admin: the
+              // collection is readable, each document is not.
+              read: ({ req }) =>
+                req.user?.id === ADMIN
+                  ? true
+                  : ({
+                      title: { equals: "no document is called this" },
+                    } as unknown as boolean),
+              update: () => true,
+              create: () => true,
+            },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: RULED,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              text({
+                name: "secret",
+                access: { read: ({ req }) => req.user?.id === ADMIN },
+              }),
+            ],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: NOTICE,
+            status: true,
+            versions: true,
+            fields: [text({ name: "heading" })],
+          }),
         ],
       });
       await seedPermissions(t);
@@ -187,7 +251,12 @@ describe.each(getConfiguredTestDialects())(
       );
       cookie = { cookie: `nextly_session=${token}` };
       editorId = await account(t, "dav-editor@example.com", [
-        await role(t, "dav-editors", [`read-${POSTS}`, `update-${POSTS}`]),
+        await role(t, "dav-editors", [
+          `read-${POSTS}`,
+          `update-${POSTS}`,
+          `read-${RULED}`,
+          `update-${RULED}`,
+        ]),
       ]);
       blindId = await account(t, "dav-blind@example.com", [
         await role(t, "dav-blind-updaters", [`update-${POSTS}`]),
@@ -260,6 +329,8 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(named.item.label).toBe("Kept");
+      // Answered as the version, snapshot and all, as before the name.
+      expect(named.item.snapshot).toBeDefined();
       const viaRest = (await rest("GET", history(id))) as {
         items: { versionNo: number; label: string | null }[];
       };
@@ -336,6 +407,274 @@ describe.each(getConfiguredTestDialects())(
           ...asUser(editorId),
         })
       ).resolves.toMatchObject({ item: { versionNo: 1 } });
+    }, 120_000);
+
+    it("refuses a malformed page size on a trusted list, and pages as REST pages", async () => {
+      const id = await publishedTwice();
+
+      await expect(
+        versions().list({ collection: POSTS, id, limit: -2 })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      const page = (await versions().list({
+        collection: POSTS,
+        id,
+      })) as unknown as {
+        meta: { limit: number };
+      };
+      const viaRest = (await rest("GET", history(id))) as {
+        meta: { limit: number };
+      };
+      expect(page.meta.limit).toBe(viaRest.meta.limit);
+    }, 120_000);
+
+    it("records who named a version on a trusted call made for a person, and returns the version", async () => {
+      const id = await publishedTwice();
+
+      const named = await versions().name({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        label: "Kept for later",
+        user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+      });
+
+      // The version as `get` answers a trusted call: its snapshot whole.
+      expect(named.item.snapshot).toEqual(
+        (await versions().get({ collection: POSTS, id, versionNo: 1 })).snapshot
+      );
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id },
+      });
+      expect(
+        events.items
+          .filter(e => e.kind === "named")
+          .map(e => [e.payload?.label, e.actorId])
+      ).toContainEqual(["Kept for later", ADMIN]);
+    }, 120_000);
+
+    it("hands no person's name with a version named on a trusted call made as an API key", async () => {
+      const id = await publishedTwice();
+      // What the trusted call hands the history: the actor, and the name kept
+      // with it.
+      const setLabel = vi
+        .spyOn(t.getService("versionsService"), "setLabel")
+        .mockResolvedValue({
+          versionNo: 1,
+          label: "By the key",
+          snapshot: {},
+        } as never);
+
+      await versions().name({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        label: "By the key",
+        overrideAccess: true,
+        // The key's owner, named on the call beside the key it is made as.
+        user: {
+          id: ADMIN as AuthUserId,
+          email: `${ADMIN}@example.test`,
+          name: "The key's owner",
+        },
+        actor: { actorType: "apiKey", permissions: [] },
+      });
+      const record = setLabel.mock.calls[0]?.[3] as
+        | { actor: { type: string }; personName: string | null }
+        | undefined;
+      setLabel.mockRestore();
+
+      expect(record?.actor.type).toBe("apiKey");
+      expect(record?.personName).toBeNull();
+    }, 120_000);
+
+    it("hands a trusted restore's request and person to the update it makes", async () => {
+      const id = await publishedTwice();
+      let sawRequest = false;
+      const watch = (ctx: { req?: { http?: unknown }; data?: unknown }) => {
+        sawRequest = sawRequest || ctx.req?.http !== undefined;
+        return ctx.data;
+      };
+      registerHook("beforeUpdate", POSTS, watch as never);
+      try {
+        await versions().restore({
+          collection: POSTS,
+          id,
+          versionNo: 1,
+          _overwrite: true,
+          request: new Request(`${ORIGIN}/api/restore`, { method: "POST" }),
+          user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+        });
+      } finally {
+        unregisterHook("beforeUpdate", POSTS, watch as never);
+      }
+
+      expect(sawRequest).toBe(true);
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id },
+      });
+      expect(
+        events.items.filter(e => e.kind === "restored").map(e => e.actorId)
+      ).toContain(ADMIN);
+    }, 120_000);
+
+    /** A document of `slug` saved twice: versions 1 and 2, each holding `extra`. */
+    async function savedTwice(
+      slug: string,
+      extra: Record<string, unknown>
+    ): Promise<string> {
+      const created = await handler().createEntry(
+        { collectionName: slug, overrideAccess: true },
+        { title: "one", status: "published", ...extra }
+      );
+      const id = created.data!.id;
+      await handler().updateEntry(
+        { collectionName: slug, entryId: id, overrideAccess: true },
+        { title: "two", status: "published", ...extra, _overwrite: true }
+      );
+      return id;
+    }
+
+    it("answers a checked name with the version as the caller reads it, a field they may not read withheld", async () => {
+      const id = await savedTwice(RULED, { secret: "kept from editors" });
+
+      const named = await versions().name({
+        collection: RULED,
+        id,
+        versionNo: 1,
+        label: "Checked",
+        ...asUser(editorId),
+      });
+
+      expect(named.item.label).toBe("Checked");
+      const snapshot = named.item.snapshot as Record<string, unknown>;
+      expect(snapshot.title).toBe("one");
+      expect(snapshot).not.toHaveProperty("secret");
+    }, 120_000);
+
+    it("writes no name when the version cannot be read for a checked caller", async () => {
+      const id = await publishedTwice();
+
+      // The read of the version for the caller fails, as a rule that could
+      // not run fails it.
+      redactionFails.on = true;
+      try {
+        await expect(
+          versions().name({
+            collection: POSTS,
+            id,
+            versionNo: 1,
+            label: "Never written",
+            ...asUser(editorId),
+          })
+        ).rejects.toBeDefined();
+      } finally {
+        redactionFails.on = false;
+      }
+
+      // Nothing written: the version keeps no name, and no event names it.
+      const stored = await versions().get({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+      });
+      expect((stored as { label?: string | null }).label ?? null).toBeNull();
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id },
+      });
+      expect(events.items.some(e => e.kind === "named")).toBe(false);
+    }, 120_000);
+
+    it("hands a restore's hook context to the update it makes, checked or trusted", async () => {
+      const id = await publishedTwice();
+      const seen: unknown[] = [];
+      const watch = (ctx: {
+        context?: { marker?: unknown };
+        data?: unknown;
+      }) => {
+        seen.push(ctx.context?.marker);
+        return ctx.data;
+      };
+      registerHook("beforeUpdate", POSTS, watch as never);
+      try {
+        for (const overrideAccess of [true, false]) {
+          await versions().restore({
+            collection: POSTS,
+            id,
+            versionNo: 1,
+            _overwrite: true,
+            overrideAccess,
+            user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+            context: { marker: `restored-${String(overrideAccess)}` },
+          });
+        }
+      } finally {
+        unregisterHook("beforeUpdate", POSTS, watch as never);
+      }
+
+      expect(seen).toContain("restored-true");
+      expect(seen).toContain("restored-false");
+    }, 120_000);
+
+    it("judges a checked restore's reads with the hook context the call carries", async () => {
+      const id = await publishedTwice();
+      // A read hook that lets a read through only where the call says so.
+      const gate = (ctx: {
+        context?: { historyAllowed?: unknown };
+        data?: unknown;
+      }) => {
+        if (ctx.context?.historyAllowed !== true) {
+          throw new Error("this read is not allowed here");
+        }
+        return ctx.data;
+      };
+      registerHook("beforeRead", POSTS, gate as never);
+      try {
+        const restored = await versions().restore({
+          collection: POSTS,
+          id,
+          versionNo: 1,
+          _overwrite: true,
+          ...asUser(editorId),
+          context: { historyAllowed: true },
+        });
+        expect(restored.item.restoredFrom).toBe(1);
+      } finally {
+        unregisterHook("beforeRead", POSTS, gate as never);
+      }
+    }, 120_000);
+
+    it("marks a version seen on a trusted call, for a person the read rules would refuse", async () => {
+      const created = await handler().createEntry(
+        { collectionName: PRIVATE, overrideAccess: true },
+        { title: "one", status: "published" }
+      );
+      const id = created.data!.id;
+      // May read the collection, but its read rule refuses them each document.
+      const readerId = await account(t, "dav-private-reader@example.com", [
+        await role(t, "dav-private-readers", [`read-${PRIVATE}`]),
+      ]);
+
+      // The server showed this version under its own bypass; the person's
+      // marker is recorded as shown, whatever their own rules would say.
+      await expect(
+        versions().markSeen({
+          collection: PRIVATE,
+          id,
+          versionNo: 1,
+          user: {
+            id: readerId as AuthUserId,
+            email: `${readerId}@example.com`,
+          },
+        })
+      ).resolves.toMatchObject({ item: { versionNo: 1 } });
+    }, 120_000);
+
+    it("refuses a person who may not read a Single before looking for its row", async () => {
+      // The same answer whether or not the Single has a row yet, so a refused
+      // caller cannot tell which.
+      await expect(
+        versions().list({ single: NOTICE, ...asUser(blindId) })
+      ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
     }, 120_000);
   }
 );
