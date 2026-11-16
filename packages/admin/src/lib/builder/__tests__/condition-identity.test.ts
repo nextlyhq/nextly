@@ -276,6 +276,25 @@ describe("a condition following a rename", () => {
     ).toBe("summary");
   });
 
+  // A name cleared to be typed again: a condition not yet given a source reads "" too, so a rename
+  // from or to an empty name would take conditions that never read this field.
+  it("follows no rename from or to an empty name", () => {
+    const unfinished = field("note", {
+      admin: { condition: { field: "", operator: "equals", value: "" } },
+    });
+    const cleared = renamed(
+      [field("summary"), gated("teaser", "summary"), unfinished],
+      "f-summary",
+      ""
+    );
+    expect(followRename(cleared, "f-summary", "summary")).toBe(cleared);
+    const retyped = renamed(cleared, "f-summary", "abstract");
+    expect(followRename(retyped, "f-summary", "")).toBe(retyped);
+    expect(conditionOf(followRename(retyped, "f-summary", ""), "f-note")).toBe(
+      ""
+    );
+  });
+
   it("returns the fields themselves when no condition reads the old name", () => {
     const fields = renamed(
       [field("summary"), gated("teaser", "body")],

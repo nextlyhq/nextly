@@ -176,7 +176,8 @@ export function brokenConditions(
  * Only the conditions the entry form evaluates against the renamed field are followed: those on
  * the fields beside it on its level (`findFieldPlacement`), as `brokenConditionOf` judges them. A
  * condition elsewhere naming the same name reads another field, and the field's own condition is
- * not one that reads it. Returns `fields` itself when no condition follows.
+ * not one that reads it. A rename from or to an empty name follows nothing. Returns `fields`
+ * itself when no condition follows.
  */
 export function followRename(
   fields: BuilderField[],
@@ -184,7 +185,16 @@ export function followRename(
   previousName: string
 ): BuilderField[] {
   const placement = findFieldPlacement(fields, fieldId);
-  if (!placement || placement.field.name === previousName) return fields;
+  // A condition not yet given a source reads "" too, so a name cleared to be typed again carries
+  // nothing: from or to an empty name, no condition is this field's to follow.
+  if (
+    !placement ||
+    !previousName ||
+    !placement.field.name ||
+    placement.field.name === previousName
+  ) {
+    return fields;
+  }
   // Matched by identity: those very fields, whatever else in the tree shares an id with one.
   const readers = new Set(
     placement.siblings.filter(
