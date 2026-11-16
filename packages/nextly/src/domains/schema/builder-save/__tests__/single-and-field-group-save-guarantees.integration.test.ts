@@ -45,6 +45,7 @@ import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
 // `cli/program` imports every command; the commands driven here are handed their context.
@@ -785,6 +786,71 @@ describe.each(getConfiguredTestDialects())(
             });
           },
           30_000
+        );
+
+        // A column type change keeps the push, which waits in tries of its own. Its stop says
+        // nothing ran, so the files the save wrote are withdrawn, on MySQL as anywhere else.
+        it("stops a save the push applies with nothing changed, leaving no file behind", async () => {
+          const t = await boot();
+          await kind.create([text("heading")]);
+          const before = await standing(t, kind);
+          await holdTheTable(t);
+
+          await expect(
+            kind.change(t, [{ name: "heading", type: "number" }])
+          ).rejects.toBeInstanceOf(Error);
+
+          free();
+          await holding.catch(() => {});
+          expect(await standing(t, kind)).toEqual(before);
+        }, 60_000);
+
+        // MySQL commits each schema statement as it runs. A push whose second statement fails
+        // after its first committed stopped part way: its files stay, recorded applied nowhere,
+        // so the next `nextly migrate` names them. The failure comes through the test's seam on
+        // the push's statement executor, which runs the first statement and then fails.
+        it.runIf(dialect === "mysql")(
+          "keeps the files of a push whose second statement failed after its first committed",
+          async () => {
+            const t = await boot();
+            await kind.create([text("heading")]);
+            const filesBefore = migrationFiles();
+            const run = DrizzleStatementExecutor.prototype.executeStatements;
+            const sent: string[] = [];
+            // Every statement the push sends, across its calls: the first runs, which MySQL
+            // commits, and the second fails.
+            const failing = vi
+              .spyOn(DrizzleStatementExecutor.prototype, "executeStatements")
+              .mockImplementation(async function (
+                this: DrizzleStatementExecutor,
+                tx: unknown,
+                statements: string[]
+              ) {
+                for (const statement of statements) {
+                  sent.push(statement);
+                  if (sent.length > 1) {
+                    throw new Error("the second statement failed");
+                  }
+                  await run.call(this, tx, [statement]);
+                }
+              });
+
+            // A type change, which keeps the push, and a field added: two statements.
+            await expect(
+              kind.change(t, [
+                { name: "heading", type: "number" },
+                text("body"),
+              ])
+            ).rejects.toBeInstanceOf(Error);
+            failing.mockRestore();
+
+            expect(sent.length, sent.join("\n")).toBeGreaterThan(1);
+            const kept = migrationFiles().filter(f => !filesBefore.includes(f));
+            expect(kept).not.toEqual([]);
+            const applied = await appliedFiles(t);
+            for (const file of kept) expect(applied).not.toContain(file);
+          },
+          60_000
         );
       });
     });
