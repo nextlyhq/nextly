@@ -695,6 +695,10 @@ function useOpenVariable({
   };
 
   const close = (key: string): void => {
+    // A field still being typed in commits first, as leaving it does: a
+    // click outside closes the editor before the field's own blur, and the
+    // name typed there would otherwise miss the code name made below.
+    commitFocusedField(root.current?.ownerDocument);
     setOpenKey(null);
     // Settled after the renaming below, so a just-added variable's code name
     // is part of what is persisted with the rest of its edit.
@@ -721,6 +725,17 @@ function useOpenVariable({
 
   const commitFrom = useCommitsSettled(onChange, onSettle, openKey);
   return { root, openKey, toggle, add, forget, commitFrom };
+}
+
+/**
+ * Commits the variable editor's field that has focus, by leaving it, as Tab
+ * would: each field commits on blur, synchronously.
+ */
+function commitFocusedField(document: Document | undefined): void {
+  const active = document?.activeElement;
+  if (active instanceof HTMLElement && active.closest(".nx-vars-editor")) {
+    active.blur();
+  }
 }
 
 /**
@@ -754,10 +769,10 @@ function searched<
   return groups
     .map(group => ({
       ...group,
-      entries: group.entries.filter(
-        entry =>
-          entry.label.toLowerCase().includes(needle) ||
-          entry.row.name.toLowerCase().includes(needle)
+      // The name shown, only: the code name is hidden, so a match on it
+      // would list a row with nothing in it matching what was typed.
+      entries: group.entries.filter(entry =>
+        entry.label.toLowerCase().includes(needle)
       ),
     }))
     .filter(group => group.entries.length > 0);
