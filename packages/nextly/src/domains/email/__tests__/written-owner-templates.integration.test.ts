@@ -64,6 +64,18 @@ const TAKEN: WrittenDocument = {
   blocks: [heading("Thank you"), paragraph("Your payment of ")],
 };
 
+// Three blocks the site changed only the last of, for an owner's update that
+// changes, adds, deletes or moves another one.
+const FIRST = heading("Payment received");
+const MIDDLE = paragraph("We received ");
+const LAST = heading("See you soon");
+const SITES_LAST = heading("Until next time");
+const BASE3: WrittenDocument = { version: 1, blocks: [FIRST, MIDDLE, LAST] };
+const SITE3: WrittenDocument = {
+  version: 1,
+  blocks: [FIRST, MIDDLE, SITES_LAST],
+};
+
 /** Every change a comparison offers, decided the same way. */
 const every = (
   comparison: { changes: ReadonlyArray<{ id: string }> },
@@ -214,6 +226,48 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         'Text: Your payment of [amount, or "your payment"].',
       ]);
     });
+
+    it.each([
+      [
+        "changed block",
+        [heading("Thank you"), MIDDLE, LAST],
+        "change",
+        [heading("Thank you"), MIDDLE, SITES_LAST],
+      ],
+      [
+        "block added before another",
+        [heading("Hello"), FIRST, MIDDLE, LAST],
+        "insert",
+        [heading("Hello"), FIRST, MIDDLE, SITES_LAST],
+      ],
+      ["deleted block", [FIRST, LAST], "delete", [FIRST, SITES_LAST]],
+      [
+        "two blocks swapped",
+        [MIDDLE, FIRST, LAST],
+        "move",
+        [MIDDLE, FIRST, SITES_LAST],
+      ],
+    ] as const)(
+      "offers the plugin's %s as one change, and taking it keeps the site's own edit on its block",
+      async (_case, theirs, kind, taken) => {
+        const first = await boot(BASE3);
+        const { id } = await paidTemplate(first);
+        await first.updateTemplate(id, { blocks: SITE3 });
+
+        const service = await boot({ version: 1, blocks: [...theirs] });
+        const comparison = await service.compareTemplate(id);
+        expect(comparison.changes).toEqual([
+          expect.objectContaining({ field: "blocks", kind, conflict: false }),
+        ]);
+
+        const { template } = await service.applyOwnerUpdate(
+          id,
+          every(comparison, "theirs"),
+          comparison.review
+        );
+        expect(template.blocks).toEqual({ version: 1, blocks: [...taken] });
+      }
+    );
 
     it("takes the plugin's blocks when the site chooses them, and its own again on undo", async () => {
       const id = await overridden();
@@ -477,6 +531,22 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       expect(await service.getTemplate(id)).toMatchObject({
         format: "written",
         blocks: V2,
+        overridden: false,
+      });
+    });
+
+    it("takes the plugin's new blocks on Reset before the boot reaches the row, even when they write the same email", async () => {
+      const { id } = await paidTemplate(await boot(V1));
+      // The plugin's next version, known to the registry, with the row not
+      // yet brought up to it: no `ensureBuiltInTemplates` this time.
+      const service = store.newService();
+      service.configureOwnership({
+        plugins: [{ name: ORDERS, templates: [paid(splitRuns(V1))] }],
+      });
+      await service.resetTemplate(id);
+      expect(await service.getTemplate(id)).toMatchObject({
+        format: "written",
+        blocks: splitRuns(V1),
         overridden: false,
       });
     });

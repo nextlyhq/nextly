@@ -468,8 +468,17 @@ function reviewedBlocks(blocks: {
   theirs: WrittenDocument | null;
   mine: WrittenDocument | null;
 }): ReviewedBlocks {
+  // `reviewMode` chose blocks only with all three written; a side without
+  // blocks here is a defect, refused rather than merged as empty.
   if (!blocks.base || !blocks.theirs || !blocks.mine) {
-    throw new Error("A block review needs the blocks of all three sides.");
+    throw NextlyError.internal({
+      logContext: {
+        reason: "a block review needs the blocks of all three sides",
+        base: !!blocks.base,
+        theirs: !!blocks.theirs,
+        mine: !!blocks.mine,
+      },
+    });
   }
   return { base: blocks.base, theirs: blocks.theirs, mine: blocks.mine };
 }
@@ -2000,11 +2009,12 @@ export class EmailTemplateService extends BaseService {
     const entry = this.ownedEntry(record);
     // Nothing to reset, unless the row still holds an earlier owner version
     // the background reconciliation hasn't reached: Reset brings it up to the
-    // owner's current one now.
+    // owner's current one now. A written owner's version is known by its
+    // blocks, so new blocks that write the same email are still taken.
     if (
       !record.overridden &&
       row.ownerKind !== null &&
-      sameVersion(versionOf(row), entry.version)
+      holdsOwnersVersion(row, entry)
     ) {
       return record;
     }
