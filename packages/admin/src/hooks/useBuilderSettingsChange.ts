@@ -41,7 +41,16 @@ export interface UseBuilderSettingsChangeOptions {
 }
 
 export interface BuilderSettingsChange {
-  onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * Records `next`. `leaveWithoutWarning`, the leave guard's, is called
+   * before an unsaved entity's address moves the route: the same entity under
+   * a new address is no leave, and the guard would otherwise hold the route
+   * at an address the store no longer holds.
+   */
+  onSettingsChange: (
+    next: BuilderSettingsValues,
+    leaveWithoutWarning?: () => void
+  ) => void;
   /** For an unsaved entity, what its address is checked against. */
   unsavedAddress?: { otherAddresses: readonly PendingAddress[] };
 }
@@ -61,7 +70,7 @@ export function useBuilderSettingsChange({
   );
 
   const onSettingsChange = useCallback(
-    (next: BuilderSettingsValues) => {
+    (next: BuilderSettingsValues, leaveWithoutWarning?: () => void) => {
       let shown = settings;
       if (unsaved && next.slug !== unsaved.address) {
         // The settings checked the address against every other unsaved
@@ -73,6 +82,7 @@ export function useBuilderSettingsChange({
           return;
         }
         moveAddress(next.slug);
+        leaveWithoutWarning?.();
         navigateTo(editRoute(next.slug));
         shown = settings && { ...settings, slug: next.slug };
       }

@@ -266,6 +266,12 @@ describe("an unsaved collection's address", () => {
     await user.click(save);
 
     expect(navigate).toHaveBeenCalledWith("/admin/builder/collections/items");
+    // The same collection under a new address: no leave to ask about, and the
+    // route has moved.
+    expect(
+      screen.queryByRole("alertdialog", { name: "Unsaved Changes" })
+    ).toBeNull();
+    expect(window.location.pathname).toBe("/admin/builder/collections/items");
     expect(unsavedEntity("collection", "items")).toBeDefined();
     expect(unsavedEntity("collection", "products")).toBeUndefined();
 

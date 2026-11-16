@@ -849,3 +849,36 @@ describe("field groups the save creates first", () => {
     createsFirst(dialog);
   });
 });
+
+describe("BuilderSchemaChangeDialogs: an unsaved entity's settings", () => {
+  it("lists the settings changed before the first save in its create review", () => {
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(preview())}
+        kind="collection"
+        entityName="posts"
+        onConfirm={vi.fn()}
+        creating
+        settingChanges={[
+          {
+            key: "description",
+            label: "description",
+            from: "",
+            to: "Long reads",
+          },
+        ]}
+      />
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Create the collection posts?",
+      })
+    ).toBeInTheDocument();
+    expect(
+      within(within(dialog).getByRole("list", { name: "Settings" }))
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Description: none → Long reads"]);
+  });
+});

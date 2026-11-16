@@ -22,6 +22,7 @@ import {
 import type { JSX } from "react";
 
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewChange } from "@admin/services/schemaApi";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
@@ -29,6 +30,7 @@ import {
   FieldGroupCreatesList,
   type FieldGroupCreate,
 } from "./FieldGroupCreatesList";
+import { SettingChangesList } from "./SettingChangesList";
 
 interface CreateEntityConfirmDialogProps {
   open: boolean;
@@ -39,6 +41,8 @@ interface CreateEntityConfirmDialogProps {
   entityName: string;
   /** Every field is in `added`; a create removes and changes nothing. */
   changes: SchemaPreviewChange;
+  /** Settings changed since the dialog set them, which the create saves too. */
+  settingChanges?: readonly SettingChange[];
   onConfirm: () => void;
   isApplying: boolean;
   /** The field groups not saved yet that this save creates first, listed before all else. */
@@ -51,6 +55,7 @@ export function CreateEntityConfirmDialog({
   kind,
   entityName,
   changes,
+  settingChanges = [],
   onConfirm,
   isApplying,
   fieldGroupCreates = [],
@@ -90,6 +95,8 @@ export function CreateEntityConfirmDialog({
             ))}
           </div>
         )}
+
+        <SettingChangesList changes={settingChanges} />
 
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>

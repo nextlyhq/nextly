@@ -99,6 +99,7 @@ export function BuilderSchemaChangeDialogs({
         entityName={entityName}
         changes={preview.changes}
         fieldGroupCreates={fieldGroupCreates}
+        settingChanges={settingChanges}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />

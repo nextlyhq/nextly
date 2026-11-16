@@ -241,14 +241,24 @@ export function useBuilderEntityState<TEntity>({
   const pinFields = useCallback(() => {
     const saved = builder.snapshot;
     setOriginalFields(saved.fields.filter(f => !f.isSystem));
+    // Settings still to be written share this history: their step stays
+    // undoable until that write lands (`pinSettings`), so a failed write
+    // leaves a change Undo can still take back.
+    if (changedSettings.length > 0) return;
     // The snapshot itself, as the history holds it, so the history finds the
     // place the save was made from.
     clearHistory(saved, builder.historyStep);
-  }, [builder.snapshot, builder.historyStep, clearHistory]);
+  }, [builder.snapshot, builder.historyStep, clearHistory, changedSettings]);
 
-  const pinSettings = useCallback((saved: BuilderSettingsValues) => {
-    setOriginalSettings(saved);
-  }, []);
+  // The settings landed: they are the baseline, and nothing before this place
+  // in the history can be undone any more.
+  const pinSettings = useCallback(
+    (saved: BuilderSettingsValues) => {
+      setOriginalSettings(saved);
+      clearHistory(builder.snapshot, builder.historyStep);
+    },
+    [builder.snapshot, builder.historyStep, clearHistory]
+  );
 
   const { rewriteSnapshots } = builder;
   const moveAddress = useCallback(

@@ -79,7 +79,15 @@ type Props = {
   savedFieldIds: ReadonlySet<string>;
   onSave: () => void;
   settings: BuilderSettingsValues;
-  onSettingsChange: (next: BuilderSettingsValues) => void;
+  /**
+   * The settings the modal hands back. `leaveWithoutWarning` is the leave
+   * guard's: a change that moves the editor to a new route (an unsaved
+   * entity's new address) states that move deliberate with it.
+   */
+  onSettingsChange: (
+    next: BuilderSettingsValues,
+    leaveWithoutWarning?: () => void
+  ) => void;
   /**
    * Whether the save judges names with Draft/Published on: on as stored, or as the pending settings
    * turn it on. Its columns stand until the save that turns it off lands, after the fields, so a
