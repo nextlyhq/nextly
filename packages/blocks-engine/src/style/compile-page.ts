@@ -47,6 +47,7 @@ import { isConditionGated } from "../visibility";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { childGapForms } from "./child-gap";
+import { childFlagRule, withContainInset } from "./contain-inset";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -81,7 +82,6 @@ import {
 } from "./part-routing";
 import { serializeRules } from "./serialize";
 import type { CssRule } from "./serialize";
-import type { SpacingMode } from "./spacing-mode";
 import type { StyleOrigin, StyleTraceEntry } from "./style-trace";
 import type { StyleIssueBudget } from "./validate-style-value";
 import { newStyleIssueBudget } from "./validate-style-value";
@@ -218,17 +218,6 @@ export interface StyleCompileContext {
    * (a node value or a named class, both `0-3-0`).
    */
   childGaps?: Readonly<Record<string, StyleValue>>;
-
-  /**
-   * The site's spacing model. Under `classic` no container gap is written,
-   * whatever {@link childGaps} holds, and no container wears the gap marker;
-   * absent or `gaps`, the gaps are written as described there.
-   *
-   * The block library that supplies the element and block defaults reads the
-   * same flag to swap in the defaults of the classic model, so the one flag
-   * decides the whole spacing model of a compile. See `style/spacing-mode`.
-   */
-  spacingMode?: SpacingMode;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -1454,8 +1443,19 @@ function envelopeRules(
             (weightlessAnchor === undefined
               ? `${selector}${stateSelectors[state]}${rule.descendant}`
               : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`),
-          declarations: rule.declarations,
+          declarations: withContainInset(
+            rule.declarations,
+            rule.descendant === ""
+          ),
         });
+        // The flag for the block's children; not traced, as no one set it.
+        const flags = childFlagRule(
+          rule,
+          `${selector}${stateSelectors[state]} > *`,
+          weightlessAnchor,
+          context.atRule
+        );
+        if (flags !== undefined) rules.push(flags);
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.
@@ -2202,9 +2202,7 @@ export function compilePageCss(
   // the gap at equal weight; before the named classes and the nodes, so an
   // author's spacing on a child always wins.
   const flowGaps = new Map<string, readonly Declaration[]>();
-  // The classic model writes no container gap at all: its blocks space
-  // themselves with their own margins.
-  const gaps = ctx.spacingMode === "classic" ? {} : (ctx.childGaps ?? {});
+  const gaps = ctx.childGaps ?? {};
   for (const type of [...usedTypes].sort()) {
     if (!Object.hasOwn(gaps, type)) continue;
     const path = pointer("/childGaps", type);

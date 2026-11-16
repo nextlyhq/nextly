@@ -34,7 +34,6 @@ import {
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
-  type SpacingMode,
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
@@ -65,7 +64,6 @@ import { createPortal } from "react-dom";
 
 import { ShowMore, withOpenRow } from "./panel-actions";
 import { useCanvasTokenModeAt } from "./prefers-dark";
-import { SpacingModeChoice } from "./spacing-mode-choice";
 import { colourHexOf, colourPairOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
@@ -168,11 +166,6 @@ export interface TokensPanelProps {
    */
   header?: VariablesHeader;
   /**
-   * The site's spacing model, shown as "Space between blocks" above the
-   * spacing variables. Absent, the choice is not drawn.
-   */
-  spacing?: SpacingModeControl;
-  /**
    * How widely each variable is used, read through the host: a count at the
    * end of each row, and Remove refusing in place while a variable is used.
    * Absent: no counts, and Remove confirms as it always has.
@@ -187,14 +180,6 @@ export interface TokensPanelProps {
    * @experimental Settles with the Variables tab's usage.
    */
   classes?: readonly NamedClass[];
-}
-
-/** The site's spacing model as the Variables view offers it. */
-export interface SpacingModeControl {
-  /** The model as it is now. */
-  readonly mode: SpacingMode;
-  /** A new model. The host saves it, as it saves an edit. */
-  readonly onChange: (mode: SpacingMode) => void;
 }
 
 /** The Design panel's header controls, and the preview mode they choose. */
@@ -309,7 +294,6 @@ function VariablesView({
   headerActions,
   header,
   placed,
-  spacing,
   ...hosted
 }: TokensPanelProps & {
   header: VariablesHeader;
@@ -368,7 +352,6 @@ function VariablesView({
         <VariableGroups
           shown={shown}
           searching={needle !== ""}
-          spacing={spacing}
           onAdd={add}
           rows={{
             tokens,
@@ -406,11 +389,10 @@ interface RowsHost {
   readonly onRemoved: (key: string) => void;
 }
 
-/** The groups a search leaves, each under its spacing choice, or that none match. */
+/** The groups a search leaves, or that none match. */
 function VariableGroups({
   shown,
   searching,
-  spacing,
   onAdd,
   rows,
 }: {
@@ -420,7 +402,6 @@ function VariableGroups({
     readonly entries: readonly VariableEntry[];
   }[];
   searching: boolean;
-  spacing: SpacingModeControl | undefined;
   onAdd: (what: NewVariable) => void;
   rows: RowsHost;
 }): React.JSX.Element {
@@ -431,11 +412,6 @@ function VariableGroups({
     <>
       {shown.map(group => (
         <React.Fragment key={group.group}>
-          <SpacingModeAbove
-            group={group.group}
-            spacing={spacing}
-            readOnly={rows.readOnly}
-          />
           <Group
             group={group.group}
             heading={group.heading}
@@ -574,30 +550,6 @@ function rowReach(
   return combinedReach(rowIdentities(entry).map(usage.reachOf));
 }
 
-/**
- * "Space between blocks", drawn above the spacing variables (the model they
- * space by), and nothing above any other group or when the host offers no
- * choice.
- */
-function SpacingModeAbove({
-  group,
-  spacing,
-  readOnly,
-}: {
-  group: VariableGroup;
-  spacing: SpacingModeControl | undefined;
-  readOnly: boolean;
-}): React.JSX.Element | null {
-  if (group !== "spacing" || spacing === undefined) return null;
-  return (
-    <SpacingModeChoice
-      mode={spacing.mode}
-      onChange={spacing.onChange}
-      readOnly={readOnly}
-    />
-  );
-}
-
 /** What shows while the variables are being read, or after a read failed. */
 function Unread({
   absence,
@@ -719,6 +671,18 @@ function useOpenVariable({
     row?.focus();
     setFocusKey(null);
   }, [focusKey, tokens]);
+
+  // A variable just added is brought into view before its editor is placed
+  // beside it: added at the end of a long list, it would otherwise open its
+  // editor below the window, far from the "+" pressed.
+  React.useLayoutEffect(() => {
+    if (openKey === null || !fresh.current.has(openKey)) return;
+    root.current
+      ?.querySelector<HTMLElement>(
+        `[data-variable-key="${CSS.escape(openKey)}"]`
+      )
+      ?.scrollIntoView({ block: "nearest" });
+  }, [openKey, tokens]);
 
   const add = (what: NewVariable): void => {
     const made = addVariable(currentTokens() ?? tokens, what);
@@ -1107,6 +1071,8 @@ function VariableRow({
           side="right"
           align="start"
           sideOffset={12}
+          // Kept inside the window, clear of its edges.
+          collisionPadding={8}
           className="nx-vars-editor"
           aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
         >

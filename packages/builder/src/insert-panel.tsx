@@ -62,7 +62,6 @@ import {
   allBlocks,
   asPermittedList,
   COMPONENT_INSTANCE_TYPE,
-  findNode,
   permittedLabel,
   placementSiteIn,
   planInsertPattern,
@@ -111,6 +110,15 @@ import {
   offeredIn,
   withEntryContentField,
 } from "./entry-content-rules";
+import { insertLockAt, type InsertLock } from "./insert-lock";
+import {
+  cardAnchor,
+  NOWHERE,
+  SummonAnswerOnly,
+  useSummonAnswer,
+  type Measurable,
+} from "./insert-panel-summon";
+import { placeParts, placementWords } from "./insert-placement-words";
 import {
   blockLabel,
   blockSourceFor,
@@ -138,7 +146,6 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
-import { layerLabel } from "./layers";
 import { lockRefusalWording, type LockRefusalFacts } from "./lock-refusal";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp } from "./op-vocabulary";
@@ -290,6 +297,17 @@ export interface InsertPanelProps {
    * does not hold.
    */
   renderPreview?: (entry: InsertEntry) => React.ReactNode;
+  /**
+   * How many times an add control on the canvas has asked for this panel,
+   * counted by the host. Each new count is a press the panel answers, so the
+   * author sees it heard them whether it just opened or was already open: the
+   * search takes focus, the list goes back to the top, and the line naming
+   * the place is highlighted for a moment. `undefined` while no press waits,
+   * as when the panel is opened from the rail.
+   */
+  summoned?: number;
+  /** Told each count the panel has answered, so the host asks no more. */
+  onSummoned?: (count: number) => void;
 }
 
 /** The panel's two tabs: blocks and the site's components, and patterns. */
@@ -568,18 +586,7 @@ function highlightedEntry(
   return undefined;
 }
 
-/**
- * Anything a popover can be anchored to: the tile, or nowhere while there is
- * no tile in the document to measure.
- */
-interface Measurable {
-  getBoundingClientRect(): DOMRect;
-}
-
-/** The anchor for a popover with no tile under it: a point at the origin. */
-const NOWHERE: Measurable = {
-  getBoundingClientRect: () => new DOMRect(),
-};
+export { placementWords }; // For the importers of the panel's words.
 
 /**
  * The tile in the panel carrying a command value.
@@ -613,8 +620,8 @@ function tileElement(
  * `aria-hidden`, and it never takes focus: everything it says is the tile's
  * own accessible description already, so a screen reader hears it on the
  * tile, and focus has to stay in the search for typing and the arrow keys to
- * keep working. Anchored to the tile itself, so it sits beside the one it
- * describes as the highlight moves down the grid.
+ * keep working. Anchored beside the panel at the tile's height, so it moves
+ * down with the highlight and never covers a tile.
  */
 function TilePopover({
   shown,
@@ -644,10 +651,10 @@ function TilePopover({
   // own effect reads it: layout effects run ahead of passive ones, so the
   // popover measures the tile it describes rather than the one before it.
   React.useLayoutEffect(() => {
-    anchor.current =
-      entry === undefined
-        ? NOWHERE
-        : (tileElement(root.current, tokens.get(entry.id)) ?? NOWHERE);
+    const panel = root.current;
+    const tile =
+      entry === undefined ? null : tileElement(panel, tokens.get(entry.id));
+    anchor.current = cardAnchor(panel, tile);
   });
   if (entry === undefined) return null;
   const offer = offers.get(entry.id);
@@ -667,6 +674,8 @@ function TilePopover({
         side="right"
         align="start"
         sideOffset={8}
+        // Never flipped back over the tiles where the right has no room.
+        avoidCollisions={false}
         aria-hidden="true"
         className="nx-insert-popover"
         // Focus stays in the search, where typing and the arrow keys work.
@@ -736,6 +745,8 @@ function howToAdd(entry: InsertEntry): string {
  */
 function PlacementLine({
   document,
+  root,
+  summons,
   first,
   shown,
   groups,
@@ -743,6 +754,10 @@ function PlacementLine({
   offers,
 }: {
   document: BlockDocument;
+  /** The panel, whose search and list a press is answered in. */
+  root: React.RefObject<HTMLDivElement | null>;
+  /** A canvas press still to answer, and where to say it was answered. */
+  summons: Pick<InsertPanelProps, "summoned" | "onSummoned">;
   first: InsertionCandidate;
   shown: boolean;
   groups: readonly InsertGroup<InsertEntry>[];
@@ -750,6 +765,8 @@ function PlacementLine({
   offers: ReadonlyMap<string, EntryOffer>;
 }): React.JSX.Element {
   const highlighted = useCommandHighlight();
+  // The line answers a canvas press for the whole panel, highlighted for it.
+  const flash = useSummonAnswer(root, summons.summoned, summons.onSummoned);
   const entry = shown
     ? highlightedEntry(groups, tokens, highlighted)
     : undefined;
@@ -758,50 +775,12 @@ function PlacementLine({
   return (
     <p
       className="nx-insert-panel__placement"
+      data-flash={flash === undefined ? undefined : ""}
       aria-live={entry === undefined ? "polite" : "off"}
     >
       <CornerDownRight aria-hidden="true" size={14} />
       <span>{placementWords("Adding", document, place)}</span>
     </p>
-  );
-}
-
-/**
- * Where a place is, in words: "after", "inside" or "at the end of the page",
- * and the block it is beside or in, named as Layers names it.
- */
-function placeParts(
-  document: BlockDocument,
-  candidate: InsertionCandidate
-): { where: string; name?: string } {
-  if (candidate.kind === "document-end") {
-    return { where: "at the end of the page" };
-  }
-  const inside = candidate.kind === "inside";
-  const id = inside ? candidate.insideId : candidate.afterId;
-  const node = id === undefined ? undefined : findNode(document.nodes, id);
-  // The guard is over an id the candidate was built from this same document,
-  // so it holds; the words still say something true if it ever does not.
-  return {
-    where: inside ? "inside" : "after",
-    name: node === undefined ? "the selected block" : layerLabel(node),
-  };
-}
-
-/** "Adding after Heading", say, with the block's name in bold. */
-export function placementWords(
-  lead: string,
-  document: BlockDocument,
-  candidate: InsertionCandidate
-): React.ReactNode {
-  const { where, name } = placeParts(document, candidate);
-  return name === undefined ? (
-    `${lead} ${where}`
-  ) : (
-    <>
-      {`${lead} ${where} `}
-      <b>{name}</b>
-    </>
   );
 }
 
@@ -1157,6 +1136,8 @@ export function InsertPanel({
   beginInsertDrag,
   inside,
   renderPreview,
+  // A canvas press to answer, handed to the line that answers it.
+  ...summons
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   // Blocks first: what an author adds most. Sections holds the patterns.
@@ -1278,6 +1259,8 @@ export function InsertPanel({
     // from the page, or holds no region a block can be put in.
     return (
       <div className="nx-insert-panel" data-empty="unplaceable">
+        {/* A press is still answered, with nothing to focus, so it waits for no later open. */}
+        <SummonAnswerOnly {...summons} />
         {header}
         <p className="nx-insert-panel__note">
           The container chosen to add into is no longer on the page. Select a
@@ -1311,6 +1294,8 @@ export function InsertPanel({
       />
       <PlacementLine
         document={editor.document}
+        root={root}
+        summons={summons}
         first={firstPlace}
         shown={moved !== null}
         groups={groups}
@@ -1549,8 +1534,11 @@ interface OfferInputs {
   readonly source: NestingSource;
   readonly components: ComponentLookup | undefined;
   readonly expansion: EntryPlacement["expansion"];
-  /** Asked what the locks say of an insert; its identity changes with the document. */
-  readonly editor: Pick<EditorState, "lockRefusalFor">;
+  /** The lock rules and caps a place's locks are read with (`insert-lock`). */
+  readonly editor: Pick<
+    EditorState,
+    "lockDefinitions" | "limits" | "lockRefusalFor"
+  >;
   /** Whether the template's collection's blocks fields are known yet. */
   readonly entryFieldsKnown: boolean;
 }
@@ -1655,6 +1643,8 @@ function offersFor(inputs: OfferInputs): ReadonlyMap<string, EntryOffer> {
 /** What judging any entry at one place reads, asked once per place. */
 interface PlaceContext {
   readonly placement: EntryPlacement | undefined;
+  /** The locks at this place, read from the structure around it. */
+  readonly locks: InsertLock;
   /**
    * The locks' answer for the catalog's first block here, which a pattern or
    * a component follows: each arrives as a block of its own type, which no
@@ -1663,7 +1653,7 @@ interface PlaceContext {
   readonly firstBlockLock: () => LockRefusalFacts | undefined;
 }
 
-/** {@link PlaceContext} for one place, its lock question asked lazily. */
+/** {@link PlaceContext} for one place, its locks read lazily. */
 function placeContext(
   inputs: OfferInputs,
   candidate: InsertionCandidate
@@ -1671,12 +1661,19 @@ function placeContext(
   const firstBlock = inputs.catalog.find(
     (entry): entry is BlockInsertEntry => entry.kind === "block"
   );
+  const locks = insertLockAt(inputs.document, candidate.at, {
+    definitions: inputs.editor.lockDefinitions,
+    nesting: inputs.source,
+    limits: inputs.editor.limits,
+    ask: inputs.editor.lockRefusalFor,
+  });
   const asked: { answer?: LockRefusalFacts; done: boolean } = { done: false };
   return {
     placement: placementAt(inputs, candidate.at),
+    locks,
     firstBlockLock: () => {
       if (!asked.done && firstBlock !== undefined) {
-        const answer = lockAt(inputs, firstBlock, candidate.at);
+        const answer = lockAt(inputs, locks, firstBlock);
         if (answer !== undefined) asked.answer = answer;
       }
       asked.done = true;
@@ -1715,30 +1712,26 @@ function refusalAt(
   }
   const lock =
     entry.kind === "block"
-      ? lockAt(inputs, entry, candidate.at)
+      ? lockAt(inputs, context.locks, entry)
       : context.firstBlockLock();
   return lock === undefined
     ? undefined
     : refusalAnnouncement(lockRefusalWording(lock));
 }
 
-/** What the locks say of inserting one block at a position. */
+/**
+ * What the locks say of inserting one block at a place, from the structure
+ * there: no trial insert, which runs only for the block actually added, in
+ * the editor's apply.
+ */
 function lockAt(
   inputs: OfferInputs,
-  entry: BlockInsertEntry,
-  at: OpPosition
+  locks: InsertLock,
+  entry: BlockInsertEntry
 ): LockRefusalFacts | undefined {
-  return inputs.editor.lockRefusalFor([
-    {
-      kind: "insert",
-      node: nodeForEntry(
-        entry,
-        inputs.expansion.definitions,
-        inputs.expansion.nesting
-      ),
-      at,
-    },
-  ]);
+  return locks.of(
+    nodeForEntry(entry, inputs.expansion.definitions, inputs.expansion.nesting)
+  );
 }
 
 /**

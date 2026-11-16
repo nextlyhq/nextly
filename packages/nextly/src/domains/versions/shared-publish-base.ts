@@ -33,6 +33,7 @@ import {
   type CallerGrants,
 } from "../../shared/lib/field-level-registry";
 
+import { SHARED_PART_ALONE } from "./changed-parts";
 import { canonicalJson, storeDraftSave } from "./draft-save";
 import type { VersionCaptureService } from "./version-capture-service";
 import { registerVersionPinHolder, versionPins } from "./version-pins";
@@ -653,6 +654,9 @@ export async function takeLiveSharedValuesInto(
     },
     replaces: pending,
     createdBy,
+    // Every value taken is a shared field's: the save changes the shared
+    // part alone.
+    changedParts: SHARED_PART_ALONE,
     maxPerDoc: args.maxPerDoc,
   });
   return { taken, remaining, versionNo };

@@ -45,6 +45,73 @@ export type IsoInstantReading =
   | { ok: false; problem: IsoInstantProblem };
 
 /**
+ * ISO 8601 as the exact reader takes it: a calendar date, then optionally a time, then optionally
+ * an offset, with up to six digits of a second. The same separators and offset forms as
+ * `ISO_INSTANT` (`T`, `Z`, `±HH:MM`); only the parts may be missing, and the fraction may be longer,
+ * so a caller can tell a text naming no time or no offset from one that is no date at all.
+ * Captures: year, month, day, hour, minute, second, fraction, offset.
+ */
+const ISO_EXACT =
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
+/** Why a text is not an instant the exact reader can name. */
+export type ExactIsoProblem =
+  | IsoInstantProblem
+  /** A calendar date with no time. */
+  | "no-time"
+  /** A date and a time with no offset from UTC. */
+  | "no-offset";
+
+/** An instant read exactly: whole seconds since 1970 UTC, and the digits of a second as written. */
+export interface ExactIsoInstant {
+  seconds: number;
+  /** The digits after the point, exactly as written (`"250"` for `.250`), or `""` for none. */
+  fraction: string;
+}
+
+export type ExactIsoReading =
+  | { ok: true; instant: ExactIsoInstant }
+  | { ok: false; problem: ExactIsoProblem };
+
+/**
+ * An instant read exactly, keeping every digit of its second up to microseconds, and saying why a
+ * text is not one: not ISO 8601 in an accepted form, no instant, a day that does not exist, or a
+ * date or time that names no time or no offset. The date a text names is checked even where it
+ * names no time or no offset, so a February 30 is no date whatever else it lacks.
+ *
+ * The one reading of an instant's parts: `readIsoInstant` and `readIsoDateOrInstant` derive theirs
+ * from it, keeping their narrower shapes.
+ */
+export function readExactIsoInstant(raw: string): ExactIsoReading {
+  const parts = ISO_EXACT.exec(raw);
+  if (parts === null) return { ok: false, problem: "shape" };
+  const [, year, month, day, hour, minute, second, fraction, offset] = parts;
+  const date = `${year}-${month}-${day}`;
+  // Checked with the first three digits of its second, the most a Date reads, so a time the
+  // fraction makes invalid (an hour of 24 past midnight) is refused as `ISO_INSTANT`'s reader did.
+  const time =
+    hour === undefined ? "00:00:00" : `${hour}:${minute}:${second ?? "00"}`;
+  const millis = fraction === undefined ? "" : `.${fraction.slice(0, 3)}`;
+  const zone = offset ?? "Z";
+  const whole = `${date}T${time}${millis}${zone}`;
+  const at = new Date(whole);
+  if (Number.isNaN(at.getTime())) return { ok: false, problem: "invalid" };
+  if (!statesTheSameDay(whole, at, zone)) {
+    return { ok: false, problem: "no-such-day" };
+  }
+  if (hour === undefined) return { ok: false, problem: "no-time" };
+  if (offset === undefined) return { ok: false, problem: "no-offset" };
+  return {
+    ok: true,
+    // Whole seconds: the digits of the second are the fraction's, as written.
+    instant: {
+      seconds: Math.floor(at.getTime() / 1000),
+      fraction: fraction ?? "",
+    },
+  };
+}
+
+/**
  * Whether the parsed instant still names the calendar day the caller wrote.
  *
  * Compared in the offset the STRING states, by shifting the instant by that
@@ -67,29 +134,27 @@ function statesTheSameDay(raw: string, at: Date, offset: string): boolean {
   return raw.startsWith(local.toISOString().slice(0, 10));
 }
 
-/** Parses a string whose shape has passed, with the offset its match found. */
-function readShaped(
-  raw: string,
-  parsed: string,
-  offset: string
-): IsoInstantReading {
-  const at = new Date(parsed);
-  if (Number.isNaN(at.getTime())) return { ok: false, problem: "invalid" };
-  if (!statesTheSameDay(raw, at, offset)) {
-    return { ok: false, problem: "no-such-day" };
-  }
-  return { ok: true, at };
-}
-
 /**
  * An instant written with its offset, such as `2026-09-01T09:00:00Z`.
  *
  * For a moment that must be stated exactly, such as when a release publishes.
  */
 export function readIsoInstant(raw: string): IsoInstantReading {
-  const shape = ISO_INSTANT.exec(raw);
-  if (shape === null) return { ok: false, problem: "shape" };
-  return readShaped(raw, raw, shape[1] ?? "Z");
+  // This reader's own, narrower shape: a time and an offset, and at most three digits of a second.
+  if (!ISO_INSTANT.test(raw)) return { ok: false, problem: "shape" };
+  const exact = readExactIsoInstant(raw);
+  if (!exact.ok) {
+    // The shape already holds a time and an offset, so only an instant's own problems remain.
+    return {
+      ok: false,
+      problem: exact.problem === "no-such-day" ? "no-such-day" : "invalid",
+    };
+  }
+  const { seconds, fraction } = exact.instant;
+  return {
+    ok: true,
+    at: new Date(seconds * 1000 + Number(fraction.padEnd(3, "0"))),
+  };
 }
 
 /**
@@ -101,6 +166,6 @@ export function readIsoInstant(raw: string): IsoInstantReading {
  * comparison of a date with a timestamp already gives in UTC.
  */
 export function readIsoDateOrInstant(raw: string): IsoInstantReading {
-  if (ISO_DATE.test(raw)) return readShaped(raw, `${raw}T00:00:00.000Z`, "Z");
+  if (ISO_DATE.test(raw)) return readIsoInstant(`${raw}T00:00:00.000Z`);
   return readIsoInstant(raw);
 }

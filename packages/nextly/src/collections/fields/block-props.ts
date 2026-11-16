@@ -964,7 +964,7 @@ function countOption(
  * their own), so validating the full tree would encode the editor's node
  * catalog into the field system.
  */
-function isEditorContent(value: unknown): string | true {
+export function isEditorContent(value: unknown): string | true {
   // Plain records, not merely objects: a class instance with the right keys
   // encodes to whatever its own `toJSON` decides, so the renderer would read
   // back something other than the envelope that was validated.

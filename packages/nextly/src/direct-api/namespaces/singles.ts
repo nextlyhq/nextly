@@ -73,6 +73,9 @@ export async function findSingle<
     // field falls back to the default language, and a rule keyed on it sees
     // `undefined` when it is dropped here.
     fallbackLocale: config.fallbackLocale,
+    wholeDocumentFallback: args.wholeDocumentFallback,
+    sourceLocales: args.sourceLocales,
+    translations: args.translations,
     // Forwarded to the same service option `findByID` uses for its own `draft`
     // flag, so one idea keeps one spelling across the two read paths. The
     // service applies the trust gate; nothing is decided here.

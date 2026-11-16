@@ -24,6 +24,7 @@ import {
   type PrincipalDigestDb,
 } from "../audit/principal-digest";
 import { pluginSettingsSecrets } from "../plugins/settings-service";
+import type { ChangedParts } from "../versions/changed-parts";
 import { statusEventsFor } from "../webhooks/status-events";
 
 import { contentEventActor } from "./actor";
@@ -182,6 +183,45 @@ export async function recordWriteEvent(
 }
 
 /**
+ * The moves a write's history records as `kind`: those the rule that decides
+ * the webhook events calls a publish, or an unpublish. A move between equal
+ * states is neither, and is recorded as nothing.
+ */
+function movesRecordedAs(
+  kind: "published" | "unpublished",
+  moves: readonly StatusMove[],
+  isCreate: boolean
+): StatusMove[] {
+  return moves.filter(
+    m =>
+      typeof m.to === "string" &&
+      statusEventsFor({ from: m.from ?? null, to: m.to, isCreate }).includes(
+        `entry.${kind}`
+      )
+  );
+}
+
+/**
+ * The parts a write's status moves change, as its history records them: each
+ * language a recorded move names, and the shared part where one names none
+ * (the document's own status). Read from the same list of moves
+ * `recordTransitionEvents` is handed, so the version a publish records and
+ * the event it writes cannot name different parts. For the moves of a write
+ * that is not a create, as a publish of existing content is.
+ *
+ * @experimental
+ */
+export function partsMovesRecord(moves: readonly StatusMove[]): ChangedParts {
+  const recorded = (["published", "unpublished"] as const).flatMap(kind =>
+    movesRecordedAs(kind, moves, false)
+  );
+  return {
+    locales: [...new Set(recorded.flatMap(m => (m.locale ? [m.locale] : [])))],
+    shared: recorded.some(m => !m.locale),
+  };
+}
+
+/**
  * Record a write's status moves in the document's history: one "published"
  * event naming the parts it published, and one "unpublished" for those it
  * unpublished. Decided by the rule that decides the webhook events, so the
@@ -202,15 +242,7 @@ export async function recordTransitionEvents(
   moves: readonly StatusMove[]
 ): Promise<void> {
   for (const kind of ["published", "unpublished"] as const) {
-    const moved = moves.filter(
-      m =>
-        typeof m.to === "string" &&
-        statusEventsFor({
-          from: m.from ?? null,
-          to: m.to,
-          isCreate: write.isCreate === true,
-        }).includes(`entry.${kind}`)
-    );
+    const moved = movesRecordedAs(kind, moves, write.isCreate === true);
     const first = moved[0];
     if (!first) continue;
     const locales = moved.flatMap(m => (m.locale ? [m.locale] : []));

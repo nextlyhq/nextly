@@ -28,9 +28,19 @@ const retiredManageStep: UpgradeStep = {
     (await import("./retired-manage")).convertRoles(context),
 };
 
+/** Converting translated date columns an earlier release made with a time zone. */
+const zonedDatesStep: UpgradeStep = {
+  title: "convert translated date columns kept with a time zone",
+  pending: async context =>
+    (await import("./zoned-dates")).zonedDatesToConvert(context),
+  run: async context =>
+    (await import("./zoned-dates")).convertZonedDates(context),
+};
+
 export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   schemaEventsStep,
   storedPasswordsStep,
   versionPasswordsStep,
   retiredManageStep,
+  zonedDatesStep,
 ];
