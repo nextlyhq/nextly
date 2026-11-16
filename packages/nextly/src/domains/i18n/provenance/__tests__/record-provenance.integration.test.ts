@@ -7,7 +7,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../../../config";
+import {
+  date,
+  defineCollection,
+  defineSingle,
+  json,
+  text,
+} from "../../../../config";
 import { container } from "../../../../di/container";
 import {
   createTestNextly,
@@ -45,7 +51,19 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         versions: { drafts: true },
-        fields: [text({ name: "title", localized: true })],
+        fields: [
+          text({ name: "title", localized: true }),
+          text({ name: "summary", localized: true }),
+        ],
+      }),
+      // Values a store reshapes: a date, and a JSON value.
+      defineCollection({
+        slug: "events",
+        localized: true,
+        fields: [
+          date({ name: "startsOn", localized: true }),
+          json({ name: "meta", localized: true }),
+        ],
       }),
     ],
     singles: [
@@ -67,6 +85,8 @@ interface Row {
   origin: string;
   engine: string | null;
   actorKind: string | null;
+  actorId: string | null;
+  actorPrincipalKind: string | null;
   sourceLocale: string | null;
   sourceFingerprint: string | null;
 }
@@ -97,6 +117,8 @@ async function rowsOf(
       origin: row.origin,
       engine: row.engine,
       actorKind: row.actorKind,
+      actorId: row.actorId,
+      actorPrincipalKind: row.actorPrincipalKind,
       sourceLocale: row.sourceLocale,
       sourceFingerprint: row.sourceFingerprint,
     });
@@ -109,7 +131,11 @@ async function save(
   id: string,
   locale: string,
   data: Record<string, unknown>,
-  as: { user?: string; apiKey?: string } = { user: "ann" },
+  as: {
+    user?: string;
+    apiKey?: string;
+    principal?: { kind: string; id: string };
+  } = { user: "ann" },
   collectionName = "posts"
 ) {
   const handler = container.get<CollectionsHandler>("collectionsHandler");
@@ -122,6 +148,9 @@ async function save(
       ...(as.user ? { user: { id: as.user } } : {}),
       ...(as.apiKey
         ? { actor: { type: "apiKey" as const, id: as.apiKey } }
+        : {}),
+      ...(as.principal
+        ? { actor: { type: "principal" as const, principal: as.principal } }
         : {}),
     },
     { ...data, _overwrite: true }
@@ -430,6 +459,153 @@ describe.each(getConfiguredTestDialects())(
           sourceFingerprint: valueFingerprint("Sale"),
         }),
       ]);
+    });
+    it("records a rewrite of a translated field, which puts its translations out of date", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi" },
+      })) as { item: { id: string } };
+      const id = created.item.id;
+      await save(id, "es", { title: "Hola" });
+      const read = (await t!.nextly.findByID({
+        collection: "posts",
+        id,
+        locale: "en",
+      })) as unknown as { _rev: string };
+
+      await t!.nextly.rewriteField({
+        collection: "posts",
+        id,
+        field: "title",
+        locale: "en",
+        expectedVersion: read._rev,
+        set: { value: "Hello" },
+        reason: "A renamed product",
+      } as never);
+
+      const rows = await rowsOf(id);
+      expect(rows.en).toEqual([
+        expect.objectContaining({
+          valueFingerprint: valueFingerprint("Hello"),
+          origin: "original",
+        }),
+      ]);
+      // Spanish was made from "Hi", which is no longer the source's value.
+      expect(rows.es).toEqual([
+        expect.objectContaining({ sourceFingerprint: valueFingerprint("Hi") }),
+      ]);
+    });
+
+    it("keeps what a published language's untouched fields recorded when a held change to another field goes live", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "notes",
+        locale: "en",
+        data: { title: "Hi", summary: "Short" },
+      })) as { item: { id: string } };
+      const id = created.item.id;
+      const notes = { kind: "collection", slug: "notes" };
+      await save(id, "en", { status: "published" }, undefined, "notes");
+      await save(
+        id,
+        "es",
+        { title: "Hola", summary: "Corto", status: "published" },
+        undefined,
+        "notes"
+      );
+      // The source's title moves: Spanish's title is now out of date.
+      await save(id, "en", { title: "Hello" }, undefined, "notes");
+      await save(id, "en", { status: "published" }, undefined, "notes");
+
+      // A held change to Spanish's summary alone, then published by another.
+      await save(id, "es", { summary: "Corto 2" }, undefined, "notes");
+      await save(
+        id,
+        "es",
+        { status: "published" },
+        { apiKey: "key-1" },
+        "notes"
+      );
+
+      const title = (await rowsOf(id, notes)).es?.find(
+        row => row.fieldPath === "title"
+      );
+      // Still the person's translation of "Hi": nothing re-made it.
+      expect(title).toMatchObject({
+        partState: "live",
+        valueFingerprint: valueFingerprint("Hola"),
+        actorKind: "user",
+        sourceFingerprint: valueFingerprint("Hi"),
+      });
+    });
+
+    it("fingerprints a date and a JSON value as written, not as stored", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "events",
+        locale: "en",
+        data: { startsOn: "2026-01-01T00:00:00.000Z", meta: { a: 1, b: 2 } },
+      })) as { item: { id: string } };
+      const id = created.item.id;
+      const events = { kind: "collection", slug: "events" };
+      const fingerprintOf = async (field: string) =>
+        (await rowsOf(id, events)).en?.find(row => row.fieldPath === field)
+          ?.valueFingerprint;
+
+      expect(await fingerprintOf("startsOn")).toBe(
+        valueFingerprint("2026-01-01T00:00:00.000Z")
+      );
+      expect(await fingerprintOf("meta")).toBe(
+        valueFingerprint({ a: 1, b: 2 })
+      );
+
+      await save(
+        id,
+        "en",
+        { startsOn: "2026-02-01T00:00:00.000Z", meta: { b: 2, a: 1 } },
+        undefined,
+        "events"
+      );
+      // Another date is another value; the same object in another key order is not.
+      expect(await fingerprintOf("startsOn")).toBe(
+        valueFingerprint("2026-02-01T00:00:00.000Z")
+      );
+      expect(await fingerprintOf("meta")).toBe(
+        valueFingerprint({ a: 1, b: 2 })
+      );
+    });
+
+    it("records a plugin-defined person by kind, never by their id", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi" },
+      })) as { item: { id: string } };
+      const id = created.item.id;
+      expect(
+        (
+          await save(
+            id,
+            "es",
+            { title: "Hola" },
+            { principal: { kind: "member", id: "m-1@example.com" } }
+          )
+        ).success
+      ).toBe(true);
+
+      const rows = await rowsOf(id);
+      expect(rows.es).toEqual([
+        expect.objectContaining({
+          origin: "person",
+          actorKind: "principal",
+          actorPrincipalKind: "member",
+          actorId: null,
+        }),
+      ]);
+      expect(JSON.stringify(rows)).not.toContain("m-1@example.com");
     });
   }
 );

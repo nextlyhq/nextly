@@ -500,6 +500,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "engine" TEXT,
       "actor_kind" TEXT,
       "actor_id" TEXT,
+      "actor_principal_kind" TEXT,
       "source_locale" TEXT,
       "source_fingerprint" TEXT,
       "origin_row_id" TEXT,

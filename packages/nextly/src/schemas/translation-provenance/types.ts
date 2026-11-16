@@ -23,15 +23,3 @@ export type ProvenanceOrigin =
   | "copy"
   | "original"
   | "unknown";
-
-/** Every origin, in the order the type lists them. */
-export const PROVENANCE_ORIGINS: readonly ProvenanceOrigin[] = [
-  "person",
-  "agent",
-  "machine",
-  "integration",
-  "import",
-  "copy",
-  "original",
-  "unknown",
-];

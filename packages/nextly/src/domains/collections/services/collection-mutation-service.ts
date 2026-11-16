@@ -7418,6 +7418,12 @@ export class CollectionMutationService extends BaseService {
       columns,
       translation,
       savedBy: args.actor,
+      // Where the rewritten value came from, as any live write records it:
+      // a rewrite of a source value puts its translations out of date.
+      provenance: {
+        collectionName: params.collectionName,
+        promotesDraft: false,
+      },
       // The language row's version is claimed where the version given names
       // it; the main row's was judged under the lock already.
       ...(translation &&
@@ -13729,7 +13735,7 @@ export class CollectionMutationService extends BaseService {
       } | null;
       /**
        * Where the translated values came from, recorded with them
-       * (`recordTranslationProvenance`): the collection, the write's claims,
+       * (`recordWrittenValues`): the collection, the write's claims,
        * and whether the write puts a held draft live, whose rows then move.
        */
       provenance?: {

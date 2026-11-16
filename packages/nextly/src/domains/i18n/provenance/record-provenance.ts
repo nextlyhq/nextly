@@ -97,11 +97,34 @@ export function translationProvenancePresent(
   return present(via);
 }
 
-/** A sha256 of a value as it is stored, the same on every dialect. */
+/**
+ * A sha256 of a value as it was written, the same on every dialect. A write hands its values on
+ * as the store will keep them, so each is read back to what it was first: a date as its ISO
+ * string (canonical JSON would make every date `{}`), and a JSON object or array kept as text as
+ * the value it encodes (so its keys are put in order, not compared as written).
+ */
 export function valueFingerprint(value: unknown): string {
   return createHash("sha256")
-    .update(canonicalJson(value ?? null) ?? "", "utf8")
+    .update(canonicalJson(writtenValueOf(value ?? null)) ?? "", "utf8")
     .digest("hex");
+}
+
+/** A stored value read back to the value written; see {@link valueFingerprint}. */
+function writtenValueOf(value: unknown): unknown {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try {
+        return JSON.parse(text) as unknown;
+      } catch {
+        return value;
+      }
+    }
+  }
+  return value;
 }
 
 /** The origin a write without a claim gives a value, from who wrote it. */
@@ -113,15 +136,30 @@ function originOfActor(savedBy: RequestActor | undefined): ProvenanceOrigin {
   return "import";
 }
 
-/** Who wrote the value, as the row keeps it. */
+/**
+ * Who wrote the value, as the row keeps it. A plugin-defined person is kept by their kind alone,
+ * never by their id, as a translation row keeps its last changer: the id may be an address, and
+ * none is written where an erasure would have to find it.
+ */
 function actorColumns(savedBy: RequestActor | undefined): {
   actorKind: string | null;
   actorId: string | null;
+  actorPrincipalKind: string | null;
 } {
-  if (savedBy === undefined) return { actorKind: null, actorId: null };
+  if (savedBy === undefined) {
+    return { actorKind: null, actorId: null, actorPrincipalKind: null };
+  }
+  if (savedBy.type === "principal") {
+    return {
+      actorKind: savedBy.type,
+      actorId: null,
+      actorPrincipalKind: savedBy.principal?.kind ?? null,
+    };
+  }
   return {
     actorKind: savedBy.type,
-    actorId: savedBy.id ?? savedBy.principal?.id ?? null,
+    actorId: savedBy.id ?? null,
+    actorPrincipalKind: null,
   };
 }
 
@@ -194,7 +232,7 @@ async function liveFingerprints(
  *
  * @experimental
  */
-export async function recordTranslationProvenance(
+async function recordTranslationProvenance(
   db: ProvenanceDb,
   write: ProvenanceWrite
 ): Promise<void> {
@@ -275,7 +313,7 @@ export interface ProvenancePromotion {
  *
  * @experimental
  */
-export async function promoteDraftProvenance(
+async function promoteDraftProvenance(
   db: ProvenanceDb,
   promotion: ProvenancePromotion
 ): Promise<ReadonlySet<string>> {
@@ -321,11 +359,39 @@ export async function recordWrittenValues(
   let values = write.values;
   if (write.promotesDraft === true) {
     const moved = await promoteDraftProvenance(db, write);
+    // The draft's values are the whole language, untouched fields included: a field the draft
+    // recorded nothing for keeps the live record it has. Only a value with none at all (a draft
+    // held before recording began) is recorded as this write's, and a blank one never is.
+    const live = await recordedFields(db, write, "live");
     values = Object.fromEntries(
-      Object.entries(values).filter(([field]) => !moved.has(field))
+      Object.entries(values).filter(
+        ([field, value]) =>
+          !moved.has(field) && !live.has(field) && !isBlankValue(value)
+      )
     );
   }
   await recordTranslationProvenance(db, { ...write, values });
+}
+
+/** The fields one document's language and part has a row for. */
+async function recordedFields(
+  db: ProvenanceDb,
+  write: ProvenanceWrite,
+  partState: ProvenancePartState
+): Promise<ReadonlySet<string>> {
+  const rows = await db.select<{ fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["fieldPath"],
+      where: documentWhere(write, write.locale, partState),
+    }
+  );
+  return new Set(rows.map(row => row.fieldPath));
+}
+
+/** A value that holds nothing translated: absent, null or an empty string. */
+function isBlankValue(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
 }
 
 /**

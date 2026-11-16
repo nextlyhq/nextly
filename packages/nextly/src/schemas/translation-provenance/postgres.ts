@@ -53,6 +53,8 @@ export const nextlyTranslationProvenancePg = pgTable(
     // Who wrote the value: the kind and id of the actor, when one was known.
     actorKind: text("actor_kind"),
     actorId: text("actor_id"),
+    // A plugin-defined person's kind: such a person is kept by kind alone, never by id.
+    actorPrincipalKind: text("actor_principal_kind"),
     // The language the value was made from, and the fingerprint of that
     // language's value then. NULL for a value written in its own language.
     sourceLocale: text("source_locale"),
