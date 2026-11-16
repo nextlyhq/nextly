@@ -5,8 +5,9 @@
  * What only a server shows: core's gate and field rules decide what is
  * listed. A Single the author may not read is not listed at all, a field
  * their rules hide is not listed, a field visitors may not read is listed as
- * not public with no value, and a value only a pending draft holds is marked
- * as a draft's rather than shown.
+ * not public with no value, and a value only a pending draft holds is shown
+ * to a person who may edit the entry, marked as a draft's, and to no one
+ * else.
  *
  * @module __tests__/binding-fields-route.integration.test
  */
@@ -148,12 +149,13 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(entry).toBeDefined();
       const fields = entry?.fields ?? [];
-      // A draft's value is marked, not shown.
+      // A draft's value is shown to the person editing it, marked as a
+      // draft's.
       expect(named(fields, "title")).toMatchObject({
         public: true,
         draft: true,
+        preview: "Draft title",
       });
-      expect(named(fields, "title")?.preview).toBeUndefined();
       // Readable by the author, not by visitors: listed, with no value.
       expect(named(fields, "staffNote")).toMatchObject({ public: false });
       expect(named(fields, "staffNote")?.preview).toBeUndefined();
@@ -174,6 +176,27 @@ describe.each(getConfiguredTestDialects())(
       expect(text).not.toContain(PAYROLL);
       expect(text).not.toContain("GB29");
       expect(answer.sources.at(-1)?.binding).toEqual({ source: "site" });
+    });
+
+    it("shows no draft's value to a reader who may not edit the entry", async () => {
+      // Read rights only: core's gate hands this reader the published entry,
+      // so the pending draft's title never reaches them, not even as a
+      // preview.
+      const t = await boot();
+      const id = await article(t);
+      const { cookie } = await holding(t, [
+        `read-${ARTICLES}`,
+        `read-${CONTACT}`,
+      ]);
+      const answer = await ask(cookie, id);
+      const entry = answer.sources.find(
+        source => source.binding.source === "entry"
+      );
+      expect(named(entry?.fields ?? [], "title")).toMatchObject({
+        public: true,
+        preview: "Live title",
+      });
+      expect(JSON.stringify(answer)).not.toContain("Draft title");
     });
 
     it("lists no entry the author may not read", async () => {

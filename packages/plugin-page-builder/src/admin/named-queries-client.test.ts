@@ -29,6 +29,10 @@ const writePluginRoute = vi.hoisted(() => vi.fn());
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   readPluginRoute,
   writePluginRoute,
+  // The schema never moves here: the sources' keeping is
+  // `session-answers.test`'s.
+  schemaVersion: () => 1,
+  onSchemaChange: () => () => {},
 }));
 
 import type {

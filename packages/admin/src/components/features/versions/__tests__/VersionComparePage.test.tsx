@@ -46,12 +46,21 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   // The rail's summary lines fetch one of these each. They are not what these
   // tests are about, so they answer nothing and stay quiet.
   useVersionDiff: () => ({ data: undefined, isLoading: false, isError: false }),
+  // No baseline is named in these tests: the server is never asked.
+  useBaselineDiff: () => ({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+  }),
   scopeKey: (s: { kind: string; slug: string; entryId?: string }) => [
     s.kind,
     s.slug,
     s.entryId ?? "",
   ],
 }));
+
+// Marking a version seen is the page's own concern, tested beside its choices.
+vi.mock("../useMarkVersionSeen", () => ({ useMarkVersionSeen: vi.fn() }));
 
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (...a: unknown[]) => canMock(...a) as boolean,

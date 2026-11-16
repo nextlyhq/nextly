@@ -128,7 +128,17 @@ export type PairResolution =
    * rail listing several.
    */
   | { kind: "only-in-locale" }
-  | { kind: "not-loaded" };
+  | { kind: "not-loaded" }
+  /**
+   * A baseline only the server can resolve (what is published, the current
+   * draft, the version this person last looked at), against `to`, or against
+   * the server's default target when the address names none.
+   */
+  | { kind: "baseline"; baseline: ServerBaseline; to?: number };
+
+/** The baselines the server resolves by name, spelled as it names them. */
+export const SERVER_BASELINES = ["published", "draft", "last-viewed"] as const;
+export type ServerBaseline = (typeof SERVER_BASELINES)[number];
 
 /**
  * The pair to compare when the address names none: the newest version and what
