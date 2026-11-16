@@ -195,6 +195,7 @@ import {
   runSingleStatusMoveBeforeHooks,
   type SingleBeforeHookCall,
 } from "./single-before-update";
+import { recordSingleProvenance } from "./single-provenance";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -1789,6 +1790,25 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
           savedBy: plan.actor,
         });
+        // The held draft's record of where its values came from goes live
+        // with them.
+        await recordSingleProvenance(
+          {
+            adapter: this.adapter,
+            logger: this.logger,
+            defaultLocale: this.localization?.defaultLocale,
+          },
+          tx,
+          {
+            slug: singleMeta.slug,
+            entryId: existingDoc.id,
+            locale: draft.locale,
+            values: companionValues,
+            localizedFields: companion.localizedFields,
+            savedBy: plan.actor,
+            promotesDraft: true,
+          }
+        );
       }
       await this.promoteComponents(
         tx,
