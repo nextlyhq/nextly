@@ -2513,45 +2513,6 @@ export class ReleasesRepository {
     }));
   }
 
-  /**
-   * Each collection, Single or page the scheduled releases' documents are
-   * in, once: what a pass asks about the entities themselves (whether one
-   * was removed from code) before asking about any document.
-   *
-   * Reads the two scope columns of the scheduled releases' members, a run of
-   * releases at a time, and folds them here: the port has no distinct
-   * select, and those rows are two short columns each.
-   */
-  async scheduledMemberScopes(): Promise<
-    Array<Pick<ReleaseMemberRow, "scopeKind" | "scopeSlug">>
-  > {
-    const scheduled = await this.db.select<{ id: string }>(RELEASES, {
-      columns: ["id"],
-      where: {
-        and: [{ column: "state", op: "=", value: "scheduled" }],
-      },
-    });
-    const scopes = new Map<
-      string,
-      Pick<ReleaseMemberRow, "scopeKind" | "scopeSlug">
-    >();
-    for (const ids of idBatches(scheduled.map(row => row.id))) {
-      const rows = await this.db.select<
-        Pick<ReleaseMemberRow, "scopeKind" | "scopeSlug">
-      >(MEMBERS, {
-        columns: ["scopeKind", "scopeSlug"],
-        where: membersOf(ids),
-      });
-      for (const row of rows) {
-        scopes.set(`${row.scopeKind}:${row.scopeSlug}`, {
-          scopeKind: row.scopeKind,
-          scopeSlug: row.scopeSlug,
-        });
-      }
-    }
-    return [...scopes.values()];
-  }
-
   /** The members an event names, of any release; see `scheduledMembersFor`. */
   private async membersNamedBy(
     target: ReleaseRecheckTarget

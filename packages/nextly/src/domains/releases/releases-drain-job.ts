@@ -95,7 +95,7 @@ export function createReleasesDrainJob(deps: {
     handler: async (_input, context) => {
       const startedAt = Date.now();
       const repository = new ReleasesRepository(deps.db);
-      await stopReleasesOfRemovedEntitiesContained(repository);
+      await stopReleasesOfRemovedEntitiesContained();
       await tellOverdueOwners(repository, context.now);
       const result = await applyDueReleases({
         // ONE origin for both sides of the pass's `now() >= deadline` test.
@@ -134,11 +134,9 @@ export function createReleasesDrainJob(deps: {
  * code, logging rather than throwing a failure: the pass still runs what is
  * due, and the next pass asks again.
  */
-async function stopReleasesOfRemovedEntitiesContained(
-  repository: ReleasesRepository
-): Promise<void> {
+async function stopReleasesOfRemovedEntitiesContained(): Promise<void> {
   try {
-    await stopReleasesOfRemovedEntities({ repository });
+    await stopReleasesOfRemovedEntities();
   } catch (error) {
     getNextlyLogger().warn({
       kind: "release-removed-entity-stop-failed",

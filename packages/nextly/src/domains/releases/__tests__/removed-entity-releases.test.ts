@@ -1,15 +1,16 @@
 /**
  * The release engine's run stops the scheduled releases holding a document of
- * an entity removed from code: which entities it hands to the early stop, and
- * where in the pass it does so.
+ * an entity removed from code: which entities it finds removed, what it hands
+ * the early stop, and where in the pass it does so.
  *
- * The decision itself (`entityRemovedFromCode`) is the write guard's and has
- * its own tests; the end-to-end stop, its owner's notice and the release's
- * state are proven on every dialect by
- * `release-removed-entity.integration.test.ts`.
+ * The decision itself (`isRemovedFromCode`) is the write guard's and has its
+ * own tests; the end-to-end stop, its owner's notice and the release's state
+ * are proven on every dialect by `release-removed-entity.integration.test.ts`.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { container } from "../../../di/container";
+import { publishDeclaredEntities } from "../../dynamic-collections/services/removed-from-code-writes";
 import type { ReleaseCheckScope } from "../readiness/check-sources";
 import type { ReleaseRecheckTarget } from "../release-recheck";
 
@@ -19,48 +20,90 @@ const { applyMock, stopRemovedMock, order } = vi.hoisted(() => ({
   order: [] as string[],
 }));
 
-const { stopReleasesOfRemovedEntities } = await import(
+const { removedEntityScopes, stopReleasesOfRemovedEntities } = await import(
   "../removed-entity-releases"
 );
 
-describe("stopReleasesOfRemovedEntities", () => {
-  const scopes: ReleaseCheckScope[] = [
-    { scopeKind: "collection", scopeSlug: "posts" },
-    { scopeKind: "collection", scopeSlug: "old-posts" },
-    { scopeKind: "single", scopeSlug: "banner" },
-    { scopeKind: "page", scopeSlug: "home" },
-  ];
-  const removed = new Set(["collection:old-posts", "single:banner"]);
-  const isRemoved = async (scope: ReleaseCheckScope) =>
-    removed.has(`${scope.scopeKind}:${scope.scopeSlug}`);
+/** Register `service` under `name` for one case; each case starts empty. */
+function register(name: string, service: unknown): void {
+  container.register(name, () => service);
+}
 
-  it("hands the early stop exactly the removed entities the scheduled releases hold", async () => {
-    const stop = vi.fn(async (_target: ReleaseRecheckTarget) => {});
-    await stopReleasesOfRemovedEntities({
-      repository: { scheduledMemberScopes: async () => scopes },
-      isRemoved,
-      stop,
-    });
-    expect(stop.mock.calls).toEqual([
-      [
-        {
-          scopes: [
-            { scopeKind: "collection", scopeSlug: "old-posts" },
-            { scopeKind: "single", scopeSlug: "banner" },
-          ],
-        },
+afterEach(() => {
+  container.clear();
+  publishDeclaredEntities(undefined);
+});
+
+describe("removedEntityScopes", () => {
+  /** The registries: the app's code, the Schema Builder and a plugin. */
+  function registries(): void {
+    register("collectionRegistryService", {
+      getAllCollectionsForRead: async () => [
+        { slug: "posts", source: "code" },
+        { slug: "old-posts", source: "code" },
+        { slug: "landing", source: "ui" },
+        { slug: "orders", source: "plugin" },
       ],
+    });
+    register("singleRegistryService", {
+      getAllSinglesForRead: async () => [
+        { slug: "header", source: "code" },
+        { slug: "banner", source: "code" },
+      ],
+    });
+  }
+
+  it("names the code entities the configuration no longer declares, and no other", async () => {
+    registries();
+    publishDeclaredEntities({
+      collections: [{ slug: "posts" }],
+      singles: [{ slug: "header" }],
+    });
+    expect(await removedEntityScopes()).toEqual([
+      { scopeKind: "collection", scopeSlug: "old-posts" },
+      { scopeKind: "single", scopeSlug: "banner" },
     ]);
   });
 
-  it("stops nothing, and asks nothing of the early stop, when none is removed", async () => {
+  it("names none while no configuration is published, as the write guard reads it", async () => {
+    registries();
+    expect(await removedEntityScopes()).toEqual([]);
+  });
+});
+
+describe("stopReleasesOfRemovedEntities", () => {
+  const removed: ReleaseCheckScope[] = [
+    { scopeKind: "collection", scopeSlug: "old-posts" },
+    { scopeKind: "single", scopeSlug: "banner" },
+  ];
+
+  it("hands the early stop exactly the removed entities", async () => {
     const stop = vi.fn(async (_target: ReleaseRecheckTarget) => {});
     await stopReleasesOfRemovedEntities({
-      repository: { scheduledMemberScopes: async () => scopes },
-      isRemoved: async () => false,
+      removedScopes: async () => removed,
+      stop,
+    });
+    expect(stop.mock.calls).toEqual([[{ scopes: removed }]]);
+  });
+
+  it("asks nothing of the early stop when none is removed", async () => {
+    const stop = vi.fn(async (_target: ReleaseRecheckTarget) => {});
+    await stopReleasesOfRemovedEntities({
+      removedScopes: async () => [],
       stop,
     });
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("lets a stop that failed reach its caller, rather than logging it as an event's", async () => {
+    register("releasesService", {
+      stopOnHardProblems: async () => {
+        throw new Error("connection reset");
+      },
+    });
+    await expect(
+      stopReleasesOfRemovedEntities({ removedScopes: async () => removed })
+    ).rejects.toThrow("connection reset");
   });
 });
 

@@ -14,14 +14,19 @@
  * engine's run is the first writer after a deploy.
  *
  * Whether an entity is removed from code is the write guard's own decision
- * (`entityRemovedFromCode`), asked here rather than decided again, so the
+ * (`entityRemovedFromCode`, and `rowRemovedFromCode` for a registry row in
+ * hand), asked here rather than decided again, so the
  * check and the refusal it predicts cannot come to disagree.
  *
  * @module domains/releases/removed-entity-releases
  */
-import { entityRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
+import { getService } from "../../di/service-access";
+import {
+  entityRemovedFromCode,
+  rowRemovedFromCode,
+} from "../dynamic-collections/services/removed-from-code-writes";
 
-import { stopReleasesHolding } from "./early-stop";
+import { stopReleasesHoldingOrThrow } from "./early-stop";
 import type { ReleaseCheckScope } from "./readiness/check-sources";
 import type { ReleaseRecheckTarget } from "./release-recheck";
 
@@ -37,33 +42,53 @@ export function scopeRemovedFromCode(
 }
 
 /**
+ * The collections and Singles removed from code, as release scopes.
+ *
+ * Read from the registries' cached listings and judged by the write guard's
+ * decision for rows already in hand (`rowRemovedFromCode`), so it costs no
+ * database read and grows with the number of entities a site has, never with
+ * its releases or their documents. Empty while no configuration is published,
+ * as the guard reads it.
+ */
+export async function removedEntityScopes(): Promise<ReleaseCheckScope[]> {
+  const [collections, singles] = await Promise.all([
+    getService("collectionRegistryService").getAllCollectionsForRead(),
+    getService("singleRegistryService").getAllSinglesForRead(),
+  ]);
+  return [
+    ...collections
+      .filter(row => rowRemovedFromCode("collection", row))
+      .map(row => ({ scopeKind: "collection" as const, scopeSlug: row.slug })),
+    ...singles
+      .filter(row => rowRemovedFromCode("single", row))
+      .map(row => ({ scopeKind: "single" as const, scopeSlug: row.slug })),
+  ];
+}
+
+/**
  * Stop every scheduled release holding a document of an entity removed from
  * code, and tell each one's owner.
  *
- * Asks first which entities the scheduled releases' documents are in, and
- * whether each was removed, so a site with none removed reads the scopes and
- * nothing more: a declared entity is answered from the published
- * configuration. The releases holding a removed one are handed to the early
- * stop, which checks those members with the hard sources, stops each failing
- * release through the one transition into `blocked` (with its due component,
- * when it is due) and tells its owner once. A release already stopped is no
- * longer scheduled, so a later run stops and tells nothing twice.
+ * Asks first which entities are removed, which on almost every pass is none,
+ * and then stops nothing. Otherwise the removed entities are handed to the
+ * early stop, which finds the scheduled releases' members in them through the
+ * members' scope index, checks those members with the hard sources, stops
+ * each failing release through the one transition into `blocked` (with its
+ * due component, when it is due) and tells its owner once. A release already
+ * stopped is no longer scheduled, so a later pass finds no member to check,
+ * and stops and tells nothing twice.
  *
- * `isRemoved` and `stop` are the decision and the early stop above, injected
- * so the step is testable without a booted runtime.
+ * A failure reaches the caller, which reports it as this step's.
+ * `removedScopes` and `stop` are the reads above, injected so the step is
+ * testable without a booted runtime.
  */
-export async function stopReleasesOfRemovedEntities(deps: {
-  repository: {
-    scheduledMemberScopes(): Promise<readonly ReleaseCheckScope[]>;
-  };
-  isRemoved?: (scope: ReleaseCheckScope) => Promise<boolean>;
-  stop?: (target: ReleaseRecheckTarget) => Promise<void>;
-}): Promise<void> {
-  const isRemoved = deps.isRemoved ?? scopeRemovedFromCode;
-  const removed: ReleaseCheckScope[] = [];
-  for (const scope of await deps.repository.scheduledMemberScopes()) {
-    if (await isRemoved(scope)) removed.push(scope);
-  }
+export async function stopReleasesOfRemovedEntities(
+  deps: {
+    removedScopes?: () => Promise<readonly ReleaseCheckScope[]>;
+    stop?: (target: ReleaseRecheckTarget) => Promise<void>;
+  } = {}
+): Promise<void> {
+  const removed = await (deps.removedScopes ?? removedEntityScopes)();
   if (removed.length === 0) return;
-  await (deps.stop ?? stopReleasesHolding)({ scopes: removed });
+  await (deps.stop ?? stopReleasesHoldingOrThrow)({ scopes: [...removed] });
 }
