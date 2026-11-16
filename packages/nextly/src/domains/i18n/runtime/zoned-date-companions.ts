@@ -27,7 +27,6 @@ import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoti
 import { isFieldLocalized } from "../classify-fields";
 import { zonedDateColumns } from "../migration/companion-column-holds";
 import type { CompanionFieldLike } from "../migration/reconcile-companion";
-import { storesPerLanguage } from "../per-language-storage";
 
 import { liveCompanionColumns } from "./companion-io";
 
@@ -46,7 +45,7 @@ interface TranslatedEntity {
   builtBy: ReturnType<typeof builtByFor>;
 }
 
-/** Every entity the registry holds whose translatable values live in a translations table. */
+/** Every entity the registry holds, with what decides its translations columns. */
 async function translatedEntities(
   adapter: DrizzleAdapter
 ): Promise<TranslatedEntity[]> {
@@ -72,26 +71,29 @@ async function translatedEntities(
 }
 
 /** A stored entity as this pass reads it: where its values live, its fields, and its owner. */
-type StoredEntity = Parameters<typeof storesPerLanguage>[0] &
-  RegisteredCollectionRow & {
-    tableName: string;
-    fields?: readonly unknown[] | null;
-  };
+type StoredEntity = RegisteredCollectionRow & {
+  tableName: string;
+  fields?: readonly unknown[] | null;
+};
 
-/** `records` of one kind that keep their translatable values in a translations table. */
+/**
+ * `records` of one kind, each with its translatable fields. Every entity is taken, whatever its
+ * own `localized` says: under per-language storage one not marked translated keeps its
+ * translatable values in a translations table too, and a command that reads no config (`nextly
+ * upgrade`) cannot know that setting. The translations table being there is what decides
+ * (`findZonedDateColumns`).
+ */
 function entitiesOf(
   kind: "collection" | "single" | "fieldGroup",
   records: readonly StoredEntity[]
 ): TranslatedEntity[] {
-  return records
-    .filter(record => storesPerLanguage(record))
-    .map(record => ({
-      tableName: record.tableName,
-      fields: ((record.fields ?? []) as CompanionFieldLike[]).filter(field =>
-        isFieldLocalized(field, true)
-      ),
-      builtBy: builtByFor(kind, !isCodeOwned(record)),
-    }));
+  return records.map(record => ({
+    tableName: record.tableName,
+    fields: ((record.fields ?? []) as CompanionFieldLike[]).filter(field =>
+      isFieldLocalized(field, true)
+    ),
+    builtBy: builtByFor(kind, !isCodeOwned(record)),
+  }));
 }
 
 /** One translated date column an earlier release made with a time zone. */

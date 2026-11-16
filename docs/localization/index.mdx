@@ -166,7 +166,7 @@ A translated field renamed in code is not yet carried over: the old column keeps
 
 ### Translated date fields on PostgreSQL
 
-The translations table keeps a translated date field as the main table does: a `timestamp` holding the UTC time. A PostgreSQL database from an earlier release keeps these columns with a time zone until `nextly upgrade` converts them, keeping each date as Nextly showed it; on a server not in UTC, check recent translated dates after upgrading. See [Translated date fields on PostgreSQL](/docs/guides/production-migrations#translated-date-fields-on-postgresql).
+The translations table keeps a translated date field as the main table does: a `timestamp` holding the UTC time. A PostgreSQL database from an earlier release keeps these columns with a time zone until `nextly upgrade` converts them, keeping each date as Nextly showed it; on a server not in UTC, run it as soon as the release serves every instance, and check recent translated dates after it. See [Translated date fields on PostgreSQL](/docs/guides/production-migrations#translated-date-fields-on-postgresql).
 
 ## Fallback chains
 

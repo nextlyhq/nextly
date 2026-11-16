@@ -306,6 +306,25 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       });
     });
 
+    // Under per-language storage an entity keeps its translatable values in its translations table
+    // whatever its own `localized` says, and `nextly upgrade` reads no config to know it: the table
+    // being there is what it goes by.
+    it("converts it through nextly upgrade for an entity not marked translated", async () => {
+      await openIn(zone);
+      await runSync(configOf(false));
+      await insertMainRows();
+      await runSync(configOf(true));
+      await madeTheOldWay();
+      await query(
+        `UPDATE dynamic_collections SET localized = false WHERE slug = '${SLUG}'`
+      );
+
+      expect(await runUpgradeStep()).toMatchObject({ pending: 1, converted: 1 });
+      expect((await published(COMPANION, "_parent")).type).toBe(
+        "timestamp without time zone"
+      );
+    });
+
     it("converts a date column made with a time zone through the development sync", async () => {
       await openIn(zone);
       await runSync(configOf(false));
