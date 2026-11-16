@@ -29,8 +29,6 @@ import {
   type TransferKind,
 } from "../transfer/transfer-contract";
 
-import { refusalMessage } from "./save-pattern-client";
-
 /** The row action's id, the same on all three lists. */
 const EXPORT_ROW_ACTION_ID = "page-builder-export";
 
@@ -72,9 +70,22 @@ async function exportRow(kind: TransferKind, id: string): Promise<void> {
     download(file);
     toast.success(exportedMessage(file));
   } catch (error) {
-    toast.error(
-      error instanceof Error ? refusalMessage(error, UNEXPLAINED) : UNEXPLAINED
-    );
+    toast.error(await failureMessage(error));
+  }
+}
+
+/**
+ * What a failed export says. The refusal's words come with the builder's own
+ * reasons, so they are fetched when an export fails rather than with this
+ * module, which the admin entry loads on every screen to register the action.
+ */
+async function failureMessage(error: unknown): Promise<string> {
+  if (!(error instanceof Error)) return UNEXPLAINED;
+  try {
+    const { refusalMessage } = await import("./save-pattern-client");
+    return refusalMessage(error, UNEXPLAINED);
+  } catch {
+    return UNEXPLAINED;
   }
 }
 
