@@ -38,6 +38,7 @@ import { applyOps, type BuilderOp } from "./ops";
 import { NoticeSinkProvider } from "./builder-notices";
 import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
+import { keyHint } from "./key-hint";
 import {
   breakpointLabel,
   describedWithUnit,
@@ -5481,17 +5482,46 @@ describe("a per-side property is drawn as a box", () => {
     ]);
   });
 
-  it("names Alt+Backspace in each side's description", () => {
-    const { box } = mountSpacingBox(LTR);
-    const top = within(box as HTMLElement).getByLabelText("Margin top");
-    const described = (top.getAttribute("aria-describedby") ?? "")
+  /** A side's description, read as assistive technology reads it. */
+  function descriptionOf(field: HTMLElement): string {
+    return (field.getAttribute("aria-describedby") ?? "")
       .split(" ")
       .map(id => document.getElementById(id)?.textContent ?? "")
       .join(" ");
+  }
 
-    expect(described).toContain("Alt+Backspace");
+  it("names the reset key in each side's description, as this keyboard spells it", () => {
+    const { box } = mountSpacingBox(LTR);
+    const top = within(box as HTMLElement).getByLabelText("Margin top");
+
+    expect(descriptionOf(top)).toBe("Alt+Backspace resets this side.");
     // A description, not an error: the side is not marked invalid by it.
     expect(top.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("names the key Option on a Mac, through the editor's key hints", () => {
+    const original = Object.getOwnPropertyDescriptor(
+      window.navigator,
+      "platform"
+    );
+    Object.defineProperty(window.navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    try {
+      const { box } = mountSpacingBox(LTR);
+      const top = within(box as HTMLElement).getByLabelText("Margin top");
+
+      // The same spelling the Help panel and the layer menus show.
+      expect(descriptionOf(top)).toBe(
+        `${keyHint("alt+Backspace", true)} resets this side.`
+      );
+      expect(descriptionOf(top)).toContain("⌥");
+    } finally {
+      if (original !== undefined) {
+        Object.defineProperty(window.navigator, "platform", original);
+      }
+    }
   });
 
   it("carries the EDITED ELEMENT's axes, so its grid resolves in them", () => {

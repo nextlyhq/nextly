@@ -12,8 +12,10 @@
  */
 
 import type { StyleValue } from "@nextlyhq/blocks-engine";
+import { detectApplePlatform } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { keyHint } from "./key-hint";
 import type { SideOrientation } from "./side-orientation";
 import type { InspectedStyleProperty } from "./style-inspector";
 import { sideBoxFor } from "./style-sides";
@@ -118,13 +120,27 @@ function SideResetKeys({
   side: string | undefined;
   fieldId: string;
 }): React.JSX.Element | null {
+  /*
+   * The key as this keyboard names it (Option on Apple, Alt elsewhere),
+   * spelled by the editor's one key-hint helper. Resolved after mounting:
+   * a server render has no platform to ask, and a hint naming the wrong key
+   * is worse than none for the moment before it is known.
+   */
+  const [apple, setApple] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setApple(detectApplePlatform());
+  }, []);
   if (side === undefined) return null;
+  const keys = apple === null ? null : keyHint(RESET_KEYS, apple);
   return (
     <span id={sideKeysId(fieldId)} hidden>
-      Alt+Backspace resets this side.
+      {keys === null ? null : `${keys} resets this side.`}
     </span>
   );
 }
+
+/** A side's reset key, as the shortcut grammar spells it. */
+const RESET_KEYS = "alt+Backspace";
 
 /** Alt+Backspace and no other modifier: a side's reset key. */
 function isResetKey(event: React.KeyboardEvent): boolean {
