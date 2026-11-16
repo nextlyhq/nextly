@@ -89,6 +89,7 @@ import {
   MAX_INDEX_NAME_LENGTH,
   columnTypeIsIndexable,
   indexNameForColumn,
+  uniqueNotOnListError,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import {
@@ -725,18 +726,7 @@ export class FieldGroupSchemaService {
     // says why): refused before any statement, as the field asks for something no index gives.
     if (relationHoldsReferenceList(field)) {
       const listName = "name" in field && field.name ? String(field.name) : "";
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: `fields.${listName}`,
-            code: "UNIQUE_NOT_ON_LIST",
-            message:
-              `"${listName}" is marked unique, but it holds a list of references, which cannot be ` +
-              `unique. Remove the unique flag.`,
-          },
-        ],
-        logContext: { tableName, field: listName, dialect: this.dialect },
-      });
+      throw uniqueNotOnListError(tableName, listName, this.dialect);
     }
     const columnType = this.columnTypeFor(field);
     if (columnType === null) return;

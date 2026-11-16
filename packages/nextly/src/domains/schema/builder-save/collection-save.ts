@@ -105,11 +105,13 @@ import {
   classifyFieldKind,
   fieldsStoredOnRow,
   getColumnDescriptor,
+  relationHoldsReferenceList,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import {
   uniquenessCanBeAnIndex,
+  uniqueNotOnListError,
   uniquenessNotEnforceableError,
 } from "../services/index-name";
 import { loadUiSchema } from "../ui-schema/loader";
@@ -793,6 +795,11 @@ function refuseUnenforceableUniques(
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
+    // A relationship holding a list is never unique, on any dialect: refused here before any
+    // statement, as at the create.
+    if (relationHoldsReferenceList(field)) {
+      throw uniqueNotOnListError(table, name, dialect);
+    }
     if (toSnakeCase(name) === "slug") continue;
     const column = getColumnDescriptor(
       field as FieldDefinition,

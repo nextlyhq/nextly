@@ -61,6 +61,7 @@ import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   getSystemColumnDescriptors,
+  relationHoldsReferenceList,
   relationshipStoresJson,
   relationStorageShape,
   renderSystemColumnSql,
@@ -72,6 +73,7 @@ import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
+  uniqueNotOnListError,
   uniquenessNotEnforceableError,
 } from "../../schema/services/index-name";
 import {
@@ -564,6 +566,11 @@ export class DynamicCollectionSchemaService {
     for (const { previous, field } of pairs) {
       // Unique by its mark or by a relationship being one-to-one, so a relationship becoming
       // one-to-one is made unique as a field marked unique is, and loses it when it stops.
+      // A list marked unique is refused, not quietly left without uniqueness: asked of the mark,
+      // since the list is never unique by the column rule.
+      if (field.unique === true && relationHoldsReferenceList(field)) {
+        throw uniqueNotOnListError(tableName, field.name, this.dialect);
+      }
       const wasUnique = this.columnIsUnique(previous);
       const isUnique = this.columnIsUnique(field);
       if (wasUnique === isUnique || !fieldProducesColumn(field)) continue;
@@ -1966,6 +1973,11 @@ ${allColumnDefs.join(",\n")}
         // silently gone. There is no spelling that works here: MySQL refuses to key an unbounded
         // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
         // outcome, and saying it first is what keeps the table untouched.
+        // A list marked unique is refused on every dialect, by the same rule and before any
+        // statement, rather than built without the uniqueness it asks for.
+        if (field.unique === true && relationHoldsReferenceList(field)) {
+          throw uniqueNotOnListError(tableName, field.name, this.dialect);
+        }
         if (this.columnIsUnique(field) && !this.uniquenessCanBeAnIndex(type)) {
           throw this.uniquenessNotEnforceable(tableName, field);
         }

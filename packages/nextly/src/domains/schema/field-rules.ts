@@ -121,3 +121,15 @@ export function relationHoldsReferenceList(field: {
   const isRelation = field.type === "relationship" || field.type === "upload";
   return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
 }
+
+/**
+ * The words every road uses to refuse a list relation marked unique (`relationHoldsReferenceList`
+ * says why it cannot be): they name the field and what to do instead.
+ */
+export function uniqueNotOnListMessage(fieldName: string): string {
+  return (
+    `"${fieldName}" holds a list of links, which cannot be unique: it would mean ` +
+    `no two entries hold the identical list. Turn Unique off on "${fieldName}", or ` +
+    `make it a single link.`
+  );
+}

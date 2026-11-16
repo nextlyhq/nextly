@@ -13,6 +13,7 @@
 // genuinely reachable; with letters outside ASCII it is reached sooner.
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { uniqueNotOnListMessage } from "../field-rules";
 import { isMysqlTextOrBlobType } from "../pipeline/sql-templates/create-index";
 
 /**
@@ -290,6 +291,28 @@ export function uniquenessCanBeAnIndex(
   // The same TEXT/BLOB question the index renderer asks before keying a column by prefix, every
   // size of both included.
   return !isMysqlTextOrBlobType(columnType);
+}
+
+/**
+ * The refusal for a relationship holding a list marked unique, on every dialect and every road
+ * that judges it: no dialect keeps such uniqueness (`relationHoldsReferenceList` says why), so the
+ * mark is refused before any statement, naming the field and what to do instead.
+ */
+export function uniqueNotOnListError(
+  tableName: string,
+  fieldName: string,
+  dialect: string
+): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${fieldName}`,
+        code: "UNIQUE_NOT_ON_LIST",
+        message: uniqueNotOnListMessage(fieldName),
+      },
+    ],
+    logContext: { tableName, field: fieldName, dialect },
+  });
 }
 
 /**

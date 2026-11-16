@@ -33,6 +33,7 @@ import {
   publicAddressErrors,
   publicAddressFieldProblem,
 } from "../../domains/public-addresses/public-address-template";
+import { uniqueNotOnListMessage } from "../../domains/schema/field-rules";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -440,9 +441,7 @@ export function uniqueOnListError(
   if (field.unique !== true || !relationHoldsReferenceList(field)) return null;
   return {
     path: `${path}.unique`,
-    message:
-      `"${String(field.name)}" holds a list of references, which cannot be unique. ` +
-      "Remove the unique flag.",
+    message: uniqueNotOnListMessage(String(field.name)),
     code: "UNIQUE_NOT_ON_LIST",
   };
 }
