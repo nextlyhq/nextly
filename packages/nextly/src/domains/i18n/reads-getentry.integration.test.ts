@@ -168,7 +168,7 @@ describe("getEntry — localized field resolution (M4a)", () => {
     expect(doc?.heading).toBe("Hallo");
   });
 
-  it("locale=all returns a language-keyed object per localized field", async () => {
+  it("locale=all reads the default language, with every language's values beside it", async () => {
     const t = await boot();
     const created = await t.nextly.create({
       collection: "pages",
@@ -187,8 +187,12 @@ describe("getEntry — localized field resolution (M4a)", () => {
       locale: "all",
       overrideAccess: true,
     });
-    expect(all.data?.heading).toEqual({ en: "Hello", de: "Hallo" });
-    // Shared fields stay flat.
+    // Every field keeps its type, read in the default language.
+    expect(all.data?.heading).toBe("Hello");
     expect(all.data?.title).toBe("Page 1");
+    // Every language's values beside it.
+    expect(
+      (all.data?._allLocales as Record<string, unknown> | undefined)?.heading
+    ).toEqual({ en: "Hello", de: "Hallo" });
   });
 });
