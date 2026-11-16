@@ -122,6 +122,22 @@ describe("the default, by the collection's main field", () => {
     ).toBe("/admin/collections/pages/42/builder?field=content");
   });
 
+  it("skips the system title and slug the collections list puts first, as well as the field it titles entries by", () => {
+    // The shape the admin is given: the list adds `title` and `slug` in front
+    // of a collection that does not declare them.
+    expect(
+      open({
+        fields: [
+          title,
+          slug,
+          { name: "name", type: "text" },
+          blocks("content"),
+        ],
+        admin: { useAsTitle: "name" },
+      })
+    ).toBe("/admin/collections/pages/42/builder?field=content");
+  });
+
   it("reads the legacy schemaDefinition shape the collections list carries", () => {
     expect(
       open({ schemaDefinition: { fields: [title, blocks("content")] } })

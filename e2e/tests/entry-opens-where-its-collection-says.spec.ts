@@ -209,4 +209,6 @@ test("with the builder's views not published, a row opens the form", async ({
   await expect(rowLink(page, title)).toHaveAttribute("href", formAt(id));
   await rowLink(page, title).click();
   await expect(excerpt(page)).toHaveValue("A short summary.");
+  // Nothing offers the builder where its views are not published.
+  await expect(page.getByText("Open in builder")).toHaveCount(0);
 });

@@ -109,17 +109,25 @@ function shownTopLevelFields(collection: OpenableCollection): MainField[] {
 }
 
 /**
+ * The fields the title block draws above the form rather than in it: `title`
+ * and `slug`, which the collections list puts first on a collection that
+ * does not declare them, and the field the collection titles entries by.
+ */
+function titleFields(collection: OpenableCollection): ReadonlySet<string> {
+  const titled = collection.admin?.useAsTitle;
+  return new Set(["title", "slug", ...(titled === undefined ? [] : [titled])]);
+}
+
+/**
  * The collection's main field: the first top-level field, reading into
- * unnamed groups, that is not hidden, not the one it titles entries by and
- * not `slug`.
+ * unnamed groups, that is not hidden, not the title (the field it titles
+ * entries by, or `title`) and not `slug`.
  */
 export function mainFieldOf(
   collection: OpenableCollection
 ): MainField | undefined {
-  const titleField = collection.admin?.useAsTitle ?? "title";
-  return shownTopLevelFields(collection).find(
-    ({ path }) => path !== titleField && path !== "slug"
-  );
+  const skipped = titleFields(collection);
+  return shownTopLevelFields(collection).find(({ path }) => !skipped.has(path));
 }
 
 /** The published view at `path` on a collection: its own first, else a field type's. */

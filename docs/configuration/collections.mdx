@@ -3,7 +3,7 @@ title: Collections
 description: Define content types with multiple entries using collections.
 ---
 
-import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 A collection is a content type that stores multiple entries - blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/admin/api/collections/[slug]/entries`, and appears in the admin panel with list and edit views.
 
@@ -17,7 +17,13 @@ A collection is a content type that stores multiple entries - blog posts, produc
 Use `defineCollection()` from `nextly`:
 
 ```typescript title="src/collections/posts.ts"
-import { defineCollection, text, richText, relationship, date } from "nextly";
+import {
+  defineCollection,
+  text,
+  richText,
+  relationship,
+  date,
+} from "nextly";
 
 export default defineCollection({
   slug: "posts",
@@ -109,7 +115,7 @@ Every collection row has these. Never declare them yourself.
 
 ### Conditionally auto-injected (declared definition wins)
 
-`defineCollection()` adds these as `text NOT NULL` columns _only if you don't declare them yourself_:
+`defineCollection()` adds these as `text NOT NULL` columns *only if you don't declare them yourself*:
 
 - `title`
 - `slug`
@@ -150,10 +156,10 @@ Only `slug` and `fields` are required.
 
 ### `slug`
 
-|              |          |
-| ------------ | -------- |
-| **Type**     | `string` |
-| **Required** | Yes      |
+| | |
+|---|---|
+| **Type** | `string` |
+| **Required** | Yes |
 
 Unique identifier used as the database table name (with a `dc_` prefix, unless `dbName` is set), the REST path (`/admin/api/collections/[slug]/entries`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
 
@@ -175,8 +181,10 @@ REST schema endpoints, through `nextly.fieldGroups.create()`, and by `nextly mig
   PostgreSQL allows: 48 for a Single (`single_<slug>_locales`) and 47 for a field group
   (`idx_comp_<slug>_parent`).
 
-The table is named from the address's snake*case form, each hyphen written as an underscore:
-`team-updates` is stored in `dc_team_updates`. So two addresses that differ only by `-` and `*`are refused: a collection or Single cannot take`team_updates`beside a collection or Single`team-updates`, and a field group cannot take it beside another field group `team-updates`. A
+The table is named from the address's snake_case form, each hyphen written as an underscore:
+`team-updates` is stored in `dc_team_updates`. So two addresses that differ only by `-` and `_`
+are refused: a collection or Single cannot take `team_updates` beside a collection or Single
+`team-updates`, and a field group cannot take it beside another field group `team-updates`. A
 field group may share that form with a collection, since field groups have their own addresses.
 
 A refusal names the address and the reason. The rule applies only when an address is created:
@@ -185,36 +193,36 @@ an entity that already exists under an address the rule now refuses keeps workin
 
 ### `fields`
 
-|              |                 |
-| ------------ | --------------- |
-| **Type**     | `FieldConfig[]` |
-| **Required** | Yes             |
+| | |
+|---|---|
+| **Type** | `FieldConfig[]` |
+| **Required** | Yes |
 
 Array of field definitions. See [Fields](/docs/configuration/fields) for the full inventory.
 
 ### `labels`
 
-|             |                                          |
-| ----------- | ---------------------------------------- |
-| **Type**    | `{ singular?: string; plural?: string }` |
-| **Default** | Auto-generated from slug                 |
+| | |
+|---|---|
+| **Type** | `{ singular?: string; plural?: string }` |
+| **Default** | Auto-generated from slug |
 
 Display names in the admin UI. If omitted, the singular label is derived from the slug (`blog-posts` → `Blog Posts`) and the plural is generated from the singular.
 
 ### `timestamps`
 
-|             |           |
-| ----------- | --------- |
-| **Type**    | `boolean` |
-| **Default** | `true`    |
+| | |
+|---|---|
+| **Type** | `boolean` |
+| **Default** | `true` |
 
 When `true`, every entry gets `createdAt` (set on insert) and `updatedAt` (refreshed on every save) columns.
 
 ### `dbName`
 
-|             |                                                               |
-| ----------- | ------------------------------------------------------------- |
-| **Type**    | `string`                                                      |
+| | |
+|---|---|
+| **Type** | `string` |
 | **Default** | `dc_<slug>`, with hyphens in the slug replaced by underscores |
 
 Custom database table name. Useful for legacy schemas or when the slug doesn't match your naming convention.
@@ -223,40 +231,40 @@ Collection tables carry a `dc_` prefix. By default the table is `dc_` plus the s
 
 ### `description`
 
-|             |             |
-| ----------- | ----------- |
-| **Type**    | `string`    |
+| | |
+|---|---|
+| **Type** | `string` |
 | **Default** | `undefined` |
 
 Description displayed in the admin UI. Falls back to `admin.description` when reading from the type.
 
 ### `sanitize`
 
-|             |           |
-| ----------- | --------- |
-| **Type**    | `boolean` |
-| **Default** | `true`    |
+| | |
+|---|---|
+| **Type** | `boolean` |
+| **Default** | `true` |
 
 When enabled, the global sanitization hook strips HTML tags from plain-text fields (`text`, `textarea`, `email`) before storage. Set to `false` only if the collection intentionally stores HTML in those fields.
 
 ### `search`
 
-|             |                                               |
-| ----------- | --------------------------------------------- |
-| **Type**    | `SearchConfig`                                |
+| | |
+|---|---|
+| **Type** | `SearchConfig` |
 | **Default** | Auto-detects `text`/`textarea`/`email` fields |
 
-| Property           | Type       | Default                              | Description                              |
-| ------------------ | ---------- | ------------------------------------ | ---------------------------------------- |
-| `searchableFields` | `string[]` | All `text`/`textarea`/`email` fields | Fields included in search queries.       |
-| `minSearchLength`  | `number`   | `2`                                  | Minimum query length before search runs. |
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `searchableFields` | `string[]` | All `text`/`textarea`/`email` fields | Fields included in search queries. |
+| `minSearchLength` | `number` | `2` | Minimum query length before search runs. |
 
 ### `indexes`
 
-|             |                 |
-| ----------- | --------------- |
-| **Type**    | `IndexConfig[]` |
-| **Default** | `undefined`     |
+| | |
+|---|---|
+| **Type** | `IndexConfig[]` |
+| **Default** | `undefined` |
 
 Compound database indexes. For single-field indexes, use `index: true` directly on the field. `id` is the primary key and `createdAt` is indexed on its own automatically.
 
@@ -266,7 +274,7 @@ An index names top-level fields, and may also name `id`, `createdAt` and `update
 indexes: [
   { fields: ["authorId", "createdAt"] },
   { fields: ["slug", "locale"], unique: true, name: "uq_slug_locale" },
-];
+]
 ```
 
 A `name` is optional, and must start with `idx_` (or `uq_` for a unique index):
@@ -292,27 +300,27 @@ refused; index fewer, or narrower, fields. An explicit `name` may be at most
 
 ### `endpoints`
 
-|             |                    |
-| ----------- | ------------------ |
-| **Type**    | `CustomEndpoint[]` |
-| **Default** | `undefined`        |
+| | |
+|---|---|
+| **Type** | `CustomEndpoint[]` |
+| **Default** | `undefined` |
 
 `defineCollection()` accepts and type-checks `endpoints`, each `{ path, method, handler }`, but no route serves them: neither the REST handler nor any other route calls these handlers, so a request to their path is answered as if they were not there. For logic of your own, add a Next.js route handler in your app and read and write through the [Direct API](/docs/api-reference/direct-api).
 
 ### `custom`
 
-|             |                           |
-| ----------- | ------------------------- |
-| **Type**    | `Record<string, unknown>` |
-| **Default** | `undefined`               |
+| | |
+|---|---|
+| **Type** | `Record<string, unknown>` |
+| **Default** | `undefined` |
 
 Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
 
 ### `publicAddress`
 
-|             |             |
-| ----------- | ----------- |
-| **Type**    | `string`    |
+| | |
+|---|---|
+| **Type** | `string` |
 | **Default** | `undefined` |
 
 Where each entry is served on your site, as a path with placeholders: `"/blog/{slug}"`. [`publicAddressOf`](/docs/configuration/public-addresses) reads it, and answers that a collection without one has no address rather than guessing. Experimental. With the [SEO plugin](/docs/plugins/seo) installed, the sitemap lists each published entry at this address and each page's canonical link is this address; a collection without one is left out of the sitemap.
@@ -333,9 +341,9 @@ An address that breaks a rule stops the configuration from loading, naming what 
 
 ### `publicAddressField`
 
-|             |             |
-| ----------- | ----------- |
-| **Type**    | `string`    |
+| | |
+|---|---|
+| **Type** | `string` |
 | **Default** | `undefined` |
 
 Experimental. A text field whose value, where an entry has one, is that entry's own public address, for a collection whose entries are not all served under one pattern. An entry whose field is empty is served at `publicAddress`, which this needs.
@@ -346,10 +354,7 @@ defineCollection({
   fields: [
     text({ name: "title" }),
     text({ name: "slug" }),
-    text({
-      name: "address",
-      admin: { description: "Leave empty for /features/{slug}" },
-    }),
+    text({ name: "address", admin: { description: "Leave empty for /features/{slug}" } }),
   ],
   publicAddress: "/features/{slug}",
   publicAddressField: "address",
@@ -368,21 +373,21 @@ A field that is not a text field of the collection, or a collection without `pub
 
 Configure how the collection appears in the admin panel via the `admin` property.
 
-| Property                  | Type                        | Default             | Description                                                                                                                                                                                          |
-| ------------------------- | --------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group`                   | `string`                    | None                | Sidebar group name; collections sharing a group appear together.                                                                                                                                     |
-| `icon`                    | `string`                    | None                | Lucide icon name (e.g. `"FileText"`, `"Users"`).                                                                                                                                                     |
-| `hidden`                  | `boolean`                   | `false`             | Hide from sidebar navigation (still reachable via direct URL and API).                                                                                                                               |
-| `order`                   | `number`                    | `100`               | Sort order within sidebar group (lower = higher).                                                                                                                                                    |
-| `sidebarGroup`            | `string`                    | None                | Custom sidebar group slug; moves the entry from its default section to a custom group.                                                                                                               |
-| `isPlugin`                | `boolean`                   | `false`             | Render under the "Plugins" sidebar section instead of "Collections".                                                                                                                                 |
-| `useAsTitle`              | `string`                    | Document ID         | Field name used as the entry title in lists and breadcrumbs.                                                                                                                                         |
-| `opensIn`                 | `string`                    | By its main field   | Experimental. Where the admin opens this collection's entries: `"form"`, or the path of a document view the collection has. See [Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens). |
-| `pagination.defaultLimit` | `number`                    | `10`                | Default entries per page.                                                                                                                                                                            |
-| `pagination.limits`       | `number[]`                  | `[10, 25, 50, 100]` | Available page-size options.                                                                                                                                                                         |
-| `description`             | `string`                    | None                | Help text below the collection title.                                                                                                                                                                |
-| `preview`                 | `CollectionPreviewConfig`   | None                | Adds a "Preview" button to the entry form. See below.                                                                                                                                                |
-| `components`              | `CollectionAdminComponents` | None                | Override default views and inject custom React components. See below.                                                                                                                                |
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `group` | `string` | None | Sidebar group name; collections sharing a group appear together. |
+| `icon` | `string` | None | Lucide icon name (e.g. `"FileText"`, `"Users"`). |
+| `hidden` | `boolean` | `false` | Hide from sidebar navigation (still reachable via direct URL and API). |
+| `order` | `number` | `100` | Sort order within sidebar group (lower = higher). |
+| `sidebarGroup` | `string` | None | Custom sidebar group slug; moves the entry from its default section to a custom group. |
+| `isPlugin` | `boolean` | `false` | Render under the "Plugins" sidebar section instead of "Collections". |
+| `useAsTitle` | `string` | Document ID | Field name used as the entry title in lists and breadcrumbs. |
+| `opensIn` | `string` | By its main field | Experimental. Where the admin opens this collection's entries: `"form"`, or the path of a document view the collection has. See [Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens). |
+| `pagination.defaultLimit` | `number` | `10` | Default entries per page. |
+| `pagination.limits` | `number[]` | `[10, 25, 50, 100]` | Available page-size options. |
+| `description` | `string` | None | Help text below the collection title. |
+| `preview` | `CollectionPreviewConfig` | None | Adds a "Preview" button to the entry form. See below. |
+| `components` | `CollectionAdminComponents` | None | Override default views and inject custom React components. See below. |
 
 ### Preview URLs
 
@@ -438,19 +443,19 @@ access: {
 
 Every access rule — a collection's, a Single's and a field's — is handed one context, `AccessRuleContext` (`AccessControlContext` is the same type):
 
-| Property      | Type                                                                     | Description                                                                                                                                                |
-| ------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user`        | `MinimalUser \| null`                                                    | The authenticated user (or `null` for unauthenticated requests). For an API key, the user who made it.                                                     |
-| `req`         | `RequestContext`                                                         | The request. For a field rule, `req.user` is the user object the request carries; for any other rule, the caller's `id`, `email` where known, and `roles`. |
-| `roles`       | `string[]`                                                               | The user's role slugs (resolved from DB, includes inherited roles). Don't decide by these: check `permissions`.                                            |
-| `permissions` | `string[]`                                                               | Effective permissions, spelled as the Roles screen spells them: `update-posts`.                                                                            |
-| `principal`   | `Principal \| null`                                                      | A plugin-defined signed-in person, or `null`.                                                                                                              |
-| `operation`   | `"create" \| "read" \| "update" \| "delete" \| "publish" \| "unpublish"` | The operation being checked.                                                                                                                               |
-| `target`      | `{ kind, slug }`                                                         | What is being checked: a `"collection"`, a `"single"`, or, for a field rule, the `"component"` the field belongs to.                                       |
-| `collection`  | `string`                                                                 | The target's slug, the same as `target.slug`.                                                                                                              |
-| `id`, `data`  | optional                                                                 | The entry, where the rule judges a known one. A collection's rule is asked before any entry is read, so it has none.                                       |
-| `locale`      | `string \| undefined`                                                    | The one language the operation is in, where it is in one. See [Localization](/docs/localization#access-rules-and-languages).                               |
-| `locales`     | `string[]`                                                               | Every language the operation involves; every configured language for an operation on the whole entry, such as a delete.                                    |
+| Property | Type | Description |
+|---|---|---|
+| `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). For an API key, the user who made it. |
+| `req` | `RequestContext` | The request. For a field rule, `req.user` is the user object the request carries; for any other rule, the caller's `id`, `email` where known, and `roles`. |
+| `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). Don't decide by these: check `permissions`. |
+| `permissions` | `string[]` | Effective permissions, spelled as the Roles screen spells them: `update-posts`. |
+| `principal` | `Principal \| null` | A plugin-defined signed-in person, or `null`. |
+| `operation` | `"create" \| "read" \| "update" \| "delete" \| "publish" \| "unpublish"` | The operation being checked. |
+| `target` | `{ kind, slug }` | What is being checked: a `"collection"`, a `"single"`, or, for a field rule, the `"component"` the field belongs to. |
+| `collection` | `string` | The target's slug, the same as `target.slug`. |
+| `id`, `data` | optional | The entry, where the rule judges a known one. A collection's rule is asked before any entry is read, so it has none. |
+| `locale` | `string \| undefined` | The one language the operation is in, where it is in one. See [Localization](/docs/localization#access-rules-and-languages). |
+| `locales` | `string[]` | Every language the operation involves; every configured language for an operation on the whole entry, such as a delete. |
 
 Rules were once handed permissions as `posts:update`. That spelling is no longer in the list, so a rule checking it does not allow; check `update-posts`, as the Roles screen spells it.
 
@@ -466,16 +471,16 @@ Hooks let you run custom logic at specific points in a document's lifecycle. Eve
 
 ### Eight available hooks
 
-| Hook              | Triggers on                                                              | Can modify                |
-| ----------------- | ------------------------------------------------------------------------ | ------------------------- |
-| `beforeOperation` | Before any operation begins.                                             | Yes (operation arguments) |
-| `beforeValidate`  | Before validation during create/update.                                  | Yes (data)                |
-| `beforeChange`    | After validation passes, before the database write during create/update. | Yes (data)                |
-| `afterChange`     | After the database write during create/update.                           | No (side effects)         |
-| `beforeRead`      | Before reading from the database.                                        | Yes (query parameters)    |
-| `afterRead`       | After reading from the database.                                         | Yes (transform output)    |
-| `beforeDelete`    | Before deletion. Throw to prevent.                                       | No                        |
-| `afterDelete`     | After deletion.                                                          | No (side effects)         |
+| Hook | Triggers on | Can modify |
+|---|---|---|
+| `beforeOperation` | Before any operation begins. | Yes (operation arguments) |
+| `beforeValidate` | Before validation during create/update. | Yes (data) |
+| `beforeChange` | After validation passes, before the database write during create/update. | Yes (data) |
+| `afterChange` | After the database write during create/update. | No (side effects) |
+| `beforeRead` | Before reading from the database. | Yes (query parameters) |
+| `afterRead` | After reading from the database. | Yes (transform output) |
+| `beforeDelete` | Before deletion. Throw to prevent. | No |
+| `afterDelete` | After deletion. | No (side effects) |
 
 ### Execution order
 
@@ -584,31 +589,31 @@ What a `beforeChange` handler returns is written without being re-validated.
   There is no collection-level phase after the field hooks. This matches
   Payload's ordering, so hooks written against that model behave the same here.
 
-Four things bound what a field hook can guarantee:
+  Four things bound what a field hook can guarantee:
 
-- **It is the last phase, not the last step.** After every hook has run, core
-  still normalises the record before the write. On a collection, a `slug` is
-  re-sanitised, so a hook returning `"Changed By Hook"` stores
-  `changed-by-hook`; on a Single it is not, and that value is stored as
-  written. On both, password fields are hashed and relationship and upload
-  values are reduced to ids. A hook whose output must survive exactly cannot
-  rely on being last.
-- **A later field hook can still change a sibling.** Field hooks run in
-  registration order over one shared `data` object, so a hook on an earlier
-  field that sets a sibling can be overwritten by that sibling's own hook.
-  What no longer follows is a collection-level phase.
-- **It runs only when its field is in the data.** An update whose patch omits
-  the field, or an earlier hook that deleted the key, skips that field's hooks
-  entirely. A field hook is not a point that runs on every write.
-- **`data` is the record so far, at the field's own level.** On an ordinary
-  create it is the submitted document with defaults, `slug` and
-  title already applied (a bulk or transactional create applies no defaults);
-  on an update it is the submitted patch, not the stored row, so an unchanged
-  sibling reads as `undefined`. For a field inside a group or a repeater it is
-  the containing row, not the top-level document. The
-  [field hooks](/docs/configuration/fields#hooks) section says what each
-  write path adds and when.
-  </Callout>
+  - **It is the last phase, not the last step.** After every hook has run, core
+    still normalises the record before the write. On a collection, a `slug` is
+    re-sanitised, so a hook returning `"Changed By Hook"` stores
+    `changed-by-hook`; on a Single it is not, and that value is stored as
+    written. On both, password fields are hashed and relationship and upload
+    values are reduced to ids. A hook whose output must survive exactly cannot
+    rely on being last.
+  - **A later field hook can still change a sibling.** Field hooks run in
+    registration order over one shared `data` object, so a hook on an earlier
+    field that sets a sibling can be overwritten by that sibling's own hook.
+    What no longer follows is a collection-level phase.
+  - **It runs only when its field is in the data.** An update whose patch omits
+    the field, or an earlier hook that deleted the key, skips that field's hooks
+    entirely. A field hook is not a point that runs on every write.
+  - **`data` is the record so far, at the field's own level.** On an ordinary
+    create it is the submitted document with defaults, `slug` and
+    title already applied (a bulk or transactional create applies no defaults);
+    on an update it is the submitted patch, not the stored row, so an unchanged
+    sibling reads as `undefined`. For a field inside a group or a repeater it is
+    the containing row, not the top-level document. The
+    [field hooks](/docs/configuration/fields#hooks) section says what each
+    write path adds and when.
+</Callout>
 
 ### Hook handler signature
 
