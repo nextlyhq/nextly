@@ -28,6 +28,7 @@ import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
+import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
@@ -615,6 +616,9 @@ function CommitInput({
  * stays in one dialog. What it composes is held as a draft and written once,
  * when the picker is closed or this editor goes away, so dragging across it
  * is one save rather than one per pointer move.
+ *
+ * Its picker lists the author's Recent colours, as a block's does; a colour
+ * written here, typed or picked, joins them.
  */
 function ColourValue({
   label,
@@ -637,15 +641,17 @@ function ColourValue({
   // What the picker shows while a gesture is under way, handed back to it as
   // its colour so each step builds on the last; written only when it closes.
   const [shown, setShown] = React.useState<string | null>(null);
-  const latest = React.useRef({ value, onCommit });
+  const [recentColours, remember] = useRecentColours();
+  const latest = React.useRef({ value, onCommit, remember });
   React.useEffect(() => {
-    latest.current = { value, onCommit };
+    latest.current = { value, onCommit, remember };
   });
   const flush = React.useCallback((): void => {
     const pending = draft.current;
     draft.current = null;
     if (pending !== null && pending !== latest.current.value) {
       latest.current.onCommit(pending);
+      latest.current.remember(pending);
     }
   }, []);
   // A picker still open when the popover closes writes what it showed.
@@ -660,7 +666,19 @@ function ColourValue({
       (next !== value || refusedBy !== undefined)
     ) {
       onCommit(next);
+      // Only a colour joins Recent colours; text that is none is refused.
+      if (isColour(next)) remember(next);
     }
+  };
+  // A recent colour is one choice, written as it is listed, as on a block.
+  const pickRecent = (colour: string): void => {
+    draft.current = null;
+    setShown(null);
+    setText(colour);
+    setPicking(false);
+    commit(colour);
+    // Chosen again, it moves to the front even where it is already the value.
+    remember(colour);
   };
   const { hex, paint, invalid, said } = colourFieldState(
     text.trim(),
@@ -728,6 +746,8 @@ function ColourValue({
           // picked from there is seen.
           color={hex ?? NO_COLOUR}
           showAlpha
+          recentColors={[...recentColours]}
+          onRecentSelect={pickRecent}
           onColorChange={next => {
             draft.current = next;
             setShown(next);
@@ -779,6 +799,11 @@ function colourFieldState(
     invalid,
     said: invalid ? " (not a valid colour)" : "",
   };
+}
+
+/** Whether `text` is a colour: one this package reads, or the browser does. */
+function isColour(text: string): boolean {
+  return colourHexOf(text, undefined) !== undefined || isCssColour(text);
 }
 
 /**
