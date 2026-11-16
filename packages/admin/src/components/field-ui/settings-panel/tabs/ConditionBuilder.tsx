@@ -17,6 +17,9 @@ import type {
   FieldCondition,
 } from "@admin/components/features/schema-builder/types";
 import * as Icons from "@admin/components/icons";
+import { distinguishFieldAt } from "@admin/lib/builder/distinguishing-label";
+import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+import { isLayoutContainer } from "@admin/lib/builder/move-rule";
 
 import {
   ConditionRow,
@@ -28,6 +31,8 @@ import {
 type Props = {
   condition: FieldCondition | undefined;
   siblingFields: readonly BuilderField[];
+  /** The containers above the field, outermost first. */
+  ancestors?: readonly BuilderField[];
   readOnly?: boolean;
   onChange: (next: FieldCondition | undefined) => void;
 };
@@ -67,16 +72,26 @@ function normalizeIncoming(
 }
 
 /**
- * A builder field as the shared row needs to see it.
+ * A builder field as the shared row needs to see it, told apart from another
+ * of the same label by its type's plain name and its name in the database and
+ * API, its path where it is nested. `path` is the named containers above the
+ * sources, which share the field's level.
  *
  * Only choice types pass their options along: the row turns an option list
  * into a dropdown, and a text field carrying stray options would lose its free
  * text input for a list it does not actually constrain values to.
  */
-function toSource(field: BuilderField): ConditionSource {
+function toSource(
+  field: BuilderField,
+  path: readonly BuilderField[],
+  typeLabel: (type: string) => string
+): ConditionSource {
   return {
     name: field.name,
     label: field.label || field.name,
+    description: `${typeLabel(field.type)} · ${
+      distinguishFieldAt(field, path).disambiguator
+    }`,
     type: field.type,
     options: PICKER_TYPES.has(field.type)
       ? (field.options ?? []).filter(option => option.value !== "")
@@ -104,9 +119,14 @@ function toStoredCondition(next: ConditionValue): FieldCondition {
 export function ConditionBuilder({
   condition,
   siblingFields,
+  ancestors = [],
   readOnly = false,
   onChange,
 }: Props): JSX.Element {
+  const typeLabel = useFieldTypeLabel();
+  // The sources sit on the field's level, so the containers naming that level
+  // are theirs too; one with no name stores nothing and names nothing.
+  const path = ancestors.filter(each => !isLayoutContainer(each));
   const eligible = siblingFields.filter(f => ELIGIBLE_SOURCE_TYPES.has(f.type));
   const c = normalizeIncoming(condition);
 
@@ -160,7 +180,7 @@ export function ConditionBuilder({
           operator: c.operator ?? "equals",
           value: c.value,
         }}
-        sources={eligible.map(toSource)}
+        sources={eligible.map(each => toSource(each, path, typeLabel))}
         readOnly={readOnly}
         onChange={next => onChange(next && toStoredCondition(next))}
       />
