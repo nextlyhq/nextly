@@ -14,7 +14,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, number, text } from "../../../config";
+import { defineCollection, defineSingle, number, text } from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -23,8 +23,10 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 const POSTS = "partversions";
+const SITE = "partversionsite";
 
 let handle: TestNextly | undefined;
 
@@ -47,11 +49,52 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
         fields: [text({ name: "title" }), number({ name: "views" })],
       }),
     ],
+    singles: [
+      defineSingle({
+        slug: SITE,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        // Translatable: `title`. Shared: `views`.
+        fields: [text({ name: "title" }), number({ name: "views" })],
+      }),
+    ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
   return (
     handle.getService("collectionsHandler") as CollectionsHandler
   ).getEntryService() as CollectionEntryService;
+}
+
+/** The Single service of the instance `boot` started. */
+function singlesOf(): SingleEntryService {
+  return handle!.getService("singleEntryService");
+}
+
+/** Writes `data` to the Single in `locale`, as an editor's save does. */
+async function saveSingle(
+  locale: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  const saved = await singlesOf().update(
+    SITE,
+    { ...data, _overwrite: true },
+    { locale, overrideAccess: true }
+  );
+  expect(saved.success, JSON.stringify(saved)).toBe(true);
+}
+
+/** The Single published in English and Spanish; answers its id. */
+async function singlePublishedInBoth(): Promise<string> {
+  await saveSingle("en", { title: "en title", views: 10, status: "published" });
+  await saveSingle("es", { title: "es title", status: "published" });
+  const read = await singlesOf().get(SITE, {
+    locale: "en",
+    overrideAccess: true,
+  });
+  expect(read.success, JSON.stringify(read)).toBe(true);
+  return (read.data as { id: string }).id;
 }
 
 /** Writes `data` to the entry in `locale`, as an editor's save does. */
@@ -264,6 +307,36 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await heldDraftParts(id, null)).toEqual({
         locales: [],
+        shared: true,
+      });
+    }, 90_000);
+
+    it("names the shared part with the language for a Single published by saving in it", async () => {
+      await boot(dialect);
+      const id = await singlePublishedInBoth();
+      await saveSingle("es", { title: "es 2", views: 40 });
+
+      await saveSingle("es", { status: "published" });
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: ["es"],
+        shared: true,
+      });
+    }, 90_000);
+
+    it("names the language and the shared part whose pending changes a publish of every language of a Single puts live", async () => {
+      await boot(dialect);
+      const id = await singlePublishedInBoth();
+      await saveSingle("es", { title: "es 2", views: 60 });
+
+      const published = await singlesOf().publishAllLocales(SITE, {
+        overrideAccess: true,
+        data: { _overwrite: true },
+      });
+      expect(published.success, JSON.stringify(published)).toBe(true);
+
+      expect(await newestVersionParts(id)).toEqual({
+        locales: ["es"],
         shared: true,
       });
     }, 90_000);

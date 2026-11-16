@@ -31,6 +31,7 @@ import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { perLanguageFieldNames } from "../i18n/per-language-fields";
 import { perLanguageStorageEnabled } from "../i18n/per-language-storage";
 
+import { SHARED_PART_ALONE, type ChangedParts } from "./changed-parts";
 import type {
   VersionRef,
   VersionRow,
@@ -157,6 +158,46 @@ function touchesPart(
 }
 
 /**
+ * The parts a write in `locale` that set the keys `touched` changed, as its
+ * version records them: the language where the write set one of the
+ * language's keys, and the shared part where it set a shared key.
+ *
+ * `languageWritten` says the write put the language itself, its status
+ * included, where it lands: a write in place does, so a publish by status
+ * alone still names its language. A held save does not, and names a language
+ * only for the values it held there.
+ *
+ * A write under no language is a write of a document kept as one part, which
+ * is its shared part.
+ */
+export function partsWritten(write: {
+  locale: string | null;
+  touched: ReadonlySet<string>;
+  keys: PartKeys;
+  languageWritten?: boolean;
+}): ChangedParts {
+  if (write.locale === null) return SHARED_PART_ALONE;
+  const language =
+    write.languageWritten === true ||
+    touchesPart(write.touched, write.keys.language);
+  return {
+    locales: language ? [write.locale] : [],
+    shared: touchesPart(write.touched, write.keys.shared),
+  };
+}
+
+/**
+ * The parts a working draft kept under `slot` holds, which its row records.
+ * The shared draft holds the shared part. Kept by part, a language's draft
+ * holds that language alone; otherwise it holds the whole document in that
+ * language, its shared values included.
+ */
+export function draftSlotParts(slot: string | null): ChangedParts {
+  if (slot === SHARED_DRAFT_SLOT) return SHARED_PART_ALONE;
+  return { locales: [slot], shared: !draftsKeptByPart() };
+}
+
+/**
  * The translated keys a held save names to its history when it changed the
  * shared part, else `null`. The shared draft it changed goes live with any
  * language's publish, so every language's review is judged on the shared
@@ -239,12 +280,14 @@ export async function storePartDrafts(
 ): Promise<void> {
   const touches = (part: ReadonlySet<string>) =>
     touchesPart(input.touched, part);
+  // Each row records the part it holds (`draftSlotParts`).
   if (input.existing.shared || touches(input.keys.shared)) {
     await repo.upsertWorkingDraft({
       ref: input.ref,
       locale: SHARED_DRAFT_SLOT,
       snapshot: pick(input.document, input.keys.shared),
       createdBy: input.createdBy,
+      parts: draftSlotParts(SHARED_DRAFT_SLOT),
     });
   }
   if (input.existing.language || touches(input.keys.language)) {
@@ -253,6 +296,7 @@ export async function storePartDrafts(
       locale: input.locale,
       snapshot: pick(input.document, input.keys.language),
       createdBy: input.createdBy,
+      parts: draftSlotParts(input.locale),
     });
   }
 }

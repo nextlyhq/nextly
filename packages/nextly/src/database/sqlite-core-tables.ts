@@ -412,7 +412,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       "revision" INTEGER NOT NULL DEFAULT 0,
       "base_version_no" INTEGER,
       "base_draft_revision" INTEGER,
-      "field_sources" TEXT
+      "field_sources" TEXT,
+      "changed_locales" TEXT,
+      "shared_changed" INTEGER
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
