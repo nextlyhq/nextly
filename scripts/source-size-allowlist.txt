@@ -12,7 +12,6 @@
 # When a file shrinks, its count may be lowered to its new size.
 
 
-packages/blocks-engine/src/document.ts 1543
 
 
 
