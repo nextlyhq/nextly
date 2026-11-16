@@ -43,6 +43,12 @@ import type { ContentServices } from "./content-controls";
 import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
+import type { SharedBlockVerbs } from "./keyboard-actions";
+
+/** Verbs as a host shares them: the menu's locked answers are the same list. */
+function shared(verbs: Omit<SharedBlockVerbs, "withLocks">): SharedBlockVerbs {
+  return { ...verbs, withLocks: () => verbs.actions };
+}
 
 afterEach(() => {
   cleanup();
@@ -689,7 +695,7 @@ describe("InspectorPanel block card", () => {
     render(
       <InspectorPanel
         editor={editorFor(documentOf({}))}
-        verbs={{
+        verbs={shared({
           actions: [
             { id: "duplicate", label: "Duplicate", enabled: true },
             {
@@ -701,7 +707,7 @@ describe("InspectorPanel block card", () => {
             { id: "move-up", label: "Move up", enabled: true },
           ],
           run,
-        }}
+        })}
       />
     );
     openCardMenu("Heading");

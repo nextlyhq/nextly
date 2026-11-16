@@ -673,6 +673,14 @@ exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/database-adapter-missing  (DATABASE_ADAPTER_MISSING)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_BEHIND_MIGRATIONS 1`] = `
+"✗ The database lacks 2 tables or columns its applied migrations created, so it no longer matches its ledger. Nothing was changed.
+  Why:  - table dc_posts (created by 20261116_120000_000_create_posts)
+        - column dc_tags.label (created by 20261116_120000_001_add_label)
+  Next: Restore what is missing (from a backup, or by running again the statements of the migration named), then run \`nextly migrate\` again. Nothing applies until the database holds what its ledger says it does.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-behind-migrations  (DATABASE_BEHIND_MIGRATIONS)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] = `
 "✗ Could not read the database catalog, so core tables were not created.
   Why:  The catalog says which field-group registry this database uses, and creating the tables without it would leave a database that cannot repair itself.
