@@ -665,13 +665,43 @@ const LENGTH_TOKEN_KEYWORDS: ReadonlySet<string> = new Set(
     .map(asciiLower)
 );
 
-/** What a length token holding words is told, with what to type instead. */
-const LENGTH_WORDS =
-  "is words, not a length; type a number with a unit, such as 16px";
+/** What a length token holding words is told. */
+const LENGTH_WORDS = "is words, not a length";
 
 /** What a colour token holding a hex CSS cannot read is told. */
 const HEX_MALFORMED =
-  "is not a hex colour; a hex colour has 3, 4, 6 or 8 digits from 0-9 and a-f, such as #1d4ed8";
+  "is not a hex colour, which has 3, 4, 6 or 8 digits from 0-9 and a-f";
+
+/**
+ * What to type for a token of each kind, as an example an author can copy, or
+ * nothing for the kinds no value is refused for. Said after a mismatch from
+ * {@link checkTokenKind}, wherever it is shown: as an editor refuses a value,
+ * as a save is refused, or as a render warns.
+ */
+export function tokenKindExample(kind: TokenKind): string | undefined {
+  switch (kind) {
+    case "color":
+      return "a colour, such as #1d4ed8";
+    case "dimension":
+      return "a number with a unit, such as 16px or 1.5rem";
+    case "duration":
+      return "a time, such as 150ms";
+    case "number":
+      return "a plain number, such as 1.5";
+    case "fontWeight":
+      return "a weight from 1 to 1000, such as 400, or normal or bold";
+    case "fontFamily":
+    case "shadow":
+    case "custom":
+      return undefined;
+  }
+}
+
+/** " Type …." for a kind with an example, else nothing. */
+function typeInstead(kind: TokenKind): string {
+  const example = tokenKindExample(kind);
+  return example === undefined ? "" : ` Type ${example}.`;
+}
 
 /** The only words `font-weight` takes; every other value is a number. */
 const FONT_WEIGHT_KEYWORDS = new Set(["normal", "bold", "bolder", "lighter"]);
@@ -1487,7 +1517,7 @@ export function emitTokenBlocks(
       if (mismatch !== undefined) {
         issues.push(
           tokenIssue(
-            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}.`,
+            `"${token.name}" is a ${token.kind} token, but its ${mode} value "${modeValue}" ${mismatch}.${typeInstead(token.kind)}`,
             "warning",
             // What a render does with it, kept out of the message: a save
             // that refuses on this report stores nothing, and the message

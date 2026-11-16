@@ -13,6 +13,7 @@ import { compileStyleValues, safeTokenPrefix } from "./declarations";
 import type { SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   checkTokenKind,
+  tokenKindExample,
   DARK_MODE_ATTRIBUTE,
   defaultSiteTokens,
   resolveSiteTokens,
@@ -346,11 +347,17 @@ describe("a value that cannot be its kind", () => {
 
   it("says what to type instead of a word or a bad hex", () => {
     expect(checkTokenKind("dimension", "the spacing")).toBe(
-      "is words, not a length; type a number with a unit, such as 16px"
+      "is words, not a length"
+    );
+    expect(tokenKindExample("dimension")).toBe(
+      "a number with a unit, such as 16px or 1.5rem"
     );
     expect(checkTokenKind("color", "#12345")).toBe(
-      "is not a hex colour; a hex colour has 3, 4, 6 or 8 digits from 0-9 and a-f, such as #1d4ed8"
+      "is not a hex colour, which has 3, 4, 6 or 8 digits from 0-9 and a-f"
     );
+    expect(tokenKindExample("color")).toBe("a colour, such as #1d4ed8");
+    // A kind that takes any value has nothing to suggest.
+    expect(tokenKindExample("custom")).toBeUndefined();
   });
 
   it("reports a mismatch without claiming where the value went", () => {
@@ -366,7 +373,7 @@ describe("a value that cannot be its kind", () => {
       SCOPE
     );
     expect(issues[0]?.message).toBe(
-      '"space.gap" is a dimension token, but its light value "big" is words, not a length; type a number with a unit, such as 16px.'
+      '"space.gap" is a dimension token, but its light value "big" is words, not a length. Type a number with a unit, such as 16px or 1.5rem.'
     );
     expect(issues[0]?.suggestion).toBe(
       "It was written as given, and will do nothing where the token is used."
