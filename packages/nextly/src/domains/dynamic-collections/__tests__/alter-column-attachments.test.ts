@@ -218,17 +218,9 @@ describe.each(DIALECTS)(
       expect(added.notNull).toBe(created.notNull);
       expect(added.indexed).toBe(created.indexed);
 
-      if (definition.unique !== true && created.unique) {
-        // A one-to-one's uniqueness is the one attachment the two paths cannot yet agree on,
-        // and the disagreement is older than either of them: CREATE writes it inline, where the
-        // dialect names the index; the desired schema the diff compares against declares a
-        // NON-unique index for the same field. A named constraint here would be a third
-        // spelling that the next diff proposes dropping. Asserted rather than skipped, so
-        // converging them makes this fail and say so.
-        expect(added.unique).toBe(false);
-      } else {
-        expect(added.unique).toBe(created.unique);
-      }
+      // A one-to-one's uniqueness included: the desired schema declares the same named index
+      // for it as for a field marked unique, and both paths emit that one spelling.
+      expect(added.unique).toBe(created.unique);
 
       if (dialect === "sqlite" && created.referencesTable !== null) {
         // SQLite attaches a foreign key only in a CREATE TABLE: there is no statement that adds
@@ -244,7 +236,7 @@ describe.each(DIALECTS)(
 
 describe("the attachments the ADD path used to lose", () => {
   it.each(DIALECTS)(
-    "does not add a third spelling of a one-to-one's uniqueness (%s)",
+    "adds a one-to-one's uniqueness under the name the desired schema declares (%s)",
     dialect => {
       const oneToOne = field({
         name: "profile",
@@ -257,9 +249,10 @@ describe("the attachments the ADD path used to lose", () => {
         [oneToOne],
         { tableHasRows: false }
       );
-      // The desired schema declares a non-unique index for this field, so a named unique
-      // constraint here is drift the next diff proposes dropping.
-      expect(alterAttachments(sql, "profile").unique).toBe(false);
+      // The desired schema declares `uq_<table>_<column>` for a one-to-one as for a field marked
+      // unique, so the column it adds carries that index and the next diff plans nothing for it.
+      expect(alterAttachments(sql, "profile").unique).toBe(true);
+      expect(sql).toContain(`uq_${TABLE}_profile`);
     }
   );
 

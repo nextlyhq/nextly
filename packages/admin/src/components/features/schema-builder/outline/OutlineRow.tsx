@@ -76,6 +76,18 @@ function Badge({
 }
 
 /**
+ * That a field has an error, with the error itself on hover: on its row, and on the breadcrumb's
+ * crumb while the field is the focused container and its row is not drawn.
+ */
+export function ErrorBadge({ error }: { error: string }): JSX.Element {
+  return (
+    <Badge tone="danger">
+      <span title={error}>Has an error</span>
+    </Badge>
+  );
+}
+
+/**
  * What a blocks field accepts, in words, as its policy says it: any block when
  * it names none, no block for an empty list, else the blocks and patterns it
  * names, the first few of them.
@@ -189,11 +201,7 @@ function RowBadges({
         .map(mark => (
           <Badge key={mark.text}>{mark.text}</Badge>
         ))}
-      {error && (
-        <Badge tone="danger">
-          <span title={error}>Has an error</span>
-        </Badge>
-      )}
+      {error && <ErrorBadge error={error} />}
     </span>
   );
 }

@@ -64,7 +64,9 @@ function horizontal(
     return row.expanded ? { kind: "focus", index: index + 1 } : null;
   }
   if (row.expanded === true) return { kind: "toggle" };
-  return row.node.parentId ? { kind: "focus-parent" } : null;
+  // A row at the first level drawn has no row to go up to: in a focused view its container is
+  // not drawn, though it is still the row's parent.
+  return row.level > 1 && row.node.parentId ? { kind: "focus-parent" } : null;
 }
 
 /**

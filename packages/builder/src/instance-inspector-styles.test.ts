@@ -9,9 +9,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-const FLAT = readFileSync(
-  fileURLToPath(new URL("./styles/builder-chrome.css", import.meta.url)),
-  "utf8"
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+
+const FLAT = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 )
   .replace(/\/\*[\s\S]*?\*\//g, "*/")
   .replace(/\s+/g, " ");

@@ -48,6 +48,9 @@ export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
 
   useEffect(() => {
     if (focusedId !== null && view.focused === null) {
+      // The rows the focused view drew are gone with it, so keyboard focus is asked for again:
+      // on the deepest crumb that is drawn after the fallback, else as an empty view's is.
+      returning.current = [...crumbIds.current].reverse();
       setFocusedId(focusFallback(nodes, crumbIds.current));
     }
   }, [focusedId, view.focused, nodes]);
