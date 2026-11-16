@@ -202,8 +202,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useDocumentActions: () => null,
   // No preview here: the top bar's Preview draws nothing.
   useDocumentPreview: () => null,
-  // No one signed in: the editor keeps no preferences.
-  useCurrentUserId: () => null,
+  // An author signed in, as the editor always has one: the canvas keeps
+  // its list reads for the person, and asks them again for no one else.
+  useCurrentUserId: () => "author-1",
+  // The schema the author's kept answers were read under, which never moves
+  // here.
+  schemaVersion: () => 1,
+  onSchemaChange: () => () => {},
+  // The author's choices kept nowhere: these cases are about drawing.
+  devicePreferenceStore: () => ({
+    read: () => null,
+    write: () => {},
+    remove: () => {},
+  }),
   useDocumentStatus: () => null,
   // The editor registers its restore; nothing here offers one.
   useDocumentRestore: () => undefined,
