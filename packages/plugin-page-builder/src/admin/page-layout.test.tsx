@@ -63,6 +63,7 @@ const choices: LayoutChoicesResponse = {
       title: "Main",
       published: true,
       draftChangesNotLive: false,
+      isEmpty: false,
       regions: [{ area: "header", componentId: "h" }],
     },
     {
@@ -70,6 +71,7 @@ const choices: LayoutChoicesResponse = {
       title: "Landing",
       published: true,
       draftChangesNotLive: true,
+      isEmpty: false,
       regions: [
         { area: "header", componentId: "lh" },
         { area: "footer", componentId: "lf" },
@@ -180,7 +182,7 @@ describe("the page's Layout picker", () => {
     expect(why?.textContent).toBe(
       "Follows the site default, Main, because this page doesn't choose its own header & footer set."
     );
-    expect(trigger.textContent).toContain("Site default · Main");
+    expect(trigger.textContent).toContain("Site default (Main)");
   });
 
   it("writes the Layout and clears the switch when a Layout is chosen", async () => {
@@ -242,6 +244,7 @@ describe("the page's Layout picker", () => {
       title: `Layout ${i}`,
       published: true,
       draftChangesNotLive: false,
+      isEmpty: false,
       regions: [],
     });
     const first = {
@@ -308,6 +311,7 @@ describe("the page's Layout picker", () => {
       title: `Layout ${i}`,
       published: true,
       draftChangesNotLive: false,
+      isEmpty: false,
       regions: [],
     });
     const first = {
@@ -378,6 +382,7 @@ describe("the page's Layout picker", () => {
               title: "Layout 0",
               published: true,
               draftChangesNotLive: false,
+              isEmpty: false,
               regions: [],
             },
           ],
@@ -396,7 +401,7 @@ describe("the page's Layout picker", () => {
     // The trigger still says what is chosen.
     expect(
       screen.getByRole("combobox", { name: "Header & footer" }).textContent
-    ).toContain("Site default · Layout 0");
+    ).toContain("Site default (Layout 0)");
   });
 
   it("keeps the rows the server matched, however their titles compare here", async () => {
@@ -412,6 +417,7 @@ describe("the page's Layout picker", () => {
               title: "Layout 0",
               published: true,
               draftChangesNotLive: false,
+              isEmpty: false,
               regions: [],
             },
             {
@@ -419,6 +425,7 @@ describe("the page's Layout picker", () => {
               title: "Café",
               published: true,
               draftChangesNotLive: false,
+              isEmpty: false,
               regions: [],
             },
           ],
@@ -689,6 +696,7 @@ describe("a Layout behind Remove Layout's fence in the list", () => {
           title: "Campaign",
           published: false,
           draftChangesNotLive: false,
+          isEmpty: false,
           regions: [],
           removal: "unpublished",
         },

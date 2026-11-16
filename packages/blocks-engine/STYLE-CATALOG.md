@@ -82,7 +82,7 @@ spacing group.
 
 Where a group lists flags, the object form opts in precisely:
 `supports: { border: { radius: true } }` allows corner rounding and no border
-lines. Properties with no flag are reachable only through the `true` form, which
+lines, and `{ border: { outline: true } }` an outline alone. Properties with no flag are reachable only through the `true` form, which
 is how a group states that it offers nothing finer than all-or-nothing.
 
 `supports` decides what an EDITOR offers and what a block promises to render.
@@ -206,10 +206,11 @@ an overlay set at one device covers an image set at another.
 
 ### border
 
-| Property       | Flag     | Value                                                | Tokens           | Emits                                             | Applies when |
-| -------------- | -------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------- | ------------ |
-| `border`       | `line`   | composite: `width` (logical sides), `style`, `color` | dimension, color | `border-*-width`, `border-style`, `border-color`  | always       |
-| `borderRadius` | `radius` | one dimension, or logical corners                    | dimension        | `border-radius`, or `border-start-start-radius` … | always       |
+| Property       | Flag      | Value                                                | Tokens           | Emits                                                               | Applies when |
+| -------------- | --------- | ---------------------------------------------------- | ---------------- | ------------------------------------------------------------------- | ------------ |
+| `border`       | `line`    | composite: `width` (logical sides), `style`, `color` | dimension, color | `border-*-width`, `border-style`, `border-color`                    | always       |
+| `borderRadius` | `radius`  | one dimension, or logical corners                    | dimension        | `border-radius`, or `border-start-start-radius` …                   | always       |
+| `outline`      | `outline` | composite: `width`, `style`, `color`, `offset`       | dimension, color | `outline-width`, `outline-style`, `outline-color`, `outline-offset` | always       |
 
 ### shadow
 

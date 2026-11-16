@@ -76,6 +76,7 @@ import {
   type PreviewActionsProps,
 } from "./PreviewActions";
 import { SaveStateIndicator } from "./SaveStateIndicator";
+import { useBarShowsPill } from "./title-in-view";
 import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
@@ -908,13 +909,17 @@ function DocumentBarState({
   );
 }
 
-/** The status pill, where the document has a status to show. */
+/**
+ * The status pill, where the document has a status to show, and only while
+ * the title's own pill is out of view (`title-in-view`), so it shows once.
+ */
 function BarStatusPill({
   documentStatus,
 }: {
   documentStatus: DocumentBarProps["documentStatus"];
 }) {
-  if (!documentStatus) return null;
+  const shown = useBarShowsPill();
+  if (!documentStatus || !shown) return null;
   return (
     <DocumentStatusPill
       status={documentStatus.status}

@@ -23,6 +23,7 @@ const main: LayoutChoice = {
   published: true,
   draftChangesNotLive: false,
   regions: [{ area: "header", componentId: "h" }],
+  isEmpty: false,
 };
 const landing: LayoutChoice = {
   id: "landing",
@@ -30,13 +31,34 @@ const landing: LayoutChoice = {
   published: true,
   draftChangesNotLive: true,
   regions: [{ area: "footer", componentId: "f" }],
+  isEmpty: false,
 };
+// Unpublished, so it lists no regions, but its own areas name a header.
 const unfinished: LayoutChoice = {
   id: "unfinished",
   title: "Unfinished",
   published: false,
   draftChangesNotLive: false,
   regions: [],
+  isEmpty: false,
+};
+// Published with no header and no footer: what the site was seeded with.
+const seed: LayoutChoice = {
+  id: "seed",
+  title: "Site layout",
+  published: true,
+  draftChangesNotLive: false,
+  regions: [],
+  isEmpty: true,
+};
+// Never published, and its own areas name nothing either.
+const blank: LayoutChoice = {
+  id: "blank",
+  title: "Blank",
+  published: false,
+  draftChangesNotLive: false,
+  regions: [],
+  isEmpty: true,
 };
 
 function ready(
@@ -68,10 +90,14 @@ const page = (layout: unknown = null, noHeaderFooter = false) => ({
 });
 
 describe("the page's Layout picker", () => {
-  it("offers the default by name, published Layouts, unpublished ones marked, then none", () => {
+  it("offers the site default by name, the other published sets, unpublished ones marked, then none", () => {
     expect(layoutPickerView(page(), ready()).options).toEqual([
-      { value: SITE_DEFAULT_VALUE, label: "Site default", note: "Main" },
-      { value: layoutValue("main"), label: "Main" },
+      {
+        value: SITE_DEFAULT_VALUE,
+        label: "Site default (Main)",
+        note: "Follows the site if the default changes",
+      },
+      // Main is the default, so it is offered once, as the site default.
       { value: layoutValue("landing"), label: "Landing" },
       {
         value: layoutValue("unfinished"),
@@ -79,6 +105,64 @@ describe("the page's Layout picker", () => {
       },
       { value: NO_HEADER_FOOTER_VALUE, label: "No header or footer" },
     ]);
+  });
+
+  it("offers no set that holds no header and no footer, published or not", () => {
+    // Choosing one would be the same as "No header or footer", under a name
+    // that hides it, and a page that chose it would stay blank when the
+    // site default changes.
+    const values = layoutPickerView(
+      page(),
+      ready({}, [main, seed, unfinished, blank, landing])
+    ).options.map(option => option.value);
+    expect(values).not.toContain(layoutValue("seed"));
+    expect(values).not.toContain(layoutValue("blank"));
+    expect(values).toEqual([
+      SITE_DEFAULT_VALUE,
+      layoutValue("landing"),
+      layoutValue("unfinished"),
+      NO_HEADER_FOOTER_VALUE,
+    ]);
+  });
+
+  it("keeps an empty set the page already names, shown and selected", () => {
+    for (const named of [seed, blank]) {
+      const view = layoutPickerView(
+        page(named.id),
+        ready({}, [main, seed, blank, landing])
+      );
+      expect(view.value).toBe(layoutValue(named.id));
+      expect(view.options.map(option => option.value)).toContain(
+        layoutValue(named.id)
+      );
+      // Only the page's own: the other empty set is still not offered.
+      const other = named === seed ? blank : seed;
+      expect(view.options.map(option => option.value)).not.toContain(
+        layoutValue(other.id)
+      );
+    }
+  });
+
+  it("keeps the default set the page names directly, shown and selected by its own name", () => {
+    const view = layoutPickerView(page("main"), ready());
+    expect(view.value).toBe(layoutValue("main"));
+    expect(view.options).toContainEqual({
+      value: layoutValue("main"),
+      label: "Main",
+    });
+    // And the site default is still offered beside it.
+    expect(view.options[0]?.value).toBe(SITE_DEFAULT_VALUE);
+  });
+
+  it("does not list an unpublished default set by its own name either", () => {
+    const view = layoutPickerView(
+      page(),
+      ready({ defaultLayout: "unfinished" })
+    );
+    expect(view.options[0]?.label).toBe("Site default (none set)");
+    expect(view.options.map(option => option.value)).not.toContain(
+      layoutValue("unfinished")
+    );
   });
 
   it("names the default in effect for a page naming nothing", () => {
@@ -114,10 +198,7 @@ describe("the page's Layout picker", () => {
     expect(view.options.find(o => o.value === view.value)?.label).toBe(
       "A header & footer set you can't view, or one that was deleted"
     );
-    expect(view.options[0]).toMatchObject({
-      label: "Site default",
-      note: "Main",
-    });
+    expect(view.options[0]).toMatchObject({ label: "Site default (Main)" });
     expect(view.why).toBe(
       "You can't see this header & footer set. It may have been deleted, or you may not have access to it. Choose another header & footer set to change it."
     );

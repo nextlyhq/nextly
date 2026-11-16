@@ -113,10 +113,10 @@ function optionLabel(item: LayoutChoice, site: LayoutSite): string {
  * The picker's view of `stored`, given where the choices read stands.
  *
  * Every state, in the words the editor uses:
- * - the default: "Site default", with the default Layout's name as its note
- *   ("Main"), or "Site default (none set)" when the site has no published
- *   default;
+ * - the default: "Site default (Main)", or "Site default (none set)" when the
+ *   site has no published default;
  * - a published Layout by its title; an unpublished one marked as such;
+ *   neither the default set nor an empty one, unless the page names it;
  * - a Layout the answer does not hold, hidden from the author or deleted:
  *   "A Layout you can't view, or one that was deleted";
  * - "No header or footer";
@@ -252,6 +252,23 @@ function fencedOption(
   };
 }
 
+/**
+ * Whether a set is offered by its own name. Two never are: the site default,
+ * which is offered once, as "Site default (<name>)", and a set that holds no
+ * header and no footer, which would mean the same as "No header or footer"
+ * under a name that hides it. A page that picked either by name would stay on
+ * it when the site default changes. The page's own stored choice is always
+ * offered, so what the page names stays selected and shown.
+ */
+function offeredByName(
+  item: LayoutChoice,
+  defaultLayout: string | null,
+  selected: string | null
+): boolean {
+  if (item.id === selected) return true;
+  return item.id !== defaultLayout && !item.isEmpty;
+}
+
 /** The options: the default, published Layouts, unpublished ones, then none. */
 function choiceOptions(
   items: readonly LayoutChoice[],
@@ -269,10 +286,13 @@ function choiceOptions(
       ? {}
       : fencedOption(item.removal, item.id === selected)),
   });
+  const offered = items.filter(item =>
+    offeredByName(item, meta.defaultLayout, selected)
+  );
   return [
     { value: SITE_DEFAULT_VALUE, ...defaultWords(meta, items) },
-    ...items.filter(item => item.published).map(toOption),
-    ...items.filter(item => !item.published).map(toOption),
+    ...offered.filter(item => item.published).map(toOption),
+    ...offered.filter(item => !item.published).map(toOption),
     NONE_OPTION,
   ];
 }
@@ -308,11 +328,13 @@ function unknownLayoutView(
   };
 }
 
+/** The note under the site default, saying what choosing it means. */
+const SITE_DEFAULT_NOTE = "Follows the site if the default changes";
+
 /**
- * The default option's words: which Layout it is, or why it is not one. The
- * Layout's name is the option's note, muted beside "Site default", rather than
- * part of its label: a default named "Default (site)" would otherwise read
- * "Site default (Default (site))".
+ * The default option's words: which set it is, by name, or why it is not one.
+ * The set is not listed again by its own name, so this label is where its
+ * name is read.
  */
 function defaultWords(
   meta: LayoutChoicesResponse["meta"],
@@ -326,7 +348,7 @@ function defaultWords(
   }
   const usable = items.find(item => item.id === meta.defaultLayout);
   return usable?.published === true
-    ? { label: "Site default", note: usable.title }
+    ? { label: `Site default (${usable.title})`, note: SITE_DEFAULT_NOTE }
     : { label: "Site default (none set)" };
 }
 
