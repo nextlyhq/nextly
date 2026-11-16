@@ -424,9 +424,27 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   getTemplate: {
+    // The one record the workbench edits, carrying what each list row
+    // carries: what sends it, and whether every plugin answered — the
+    // workbench's details and state line show senders from this record, so
+    // without them here the column the list adds would never reach the
+    // edit screen.
     execute: async (svc, p) => {
       const template = await svc.templateService.getTemplate(p.templateId);
-      return respondDoc(template);
+      const { references, complete } = await collectTemplateReferences(
+        { slug: template.slug },
+        logReferenceFailure
+      );
+      const senders = sendersBySlug(
+        [template.slug],
+        slug => svc.templateService.ownerSentBy(slug),
+        references
+      );
+      return respondDoc({
+        ...template,
+        sentBy: senders.get(template.slug),
+        referencesComplete: complete,
+      });
     },
   },
   updateTemplate: {

@@ -662,6 +662,12 @@ export function formBuilder(
       // templates by slug, so every form is read; with notifications off, no
       // form sends anything. Rules live in a JSON field, which can't be
       // queried by template, so the forms are paged through.
+      //
+      // Read as the plugin's own bookkeeping (`ownCollections`, no read
+      // hooks, no caller): a host's list-query filter or stored read hook
+      // may narrow what the forms UI shows a given reader, and references
+      // collected through that narrowed read would silently miss forms the
+      // rules still send — while the answer claimed to be complete.
       nextly.filters.add(
         "email.templateReferences",
         async (references: TemplateReference[]) => {
@@ -669,7 +675,7 @@ export function formBuilder(
           const forms: Array<Record<string, unknown>> = [];
           const pageSize = 200;
           for (let page = 1; ; page += 1) {
-            const result = await nextly.services.collections.listEntries(
+            const result = await nextly.services.ownCollections.listEntries(
               formsSlug,
               { pagination: { limit: pageSize, page } }
             );

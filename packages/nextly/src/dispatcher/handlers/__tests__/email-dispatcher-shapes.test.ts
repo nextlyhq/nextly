@@ -443,11 +443,12 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
 });
 
 describe("dispatchEmailTemplates, single-doc reads (respondDoc)", () => {
-  it("getTemplate returns bare doc body", async () => {
+  it("getTemplate returns the doc with what sends it", async () => {
     const fakeTemplate = { id: "t1", slug: "welcome" };
     wireTemplates(
       makeTemplateService({
         getTemplate: vi.fn().mockResolvedValue(fakeTemplate),
+        ownerSentBy: vi.fn().mockReturnValue(["Form: Contact us"]),
       })
     );
 
@@ -459,7 +460,14 @@ describe("dispatchEmailTemplates, single-doc reads (respondDoc)", () => {
 
     const response = result as Response;
     const body = await response.json();
-    expect(body).toEqual(fakeTemplate);
+    // What the list rows carry, for the one record the workbench edits: its
+    // owner's declarations and the settings that send it, and whether every
+    // plugin answered.
+    expect(body).toEqual({
+      ...fakeTemplate,
+      sentBy: { declared: ["Form: Contact us"], referenced: [] },
+      referencesComplete: true,
+    });
     expect(body).not.toHaveProperty("data");
   });
 });
