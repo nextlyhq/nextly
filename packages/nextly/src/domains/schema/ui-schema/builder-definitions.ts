@@ -4,17 +4,18 @@
  * own migration. Two readers judged it apart before, and a definition one refused the other wrote
  * into a migration.
  *
- * Reading it means: load the file (or take the definition a save holds), materialise the plugin
- * extends that target a Builder entity, merge it with the configuration (a code-first entity of the
- * same kind and slug wins, with a warning naming its kind), check the plugin field declarations of
- * the entries that survive, and refuse a relationship whose target neither file declares. Every
- * refusal is thrown as a `NextlyError` with an issue code, which the CLI maps to its own code, so
- * each command that reads the file ends with the same message.
+ * Reading it (`readBuilderDefinitions`) means: load the file (or take the definition a save holds),
+ * materialise the plugin extends that target a Builder entity, merge it with the configuration (a
+ * code-first entity of the same kind and slug wins, with a warning naming its kind), and check the
+ * plugin field declarations of the entries that survive. Judging it against the newest snapshot
+ * (`judgeBuilderDefinitions`) means: refuse a Builder entity the file lost, then a relationship
+ * whose target neither file declares. Every refusal is thrown as a `NextlyError` with an issue code,
+ * which the CLI maps to its own code, so each command that reads the file ends with the same
+ * message.
  *
  * The definition file is part of the code: a Builder entity the newest snapshot records and
  * neither the configuration nor the file declares was lost, not removed, since a Builder delete
- * writes the migration that drops it. `assertBuilderDefinitionsKept` refuses that before a drop is
- * planned.
+ * writes the migration that drops it.
  *
  * @module domains/schema/ui-schema/builder-definitions
  */
@@ -85,30 +86,32 @@ export interface ReadBuilderDefinitionsArgs {
   projectRoot: string;
   /** The definition a Builder save holds already; absent, it is read from `db.uiSchemaFile`. */
   manifest?: UiSchemaManifest;
-  /**
-   * Whether every relationship's target is judged. A Builder save, which writes one entity's
-   * migration, leaves it to the save's own validation of the entity it writes, so an unrelated
-   * entry never refuses it.
-   */
-  judgeRelationTargets: boolean;
   logger: { warn(message: string): void };
 }
 
-/** The Builder's definitions, read and judged. */
+/** The Builder's definitions, read. `judgeBuilderDefinitions` judges them against a snapshot. */
 export interface BuilderDefinitions {
   /** The definition, with the plugin extends that target its entities materialised. */
   manifest: UiSchemaManifest;
   /** The entities to generate or check a migration from. */
   merged: MergedEntities;
-  /** The Builder's entries no code-first entity of their kind shadows. */
+  /** The Builder's entries no code-first entity of their kind shadows, as the merge kept them. */
   surviving: {
     collections: UiSchemaEntity[];
     singles: UiSchemaEntity[];
     components: UiSchemaEntity[];
   };
+  /** `db.uiSchemaFile`, as the configuration names it. */
+  definitionFile: string;
+  /** The code-first collections' slugs, which a Builder relationship may name. */
+  codeCollectionSlugs: string[];
 }
 
-/** Read the Builder's definition file and judge it, throwing the first refusal. */
+/**
+ * Read the Builder's definition file and merge it with the configuration, warning about each
+ * shadowed entry and refusing a plugin field declaration Nextly cannot use. What it declares is
+ * judged against the newest snapshot by `judgeBuilderDefinitions`, once the caller has read it.
+ */
 export async function readBuilderDefinitions(
   args: ReadBuilderDefinitionsArgs
 ): Promise<BuilderDefinitions> {
@@ -138,7 +141,11 @@ export async function readBuilderDefinitions(
     [...(args.deferredExtends ?? [])]
   );
 
-  const { shadowed, ...merged } = mergeUiEntities({
+  // The merge decides which entries a code-first entity of their kind shadows
+  // (per kind: one slug may name a collection, a Single and a field group),
+  // and keeps the rest as `surviving`. Every reader below takes its answer
+  // rather than deciding again.
+  const { shadowed, surviving, ...merged } = mergeUiEntities({
     codeCollections,
     codeSingles,
     codeComponents,
@@ -151,39 +158,56 @@ export async function readBuilderDefinitions(
     );
   }
 
-  // Shadowing is per KIND: the definition may use one slug for a collection,
-  // a Single and a field group, and the merge resolves each kind apart. A
-  // shadowed entry contributes nothing, so it is not judged.
-  const survivingOf = <T extends { slug: string }>(
-    list: readonly T[],
-    codeFirst: ReadonlyArray<{ slug: string }>
-  ): T[] => {
-    const codeSlugs = new Set(codeFirst.map(e => e.slug));
-    return list.filter(e => !codeSlugs.has(e.slug));
-  };
-  const surviving = {
-    collections: survivingOf(manifest.collections, codeCollections),
-    singles: survivingOf(manifest.singles, codeSingles),
-    components: survivingOf(manifest.components, codeComponents),
-  };
-
   // A Builder entity can carry a plugin's field too, and a plugin extending
-  // one contributes its fields here rather than in the configuration.
+  // one contributes its fields here rather than in the configuration. A
+  // shadowed entry contributes nothing, so it is not judged.
   assertPluginFieldDeclarations({
     collections: surviving.collections,
     singles: surviving.singles,
     fieldGroups: surviving.components,
   });
 
-  if (args.judgeRelationTargets) {
-    assertRelationTargetsDeclared({
-      codeCollectionSlugs: config.collections.map(c => c.slug),
-      manifest,
-      definitionFile,
-    });
-  }
+  return {
+    manifest,
+    merged,
+    surviving,
+    definitionFile,
+    codeCollectionSlugs: config.collections.map(c => c.slug),
+  };
+}
 
-  return { manifest, merged, surviving };
+/**
+ * Judge the Builder's definitions against the newest snapshot, as `migrate:create` and
+ * `migrate:check` both do before planning or checking anything from them.
+ *
+ * A Builder entity the definition lost is refused first: an entry removed by hand that another
+ * entry still relates to is that loss, and restoring the file is its fix, not creating the target.
+ * Then the surviving entries' relationship targets. A Builder save writing one entity's migration
+ * asks neither (`unscoped: false`): it holds the definition it writes, its own delete included,
+ * and the save's own validation judges the entity it writes, so an unrelated entry never refuses
+ * it.
+ */
+export function judgeBuilderDefinitions(args: {
+  definitions: BuilderDefinitions;
+  /** The newest snapshot's settings record; absent where it has none. */
+  recorded: EntitySettingsRecord | undefined;
+  /** Whether the run plans or checks every entity, rather than one save's. */
+  unscoped: boolean;
+}): void {
+  const { definitions, recorded } = args;
+  if (!args.unscoped) return;
+  assertBuilderDefinitionsKept({
+    recorded,
+    merged: definitions.merged,
+    definitionFile: definitions.definitionFile,
+  });
+  assertRelationTargetsDeclared({
+    codeCollectionSlugs: definitions.codeCollectionSlugs,
+    // Only the entries the merge kept: a shadowed one is ignored, its
+    // relationships included.
+    manifest: { ...definitions.manifest, ...definitions.surviving },
+    definitionFile: definitions.definitionFile,
+  });
 }
 
 /**

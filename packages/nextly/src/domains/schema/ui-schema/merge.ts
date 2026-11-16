@@ -52,6 +52,16 @@ export interface MergeUiEntitiesResult {
    * with its kind: shadowing is per kind, so a caller naming one must say which kind it is.
    */
   shadowed: ShadowedBuilderEntity[];
+  /**
+   * The Builder's entries no code-first entity of their kind shadows, as the definition holds
+   * them: the ones the merged lists carry. Readers that judge the definition or write its
+   * registry rows take these, so the shadowing is decided here alone.
+   */
+  surviving: {
+    collections: UiSchemaEntity[];
+    singles: UiSchemaEntity[];
+    components: UiSchemaEntity[];
+  };
 }
 
 /**
@@ -92,7 +102,8 @@ function mergeType(
   ui: UiSchemaEntity[],
   prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix,
   kind: BuilderEntityKind,
-  shadowed: ShadowedBuilderEntity[]
+  shadowed: ShadowedBuilderEntity[],
+  surviving: UiSchemaEntity[]
 ): MinimalConfigEntity[] {
   const codeSlugs = new Set(code.map(c => c.slug));
   const merged = [...code];
@@ -101,6 +112,7 @@ function mergeType(
       shadowed.push({ kind, slug: e.slug });
       continue;
     }
+    surviving.push(e);
     merged.push(uiToMinimal(e, prefix));
   }
   return merged;
@@ -162,28 +174,37 @@ export function mergeUiEntities(
   args: MergeUiEntitiesArgs
 ): MergeUiEntitiesResult {
   const shadowed: ShadowedBuilderEntity[] = [];
+  const surviving: MergeUiEntitiesResult["surviving"] = {
+    collections: [],
+    singles: [],
+    components: [],
+  };
   return {
     collections: mergeType(
       args.codeCollections,
       args.manifest.collections,
       "dc_",
       "collection",
-      shadowed
+      shadowed,
+      surviving.collections
     ),
     singles: mergeType(
       args.codeSingles,
       args.manifest.singles,
       "single_",
       "single",
-      shadowed
+      shadowed,
+      surviving.singles
     ),
     components: mergeType(
       args.codeComponents,
       args.manifest.components,
       STORAGE_FORMAT.tablePrefix,
       "fieldGroup",
-      shadowed
+      shadowed,
+      surviving.components
     ),
     shadowed,
+    surviving,
   };
 }

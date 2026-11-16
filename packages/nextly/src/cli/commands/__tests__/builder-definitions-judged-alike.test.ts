@@ -93,17 +93,20 @@ interface Ran {
   code: number | undefined;
   /** Every warning it gave. */
   warned: string[];
+  /** Every line it reported, a dry run's plan among them. */
+  informed: string[];
   /** The error it ended with, as printed in the error shape on standard error. */
   printed: string[];
 }
 
-/** Run a command over the project; its exit code, if any, its warnings and its printed error. */
+/** Run a command over the project; its exit code, if any, what it said and its printed error. */
 async function run(
   command: (context: CommandContext) => Promise<void>,
   config: unknown
 ): Promise<Ran> {
   loaded.config = config;
   const warned: string[] = [];
+  const informed: string[] = [];
   const printed: string[] = [];
   const quiet = () => {};
   const context = {
@@ -112,8 +115,10 @@ async function run(
       warn: (message: string) => {
         warned.push(message);
       },
+      info: (message: string) => {
+        informed.push(message);
+      },
       error: quiet,
-      info: quiet,
       success: quiet,
     },
     options: {},
@@ -127,10 +132,10 @@ async function run(
   });
   try {
     await command(context);
-    return { code: undefined, warned, printed };
+    return { code: undefined, warned, informed, printed };
   } catch (error) {
     const match = /^exit (\d+)$/.exec((error as Error).message);
-    if (match) return { code: Number(match[1]), warned, printed };
+    if (match) return { code: Number(match[1]), warned, informed, printed };
     throw error;
   } finally {
     exit.mockRestore();
@@ -152,11 +157,15 @@ function endAsTheAction(context: CommandContext, error: unknown): never {
  * plan is thrown on for the command's action to print, so it ends here as the action ends it
  * (`migrateCreateAction`).
  */
-function create(config: unknown, name = "builder"): Promise<Ran> {
+function create(
+  config: unknown,
+  name = "builder",
+  options: { dryRun?: true } = {}
+): Promise<Ran> {
   return run(async context => {
     setNonInteractive(true);
     try {
-      await runMigrateCreate(name, { cwd: dir }, context);
+      await runMigrateCreate(name, { cwd: dir, ...options }, context);
     } catch (error) {
       endAsTheAction(context, error);
     } finally {
@@ -220,6 +229,100 @@ describe("a Builder definition whose relationship target is missing", () => {
     );
     expect(created.printed.join("\n")).toBe(refusal);
     expect(sqlFiles()).toEqual([]);
+  });
+
+  it("is reported by a dry run in the words the real run prints, and nothing is written", async () => {
+    useDialect("sqlite");
+    await writeDefinitions(MANIFEST);
+
+    const dry = await create(EMPTY, "builder", { dryRun: true });
+
+    // A dry run reports the real run's refusal and exits 0.
+    expect(dry.code).toBe(0);
+    const reported = dry.informed.join("\n");
+    expect(reported).toContain("BUILDER_RELATION_TARGET_UNKNOWN");
+    expect(reported).toContain(
+      "posts.author relates to unknown target 'authors'"
+    );
+    expect(sqlFiles()).toEqual([]);
+  });
+});
+
+describe("a shadowed Builder entry whose relationship target is missing", () => {
+  it("is ignored with the rest of the entry, by both commands", async () => {
+    useDialect("sqlite");
+    // The code-first `posts` wins; the Builder's, and its relationship to a
+    // collection nobody declares, contribute nothing.
+    await writeDefinitions({
+      collections: [
+        {
+          slug: "posts",
+          fields: [
+            { name: "author", type: "relationship", relationTo: "authors" },
+          ],
+        },
+      ],
+      singles: [],
+      components: [],
+    });
+    const config = defineConfig({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [{ name: "title", type: "text" }],
+        }),
+      ],
+      db: { migrationsDir: "./migrations" },
+    });
+
+    const created = await create(config);
+    const checked = await check(config);
+
+    for (const ran of [created, checked]) {
+      expect(ran.printed.join("\n")).toBe("");
+      expect(ran.code).toBeUndefined();
+      expect(ran.warned.some(w => w.includes("collection 'posts'"))).toBe(true);
+    }
+  });
+});
+
+describe("a Builder entry removed by hand that another still relates to", () => {
+  it("is refused as lost by both commands, not as a missing target", async () => {
+    useDialect("sqlite");
+    const posts = {
+      slug: "posts",
+      fields: [{ name: "author", type: "relationship", relationTo: "authors" }],
+    };
+    const authors = {
+      slug: "authors",
+      fields: [{ name: "name", type: "text" }],
+    };
+    await writeDefinitions({
+      collections: [authors, posts],
+      singles: [],
+      components: [],
+    });
+    expect((await create(EMPTY)).code).toBeUndefined();
+    const written = sqlFiles();
+    // `authors` removed from the file; `posts` still relates to it.
+    await writeDefinitions({
+      collections: [posts],
+      singles: [],
+      components: [],
+    });
+
+    const checked = await check(EMPTY);
+    const created = await create(EMPTY, "after_removal");
+
+    for (const ran of [checked, created]) {
+      expect(ran.code).toBe(1);
+      const refusal = ran.printed.join("\n");
+      expect(refusal).toContain("BUILDER_DEFINITION_MISSING");
+      expect(refusal).toContain("collection 'authors'");
+      expect(refusal).not.toContain("BUILDER_RELATION_TARGET_UNKNOWN");
+    }
+    expect(created.printed.join("\n")).toBe(checked.printed.join("\n"));
+    expect(sqlFiles()).toEqual(written);
   });
 });
 

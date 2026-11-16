@@ -23,7 +23,7 @@ import type {
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
 import {
-  assertBuilderDefinitionsKept,
+  judgeBuilderDefinitions,
   readBuilderDefinitions,
 } from "../ui-schema/builder-definitions";
 import {
@@ -142,7 +142,6 @@ export async function appMigrationInputs(
       : { deferredExtends: input.deferredExtends }),
     projectRoot: input.projectRoot,
     ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
-    judgeRelationTargets: input.judged === undefined,
     logger,
   });
   const { merged } = definitions;
@@ -167,17 +166,15 @@ export async function appMigrationInputs(
   // never received the table.
   const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
 
-  // A Builder entity the newest snapshot records and nothing declares now was
-  // lost from the definition file, and the drop below would take its table.
-  // A save writing one entity's migration holds the definition it writes, its
-  // own delete included, so only an unscoped run asks.
-  if (input.judged === undefined) {
-    assertBuilderDefinitionsKept({
-      recorded: latest?.data.entities,
-      merged,
-      definitionFile: config.db.uiSchemaFile,
-    });
-  }
+  // The definitions judged against that snapshot, as `migrate:check` judges
+  // them: a Builder entity the file lost (the drop below would take its
+  // table), then each relationship's target. A save writing one entity's
+  // migration asks neither (`judgeBuilderDefinitions`).
+  judgeBuilderDefinitions({
+    definitions,
+    recorded: latest?.data.entities,
+    unscoped: input.judged === undefined,
+  });
 
   // Before the app stream compiles: a plugin hook still extending a removed
   // collection's, Single's or field group's table would stop that compile with

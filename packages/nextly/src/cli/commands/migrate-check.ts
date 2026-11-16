@@ -100,8 +100,8 @@ import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import {
-  assertBuilderDefinitionsKept,
-  type MergedEntities,
+  type BuilderDefinitions,
+  judgeBuilderDefinitions,
   readBuilderDefinitions,
 } from "../../domains/schema/ui-schema/builder-definitions";
 import { addressRefusalsError } from "../../shared/address-rule";
@@ -186,24 +186,25 @@ export async function runMigrateCheck(
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
-  // The Builder's definitions, read and judged by the rules `migrate:create`
-  // reads them by (`readBuilderDefinitions`): the same definition is refused
-  // by both with the same message, and a shadowed entity is warned about,
-  // naming its kind. Plugin extends that target a Builder entity are
+  // The Builder's definitions, read by the rules `migrate:create` reads them
+  // by (`readBuilderDefinitions`), and judged against the newest snapshot once
+  // `runChecks` reads it, as `migrate:create` judges them: the same definition
+  // is refused by both with the same message, and a shadowed entity is warned
+  // about, naming its kind. Plugin extends that target a Builder entity are
   // materialised, so the drift comparison below sees the schema
   // `migrate:create` would produce.
-  let merged: MergedEntities;
+  let definitions: BuilderDefinitions;
   try {
-    ({ merged } = await readBuilderDefinitions({
+    definitions = await readBuilderDefinitions({
       config: configResult.config,
       deferredExtends: configResult.deferredExtends ?? [],
       projectRoot: cwd,
-      judgeRelationTargets: true,
       logger,
-    }));
+    });
   } catch (error) {
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
+  const { merged } = definitions;
 
   // Built once the latest snapshot is read, as `migrate:create` builds it:
   // a field a plugin holds back from a type switched off keeps its column
@@ -243,7 +244,7 @@ export async function runMigrateCheck(
     // Each entity with its settings, as `migrate:create` records them; the
     // merge sets a Builder entity's (`uiToMinimal`).
     entities: merged,
-    definitionFile: configResult.config.db.uiSchemaFile,
+    definitions,
     logger,
   });
 }
@@ -286,11 +287,12 @@ export async function runChecks(args: {
     components: readonly MinimalConfigEntity[];
   };
   /**
-   * `db.uiSchemaFile`, as the configuration names it. With `entities`, a
-   * Builder entity the newest snapshot records and neither declares is refused
-   * naming it, as `migrate:create` refuses it. Omitted, that is not checked.
+   * The Builder's definitions as `readBuilderDefinitions` read them, judged
+   * against the newest snapshot as `migrate:create` judges them: a Builder
+   * entity the file lost, then each relationship's target. Omitted, neither is
+   * checked.
    */
-  definitionFile?: string;
+  definitions?: BuilderDefinitions;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -407,14 +409,14 @@ export async function runChecks(args: {
     throw err;
   }
 
-  // A Builder entity the definition file lost, before the drift that shows it
-  // as a drop: `migrate:create` refuses to write that drop, with this message.
-  if (args.entities !== undefined && args.definitionFile !== undefined) {
+  // The Builder's definitions, judged before the drift that would show a lost
+  // entity as a drop: `migrate:create` refuses each of these with this message.
+  if (args.definitions !== undefined) {
     try {
-      assertBuilderDefinitionsKept({
+      judgeBuilderDefinitions({
+        definitions: args.definitions,
         recorded: latest?.data.entities,
-        merged: args.entities,
-        definitionFile: args.definitionFile,
+        unscoped: true,
       });
     } catch (error) {
       return exitWithError(logger, error);
