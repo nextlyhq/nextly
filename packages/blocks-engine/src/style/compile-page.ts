@@ -1337,7 +1337,28 @@ const UNITLESS_ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
  * the one value that needs a unit, in whichever spelling it was written.
  */
 function asMaxArgument(value: string): string {
-  return UNITLESS_ZERO.test(value) ? "0px" : value;
+  return UNITLESS_ZERO.test(value.trim()) ? "0px" : value;
+}
+
+/**
+ * The keywords every property takes, none of which a math function can.
+ *
+ * `max(inherit, ...)` is invalid, so wrapping one would break the keyword on
+ * every block, contained or not. A keyword is an author's explicit word about
+ * the cascade, so it is written as it is: on a contained block it sets the
+ * padding the way it says, as it does anywhere else.
+ */
+const CSS_WIDE_KEYWORDS = new Set([
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
+
+/** Whether an inline padding value can stand as an argument of `max()`. */
+function takesContainInset(value: string): boolean {
+  return !CSS_WIDE_KEYWORDS.has(value.trim().toLowerCase());
 }
 
 /**
@@ -1357,7 +1378,8 @@ function asMaxArgument(value: string): string {
  */
 function withContainInset(declarations: readonly Declaration[]): Declaration[] {
   return declarations.map(declaration =>
-    INLINE_PADDING.has(declaration.property)
+    INLINE_PADDING.has(declaration.property) &&
+    takesContainInset(declaration.value)
       ? {
           ...declaration,
           value: `max(${asMaxArgument(declaration.value)}, var(${CONTAIN_INSET_PROPERTY}, 0px))`,

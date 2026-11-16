@@ -2323,6 +2323,55 @@ describe("inline padding and a contained container's inset", () => {
     }
   });
 
+  it("gives a zero written with spaces around it a unit too", () => {
+    const out = css(
+      doc([
+        node("n1", {
+          base: {
+            base: { padding: { inlineStart: " 0 ", inlineEnd: "\t0.0 " } },
+          },
+        }),
+      ])
+    );
+    expect(out).toContain(`padding-inline-start: max(0px, ${INSET})`);
+    expect(out).toContain(`padding-inline-end: max(0px, ${INSET})`);
+  });
+
+  it("writes a CSS-wide keyword as it is, since max() cannot take one", () => {
+    // `max(inherit, ...)` is invalid, which would break the keyword on every
+    // block, contained or not. A keyword is the author's explicit word on the
+    // cascade, so it is left to mean what it means.
+    for (const keyword of [
+      "inherit",
+      "initial",
+      "unset",
+      "revert",
+      "revert-layer",
+    ]) {
+      const out = css(
+        doc([
+          node("n1", {
+            base: {
+              base: {
+                padding: {
+                  inlineStart: keyword,
+                  inlineEnd: ` ${keyword.toUpperCase()} `,
+                },
+              },
+            },
+          }),
+        ])
+      );
+      expect(out).not.toContain("max(");
+      expect(out).toMatch(
+        new RegExp(`padding-inline-start: ${keyword}\\b`, "i")
+      );
+      expect(out).toMatch(
+        new RegExp(`padding-inline-end: \\s*${keyword}\\b`, "i")
+      );
+    }
+  });
+
   it("writes a block-type default and a named class the same way", () => {
     // A Section's default gutter is a block-type default, and a class can set
     // padding too. Either would replace the containment if it were written as
