@@ -26,6 +26,8 @@
  *   the command does, and the start goes on.
  * - A migration that deletes data: refused without consent, applied under
  *   `NEXTLY_ACCEPT_DATA_LOSS` naming the table, as the command reads it.
+ * - A first run with no app migration carrying the registry: the start gives
+ *   its notice once, and a later `nextly migrate` gives none.
  * - An older build, against a database a newer build migrated: the step
  *   writes nothing, a warning names the migration the build lacks, and the
  *   start goes on and serves what the database holds.
@@ -486,10 +488,13 @@ describe.each(getConfiguredTestDialects())(
     async function productionStart(
       url: string,
       config: unknown,
-      read: string
+      /** A collection to read through the started app, where it has a table. */
+      read?: string
     ): Promise<{
       calls: RecordedStatement[];
       warnings: string[];
+      /** Every line the start logged, at any level. */
+      logged: string[];
       refusal?: unknown;
     }> {
       use(url);
@@ -503,9 +508,12 @@ describe.each(getConfiguredTestDialects())(
         context: () => sentFrom.getStore(),
       });
       const warnings: string[] = [];
-      const spies = (["warn", "error"] as const).map(level =>
+      const logged: string[] = [];
+      const spies = (["log", "info", "warn", "error"] as const).map(level =>
         vi.spyOn(console, level).mockImplementation((...parts: unknown[]) => {
-          warnings.push(parts.map(String).join(" "));
+          const line = parts.map(String).join(" ");
+          logged.push(line);
+          if (level === "warn" || level === "error") warnings.push(line);
         })
       );
       try {
@@ -513,10 +521,10 @@ describe.each(getConfiguredTestDialects())(
           config: sanitizeConfig(config as never) as never,
         });
         await startSettled();
-        await nextly.find({ collection: read });
-        return { calls: [...recorder.calls], warnings };
+        if (read !== undefined) await nextly.find({ collection: read });
+        return { calls: [...recorder.calls], warnings, logged };
       } catch (refusal) {
-        return { calls: [...recorder.calls], warnings, refusal };
+        return { calls: [...recorder.calls], warnings, logged, refusal };
       } finally {
         for (const spy of spies) spy.mockRestore();
         recorder.uninstall();
@@ -751,6 +759,26 @@ describe.each(getConfiguredTestDialects())(
       expect(started.refusal).toBeUndefined();
       expect(started.warnings.join("\n")).toMatch(refusal);
       expect(await fieldsOf(viaStart)).toEqual(before);
+    }, 600_000);
+
+    it("gives the first run's notice once, at the start, and nextly migrate gives none after it", async () => {
+      // No app migration carries the registry yet, so the first run writes
+      // the registry rows from the configuration and says so, once: the
+      // record it writes in the same commit makes every later run ordinary.
+      const database = await emptyDatabase();
+      const notice = /First run on this release/;
+
+      // No migration makes the collection's table, so nothing is read.
+      const started = await productionStart(database, migratedAtStart(POSTS));
+      const later = await migrateRun(database, migratedByCommand(POSTS));
+
+      expect(started.refusal).toBeUndefined();
+      expect(
+        started.logged.filter(line => notice.test(line)),
+        started.logged.join("\n")
+      ).toHaveLength(1);
+      expect(later.code, later.said).toBeUndefined();
+      expect(later.said).not.toMatch(notice);
     }, 600_000);
 
     it("writes nothing for an older build, names the migration it lacks, and starts", async () => {
