@@ -904,8 +904,7 @@ describeEachDialect(
             fields: [title, storedPerson("manyToOne", true)],
           }
         );
-        const singles: SingleEntryService =
-          t.getService("singleEntryService");
+        const singles: SingleEntryService = t.getService("singleEntryService");
         for (const locale of ["en", "de"]) {
           const written = await singles.update(
             "o2o_page",

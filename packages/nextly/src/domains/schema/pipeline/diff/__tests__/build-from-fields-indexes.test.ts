@@ -100,7 +100,9 @@ describe("buildDesiredTableFromFields — indexes", () => {
       expect(emitted).toMatch(
         /CREATE UNIQUE INDEX[^\n]*[`"]uq_dc_posts_profile[`"][^\n]*[`"]profile[`"]/i
       );
-      expect(emitted).toMatch(/CREATE INDEX[^\n]*[`"]idx_dc_posts_profile[`"]/i);
+      expect(emitted).toMatch(
+        /CREATE INDEX[^\n]*[`"]idx_dc_posts_profile[`"]/i
+      );
 
       // ...so the desired schema a migration is written from declares the same two, or the
       // migration creates the column without its uniqueness and the table takes two rows naming

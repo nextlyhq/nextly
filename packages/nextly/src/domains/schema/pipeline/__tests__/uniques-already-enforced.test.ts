@@ -16,7 +16,12 @@ const live: NextlySchemaSnapshot = {
 const add = (name: string, where?: string): Operation => ({
   type: "add_index",
   tableName: "profiles",
-  index: { name, columns: ["person"], unique: true, ...(where ? { where } : {}) },
+  index: {
+    name,
+    columns: ["person"],
+    unique: true,
+    ...(where ? { where } : {}),
+  },
 });
 const drop = (name: string): Operation => ({
   type: "drop_index",
