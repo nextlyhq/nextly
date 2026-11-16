@@ -2369,7 +2369,9 @@ describe("inline padding and a contained container's inset", () => {
     // The inspector names a value and where it came from. The inset is how
     // containment combines with it, not a value anyone set.
     const { trace } = compilePageCss(
-      doc([node("n1", { base: { base: { padding: { inlineStart: "2rem" } } } })]),
+      doc([
+        node("n1", { base: { base: { padding: { inlineStart: "2rem" } } } }),
+      ]),
       { ...CTX, trace: true } as StyleCompileContext
     );
     expect(trace).toBeDefined();

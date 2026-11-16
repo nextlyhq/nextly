@@ -13,9 +13,15 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { BlockDefinition } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDefinition,
+  BlockDocument,
+  BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
+import type { BlockResolver } from "../resolver";
+import { resolvePageStyles, type PageStyles } from "../styles";
 
 import { accordion } from "./accordion";
 import { box } from "./box";
@@ -25,6 +31,7 @@ import { columns } from "./columns";
 import { CONTENT_WIDTH_CLASS } from "./container";
 import type { ContainerProps } from "./container";
 import { gallery } from "./gallery";
+import { coreBlocks } from "./index";
 import { section } from "./section";
 
 const CONTAINERS = [
@@ -82,4 +89,77 @@ describe("a contained container", () => {
       );
     }
   );
+});
+
+/**
+ * A page stylesheet stored before contained blocks were padded in.
+ *
+ * That compiler wrote an author's side padding as the bare value, which
+ * outweighs the containment rule, so the content of a contained Section with
+ * 300px at its sides ran past the content width on a narrow page. A stored
+ * sheet is reused while its stamp matches, so the stamp's encoding moved and
+ * the old sheet is recompiled on its next read rather than served.
+ */
+describe("a sheet stored before contained blocks were padded in", () => {
+  const DOC: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "band",
+        type: "core/section",
+        version: 1,
+        props: { as: "section", contained: true },
+        styles: {
+          base: {
+            base: { padding: { inlineStart: "300px", inlineEnd: "300px" } },
+          },
+        },
+      } as BlockNode,
+    ],
+  };
+  const resolver: BlockResolver = {
+    get: (name: string) =>
+      coreBlocks.find(block => block.name === name) as never,
+  };
+  const context = {
+    breakpoints: {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    },
+  };
+  const PADDED_IN =
+    "padding-inline-start: max(300px, var(--nx-contain-inset, 0px))";
+
+  /** The sheet as the `v6` compiler stored it: the bare padding, a `v6` stamp. */
+  function storedByV6(): PageStyles {
+    const current = resolvePageStyles(DOC, undefined, context, resolver);
+    return {
+      ...current,
+      css: current.css.replaceAll(PADDED_IN, "padding-inline-start: 300px"),
+      sharedInputsId: current.sharedInputsId?.replace(/^v\d+:/, "v6:"),
+    } as PageStyles;
+  }
+
+  it("is recompiled on a read with no compile context", () => {
+    const stored = storedByV6();
+    expect(stored.css).not.toContain(PADDED_IN);
+    const served = resolvePageStyles(DOC, stored, undefined, resolver);
+    expect(served.css).toContain(PADDED_IN);
+    expect(served.sharedInputsId?.startsWith("v7:")).toBe(true);
+  });
+
+  it("is recompiled where a compile context exists", () => {
+    const served = resolvePageStyles(DOC, storedByV6(), context, resolver);
+    expect(served.css).toContain(PADDED_IN);
+  });
+
+  it("CONTROL: a sheet stored by the current compiler is served as it stands", () => {
+    const current = resolvePageStyles(DOC, undefined, context, resolver);
+    // Marked so a recompile would show: the same stamp, a css nobody compiles.
+    const marked = { ...current, css: `${current.css}\n/* stored */` };
+    expect(resolvePageStyles(DOC, marked, undefined, resolver).css).toBe(
+      marked.css
+    );
+  });
 });

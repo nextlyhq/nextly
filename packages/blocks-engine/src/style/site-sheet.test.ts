@@ -120,7 +120,9 @@ describe("the content-width rule", () => {
     // the reset or every contained element would be inset by nothing.
     const css = sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css;
     const reset = css.indexOf(":where(*){--nx-contain-inset:0px}");
-    const contained = css.indexOf(":where(.nx-pb-contained){--nx-contain-inset:");
+    const contained = css.indexOf(
+      ":where(.nx-pb-contained){--nx-contain-inset:"
+    );
     expect(reset).toBeGreaterThan(-1);
     expect(contained).toBeGreaterThan(reset);
     // And the registration comes first, at the sheet's top level.

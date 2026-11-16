@@ -1355,9 +1355,7 @@ function asMaxArgument(value: string): string {
  *
  * Only the emitted rule carries it: the trace records the value as it was set.
  */
-function withContainInset(
-  declarations: readonly Declaration[]
-): Declaration[] {
+function withContainInset(declarations: readonly Declaration[]): Declaration[] {
   return declarations.map(declaration =>
     INLINE_PADDING.has(declaration.property)
       ? {

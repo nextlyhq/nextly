@@ -277,8 +277,7 @@ test("a contained Box and Card are banded the same way, and a free Box is unchan
       .getByText(words, { exact: true })
       .evaluate(node =>
         parseFloat(
-          getComputedStyle(node.parentElement as Element)
-            .borderInlineStartWidth
+          getComputedStyle(node.parentElement as Element).borderInlineStartWidth
         )
       );
     near(text.left, inset + border);
