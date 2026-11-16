@@ -37,7 +37,6 @@ packages/blocks-engine/src/validation.ts 3573
 
 packages/blocks-react/src/rich-text.tsx 1676
 
-packages/blocks-react/src/styles.ts 1639
 
 packages/builder/src/binding-controls.tsx 1632
 
