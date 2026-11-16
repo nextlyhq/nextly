@@ -161,7 +161,7 @@ async function codesOf(
 describe("the plugin's blocks field judges composition once installed", () => {
   it("refuses a component save that closes a loop", async () => {
     const plugin = pageBuilder();
-    await plugin.init?.(initContext() as never);
+    await plugin.init?.(declaring(plugin, initContext(), []) as never);
 
     expect(
       await codesOf(blocksType(plugin), savingA(COMPONENTS_SLUG, "content"))
@@ -173,7 +173,7 @@ describe("the plugin's blocks field judges composition once installed", () => {
     // not be recognised as a component's, and nothing would be refused.
     const plugin = pageBuilder();
     await plugin.init?.(
-      initContext({ [COMPONENTS_SLUG]: "host_components" }) as never
+      declaring(plugin, initContext({ [COMPONENTS_SLUG]: "host_components" }), []) as never
     );
 
     expect(
@@ -186,7 +186,7 @@ describe("the plugin's blocks field judges composition once installed", () => {
       componentReadiness: { collection: "site_components", field: "blocks" },
     });
     await plugin.init?.(
-      initContext({ [COMPONENTS_SLUG]: "host_components" }) as never
+      declaring(plugin, initContext({ [COMPONENTS_SLUG]: "host_components" }), []) as never
     );
 
     expect(
