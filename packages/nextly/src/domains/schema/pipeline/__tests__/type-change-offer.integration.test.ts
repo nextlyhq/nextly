@@ -66,6 +66,8 @@ describe.each(getConfiguredTestDialects())(
     const { q, run } = tools;
     const db = () => handle.adapter.getDrizzle();
     const printed: string[] = [];
+    /** MySQL's apply names its database, as `db:sync` reads it from the connection URL. */
+    let databaseName: string | undefined;
 
     /** One code-first apply of the collection with `fields`, as `db:sync` makes it. */
     const sync = (fields: FieldDefinition[]) =>
@@ -93,6 +95,7 @@ describe.each(getConfiguredTestDialects())(
         source: "code",
         promptChannel: "terminal",
         nextStep: "run db:sync again",
+        ...(databaseName !== undefined ? { databaseName } : {}),
       });
 
     /** The table's definition and every value of `column`, to compare across a refusal. */
@@ -103,6 +106,13 @@ describe.each(getConfiguredTestDialects())(
 
     beforeEach(async () => {
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+      databaseName =
+        dialect === "mysql"
+          ? String(
+              ((await run("SELECT DATABASE() AS db")) as Array<{ db: unknown }>)[0]
+                ?.db
+            )
+          : undefined;
       clearCachedSnapshot();
       printed.length = 0;
       delete process.env[CONSENT];

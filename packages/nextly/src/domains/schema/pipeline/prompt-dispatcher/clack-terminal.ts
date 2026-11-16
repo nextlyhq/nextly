@@ -350,7 +350,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
           confirmedRenames: [],
           resolutions:
             (await this.judgeDrops(events.filter(isDrop), false)) ?? [],
-          clearing,
+          ...(clearing.length > 0 ? { clearing } : {}),
           proceed: true,
         };
       }
@@ -434,7 +434,9 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     return {
       confirmedRenames: renameResult.confirmedRenames,
       resolutions: eventResult.resolutions,
-      clearing: eventResult.clearing,
+      ...(eventResult.clearing !== undefined
+        ? { clearing: eventResult.clearing }
+        : {}),
       proceed: eventResult.proceed,
     };
   }
@@ -584,7 +586,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }
 
     clack.outro("Resolutions confirmed");
-    return { resolutions, proceed: true, clearing };
+    return {
+      resolutions,
+      proceed: true,
+      ...(clearing.length > 0 ? { clearing } : {}),
+    };
   }
 
   // Walks candidates in a shrinking-pool pattern:
