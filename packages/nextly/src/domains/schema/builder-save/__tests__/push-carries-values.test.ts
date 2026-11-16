@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { TableSpec } from "../../pipeline/diff/types";
+import { getColumnDescriptor } from "../../services/field-column-descriptor";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { pushCarriesValues } from "../push-carries-values";
 
@@ -22,6 +23,8 @@ function save(
     isStored: false,
     renamed: undefined,
     liveTable: () => Promise.resolve(undefined),
+    columnOf: field => getColumnDescriptor(field, "postgresql", "collection"),
+    renames: [],
     ...overrides,
   };
 }
@@ -191,6 +194,72 @@ describe("pushCarriesValues", () => {
               fills,
               holdsRow: () => Promise.resolve(true),
             },
+          })
+        )
+      ).toBe(false);
+    });
+  });
+
+  describe("a field whose column changes type, where the push judges the stored values", () => {
+    const onMySql = (field: FieldDefinition) =>
+      getColumnDescriptor(field, "mysql", "fieldGroup");
+
+    it("keeps the push for a shared text made Unique, which MySQL bounds to varchar(255)", async () => {
+      const unique = save({
+        oldFields: [shared("heading")],
+        newFields: [field("heading", { localized: false, unique: true })],
+        columnOf: onMySql,
+      });
+      expect(await pushCarriesValues(unique)).toBe(true);
+      // Elsewhere the column stays text, and the file runs.
+      expect(
+        await pushCarriesValues({
+          ...unique,
+          columnOf: f => getColumnDescriptor(f, "postgresql", "fieldGroup"),
+        })
+      ).toBe(false);
+    });
+
+    it("keeps the push for a bounded text narrowed", async () => {
+      const short = (maxLength: number) =>
+        field("code", {
+          localized: false,
+          options: { variant: "short" },
+          validation: { maxLength },
+        });
+      // A collection's or a Single's short text takes its width from `maxLength`.
+      expect(
+        await pushCarriesValues(
+          save({
+            oldFields: [short(120)],
+            newFields: [short(40)],
+            columnOf: f => getColumnDescriptor(f, "mysql", "collection"),
+          })
+        )
+      ).toBe(true);
+    });
+
+    it("keeps the push for a field whose type changes, renamed or not", async () => {
+      const typeChange = save({
+        oldFields: [shared("views")],
+        newFields: [field("views", { type: "number", localized: false })],
+      });
+      expect(await pushCarriesValues(typeChange)).toBe(true);
+      expect(
+        await pushCarriesValues({
+          ...typeChange,
+          newFields: [field("hits", { type: "number", localized: false })],
+          renames: [{ from: "views", to: "hits" }],
+        })
+      ).toBe(true);
+    });
+
+    it("runs the file for a field made required, whose column keeps its type", async () => {
+      expect(
+        await pushCarriesValues(
+          save({
+            oldFields: [shared("heading")],
+            newFields: [field("heading", { localized: false, required: true })],
           })
         )
       ).toBe(false);

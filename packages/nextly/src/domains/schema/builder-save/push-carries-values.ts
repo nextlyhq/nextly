@@ -11,7 +11,10 @@ import { fieldsJoiningTranslation } from "../../i18n/migration/field-joins-trans
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
 import { reachesRelationStorage } from "../pipeline/recorded-shapes";
-import { toSnakeCase } from "../services/field-column-descriptor";
+import {
+  toSnakeCase,
+  type ColumnDescriptor,
+} from "../services/field-column-descriptor";
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
@@ -20,8 +23,9 @@ import { toSnakeCase } from "../services/field-column-descriptor";
  * columns from the ones they replace; a field joining translation or leaving it, its values moved
  * between the main table and the companion (judged under `renamed`, the companion rename the save
  * makes, as the preflights judge it); a translated field renamed or removed, its companion column
- * judged against the companion as it stands; a field new to a Single's table that its row is
- * filled in; and a change reaching a relation's storage
+ * judged against the companion as it stands; a field whose column changes type or size, whose
+ * stored values the push judges before it alters the column; a field new to a Single's table that
+ * its row is filled in; and a change reaching a relation's storage
  * (`reachesRelationStorage`), which the push plans from the live table.
  *
  * Any other save moves no value, and its file applies it, in tries over a busy table and on SQLite
@@ -40,6 +44,10 @@ export async function pushCarriesValues(args: {
   renamed: FieldRename | null | undefined;
   /** The entity's main table as the database holds it. */
   liveTable: () => Promise<TableSpec | undefined>;
+  /** A field's column on this dialect, from the one field-to-column descriptor, or none. */
+  columnOf: (field: FieldDefinition) => ColumnDescriptor | null;
+  /** The main table's renames the save makes, by column. */
+  renames: ReadonlyArray<{ from: string; to: string }>;
   /**
    * A Single's one row, which a field new to its table is filled in where the field is required
    * or states a default the row takes (`singleRowFillValue`). A field group has none.
@@ -72,6 +80,10 @@ export async function pushCarriesValues(args: {
   // the push against the companion as it stands, so a save made again after one that stopped part
   // way finishes it. The file, planned from the companion's history, would rename or drop it again.
   if (args.wasStored && translatedFieldRenamedOrRemoved(args)) return true;
+  // A field whose column changes type or size: the push judges every stored value against the new
+  // column before it alters it, refusing one it would cut short; the file's statements have no
+  // such judgement yet, and a server refuses them with its own error, or cuts the value.
+  if (columnTypeChanges(args)) return true;
   // A Single's row filled in for a field new to its table: the push writes the value with the
   // column, where the file adds the column alone, refused when required and empty otherwise.
   if (
@@ -84,6 +96,29 @@ export async function pushCarriesValues(args: {
     before: args.oldFields,
     after: args.newFields,
     liveTable: args.liveTable,
+  });
+}
+
+/** Whether a field kept by the save, under its name or its rename, gets a column of another type. */
+function columnTypeChanges(args: {
+  oldFields: readonly FieldDefinition[];
+  newFields: readonly FieldDefinition[];
+  columnOf: (field: FieldDefinition) => ColumnDescriptor | null;
+  renames: ReadonlyArray<{ from: string; to: string }>;
+}): boolean {
+  const before = new Map(
+    args.oldFields.map(field => [toSnakeCase(field.name), field] as const)
+  );
+  // The type as the database declares it, sizes included (`varchar(255)`, `numeric(10, 2)`): a
+  // field whose column keeps it (a Unique text on PostgreSQL stays `text`) changes nothing there.
+  const shape = (field: FieldDefinition) =>
+    args.columnOf(field)?.dialectType ?? null;
+  return args.newFields.some(field => {
+    const column = toSnakeCase(field.name);
+    const from =
+      args.renames.find(rename => rename.to === column)?.from ?? column;
+    const old = before.get(from);
+    return old !== undefined && shape(old) !== shape(field);
   });
 }
 

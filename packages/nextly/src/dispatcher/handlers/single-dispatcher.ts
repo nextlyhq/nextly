@@ -55,7 +55,10 @@ import { translationLayoutChange } from "../../domains/i18n/per-language-storage
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
-import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import {
+  renamedFieldsOf,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
@@ -69,6 +72,7 @@ import {
   fieldsAsStored,
   recordedFieldsOf,
 } from "../../domains/schema/services/collection-schema-apply";
+import { getSingleRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -1649,6 +1653,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   liveTable: async () =>
                     (await introspectLiveSnapshot(db, dialect, [tableName]))
                       .tables[0],
+                  columnOf: field =>
+                    getSingleRowColumnDescriptor(field, dialect, "collection"),
+                  renames: renamedFieldsOf(renameResolutions ?? []),
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
             }
