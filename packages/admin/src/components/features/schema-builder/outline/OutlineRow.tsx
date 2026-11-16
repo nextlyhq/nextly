@@ -29,8 +29,8 @@ import type { OutlineActions } from "./outline-types";
 import { OutlineRowMenu } from "./OutlineRowMenu";
 import { ROW_ID_PREFIX } from "./useTreeKeyDown";
 
-/** The width of one level of indent, in pixels. */
-const INDENT = 20;
+/** The width of one level of indent, in pixels; a drag sideways by it changes level. */
+export const INDENT = 20;
 
 type Props = {
   row: VisibleRow;
@@ -41,8 +41,10 @@ type Props = {
   selected: boolean;
   /** The row the tree's tab stop is on. */
   tabStop: boolean;
-  /** May be dragged within its container. */
+  /** May be dragged, and moved by key: the rule judges where to. */
   draggable: boolean;
+  /** The element naming the keys that move a field, for a row that may move. */
+  movesDescribedBy?: string;
   onSelect: (id: string) => void;
   onToggle: (path: string) => void;
   registerRow: (id: string, element: HTMLElement | null) => void;
@@ -270,6 +272,8 @@ function RowItem({
   onSelect,
   onToggle,
   registerRow,
+  draggable,
+  movesDescribedBy,
 }: Pick<
   Props,
   | "row"
@@ -280,6 +284,8 @@ function RowItem({
   | "onSelect"
   | "onToggle"
   | "registerRow"
+  | "draggable"
+  | "movesDescribedBy"
 >): JSX.Element {
   const { node, level, expanded, match } = row;
   const { field } = node;
@@ -296,6 +302,7 @@ function RowItem({
       aria-setsize={row.setsize}
       aria-expanded={expanded}
       aria-selected={selected}
+      aria-describedby={draggable ? movesDescribedBy : undefined}
       tabIndex={tabStop ? 0 : -1}
       onClick={() => onSelect(node.id)}
       className={cn(

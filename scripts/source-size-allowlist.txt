@@ -35,7 +35,6 @@ packages/blocks-engine/src/validation.ts 3573
 
 packages/blocks-react/src/block-boundary.tsx 1797
 
-packages/blocks-react/src/next.ts 5716
 
 packages/blocks-react/src/rich-text.tsx 1676
 

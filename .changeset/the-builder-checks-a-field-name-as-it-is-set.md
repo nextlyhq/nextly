@@ -31,4 +31,4 @@
 
 The Schema Builder checks a field's name where it is set, by the rule its save refuses a name by. The field settings panel shows what is wrong under Name as the name is typed or follows the label: a spelling the save refuses, a column longer than 63 characters, a built-in column, a Draft/Published name while drafts are on, or a name a sibling already has (in other letter case or as the same column too, a field deleted but not yet saved included). A saved field's own name is never flagged.
 
-The field picker gives a derived name that is taken the next free number (`status_2` while drafts are on), and refuses to add a field whose name could never be saved, by button or by Enter. A duplicated field's name moves past a sibling's in other letter case or column as well as its exact name.
+The field picker gives a derived name that is taken the next free number (`status_2` while drafts are on), and refuses to add a field whose name could never be saved, by button or by Enter.

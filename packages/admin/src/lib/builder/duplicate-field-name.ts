@@ -26,15 +26,29 @@ export function nextDuplicateName(
   takenNames: readonly string[],
   isTaken: (name: string) => boolean = () => false
 ): string {
-  const unavailable = (name: string) =>
-    isTaken(name) || takenNames.some(other => siblingNameClash(name, other));
-  if (!unavailable(source)) return source;
+  return freeDuplicateName(
+    source,
+    name =>
+      isTaken(name) || takenNames.some(other => siblingNameClash(name, other))
+  );
+}
+
+/**
+ * The first of `source`, then `source` with the next numeric suffix, that
+ * `isTaken` says is free: what a copy is named when "taken" means more than
+ * an exact match, such as a sibling's name in other letter case.
+ */
+export function freeDuplicateName(
+  source: string,
+  isTaken: (name: string) => boolean
+): string {
+  if (!isTaken(source)) return source;
 
   const match = source.match(SUFFIX_PATTERN);
   const base = match ? match[1] : source;
   let n = match ? Number(match[2]) + 1 : 2;
 
-  while (unavailable(`${base}_${n}`)) {
+  while (isTaken(`${base}_${n}`)) {
     n += 1;
   }
   return `${base}_${n}`;
