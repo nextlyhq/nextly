@@ -301,6 +301,71 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(read.author).toEqual(a.item.id);
     });
 
+    it("creates a list relationship sent as the editor writes it, relationTo and hasMany with no options, and saves and reads two ids", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      await createCollection("posts", [
+        {
+          name: "writers",
+          type: "relationship",
+          relationTo: "authors",
+          hasMany: true,
+        },
+      ]);
+      const a = await t.nextly.create({
+        collection: "authors",
+        data: { title: "A", name: "A" },
+      });
+      const b = await t.nextly.create({
+        collection: "authors",
+        data: { title: "B", name: "B" },
+      });
+      const ids = [a.item.id, b.item.id] as string[];
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: { title: "P", writers: ids },
+      });
+      const read = (await t.nextly.findByID({
+        collection: "posts",
+        id: post.item.id as string,
+        depth: 0,
+      })) as unknown as { writers: unknown };
+      expect(read.writers).toEqual(ids);
+    });
+
+    it("creates a relationship to several collections sent as the editor writes it, with no options, and saves and reads one", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      await createCollection("tags", [{ name: "label", type: "text" }]);
+      await createCollection("posts", [
+        {
+          name: "subject",
+          type: "relationship",
+          relationTo: ["authors", "tags"],
+        },
+      ]);
+      const a = await t.nextly.create({
+        collection: "authors",
+        data: { title: "A", name: "A" },
+      });
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "P",
+          subject: { relationTo: "authors", value: a.item.id },
+        },
+      });
+      const read = (await t.nextly.findByID({
+        collection: "posts",
+        id: post.item.id as string,
+        depth: 0,
+      })) as unknown as { subject: unknown };
+      expect(read.subject).toMatchObject({
+        relationTo: "authors",
+        value: a.item.id,
+      });
+    });
+
     it("stores a hasMany relationship the Builder creates as a list, and saves and reads two ids", async () => {
       const t = await boot();
       await createCollection("authors", [{ name: "name", type: "text" }]);
