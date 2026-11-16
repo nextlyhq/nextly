@@ -152,6 +152,8 @@ export function warnSizeNotHere(url: string, mediaId: string): void {
 /** The media columns a search for files another item refers to reads. */
 export interface StoredFileColumns {
   filename: AnyColumn;
+  /** Read for the resized copies an item can have beside its original. */
+  mimeType: AnyColumn;
   url: AnyColumn;
   thumbnailUrl: AnyColumn;
 }

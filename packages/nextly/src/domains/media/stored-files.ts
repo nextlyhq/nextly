@@ -1,5 +1,6 @@
 import { siblingStoredPath } from "../../storage/stored-path";
 
+import { copyPathsOf } from "./copies/copy-rules";
 import { urlOnlySizeHere, type SizeLocator } from "./size-location";
 
 /**
@@ -47,9 +48,20 @@ function urlOnlySizes(sizes: unknown): string[] {
 /** What a media record holds about where its files went. */
 export interface MediaFilesRecord {
   filename: string;
+  /** Which resized copies the original can have, each stored beside it. */
+  mimeType: string;
   url: string;
   thumbnailUrl?: string | null;
   sizes?: unknown;
+}
+
+/**
+ * A record naming one stored file and nothing made from it: no thumbnail, no
+ * size and no copy. For a removal that already lists each file it removes,
+ * as a replaced item's old files are listed one by one.
+ */
+export function singleStoredFile(path: string, url: string): MediaFilesRecord {
+  return { filename: path, mimeType: "", url };
 }
 
 /** The files stored for an item, as far as its record shows them. */
@@ -68,8 +80,10 @@ export interface StoredFiles {
 }
 
 /**
- * Every file stored for an item: its original, every image size and the
- * thumbnail made at upload. The record holds only that thumbnail's URL, so
+ * Every file stored for an item: its original, every image size, the
+ * thumbnail made at upload, and every resized copy it can have. A copy's key
+ * is derived from the original's, so each one it can have is listed whether
+ * or not it was ever asked for; a delete of one never made counts as done. The record holds only that thumbnail's URL, so
  * its path is worked out from what the record holds about the original; a
  * thumbnail that is one of the sizes is already among them. A thumbnail whose
  * location the record does not show is returned apart, by its URL, so that
@@ -85,7 +99,11 @@ export function storedFilesOf(
   media: MediaFilesRecord,
   storage?: SizeLocator
 ): StoredFiles {
-  const paths = [media.filename, ...variantPaths(media.sizes)];
+  const paths = [
+    media.filename,
+    ...variantPaths(media.sizes),
+    ...copyPathsOf(media),
+  ];
   const notHere: string[] = [];
   for (const url of urlOnlySizes(media.sizes)) {
     const path = urlOnlySizeHere(url, media, storage);

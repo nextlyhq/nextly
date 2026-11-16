@@ -446,6 +446,20 @@ export type {
 } from "./services/users/user-service";
 
 export { MediaService } from "./services/media/media-service";
+/**
+ * Resized copies of stored images: the widths a copy can have, the allowed
+ * width nearest any other, and what `copyOf` answers.
+ * @experimental
+ */
+export {
+  MEDIA_COPY_WIDTHS,
+  nearestMediaCopyWidth,
+  type MediaCopyWidth,
+} from "./domains/media/copies/copy-rules";
+export type {
+  MediaCopy,
+  MediaCopySource,
+} from "./domains/media/copies/media-copies";
 export type {
   MediaFile,
   MediaType,

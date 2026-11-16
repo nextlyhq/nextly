@@ -47,6 +47,8 @@ export const PLUGIN_MEDIA_READS = [
   "getImageDimensions",
   // Whether anything uses an item, for a plugin freeing its own uploads.
   "isInUse",
+  // A resized copy of an image, for a plugin showing it at a known width.
+  "copyOf",
 ] as const satisfies readonly (keyof MediaService)[];
 
 /**

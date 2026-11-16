@@ -91,6 +91,13 @@ import {
   type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import {
+  copyOfMedia,
+  mediaCopyStorage,
+  mediaIdOfCopySource,
+  type MediaCopy,
+  type MediaCopySource,
+} from "../copies/media-copies";
 import type { MediaLibraryCounts } from "../media-library-query";
 import type { DeleteClaim, PendingMediaDeletes } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
@@ -625,6 +632,34 @@ export class MediaService {
     }
 
     return this.mapToMediaFile(result.data);
+  }
+
+  /**
+   * A resized copy of an image, by its address, at the allowed width nearest
+   * `width`: made the first time it is fetched and kept beside the original.
+   * `null` when no copy can be had, and the original is to be used: an
+   * address that is not a media item's, an image type that is not resized, a
+   * storage that cannot keep copies, or an install without the image library.
+   *
+   * Reads like `findById`, so a missing item is NOT_FOUND. Whoever calls it
+   * has decided the caller may read the item; the copy route serves it only
+   * to whoever may read the item.
+   *
+   * @experimental
+   */
+  async copyOf(
+    source: MediaCopySource,
+    width: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy | null> {
+    const id = mediaIdOfCopySource(source);
+    if (id === undefined) return null;
+    const item = await this.findById(id, context);
+    return await copyOfMedia(item, width, {
+      storage: mediaCopyStorage(),
+      processor: this.imageProcessor,
+      logger: this.logger,
+    });
   }
 
   /**

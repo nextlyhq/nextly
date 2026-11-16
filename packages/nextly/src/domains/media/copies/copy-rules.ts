@@ -105,6 +105,9 @@ const FORMATS_BY_TYPE: ReadonlyMap<string, readonly CopyFormat[]> = new Map([
 
 /** The formats an original of `mimeType` can be copied into; none if it has no copies. */
 export function copyFormatsOf(mimeType: string): readonly CopyFormat[] {
+  // A record read through a generic row select is typed, not checked, so a
+  // missing type is answered as "no copies" rather than thrown on.
+  if (typeof mimeType !== "string") return [];
   return FORMATS_BY_TYPE.get(canonicalMimeType(mimeType)) ?? [];
 }
 

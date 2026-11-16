@@ -25,6 +25,7 @@ import {
   readStoredMediaBytes,
   type StoredMediaSource,
 } from "../../../storage/read-stored-media";
+import { getMediaStorage } from "../../../storage/storage";
 import type { IStorageAdapter } from "../../../storage/types";
 import { consoleLogger, type Logger } from "../../../shared/types";
 
@@ -32,6 +33,7 @@ import {
   copyFormatsOf,
   copyPathOf,
   mediaCopyAddress,
+  mediaIdOfCopyableAddress,
   nearestMediaCopyWidth,
   negotiateCopyFormat,
   type CopyFormat,
@@ -52,6 +54,35 @@ export interface MediaCopy {
 
 /** What of a storage copies are read from and kept by. */
 export type CopyStorage = StoredMediaSource & Pick<IStorageAdapter, "uploadAt">;
+
+/** The collection whose storage holds media originals and their copies. */
+const MEDIA_COLLECTION = "media";
+
+/**
+ * The storage media originals are kept in, and so their copies: the media
+ * collection's own adapter, which reads and writes, rather than the manager
+ * routing to it, which does neither.
+ */
+export function mediaCopyStorage(): CopyStorage {
+  return getMediaStorage().getAdapterForCollection(MEDIA_COLLECTION);
+}
+
+/**
+ * Which image a copy is asked of: a media item by its id, or an address. An
+ * address finds an item only when it is one of the media routes naming the
+ * item by id; any other address, an image on another site above all, has no
+ * copy, and the caller uses it as it is.
+ *
+ * @experimental
+ */
+export type MediaCopySource = { id: string } | { url: string };
+
+/** The item id a copy source names, or `undefined` for an address naming none. */
+export function mediaIdOfCopySource(
+  source: MediaCopySource
+): string | undefined {
+  return "id" in source ? source.id : mediaIdOfCopyableAddress(source.url);
+}
 
 /** What making and finding copies needs. */
 export interface CopyDeps {
