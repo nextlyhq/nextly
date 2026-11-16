@@ -20,9 +20,8 @@
  * it draws. A check that fails changes nothing; the next one asks again.
  *
  * What the canvas kept lives as long as the editor: closing it, signing
- * out, or the canvas starting to read a source it did not read before drops
- * it, so no answer read before the marks were taken is ever compared with
- * them.
+ * out, or the sources the canvas reads changing drops it, so no answer read
+ * before the marks were taken is ever compared with them.
  *
  * @module admin/editor/canvas-source-check
  */
@@ -65,27 +64,6 @@ async function askRoute(ask: CanvasSourcesChangedRequest): Promise<string> {
   return body.stamp;
 }
 
-/** Whether `next` names a source `previous` did not. */
-function namesNewSource(
-  previous: CanvasSourcesChangedRequest,
-  next: CanvasSourcesChangedRequest
-): boolean {
-  const named = (ask: CanvasSourcesChangedRequest) =>
-    new Set([
-      JSON.stringify(ask.source),
-      `locale:${ask.locale ?? ""}`,
-      ...(ask.site === true ? ["site"] : []),
-      ...ask.singles.map(slug => `single:${slug}`),
-      ...ask.lists.map(slug => `list:${slug}`),
-      ...(ask.follows?.entry ?? []).map(field => `follow::${field}`),
-      ...Object.entries(ask.follows?.singles ?? {}).flatMap(([slug, fields]) =>
-        fields.map(field => `follow:${slug}:${field}`)
-      ),
-    ]);
-  const before = named(previous);
-  return [...named(next)].some(source => !before.has(source));
-}
-
 /**
  * Keep the canvas's kept reads in step with saves made elsewhere, for the
  * sources `asked` names, as `userId`. Asks nothing for a page that reads no
@@ -99,9 +77,11 @@ export function useCanvasSourceCheck(
   // The sources by name: an edit that leaves them the same asks nothing new.
   const key =
     asked === undefined || userId === null ? "" : JSON.stringify(asked);
-  // The sources the last check named, across asks: a source read for the
-  // first time may have been kept from before this editor watched it.
-  const previous = useRef<CanvasSourcesChangedRequest | undefined>(undefined);
+  // The sources the last check named, across asks. A mark is one for all the
+  // sources asked about, so marks for different sources cannot be compared:
+  // a changed ask drops what was kept, and its first mark is taken with the
+  // reads that drop asks for.
+  const previous = useRef("");
   useEffect(() => {
     if (key === "") return;
     const sources = JSON.parse(key) as CanvasSourcesChangedRequest;
@@ -158,9 +138,9 @@ export function useCanvasSourceCheck(
       void check(true);
     });
     const before = previous.current;
-    previous.current = sources;
-    if (before !== undefined && namesNewSource(before, sources)) {
-      // What was kept for the new source predates every mark: drop it, which
+    previous.current = key;
+    if (before !== "" && before !== key) {
+      // What was kept predates every mark of the new ask: drop it, which
       // asks the check again through the listener above.
       canvasSourcesChanged();
     } else {

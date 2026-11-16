@@ -192,7 +192,7 @@ describe("the canvas's change check", () => {
     expect(dropped).toBe(0);
   });
 
-  it("drops what was kept when the canvas starts reading a source it did not, and not when one goes", async () => {
+  it("drops what was kept whenever the sources the canvas reads change, and not when they stay the same", async () => {
     const ask = vi.fn(async () => "same");
     const { rerender } = renderHook(
       ({ asked }: { asked: typeof ASKED }) =>
@@ -200,13 +200,19 @@ describe("the canvas's change check", () => {
       { initialProps: { asked: ASKED } }
     );
     await vi.advanceTimersByTimeAsync(0);
-    rerender({ asked: { ...ASKED, lists: [] } });
+    // The same sources, asked as a new object: nothing is dropped.
+    rerender({ asked: { ...ASKED } });
     await vi.advanceTimersByTimeAsync(0);
     expect(dropped).toBe(0);
-    // The list back: what was kept for it predates every mark since.
-    rerender({ asked: ASKED });
+    // A source goes: the mark of the rest cannot be compared with the last,
+    // so what was kept is dropped and read again with the new first mark.
+    rerender({ asked: { ...ASKED, lists: [] } });
     await vi.advanceTimersByTimeAsync(0);
     expect(dropped).toBe(1);
+    // It comes back: what was kept for it predates every mark since.
+    rerender({ asked: ASKED });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dropped).toBe(2);
   });
 
   it("drops what was kept on signing out and on closing the editor", async () => {
