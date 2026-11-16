@@ -3,7 +3,7 @@
 /**
  * Collection Builder — Create Page
  *
- * The create flow is now a focused settings modal: user fills the modal,
+ * The create flow is the new-entity dialog: user fills the modal,
  * clicks Continue, the collection is created with its system fields only,
  * and the user lands on the [slug].tsx edit page to add custom fields.
  *
@@ -15,10 +15,8 @@
 
 import { useEffect, useState } from "react";
 
-import {
-  BuilderSettingsModal,
-  type BuilderSettingsValues,
-} from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import { NewEntityDialog } from "@admin/components/features/schema-builder/new-entity/NewEntityDialog";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -135,13 +133,13 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
 
   return (
     <PageContainer>
-      <BuilderSettingsModal
+      {/* One short dialog; Create still writes the entity at once. */}
+      <NewEntityDialog
         open={open}
-        mode="create"
         config={COLLECTION_BUILDER_CONFIG}
-        initialValues={null}
         onCancel={() => setOpen(false)}
-        onSubmit={handleSubmit}
+        onCreate={handleSubmit}
+        creating={isPending}
       />
     </PageContainer>
   );

@@ -41,6 +41,7 @@ import {
   fieldsStoredOnRow,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  getSingleRowColumnDescriptor,
   componentRelationIsSingleReference,
   type ColumnOrigin,
   kindAndSizes,
@@ -492,10 +493,14 @@ export function buildDesiredTableFromFields(
   }
 
   // User-defined fields — descriptor module handles layout-only filtering,
-  // hasMany/relationTo promotion to JSON, and per-dialect token rendering.
+  // hasMany/relationTo promotion to JSON, and per-dialect token rendering. A
+  // Single's reference columns accept NULL (`getSingleRowColumnDescriptor`).
+  const describeUserColumn = tableName.startsWith("single_")
+    ? getSingleRowColumnDescriptor
+    : getColumnDescriptor;
   for (const field of stored) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
-    const desc = getColumnDescriptor(
+    const desc = describeUserColumn(
       // The descriptor's input type is FieldDefinition; this util is
       // structurally compatible (same name/type/required/hasMany/relationTo
       // keys). Cast through unknown to bridge the two surface types

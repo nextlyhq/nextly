@@ -24,6 +24,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -434,6 +435,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` discards the shared part's pending change alone.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),
@@ -785,6 +788,9 @@ const COLLECTIONS_METHODS: Record<
       assertValidFieldsPayload(fields, {
         kind: "collection",
         stored: collection.fields ?? [],
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          collection.status === true || readRequestedLifecycle(body) === true,
       });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
@@ -944,6 +950,9 @@ const COLLECTIONS_METHODS: Record<
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
       assertValidFieldsPayload(fields, {
         kind: "collection",
         stored: "under-lock",
@@ -985,7 +994,13 @@ const COLLECTIONS_METHODS: Record<
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, collection.fields ?? []);
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
+          assertBuilderFieldNames(fields, collection.fields ?? [], {
+            surface: "collection",
+            lifecycleEnabled:
+              collection.status === true || requestedLifecycle === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.

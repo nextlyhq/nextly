@@ -207,17 +207,18 @@ export { useCurrentUserId } from "@nextlyhq/admin/kit/core";
  * identity is the same whichever language you read it in, and its status is
  * not. This answers for the language being edited.
  *
- * It reports FACTS. What to call a published document with local edits is
- * `pillStateFromForm`'s question, because only the caller knows whether IT has
- * unsaved work — a surface holding its own document outside the form is not
- * described by the form's dirty flag.
+ * It reports FACTS. `savedPillState` turns them into the state the entry
+ * page's pill shows (Draft, Published or Changed), which never counts unsaved
+ * edits: those are the save state's to report.
  */
 export {
   useDocumentStatus,
   pillStateFromForm,
+  savedPillState,
   PILL_LABEL,
   type DocumentStatus,
   type PillState,
+  type SavedPillState,
 } from "@nextlyhq/admin/kit/document";
 
 /**

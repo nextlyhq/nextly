@@ -109,7 +109,7 @@ describe("a schema save making columns required over rows holding no value", () 
         oldFields: [text("tagline", false)],
         newFields: [text("tagline", true), text("headline", true)],
         // A column the ALTER generator gives existing rows no value in, as a contributed field
-        // type's can be (every built-in NOT NULL type has one; a relationship's stays nullable).
+        // type's or a relationship's can be.
         backfill: field =>
           field.name === "headline" ? null : schema.addedColumnBackfill(field),
       })
@@ -129,9 +129,10 @@ describe("a schema save making columns required over rows holding no value", () 
     ]);
   });
 
-  // A relationship's foreign key stays nullable however required the field is: its requiredness is
-  // enforced when an entry is saved (`getColumnDescriptor`), so the save writes no NOT NULL.
-  it("refuses no relationship made required, or added as required, over rows holding none", async () => {
+  // A required relationship's column is NOT NULL like any other required field's
+  // (`getColumnDescriptor`), so making one required, or adding one as required, over rows holding
+  // no value is refused the same way rather than left to the database.
+  it("refuses a relationship made required, or added as required, over rows holding none", async () => {
     sqlite.exec(`ALTER TABLE dc_posts ADD COLUMN editor TEXT`);
     expect(
       await refusals({
@@ -140,7 +141,20 @@ describe("a schema save making columns required over rows holding no value", () 
         oldFields: [relationship("editor", false)],
         newFields: [relationship("editor"), relationship("author")],
       })
-    ).toEqual([]);
+    ).toEqual([
+      {
+        path: "fields.editor",
+        code: "REQUIRED_COLUMN_HAS_NULLS",
+        message:
+          "Collection 'posts': field 'editor' cannot become required while 3 rows hold no value in it. Give those rows a value first, or keep the field optional.",
+      },
+      {
+        path: "fields.author",
+        code: "REQUIRED_COLUMN_HAS_NULLS",
+        message:
+          "Collection 'posts': field 'author' cannot be added as required without a default while 3 rows exist, which would hold no value in it. Give it a default, or add it as optional.",
+      },
+    ]);
   });
 
   it("counts a renamed field under the column the table still has", async () => {

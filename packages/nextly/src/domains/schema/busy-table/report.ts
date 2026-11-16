@@ -121,6 +121,8 @@ const NO_RETRY_KINDS: Record<NoRetryReason, string> = {
     "a row change on a table whose triggers this database account cannot see, which may run code the system does not know,",
   "session-state":
     "a statement an earlier try kept that made state of its own session (a temporary table, a prepared statement, a cursor), which the next try's session would not have,",
+  "event-trigger":
+    "a schema statement, which fires the database's DDL event trigger, code the system does not know,",
   unread: "a statement of a kind the system does not recognise",
 };
 
@@ -178,11 +180,15 @@ function waitLine(stop: BusyTableStop): string {
       );
 }
 
-/** The changes this run applied before the one that stopped. */
-function appliedLine(appliedBefore: readonly string[]): string {
+/** The changes this run applied, or for a DOWN rolled back, before the one that stopped. */
+function appliedLine(
+  appliedBefore: readonly string[],
+  direction: BusyTableStop["direction"]
+): string {
+  const done = direction === "down" ? "rolled back" : "applied";
   return appliedBefore.length === 0
-    ? "Nothing was applied before it in this run."
-    : `Applied before it in this run: ${appliedBefore.map(change => `\`${change}\``).join(", ")}.`;
+    ? `Nothing was ${done} before it in this run.`
+    : `${done === "applied" ? "Applied" : "Rolled back"} before it in this run: ${appliedBefore.map(change => `\`${change}\``).join(", ")}.`;
 }
 
 /** What to do next: wait out or end the holder, or resolve a file that stopped part-way. */
@@ -301,7 +307,7 @@ export function tableBusyError(stop: BusyTableStop): NextlyError {
     whatHappened(stop, why),
     ...outcomeLines(stop.outcome),
     waitLine(stop),
-    appliedLine(stop.appliedBefore),
+    appliedLine(stop.appliedBefore, stop.direction),
     ...(stop.endedAtLease
       ? [
           "The tries ended early: the schema lock could not be renewed while another connection " +
