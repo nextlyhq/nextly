@@ -30,6 +30,7 @@ import {
   type ColumnDescriptor,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  getSingleRowColumnDescriptor,
   renderDialectType,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
@@ -85,7 +86,9 @@ function describeColumn(
   const describe =
     entity.kind === "fieldGroup" && !translation
       ? getComponentRowColumnDescriptor
-      : getColumnDescriptor;
+      : entity.kind === "single" && !translation
+        ? getSingleRowColumnDescriptor
+        : getColumnDescriptor;
   const described = describe(field, dialect, origin);
   if (described === null) return null;
   // An override the app made of the column's storage is what the column should have: the entity's
