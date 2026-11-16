@@ -29,7 +29,9 @@ export interface FocusView {
  * The containers a person may focus: a group, repeating rows and a blocks field. A field group is
  * changed in its own editor, and a block's rows are only read. A container whose delete is pending
  * is still drawn, marked, until the save, but it is going: it is not focused, and Focus on it
- * falls back as for one already gone.
+ * falls back as for one already gone. A blocks field with no block rows (none accepted, or its
+ * blocks not read) is not focused either: its own row is where that is said, and Focus would hide
+ * it, while it holds nothing to add.
  */
 const FOCUSABLE: ReadonlySet<OutlineContainer> = new Set<OutlineContainer>([
   "group",
@@ -41,7 +43,8 @@ export function canFocus(node: OutlineNode): boolean {
   return (
     node.container !== null &&
     FOCUSABLE.has(node.container) &&
-    !isPendingDelete(node)
+    !isPendingDelete(node) &&
+    !(node.container === "blocks" && node.children.length === 0)
   );
 }
 

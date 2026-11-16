@@ -158,6 +158,16 @@ describe("Focus", () => {
     expect(probe.addsAt).toEqual([{ parentFieldId: "f-details" }]);
   });
 
+  it("puts keyboard focus on Exit focus when the focused container draws no row", async () => {
+    const { user } = setup([
+      plain("title"),
+      plain("details", { type: "group", fields: [] }),
+    ]);
+    await focusOn(user, "details");
+    expect(drawn()).toEqual([]);
+    expect(screen.getByRole("button", { name: "Exit focus" })).toHaveFocus();
+  });
+
   it("puts keyboard focus on the first field Find still shows", async () => {
     const { user } = setup();
     await user.type(

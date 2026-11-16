@@ -14,7 +14,7 @@ import {
   type CollisionDetection,
 } from "@dnd-kit/core";
 import { Button } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { JSX, Ref } from "react";
 
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import { canFocus } from "@admin/lib/builder/outline/focus-view";
@@ -123,11 +123,14 @@ function CurrentCrumb({ node }: { node: OutlineNode }): JSX.Element {
 
 export function FocusCrumbs({
   crumbs,
+  exitRef,
   onGo,
   onExit,
 }: {
   /** From the top level's first container down to the focused one. */
   crumbs: readonly OutlineNode[];
+  /** Exit focus, which takes keyboard focus when the focused container draws no row. */
+  exitRef?: Ref<HTMLButtonElement>;
   /** Go back to a crumb's level: a container's id, or null for the top level. */
   onGo: (containerId: string | null) => void;
   onExit: () => void;
@@ -165,7 +168,7 @@ export function FocusCrumbs({
           </li>
         </ol>
       </nav>
-      <Button variant="outline" size="sm" onClick={onExit}>
+      <Button ref={exitRef} variant="outline" size="sm" onClick={onExit}>
         Exit focus
       </Button>
     </div>

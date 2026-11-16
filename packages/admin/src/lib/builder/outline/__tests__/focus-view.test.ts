@@ -124,6 +124,19 @@ describe("canFocus", () => {
   });
 });
 
+describe("a blocks field with no block rows", () => {
+  it("is not focused, so its own row keeps saying why it shows none", () => {
+    // Its accepted blocks not read: the row has no children.
+    const nodes = buildOutline(nestedFixtureFields(), {
+      entityReadOnly: false,
+      fieldGroups: nestedFixtureFieldGroups(),
+    });
+    expect(node(nodes, "f-body").children).toEqual([]);
+    expect(canFocus(node(nodes, "f-body"))).toBe(false);
+    expect(focusView(nodes, "f-body").focused).toBeNull();
+  });
+});
+
 describe("a container whose delete is pending", () => {
   it("is not focused, and Focus on it draws the whole outline", () => {
     const nodes = withDeleted("f-items-cta");

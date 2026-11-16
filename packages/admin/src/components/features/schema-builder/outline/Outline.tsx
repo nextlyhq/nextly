@@ -16,8 +16,15 @@
  * with focus kept on the field.
  */
 import { Button } from "@nextlyhq/ui";
-import type { FocusEvent, JSX, ReactNode } from "react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import type { FocusEvent, JSX, ReactNode, RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { usePersistedStringSet } from "@admin/hooks/usePersistedState";
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
@@ -139,17 +146,23 @@ function useRefocusAfterMove(
   });
 }
 
-/** Keyboard focus on the row a change of Focus asked for, once it is drawn. */
+/**
+ * Keyboard focus on the row a change of Focus asked for, once it is drawn. Where a focused
+ * container draws none of them (an empty one), it goes to `fallback`, the breadcrumb's Exit
+ * focus, rather than staying on a row the change took away.
+ */
 function useReturnAfterFocus(
   focus: OutlineFocus,
   rows: readonly VisibleRow[],
-  state: OutlineActionState
+  state: OutlineActionState,
+  fallback: RefObject<HTMLButtonElement | null>
 ): void {
   useEffect(() => {
-    const id = focus.takeReturn(target =>
+    const { asked, id } = focus.takeReturn(target =>
       rows.some(row => row.node.id === target)
     );
     if (id !== null) state.focusRow(id, true);
+    else if (asked && focus.view.focused) fallback.current?.focus();
   });
 }
 
@@ -209,7 +222,10 @@ function useOutlineView(
     [state.actions, show, nodes]
   );
   useRefocusAfterMove(state, rows, nodes, folded, setFolded, focus);
-  useReturnAfterFocus(focus, rows, state);
+  // The breadcrumb's Exit focus, where keyboard focus goes when a focused
+  // container draws no row to take it.
+  const exitRef = useRef<HTMLButtonElement | null>(null);
+  useReturnAfterFocus(focus, rows, state, exitRef);
   const onKeyDown = useTreeKeyDown({
     rows,
     actions,
@@ -230,6 +246,7 @@ function useOutlineView(
     setQuery,
     preview,
     setPreview,
+    exitRef,
     state,
     actions,
     focus,
@@ -292,6 +309,7 @@ export function Outline({
       {view.focus.view.focused && (
         <FocusCrumbs
           crumbs={view.focus.view.crumbs}
+          exitRef={view.exitRef}
           // Back with the selection kept: focus goes to the selected field if
           // that level draws it, else to the container that was focused.
           onGo={id =>

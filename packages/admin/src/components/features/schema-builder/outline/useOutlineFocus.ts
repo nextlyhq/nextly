@@ -22,10 +22,17 @@ export interface OutlineFocus {
    */
   show: (id: string | null, returnTo?: readonly (string | null)[]) => void;
   /**
-   * The row asked for focus, the first of them drawn; asked once, on the first drawing after
-   * `show`, and forgotten after it whether or not one was drawn.
+   * Whether a change of Focus asked for keyboard focus since the last drawing, and the row it
+   * asked for, the first of them drawn (null when none is: an empty container, say, where the
+   * outline gives focus elsewhere). Asked once, on the first drawing after `show`, and forgotten
+   * after it.
    */
-  takeReturn: (drawn: (id: string) => boolean) => string | null;
+  takeReturn: (drawn: (id: string) => boolean) => FocusReturn;
+}
+
+export interface FocusReturn {
+  asked: boolean;
+  id: string | null;
 }
 
 export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
@@ -34,7 +41,8 @@ export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
   // The crumbs last shown, so a container that goes away hands Focus to the deepest one left.
   const crumbIds = useRef<string[]>([]);
   if (view.focused) crumbIds.current = view.crumbs.map(crumb => crumb.id);
-  const returning = useRef<readonly (string | null)[]>([]);
+  // The rows a change of Focus asked to return to, or null when none asked.
+  const returning = useRef<readonly (string | null)[] | null>(null);
 
   useEffect(() => {
     if (focusedId !== null && view.focused === null) {
@@ -50,13 +58,20 @@ export function useOutlineFocus(nodes: readonly OutlineNode[]): OutlineFocus {
     []
   );
 
-  const takeReturn = useCallback((drawn: (id: string) => boolean) => {
-    const candidates = returning.current;
-    returning.current = [];
-    return (
-      candidates.find((id): id is string => id !== null && drawn(id)) ?? null
-    );
-  }, []);
+  const takeReturn = useCallback(
+    (drawn: (id: string) => boolean): FocusReturn => {
+      const candidates = returning.current;
+      returning.current = null;
+      if (candidates === null) return { asked: false, id: null };
+      return {
+        asked: true,
+        id:
+          candidates.find((id): id is string => id !== null && drawn(id)) ??
+          null,
+      };
+    },
+    []
+  );
 
   // One object while what it holds is the same, so what is built from it is not rebuilt on every
   // drawing of the outline.
