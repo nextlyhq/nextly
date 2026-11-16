@@ -365,6 +365,7 @@ function VariablesView({
             groups={groups}
             searching={searching}
             readOnly={readOnly}
+            folds={hosted.folds}
             onAdd={add}
           />
         }
@@ -844,11 +845,13 @@ function HiddenGroupAdds({
   groups,
   searching,
   readOnly,
+  folds,
   onAdd,
 }: {
   groups: readonly { group: VariableGroup; entries: readonly unknown[] }[];
   searching: boolean;
   readOnly: boolean;
+  folds: GroupFolds | undefined;
   onAdd: (what: NewVariable) => void;
 }): React.JSX.Element | null {
   const hidden = groups.filter(
@@ -861,12 +864,24 @@ function HiddenGroupAdds({
         <AddButton
           key={group.group}
           adds={ADDS[group.group]}
-          onAdd={onAdd}
+          onAdd={what => {
+            openFold(folds, group.group);
+            onAdd(what);
+          }}
           worded
         />
       ))}
     </p>
   );
+}
+
+/**
+ * Opens a group the author folded, for a variable about to be added to it,
+ * so its row and editor are drawn: the stored fold, which a search only
+ * sets aside and would bring back once the add clears it.
+ */
+function openFold(folds: GroupFolds | undefined, group: VariableGroup): void {
+  if (folds?.folded.has(group) === true) folds.onFold(group, false);
 }
 
 /** The groups that list only what they hold, hidden while they hold none. */
@@ -993,7 +1008,7 @@ function Group({
             // A folded group opens for what is added to it, so the new row
             // and its editor are drawn.
             onAdd={what => {
-              if (folded) folds?.onFold(group, false);
+              openFold(folds, group);
               onAdd(what);
             }}
           />

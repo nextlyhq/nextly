@@ -1612,12 +1612,16 @@ describe("a Design tab's view of the variables", () => {
     search,
     groups,
     onSearch,
+    initiallyFolded = [],
   }: {
     search?: string;
     groups?: readonly VariableGroup[];
     onSearch?: (query: string) => void;
+    initiallyFolded?: readonly string[];
   }): React.JSX.Element {
-    const [folded, setFolded] = React.useState<ReadonlySet<string>>(new Set());
+    const [folded, setFolded] = React.useState<ReadonlySet<string>>(
+      new Set(initiallyFolded)
+    );
     return (
       <Hosted
         tokens={SITE}
@@ -1715,5 +1719,35 @@ describe("a Design tab's view of the variables", () => {
     render(<Folding search="brand" onSearch={onSearch} />);
     fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
     expect(onSearch).toHaveBeenCalledWith("");
+  });
+
+  it("opens a hidden group the author had folded, for its first variable", async () => {
+    render(
+      <Folding groups={["spacing", "other"]} initiallyFolded={["other"]} />
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Add another variable" }),
+      { button: 0, ctrlKey: false }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /^Other values, 1$/, hidden: true })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
+  });
+
+  it("opens a folded group for what is added during a search, once the search is cleared", () => {
+    const { rerender } = render(<Folding initiallyFolded={["colours"]} />);
+    rerender(<Folding initiallyFolded={["colours"]} search="brand" />);
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    // The search is the host's to clear; cleared, the group stays open.
+    rerender(<Folding initiallyFolded={["colours"]} search="" />);
+    expect(
+      screen
+        .getByRole("button", { name: /^Colours, \d+$/, hidden: true })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
   });
 });

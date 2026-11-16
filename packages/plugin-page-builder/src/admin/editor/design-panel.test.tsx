@@ -339,4 +339,24 @@ describe("the Design panel's search and folds", () => {
     renderBrowsing();
     expect(screen.getByText("colour rows")).toBeTruthy();
   });
+
+  it("reads the author's folds when their store arrives after the panel opened, and builds on them", () => {
+    const tabs = {
+      colours: () => <Reporting />,
+      type: () => null,
+      spacing: () => null,
+      styles: () => null,
+    };
+    const view = { current: "colours", choose: vi.fn() };
+    const { rerender } = render(<DesignPanel view={view} tabs={tabs} />);
+    expect(screen.getByText("colour rows")).toBeTruthy();
+    // The author becomes known: their store holds a folded group.
+    const store = memoryStore();
+    store.write('["colours","fonts"]');
+    rerender(<DesignPanel view={view} tabs={tabs} foldStore={store} />);
+    expect(screen.queryByText("colour rows")).toBeNull();
+    // A toggle keeps what the store already held.
+    fireEvent.click(screen.getByRole("button", { name: "Colours group" }));
+    expect(store.held()).toBe('["fonts"]');
+  });
 });

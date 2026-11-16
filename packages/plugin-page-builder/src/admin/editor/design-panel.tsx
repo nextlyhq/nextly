@@ -90,17 +90,25 @@ export function useDesignBrowse(): DesignBrowse {
  * and folding lasts only as long as the panel.
  */
 function useFolds(store: PreferenceStore | undefined): GroupFolds {
-  const [folded, setFolded] = React.useState<ReadonlySet<string>>(() =>
-    foldsRead(store)
-  );
+  const [kept, setKept] = React.useState(() => ({
+    store,
+    folded: foldsRead(store),
+  }));
+  // A store arriving after the panel mounted, as once the author is known,
+  // is read then, so a toggle builds on the folds it holds rather than
+  // writing over them.
+  if (kept.store !== store) {
+    setKept({ store, folded: foldsRead(store) });
+  }
+  const folded = kept.store === store ? kept.folded : foldsRead(store);
   const onFold = React.useCallback(
     (group: string, fold: boolean) => {
-      setFolded(current => {
-        const next = new Set(current);
+      setKept(current => {
+        const next = new Set(current.folded);
         if (fold) next.add(group);
         else next.delete(group);
         store?.write(JSON.stringify([...next]));
-        return next;
+        return { store, folded: next };
       });
     },
     [store]

@@ -55,7 +55,11 @@ async function switchTo(page: Page, name: string): Promise<void> {
 async function firstRowColumns(page: Page) {
   const row = page.locator(".nx-vars__row").first();
   await expect(row).toBeVisible();
-  return row.evaluate(element => {
+  const body = await page
+    .locator(".nx-vars__body")
+    .first()
+    .evaluate(element => element.clientWidth);
+  const columns = await row.evaluate(element => {
     const at = (box: Element | null) => {
       const rect = box?.getBoundingClientRect();
       return rect === undefined
@@ -68,6 +72,14 @@ async function firstRowColumns(page: Page) {
       values: at(element.querySelector(".nx-vars__pair")),
     };
   });
+  return { ...columns, body };
+}
+
+/** The room inside every panel body the open tab draws. */
+function bodyWidths(page: Page): Promise<number[]> {
+  return page
+    .locator(".nx-vars__body")
+    .evaluateAll(bodies => bodies.map(body => body.clientWidth));
 }
 
 test("names its four tabs in order, each holding its own kind", async ({
@@ -177,9 +189,23 @@ test("keeps the rows' columns where they were across all four tabs, at the defau
     }
     await switchTo(page, "Colours");
     const before = await firstRowColumns(page);
-    for (const name of ["Type", "Spacing", "Styles", "Colours"]) {
+    // Measured while each tab is open: every variable row spans the same
+    // room, and every tab's body is as wide as Colours'.
+    for (const name of ["Type", "Spacing", "Styles"]) {
       await switchTo(page, name);
+      const widths = await bodyWidths(page);
+      expect(widths, `${name} at the ${width} width`).toEqual(
+        widths.map(() => before.body)
+      );
+      if (name !== "Styles") {
+        const here = await firstRowColumns(page);
+        expect(here.row, `${name}'s rows at the ${width} width`).toEqual(
+          before.row
+        );
+      }
     }
+    // And back on Colours, the same columns as before.
+    await switchTo(page, "Colours");
     expect(await firstRowColumns(page), `at the ${width} width`).toEqual(
       before
     );
