@@ -280,6 +280,7 @@ export type {
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
   MediaCopyArgs,
+  MediaCopiesArgs,
   UpdateMediaArgs,
   DeleteMediaArgs,
   BulkDeleteMediaArgs,
@@ -343,6 +344,17 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  // The Email hub's Activity reads, `nextly.emailDeliveries.*`
+  // (experimental).
+  FindEmailDeliveriesArgs,
+  FindQueuedEmailsArgs,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
+  ActivityPage,
+  DeliveryActivity,
+  QueuedEmailActivity,
+  QueuedEmailOverdue,
+  TemplatesLastSent,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;

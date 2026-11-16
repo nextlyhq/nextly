@@ -126,11 +126,14 @@ test("switching Design tabs leaves the rows' columns where they were", async ({
     // one whose list does not: a scrollbar taking room only in the first
     // narrows every row there.
     const room = () =>
-      page.locator(".nx-vars__body").evaluate(body => body.clientWidth);
+      page
+        .locator(".nx-vars__body")
+        .first()
+        .evaluate(body => body.clientWidth);
     const scrolling = await room();
-    await switchTo(page, "Fonts");
+    await switchTo(page, "Type");
     expect(await room()).toBe(scrolling);
-    for (const tab of ["Shared styles", "Variables", "Fonts", "Variables"]) {
+    for (const tab of ["Styles", "Colours", "Type", "Spacing", "Colours"]) {
       await switchTo(page, tab);
     }
     // And once the counts are in.

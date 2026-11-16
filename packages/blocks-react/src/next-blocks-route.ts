@@ -41,6 +41,12 @@ import type {
   ReadClaim,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
+import {
+  hasDefaultColumnGap,
+  imageSizingFor,
+  siteSizesBlocks,
+  type ImageCopies,
+} from "./image-slot";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
 import {
   listPageSlug,
@@ -271,6 +277,63 @@ function siteStylesKey(
   ];
 }
 
+/**
+ * The image-copy lookups one render may make: `limit` of them, claimed one per
+ * lookup, refused after. Their own bound, beside the page's reads.
+ */
+function copyLookups(limit: number): { take(): boolean } {
+  let left = limit;
+  return {
+    take: () => {
+      if (left <= 0) return false;
+      left -= 1;
+      return true;
+    },
+  };
+}
+
+/**
+ * The site's copies of an image, kept on a public page per image and width
+ * bound until a write to that media item expires them, since asking for them
+ * reads the item. An author's preview asks each time. `undefined` where the
+ * site offers no copies.
+ */
+function cachedImageCopies(
+  config: BlocksPageConfig,
+  isPublic: boolean,
+  window: number | false | undefined
+): ImageCopies | undefined {
+  const copies = config.imageCopies;
+  if (copies === undefined) return undefined;
+  // Their own allowance, not the page's: the page's reads are what the
+  // editor counts a published render against, and copies are not among
+  // them. One lookup per image the page draws, so no more than it has nodes,
+  // claimed by the lookups a kept answer does not cover: every one on a
+  // preview, and a public page's on a miss.
+  const budget = copyLookups(effectiveLimits(config).maxNodes);
+  if (!isPublic) return async (source, upTo) => copies(source, upTo, budget);
+  const media = config.mediaCollection ?? MEDIA_TAG_COLLECTION;
+  return async (source, upTo) => {
+    const named = "id" in source ? `id:${source.id}` : `url:${source.url}`;
+    return await cachedFind(
+      async () => [...(await copies(source, upTo, budget))],
+      {
+        tags: "id" in source ? nextlyTags(media, source.id) : nextlyTags(media),
+        // Under the route's cache scope, as its other kept reads are: two sites
+        // served from one process keep their own answers for the same id.
+        keyParts: [
+          "page-builder-image-copies",
+          config.cacheScope ?? "",
+          media,
+          named,
+          String(upTo),
+        ],
+        revalidate: await releaseBoundedRevalidate(window),
+      }
+    );
+  };
+}
+
 export function blocksRouteConfig(
   config: BlocksPageConfig,
   isPublic: boolean,
@@ -296,6 +359,7 @@ export function blocksRouteConfig(
     // on would hand `createContentRoute` options it does not define.
     mediaCollection: _mediaCollection,
     resolveMedia: _resolveMedia,
+    imageCopies: _imageCopies,
     resolveEntryPath: _resolveEntryPath,
     layouts: _layouts,
     timeZone: _timeZone,
@@ -709,7 +773,26 @@ export function blocksRouteConfig(
       // regions spend the page's ONE budget and read in its locale), the
       // blocks, the caps, the host's posture and the page's bindings.
       const shared: SharedRendererProps = {
-        context: stagedContext(pageContext, staged, terms, listReads),
+        context: {
+          ...stagedContext(pageContext, staged, terms, listReads),
+          // Sized images: the site's copies, kept per image until a media
+          // write expires them, the slot each device draws at the top of the
+          // page, and the first top-level block, whose images load first.
+          // The first block as the page draws it: composed and gated, so
+          // a component's hero or a page whose first stored block is hidden
+          // still has its first drawn section found.
+          ...imageSizingFor(
+            cachedImageCopies(config, isPublic, listWindow),
+            siteBreakpoints,
+            (page.prepared?.presented ?? document).nodes,
+            // Columns divide an image's slot only under the gap the bound
+            // knows; a site with its own leaves their images the row's width.
+            hasDefaultColumnGap(siteStyles?.tokens),
+            // A block's own width bounds its images only where no class or
+            // block default of the site's can draw it wider.
+            siteSizesBlocks(siteStyles)
+          ),
+        },
         blocks: resolver,
         styleContext,
         blockFallback,
