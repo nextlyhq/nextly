@@ -8,6 +8,7 @@ import {
   QueryClient,
   QueryClientProvider,
   focusManager,
+  onlineManager,
 } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -237,6 +238,41 @@ describe("useVersionDiff", () => {
 
 describe("useBaselineDiff", () => {
   beforeEach(() => vi.clearAllMocks());
+  // Focus and connection are global singletons; reset them so a simulated
+  // return in one test does not carry into the next.
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+  });
+
+  it("resolves what is published again when the reader returns or the network does", async () => {
+    // A publish in another tab changes what "published" names, so the
+    // comparison and the restore it offers follow it. The mirrored wrapper
+    // turns focus refetch off app-wide, so only the hook's own opt-in counts.
+    baselineDiffSpy.mockResolvedValue({
+      from: 3,
+      to: 5,
+      locale: null,
+      hasChanges: true,
+      fields: [],
+      baseline: { name: "published", versionNo: 3 },
+    });
+
+    const { result } = renderHook(
+      () => useBaselineDiff({ scope, baseline: "published", to: 5 }),
+      { wrapper: providerFocusWrapper }
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(baselineDiffSpy).toHaveBeenCalledTimes(1);
+
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(baselineDiffSpy).toHaveBeenCalledTimes(2));
+
+    onlineManager.setOnline(false);
+    onlineManager.setOnline(true);
+    await waitFor(() => expect(baselineDiffSpy).toHaveBeenCalledTimes(3));
+  });
 
   it("asks the server to compare a version with a baseline it resolves", async () => {
     baselineDiffSpy.mockResolvedValue({

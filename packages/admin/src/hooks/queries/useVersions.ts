@@ -325,17 +325,21 @@ export function useVersionDiff({
  * A version compared with a baseline the server resolves (see
  * `versionApi.diffFromBaseline`). Null asks for nothing.
  *
- * Resolved once per visit, unlike a pair's comparison, and never refetched by
- * focus, reconnection or a remount while the answer is cached. Showing the
- * comparison marks its newer version seen, which moves the baseline "the
- * version you last looked at" onto that version itself: asked again, the
- * server would answer that there is nothing to compare, replacing the
- * comparison the reader is looking at. Freezing the pair costs no freshness
- * the reader can see, because only the two version numbers and the baseline
- * note are read from this answer; the fields are drawn by the pair's own
- * comparison (`useVersionDiff`), which still revalidates against the live
- * schema. Marking a version seen invalidates nothing, so it cannot refetch
- * this either.
+ * What is published and the current draft are resolved again whenever the
+ * reader returns, the network does, or the comparison mounts: a publish or a
+ * draft saved in another tab changes what they name, and the comparison and
+ * the restore it offers should follow.
+ *
+ * "The version you last looked at" is the exception, resolved once per visit
+ * and never refetched by focus, reconnection or a remount while the answer is
+ * cached. Showing the comparison marks its newer version seen, which moves
+ * that baseline onto the version itself: asked again, the server would answer
+ * that there is nothing to compare, replacing the comparison the reader is
+ * looking at. Freezing it costs no freshness the reader can see, because only
+ * the two version numbers and the baseline note are read from this answer;
+ * the fields are drawn by the pair's own comparison (`useVersionDiff`), which
+ * still revalidates against the live schema. Marking a version seen
+ * invalidates nothing, so it cannot refetch this either.
  */
 export function useBaselineDiff({
   scope,
@@ -351,6 +355,8 @@ export function useBaselineDiff({
   // The start every baseline key of this document shares, so a previous
   // answer can be told apart from another document's.
   const documentKey = versionKeys.documentDiffs(scope);
+  // The one baseline its own showing moves (see above).
+  const resolvedOnce = baseline === "last-viewed";
   return useQuery<VersionDiff, Error>({
     queryKey:
       baseline === null
@@ -362,10 +368,11 @@ export function useBaselineDiff({
       return versionApi.diffFromBaseline(scope, baseline, to);
     },
     enabled: enabled && baseline !== null && isAddressable(scope),
-    // Frozen for the visit (see above).
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    // Frozen for the visit, or re-resolved on every return (see above). Focus
+    // refetch is opted into explicitly: the provider turns it off app-wide.
+    staleTime: resolvedOnce ? Infinity : 0,
+    refetchOnWindowFocus: !resolvedOnce,
+    refetchOnReconnect: !resolvedOnce,
     // The previous comparison stays on screen while another baseline of the
     // SAME document loads. Never another document's: the router can move from
     // one document's comparison to another's without unmounting, and that
