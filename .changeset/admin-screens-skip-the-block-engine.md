@@ -30,6 +30,12 @@
 ---
 
 The admin's sign-in page, dashboard and every other screen no longer download
-the block engine and its CSS parser just to check a colour's contrast. The
-engine has a new, experimental `@nextlyhq/blocks-engine/contrast` entry with
-the contrast math alone, and core's colour helpers import it.
+the block engine and its CSS parser. Two routes brought them there, and both now
+reach the engine through new, experimental narrow entries instead of its root:
+
+- `@nextlyhq/blocks-engine/contrast`, the contrast math alone, which core's
+  colour helpers use;
+- `@nextlyhq/blocks-engine/named-query`, `defineNamedQuery` and `param`, which
+  `@nextlyhq/plugin-sdk/blocks` re-exports, so a plugin that contributes blocks
+  no longer brings the engine to every admin screen. The SDK's names and types
+  are unchanged.

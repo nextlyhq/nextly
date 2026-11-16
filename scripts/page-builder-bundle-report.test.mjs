@@ -12,8 +12,8 @@ import { describe, expect, it } from "vitest";
 import {
   breaches,
   fetchableStylesheets,
-  GROUPS,
   judge,
+  narrowEngineSources,
   REGISTRATION_BUDGET_KB,
   SCREENS,
   sourceLengths,
@@ -280,41 +280,76 @@ describe("sourceLengths", () => {
   });
 });
 
-describe("the block engine beyond its narrow entries", () => {
-  const group = GROUPS.find(
-    candidate => candidate.name === "block engine beyond its narrow entries"
-  );
+describe("the block engine's narrow entries", () => {
+  const packageJson = {
+    exports: {
+      ".": { import: "./dist/index.mjs" },
+      "./contrast": { import: "./dist/contrast.mjs" },
+      "./named-query": { default: "./dist/named-query.mjs" },
+    },
+  };
+  // The root, two narrow entries, the chunk one of them shares with the root,
+  // and a chunk only the root reaches.
+  const metafile = {
+    outputs: {
+      "dist/index.mjs": {
+        imports: [
+          { path: "dist/contrast-a1.mjs" },
+          { path: "dist/compile-b2.mjs" },
+          { path: "css-tree/parser", external: true },
+        ],
+        inputs: { "src/index.ts": {} },
+      },
+      "dist/contrast.mjs": {
+        imports: [{ path: "dist/contrast-a1.mjs" }],
+        inputs: { "src/contrast.ts": {} },
+      },
+      "dist/contrast-a1.mjs": {
+        imports: [],
+        inputs: {
+          "src/style/contrast.ts": {},
+          "src/style/css-identifier.ts": {},
+        },
+      },
+      "dist/named-query.mjs": {
+        imports: [],
+        inputs: { "src/named-query.ts": {}, "src/plain-record.ts": {} },
+      },
+      "dist/compile-b2.mjs": {
+        imports: [],
+        inputs: { "src/style/compile-page.ts": {} },
+      },
+    },
+  };
+  const sources = narrowEngineSources(packageJson, metafile);
 
-  it("leaves out the narrow entries and the modules they read, as source or as built", () => {
-    for (const source of [
-      "packages/blocks-engine/src/contrast.ts",
-      "packages/blocks-engine/src/style/contrast.ts",
-      "packages/blocks-engine/src/style/css-identifier.ts",
-      "packages/blocks-engine/dist/contrast.mjs",
-      "packages/blocks-engine/dist/contrast-CTtMvkyT.mjs",
-      "packages/blocks-engine/src/named-query.ts",
-      "packages/blocks-engine/src/plain-record.ts",
-      "packages/blocks-engine/src/calendar-day.ts",
-      "packages/blocks-engine/src/field-name.ts",
-      "packages/blocks-engine/src/issue-text.ts",
-      "packages/blocks-engine/dist/named-query.mjs",
-    ]) {
-      expect(group?.matches(source), source).toBe(false);
-    }
+  it("holds what each subpath export other than the root reaches, as source and as built", () => {
+    expect([...sources].sort()).toEqual(
+      [
+        "packages/blocks-engine/dist/contrast.mjs",
+        "packages/blocks-engine/dist/contrast-a1.mjs",
+        "packages/blocks-engine/dist/named-query.mjs",
+        "packages/blocks-engine/src/contrast.ts",
+        "packages/blocks-engine/src/style/contrast.ts",
+        "packages/blocks-engine/src/style/css-identifier.ts",
+        "packages/blocks-engine/src/named-query.ts",
+        "packages/blocks-engine/src/plain-record.ts",
+      ].sort()
+    );
   });
 
-  it("counts every other module of the engine", () => {
-    for (const source of [
-      "packages/blocks-engine/src/document.ts",
-      "packages/blocks-engine/src/style/css-value-syntax.ts",
-      "packages/blocks-engine/src/index.ts",
-      "packages/blocks-engine/dist/index.mjs",
-    ]) {
-      expect(group?.matches(source), source).toBe(true);
-    }
+  it("leaves out what only the root reaches", () => {
+    expect(sources.has("packages/blocks-engine/src/index.ts")).toBe(false);
+    expect(
+      sources.has("packages/blocks-engine/src/style/compile-page.ts")
+    ).toBe(false);
+    expect(sources.has("packages/blocks-engine/dist/compile-b2.mjs")).toBe(
+      false
+    );
   });
 
-  it("CONTROL: counts nothing outside the engine", () => {
-    expect(group?.matches("packages/builder/src/canvas.tsx")).toBe(false);
+  it("is empty without a build graph, so every engine module counts against a screen", () => {
+    expect(narrowEngineSources(packageJson, undefined).size).toBe(0);
+    expect(narrowEngineSources(undefined, metafile).size).toBe(0);
   });
 });

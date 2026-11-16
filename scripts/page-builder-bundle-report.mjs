@@ -128,15 +128,13 @@ export const GROUPS = [
     matches: source => source.startsWith("packages/blocks-engine/"),
   },
   {
-    // Judged on a screen that draws no part: the engine less its narrow
-    // entries and the modules they read, as source or as built (each entry,
-    // and the chunks it shares with the root, are named after it). Core
-    // checks colours with `./contrast` on every screen, and a plugin that
+    // Judged on a screen that draws no part: the engine less what its narrow
+    // entries reach (`narrowEngineSources`). Core reads `./format` and checks
+    // colours with `./contrast` on every screen, and a plugin that
     // contributes blocks reaches `./named-query` through the plugin SDK.
     name: "block engine beyond its narrow entries",
     matches: source =>
-      source.startsWith("packages/blocks-engine/") &&
-      !NARROW_ENGINE_SOURCES.test(source),
+      source.startsWith(`${ENGINE}/`) && !NARROW_ENGINE_SOURCES.has(source),
   },
   {
     name: "builder editor",
@@ -175,14 +173,58 @@ export const GROUPS = [
   },
 ];
 
+/** The block engine's package, as the build's source maps name its files. */
+const ENGINE = "packages/blocks-engine";
+
 /**
- * The block engine's narrow entries and every module they read, as the
- * build's source maps name them: `./contrast` (with `style/contrast` and
- * `style/css-identifier`) and `./named-query` (with the four dependency-free
- * modules it reads), or their built files.
+ * Every source of the block engine its narrow entries reach, as the build's
+ * source maps name them, with their built files: each subpath export other
+ * than the root, walked through the engine build's own module graph (its
+ * metafile), so an entry's reach is read rather than listed and cannot drift.
+ * Empty when either is missing, so every engine module then counts as beyond
+ * them: the check fails rather than passing on nothing.
  */
-const NARROW_ENGINE_SOURCES =
-  /^packages\/blocks-engine\/(src\/(contrast|style\/contrast|style\/css-identifier|named-query|calendar-day|field-name|issue-text|plain-record)\.ts|dist\/(contrast|named-query)(-[\w-]+)?\.mjs)$/;
+export function narrowEngineSources(packageJson, metafile) {
+  const outputs = metafile?.outputs;
+  if (packageJson?.exports === undefined || outputs === undefined) {
+    return new Set();
+  }
+  const entries = Object.entries(packageJson.exports)
+    .filter(([subpath]) => subpath !== ".")
+    .map(([, target]) => target?.import ?? target?.default)
+    .filter(target => typeof target === "string")
+    .map(target => target.replace(/^\.\//, ""));
+  const reached = new Set();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (file === undefined || reached.has(file)) continue;
+    reached.add(file);
+    for (const edge of outputs[file]?.imports ?? []) {
+      if (edge.external !== true) queue.push(edge.path);
+    }
+  }
+  const sources = new Set();
+  for (const file of reached) {
+    sources.add(`${ENGINE}/${file}`);
+    for (const input of Object.keys(outputs[file]?.inputs ?? {})) {
+      sources.add(`${ENGINE}/${input}`);
+    }
+  }
+  return sources;
+}
+
+/** Reads the engine's package and its build's metafile, if there is one. */
+function readNarrowEngineSources(root = ROOT) {
+  const read = path =>
+    existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+  return narrowEngineSources(
+    read(join(root, ENGINE, "package.json")),
+    read(join(root, ENGINE, "dist", "metafile-esm.json"))
+  );
+}
+
+const NARROW_ENGINE_SOURCES = readNarrowEngineSources();
 
 /** The editor stylesheet, as the build's CSS source maps name it. */
 const EDITOR_STYLESHEET =
