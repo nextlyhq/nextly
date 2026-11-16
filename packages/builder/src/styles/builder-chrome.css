@@ -1083,12 +1083,7 @@
   min-height: 0;
   height: 100%;
   overflow-y: auto;
-  /*
-   * Room for a classic scrollbar is kept whether or not the panel scrolls,
-   * so the fields have one width with overlay and classic scrollbars alike:
-   * a scrollbar appearing as the Style tab grows took 15px from them and
-   * could tip the spacing box into its narrow layout.
-   */
+  /* One width with overlay and classic scrollbars, scrolling or not. */
   scrollbar-gutter: stable;
   padding: 0.75rem;
   color: var(--nx-builder-text, var(--nx-foreground));
@@ -7715,18 +7710,12 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * The sides, placed by WHICH SIDE THEY ARE.
- *
- * Not by their position among the children: that list varies with the heading,
- * the form selectors and the notice above, so a rule counting elements moves
- * every side the moment one appears. Each field says which side it draws and
- * this reads it, which is also why these selectors stay shallow.
+ * The sides, placed by WHICH SIDE THEY ARE, not by their place among the
+ * children, which varies with the heading, form selectors and notices; it is
+ * also the document order, which Tab follows, that leaves the picture alone.
  */
-/*
- * The block sides span their row, centred at a side cell's width: the centre
- * column is only as wide as what it holds, which for the inner box is too
- * narrow for a value.
- */
+/* The block sides span their row at a side cell's width: the centre column
+   is only as wide as the inner box, too narrow for a value. */
 .nx-style-inspector__side-box > [data-side="blockStart"] {
   grid-area: 1 / 1 / 2 / -1;
   justify-self: center;
@@ -7748,12 +7737,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 }
 
 /*
- * A side is a control alone: no label column, and the text of its label hidden.
- *
- * Position is what tells a sighted author which edge this is, so the words are
- * noise here — but only the WORDS. The label still carries the provenance dot,
- * which says whether the side is authored or inherited and is not something
- * position can tell anyone, so the dot stays and the text is clipped around it.
+ * A side is a control alone: its position names the edge, so its label's
+ * words are hidden, but not its provenance dot, which position cannot say.
  */
 .nx-style-inspector__side-box > [data-side] {
   display: block;
@@ -8122,14 +8107,8 @@ label[data-named-above] .nx-style-inspector__field-label-text {
   pointer-events: auto;
 }
 
-/*
- * The box falls back to a column of rows only below the width it really
- * needs. Measured with the narrow rule off, the padding ring's sides start to
- * spill over the margin's at 262px, so the box holds whole from 16.5rem; the
- * inspector's minimum width leaves it at least that, a classic scrollbar's
- * gutter included. At 18rem it turned into a list at the default width
- * whenever that scrollbar showed.
- */
+/* Rows only below the width the box needs: the padding ring's sides spill
+   over the margin's under 16.5rem, measured. */
 @container nx-inspector-fields (width < 16.5rem) {
   .nx-style-inspector__side-box {
     display: flex;
@@ -8165,9 +8144,7 @@ label[data-named-above] .nx-style-inspector__field-label-text {
     box-shadow: none;
   }
 
-  /* The focused side's action is named too: the overlay rule above is more
-     specific than the first selector here, and without its own selector a
-     focused side's reset floated over the next row's label. */
+  /* A focused side's too, which the overlay rule above otherwise floats. */
   .nx-spacing-box .nx-inspector__field > .nx-style-inspector__breakpoint-action,
   .nx-spacing-box
     .nx-inspector__field:focus-within

@@ -147,6 +147,12 @@ import {
   sharedStyleWrite,
 } from "./shared-style-target";
 import type { SideOrientation } from "./side-orientation";
+import {
+  CompactSides,
+  fieldDescribedBy,
+  sideKeysFor,
+  spacingRings,
+} from "./spacing-box";
 import { stateLabel } from "./state-switcher";
 import {
   alignmentGroupFor,
@@ -1542,139 +1548,6 @@ function reachingLayout(provenanceOf: ProvenanceOf): string | undefined {
     : undefined;
 }
 
-/** Margin and padding drawn as one box, and what the section shows besides. */
-interface SpacingRings {
-  readonly margin: InspectedStyleProperty | undefined;
-  readonly padding: InspectedStyleProperty;
-  readonly rest: readonly InspectedStyleProperty[];
-}
-
-/**
- * Whether the spacing section draws its box model, and from which properties.
- *
- * Drawn when padding is shown, offered and drawn as a box, which needs the
- * element's axes; margin joins as the outer ring under the same conditions.
- * Anything else the section shows is drawn as before, beneath the box.
- */
-function spacingRings(
-  shown: readonly InspectedStyleProperty[],
-  orientation: SideOrientation | undefined
-): SpacingRings | undefined {
-  const ring = (key: string) =>
-    shown.find(
-      property =>
-        property.property === key &&
-        property.offered &&
-        sideBoxFor(property.controls, orientation).boxed
-    );
-  const padding = ring("padding");
-  if (padding === undefined) return undefined;
-  const margin = ring("margin");
-  return {
-    margin,
-    padding,
-    rest: shown.filter(property => property !== padding && property !== margin),
-  };
-}
-
-/**
- * Fields drawn compact: the spacing box's sides, which take a value typed
- * with its unit, show no unit menu, and say "–" while unset rather than a
- * hint there is no room for.
- */
-const CompactSides = React.createContext(false);
-
-/**
- * The id of a spacing-box side's description, which names its reset key: one
- * spelling for the field that writes it and the input that reads it.
- */
-function sideKeysId(fieldId: string): string {
-  return `${fieldId}-keys`;
-}
-
-/** The side a field draws, when it is drawn inside the spacing box. */
-function spacingBoxSide(
-  side: string | undefined,
-  inSpacingBox: boolean
-): string | undefined {
-  return inSpacingBox ? side : undefined;
-}
-
-/**
- * The key handler of a spacing-box side, which resets by key rather than by
- * Tab: its reset is out of the Tab order, so typing round the box goes side
- * to side, and Alt+Backspace in the side does what the reset does when there
- * is a value here to reset. Named in the side's description. `undefined` for
- * a field that is not a side.
- */
-function sideResetKeyDown(
-  side: string | undefined,
-  stored: StyleValue | undefined,
-  readOnly: boolean,
-  reset: () => void
-): ((event: React.KeyboardEvent<HTMLDivElement>) => void) | undefined {
-  if (side === undefined) return undefined;
-  const resettable = stored !== undefined && !readOnly;
-  return event => {
-    if (!resettable || !isResetKey(event)) return;
-    // From this field only. React carries a key press out of a portal to the
-    // component that opened it, so Alt+Backspace (delete a word) in the
-    // variables list's search would otherwise reset the side behind it.
-    if (!event.currentTarget.contains(event.target as Node)) return;
-    // Taken from the field, where Alt+Backspace would otherwise delete the
-    // word before the caret: here it is the side's reset.
-    event.preventDefault();
-    reset();
-  };
-}
-
-/**
- * A spacing-box side's description, which its input names: how to reset it
- * from the keyboard now that its reset is not a Tab stop. Hidden, so it is
- * read as the side's description and not again, between the fields, by a
- * screen reader reading the panel through. Nothing for a field that is not a
- * side.
- */
-function SideResetKeys({
-  side,
-  fieldId,
-}: {
-  side: string | undefined;
-  fieldId: string;
-}): React.JSX.Element | null {
-  if (side === undefined) return null;
-  return (
-    <span id={sideKeysId(fieldId)} hidden>
-      Alt+Backspace resets this side.
-    </span>
-  );
-}
-
-/** Alt+Backspace and no other modifier: a side's reset key. */
-function isResetKey(event: React.KeyboardEvent): boolean {
-  return (
-    event.key === "Backspace" &&
-    event.altKey &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.shiftKey
-  );
-}
-
-/**
- * What a value field is described by: the refusal of what was typed, if any,
- * and for a side of the spacing box its reset key as well.
- */
-function fieldDescribedBy(
-  refusal: string | undefined,
-  side: boolean,
-  fieldId: string
-): string | undefined {
-  const ids = side ? [refusal, sideKeysId(fieldId)] : [refusal];
-  const joined = ids.filter(id => id !== undefined).join(" ");
-  return joined === "" ? undefined : joined;
-}
-
 /**
  * Whether this field's form toggle is drawn just above it. A single control
  * there keeps its label for assistive technology and drops the visible copy:
@@ -2363,10 +2236,6 @@ function StyleControlField({
   // field, or meets several rejected controls, has no way to tell which message
   // belongs to which without the relationship being stated.
   const errorId = `${id}-error`;
-  // A side of the spacing box, which resets by key: the one place that asks,
-  // so its key, its reset's Tab stop and its description agree. A side box
-  // drawn on its own, outside the spacing box, keeps a reset to Tab to.
-  const boxSide = spacingBoxSide(side, React.useContext(CompactSides));
   const address: StyleAddress = {
     state,
     breakpoint,
@@ -2394,6 +2263,9 @@ function StyleControlField({
   const inherited = inheritedShown(stored, answer);
 
   const readOnly = showsNoField(control, stored, clearOnly);
+  // A spacing-box side resets by key: see `sideKeysFor`.
+  const inBox = React.useContext(CompactSides);
+  const sideKeys = sideKeysFor(side, inBox, stored, readOnly, id, commit);
   const labelId = `${id}-label`;
   // Computed once and used by both the control and its message: two spellings
   // of "is there an error" is the shape that drifts into a control described by
@@ -2414,11 +2286,6 @@ function StyleControlField({
     );
   }
 
-  // A side of the spacing box resets by key; see `sideResetKeyDown`.
-  const onSideKeyDown = sideResetKeyDown(boxSide, stored, readOnly, () =>
-    commit(null)
-  );
-
   return (
     <div
       className="nx-inspector__field"
@@ -2426,7 +2293,7 @@ function StyleControlField({
       // Absent when this is not a side: React omits an `undefined` attribute, so
       // the value says whether the field is in a box without a branch here.
       data-side={side}
-      onKeyDown={onSideKeyDown}
+      onKeyDown={sideKeys.onKeyDown}
       {...writes.caption}
     >
       {/* The label drags the value the number field below offers it. */}
@@ -2467,9 +2334,9 @@ function StyleControlField({
         onReset={() => commit(null)}
         stored={stored}
         readOnly={readOnly}
-        resetByKey={boxSide !== undefined}
+        resetByKey={sideKeys.resetByKey}
       />
-      <SideResetKeys side={boxSide} fieldId={id} />
+      {sideKeys.hint}
       <SharedValueLine
         target={target}
         answer={answer}
@@ -2697,10 +2564,7 @@ function BreakpointAction({
   stored: StyleValue | undefined;
   /** A field drawn as a retained value, whose own Clear already resets it. */
   readOnly: boolean;
-  /**
-   * Whether the field resets by a key of its own (a side of the spacing box),
-   * which takes its reset out of the Tab order.
-   */
+  /** A field that resets by a key of its own: its reset leaves the Tab order. */
   resetByKey?: boolean;
 }): React.JSX.Element | null {
   /*
@@ -2922,7 +2786,7 @@ function ResetAction({
   onReset,
   outOfTabOrder = false,
 }: {
-  /** Out of the Tab order, for a field that resets by a key of its own. */
+  /** Out of the Tab order (still clickable): its field resets by key. */
   outOfTabOrder?: boolean;
   /**
    * What shows once this value is gone: another tier's value, nothing, or
@@ -2958,8 +2822,6 @@ function ResetAction({
           data-action="reset"
           {...commitsFor(fieldId)}
           onClick={onReset}
-          // Still a button to click; only Tab passes it by, since the field it
-          // belongs to resets by key.
           tabIndex={outOfTabOrder ? -1 : undefined}
           aria-label={named}
         >
@@ -6925,8 +6787,6 @@ function TextField({
       title={sideTitle(compact, draft)}
       // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
-      // A side names its reset key in its description as well; kept apart
-      // from `describedBy`, which says the value was refused.
       aria-describedby={fieldDescribedBy(describedBy, compact, id)}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
