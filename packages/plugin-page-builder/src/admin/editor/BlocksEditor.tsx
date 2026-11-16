@@ -245,7 +245,8 @@ function useDrawnCanvasRender(
 
 /**
  * What the editor's search adds from: the Add panel's own sources, and the
- * container whose "+" opened Add, so a search row adds where the panel would.
+ * place a "+" that opened Add chose, so a search row adds where the panel
+ * would.
  */
 function searchInsertSources(
   panels: EditorPanels
@@ -256,6 +257,7 @@ function searchInsertSources(
     ...(panels.insertInside === undefined
       ? {}
       : { inside: panels.insertInside }),
+    ...(panels.insertAfter === undefined ? {} : { after: panels.insertAfter }),
   };
 }
 

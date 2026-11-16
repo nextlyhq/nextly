@@ -114,6 +114,7 @@ export type InsertOffersInputs = Pick<
   | "componentDefinitions"
   | "nesting"
   | "inside"
+  | "after"
   | "onInsert"
 > & {
   /**
@@ -166,6 +167,7 @@ export function useInsertOffers({
   componentDefinitions,
   nesting,
   inside,
+  after,
   onInsert,
   enabled = true,
 }: InsertOffersInputs): InsertOffers {
@@ -240,6 +242,7 @@ export function useInsertOffers({
   const placeOptions: InsertionOptions = {
     slots: slotSource,
     ...(inside === undefined ? {} : { inside }),
+    ...(after === undefined ? {} : { after }),
   };
   const places: Readonly<Record<EntryRole, InsertionCandidate[]>> = {
     content: insertionCandidates(editor.document, editor.selectedId, {
@@ -278,11 +281,11 @@ export function useInsertOffers({
 
   // The sentence the last insert is announced with. A live region reads only
   // a changed text, so a repeat of the same sentence (five Text blocks in a
-  // row) alternates a zero-width space to be read again.
+  // row) gains a zero-width space, or loses it, to be read again each time.
   const [announcement, setAnnouncement] = React.useState("");
   const announce = (message: string) =>
     setAnnouncement(previous =>
-      previous.replace(/\u200b$/, "") === message ? `${message}\u200b` : message
+      previous === message ? `${message}\u200b` : message
     );
   /*
    * Add an entry where its offer says, or nothing when it was refused.

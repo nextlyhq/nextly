@@ -183,6 +183,7 @@ export function InsertPanel({
   onInsert,
   beginInsertDrag,
   inside,
+  after,
   renderPreview,
   // A canvas press to answer, handed to the line that answers it.
   ...summons
@@ -226,6 +227,7 @@ export function InsertPanel({
       componentDefinitions,
       nesting,
       inside,
+      after,
       onInsert,
     });
   // The field a dragged Entry content block draws, as a click places it,
@@ -304,8 +306,10 @@ export function InsertPanel({
   const header = <h2 className="nx-insert-panel__title">{EDITOR_WORDS.add}</h2>;
   const firstPlace = rest;
   if (firstPlace === undefined) {
-    // Only an `inside` can leave no place: the container it names is gone
-    // from the page, or holds no region a block can be put in.
+    // Only an explicit place can leave no place: the container an `inside`
+    // names is gone from the page, or holds no region a block can be put
+    // in. (A gap's `after` lasts only while its block is selected, so it is
+    // on the page.)
     return (
       <div className="nx-insert-panel" data-empty="unplaceable">
         {/* A press is still answered, with nothing to focus, so it waits for no later open. */}

@@ -330,6 +330,34 @@ describe("where a clicked block lands", () => {
     }
   });
 
+  it("adds only in the gap a '+' chose after a block, even a selected Section", () => {
+    for (const role of ["content", "layout", "band"] as const) {
+      expect(
+        insertionCandidates(hero(), "hero", { slots, role, after: "hero" })
+      ).toEqual([
+        {
+          kind: "between",
+          at: { index: 1 },
+          target: { kind: "root" },
+          afterId: "hero",
+          beforeId: "pricing",
+        },
+      ]);
+    }
+    // After the last block, and nowhere once that block is gone.
+    expect(
+      insertionCandidates(hero(), "pricing", { after: "pricing" })
+    ).toEqual([
+      {
+        kind: "after-ancestor",
+        at: { index: 2 },
+        target: { kind: "root" },
+        afterId: "pricing",
+      },
+    ]);
+    expect(insertionCandidates(hero(), null, { after: "gone" })).toEqual([]);
+  });
+
   it("names an explicit place between two blocks, and after the last", () => {
     expect(insertionCandidates(hero(), null, { at: { index: 1 } })).toEqual([
       {

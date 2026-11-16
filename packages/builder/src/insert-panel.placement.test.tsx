@@ -186,6 +186,33 @@ describe("where a clicked block lands, as the Add panel says it", () => {
     expect(region?.textContent).toBe("Box added after Hero");
   });
 
+  it("adds in the gap a '+' chose below a selected Section, and says between what", () => {
+    register();
+    const twoSections = {
+      ...heroPage,
+      nodes: [
+        ...heroPage.nodes,
+        {
+          id: "pricing",
+          type: "core/section",
+          version: 1,
+          props: {},
+          name: "Pricing",
+          slots: { children: [] },
+        },
+      ],
+    } as BlockDocument;
+    const editor = { ...editorOn("hero"), document: twoSections };
+    render(<InsertPanel editor={editor} after="hero" />);
+    expect(line()?.textContent).toBe("Adding between Hero and Pricing");
+    fireEvent.click(tile("Heading"));
+    // In the gap, not inside the selected Section.
+    expect(editor.apply.mock.calls[0][0].at).toEqual({ index: 1 });
+    expect(announcement()?.textContent).toBe(
+      "Heading added between Hero and Pricing"
+    );
+  });
+
   it("announces a repeated insert again", () => {
     register();
     render(<InsertPanel editor={editorOn("hero")} />);
@@ -193,11 +220,16 @@ describe("where a clicked block lands, as the Add panel says it", () => {
     const first = announcement()?.textContent;
     fireEvent.click(tile("Heading"));
     const second = announcement()?.textContent;
-    // A live region reads a changed text only, so a repeat must differ in
-    // its characters while saying the same words.
+    fireEvent.click(tile("Heading"));
+    const third = announcement()?.textContent;
+    // A live region reads a changed text only, so each repeat must differ in
+    // its characters from the one before while saying the same words.
     expect(second).not.toBe(first);
-    expect(second?.replace(/​/g, "")).toBe(
-      "Heading added inside Hero, at the end"
-    );
+    expect(third).not.toBe(second);
+    for (const said of [first, second, third]) {
+      expect(said?.replace(/\u200b/g, "")).toBe(
+        "Heading added inside Hero, at the end"
+      );
+    }
   });
 });

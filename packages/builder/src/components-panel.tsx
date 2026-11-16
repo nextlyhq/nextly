@@ -85,6 +85,8 @@ export interface ComponentsPanelProps {
   nesting?: NestingSource;
   /** The container a "+" chose to add inside, as Add is handed it. */
   inside?: string;
+  /** The block a gap's "+" chose to add after, as Add is handed it. */
+  after?: string;
   /** Begins a drag onto the canvas, as Add's tiles do. */
   beginInsertDrag?: InsertPanelProps["beginInsertDrag"];
   /** Notified after a placement, with the node that was added. */
@@ -166,6 +168,7 @@ export function ComponentsPanel({
   withheld = 0,
   nesting,
   inside,
+  after,
   beginInsertDrag,
   onInsert,
   onEditComponent,
@@ -180,6 +183,7 @@ export function ComponentsPanel({
       componentDefinitions,
       nesting,
       inside,
+      after,
       onInsert,
     });
   const unplaceable = React.useMemo(

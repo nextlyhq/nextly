@@ -178,7 +178,7 @@ test.describe("the canvas's add controls", () => {
       await setAdd(page, open);
       await after.focus();
       await page.keyboard.press("Enter");
-      await expectAnswered(page, "Adding after Heading");
+      await expectAnswered(page, "Adding between Heading and Section");
     }
   });
 });

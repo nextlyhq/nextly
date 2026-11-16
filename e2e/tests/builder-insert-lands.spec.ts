@@ -15,6 +15,9 @@
  * - A Section clicked with a Heading inside a Section selected stores two
  *   top-level Sections. A rule that treated a Section as any layout block
  *   would put it after the Heading, inside the first Section.
+ * - The "+" in the gap below a Section adds in that gap, even though the
+ *   Section is then selected. A "+" that only selected the Section would
+ *   put a Heading inside it.
  * - One component added by a click, by Enter on its tile, from the
  *   Components panel and from search, each with the Section selected, lands
  *   inside the Section each time. A surface with a placement of its own
@@ -27,6 +30,7 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import {
+  clickBlock,
   layerRow,
   openLayers,
   pressSave,
@@ -55,7 +59,7 @@ function stamp(): string {
 }
 
 /** A Section named Hero holding one Heading, or nothing at all. */
-function content(empty: boolean): unknown {
+function content(empty: boolean, pricing: boolean): unknown {
   return {
     formatVersion: 1,
     kind: "page",
@@ -79,13 +83,26 @@ function content(empty: boolean): unknown {
               ],
             },
           },
+          ...(pricing
+            ? [
+                {
+                  id: "00000000-0000-4000-8000-00000000e003",
+                  type: "core/section",
+                  version: 1,
+                  name: "Pricing",
+                  props: { as: "section", contained: true },
+                  slots: { children: [] },
+                },
+              ]
+            : []),
         ],
   };
 }
 
 async function createPage(
   request: APIRequestContext,
-  empty = false
+  empty = false,
+  pricing = false
 ): Promise<string> {
   const t = stamp();
   const created = await request.post(PAGES, {
@@ -93,7 +110,7 @@ async function createPage(
       title: `Insert lands ${t}`,
       slug: `insert-lands-${t}`,
       status: "draft",
-      content: content(empty),
+      content: content(empty, pricing),
     },
   });
   expect(created.ok(), `creating the page: ${created.status()}`).toBe(true);
@@ -245,8 +262,10 @@ test.describe("where a clicked block lands", () => {
       "Adding at the end of the page"
     );
     await tile(page, "Box").click();
-    await expect(placementLine(page)).toHaveText(
-      "Adding inside Box, at the end"
+    // The new Box is the selection; another Box goes after it, as its tile
+    // says.
+    await expect(tile(page, "Box")).toHaveAccessibleDescription(
+      /^Goes after Box\./
     );
     await tile(page, "Box").click();
     await saveDraft(page);
@@ -285,7 +304,8 @@ test.describe("where a clicked block lands", () => {
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
-    await select(page, HEADING);
+    await clickBlock(page, HEADING);
+    await expect.poll(() => selection(page)).toEqual([HEADING]);
     await openAdd(page);
 
     await tile(page, "Section").click();
@@ -294,6 +314,28 @@ test.describe("where a clicked block lands", () => {
 
     expect(await shape(page.request, id)).toEqual([
       { "core/section": ["core/heading"] },
+      "core/section",
+    ]);
+  });
+
+  test("the + below a Section adds in the gap there, not inside the Section", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request, false, true);
+    await openBuilder(page, id);
+    await page
+      .getByRole("button", { name: "Add a section after Hero" })
+      .click();
+    await expect(placementLine(page)).toHaveText(
+      "Adding between Hero and Pricing"
+    );
+    await tile(page, "Heading").click();
+    await announced(page, "Heading added between Hero and Pricing");
+    await saveDraft(page);
+
+    expect(await shape(page.request, id)).toEqual([
+      { "core/section": ["core/heading"] },
+      "core/heading",
       "core/section",
     ]);
   });

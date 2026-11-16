@@ -65,6 +65,12 @@ export interface InsertionOptions {
   readonly inside?: string;
   /** A place someone chose, such as a gap between two blocks: that only. */
   readonly at?: OpPosition;
+  /**
+   * A block someone chose to add right after (a gap's "+"): the place just
+   * after it, in its own region, only. Resolved against the page as it is
+   * now, so an undo that moves the block moves the place with it.
+   */
+  readonly after?: string;
   /** The regions each block type declares, for "inside". */
   readonly slots?: SlotSource;
   /** What kind of block is being added; a content block when absent. */
@@ -76,7 +82,8 @@ export interface InsertionOptions {
  * answer every surface asks: a click or Enter on an Add panel tile, the
  * Components panel, search, the panel's line and each tile's description.
  *
- * - An explicit place (`at`, or a container's `inside`) is that place only.
+ * - An explicit place (`at`, a gap's `after`, or a container's `inside`) is
+ *   that place only.
  * - Nothing selected, or a selection the page no longer holds: the end of
  *   the page.
  * - A Section or saved section with a selection inside another block: after
@@ -98,6 +105,14 @@ export function insertionCandidates(
   options: InsertionOptions = {}
 ): InsertionCandidate[] {
   if (options.at !== undefined) return explicitCandidates(document, options.at);
+  if (options.after !== undefined) {
+    const location = locateNode(document.nodes, options.after);
+    const after =
+      location === undefined
+        ? undefined
+        : afterCandidate(location, options.after, true);
+    return after === undefined ? [] : explicitCandidates(document, after.at);
+  }
   if (options.inside !== undefined) {
     return insideCandidates(document, options.inside, options.slots);
   }
