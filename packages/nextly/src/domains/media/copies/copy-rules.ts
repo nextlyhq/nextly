@@ -149,13 +149,37 @@ export function negotiateCopyFormat(
   return formats.find(format => named.has(format.mimeType)) ?? fallback;
 }
 
-/** The stored key of an original's copy at `width` in `format`. */
+/**
+ * The most bytes a file's own name may have: the limit of the filesystems
+ * local storage writes to, and of the names a bucket lists.
+ */
+const NAME_BYTES = 255;
+
+/**
+ * The stored key of an original's copy at `width` in `format`: the
+ * original's key with the width and format added, beside it.
+ *
+ * An original whose name is near the limit has room for no suffix, so its
+ * copies are named instead by a fingerprint of the original's key, still in
+ * its folder. Either way the key is worked out from the original's alone, so
+ * the copy made and the copy removed are always the same file.
+ */
 export function copyPathOf(
   originalPath: string,
   width: MediaCopyWidth,
   format: CopyFormat
 ): string {
-  return `${originalPath}.w${width}.${format.ext}`;
+  const suffix = `.w${width}.${format.ext}`;
+  const slash = originalPath.lastIndexOf("/");
+  const name = originalPath.slice(slash + 1);
+  if (Buffer.byteLength(name + suffix, "utf8") <= NAME_BYTES) {
+    return `${originalPath}${suffix}`;
+  }
+  const fingerprint = createHash("sha256")
+    .update(originalPath)
+    .digest("hex")
+    .slice(0, 32);
+  return `${originalPath.slice(0, slash + 1)}${fingerprint}${suffix}`;
 }
 
 /**

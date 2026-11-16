@@ -177,6 +177,42 @@ describe("where a copy is stored", () => {
     }
   });
 
+  it("keeps every copy's name within 255 bytes, beside an original whose name is near it", () => {
+    // 248 bytes: an original, and its thumbnail, fit; a suffix would not.
+    const long = {
+      filename: `media/2026/11/${"a".repeat(244)}.jpg`,
+      mimeType: "image/jpeg",
+    };
+    const paths = copyPathsOf(long);
+    expect(paths).toHaveLength(MEDIA_COPY_WIDTHS.length * 3);
+    expect(new Set(paths).size).toBe(paths.length);
+    for (const path of paths) {
+      expect(path.startsWith("media/2026/11/")).toBe(true);
+      expect(
+        Buffer.byteLength(path.slice(path.lastIndexOf("/") + 1))
+      ).toBeLessThanOrEqual(255);
+    }
+    // Worked out from the original's key alone, so it is the same each time.
+    const [webp] = copyFormatsOf("image/webp");
+    expect(copyPathOf(long.filename, 1920, webp)).toBe(
+      copyPathOf(long.filename, 1920, webp)
+    );
+    expect(copyPathOf(long.filename, 1920, webp)).not.toBe(
+      copyPathOf(`${long.filename.slice(0, -5)}b.jpg`, 1920, webp)
+    );
+  });
+
+  it("counts a name's bytes, not its characters", () => {
+    // 121 two-byte letters: 242 bytes in 121 characters, so the copy's name
+    // is 257 bytes, past the limit, in 136 characters, well within it.
+    const wide = `media/${"é".repeat(121)}.jpg`;
+    const [avif] = copyFormatsOf("image/avif");
+    const copy = copyPathOf(wide, 1280, avif);
+    expect(
+      Buffer.byteLength(copy.slice(copy.lastIndexOf("/") + 1))
+    ).toBeLessThanOrEqual(255);
+  });
+
   it("lists none for an original it never copies", () => {
     expect(
       copyPathsOf({ filename: "doc.pdf", mimeType: "application/pdf" })
