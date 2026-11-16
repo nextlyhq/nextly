@@ -456,4 +456,23 @@ export const versionApi = {
       `${basePath(scope)}/diff?${search.toString()}`
     );
   },
+
+  /**
+   * A version compared with a baseline the server resolves by name: what is
+   * published, the current draft, or the version this person last looked at.
+   * Without `to`, the server picks the version to compare. The answer names
+   * the baseline it used, and the version retention left in place of one it
+   * removed.
+   */
+  diffFromBaseline: (
+    scope: VersionScope,
+    baseline: string,
+    to?: number
+  ): Promise<VersionDiff> => {
+    const search = new URLSearchParams({ baseline });
+    if (to !== undefined) search.set("to", String(to));
+    return protectedApi.get<VersionDiff>(
+      `${basePath(scope)}/diff?${search.toString()}`
+    );
+  },
 };

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   readFromParam,
   readLocaleParam,
+  readViewParam,
   readVersionParam,
   resolvePair,
 } from "../version-search-params";
@@ -46,10 +47,30 @@ describe("readFromParam", () => {
     expect(readFromParam(["previous", "3"])).toBe("previous");
   });
 
+  it("reads each baseline the server resolves, by its own name", () => {
+    expect(readFromParam("published")).toBe("published");
+    expect(readFromParam("draft")).toBe("draft");
+    expect(readFromParam("last-viewed")).toBe("last-viewed");
+  });
+
   it("rejects anything else", () => {
     expect(readFromParam("prev")).toBeUndefined();
+    expect(readFromParam("looked")).toBeUndefined();
     expect(readFromParam("0")).toBeUndefined();
     expect(readFromParam(undefined)).toBeUndefined();
+  });
+});
+
+describe("readViewParam", () => {
+  it("reads the two ways a comparison is drawn", () => {
+    expect(readViewParam("inline")).toBe("inline");
+    expect(readViewParam("side")).toBe("side");
+  });
+
+  it("is undefined for anything else, so the reader's own choice stands", () => {
+    expect(readViewParam("split")).toBeUndefined();
+    expect(readViewParam(undefined)).toBeUndefined();
+    expect(readViewParam(["side", "inline"])).toBe("side");
   });
 });
 
@@ -119,6 +140,20 @@ describe("resolvePair", () => {
     // One beyond the loaded page: Load more would find what precedes it.
     expect(resolvePair(interleaved, "previous", 2, true)).toEqual({
       kind: "not-loaded",
+    });
+  });
+
+  it("leaves a baseline the server resolves to the server, with the version the address names", () => {
+    const versions = [{ versionNo: 5, locale: null }];
+
+    expect(resolvePair(versions, "published", 5, false)).toEqual({
+      kind: "baseline",
+      baseline: "published",
+      to: 5,
+    });
+    expect(resolvePair(versions, "last-viewed", undefined, false)).toEqual({
+      kind: "baseline",
+      baseline: "last-viewed",
     });
   });
 

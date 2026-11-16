@@ -7,7 +7,6 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-panels
  */
-import { spacingModeOf } from "@nextlyhq/blocks-engine";
 import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
@@ -122,6 +121,9 @@ function InsertPanelWithLibrary({
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
   /** The container to add inside, when its "+" asked for it. */
   inside?: string;
+  /** A canvas press still to answer, and where to say it was answered. */
+  summoned: React.ComponentProps<typeof InsertPanel>["summoned"];
+  onSummoned: React.ComponentProps<typeof InsertPanel>["onSummoned"];
   /**
    * The component tier, read by the EDITOR rather than here.
    *
@@ -267,6 +269,15 @@ type PanelRequests = {
   openInsertPanel: (inside?: string) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
+  /**
+   * The count of canvas add presses Add has yet to answer, or `undefined`
+   * when it has answered them all: each new one has the panel focus its
+   * search, go back to the top and highlight where the block goes, whether
+   * it opens for the press or was already open.
+   */
+  addSummon: number | undefined;
+  /** Told by Add each press it has answered. */
+  onAddSummoned: (count: number) => void;
 };
 
 /** Requests to open a panel from the canvas. */
@@ -301,9 +312,18 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   const [insideRequest, setInsideRequest] = useState<string | undefined>(
     undefined
   );
+  /*
+   * Canvas presses for Add, counted apart from the panel request: opening a
+   * panel that is already open changes nothing the shell can show, so the
+   * panel answers each press itself, and says when it has, so a later open
+   * from the rail replays no press.
+   */
+  const [addPresses, setAddPresses] = useState(0);
+  const [answeredPress, setAnsweredPress] = useState(0);
   const openInsertPanel = useCallback(
     (inside?: string): void => {
       setInsideRequest(inside);
+      setAddPresses(count => count + 1);
       requestPanel("add");
     },
     [requestPanel]
@@ -323,6 +343,8 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
     requestPanel,
     openInsertPanel,
     insertInside,
+    addSummon: addPresses > answeredPress ? addPresses : undefined,
+    onAddSummoned: setAnsweredPress,
   };
 }
 
@@ -472,6 +494,8 @@ export function editorPanelRenderer({
   classSummaryContext,
   requestPanel,
   insertInside,
+  addSummon,
+  onAddSummoned,
   pages,
   canvasRender,
   editedBreakpoint,
@@ -521,7 +545,13 @@ export function editorPanelRenderer({
   > &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
+    | "offered"
+    | "offerablePatterns"
+    | "requestPanel"
+    | "insertInside"
+    | "addSummon"
+    | "onAddSummoned"
+    | "pages"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -543,6 +573,10 @@ export function editorPanelRenderer({
           offerablePatterns={offerablePatterns}
           // Inside the container a "+" chose, while it is the selection.
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // A canvas press still to answer, whether Add opened for it or
+          // was already open.
+          summoned={addSummon}
+          onSummoned={onAddSummoned}
         />
       ),
       /*
@@ -650,13 +684,6 @@ export function editorPanelRenderer({
               // The switch in the panel's header picks the mode the canvas is
               // drawn in, held by the editor so it outlasts the panel.
               preview={previewMode}
-              // Offered once the stored style is read, so the choice shows
-              // the model the canvas is compiled under and nothing earlier.
-              {...(siteStylePending || siteStyleError !== null
-                ? {}
-                : {
-                    spacingMode: spacingModeOf(canvasSiteStyle?.spacingMode),
-                  })}
             >
               {designTabs}
             </TokensStudio>

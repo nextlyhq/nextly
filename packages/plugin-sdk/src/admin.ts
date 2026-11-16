@@ -198,6 +198,20 @@ export {
 export { useCurrentUserId } from "@nextlyhq/admin/kit/core";
 
 /**
+ * The schema version this tab was last answered with, and a listener told
+ * each time it moves (@experimental).
+ *
+ * For a plugin that keeps an answer the schema decides, such as the
+ * collections an author may pick from: keep it with `schemaVersion()` as it
+ * was read, and read it again once the version differs. `onSchemaChange`
+ * tells of every move this tab learns of (its own Schema Builder apply,
+ * another tab's, a code-first change) and answers the call that stops it.
+ * `schemaVersion()` is `undefined` until an answer carried a version.
+ * Experimental while its first consumer settles.
+ */
+export { onSchemaChange, schemaVersion } from "@nextlyhq/admin/kit/core";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the
@@ -883,6 +897,31 @@ export type {
   PlaceTabProps,
   PlaceTabsProps,
   TargetSlotProps,
+} from "@nextlyhq/admin/kit/plugin-parts";
+
+/**
+ * Templates for a new collection, Single or field group, offered in the Schema
+ * Builder's new-entity dialog beside the built-in ones (@experimental).
+ *
+ * A template is a plain declaration: its kind, the gallery's category, name,
+ * description and icon, and the fields it adds, in the shape the Builder
+ * stores a field. Register a plugin's own from its admin module under the
+ * plugin's name, which the gallery shows beside each one; the call returns the
+ * function that takes them back. What a template needs (a collection a link
+ * points at, a field group a field uses) is read from its fields, never
+ * declared beside them. A picked template is checked as a typed field is (its
+ * names by the save's own rule, its types against what the Builder offers),
+ * so a mistake shows on the template and nothing reaches the save.
+ *
+ * @experimental The template declaration and the way a plugin contributes
+ * templates may change before the Schema Builder's redesign is complete. A
+ * plugin pins the SDK version it builds against.
+ */
+export { registerSchemaTemplates } from "@nextlyhq/admin/kit/plugin-parts";
+export type {
+  SchemaTemplate,
+  SchemaTemplateField,
+  SchemaTemplateKind,
 } from "@nextlyhq/admin/kit/plugin-parts";
 
 /**

@@ -35,6 +35,7 @@
     "core-tables-not-reconciled",
     "create-blocked-by-leftover-table",
     "database-adapter-missing",
+    "database-behind-migrations",
     "database-catalog-unreadable",
     "database-dialect-invalid",
     "database-dialect-unknown",

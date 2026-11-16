@@ -87,6 +87,19 @@ export interface GetSingleOptions {
   translationStatus?: boolean;
 
   /**
+   * Whole-document fallback: where the Single is not published in the
+   * requested language, answer in the first language of its fallback chain it
+   * is published in, and say which (`_locale`).
+   */
+  wholeDocumentFallback?: boolean;
+
+  /** Attach `_sources`: for each translatable field, the language its value came from. */
+  sourceLocales?: boolean;
+
+  /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+  translations?: "all";
+
+  /**
    * The fields to answer with, as a collection read selects them
    * (`shared/lib/field-selection`): a field named `true` is included, a `false`
    * entry is ignored, and a selection that includes nothing answers the whole

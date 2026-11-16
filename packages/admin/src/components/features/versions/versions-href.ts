@@ -23,8 +23,11 @@ import type { ComparisonFrom } from "./version-search-params";
  */
 export function versionsHref(
   scope: VersionScope,
-  pair?: { from: ComparisonFrom; to: number },
-  locale?: string | null
+  /** `to` may be absent for a baseline the server pairs with its own choice. */
+  pair?: { from: ComparisonFrom; to?: number },
+  locale?: string | null,
+  /** How the comparison is drawn, when the address says. */
+  view?: "inline" | "side"
 ): string {
   const path =
     scope.kind === "single"
@@ -34,11 +37,13 @@ export function versionsHref(
           id: scope.entryId ?? "",
         });
   const query = {
-    ...(pair ? { from: pair.from, to: pair.to } : {}),
+    ...(pair ? { from: pair.from } : {}),
+    ...(pair?.to !== undefined ? { to: pair.to } : {}),
     // Omitted rather than sent empty when there is none: a non-localized
     // document should carry no locale, and `?locale=` reads as one that failed
     // to resolve rather than one that was never asked for.
     ...(locale ? { locale } : {}),
+    ...(view ? { view } : {}),
   };
   return Object.keys(query).length > 0 ? withQuery(path, query) : path;
 }

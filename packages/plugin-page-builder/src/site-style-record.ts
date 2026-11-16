@@ -29,7 +29,6 @@ import {
   TOKEN_KINDS,
   emitTokenBlocks,
   isPlainRecord,
-  isSpacingMode,
   isDefaultLook,
   isLook,
   isUsableNamedClass,
@@ -913,8 +912,5 @@ export function readSiteStyleRecord(doc: unknown): SiteStyleData {
     fonts: checkStoredFonts(doc.fonts).value,
     classes: checkStoredClasses(doc.classes).value,
     breakpoints: checkStoredBreakpoints(doc.breakpoints).value,
-    // Only a model the engine knows; anything else is nothing recorded, and
-    // the engine's default applies.
-    spacingMode: isSpacingMode(doc.spacingMode) ? doc.spacingMode : undefined,
   });
 }

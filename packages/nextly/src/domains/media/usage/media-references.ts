@@ -36,6 +36,7 @@ import {
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { ComponentSchemaInfo } from "../../versions/restore-snapshot";
+import { mediaIdOfRouteAddress } from "../media-route-address";
 
 /**
  * One reference a value makes: to an item's id, or to its address. Which of
@@ -82,17 +83,12 @@ const ID_SHAPE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The media route an address may name an item by instead of the file's own
- * address (`/api/media/<id>/raw`), as a Page Builder font face does: the
- * item's id, read from it.
+ * What an address refers to: the item its media route names (an address a
+ * Page Builder font face gives as `/api/media/<id>/raw`), or itself.
  */
-const MEDIA_ROUTE =
-  /\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=[/?#]|$)/i;
-
-/** What an address refers to: the item its media route names, or itself. */
 function addressReference(url: string, fieldPath: string): MediaReference {
-  const routed = MEDIA_ROUTE.exec(url);
-  return routed ? { fieldPath, mediaId: routed[1] } : { fieldPath, url };
+  const mediaId = mediaIdOfRouteAddress(url);
+  return mediaId ? { fieldPath, mediaId } : { fieldPath, url };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

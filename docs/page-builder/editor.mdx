@@ -239,8 +239,8 @@ pageBuilder({
 
 ## Spacing
 
-Blocks have no outer margin of their own. The space between two blocks comes from the
-block that holds them:
+Blocks have no outer margin of their own. The space between two blocks is the gap of
+the container holding them, set per container or by the spacing variables:
 
 - **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
@@ -282,34 +282,6 @@ gap above it; give that block a top margin of 0 on that device to remove it.
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
 
-### Space between blocks: classic or the container's gap
-
-**Design → Variables** opens with **Space between blocks**, which decides how the
-whole site is spaced:
-
-- **From the container's gap**: the model described above. A new site starts here.
-- **From each block's margins (classic)**: the spacing pages had before container
-  gaps. Headings carry 1.5em above and 0.5em below, paragraphs 1em below, Divider
-  and Quote 1.5em above and below; Section and Card have no padding; Columns,
-  Gallery and Accordion keep the `space.4` gap; an Accordion's sections keep the
-  browser's own triangle (its Icon is **Browser default**); a Button is padded
-  0.5rem × 1rem; and no container puts a gap between its blocks. The variables in the table above
-  are not used.
-
-A site that already had a page, a component or a Layout of its own when it first
-started on the version that added container gaps (the seeded default Layout does not
-count) is put on **Classic** once, so its pages look exactly as they did. That step
-never runs again and never changes a choice made here. To move such a site to
-container gaps, choose **From the container's gap**; the canvas redraws at once, and
-published pages follow on their next render. Changing it needs the permission to
-update the site style.
-
-The choice is kept in the plugin's own table `page_builder__site_options`, created by
-the plugin's migration (`npx nextly migrate`). A route that renders with
-`loadSiteStyle({ nextly })` reads it with the rest of the site style, and a change to it
-expires the cached pages that name the `site-style` single among their `singles`, as a
-saved variable does.
-
 ## The bottom bar
 
 The bottom bar shows where you are: **Page**, then each block holding the selected
@@ -331,8 +303,8 @@ entry's page draws them. Where a plugin adds a tab of its own, such as the
 [SEO plugin](/docs/plugins/seo#in-the-page-builder), these sit under **General**, with
 the plugin's tab beside them. They save with the page, from **Save** or **Publish** in the top
 bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
-It uses the SEO fields where the page has them, then the page's first heading, text and
-image, then its title. Your site's own metadata may differ. Pressing Enter in a field
+It uses the SEO fields where the page has them, then the page's first text and image, and
+the page's title. A heading never sets the title. Your site's own metadata may differ. Pressing Enter in a field
 never saves the page.
 
 **Site** applies to the live site as soon as you change it. You see it only if your role
