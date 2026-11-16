@@ -42,9 +42,10 @@ type Props = {
    */
   saving?: boolean;
   /**
-   * Undo and Redo wait, by button and by key: an unsaved entity's address
-   * move, still being checked, records its settings when it ends, and would
-   * write over a step taken meanwhile.
+   * Undo, Redo and Discard all wait, by button and by key: an unsaved entity's
+   * address move, still being checked, records its settings when it ends, and
+   * would write over a step taken meanwhile; a discard meanwhile would let the
+   * entity go before the move renames it.
    */
   held?: boolean;
 };
@@ -174,7 +175,7 @@ export function PendingChangesControls({
         variant="ghost"
         size="sm"
         aria-label="Discard all changes"
-        disabled={count === 0 || saving}
+        disabled={count === 0 || saving || held}
         onClick={() => setConfirmingDiscard(true)}
       >
         <RotateCcw className="h-4 w-4 sm:hidden" />

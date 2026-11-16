@@ -346,15 +346,31 @@ describe("pending changes controls", () => {
   // An unsaved entity's address move, still being checked, records its
   // settings when it ends: an undo or a redo made meanwhile would be written
   // over by it, so both wait.
-  it("undo and redo wait, by button and by key, while the page holds them", async () => {
-    const user = setup(false, true);
+  it("undo and redo wait, by button and by every key, while the page holds them", async () => {
+    const { rerender } = render(<Harness />, { wrapper: Providers });
+    const user = userEvent.setup();
+    // Two steps on two fields, the second undone: there is a step to undo and
+    // one to redo.
     act(() =>
       builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
     );
+    const addressLabel = field("address").label;
+    act(() =>
+      builder.handleFieldUpdate({ ...field("address"), label: "Location" })
+    );
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(field("address").label).toBe(addressLabel);
+    expect(field("summary").label).toBe("Excerpt");
+
+    rerender(<Harness held />);
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Redo" })).toBeDisabled();
     await user.keyboard("{Control>}z{/Control}");
     expect(field("summary").label).toBe("Excerpt");
+    await user.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+    expect(field("address").label).toBe(addressLabel);
+    await user.keyboard("{Control>}y{/Control}");
+    expect(field("address").label).toBe(addressLabel);
   });
 
   // A discard during the move would let the entity go before the move renames

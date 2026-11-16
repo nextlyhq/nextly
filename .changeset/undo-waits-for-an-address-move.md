@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-In the Schema Builder, Undo and Redo, by button and by key, now wait while the new address of a collection, Single or field group not yet saved is being checked, as Save does. Before, a step undone or redone during that check was written over by the settings the move recorded when it ended.
+In the Schema Builder, Undo, Redo and Discard all, by button and by key, now wait while the new address of a collection, Single or field group not yet saved is being checked, as Save does. Before, a step undone or redone during that check was written over by the settings the move recorded when it ended, and a discard during it made the move report its new address as taken.
