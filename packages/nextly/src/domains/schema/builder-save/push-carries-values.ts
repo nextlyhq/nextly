@@ -5,6 +5,7 @@
  * @module domains/schema/builder-save/push-carries-values
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { fieldsLeavingTranslationUnder } from "../../i18n/migration/archive-preflight";
 import { fieldsJoiningTranslation } from "../../i18n/migration/field-joins-translation";
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
@@ -17,7 +18,8 @@ import { reachesRelationStorage } from "../pipeline/recorded-shapes";
  * values, or its per-language Draft/Published turned on or off, each seeding or restoring
  * columns from the ones they replace; a field joining translation or leaving it, its values moved
  * between the main table and the companion (judged under `renamed`, the companion rename the save
- * makes, as the preflights judge it); and a change reaching a relation's storage
+ * makes, as the preflights judge it); a translated field renamed or removed, its companion column
+ * judged against the companion as it stands; and a change reaching a relation's storage
  * (`reachesRelationStorage`), which the push plans from the live table.
  *
  * Any other save moves no value, and its file applies it, in tries over a busy table and on SQLite
@@ -52,9 +54,26 @@ export async function pushCarriesValues(args: {
   ) {
     return true;
   }
+  // A translated field renamed or removed: its companion column is renamed or dropped, judged by
+  // the push against the companion as it stands, so a save made again after one that stopped part
+  // way finishes it. The file, planned from the companion's history, would rename or drop it again.
+  if (args.wasStored && translatedFieldRenamedOrRemoved(args)) return true;
   return reachesRelationStorage({
     before: args.oldFields,
     after: args.newFields,
     liveTable: args.liveTable,
   });
+}
+
+/** Whether a field translated before the save is renamed, or is gone from the fields after it. */
+function translatedFieldRenamedOrRemoved(args: {
+  oldFields: readonly FieldDefinition[];
+  newFields: readonly FieldDefinition[];
+  renamed: FieldRename | null | undefined;
+}): boolean {
+  if (args.renamed) return true;
+  const kept = new Set(args.newFields.map(field => field.name));
+  return args.oldFields.some(
+    field => isFieldLocalized(field, true) && !kept.has(field.name)
+  );
 }
