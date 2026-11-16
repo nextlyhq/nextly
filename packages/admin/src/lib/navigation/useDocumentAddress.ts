@@ -1,12 +1,14 @@
 /**
  * The shared "open this document" rule (`documentAddress`) with what it needs
  * read from the signed-in admin: each collection as the admin lists it, whether
- * the reader may update it, and the site's default language.
+ * the reader may update it, the site's default language and the published
+ * document views.
  *
  * @module lib/navigation/useDocumentAddress
  */
 import { useCallback, useMemo } from "react";
 
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -38,6 +40,13 @@ export function useDocumentAddress(): DocumentAddressOf {
   const { data } = useEveryNavCollection();
   const { canAccessCollection } = useCurrentUserPermissions();
   const { enabled, defaultLocale } = useLocalization();
+  // The views the admin's metadata publishes, enabled plugins' only: read
+  // here so a link is drawn again when they arrive.
+  const { plugins } = useBranding();
+  const views = useMemo(
+    () => (plugins ?? []).flatMap(plugin => plugin.documentViews ?? []),
+    [plugins]
+  );
   const bySlug = useMemo(
     () =>
       new Map<string, OpenableCollection>(
@@ -56,8 +65,9 @@ export function useDocumentAddress(): DocumentAddressOf {
             canAccessCollection(document.slug, "update"),
           ...(options.locale === undefined ? {} : { locale: options.locale }),
           ...(enabled && defaultLocale !== "" ? { defaultLocale } : {}),
-        }
+        },
+        views
       ),
-    [bySlug, canAccessCollection, enabled, defaultLocale]
+    [bySlug, canAccessCollection, enabled, defaultLocale, views]
   );
 }

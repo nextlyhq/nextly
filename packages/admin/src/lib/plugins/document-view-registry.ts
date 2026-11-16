@@ -259,25 +259,6 @@ export function documentViewApplies(
   );
 }
 
-/**
- * The view that asks to open first on a collection whose main field is of
- * `fieldType`, or `undefined`. Boot allows at most one per field type.
- */
-export function viewOpeningFirstFor(
-  fieldType: string
-): RegisteredDocumentView | undefined {
-  for (const view of byFieldType.values()) {
-    if (
-      "fieldType" in view &&
-      view.fieldType === fieldType &&
-      view.opensFirst === "mainField"
-    ) {
-      return view;
-    }
-  }
-  return undefined;
-}
-
 /** Clear every registered view (rebuild on admin-meta change / tests). */
 export function clearDocumentViews(): void {
   registry.clear();

@@ -17,8 +17,11 @@
  * published, because its plugin is off or gone, leaves the form too.
  *
  * Read from the collection as it is now, so a collection made in the Schema
- * Builder follows the rule as its fields change. Nothing is remembered per
- * person. The form's own address is never changed by any of this.
+ * Builder follows the rule as its fields change, and from the views the
+ * admin's metadata publishes (enabled plugins' only), handed in rather than
+ * read from the route registry, which fills in an effect after that metadata
+ * renders. Nothing is remembered per person. The form's own address is never
+ * changed by any of this.
  *
  * A Single opens as its form for now; the rule takes the kind so a Single can
  * follow it later.
@@ -30,8 +33,6 @@ import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   addressableFieldsWithin,
   documentViewApplies,
-  matchDocumentView,
-  viewOpeningFirstFor,
   type DocumentKind,
   type RegisteredDocumentView,
 } from "@admin/lib/plugins/document-view-registry";
@@ -121,14 +122,41 @@ export function mainFieldOf(
   );
 }
 
+/** The published view at `path` on a collection: its own first, else a field type's. */
+function viewAt(
+  views: readonly RegisteredDocumentView[],
+  slug: string,
+  path: string
+): RegisteredDocumentView | undefined {
+  return (
+    views.find(
+      view => "slug" in view && view.slug === slug && view.path === path
+    ) ?? views.find(view => "fieldType" in view && view.path === path)
+  );
+}
+
+/** The published view asking to open first for `fieldType`; boot allows one. */
+function viewOpeningFirstFor(
+  views: readonly RegisteredDocumentView[],
+  fieldType: string
+): RegisteredDocumentView | undefined {
+  return views.find(
+    view =>
+      "fieldType" in view &&
+      view.fieldType === fieldType &&
+      view.opensFirst === "mainField"
+  );
+}
+
 /** Where a declared `opensIn` opens the entry, or the form when it can't. */
 function declaredDestination(
   slug: string,
   collection: OpenableCollection,
-  opensIn: string
+  opensIn: string,
+  views: readonly RegisteredDocumentView[]
 ): Destination {
   if (opensIn === FORM) return {};
-  const view = matchDocumentView("collection", slug, opensIn);
+  const view = viewAt(views, slug, opensIn);
   if (view === undefined) return {};
   if (!("fieldType" in view)) return { view: view.path };
   return fieldTypeDestination(collection, view);
@@ -154,15 +182,17 @@ function fieldTypeDestination(
 /** Where a collection's entries open by the rule, before the fallbacks. */
 function ruleDestination(
   slug: string,
-  collection: OpenableCollection
+  collection: OpenableCollection,
+  views: readonly RegisteredDocumentView[]
 ): Destination {
   const opensIn = collection.admin?.opensIn;
   if (typeof opensIn === "string") {
-    return declaredDestination(slug, collection, opensIn);
+    return declaredDestination(slug, collection, opensIn, views);
   }
   const main = mainFieldOf(collection);
   const type = main === undefined ? undefined : typeOf(main.field);
-  const view = type === undefined ? undefined : viewOpeningFirstFor(type);
+  const view =
+    type === undefined ? undefined : viewOpeningFirstFor(views, type);
   if (main === undefined || view === undefined) return {};
   return { view: view.path, field: main.path };
 }
@@ -185,12 +215,14 @@ function withLocale(path: string, locale: string | undefined): string {
 /**
  * The address a link to `document` opens, by the rule above. `collection` is
  * the collection as the admin has it, or `undefined` while it is not known,
- * which opens the form.
+ * which opens the form; `views` are the document views the admin's metadata
+ * publishes.
  */
 export function documentAddress(
   document: OpenedDocument,
   collection: OpenableCollection | undefined,
-  request: OpenRequest
+  request: OpenRequest,
+  views: readonly RegisteredDocumentView[]
 ): string {
   if (document.kind === "single" || document.id === undefined) {
     return withLocale(
@@ -209,7 +241,7 @@ export function documentAddress(
   ) {
     return withLocale(form, request.locale);
   }
-  const destination = ruleDestination(document.slug, collection);
+  const destination = ruleDestination(document.slug, collection, views);
   if (destination.view === undefined) return withLocale(form, request.locale);
   const address = buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
     slug: document.slug,

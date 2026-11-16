@@ -4,12 +4,8 @@
  * pinned, which tab the settings name, and the empty text per tab.
  */
 import type { CoreListWidgetData } from "nextly/core-widget-data";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import {
-  clearDocumentViews,
-  registerDocumentViews,
-} from "@admin/lib/plugins/document-view-registry";
 import { documentAddress } from "@admin/lib/navigation/document-address";
 import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 
@@ -23,11 +19,12 @@ import {
 
 /** The shared rule with no collection known: every row opens its form. */
 const formAddress: DocumentAddressOf = (document, options = {}) =>
-  documentAddress(document, undefined, {
-    canUpdate: true,
-    defaultLocale: "en",
-    ...options,
-  });
+  documentAddress(
+    document,
+    undefined,
+    { canUpdate: true, defaultLocale: "en", ...options },
+    []
+  );
 
 /** One row of the card's data, as JSON carries it. */
 type Row = CoreListWidgetData["items"][number];
@@ -157,8 +154,6 @@ describe("the card's tab and empty text", () => {
 });
 
 describe("where a Continue row opens", () => {
-  afterEach(() => clearDocumentViews());
-
   // The shared rule over one collection whose main field is a view's field
   // type, as the card's hook reads it from the admin's list of collections.
   const pageAddress: DocumentAddressOf = (document, options = {}) =>
@@ -170,18 +165,18 @@ describe("where a Continue row opens", () => {
           { name: "content", type: "blocks" },
         ],
       },
-      { canUpdate: true, defaultLocale: "en", ...options }
+      { canUpdate: true, defaultLocale: "en", ...options },
+      [
+        {
+          fieldType: "blocks",
+          path: "builder",
+          component: "@acme/builder#View",
+          opensFirst: "mainField",
+        },
+      ]
     );
 
   it("opens where every other link to the document opens", () => {
-    registerDocumentViews([
-      {
-        fieldType: "blocks",
-        path: "builder",
-        component: "@acme/builder#View",
-        opensFirst: "mainField",
-      },
-    ]);
     expect(
       continueRowFrom(row({ collection: "pages" }), pageAddress)?.href
     ).toBe("/admin/collections/pages/doc-1/builder?field=content");

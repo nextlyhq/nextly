@@ -5,13 +5,9 @@
  * else in the form. A reader who may not update the entry, and an entry asked
  * for in a language other than the default, get the form.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import {
-  clearDocumentViews,
-  registerDocumentViews,
-  type RegisteredDocumentView,
-} from "@admin/lib/plugins/document-view-registry";
+import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 import {
   documentAddress,
@@ -50,12 +46,16 @@ function open(
   return documentAddress(
     { kind: "collection", slug: collectionSlug, id: "42" },
     collection,
-    request
+    request,
+    views
   );
 }
 
-beforeEach(() => registerDocumentViews([BUILDER, REVIEW]));
-afterEach(() => clearDocumentViews());
+/** The views the admin's metadata publishes, as each test sets them. */
+let views: RegisteredDocumentView[] = [];
+beforeEach(() => {
+  views = [BUILDER, REVIEW];
+});
 
 describe("the default, by the collection's main field", () => {
   it("opens a page, whose main field is the view's field type, in that view, naming the field", () => {
@@ -129,8 +129,7 @@ describe("the default, by the collection's main field", () => {
   });
 
   it("opens every entry as a form when no view asks to open first", () => {
-    clearDocumentViews();
-    registerDocumentViews([{ ...BUILDER, opensFirst: undefined }]);
+    views = [{ ...BUILDER, opensFirst: undefined }];
     expect(open({ fields: [title, blocks("content")] })).toBe(
       "/admin/collections/pages/42"
     );
@@ -172,7 +171,7 @@ describe("a collection that says where its entries open", () => {
   });
 
   it("opens in the form when the view is not published (its plugin is off)", () => {
-    clearDocumentViews();
+    views = [];
     expect(
       open({
         fields: [title, excerpt, blocks("sections")],
@@ -216,17 +215,20 @@ describe("a Single", () => {
       documentAddress(
         { kind: "single", slug: "homepage" },
         { fields: [title, blocks("content")] },
-        editor
+        editor,
+        views
       )
     ).toBe("/admin/singles/homepage");
   });
 
   it("carries its language", () => {
     expect(
-      documentAddress({ kind: "single", slug: "homepage" }, undefined, {
-        ...editor,
-        locale: "ar",
-      })
+      documentAddress(
+        { kind: "single", slug: "homepage" },
+        undefined,
+        { ...editor, locale: "ar" },
+        views
+      )
     ).toBe("/admin/singles/homepage?locale=ar");
   });
 });
