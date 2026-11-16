@@ -12,7 +12,6 @@
 import {
   defaultPair,
   pairEndingAt,
-  SERVER_BASELINES,
   type PairableVersion,
   type PairResolution,
   type ServerBaseline,
@@ -26,14 +25,25 @@ import {
 export const PREVIOUS_VERSION = "previous";
 
 /**
- * A comparison's start: a version number, the one before `to`, or a baseline
- * the server resolves (what is published, the current draft, the version this
- * person last looked at), named as the server names it.
+ * A comparison's start: a version number, the one before `to`
+ * (`PREVIOUS_VERSION`), or a baseline the server resolves (what is published,
+ * the current draft, the version this person last looked at, or one another
+ * feature registers), named as the server names it. Any baseline name is a
+ * string, so the word for the one before `to` is one of them by type, and
+ * told apart by `namesServerBaseline`.
  */
-export type ComparisonFrom = number | typeof PREVIOUS_VERSION | ServerBaseline;
+export type ComparisonFrom = number | ServerBaseline;
 
-function isServerBaseline(value: string): value is ServerBaseline {
-  return (SERVER_BASELINES as readonly string[]).includes(value);
+/**
+ * The shape of a baseline's name: kebab-case, starting with a letter. The
+ * server registers no name of any other shape, so nothing outside it can name
+ * one. WHICH names exist is the server's to say: a well-formed name goes to
+ * it, and one it does not know is refused there with the names it does.
+ */
+const BASELINE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+
+function isServerBaseline(value: string): boolean {
+  return BASELINE_NAME.test(value);
 }
 
 /**
