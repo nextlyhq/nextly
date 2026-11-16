@@ -750,3 +750,102 @@ describe("BuilderSchemaChangeDialogs: the settings a save changes", () => {
     ).toBeInTheDocument();
   });
 });
+
+// A field group made from the field picker and not saved yet is created by this save, before the
+// entity: every review the save can open lists it first, so it is never created unseen.
+describe("field groups the save creates first", () => {
+  const HERO = { address: "hero", label: "Hero" };
+  const ADDED_SUBTITLE = {
+    added: [
+      {
+        name: "subtitle",
+        type: "text",
+        required: false,
+        hasDefault: false,
+        classification: "safe" as const,
+      },
+    ],
+    removed: [],
+    changed: [],
+    unchanged: [],
+  };
+
+  function renderWithCreates(
+    p: SchemaPreviewResponse,
+    { creating = false }: { creating?: boolean } = {}
+  ) {
+    const onConfirm = vi.fn();
+    render(
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmationOf(p)}
+        kind="collection"
+        entityName="posts"
+        onConfirm={onConfirm}
+        creating={creating}
+        fieldGroupCreates={[HERO]}
+      />
+    );
+    return { onConfirm, dialog: screen.getByRole("alertdialog") };
+  }
+
+  /** The dialog's text, in order, from its first list of what the save creates. */
+  function createsFirst(dialog: HTMLElement): void {
+    const list = within(dialog).getByRole("list", {
+      name: "Field groups created first",
+    });
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map(item => item.textContent)
+    ).toEqual(["Create the field group Hero"]);
+    // Before anything else the dialog lists.
+    const lists = within(dialog).getAllByRole("list");
+    expect(lists[0]).toBe(list);
+  }
+
+  it("lists them first in the short confirmation", () => {
+    const { dialog } = renderWithCreates(preview({ changes: ADDED_SUBTITLE }));
+    expect(within(dialog).getByText(/safe change/i)).toBeInTheDocument();
+    createsFirst(dialog);
+  });
+
+  it("lists them first in the full dialog", () => {
+    const { dialog } = renderWithCreates(
+      preview({
+        hasDestructiveChanges: true,
+        classification: "destructive",
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "body",
+              type: "text",
+              rowCount: 2,
+              classification: "destructive",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
+    );
+    createsFirst(dialog);
+  });
+
+  it("reviews a save whose only change is a field group to create", async () => {
+    const { dialog, onConfirm } = renderWithCreates(
+      preview({ hasChanges: false })
+    );
+    createsFirst(dialog);
+    expect(dialog).not.toHaveTextContent(/restart/i);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists them first in a new entity's create", () => {
+    const { dialog } = renderWithCreates(preview({ changes: ADDED_SUBTITLE }), {
+      creating: true,
+    });
+    createsFirst(dialog);
+  });
+});

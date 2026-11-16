@@ -23,6 +23,7 @@ import type { BuilderKind } from "./builder-config";
 import { CreateEntityConfirmDialog } from "./CreateEntityConfirmDialog";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
+import type { FieldGroupCreate } from "./FieldGroupCreatesList";
 import { SettingsChangeConfirmDialog } from "./SettingsChangeConfirmDialog";
 import type { SchemaChangeConfirmation } from "./types";
 
@@ -48,6 +49,11 @@ type Props = {
   creating?: boolean;
   /** The entity's settings the save changes, each reviewed with it. */
   settingChanges?: readonly SettingChange[];
+  /**
+   * The field groups not saved yet that the save creates before the entity:
+   * every review lists them first.
+   */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
 };
 
 /**
@@ -77,6 +83,7 @@ export function BuilderSchemaChangeDialogs({
   onConfirm,
   creating = false,
   settingChanges = [],
+  fieldGroupCreates = [],
 }: Props): JSX.Element | null {
   const { preview, previewId, isOpen, isApplying, setOpen } = confirmation;
 
@@ -91,15 +98,19 @@ export function BuilderSchemaChangeDialogs({
         kind={kind}
         entityName={entityName}
         changes={preview.changes}
+        fieldGroupCreates={fieldGroupCreates}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />
     );
   }
 
-  // No field changes, only settings: reviewed as such, saved without a
-  // migration or a restart.
-  if (!preview.hasChanges && settingChanges.length > 0) {
+  // No field changes, only settings or field groups to create: reviewed as
+  // such, saved without a migration or a restart.
+  if (
+    !preview.hasChanges &&
+    (settingChanges.length > 0 || fieldGroupCreates.length > 0)
+  ) {
     return (
       <SettingsChangeConfirmDialog
         key={previewId}
@@ -108,6 +119,7 @@ export function BuilderSchemaChangeDialogs({
         kind={kind}
         entityName={entityName}
         settingChanges={settingChanges}
+        fieldGroupCreates={fieldGroupCreates}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />
@@ -124,6 +136,7 @@ export function BuilderSchemaChangeDialogs({
         entityName={entityName}
         changes={preview.changes}
         settingChanges={settingChanges}
+        fieldGroupCreates={fieldGroupCreates}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
       />
@@ -146,6 +159,7 @@ export function BuilderSchemaChangeDialogs({
       leavingTranslation={preview.leavingTranslation}
       joiningTranslation={preview.joiningTranslation}
       settingChanges={settingChanges}
+      fieldGroupCreates={fieldGroupCreates}
       onConfirm={onConfirm}
       isApplying={isApplying}
     />
