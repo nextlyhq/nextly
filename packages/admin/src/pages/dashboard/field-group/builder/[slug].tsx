@@ -31,7 +31,7 @@ import {
 } from "@admin/components/features/schema-builder";
 import {
   FieldGroupUsedBy,
-  fieldGroupPlaceCount,
+  knownPlaceCount,
 } from "@admin/components/features/schema-builder/FieldGroupUsedBy";
 import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { AlertTriangle, RefreshCw } from "@admin/components/icons";
@@ -442,7 +442,7 @@ export default function FieldGroupBuilderEditPage({
       settings={settings}
       onSettingsChange={onSettingsChange}
       unsavedAddress={unsavedAddress}
-      usedByCount={usedBy.data ? fieldGroupPlaceCount(usedBy.data) : undefined}
+      usedByCount={knownPlaceCount(usedBy)}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}

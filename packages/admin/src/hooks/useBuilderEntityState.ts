@@ -14,7 +14,7 @@
  * settings edit are diffed against the values the page loaded with, so a change
  * and a change-back both read as clean.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import type {
@@ -159,8 +159,25 @@ export function useBuilderEntityState<TEntity>({
   const [originalFields, setOriginalFields] = useState<
     readonly BuilderField[] | null
   >(null);
-  const [originalSettings, setOriginalSettings] =
+  const [originalSettings, setBaselineSettings] =
     useState<BuilderSettingsValues | null>(null);
+  // The same baseline as of now rather than as of a render, for the pins: a
+  // save calls them from the render it started in, in either order, and the
+  // second must see what the first pinned.
+  const baselineNow = useRef<BuilderSettingsValues | null>(null);
+  const setOriginalSettings = useCallback(
+    (
+      next:
+        | BuilderSettingsValues
+        | null
+        | ((prev: BuilderSettingsValues | null) => BuilderSettingsValues | null)
+    ) => {
+      baselineNow.current =
+        typeof next === "function" ? next(baselineNow.current) : next;
+      setBaselineSettings(baselineNow.current);
+    },
+    []
+  );
 
   const { resetFields } = builder;
 
@@ -247,20 +264,19 @@ export function useBuilderEntityState<TEntity>({
     // as last written. Undo then takes back only what is yet to land, and a
     // failed settings write leaves a change it can still take back
     // (`pinSettings` closes that step once the write lands).
+    const written = baselineNow.current;
+    const unwritten =
+      written !== null &&
+      saved.settings !== null &&
+      settingChanges(written, saved.settings).length > 0;
     clearHistory(
       saved,
       builder.historyStep,
-      changedSettings.length > 0 && originalSettings
-        ? { fields: saved.fields, settings: originalSettings }
+      unwritten && written
+        ? { fields: saved.fields, settings: written }
         : undefined
     );
-  }, [
-    builder.snapshot,
-    builder.historyStep,
-    clearHistory,
-    changedSettings,
-    originalSettings,
-  ]);
+  }, [builder.snapshot, builder.historyStep, clearHistory]);
 
   // The settings landed: they are the baseline, and nothing before this place
   // in the history can be undone any more.
@@ -269,7 +285,7 @@ export function useBuilderEntityState<TEntity>({
       setOriginalSettings(saved);
       clearHistory(builder.snapshot, builder.historyStep);
     },
-    [builder.snapshot, builder.historyStep, clearHistory]
+    [builder.snapshot, builder.historyStep, clearHistory, setOriginalSettings]
   );
 
   const { rewriteSnapshots } = builder;
@@ -282,7 +298,7 @@ export function useBuilderEntityState<TEntity>({
       );
       setOriginalSettings(prev => (prev ? { ...prev, slug: address } : prev));
     },
-    [rewriteSnapshots]
+    [rewriteSnapshots, setOriginalSettings]
   );
 
   return {

@@ -29,14 +29,36 @@ const HOLDERS: Record<
 };
 
 /**
- * How many places use the field group, as this view counts them: the holders
- * the reader can read, each counted once however many of its fields place it.
- * The settings say it beside the field group's fixed address.
+ * Where the field group is used, as far as is known: the read's answer, or
+ * nothing when the read failed, a refresh included. An answer kept from
+ * before a failed refresh is not shown as current: a kept empty list would
+ * claim "not used" when that is not known.
  */
-export function fieldGroupPlaceCount(
+export function knownPlacements(query: {
+  data?: readonly FieldGroupPlacement[];
+  isError: boolean;
+}): readonly FieldGroupPlacement[] | undefined {
+  return query.isError ? undefined : query.data;
+}
+
+/** How many places use the field group: holders the reader can read, each once. */
+function fieldGroupPlaceCount(
   placements: readonly FieldGroupPlacement[]
 ): number {
   return byHolder(placements).length;
+}
+
+/**
+ * How many places use the field group, as far as is known, as this view
+ * counts them. The settings say it beside the field group's fixed address,
+ * and say nothing when it is not known.
+ */
+export function knownPlaceCount(query: {
+  data?: readonly FieldGroupPlacement[];
+  isError: boolean;
+}): number | undefined {
+  const placements = knownPlacements(query);
+  return placements ? fieldGroupPlaceCount(placements) : undefined;
 }
 
 /** The placements by holder, in the order first met, each with its fields. */
@@ -78,11 +100,10 @@ function summary(
 
 export function FieldGroupUsedBy({ slug }: { slug: string }): JSX.Element {
   const query = useFieldGroupUsedBy(slug);
-  // Any failed read, a refresh included, leaves the answer unknown. An earlier
-  // answer kept past a failed refresh is not shown as current: a kept empty
-  // list would say "used nowhere" after a use was added.
+  // Any failed read, a refresh included, leaves the answer unknown
+  // (`knownPlacements`), here and in the count the settings show.
   const failed = query.isError;
-  const placements = failed ? undefined : query.data;
+  const placements = knownPlacements(query);
   return (
     <section
       aria-label="Where this field group is used"
