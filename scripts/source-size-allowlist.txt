@@ -61,7 +61,6 @@ packages/builder/src/shared-styles-panel.tsx 1643
 packages/builder/src/style-inspector-panel.tsx 7077
 
 
-packages/plugin-page-builder/src/address-claims/entry-claims-hook.ts 1576
 
 packages/plugin-page-builder/src/admin/editor/BlocksEditor.tsx 2099
 

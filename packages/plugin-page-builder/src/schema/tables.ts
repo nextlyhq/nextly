@@ -279,7 +279,8 @@ type SiteOptionsColumns = {
  * A table rather than a field on a Single, because a row can be written only
  * if absent: one conflict-safe insert both records a choice and refuses to
  * replace one already made, which a Single's read-merge-write cannot promise.
- * See `spacing-mode-store` for the one option it holds today.
+ * It holds the composition graph lock's row, the fonts folder's claim, and the
+ * record that the address claims' start pass has settled.
  */
 export const siteOptions: TableDefinition<"site_options", SiteOptionsColumns> =
   defineTable<"site_options", SiteOptionsColumns>(
