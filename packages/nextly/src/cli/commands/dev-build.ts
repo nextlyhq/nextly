@@ -1496,4 +1496,20 @@ export async function ensureLocalizedCompanions(
       },
     });
   }
+  // Each translated date column an earlier release made with a time zone, of every entity the
+  // registry holds, Builder-made ones included, once nothing above was refused. The development
+  // sync converts it, no earlier instance writing beside it. `nextly migrate` (`supervised`) runs
+  // while instances of the earlier release may still write, which would store a date in a
+  // non-default language shifted into a converted column, so it only names each, and `nextly
+  // upgrade`, which converts them once the release serves every instance.
+  if (phase === "afterApply") {
+    const { convertZonedDateCompanions } = await import(
+      "../../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(adapter as unknown as DrizzleAdapter, {
+      convert: options.supervised !== true,
+      onNotice: message => logger.info(message),
+      onWarning: message => logger.warn(message),
+    });
+  }
 }
