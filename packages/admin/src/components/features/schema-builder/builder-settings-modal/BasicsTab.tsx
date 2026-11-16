@@ -12,7 +12,7 @@
 // snake for the others), decided with the rest of the derivation in
 // `lib/builder/entity-names`, which the new-entity dialog shares.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { type JSX, useId } from "react";
 
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import { namesFollowingName } from "@admin/lib/builder/entity-names";
@@ -36,6 +36,12 @@ type Props = {
   /** False once the entity exists: its slug addresses rows that already
    *  live under it, so no save can move it. */
   slugEditable?: boolean;
+  /**
+   * What the address is for, said under it and read with it: why a saved one
+   * is fixed, or what the check says of an unsaved one; a refusal is drawn as
+   * an error.
+   */
+  slugNote?: { text: string; refused: boolean };
 };
 
 export function BasicsTab({
@@ -44,7 +50,9 @@ export function BasicsTab({
   values,
   onChange,
   slugEditable = true,
+  slugNote,
 }: Props): JSX.Element {
+  const noteId = useId();
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
     value: BuilderSettingsValues[K]
@@ -60,7 +68,24 @@ export function BasicsTab({
         value={values.slug}
         onChange={next => set("slug", next)}
         readOnly={!slugEditable}
+        describedBy={slugNote ? noteId : undefined}
       />
+      {slugNote && (
+        <p
+          id={noteId}
+          // A live region: an unsaved address's check answers after typing
+          // stops, so its answer is announced when it arrives.
+          role="status"
+          aria-live="polite"
+          className={
+            slugNote.refused
+              ? "text-xs text-danger-text"
+              : "text-xs text-muted-foreground"
+          }
+        >
+          {slugNote.text}
+        </p>
+      )}
     </div>
   );
 
@@ -75,8 +100,15 @@ export function BasicsTab({
   // its own; empty, or equal to what the old name derived, still follows. The
   // derivation is shared with the new-entity dialog (`namesFollowingName`), so
   // the two derive alike.
+  // A fixed address does not follow: once saved, renaming the entity keeps
+  // its address, as nothing that refers to it moves.
   const setSingular = (singular: string) => {
-    onChange({ ...values, ...namesFollowingName(kind, values, singular) });
+    const follows = namesFollowingName(kind, values, singular);
+    onChange({
+      ...values,
+      ...follows,
+      ...(slugEditable ? {} : { slug: values.slug }),
+    });
   };
 
   const hasPlural = fields.includes("pluralName");
