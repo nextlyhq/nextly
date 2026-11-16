@@ -9,6 +9,10 @@
  * - `nextly migrate` replaying the files the dialog wrote into a second database, a deploy's,
  *   whose group column holds what the first database's held, and whose entries read the same.
  *
+ * What the moved column had that a group's JSON value has no place for (its type, NOT NULL, index,
+ * comment, character set and collation) is named in the review and in the file's header, and
+ * applied to no other column.
+ *
  * A move the save cannot keep the values of is refused before anything is written or run: the
  * definition, the migration files, the table and every entry stand as they were.
  */
@@ -31,6 +35,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import {
   type DataLossConsent,
   NO_CONSENT,
@@ -365,6 +370,98 @@ describe.each(getConfiguredTestDialects())(
           movedValues(before.get(entry.slug))
         );
       }
+    });
+
+    it("names what the moved column had that the group does not carry, in the review and the file", async () => {
+      const t = await boot(dialect);
+      const summary: Field = {
+        name: "summary",
+        type: "text",
+        required: true,
+        index: true,
+      };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      // What a database may give a column besides what Nextly writes: a comment, and on MySQL a
+      // collation of its own. SQLite keeps neither.
+      if (dialect === "postgresql") {
+        await run(
+          t,
+          `COMMENT ON COLUMN ${q(TABLE)}.${q("summary")} IS 'Shown in lists'`
+        );
+      } else if (dialect === "mysql") {
+        const [column] = await run<{ type: string }>(
+          t,
+          `SELECT COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME = 'summary'`
+        );
+        await run(
+          t,
+          `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("summary")} ${column?.type ?? ""} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT 'Shown in lists'`
+        );
+      }
+      for (const [title, text] of [
+        ["One", "First"],
+        ["Two", "Second"],
+      ] as const) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title, slug: title.toLowerCase(), summary: text },
+        });
+      }
+      const definitionOf = async () =>
+        (
+          await readTableDefinition(
+            statement => run(t, statement),
+            dialect,
+            TABLE
+          )
+        ).columns.filter(column => column.name !== "summary");
+      const others = await definitionOf();
+      const into = [{ from: ["summary"], to: ["meta", "summary"] }];
+      const fields = [group("meta", [NOTE, summary])];
+
+      const reviewed = (await (
+        (await preview(fields, into)) as Response
+      ).json()) as { notices: string[] };
+      const sentence = reviewed.notices.find(notice =>
+        notice.startsWith("Moving summary into meta keeps every value")
+      );
+      expect(sentence, reviewed.notices.join("\n")).toBeDefined();
+      expect(sentence).toContain("constraint NOT NULL");
+      expect(sentence).toMatch(/: type \S+/);
+      expect(sentence).toMatch(/index \S*summary\S*/);
+      if (dialect !== "sqlite") {
+        expect(sentence).toContain("comment Shown in lists");
+      }
+      if (dialect === "mysql") {
+        expect(sentence).toContain("collation utf8mb4_bin");
+        // The table's own character set is every column's; only one of the column's own is named.
+        expect(sentence).not.toContain("character set");
+      }
+
+      await save(t, fields, into);
+
+      const files = (await readdir(join(basePath, "migrations")))
+        .filter(f => f.endsWith(".sql"))
+        .sort();
+      const written = await readFile(
+        join(basePath, "migrations", files.at(-1) ?? ""),
+        "utf-8"
+      );
+      expect(
+        written
+          .split("\n")
+          .filter(line => line.startsWith("-- Deletes:"))
+          .join("\n")
+      ).toContain(sentence);
+      // Applied to no other column: every other column stands as it was.
+      expect(await definitionOf()).toEqual(others);
+      const read = await readAll(t);
+      expect((read.get("one")?.meta as Record<string, unknown>).summary).toBe(
+        "First"
+      );
+      expect((read.get("two")?.meta as Record<string, unknown>).summary).toBe(
+        "Second"
+      );
     });
 
     describe("a move that cannot keep its values is refused before anything is written", () => {

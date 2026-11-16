@@ -62,6 +62,7 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
+import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -475,12 +476,18 @@ export async function previewCollectionSave(
       ...files.change,
     ];
     const conversions = plan.adoption?.conversions ?? [];
+    const moved = await moveSentencesOf(
+      deps,
+      plan.table,
+      plannedMovesOf(deps, save, plan.table)
+    );
     return {
       adopts: plan.adoption !== null,
       conversions,
       notices: [
         ...conversions.map(conversionNotice),
         ...(await settledRows(deps, save, plan.table)).map(resolutionNotice),
+        ...moved.values(),
       ],
       files: await Promise.all(
         names.map(async name => ({
@@ -970,7 +977,7 @@ async function writeFiles(
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
-    ...movesOf(deps, save, plan.table),
+    ...(await movesOf(deps, save, plan.table)),
     ...(save.resolutions === undefined
       ? {}
       : {
@@ -1318,23 +1325,41 @@ const NO_MOVES: EntityMoves = {
  * planned between the definitions before and after it: a move refused here stops the save before
  * anything is written.
  */
-function movesOf(
+async function movesOf(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
-): {
+): Promise<{
   appended: { up: AddedStatements; down: AddedStatements };
   valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
-} {
+}> {
   const moves = plannedMovesOf(deps, save, table);
+  // The header names each dropped column as the move it is, with what the group does not carry.
+  const sentences = await moveSentencesOf(deps, table, moves);
   return {
     appended: addedStatements(deps, save, table, moves),
     valueMoves: moves.movedColumns.map(moved => ({
       table: moved.table,
       column: moved.column,
-      reason: `moved into the group ${moved.into}; its values are copied there first`,
+      reason:
+        sentences.get(moved.column) ??
+        `moved into the group ${moved.into}; its values are copied there first`,
     })),
   };
+}
+
+/** What each column `moves` drops had that its group does not carry, by column (`movedColumnSentences`). */
+function moveSentencesOf(
+  deps: CollectionSaveDeps,
+  table: string,
+  moves: EntityMoves
+): Promise<Map<string, string>> {
+  return movedColumnSentences(
+    deps.adapter.getDrizzle(),
+    deps.adapter.getCapabilities().dialect,
+    table,
+    moves.movedColumns
+  );
 }
 
 /**
