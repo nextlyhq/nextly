@@ -103,7 +103,10 @@ import {
   reconcileFile,
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
-import { withEntityCoverage } from "../../domains/schema/migrate/entity-shared-rows";
+import {
+  retiredByRun,
+  withEntityCoverage,
+} from "../../domains/schema/migrate/entity-shared-rows";
 import {
   readDeletionFacts,
   runDeletions,
@@ -1413,7 +1416,7 @@ export async function previewMigrate(args: {
     [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
     dialect,
-    { adapter }
+    { adapter, migrationsDir: args.migrationsDir }
   );
   const moduleDeletions = new Map(
     judged
@@ -3370,7 +3373,7 @@ async function judgeFileDeletions(
     units,
     deps.db,
     deps.dialect,
-    { adapter: deps.adapter }
+    { adapter: deps.adapter, migrationsDir: deps.migrationsDir }
   )) {
     const source = deletionSource(unit.label, unit.text);
     for (const deletion of deletions) sources.set(deletion, source);
@@ -3588,17 +3591,26 @@ function pluginModuleUnits(
  * table a collection or Single owns belongs to its main table, and a unit
  * dropping an entity's main table lists the entity's rows in shared tables,
  * counted (`withEntityCoverage`): a consent naming the main table covers all
- * of it. `entities.adapter` finds the field groups' tables.
+ * of it. `entities.adapter` finds the field groups' tables; the entity's
+ * rows in shared tables are listed only where the snapshot the run ends at no
+ * longer records it (`retiredByRun`, over `entities.migrationsDir`).
  */
 async function pendingRunDeletions(
   units: readonly RunUnit[],
   db: unknown,
   dialect: SupportedDialect,
-  entities?: { adapter?: unknown }
+  entities?: { adapter?: unknown; migrationsDir: string }
 ): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
   const lists = units.map(unit => unit.statements);
   const facts = await readDeletionFacts(db, dialect, runStatements(lists));
   const read = runDeletions(lists, dialect, facts);
+  const retires =
+    entities === undefined
+      ? undefined
+      : await retiredByRun(
+          resolve(entities.migrationsDir, "meta"),
+          units.map(unit => unit.label.replace(/\.sql$/, ""))
+        );
   const perUnit =
     entities === undefined
       ? read
@@ -3606,6 +3618,7 @@ async function pendingRunDeletions(
           db,
           dialect,
           adapter: entities.adapter,
+          ...(retires === undefined ? {} : { retires }),
         });
   return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
 }

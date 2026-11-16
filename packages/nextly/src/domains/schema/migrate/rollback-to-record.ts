@@ -467,7 +467,7 @@ function jsonOf(content: string): unknown {
 }
 
 /** A migration's snapshot, or null where it has none or it is not a migration snapshot. */
-async function readMigrationSnapshot(
+export async function readMigrationSnapshot(
   metaDir: string,
   name: string
 ): Promise<SnapshotFile | null> {
@@ -516,6 +516,11 @@ export interface RollbackBookkeeping {
   perFile?: ReadonlyMap<string, (inFileTransaction: boolean) => Promise<void>>;
   /** What a dry run says of it. */
   summary?: string;
+  /**
+   * The entities whose registry rows the rollback removes, where its point's snapshot says
+   * (`addedEntities`): the ones it retires, whose rows in shared tables go with them.
+   */
+  removes?: SlugsByKind;
 }
 
 /** A ledger filename's base name, as the record names a point. */
@@ -701,7 +706,7 @@ async function undoToOwnSource(args: {
   targets: ReadonlySet<string>;
   deps: RegistryWriteDeps;
   judge: () => Promise<MarksJudge>;
-}): Promise<Pick<RollbackBookkeeping, "restore" | "summary">> {
+}): Promise<Pick<RollbackBookkeeping, "restore" | "summary" | "removes">> {
   if (args.point === null) return {};
   const at = await readMigrationSnapshot(args.metaDir, args.point);
   if (at === null || !carriesRegistryMetadata(at)) return {};
@@ -748,6 +753,7 @@ async function undoToOwnSource(args: {
   };
   const named = pointNamed(args.point);
   return {
+    removes: plan.remove,
     summary:
       decide === undefined
         ? `The registry rows would go back to what ${named} records.`

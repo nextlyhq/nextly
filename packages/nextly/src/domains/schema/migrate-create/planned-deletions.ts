@@ -101,9 +101,18 @@ export function judgedDeletions(args: {
     cascadeFrom: () => undefined,
     nulledBy: () => undefined,
   });
+  // An entity's rows in shared tables go only with an entity the config no longer declares: a
+  // main table dropped while its entity stays, under a table of another name, takes none.
+  const removed = args.plan.removedEntities ?? [];
   const perFile = coverRunDeletions(
     read,
-    entityOwners(args.plan.entities ?? [])
+    entityOwners(args.plan.entities ?? []),
+    entity =>
+      removed.some(
+        r =>
+          r.slug === entity.slug &&
+          (r.kind === "Single" ? "single" : r.kind) === entity.kind
+      )
   ).map(deletions => deletions.map(d => withReason(d, args.plan)));
   const seen = new Set<string>();
   const all = perFile.flat().filter(deletion => {

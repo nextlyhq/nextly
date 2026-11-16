@@ -364,17 +364,106 @@ export async function teardownEntityComponentData(
   }
 
   const tablesTouched = new Set<string>();
+  let instancesDeleted = 0;
+  const { skippedTables } = await walkEntityComponentRows(
+    adapter,
+    componentTables,
+    parentTable,
+    async ({ table, where, rows, instanceIds }) => {
+      await adapter.delete(table, where);
+      instancesDeleted += rows;
+      tablesTouched.add(table);
+      // Localized components keep translations keyed by the instance id.
+      const companion = `${table}${STORAGE_FORMAT.companionSuffix}`;
+      if (instanceIds.length > 0 && (await adapter.tableExists(companion))) {
+        for (const idChunk of chunk(instanceIds, ID_CHUNK_SIZE)) {
+          await adapter.delete(companion, {
+            and: [{ column: "_parent", op: "IN", value: idChunk }],
+          });
+        }
+      }
+    }
+  );
+
+  return {
+    instancesDeleted,
+    tablesTouched: [...tablesTouched],
+    skippedTables,
+  };
+}
+
+/**
+ * How many rows the teardown of `parentTable`'s component data removes from each table: every
+ * instance it reaches, at every level of nesting, and their translations. Reads only, through
+ * the walk the teardown takes (`walkEntityComponentRows`), so the count is of what a delete
+ * removes, never a second reading of it. A table it would refuse to skip refuses here too.
+ */
+export async function countEntityComponentTree(args: {
+  adapter: TeardownComponentDataAdapter;
+  parentTable: string;
+}): Promise<{ table: string; rows: number }[]> {
+  const { adapter } = args;
+  const componentTables = await componentTablesOf(adapter);
+  if (componentTables.length === 0) return [];
+  const counts = new Map<string, number>();
+  const add = (table: string, rows: number) => {
+    if (rows > 0) counts.set(table, (counts.get(table) ?? 0) + rows);
+  };
+  await walkEntityComponentRows(
+    adapter,
+    componentTables,
+    args.parentTable,
+    async ({ table, rows, instanceIds }) => {
+      add(table, rows);
+      const companion = `${table}${STORAGE_FORMAT.companionSuffix}`;
+      if (instanceIds.length === 0 || !(await adapter.tableExists(companion))) {
+        return;
+      }
+      const pg = adapter.dialect === "postgresql";
+      for (const idChunk of chunk(instanceIds, ID_CHUNK_SIZE)) {
+        const placeholders = idChunk
+          .map((_, i) => (pg ? `$${i + 1}` : "?"))
+          .join(", ");
+        const [row] = await adapter.executeQuery<{ n: unknown }>(
+          `SELECT COUNT(*) AS n FROM ${q(companion, adapter.dialect)} WHERE ${q("_parent", adapter.dialect)} IN (${placeholders})`,
+          idChunk
+        );
+        add(companion, Number(row?.n ?? 0));
+      }
+    }
+  );
+  return [...counts].map(([table, rows]) => ({ table, rows }));
+}
+
+/** One parent's instances in one component table, as the walk reaches them. */
+interface ReachedInstances {
+  table: string;
+  /** Selects exactly these instances: by parent table, and by parent id below the entity. */
+  where: WhereClause;
+  /** How many rows the read found. */
+  rows: number;
+  instanceIds: string[];
+}
+
+/**
+ * The walk the teardown and its count share: every instance `parentTable` owns, level by level,
+ * handed to `visit` once per parent and table, before the next level is read. Each instance is
+ * followed once: an id already reached in a table is not reached again, so the walk ends.
+ */
+async function walkEntityComponentRows(
+  adapter: TeardownComponentDataAdapter,
+  componentTables: readonly string[],
+  parentTable: string,
+  visit: (reached: ReachedInstances) => Promise<void>
+): Promise<{ skippedTables: string[] }> {
   const skippedTables = new Set<string>();
   // Resolvability is a property of the table, so it is established once, either way; whether an
   // unresolvable table is SAFE to skip depends on the frontier and is re-checked at every level.
   const unresolvable = new Set<string>();
   const resolvable = new Set<string>();
-  let instancesDeleted = 0;
   // The entity's own table owns every instance pointing at it, hence `ids: null`.
   let frontier: Frontier[] = [{ table: parentTable, ids: null }];
-  // Field groups nest to any depth, so the walk goes down until a level finds nothing. Each
-  // instance is followed once: a level deletes what it finds, and an id already reached in a
-  // table is not reached again even if its delete removed nothing, so the walk ends.
+  // Field groups nest to any depth, so the walk goes down until a level finds nothing.
   const reached = new Map<string, Set<string>>();
 
   while (frontier.length > 0) {
@@ -445,22 +534,12 @@ export async function teardownEntityComponentData(
             .map(r => r.id)
             .filter((id): id is string => typeof id === "string");
 
-          await adapter.delete(componentTable, where);
-          instancesDeleted += rows.length;
-          tablesTouched.add(componentTable);
-
-          // Localized components keep translations keyed by the instance id.
-          const companion = `${componentTable}${STORAGE_FORMAT.companionSuffix}`;
-          if (
-            instanceIds.length > 0 &&
-            (await adapter.tableExists(companion))
-          ) {
-            for (const idChunk of chunk(instanceIds, ID_CHUNK_SIZE)) {
-              await adapter.delete(companion, {
-                and: [{ column: "_parent", op: "IN", value: idChunk }],
-              });
-            }
-          }
+          await visit({
+            table: componentTable,
+            where,
+            rows: rows.length,
+            instanceIds,
+          });
 
           let reachedHere = reached.get(componentTable);
           if (reachedHere === undefined) {
@@ -479,9 +558,5 @@ export async function teardownEntityComponentData(
     frontier = nextFrontier;
   }
 
-  return {
-    instancesDeleted,
-    tablesTouched: [...tablesTouched],
-    skippedTables: [...skippedTables],
-  };
+  return { skippedTables: [...skippedTables] };
 }

@@ -3693,6 +3693,15 @@ function removedEntitiesOf(
 }
 
 /**
+ * Where an entity comes from, as its registry row will say: the provenance its declaration
+ * records (`plugin:<name>` for a plugin's), else the source its record was written under.
+ */
+function provenanceOf(entry: RecordedEntitySettings): string {
+  const declared = entry.settings.source;
+  return typeof declared === "string" ? declared : entry.source;
+}
+
+/**
  * The collections and Singles a migration is planned against, each with every table it owns
  * (`coveredEntity`): those the config declares, by the table it gives them, and those the latest
  * snapshot records, by the table their recorded declaration names (its `dbName`, else its slug).
@@ -3722,6 +3731,9 @@ function coveredEntitiesOf(
         slug: entity.slug,
         tableName: entity.tableName,
         fields: [...entity.fields, ...fieldsOf(record?.[entity.slug])],
+        ...(entity.settings === undefined
+          ? {}
+          : { source: provenanceOf(entity.settings) }),
       })
     );
     for (const [slug, entry] of Object.entries(record ?? {})) {
@@ -3734,7 +3746,7 @@ function coveredEntitiesOf(
           slug,
           tableName: table,
           fields: fieldsOf(entry),
-          source: entry.source,
+          source: provenanceOf(entry),
         })
       );
     }

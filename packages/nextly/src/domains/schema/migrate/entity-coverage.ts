@@ -90,17 +90,27 @@ export interface EntityOwners {
 /**
  * Whose each of `entities`' tables is, compared without regard to case as a
  * statement may spell a name. A table more than one entity claims, or one
- * that is any entity's main table, has no owner besides itself.
+ * that is any entity's main table, has no owner besides itself; and a main
+ * table more than one entity names is no entity's.
  */
 export function entityOwners(entities: readonly CoveredEntity[]): EntityOwners {
+  // A main table more than one registry row names belongs to none of them, so a drop of it is
+  // covered only where it is named, and lists no entity's shared rows on another's behalf.
+  const named = new Map<string, CoveredEntity[]>();
+  for (const entity of entities) {
+    const key = entity.table.toLowerCase();
+    named.set(key, [...(named.get(key) ?? []), entity]);
+  }
   const mains = new Map<string, CoveredEntity>();
-  for (const entity of entities) mains.set(entity.table.toLowerCase(), entity);
+  for (const [key, claimants] of named) {
+    if (claimants.length === 1) mains.set(key, claimants[0]);
+  }
   const claims = new Map<string, CoveredEntity[]>();
   for (const entity of entities) {
     // Each table once per entity: a field declared twice names its junction twice.
     const owned = new Set(entity.tables.slice(1).map(t => t.toLowerCase()));
     for (const key of owned) {
-      if (mains.has(key)) continue;
+      if (named.has(key)) continue;
       claims.set(key, [...(claims.get(key) ?? []), entity]);
     }
   }

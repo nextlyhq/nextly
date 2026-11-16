@@ -233,3 +233,18 @@ describe("judgedDeletions with the entities the plan knows", () => {
     ]);
   });
 });
+
+describe("judgedDeletions for a main table the plan does not retire", () => {
+  // `posts` stays declared, under a new table: the drop of its old one is no retirement.
+  const renamed = coveredEntity({
+    kind: "collection",
+    slug: "posts",
+    tableName: "dc_posts",
+    fields: [],
+  }) as CoveredEntity;
+
+  it("lists no rows in shared tables for it", () => {
+    const { all } = judge([['DROP TABLE "dc_posts"']], { entities: [renamed] });
+    expect(all).toEqual([{ kind: "table", table: "dc_posts" }]);
+  });
+});

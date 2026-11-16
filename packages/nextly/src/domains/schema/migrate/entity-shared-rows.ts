@@ -17,7 +17,10 @@
  * the entity's own tables is listed with its rows, and the shared entries are
  * counted (`countEntityRows`): a table without the entity's rows,
  * or absent, is left out, and one that cannot be counted is listed without a
- * count rather than failing the run.
+ * count rather than failing the run. Every read is bounded by one time budget
+ * per run (`ENTITY_COUNT_BUDGET_MS`). Shared rows are listed only for an
+ * entity the run retires (`retiredByRun`), never for a main table dropped
+ * while its entity lives on under another.
  *
  * @module domains/schema/migrate/entity-shared-rows
  */
@@ -25,17 +28,14 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import {
-  countEntityComponentRows,
+  countEntityComponentTree,
   type TeardownComponentDataAdapter,
 } from "../../field-groups/services/teardown-entity-field-group-data";
+import { carriesRegistryMetadata } from "../migrate-create/snapshot-io";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 
-import {
-  countDeletions,
-  type Deletion,
-  type EntityRef,
-} from "./data-loss-consent";
+import type { Deletion, EntityRef } from "./data-loss-consent";
 import {
   entityOwners,
   readCoveredEntities,
@@ -43,6 +43,7 @@ import {
   type CoveredEntity,
   type EntityOwners,
 } from "./entity-coverage";
+import { readMigrationSnapshot } from "./rollback-to-record";
 
 /**
  * Where an entity's field-group values are listed before the tables holding
@@ -147,12 +148,16 @@ export function entityRowsOf(entity: CoveredEntity): Deletion[] {
 
 /**
  * A run's deletions, unit by unit, with each deletion in a table an entity
- * owns given its owner (`withOwners`), and the entity's rows in shared tables
- * listed in the unit that first drops its main table (`entityRowsOf`).
+ * owns given its owner (`withOwners`), and, for an entity the run retires
+ * (`retires`, every one when unknown), its rows in shared tables listed in the
+ * unit that first drops its main table (`entityRowsOf`). A main table dropped
+ * while its entity lives on under another, as a change of `dbName` leaves it,
+ * takes none of the entity's shared rows with it.
  */
 export function coverRunDeletions(
   perUnit: readonly (readonly Deletion[])[],
-  owners: EntityOwners
+  owners: EntityOwners,
+  retires: (entity: EntityRef) => boolean = () => true
 ): Deletion[][] {
   const listed = new Set<string>();
   return perUnit.map(deletions => {
@@ -161,7 +166,7 @@ export function coverRunDeletions(
     for (const deletion of owned) {
       if (deletion.kind !== "table" || deletion.owner !== undefined) continue;
       const entity = owners.mainOf(deletion.table);
-      if (entity === undefined) continue;
+      if (entity === undefined || !retires(entity)) continue;
       const key = entity.table.toLowerCase();
       if (listed.has(key)) continue;
       listed.add(key);
@@ -171,18 +176,62 @@ export function coverRunDeletions(
   });
 }
 
+/**
+ * Which entities a run retires: those the snapshot of the last of `names`
+ * (the run's migrations, oldest first) that records the registry leaves out,
+ * as `nextly migrate` removes a registry row once the newest applied snapshot
+ * no longer records it. Undefined when no snapshot of the run says, and a
+ * drop of a main table is then listed as a retirement: the consent asked is
+ * never narrower than what the run may remove.
+ */
+export async function retiredByRun(
+  metaDir: string,
+  names: readonly string[]
+): Promise<((entity: EntityRef) => boolean) | undefined> {
+  for (const name of [...names].reverse()) {
+    let snapshot: Awaited<ReturnType<typeof readMigrationSnapshot>>;
+    try {
+      snapshot = await readMigrationSnapshot(metaDir, name);
+    } catch {
+      return undefined;
+    }
+    if (snapshot === null) continue;
+    if (!carriesRegistryMetadata(snapshot)) return undefined;
+    const { entities } = snapshot;
+    return entity =>
+      !(
+        entity.slug in
+        (entity.kind === "single" ? entities.singles : entities.collections)
+      );
+  }
+  return undefined;
+}
+
+/** How long a run's counts may take in all, after which what is left is listed without a count. */
+export const ENTITY_COUNT_BUDGET_MS = 5_000;
+
 /** What reading the database needs: the run's connection, and the adapter where the command holds one. */
 export interface SharedRowsReader {
   db: unknown;
   dialect: SupportedDialect;
   /** The command's adapter, through which the field groups' tables are found. */
   adapter?: unknown;
+  /** Which entities the run retires (`retiredByRun`); every one whose main table it drops when absent. */
+  retires?: (entity: EntityRef) => boolean;
+  /** How long the counts may take in all (`ENTITY_COUNT_BUDGET_MS` when absent). */
+  budgetMs?: number;
 }
 
 /**
  * A run's deletions as `coverRunDeletions` lists them, its entities read from
- * the registry on `reader`'s connection, and the entity rows counted
+ * the registry on `reader`'s connection, each of the entity's own tables
+ * listed with its rows, and the entity rows in shared tables counted
  * (`countEntityRows`). What `nextly migrate` and `migrate:down` judge.
+ *
+ * Every read is bounded by the run's budget, on the database as well where it
+ * can be (`boundedCount`): a large table or one another transaction holds
+ * costs at most the budget, and is listed without a count. A registry that
+ * cannot be read in time covers nothing, so each table must be named.
  */
 export async function withEntityCoverage(
   perUnit: readonly (readonly Deletion[])[],
@@ -192,10 +241,13 @@ export async function withEntityCoverage(
   if (perUnit.every(list => list.length === 0)) {
     return perUnit.map(list => [...list]);
   }
-  const entities = await readCoveredEntities(reader.db, reader.dialect);
+  const deadline = Date.now() + (reader.budgetMs ?? ENTITY_COUNT_BUDGET_MS);
+  const entities =
+    (await within(readCoveredEntities(reader.db, reader.dialect), deadline)) ??
+    [];
   if (entities.length === 0) return perUnit.map(list => [...list]);
   const owners = entityOwners(entities);
-  const covered = coverRunDeletions(perUnit, owners);
+  const covered = coverRunDeletions(perUnit, owners, reader.retires);
   const counted: Deletion[][] = [];
   for (const list of covered) {
     // Each of the entity's own tables is listed with its rows: the main table and every table it
@@ -204,53 +256,61 @@ export async function withEntityCoverage(
     for (const deletion of list) {
       const ofEntity =
         deletion.kind === "table" &&
+        deletion.count === undefined &&
         (deletion.owner !== undefined ||
           owners.mainOf(deletion.table) !== undefined);
+      if (!ofEntity) {
+        tablesCounted.push(deletion);
+        continue;
+      }
+      const count = await boundedCount(
+        reader,
+        deletion.table,
+        undefined,
+        deadline
+      );
       tablesCounted.push(
-        ofEntity
-          ? ((await countDeletions([deletion], reader.db, reader.dialect))[0] ??
-              deletion)
-          : deletion
+        count === undefined ? deletion : { ...deletion, count }
       );
     }
-    counted.push(await countEntityRows(tablesCounted, reader));
+    counted.push(await countEntityRows(tablesCounted, reader, deadline));
   }
   return counted;
 }
 
 /**
  * `deletions` with each entity's uncounted rows in shared tables counted on
- * the database: a table without the entity's rows, or absent, is left out, the
- * field groups' entry becomes one entry per table holding the entity's values,
- * and an entry that cannot be counted is kept without a count.
+ * the database by `deadline`: a table without the entity's rows, or absent, is
+ * left out, the field groups' entry becomes one entry per table holding the
+ * entity's values, and an entry that cannot be counted in time is kept
+ * without a count.
  */
 export async function countEntityRows(
   deletions: readonly Deletion[],
-  reader: SharedRowsReader
+  reader: SharedRowsReader,
+  deadline: number = Date.now() + (reader.budgetMs ?? ENTITY_COUNT_BUDGET_MS)
 ): Promise<Deletion[]> {
   const pending = deletions.filter(isUncountedEntityRows);
   if (pending.length === 0) return [...deletions];
-  let present: ReadonlySet<string> | undefined;
-  try {
-    present = new Set(
-      (
-        await introspectTableNames(
-          reader.db,
-          reader.dialect,
-          SHARED_TABLES.map(shared => shared.table)
-        )
-      ).map(name => name.toLowerCase())
-    );
-  } catch {
-    present = undefined;
-  }
+  const names = await within(
+    introspectTableNames(
+      reader.db,
+      reader.dialect,
+      SHARED_TABLES.map(shared => shared.table)
+    ),
+    deadline
+  );
+  const present =
+    names === undefined
+      ? undefined
+      : new Set(names.map(name => name.toLowerCase()));
   const out: Deletion[] = [];
   for (const deletion of deletions) {
     if (!isUncountedEntityRows(deletion)) {
       out.push(deletion);
       continue;
     }
-    out.push(...(await counted(deletion, reader, present)));
+    out.push(...(await counted(deletion, reader, present, deadline)));
   }
   return out;
 }
@@ -274,76 +334,136 @@ function isUncountedEntityRows(deletion: Deletion): deletion is EntityRows {
 async function counted(
   deletion: EntityRows,
   reader: SharedRowsReader,
-  present: ReadonlySet<string> | undefined
+  present: ReadonlySet<string> | undefined,
+  deadline: number
 ): Promise<Deletion[]> {
   if (deletion.table === FIELD_GROUP_TABLES) {
-    return fieldGroupRows(deletion, reader);
+    return fieldGroupRows(deletion, reader, deadline);
   }
   const shared = SHARED_TABLES.find(s => s.table === deletion.table);
   if (shared === undefined || present === undefined) return [deletion];
   if (!present.has(shared.table)) return [];
-  try {
-    if (
-      shared.table === "nextly_i18n_archive" &&
-      (await countOf(reader, shared, {
-        ...deletion.of,
-        kind: UNKNOWN_ARCHIVE_KIND,
-      })) > 0
-    ) {
-      // Rows of this slug whose kind is not yet known: the teardown labels
-      // them and may remove them, so the count cannot be told.
-      return [deletion];
-    }
-    const count = await countOf(reader, shared, deletion.of);
-    return count === 0 ? [] : [{ ...deletion, count }];
-  } catch {
-    return [deletion];
+  const where = (entity: { kind: string; slug: string }) =>
+    sql.join(
+      [
+        sql`${sql.identifier(shared.kindColumn)} = ${entity.kind}`,
+        sql`${sql.identifier(shared.slugColumn)} = ${entity.slug}`,
+        ...(shared.only === undefined ? [] : [shared.only(reader.dialect)]),
+      ],
+      sql` AND `
+    );
+  if (shared.table === "nextly_i18n_archive") {
+    const unknown = await boundedCount(
+      reader,
+      shared.table,
+      where({ ...deletion.of, kind: UNKNOWN_ARCHIVE_KIND }),
+      deadline
+    );
+    // Rows of this slug whose kind is not yet known: the teardown labels
+    // them and may remove them, so the count cannot be told.
+    if (unknown === undefined || unknown > 0) return [deletion];
   }
-}
-
-/** How many of `entity`'s rows `shared` holds. */
-async function countOf(
-  reader: SharedRowsReader,
-  shared: SharedTable,
-  entity: { kind: string; slug: string }
-): Promise<number> {
-  const conditions = [
-    sql`${sql.identifier(shared.kindColumn)} = ${entity.kind}`,
-    sql`${sql.identifier(shared.slugColumn)} = ${entity.slug}`,
-    ...(shared.only === undefined ? [] : [shared.only(reader.dialect)]),
-  ];
-  const [row] = await querySqlRows<{ n: unknown }>(
-    reader.db,
-    reader.dialect,
-    sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(shared.table)} WHERE ${sql.join(conditions, sql` AND `)}`
+  const count = await boundedCount(
+    reader,
+    shared.table,
+    where(deletion.of),
+    deadline
   );
-  return Number(row?.n ?? 0);
+  if (count === undefined) return [deletion];
+  return count === 0 ? [] : [{ ...deletion, count }];
 }
 
 /**
- * The entity's field-group values, one entry per table holding any, read
- * through the command's adapter (`countEntityComponentRows`, the rows the
- * teardown starts from). Without an adapter, or when they cannot be read, the
- * one entry stays, uncounted.
+ * The rows of `table` (those matching `where`, when given), or undefined when
+ * they cannot be counted by `deadline`. The database stops the count at the
+ * deadline too, where it can: PostgreSQL through the transaction's statement
+ * timeout, MySQL through the statement's execution-time hint. So no count
+ * outlives the run's budget holding the table a later statement drops.
+ * SQLite counts in the call itself, so its budget is checked before each.
+ */
+async function boundedCount(
+  reader: SharedRowsReader,
+  table: string,
+  where: SQL | undefined,
+  deadline: number
+): Promise<number | undefined> {
+  const left = Math.ceil(deadline - Date.now());
+  if (left <= 0) return undefined;
+  const hint =
+    reader.dialect === "mysql"
+      ? sql.raw(`/*+ MAX_EXECUTION_TIME(${String(left)}) */ `)
+      : sql``;
+  const query = sql`SELECT ${hint}COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}${
+    where === undefined ? sql`` : sql` WHERE ${where}`
+  }`;
+  const read = async (): Promise<number> => {
+    if (reader.dialect !== "postgresql") {
+      const [row] = await querySqlRows<{ n: unknown }>(
+        reader.db,
+        reader.dialect,
+        query
+      );
+      return Number(row?.n ?? 0);
+    }
+    const db = reader.db as {
+      transaction: <T>(work: (tx: unknown) => Promise<T>) => Promise<T>;
+    };
+    return db.transaction(async tx => {
+      await (tx as { execute: (q: SQL) => Promise<unknown> }).execute(
+        sql`SET LOCAL statement_timeout = ${sql.raw(String(left))}`
+      );
+      const [row] = await querySqlRows<{ n: unknown }>(tx, "postgresql", query);
+      return Number(row?.n ?? 0);
+    });
+  };
+  return within(read(), deadline);
+}
+
+/** `work`'s value, or undefined when it fails or has not settled by `deadline`; a late one is not waited for. */
+async function within<T>(
+  work: Promise<T>,
+  deadline: number
+): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<undefined>(settle => {
+    timer = setTimeout(
+      () => settle(undefined),
+      Math.max(0, deadline - Date.now())
+    );
+  });
+  try {
+    return await Promise.race([work.catch(() => undefined), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The entity's field-group values, one entry per table holding any, at every
+ * level of nesting and with their translations, read through the command's
+ * adapter by the walk the teardown takes (`countEntityComponentTree`).
+ * Without an adapter, or when they cannot be read by `deadline`, the one entry
+ * stays, uncounted.
  */
 async function fieldGroupRows(
   deletion: EntityRows,
-  reader: SharedRowsReader
+  reader: SharedRowsReader,
+  deadline: number
 ): Promise<Deletion[]> {
   if (!isTeardownAdapter(reader.adapter)) return [deletion];
-  try {
-    const owned = await countEntityComponentRows({
+  const owned = await within(
+    countEntityComponentTree({
       adapter: reader.adapter,
       parentTable: deletion.owner,
-    });
-    return owned.map(({ table, rows }) => ({
-      ...deletion,
-      table,
-      count: rows,
-    }));
-  } catch {
-    return [deletion];
-  }
+    }),
+    deadline
+  );
+  if (owned === undefined) return [deletion];
+  return owned.map(({ table, rows }) => ({
+    ...deletion,
+    table,
+    count: rows,
+  }));
 }
 
 /** Whether `adapter` reads what finding the field groups' tables needs. */

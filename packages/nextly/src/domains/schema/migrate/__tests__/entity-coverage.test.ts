@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,7 +15,12 @@ import {
   withOwners,
   type CoveredEntity,
 } from "../entity-coverage";
-import { coverRunDeletions, entityRowsOf } from "../entity-shared-rows";
+import {
+  coverRunDeletions,
+  entityRowsOf,
+  retiredByRun,
+  withEntityCoverage,
+} from "../entity-shared-rows";
 
 const manyToMany = (name: string, target: string, junctionTable?: string) => ({
   name,
@@ -241,5 +250,98 @@ describe("a run's deletions with the entities they remove", () => {
     expect(coverRunDeletions([[table("dc_other")]], owners)).toEqual([
       [table("dc_other")],
     ]);
+  });
+});
+
+describe("a main table two registry rows name", () => {
+  it("belongs to neither, so neither entity's tables or rows are covered through it", () => {
+    const twin = coveredEntity({
+      kind: "collection",
+      slug: "articles",
+      tableName: "dc_posts",
+      source: "code",
+      fields: [],
+    }) as CoveredEntity;
+    const owners = entityOwners([posts, twin]);
+    expect(owners.mainOf("dc_posts")).toBeUndefined();
+    expect(
+      coverRunDeletions(
+        [[table("dc_posts"), table("dc_posts_locales")]],
+        owners
+      )
+    ).toEqual([[table("dc_posts"), table("dc_posts_locales")]]);
+  });
+});
+
+describe("shared rows of an entity the run does not retire", () => {
+  it("are not listed, while its own tables still belong to it", () => {
+    const owners = entityOwners([posts]);
+    expect(
+      coverRunDeletions(
+        [[table("dc_posts"), table("dc_posts_locales")]],
+        owners,
+        () => false
+      )
+    ).toEqual([
+      [
+        table("dc_posts"),
+        { kind: "table", table: "dc_posts_locales", owner: "dc_posts" },
+      ],
+    ]);
+  });
+});
+
+describe("which entities a run retires, from the snapshot it ends at", () => {
+  const snapshot = (collections: string[]) =>
+    JSON.stringify({
+      version: 1,
+      migrationHash: "a".repeat(64),
+      snapshot: { tables: [] },
+      entities: {
+        collections: Object.fromEntries(
+          collections.map(slug => [
+            slug,
+            { source: "code", settings: { slug } },
+          ])
+        ),
+        singles: {},
+        fieldGroups: {},
+      },
+    });
+
+  it("retires an entity the last snapshot of the run leaves out, and keeps one it records", async () => {
+    const meta = mkdtempSync(join(tmpdir(), "nextly-retired-"));
+    try {
+      writeFileSync(
+        join(meta, "0001_a.snapshot.json"),
+        snapshot(["posts", "pages"])
+      );
+      writeFileSync(join(meta, "0002_b.snapshot.json"), snapshot(["pages"]));
+      const retires = await retiredByRun(meta, ["0001_a", "0002_b"]);
+      expect(retires?.({ kind: "collection", slug: "posts" })).toBe(true);
+      expect(retires?.({ kind: "collection", slug: "pages" })).toBe(false);
+      // A run with no snapshot says nothing, and every drop is listed as a retirement.
+      expect(await retiredByRun(meta, ["0003_none"])).toBeUndefined();
+    } finally {
+      rmSync(meta, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("counting within the time a run allows", () => {
+  it("lists what it could not count in time without a count, rather than waiting", async () => {
+    // A PostgreSQL connection whose every read hangs: the registry read and every count.
+    const hanging = {
+      execute: () => new Promise(() => {}),
+      transaction: () => new Promise(() => {}),
+    };
+    const started = Date.now();
+    const listed = await withEntityCoverage([[table("dc_posts")]], {
+      db: hanging,
+      dialect: "postgresql",
+      budgetMs: 50,
+    });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(listed).toEqual([[table("dc_posts")]]);
   });
 });

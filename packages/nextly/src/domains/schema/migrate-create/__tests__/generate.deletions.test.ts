@@ -292,6 +292,41 @@ describe("generateMigration's deletions", () => {
     );
   });
 
+  it("covers nothing of a removed plugin collection through its main table", async () => {
+    // Recorded under the config wrapper's source, with the plugin's provenance in its declaration.
+    const forms: MinimalConfigEntity = {
+      slug: "forms",
+      tableName: "dc_forms",
+      fields: [{ name: "title", type: "text" }],
+      settings: {
+        source: "code",
+        settings: { slug: "forms", source: "plugin:forms" },
+      },
+    };
+    await snapshotOf([forms, PAGES]);
+    let judged: readonly Deletion[] = [];
+    await generateMigration({
+      name: "remove_forms",
+      dialect: "postgresql",
+      migrationsDir,
+      collections: [PAGES],
+      singles: [],
+      components: [],
+      nonInteractive: true,
+      now: NOW,
+      judgeDeletions: deletions => {
+        judged = deletions;
+        return Promise.resolve();
+      },
+    });
+    expect(judged).toContainEqual(
+      expect.objectContaining({ kind: "table", table: "dc_forms" })
+    );
+    expect(judged.some(d => d.kind === "rows" && d.of !== undefined)).toBe(
+      false
+    );
+  });
+
   it("asks nothing and marks nothing when nothing is deleted", async () => {
     await snapshotOf([POSTS]);
     let asked = false;
