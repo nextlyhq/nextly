@@ -56,6 +56,11 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import type { FieldMoveRequest } from "../../domains/schema/field-moves/check-move";
+import {
+  refuseMovesOffTheFile,
+  type PushReason,
+} from "../../domains/schema/field-moves/moves-road";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
@@ -108,6 +113,7 @@ import {
   getSchemaRegistryFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import {
   paginatedResponseToMeta,
   toPaginationMeta,
@@ -895,10 +901,28 @@ const COLLECTIONS_METHODS: Record<
       // show before they confirm: each conversion, fill and delete. The
       // answers are optional here, so the review can ask again once chosen.
       const answers = body as SchemaChangeAnswers;
+      // The fields the save moves are refused here as the apply refuses them, before the person
+      // confirms, where the save would not keep their values through its migration file.
+      const moves = readRequestedMoves(body);
+      const wasLocalized =
+        (collection as { localized?: boolean }).localized === true;
+      await refuseMovesOffTheFile({
+        moves,
+        writes: container.has("builderSaveSetup"),
+        pushReason: pushReasonOf({
+          adapter,
+          tableName,
+          wasLocalized,
+          isLocalized: previewLocalized ?? wasLocalized,
+          before: currentFields,
+          after: fields as FieldDefinition[],
+        }),
+      });
       const notices = await reviewLinesOf({
         slug: p.collectionName,
         collection: writerRowOf(collection),
         fields: fields as FieldDefinition[],
+        moves,
         localized:
           previewLocalized ??
           (collection as { localized?: boolean }).localized === true,
@@ -960,16 +984,19 @@ const COLLECTIONS_METHODS: Record<
         // `resolutions` map and the new pipeline emits no events until
         // the UI is updated to consume ClassifierEvents from preview.
         eventResolutions?: Resolution[];
-        // RESERVED FIELD: accepted and IGNORED in the current version.
-        // A future revision will implement client-side rename hint
-        // tracking plus server-side auto-confirm so the
-        // SchemaChangeDialog stops asking the admin to re-confirm
-        // renames they already clicked once. Reserved so the future
-        // version can ship as a pure additive change without breaking
-        // older admin clients.
-        // See plans/specs/F10-notifications-and-audit-design.md §6.6.
         hints?: {
+          // RESERVED FIELD: accepted and IGNORED in the current version.
+          // A future revision will implement client-side rename hint
+          // tracking plus server-side auto-confirm so the
+          // SchemaChangeDialog stops asking the admin to re-confirm
+          // renames they already clicked once. Reserved so the future
+          // version can ship as a pure additive change without breaking
+          // older admin clients.
+          // See plans/specs/F10-notifications-and-audit-design.md §6.6.
           renames?: Record<string, string>;
+          // The fields the save moves into or out of a group, read and
+          // checked by `readRequestedMoves` below.
+          moves?: unknown;
         };
       };
       if (!confirmed) {
@@ -982,6 +1009,8 @@ const COLLECTIONS_METHODS: Record<
       // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
       // before the lock is taken.
       const requestedLifecycle = readRequestedLifecycle(body);
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1152,31 +1181,30 @@ const COLLECTIONS_METHODS: Record<
           const push = async (): Promise<void> => {
             pushedSummary = (await applyCollectionSchemaChange(change)).summary;
           };
+          const pushReason = pushReasonOf({
+            adapter,
+            tableName,
+            wasLocalized,
+            isLocalized,
+            before: (collection.fields ?? []) as unknown as FieldDefinition[],
+            after: fields as unknown as FieldDefinition[],
+          });
+          // A save that moves fields keeps their values only through its migration file: one the
+          // push would apply instead is refused here, before anything is written or run.
+          await refuseMovesOffTheFile({
+            moves,
+            writes: container.has("builderSaveSetup"),
+            pushReason,
+          });
           const written = await saveThroughWriter({
             appliedBy: push,
             // Whether the push applies the change in development, the writer recording its
-            // migration once the push has run: a translated collection, or one turning
-            // translation on or off, whose push carries its values across the change; and a change
-            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
-            // the live table, where the file alone, written from the newest snapshot, does not.
-            pushWhen: async () =>
-              wasLocalized ||
-              isLocalized ||
-              reachesRelationStorage({
-                before: collection.fields ?? [],
-                after: fields as unknown as FieldDefinition[],
-                liveTable: async () =>
-                  (
-                    await introspectLiveSnapshot(
-                      adapter.getDrizzle(),
-                      dialect,
-                      [tableName]
-                    )
-                  ).tables[0],
-              }),
+            // migration once the push has run (`pushReasonOf`).
+            pushWhen: async () => (await pushReason()) !== null,
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
+            moves,
             localized: isLocalized,
             answers: {
               renameResolutions: renameResolutions ?? [],
@@ -1951,6 +1979,8 @@ interface WriterChange {
   slug: string;
   collection: { tableName: string; fields?: FieldDefinition[] };
   fields: FieldDefinition[];
+  /** The fields the save moves into or out of a group, whose values its file keeps. */
+  moves?: readonly FieldMoveRequest[];
   localized: boolean;
   answers: SchemaChangeAnswers;
 }
@@ -2006,9 +2036,48 @@ async function writerSaveOf(change: WriterChange): Promise<
       logger,
       applies: process.env.NODE_ENV === "development",
     },
-    save,
+    save:
+      change.moves === undefined || change.moves.length === 0
+        ? save
+        : { ...save, moves: change.moves },
     fields,
   };
+}
+
+/**
+ * Why a collection's save goes to the push rather than its migration file (`PushReason`), asked
+ * at most once: a translated collection, or one turning translation on or off, whose push carries
+ * its values across the change; and a change reaching a relation's storage
+ * (`reachesRelationStorage`), which the push plans from the live table, where the file alone,
+ * written from the newest snapshot, does not. The one answer for the road a save takes and for the
+ * saves whose moves are refused.
+ */
+function pushReasonOf(args: {
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>;
+  tableName: string;
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  before: readonly FieldDefinition[];
+  after: readonly FieldDefinition[];
+}): () => Promise<PushReason> {
+  let answer: Promise<PushReason> | undefined;
+  const ask = async (): Promise<PushReason> => {
+    if (args.wasLocalized || args.isLocalized) return "translated";
+    const reaches = await reachesRelationStorage({
+      before: args.before as FieldDefinition[],
+      after: args.after as FieldDefinition[],
+      liveTable: async () =>
+        (
+          await introspectLiveSnapshot(
+            args.adapter.getDrizzle(),
+            args.adapter.dialect,
+            [args.tableName]
+          )
+        ).tables[0],
+    });
+    return reaches ? "carries-values" : null;
+  };
+  return () => (answer ??= ask());
 }
 
 /**

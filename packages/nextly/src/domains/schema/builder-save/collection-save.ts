@@ -426,6 +426,8 @@ async function writeSave(
   const plan = await planSave(deps, save);
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
+  // A move that cannot keep its values is refused here, before the definition is written.
+  plannedMovesOf(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
@@ -1324,20 +1326,7 @@ function movesOf(
   appended: { up: AddedStatements; down: AddedStatements };
   valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
 } {
-  const moves =
-    save.moves === undefined ||
-    save.moves.length === 0 ||
-    save.previous === null ||
-    save.entity === null
-      ? NO_MOVES
-      : planEntityMoves({
-          before: (save.previous.fields ?? []) as FieldDefinition[],
-          after: (save.entity.fields ?? []) as FieldDefinition[],
-          moves: save.moves,
-          localized: save.entity.localized === true,
-          table,
-          dialect: deps.adapter.getCapabilities().dialect,
-        });
+  const moves = plannedMovesOf(deps, save, table);
   return {
     appended: addedStatements(deps, save, table, moves),
     valueMoves: moves.movedColumns.map(moved => ({
@@ -1346,6 +1335,34 @@ function movesOf(
       reason: `moved into the group ${moved.into}; its values are copied there first`,
     })),
   };
+}
+
+/**
+ * The save's moves planned between its definitions before and after (`planEntityMoves`), or the
+ * refusal of the first that cannot keep its values. A save that creates or deletes the entity
+ * moves nothing.
+ */
+function plannedMovesOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): EntityMoves {
+  if (
+    save.moves === undefined ||
+    save.moves.length === 0 ||
+    save.previous === null ||
+    save.entity === null
+  ) {
+    return NO_MOVES;
+  }
+  return planEntityMoves({
+    before: (save.previous.fields ?? []) as FieldDefinition[],
+    after: (save.entity.fields ?? []) as FieldDefinition[],
+    moves: save.moves,
+    localized: save.entity.localized === true,
+    table,
+    dialect: deps.adapter.getCapabilities().dialect,
+  });
 }
 
 const emptyAdded = (): { up: AddedStatements; down: AddedStatements } => ({
