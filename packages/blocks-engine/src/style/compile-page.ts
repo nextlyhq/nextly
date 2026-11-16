@@ -1324,6 +1324,22 @@ export const CONTAIN_INSET_PROPERTY = "--nx-contain-inset";
 /** The two padding sides a contained container's inset is applied to. */
 const INLINE_PADDING = new Set(["padding-inline-start", "padding-inline-end"]);
 
+/** `0`, `-0`, `+0`, `0.0`, `.0` and the like: a zero with no unit. */
+const UNITLESS_ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
+
+/**
+ * A padding value as an argument of `max()`.
+ *
+ * A bare `0` is a length where a property takes one, but inside `max()` it is
+ * a number, and a number beside a length makes the declaration invalid: the
+ * padding would fall to nothing and a contained container's content reach the
+ * page edge. A unitless zero is the only number a padding accepts, so it is
+ * the one value that needs a unit, in whichever spelling it was written.
+ */
+function asMaxArgument(value: string): string {
+  return UNITLESS_ZERO.test(value) ? "0px" : value;
+}
+
 /**
  * The declarations as written into a rule: an inline padding at least the
  * containment inset.
@@ -1346,7 +1362,7 @@ function withContainInset(
     INLINE_PADDING.has(declaration.property)
       ? {
           ...declaration,
-          value: `max(${declaration.value}, var(${CONTAIN_INSET_PROPERTY}, 0px))`,
+          value: `max(${asMaxArgument(declaration.value)}, var(${CONTAIN_INSET_PROPERTY}, 0px))`,
         }
       : declaration
   );

@@ -2301,9 +2301,26 @@ describe("inline padding and a contained container's inset", () => {
       ])
     );
     expect(out).toContain(`padding-inline-start: max(200px, ${INSET})`);
-    expect(out).toContain(`padding-inline-end: max(0, ${INSET})`);
+    expect(out).toContain(`padding-inline-end: max(0px, ${INSET})`);
     // The block axis is never inset: containment is about width only.
     expect(out).toContain("padding-block-start: 1rem;");
+  });
+
+  it("gives a unitless zero a unit inside the max()", () => {
+    // `0` is a length on its own, but inside `max()` it is a number, and a
+    // number beside a length makes the whole declaration invalid: the padding
+    // would fall to nothing and the content reach the page edge.
+    for (const zero of ["0", "0.0", "-0", "+0", ".0"]) {
+      const out = css(
+        doc([
+          node("n1", {
+            base: { base: { padding: { inlineStart: zero, inlineEnd: zero } } },
+          }),
+        ])
+      );
+      expect(out).toContain(`padding-inline-start: max(0px, ${INSET})`);
+      expect(out).toContain(`padding-inline-end: max(0px, ${INSET})`);
+    }
   });
 
   it("writes a block-type default and a named class the same way", () => {

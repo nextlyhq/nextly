@@ -271,7 +271,17 @@ test("a contained Box and Card are banded the same way, and a free Box is unchan
   for (const words of ["Contained box", "Contained card"]) {
     const { text, band } = await placed(page, words);
     near(band.width, pageWidth);
-    near(text.left, inset);
+    // A Card's border sits outside its padding, so its content starts that
+    // much further in; the padding itself is the inset.
+    const border = await page
+      .getByText(words, { exact: true })
+      .evaluate(node =>
+        parseFloat(
+          getComputedStyle(node.parentElement as Element)
+            .borderInlineStartWidth
+        )
+      );
+    near(text.left, inset + border);
   }
   const free = await placed(page, "Free box");
   near(free.band.left, 0);
