@@ -143,6 +143,17 @@ test("names each library once, in the panel and on the overview", async ({
   await expect(libraryGroup).not.toContainText(OLD_NAMES);
 });
 
+test("reads a new component's area as Use as, Anywhere until chosen", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/collections/components/create");
+  const useAs = page.locator("main").getByRole("combobox", { name: "Use as" });
+  await expect(useAs).toHaveText(/Anywhere/);
+  await useAs.click();
+  await expect(page.getByRole("option")).toHaveText(["Header", "Footer"]);
+  await page.keyboard.press("Escape");
+});
+
 test("leaves the Plugins panel without the Page Builder's items", async ({
   page,
 }) => {

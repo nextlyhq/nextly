@@ -980,6 +980,8 @@ describe("the panel's frame", () => {
         .getByRole("combobox", { name: "Insert a block" })
         .getAttribute("placeholder")
     ).toBe("Search saved sections");
+    // An empty tab says so once, in the tab's own name.
+    expect(screen.getByText("No saved sections yet.")).toBeTruthy();
   });
 
   it("draws the library's categories by name, a plugin's as written, and a block with none under More blocks", () => {
