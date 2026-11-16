@@ -41,7 +41,11 @@ import type {
   ReadClaim,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
-import { imageSizingFor, type ImageCopies } from "./image-slot";
+import {
+  hasDefaultColumnGap,
+  imageSizingFor,
+  type ImageCopies,
+} from "./image-slot";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
 import {
   listPageSlug,
@@ -273,6 +277,21 @@ function siteStylesKey(
 }
 
 /**
+ * The image-copy lookups one render may make: `limit` of them, claimed one per
+ * lookup, refused after. Their own bound, beside the page's reads.
+ */
+function copyLookups(limit: number): { take(): boolean } {
+  let left = limit;
+  return {
+    take: () => {
+      if (left <= 0) return false;
+      left -= 1;
+      return true;
+    },
+  };
+}
+
+/**
  * The site's copies of an image, kept on a public page per image and width
  * bound until a write to that media item expires them, since asking for them
  * reads the item. An author's preview asks each time. `undefined` where the
@@ -281,13 +300,16 @@ function siteStylesKey(
 function cachedImageCopies(
   config: BlocksPageConfig,
   isPublic: boolean,
-  window: number | false | undefined,
-  budget: QueryBudget
+  window: number | false | undefined
 ): ImageCopies | undefined {
   const copies = config.imageCopies;
   if (copies === undefined) return undefined;
-  // The page's own allowance, claimed by the lookups a kept answer does not
-  // cover: every one on a preview, and a public page's on a miss.
+  // Their own allowance, not the page's: the page's reads are what the
+  // editor counts a published render against, and copies are not among
+  // them. One lookup per image the page draws, so no more than it has nodes,
+  // claimed by the lookups a kept answer does not cover: every one on a
+  // preview, and a public page's on a miss.
+  const budget = copyLookups(effectiveLimits(config).maxNodes);
   if (!isPublic) return async (source, upTo) => copies(source, upTo, budget);
   const media = config.mediaCollection ?? MEDIA_TAG_COLLECTION;
   return async (source, upTo) => {
@@ -759,9 +781,12 @@ export function blocksRouteConfig(
           // a component's hero or a page whose first stored block is hidden
           // still has its first drawn section found.
           ...imageSizingFor(
-            cachedImageCopies(config, isPublic, listWindow, budget),
+            cachedImageCopies(config, isPublic, listWindow),
             siteBreakpoints,
-            (page.prepared?.presented ?? document).nodes
+            (page.prepared?.presented ?? document).nodes,
+            // Columns divide an image's slot only under the gap the bound
+            // knows; a site with its own leaves their images the row's width.
+            hasDefaultColumnGap(siteStyles?.tokens)
           ),
         },
         blocks: resolver,

@@ -88,7 +88,9 @@ async function render(
             );
           },
       BREAKPOINTS,
-      nodes
+      nodes,
+      // The default gap between columns, so a row divides its slot.
+      true
     ),
   };
   const stream = await renderToReadableStream(

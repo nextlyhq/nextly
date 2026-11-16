@@ -124,6 +124,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     internal: [
       "childImageContext",
       "copiesWantedUpTo",
+      "hasDefaultColumnGap",
       "imageSizingFor",
       "narrowForColumns",
       "narrowForOwnSize",

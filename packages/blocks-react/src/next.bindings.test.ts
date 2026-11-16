@@ -1076,7 +1076,7 @@ describe("a routed page's bindings", () => {
     expect(other.tags).toEqual(nextlySingleTags("campaign-style"));
   });
 
-  it("keeps a public route's image copies under its cache scope, charged to the page's reads", async () => {
+  it("keeps a public route's image copies under its cache scope, on their own allowance", async () => {
     const page: BlockDocument = {
       formatVersion: DOCUMENT_FORMAT_VERSION,
       kind: "page",
@@ -1129,12 +1129,14 @@ describe("a routed page's bindings", () => {
     expect(again).toEqual(first);
     expect(other).not.toEqual(first);
     expect(first).toContain("site-a");
-    // Each lookup is handed the page's read allowance to claim from.
+    // Each lookup is handed an allowance of its own to claim from, not the
+    // page's reads, which the editor counts a published render against.
     expect(asked.length).toBeGreaterThan(0);
     for (const { reads } of asked) {
       expect(typeof (reads as { take?: unknown } | undefined)?.take).toBe(
         "function"
       );
+      expect(reads).not.toHaveProperty("report");
     }
   });
 

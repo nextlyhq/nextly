@@ -8,6 +8,8 @@ import {
   narrowToWidth,
   rootImageSlot,
   sizesFor,
+  hasDefaultColumnGap,
+  imageSizingFor,
 } from "./image-slot";
 
 const BREAKPOINTS = {
@@ -80,7 +82,11 @@ describe("an image's slot", () => {
 });
 
 describe("a container's children", () => {
-  const ctx = { imageSlot: rootImageSlot(BREAKPOINTS), firstBlockId: "hero" };
+  // Under the default gap between columns, so a row divides its slot.
+  const ctx = {
+    imageSlot: { ...rootImageSlot(BREAKPOINTS), columnsDivide: true },
+    firstBlockId: "hero",
+  };
 
   it("share a row of columns, and are found early inside the first block", () => {
     const row = childImageContext(ctx, {
@@ -114,6 +120,18 @@ describe("a container's children", () => {
         1920, 1024, 640,
       ]);
     }
+  });
+
+  it("are not divided by a row where the site's column gap is not the default", () => {
+    // A site that sets its own gap may wrap a row sooner than the bound
+    // knows, so the row's width is the bound: never too narrow an image.
+    const row = childImageContext(
+      { imageSlot: rootImageSlot(BREAKPOINTS), firstBlockId: "hero" },
+      { id: "row", type: "core/columns", slots: { children: [{}, {}] } }
+    );
+    expect(row?.imageSlot?.devices.map(d => d.width)).toEqual([
+      1920, 1024, 640,
+    ]);
   });
 
   it("are handed nothing where the page sizes no images", () => {
@@ -190,5 +208,31 @@ describe("a container's children", () => {
     expect(narrowForOwnSize(root, capped).devices.map(d => d.width)).toEqual([
       600, 600, 512,
     ]);
+  });
+});
+
+describe("a site's gap between columns", () => {
+  it("is the default where the site keeps the shipped space.columns", () => {
+    expect(hasDefaultColumnGap(undefined)).toBe(true);
+    expect(hasDefaultColumnGap({ tokens: [] })).toBe(true);
+  });
+
+  it("is not the default where the site sets its own", () => {
+    expect(
+      hasDefaultColumnGap({
+        tokens: [{ name: "space.columns", kind: "dimension", value: "200px" }],
+      } as never)
+    ).toBe(false);
+  });
+
+  it("decides whether a page's columns divide their images' slot", () => {
+    expect(
+      imageSizingFor(async () => [], undefined, [], true).imageSlot
+        ?.columnsDivide
+    ).toBe(true);
+    // Not known: columns divide nothing.
+    expect(
+      imageSizingFor(async () => [], undefined, []).imageSlot?.columnsDivide
+    ).toBeUndefined();
   });
 });

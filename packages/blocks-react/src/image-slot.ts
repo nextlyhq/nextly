@@ -11,7 +11,12 @@
  *
  * @module image-slot
  */
-import type { BreakpointSet } from "@nextlyhq/blocks-engine";
+import {
+  defaultSiteTokens,
+  resolveSiteTokens,
+  type BreakpointSet,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 
 /** The widest a desktop is taken to be, since its breakpoint has no maximum. */
 const DESKTOP_WIDTH = 1920;
@@ -69,6 +74,12 @@ export interface ImageSlot {
   readonly devices: readonly SlotDevice[];
   /** Whether the image is in the page's first section, found early. */
   readonly eager?: boolean;
+  /**
+   * Whether a row of columns may divide this slot: only where the site's gap
+   * between columns is the default, whose widest the bound allows for. A site
+   * that sets its own gap leaves its columns' images the row's full width.
+   */
+  readonly columnsDivide?: boolean;
 }
 
 /** The slot of a block at the top of a page: each device's whole width. */
@@ -225,7 +236,12 @@ export function copiesWantedUpTo(slot: ImageSlot): number {
 export function imageSizingFor(
   imageCopies: ImageCopies | undefined,
   breakpoints: BreakpointSet | undefined,
-  nodes: readonly { readonly id?: string }[]
+  nodes: readonly { readonly id?: string }[],
+  /**
+   * Whether the site's gap between columns is the default. Left out, it is
+   * not known, and columns divide no slot.
+   */
+  defaultColumnGap = false
 ): {
   imageCopies?: ImageCopies;
   imageSlot?: ImageSlot;
@@ -235,9 +251,33 @@ export function imageSizingFor(
   const firstBlockId = nodes[0]?.id;
   return {
     imageCopies,
-    imageSlot: rootImageSlot(breakpoints),
+    imageSlot: defaultColumnGap
+      ? { ...rootImageSlot(breakpoints), columnsDivide: true }
+      : rootImageSlot(breakpoints),
     ...(firstBlockId === undefined ? {} : { firstBlockId }),
   };
+}
+
+/** The token a row of columns spaces its columns by. */
+const COLUMN_GAP_TOKEN = "space.columns";
+
+/**
+ * Whether a site's gap between columns is the default one: its
+ * `space.columns` token as the engine ships it. Any other value, however
+ * set, is one whose widest the column bound does not know.
+ */
+export function hasDefaultColumnGap(tokens: SiteTokenSet | undefined): boolean {
+  const named = (
+    set: readonly { readonly id?: string; readonly name: string }[]
+  ) => set.find(token => (token.id ?? token.name) === COLUMN_GAP_TOKEN);
+  const site = named(resolveSiteTokens(tokens).tokens);
+  const shipped = named(defaultSiteTokens());
+  if (site === undefined || shipped === undefined) return false;
+  const valueOf = (token: object) => {
+    const { value, values } = token as { value?: unknown; values?: unknown };
+    return JSON.stringify({ value, values });
+  };
+  return valueOf(site) === valueOf(shipped);
 }
 
 /** The block type whose children share its width as a row of columns. */
@@ -328,7 +368,11 @@ export function childImageContext<
     return undefined;
   }
   let next = narrowForOwnSize(slot, node.styles);
-  if (node.type === COLUMNS_TYPE && columnsLaidOutByDefault(node)) {
+  if (
+    node.type === COLUMNS_TYPE &&
+    slot.columnsDivide === true &&
+    columnsLaidOutByDefault(node)
+  ) {
     const children = recordOf(node.slots)?.children;
     next = narrowForColumns(
       next,
