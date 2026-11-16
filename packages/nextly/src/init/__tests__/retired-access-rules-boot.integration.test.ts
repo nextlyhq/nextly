@@ -162,7 +162,10 @@ describe.each(availableDialects())(
 
         const [warning] = accessRulesWarnings(logger);
         expect(warning).toContain("dynamic_singles: 1 row carries");
-        expect(warning).not.toContain("dynamic_collections");
+        // Listed by its rows only where a rule is left. The consent the
+        // warning ends with names both columns, since `nextly migrate` drops
+        // the column from both tables.
+        expect(warning).not.toContain("dynamic_collections:");
       });
     }, 120_000);
 

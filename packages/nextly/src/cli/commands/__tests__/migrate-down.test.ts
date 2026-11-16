@@ -272,6 +272,62 @@ describe("a DOWN that stopped waiting for a busy table", () => {
     return ended;
   }
 
+  it.each([
+    ["part-way", { kind: "part-way", committed: [1] }, true],
+    ["nothing changed", { kind: "nothing-changed" }, false],
+  ] as const)(
+    "writes the whole ending of a busy %s DOWN through its bounded record, not the unbounded writes",
+    async (_, outcome, failed) => {
+      const endings: unknown[] = [];
+      const unbounded: string[] = [];
+      const { deps } = baseDeps({
+        readDownSql: async () => ({
+          sql: 'ALTER TABLE "t" ADD COLUMN "c" integer;',
+          transaction: false,
+        }),
+        execDown: async () => {
+          throw busy(outcome);
+        },
+        recordFailed: async () => {
+          unbounded.push("recordFailed");
+        },
+        recordDownStarted: async () => "attempt-1",
+        endDownAttempt: async () => {
+          unbounded.push("endDownAttempt");
+        },
+        recordStopped: async (ending: unknown) => {
+          endings.push(ending);
+        },
+      });
+      await expect(
+        migrateDownCore(deps as Parameters<typeof migrateDownCore>[0])
+      ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+      expect(unbounded).toEqual([]);
+      expect(endings).toEqual([
+        expect.objectContaining({
+          filename: "a.sql",
+          failed,
+          attempt: "attempt-1",
+        }),
+      ]);
+    }
+  );
+
+  it("keeps the busy report where the bounded record cannot be written", async () => {
+    const { deps } = baseDeps({
+      readDownSql: async () => down('ALTER TABLE "t" ADD COLUMN "c" integer;'),
+      execDown: async () => {
+        throw busy({ kind: "part-way", committed: [1] });
+      },
+      recordStopped: async () => {
+        throw new Error("Lock wait timeout exceeded");
+      },
+    });
+    await expect(
+      migrateDownCore(deps as Parameters<typeof migrateDownCore>[0])
+    ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+  });
+
   it("keeps the start row of a part-way DOWN whose failed outcome could not be recorded", async () => {
     // Statement 1 committed and no failed row says so: removing the start row would leave the
     // migration recorded applied with no trace, and the next DOWN would send statement 1 again.
