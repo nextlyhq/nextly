@@ -38,7 +38,6 @@ packages/builder/src/canvas.tsx 2705
 
 
 
-packages/builder/src/inspector-panel.tsx 1805
 
 
 
