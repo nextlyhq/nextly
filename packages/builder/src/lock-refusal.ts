@@ -135,7 +135,7 @@ function verbOf(
 }
 
 /** A break the engine found, as the facts a refusal is worded from. */
-function factsOfBreak(
+export function factsOfBreak(
   document: BlockDocument,
   op: BuilderOp,
   broken: LayersLockBreak

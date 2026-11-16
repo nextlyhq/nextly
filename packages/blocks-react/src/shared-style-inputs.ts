@@ -156,8 +156,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * carries the old heading and paragraph margins and no container gap, and a
  * read with no compile context judges a stored sheet by this encoding alone,
  * so only a new one keeps that sheet from being served on such a read.
+ *
+ * `v7`: a contained block is padded in, not narrowed. Every inline padding is
+ * written as at least the containment inset. A sheet stored before wrote an
+ * author's side padding as the bare value, which outweighs the containment and
+ * lets the content run past the content width, so it is refused, not served.
+ *
+ * `v8`: a flex item, and a block taken out of the flow, carry flags
+ * the containment inset reads. A sheet stored before has neither, so a
+ * contained item in a row is inset from the whole row: refused, not served.
  */
-const ENCODING = "v6";
+const ENCODING = "v8";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.

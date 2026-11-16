@@ -2,8 +2,8 @@
 
 /**
  * The switch that applies visibility conditions on the canvas: in a
- * template's Previewing strip, and in the strip a component or a Layout gets,
- * where there is no entry to check against.
+ * template's Previewing strip, and in the strip a component gets, where
+ * there is no entry to check against.
  *
  * @module admin/editor/conditions-strip.test
  */
@@ -155,7 +155,7 @@ describe("the switch in a template's Previewing strip", () => {
   });
 });
 
-describe("the strip a component or a Layout gets", () => {
+describe("the strip a component gets", () => {
   it("names what is edited and holds the switch disabled, described by why", () => {
     render(
       <PlacedConditionsStrip kind="Component" name="Members’ worksheet" />

@@ -23,6 +23,7 @@ import {
   asc,
   desc,
   gte,
+  inArray,
   lt,
   type Column,
   type SQL,
@@ -74,6 +75,7 @@ import type {
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
   buildDrizzleCondition,
+  buildLocalizedFieldCondition,
   buildLocalizedWhereExists,
   type LocalizedQueryContext,
 } from "../../../services/collections/drizzle-condition";
@@ -155,10 +157,8 @@ import {
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
-  buildCompanionExists,
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
   TRANSLATION_FILTER_STATES,
@@ -178,6 +178,16 @@ import {
   localizationNow,
 } from "../../i18n/localization-source";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { translationProvenancePresent } from "../../i18n/provenance/record-provenance";
+import {
+  ALL_LOCALES_KEY,
+  detachedCopy,
+  judgeEachLanguage,
+  keyedByLanguageReach,
+  narrowToRowFields,
+  publishedInLanguageCondition,
+  valuesBesideRow,
+} from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   isCompanionReady,
@@ -772,6 +782,8 @@ interface FilteredReadParams {
   locale?: string;
   /** Fallback control (`false`/`"none"` disables fallback). */
   fallbackLocale?: string | false;
+  /** `"all"`: every language's values are read beside the read's own. */
+  translations?: "all";
   /**
    * A grant waiving this collection's read hooks, issued to the plugin that
    * declared it. Effective only for a collection it covers; see
@@ -1271,22 +1283,27 @@ export class CollectionQueryService extends BaseService {
   private async populateLocalizedAll(
     collectionName: string,
     rows: Record<string, unknown>[],
-    locale: string | undefined,
+    translations: "all" | undefined,
     preloaded?: CompanionSchema | null,
-    statusFilterValues?: readonly string[] | null
+    statusFilterValues?: readonly string[] | null,
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
-    if (!this.localization || locale !== EVERY_TRANSLATION || rows.length === 0)
+    if (!this.localization || translations !== "all" || rows.length === 0)
       return;
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
+    // Read into copies keyed by id, then attached beside each row's own values:
+    // the row keeps every field in its own language and type.
+    const everyLanguage = rows.map(row => ({ id: row.id }));
     await populateCompanionFieldsAllLocales({
       db: this.db as never,
       companionTable: companion.table,
       // Outside any transaction, so this may resolve rather than only read what is remembered.
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
-      rows,
+      rows: everyLanguage,
       locales: this.localization.locales.map(l => l.code),
       // Only constrain by status on a status-enabled collection with a resolved
       // single status, so a published locale=all read drops draft translations.
@@ -1294,7 +1311,14 @@ export class CollectionQueryService extends BaseService {
         companion.hasStatus && statusFilterValues
           ? statusFilterValues
           : undefined,
+      revealed,
     });
+    for (const [index, row] of rows.entries()) {
+      const values: Record<string, unknown> = everyLanguage[index] ?? {};
+      row[ALL_LOCALES_KEY] = Object.fromEntries(
+        companion.localizedFields.map(field => [field.name, values[field.name]])
+      );
+    }
   }
 
   /**
@@ -1333,10 +1357,23 @@ export class CollectionQueryService extends BaseService {
       this.adapter,
       companion
     );
+    // Where provenance is recorded (the table is there), each language is
+    // judged by its recorded values, and each one's fields are reported.
+    const provenance = (await translationProvenancePresent(
+      this.adapter,
+      this.logger
+    ))
+      ? {
+          scopeKind: "collection" as const,
+          scopeSlug: collectionName,
+          dialect: this.adapter.dialect,
+        }
+      : undefined;
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
       pendingChangeLocales,
+      provenance,
       readiness,
       localizedFields: companion.localizedFields,
       rows,
@@ -1750,6 +1787,18 @@ export class CollectionQueryService extends BaseService {
           : undefined,
       defaultLocale: this.localization.defaultLocale,
       filter,
+      // Where provenance is recorded, a language is judged by its recorded
+      // values, as the overview judges it. Asked only for the state that reads
+      // it, as the stamp column is.
+      ...(filter.state === "stale" &&
+      (await translationProvenancePresent(this.adapter, this.logger))
+        ? {
+            provenance: {
+              scopeKind: "collection" as const,
+              scopeSlug: collectionName,
+            },
+          }
+        : {}),
     });
   }
 
@@ -1774,7 +1823,11 @@ export class CollectionQueryService extends BaseService {
      * Also take each translation's version counter in the same statement, and answer the rows
      * read, for a read whose version comes from them (`PopulateCompanionArgs.withRevisions`).
      */
-    withRevisions = false
+    withRevisions = false,
+    /** Also attach each value's source language (`_sources`). */
+    sources = false,
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<Record<string, unknown>[] | undefined> {
     if (!localeChain || rows.length === 0) return undefined;
     const companion =
@@ -1792,6 +1845,8 @@ export class CollectionQueryService extends BaseService {
           ? statusFilterValues
           : undefined,
       withRevisions,
+      sources,
+      revealed,
     });
   }
 
@@ -2055,6 +2110,114 @@ export class CollectionQueryService extends BaseService {
       authenticatedScope: params.authenticatedScope,
       entryId: params.entryId,
     });
+  }
+
+  /**
+   * Keep beside each row only the languages the collection's read rule admits
+   * in that language. A read carrying every language's values
+   * (`translations: "all"`) is judged once for the language it reads; here
+   * the read gate is asked again with each other language alone, and where it
+   * answers with a filter, that filter is judged on the rows in that
+   * language, one query per language for the whole page. A language the gate
+   * refuses, or whose filter a row does not match, is withheld from that
+   * row's `_allLocales`. A trusted read asks no rule, so it keeps every
+   * language.
+   */
+  private async withholdLanguagesTheReadRuleRefuses(params: {
+    collectionName: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+    rows: Record<string, unknown>[];
+    schema: DynamicSchema & { id: SQLWrapper };
+    companion: CompanionSchema | null | undefined;
+    statusFilterValues: readonly string[] | null | undefined;
+  }): Promise<void> {
+    if (params.overrideAccess === true) return;
+    const besides = params.rows
+      .map(row => ({ row, every: valuesBesideRow(row) }))
+      .filter(
+        (
+          entry
+        ): entry is {
+          row: Record<string, unknown>;
+          every: Record<string, unknown>;
+        } => entry.every !== undefined
+      );
+    const languages = new Set<string>();
+    for (const { every } of besides) {
+      for (const values of Object.values(every)) {
+        if (values !== null && typeof values === "object") {
+          for (const code of Object.keys(values)) languages.add(code);
+        }
+      }
+    }
+    const ids = besides
+      .map(({ row }) => row.id)
+      .filter(
+        (id): id is string | number =>
+          typeof id === "string" || typeof id === "number"
+      );
+    for (const locale of languages) {
+      const access = await withRuleLanguage({ locale, locales: [locale] }, () =>
+        this.filteredCollectionRead<unknown>({
+          collectionName: params.collectionName,
+          user: params.user,
+          overrideAccess: params.overrideAccess,
+          // Never attested by the route here: a route admits the read for the
+          // language it asked, and each other language's rule is asked anew.
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+        })
+      );
+      let admitted: ReadonlySet<unknown> | "every";
+      if (access.denied) {
+        admitted = new Set();
+      } else if (!access.filter || ids.length === 0) {
+        admitted = "every";
+      } else {
+        const filter = access.filter;
+        const condition = await withRuleLanguage(
+          { locale, locales: [locale] },
+          () =>
+            ruleFilterCondition(
+              {
+                collectionName: params.collectionName,
+                filter,
+                schema: params.schema,
+                localizedCtx: localizedFilterContext(
+                  params.companion ?? null,
+                  [locale],
+                  params.schema,
+                  params.statusFilterValues ?? undefined
+                ),
+              },
+              this.filterSources(),
+              this.logger
+            )
+        );
+        admitted = condition
+          ? new Set(
+              (
+                await this.db
+                  .select({ id: params.schema.id })
+                  .from(params.schema)
+                  .where(and(inArray(params.schema.id, ids), condition))
+              ).map((row: { id: unknown }) => row.id)
+            )
+          : "every";
+      }
+      if (admitted === "every") continue;
+      for (const { row, every } of besides) {
+        if (admitted.has(row.id)) continue;
+        for (const values of Object.values(every)) {
+          if (values !== null && typeof values === "object") {
+            delete (values as Record<string, unknown>)[locale];
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -2375,17 +2538,37 @@ export class CollectionQueryService extends BaseService {
     // due release has made public as of this read's instant. Built here rather
     // than at each call site so the rows and the total beside them cannot
     // disagree about which documents a release has revealed.
+    const decisions = await this.releaseDecisions(
+      params.collectionName,
+      statusFilter,
+      params.releaseNow
+    );
     const releaseCondition = statusCondition({
       filter: statusFilter,
       statusColumn: schema.status,
       idColumn: schema.id,
-      decisions: await this.releaseDecisions(
-        params.collectionName,
-        statusFilter,
-        params.releaseNow
-      ),
+      decisions,
     });
     if (releaseCondition) conditions.push(releaseCondition);
+    // In the requested language too, by the same public states and the same
+    // due releases, so the two bounds cannot disagree about a document. Only
+    // once the translations table is there: before its migration a document's
+    // one status is the only publication there is, and the read keeps its
+    // main-table values rather than querying a table that does not exist.
+    const inLanguage = publishedInLanguageCondition({
+      companion:
+        companion &&
+        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+          "ready"
+          ? companion
+          : null,
+      statusFilter,
+      revealed: decisions.reveal,
+      localeChain,
+      mainIdColumn: schema.id,
+      defaultLocale: this.localization?.defaultLocale,
+    });
+    if (inLanguage) conditions.push(inLanguage);
 
     // AFTER the status filter, so localized where/search EXISTS checks
     // constrain by the per-locale status too — a published read must not match
@@ -2850,27 +3033,40 @@ export class CollectionQueryService extends BaseService {
     // A read of every translation returns each translated field keyed by
     // language, the fields `decodeJsonFieldValues` decodes that way.
     const inline = await passwordReachOf(fields, this.fieldGroupDataService);
+    const eachLanguage = keyedByLanguageReach(inline);
     const reach: FieldGroupReach =
-      params.locale === EVERY_TRANSLATION
-        ? {
-            ...inline,
-            keyedByLanguage: field =>
-              isFieldLocalized(
-                field as Parameters<typeof isFieldLocalized>[0],
-                true
-              ),
-          }
-        : inline;
+      params.locale === EVERY_TRANSLATION ? eachLanguage : inline;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
     this.redactServerOnlyFields(rows, fields, tableName, reach);
+    // Every language's values beside each row too, before any hook: a
+    // password inside a translated group or repeater is cleared in every
+    // language as it is in the row.
+    for (const row of rows) {
+      const every = valuesBesideRow(row);
+      if (every) {
+        this.redactServerOnlyFields([every], fields, tableName, eachLanguage);
+      }
+    }
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
     decodeJsonFieldValues(rows, fields, params.locale);
+
+    // Every language's values beside each row are kept off it while its hooks
+    // and its own field rules run, and put back only to be judged language by
+    // language below: no hook is handed a value before it is judged, so none
+    // can copy a withheld one into a field it may show.
+    const besideRows = new Map<unknown, unknown>();
+    for (const row of rows) {
+      if (ALL_LOCALES_KEY in row) {
+        besideRows.set(row.id, row[ALL_LOCALES_KEY]);
+        delete row[ALL_LOCALES_KEY];
+      }
+    }
 
     // (3) One state for the whole batch — see the docblock on sharing.
     const nestedState = this.relationshipService.createNestedHookState();
@@ -3018,12 +3214,15 @@ export class CollectionQueryService extends BaseService {
         this.accessService.fieldRuleVisitor
       ),
     };
-    for (const row of finalData) {
+    // One row's field pipeline, for the row and for each language's values
+    // beside it alike, so a language's value is withheld or reshaped exactly
+    // as the row's own would be.
+    const finishFields = async (entry: Record<string, unknown>) => {
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
       const target = {
         kind: "collection" as const,
         slug: collectionName,
-        entry: row,
+        entry,
         user: params.fieldAccessUser ?? params.user,
         overrideAccess: skipFieldRules,
         grants: fieldGroupCaller.grants,
@@ -3039,23 +3238,45 @@ export class CollectionQueryService extends BaseService {
         ...fieldGroupCaller,
         redactions: fieldGroupRedactions,
       };
-      await fieldGroupPass?.(row, rowFieldGroupCaller);
+      await fieldGroupPass?.(entry, rowFieldGroupCaller);
       if (!params.hooksWaived) {
         await runFieldHooks({
           kind: "collection",
           slug: collectionName,
           phase: "afterRead",
-          data: row,
+          data: entry,
           operation: "read",
           user: params.user,
         });
       }
       // Judged against the stored field groups, not the instances the first
       // field-group pass cut: a collection rule may read a value inside one.
-      await withFieldGroupEvidence(row, fieldGroupRedactions, () =>
+      await withFieldGroupEvidence(entry, fieldGroupRedactions, () =>
         applyFieldReadAccess(target, sourceRedactions)
       );
-      await fieldGroupPass?.(row, rowFieldGroupCaller);
+      await fieldGroupPass?.(entry, rowFieldGroupCaller);
+    };
+    for (const row of finalData) {
+      // The row as its own pass finds it, before that pass withholds
+      // anything, nested values included: each language's rules are judged
+      // on the same evidence.
+      const evidence = detachedCopy(row);
+      await finishFields(row);
+      if (besideRows.has(row.id)) {
+        row[ALL_LOCALES_KEY] = besideRows.get(row.id);
+      }
+      // Every language's values beside the row go through the same pipeline,
+      // asked in that language: a rule answering by value or by language,
+      // and a field hook that masks a value, act on each language's value as
+      // they act on the row's.
+      await judgeEachLanguage(
+        row,
+        (inLanguage, locale) =>
+          withRuleLanguage({ locale, locales: [locale] }, () =>
+            finishFields(inLanguage)
+          ),
+        evidence
+      );
     }
 
     // Authoritative related-row sanitization over the assembled response, after
@@ -3095,6 +3316,15 @@ export class CollectionQueryService extends BaseService {
     // hook, field-level read access and transform — so nothing downstream can
     // re-expose the creator's user id.
     for (const row of finalData) stripServerOnlyColumns(row, tableName);
+
+    // Every language's values beside a row say only what the row says: the
+    // fields it kept, each language's value redacted as the row's was.
+    for (const row of finalData) {
+      narrowToRowFields(row, values => {
+        this.redactServerOnlyFields([values], fields, tableName, inline);
+        return values;
+      });
+    }
 
     // The version, after everything a hook or a selection can do to a row,
     // so neither can drop or forge it.
@@ -3494,6 +3724,10 @@ export class CollectionQueryService extends BaseService {
      * row for the admin translation-status overview. No-op for non-localized collections.
      */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -3547,6 +3781,7 @@ export class CollectionQueryService extends BaseService {
       const companion =
         localeChain ||
         params.locale === EVERY_TRANSLATION ||
+        params.translations === "all" ||
         params.translationStatus
           ? await this.fileManager.loadCompanionSchema(params.collectionName)
           : null;
@@ -3771,6 +4006,9 @@ export class CollectionQueryService extends BaseService {
                 column: named.column,
                 localeChain,
                 statusValues: localizedCtx?.statusValues, // don't sort by draft translations
+                nonText: companion.localizedFields.some(
+                  field => field.column === named.column && field.nonText
+                ),
               }),
               // A missing translation reads as NULL.
               nullable: true,
@@ -3953,6 +4191,18 @@ export class CollectionQueryService extends BaseService {
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
+      // The documents a due release reveals, as the read's bound admitted
+      // them at this read's instant: their translations are read as the
+      // release will publish them.
+      const revealed = new Set<unknown>(
+        (
+          await this.releaseDecisions(
+            params.collectionName,
+            statusFilter,
+            readNow
+          )
+        ).reveal
+      );
       const translationRows = await this.overlayLocalized(
         params.collectionName,
         "translation-load-failed",
@@ -3963,7 +4213,9 @@ export class CollectionQueryService extends BaseService {
             localeChain,
             companion,
             statusFilter?.values ?? null, // the per-locale published filter
-            countersWithContent
+            countersWithContent,
+            params.sourceLocales === true,
+            revealed
           )
       );
       const joinedRevisions =
@@ -3985,11 +4237,25 @@ export class CollectionQueryService extends BaseService {
           this.populateLocalizedAll(
             params.collectionName,
             entries,
-            params.locale,
+            params.translations,
             companion,
-            statusFilter?.values ?? null // the per-locale published filter
+            statusFilter?.values ?? null, // the per-locale published filter
+            revealed
           )
       );
+      // Each language beside a row only where the read rule admits it in
+      // that language.
+      await this.withholdLanguagesTheReadRuleRefuses({
+        collectionName: params.collectionName,
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        rows: entries,
+        schema,
+        companion,
+        statusFilterValues: statusFilter?.values ?? null,
+      });
       // A per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
@@ -4442,7 +4708,9 @@ export class CollectionQueryService extends BaseService {
       params.fallbackLocale
     );
     const companion =
-      localeChain || params.locale === EVERY_TRANSLATION
+      localeChain ||
+      params.locale === EVERY_TRANSLATION ||
+      params.translations === "all"
         ? await this.fileManager.loadCompanionSchema(params.collectionName)
         : null;
     return { localeChain, companion };
@@ -5102,6 +5370,10 @@ export class CollectionQueryService extends BaseService {
      * entry for the admin translation-status pills. No-op for non-localized collections.
      */
     translationStatus?: boolean;
+    /** Attach `_sources`: for each translatable field, the language its value came from. */
+    sourceLocales?: boolean;
+    /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+    translations?: "all";
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -5251,17 +5523,18 @@ export class CollectionQueryService extends BaseService {
       // Named `lifecycleCondition` rather than shadowing the imported
       // `statusCondition` helper it now delegates to.
       const readNow = new Date();
+      const decisions = await this.releaseDecisions(
+        params.collectionName,
+        statusFilter,
+        readNow
+      );
       const lifecycleCondition = suppressDraftStatusFilter
         ? undefined
         : statusCondition({
             filter: statusFilter,
             statusColumn: schema.status,
             idColumn: schema.id,
-            decisions: await this.releaseDecisions(
-              params.collectionName,
-              statusFilter,
-              readNow
-            ),
+            decisions,
           });
       // The read rule's filter, in the language this read resolves through,
       // so an entry it does not match is not found: the same `404` a missing
@@ -5283,10 +5556,29 @@ export class CollectionQueryService extends BaseService {
             this.logger
           )
         : undefined;
+      // Whether the translations table is there to read: the language test
+      // and the joined read below both ask it of the table, once.
+      const companionReady =
+        companion !== null &&
+        companion !== undefined &&
+        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+          "ready";
+      // A public read in a language the entry is not published in finds no
+      // entry, as a list in that language leaves it out. Only once the
+      // translations table is there, as the list's test is.
+      const inLanguageCondition = publishedInLanguageCondition({
+        companion: companionReady ? companion : null,
+        statusFilter,
+        revealed: decisions.reveal,
+        localeChain,
+        mainIdColumn: schema.id,
+        defaultLocale: this.localization?.defaultLocale,
+      });
       const whereParts = [
         idCondition,
         lifecycleCondition,
         ruleCondition,
+        inLanguageCondition,
       ].filter(
         (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );
@@ -5306,8 +5598,7 @@ export class CollectionQueryService extends BaseService {
           localization: this.localization,
           locale: params.locale,
         }) &&
-        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
-          "ready"
+        companionReady
           ? localeChain
           : null;
       let entry: Record<string, unknown> | undefined;
@@ -5353,6 +5644,8 @@ export class CollectionQueryService extends BaseService {
               companion.hasStatus && statusFilter?.values
                 ? statusFilter.values
                 : undefined,
+            revealed: new Set<unknown>(decisions.reveal),
+            sources: params.sourceLocales === true,
           });
         }
       } else {
@@ -5395,7 +5688,10 @@ export class CollectionQueryService extends BaseService {
               [read],
               localeChain,
               companion,
-              statusFilter?.values ?? null // the per-locale published filter
+              statusFilter?.values ?? null, // the per-locale published filter
+              false,
+              params.sourceLocales === true,
+              new Set<unknown>(decisions.reveal)
             )
         );
       }
@@ -5407,11 +5703,25 @@ export class CollectionQueryService extends BaseService {
           this.populateLocalizedAll(
             params.collectionName,
             [entry],
-            params.locale,
+            params.translations,
             companion,
-            statusFilter?.values ?? null // the per-locale published filter
+            statusFilter?.values ?? null, // the per-locale published filter
+            new Set<unknown>(decisions.reveal)
           )
       );
+      // Each language beside the entry only where the read rule admits it in
+      // that language.
+      await this.withholdLanguagesTheReadRuleRefuses({
+        collectionName: params.collectionName,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        rows: [entry],
+        schema,
+        companion,
+        statusFilterValues: statusFilter?.values ?? null,
+      });
       // A per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
@@ -5994,28 +6304,22 @@ export class CollectionQueryService extends BaseService {
     const searchText = query.trim();
 
     // Build OR conditions for each searchable field. A localized searchable field lives in the
-    // companion table (absent from the main schema); match it via a companion EXISTS on the
-    // requested locale instead of silently dropping it. Non-localized fields match on the main
-    // table.
+    // companion table (absent from the main schema); match it on the value the reader is shown
+    // instead of silently dropping it. Non-localized fields match on the main table.
     const conditions = fields
       .map(fieldName => {
         const localizedField = localizedCtx?.localizedFields.find(
           f => f.name === fieldName
         );
         if (localizedCtx && localizedField) {
-          const t = sql.identifier(localizedCtx.companionTableName);
-          const col = sql.identifier(localizedField.column);
-          return buildCompanionExists({
-            companionTableName: localizedCtx.companionTableName,
-            mainIdColumn: localizedCtx.mainIdColumn,
-            locale: localizedCtx.locale,
-            valueCondition: caseInsensitiveContains(
-              this.dialect,
-              sql`${t}.${col}`,
-              searchText
-            ),
-            statusValues: localizedCtx.statusValues,
-          });
+          // Matched on the value the reader is shown, as a filter is.
+          return buildLocalizedFieldCondition(
+            localizedCtx,
+            localizedField,
+            "ICONTAINS",
+            searchText,
+            this.dialect
+          );
         }
         const column = schema[fieldName];
         if (!column) return undefined; // not on main table and not localized → skip

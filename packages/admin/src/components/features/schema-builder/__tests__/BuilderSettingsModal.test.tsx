@@ -5,9 +5,17 @@
 // was passed via `initialValues`. Tab content rendering is left to BasicsTab /
 // AdvancedTab tests in their own files; this file only verifies the wiring.
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen } from "@admin/__tests__/utils";
+import {
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
+import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
+import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 
 import {
   BuilderSettingsModal,
@@ -16,6 +24,22 @@ import {
 import type { BuilderConfig } from "../builder-config";
 
 import type { StoredHookConfig } from "@admin/types/collection";
+
+/** What the server's address check refuses, by address. */
+let refusals: Record<string, { code: string; message: string }> = {};
+const check = vi.fn(
+  async (kind: string, address: string, _pending?: unknown) => ({
+    kind,
+    address,
+    refusal: refusals[address] ?? null,
+  })
+);
+vi.mock("@admin/services/addressCheckApi", () => ({
+  addressCheckApi: {
+    check: (kind: string, address: string, pending?: unknown) =>
+      check(kind, address, pending),
+  },
+}));
 
 const collectionConfig: BuilderConfig = {
   kind: "collection",
@@ -354,5 +378,259 @@ describe("BuilderSettingsModal — a collection's stored hooks", () => {
     expect(
       screen.getByRole("heading", { name: "Set Audit Fields" })
     ).toBeInTheDocument();
+  });
+});
+
+// Once saved, an address names the entity's routes, its table and what refers
+// to it, so it is fixed, and the settings say what changing it would break.
+// Before the first save nothing refers to it yet, so it stays editable,
+// checked as it is typed against everything else that holds an address.
+describe("BuilderSettingsModal — the address", () => {
+  const singleConfig: BuilderConfig = {
+    kind: "single",
+    basicsFields: ["singularName", "slug", "description", "icon"],
+    advancedFields: ["status", "i18n"],
+    toolbar: { previewSchemaChange: true },
+    picker: {},
+  };
+  const SAVED: BuilderSettingsValues = {
+    singularName: "Post",
+    pluralName: "Posts",
+    slug: "posts",
+    description: "",
+    icon: "FileText",
+  };
+
+  beforeEach(() => {
+    refusals = {};
+    check.mockClear();
+  });
+
+  it.each([
+    [
+      "collection",
+      collectionConfig,
+      undefined,
+      "Fixed once saved: its API routes, and every client that calls them, use this address.",
+    ],
+    [
+      "Single",
+      singleConfig,
+      undefined,
+      "Fixed once saved: its API routes, and every client that calls them, use this address.",
+    ],
+    [
+      "field group",
+      componentConfig,
+      3,
+      "Fixed once saved: the fields that use this field group refer to it by this address. Used in 3 places you can read.",
+    ],
+  ] as const)(
+    "a saved collection's, Single's and field group's address is fixed (%s)",
+    (_kind, config, usedByCount, says) => {
+      render(
+        <BuilderSettingsModal
+          open
+          mode="edit"
+          config={config}
+          initialValues={SAVED}
+          usedByCount={usedByCount}
+          onCancel={vi.fn()}
+          onSubmit={vi.fn()}
+        />
+      );
+      const address = screen.getByLabelText("Slug");
+      expect(address).toHaveAttribute("readonly");
+      expect(address).toHaveAccessibleDescription(says);
+    }
+  );
+
+  it("keeps a saved entity's address when its name changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    // An address that is what the name derives, the one that would follow it.
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{ ...SAVED, slug: "post" }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const name = screen.getByLabelText("Singular name");
+    await user.clear(name);
+    await user.type(name, "Article");
+    expect(screen.getByLabelText("Slug")).toHaveValue("post");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSubmit.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ singularName: "Article", slug: "post" })
+    );
+  });
+
+  it("keeps an unsaved entity's address editable, checked as typed, its own not counted against it", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    refusals = {
+      articles: { code: "DUPLICATE", message: "Resource already exists." },
+    };
+    const others = [{ kind: "collection" as const, address: "drafts" }];
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={SAVED}
+        unsavedAddress={{ otherAddresses: others }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const address = screen.getByLabelText("Slug");
+    expect(address).not.toHaveAttribute("readonly");
+
+    await user.clear(address);
+    await user.type(address, "articles");
+    await waitFor(() =>
+      expect(address).toHaveAccessibleDescription(
+        "A collection or Single already uses this address."
+      )
+    );
+    expect(check).toHaveBeenLastCalledWith("collection", "articles", others);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await user.clear(address);
+    await user.type(address, "stories");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled()
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSubmit.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ slug: "stories" })
+    );
+  });
+
+  it("a plugin's collection offers no editable setting", () => {
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={SAVED}
+        readOnly
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    for (const control of [
+      ...screen.getAllByRole("textbox"),
+      ...screen.queryAllByRole("switch"),
+    ]) {
+      expect(control).toBeDisabled();
+    }
+    // Nothing to save or cancel: the footer only closes.
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+});
+
+// What the settings hand back is what the editor counts and lists: each
+// setting changed in them is a pending change of its own, translation turned
+// off among them.
+describe("BuilderSettingsModal — its changes, pending", () => {
+  it("each setting becomes a pending change, translation turned off among them", async () => {
+    const user = userEvent.setup();
+    const entity = {
+      slug: "posts",
+      settings: {
+        singularName: "Post",
+        pluralName: "Posts",
+        slug: "posts",
+        description: "",
+        icon: "FileText",
+        i18n: true,
+      } satisfies BuilderSettingsValues,
+    };
+    const editor = renderHook(() => {
+      const builder = useFieldBuilder({
+        resolver: async values => ({ values, errors: {} }),
+        defaultValues: {},
+      });
+      return useBuilderEntityState({
+        entity,
+        builder,
+        toFields: () => [],
+        toSettings: loaded => loaded.settings,
+        onLoad: () => {},
+        identity: loaded => loaded.slug,
+      });
+    });
+    await waitFor(() => expect(editor.result.current.settings).not.toBeNull());
+
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={editor.result.current.settings}
+        onCancel={vi.fn()}
+        onSubmit={next => editor.result.current.setSettings(next)}
+      />
+    );
+    const name = screen.getByLabelText("Singular name");
+    await user.clear(name);
+    await user.type(name, "Article");
+    await user.click(screen.getByRole("tab", { name: "Advanced" }));
+    await user.click(
+      screen.getByRole("switch", { name: "Internationalization" })
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        editor.result.current.pending.settingChanges.map(
+          change => `${change.label}: ${change.from} → ${change.to}`
+        )
+      ).toEqual([
+        "name: Post → Article",
+        // The plural the name derived follows it; the fixed address does not.
+        "plural name: Posts → Articles",
+        "translation: on → off",
+      ])
+    );
+    expect(editor.result.current.unsavedCount).toBe(3);
+  });
+});
+
+describe("BuilderSettingsModal — an unsaved address typed with spaces", () => {
+  it("checks and submits the same trimmed address", async () => {
+    refusals = {};
+    check.mockClear();
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <BuilderSettingsModal
+        open
+        mode="edit"
+        config={collectionConfig}
+        initialValues={{
+          singularName: "Post",
+          slug: "posts",
+          icon: "FileText",
+        }}
+        unsavedAddress={{ otherAddresses: [] }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+      />
+    );
+    const address = screen.getByLabelText("Slug");
+    await user.clear(address);
+    await user.type(address, "stories ");
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(check).toHaveBeenLastCalledWith("collection", "stories", []);
+    await user.click(save);
+    expect(onSubmit.mock.calls[0][0].slug).toBe("stories");
   });
 });

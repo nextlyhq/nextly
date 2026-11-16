@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
- * A template's SEO panel as a person uses it: the stored rule read as text
- * with variables, a change stored as the design's own metadata when the field
- * is left, a variable added where the person was typing, the shared title and
+ * A template's SEO panel as a person uses it: the title drawn read-only from
+ * the content type's title pattern, linked to where it is changed; the stored
+ * rule read as text with variables, a change stored as the design's own
+ * metadata when the field is left, a variable added where the person was typing, the shared title and
  * the share image as rules of their own, a variable naming no field said to
  * be one, the preview following the route's answer for the rule as edited,
  * and an Undo outside the panel shown at once.
@@ -22,6 +23,7 @@ import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Levels } from "../../resolver/order";
+import { SETTINGS_PAGE_HREF } from "../../settings/contract";
 import type { TemplateContext } from "../../template/contract";
 
 /** Each request the panel sent the route. */
@@ -34,6 +36,8 @@ const editing = vi.hoisted(() => ({
   unsaved: new Map<string, boolean>(),
   /** Whether the editor refuses the panel's edits. */
   refusing: false,
+  /** Whether the content type has a title pattern, its own or the site's. */
+  pattern: true,
 }));
 
 /** A rule's text pieces filled as the Page Builder fills them for the post. */
@@ -68,9 +72,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
       settings?: { seo?: Record<string, unknown> };
     };
     const rule = document.settings?.seo ?? {};
+    // The design's rule fills its description and shared title; its title,
+    // as the order goes, comes from the type's pattern instead.
     const template = Object.fromEntries(
       Object.entries({
-        title: filled(rule.title),
         description: filled(rule.description),
         socialTitle: filled(rule.socialTitle),
       }).filter(([, value]) => value !== undefined)
@@ -79,7 +84,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
       page: { title: "Typed on the post" },
       code: {},
       template,
-      pattern: {},
+      pattern: editing.pattern
+        ? {
+            title: {
+              value: "Surfer vs Rext | Rext AI",
+              pattern: "{Title} | {Site name}",
+            },
+          }
+        : {},
       content: {},
       site: { title: "Rext AI" },
       address: "/blog/surfer-vs-rext",
@@ -91,6 +103,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
         { name: "title", token: "Post title" },
         { name: "excerpt", token: "Post excerpt" },
       ],
+      ...(editing.pattern ? { titlePattern: "{Title} | {Site name}" } : {}),
       imageFields: [{ name: "cover", label: "Cover image" }],
       entries: [
         { id: "p1", label: "Surfer vs Rext" },
@@ -163,23 +176,55 @@ beforeEach(() => {
   editing.failing = false;
   editing.unsaved.clear();
   editing.refusing = false;
+  editing.pattern = true;
   holding.clear();
 });
 afterEach(cleanup);
 
 async function open(initial: DesignSeo | undefined = RULE) {
   render(<Host initial={initial} />);
-  return screen.findByLabelText("Title on Google");
+  return screen.findByLabelText("Description on Google");
 }
 
 describe("a template's SEO panel", () => {
-  it("reads the stored rule as text with variables, and says who it applies to", async () => {
-    const title = await open();
-    expect(title).toHaveProperty("value", "{Post title} | {Site name}");
-    expect(screen.getByLabelText("Description on Google")).toHaveProperty(
-      "value",
-      "{Post excerpt}"
+  it("draws the title read-only, from the type's title pattern, linked to that pattern in SEO settings", async () => {
+    await open();
+    // No field for it, though the design stores a title rule.
+    expect(screen.queryByLabelText("Title on Google")).toBeNull();
+    expect(screen.queryByDisplayValue("{Post title} | {Site name}")).toBeNull();
+    const line = screen.getByText(/Title on Google/).closest("p");
+    expect(line?.textContent).toBe(
+      "Title on Google follows the Blog posts title pattern: {Title} | {Site name}. Change it in SEO settings."
     );
+    const link = within(line as HTMLElement).getByRole("link", {
+      name: "SEO settings",
+    });
+    expect(link.getAttribute("href")).toBe(
+      `${SETTINGS_PAGE_HREF}?tab=types&type=posts`
+    );
+    // The preview's title is the pattern's, filled for the post.
+    expect((await screen.findByTestId("seo-search-title")).textContent).toBe(
+      "Surfer vs Rext | Rext AI"
+    );
+  });
+
+  it("says the title is each page's own where the type has no title pattern", async () => {
+    editing.pattern = false;
+    await open();
+    const line = screen.getByText(/Title on Google/).closest("p");
+    expect(line?.textContent).toBe(
+      "Title on Google is each blog post's own title. Add a title pattern in SEO settings."
+    );
+    expect(
+      within(line as HTMLElement)
+        .getByRole("link", { name: "SEO settings" })
+        .getAttribute("href")
+    ).toBe(`${SETTINGS_PAGE_HREF}?tab=types&type=posts`);
+  });
+
+  it("reads the stored rule as text with variables, and says who it applies to", async () => {
+    const description = await open();
+    expect(description).toHaveProperty("value", "{Post excerpt}");
     expect(
       screen.getByText(/every blog post that uses this template/)
     ).toBeTruthy();
@@ -191,23 +236,24 @@ describe("a template's SEO panel", () => {
 
   it("previews the rule as the route fills it, not the post's own text", async () => {
     await open();
-    expect((await screen.findByTestId("seo-search-title")).textContent).toBe(
-      "Surfer vs Rext | Rext AI"
-    );
+    expect(
+      (await screen.findByTestId("seo-search-description")).textContent
+    ).toBe("Surfer grades drafts.");
   });
 
   it("stores a change as the design's metadata when the field is left, and asks the route with it", async () => {
     const user = userEvent.setup();
-    const title = await open();
-    await user.clear(title);
-    await user.type(title, "Read {{Post title}");
+    const description = await open();
+    await user.clear(description);
+    await user.type(description, "Read {{Post title}");
     expect(stored).toEqual([]);
     await user.tab();
 
+    // The stored title rule is kept as it was, unused.
     expect(stored).toEqual([
       {
-        title: ["Read ", { $bind: "title" }],
-        description: [{ $bind: "excerpt" }],
+        title: RULE.title,
+        description: ["Read ", { $bind: "title" }],
       },
     ]);
     await waitFor(() =>
@@ -248,17 +294,17 @@ describe("a template's SEO panel", () => {
 
   it("says a variable that names no field is shown as written", async () => {
     const user = userEvent.setup();
-    const title = await open({});
-    await user.type(title, "{{Author}");
+    const description = await open({});
+    await user.type(description, "{{Author}");
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /\{Author\} names no field/
     );
   });
 
   it("shows a change made outside the panel at once, as an Undo is", async () => {
-    const title = await open();
-    setFromOutside({ title: ["Older"] });
-    await waitFor(() => expect(title).toHaveProperty("value", "Older"));
+    const description = await open();
+    setFromOutside({ description: ["Older"] });
+    await waitFor(() => expect(description).toHaveProperty("value", "Older"));
   });
 
   it("previews with the page chosen", async () => {
@@ -300,50 +346,50 @@ describe("a template's SEO panel", () => {
 
   it("stores a rule still being typed when the panel closes", async () => {
     const user = userEvent.setup();
-    const title = await open();
-    await user.clear(title);
-    await user.type(title, "New {{Post title}");
+    const description = await open();
+    await user.clear(description);
+    await user.type(description, "New {{Post title}");
     cleanup();
     expect(stored.at(-1)).toMatchObject({
-      title: ["New ", { $bind: "title" }],
+      description: ["New ", { $bind: "title" }],
     });
   });
 
   it("has the editor store a rule still being typed when the page is saved, and says it is unsaved until then", async () => {
     const user = userEvent.setup();
-    const title = await open();
+    const description = await open();
     const unsaved = () => [...editing.unsaved.values()].some(Boolean);
     expect(unsaved()).toBe(false);
 
-    await user.clear(title);
-    await user.type(title, "Saved {{Post title}");
+    await user.clear(description);
+    await user.type(description, "Saved {{Post title}");
     expect(unsaved()).toBe(true);
     expect(stored).toEqual([]);
 
     // The save shortcut, pressed with the field still in focus.
     act(makeHeld);
     expect(stored.at(-1)).toMatchObject({
-      title: ["Saved ", { $bind: "title" }],
+      description: ["Saved ", { $bind: "title" }],
     });
     await waitFor(() => expect(unsaved()).toBe(false));
   });
 
   it("says a rule the editor refuses was not stored, and keeps it to store again", async () => {
     const user = userEvent.setup();
-    const title = await open();
+    const description = await open();
     editing.refusing = true;
-    await user.clear(title);
-    await user.type(title, "Too long");
+    await user.clear(description);
+    await user.type(description, "Too long");
     await user.tab();
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /couldn.t be stored/
     );
-    expect(title).toHaveProperty("value", "Too long");
+    expect(description).toHaveProperty("value", "Too long");
     expect([...editing.unsaved.values()].some(Boolean)).toBe(true);
 
     editing.refusing = false;
     act(makeHeld);
-    expect(stored.at(-1)).toMatchObject({ title: ["Too long"] });
+    expect(stored.at(-1)).toMatchObject({ description: ["Too long"] });
     await waitFor(() =>
       expect(screen.queryByText(/couldn.t be stored/)).toBeNull()
     );
@@ -351,10 +397,10 @@ describe("a template's SEO panel", () => {
 
   it("says the preview is the last one read when reading it again fails", async () => {
     const user = userEvent.setup();
-    const title = await open();
+    const description = await open();
     await screen.findByTestId("seo-search-title");
     editing.failing = true;
-    await user.type(title, "!");
+    await user.type(description, "!");
     await user.tab();
     expect(
       await screen.findByText(/could not be read again just now/)
