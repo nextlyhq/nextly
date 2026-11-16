@@ -33,6 +33,8 @@ import {
   UnsavedWorkProvider,
   useUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { usePublishPartsAction } from "@admin/components/features/entries/publish-parts/usePublishPartsAction";
+import { languageLabelOf } from "@admin/components/features/entries/publishAllOutcomes";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -333,6 +335,27 @@ export default function EditEntryPage({
       collection.localized === true
         ? locales.map(each => each.label)
         : undefined,
+  });
+  // "Choose what to publish…", on the Publish split: each language, and separately the shared
+  // fields. A translated entry offers its languages; one that is not offers the shared fields,
+  // which are the whole document.
+  const translatedLanguages =
+    localizationEnabled &&
+    collection !== undefined &&
+    "localized" in collection &&
+    collection.localized === true
+      ? locales.map(each => each.code)
+      : [];
+  const publishParts = usePublishPartsAction({
+    target: slug && id ? { kind: "collection", slug, id } : undefined,
+    lifecycleEnabled: collection?.status,
+    languages: translatedLanguages,
+    labelOf: languageLabelOf(locales),
+    currentLocale: locale,
+    defaultLocale,
+    sharedPending:
+      (entry as { _sharedChangesPending?: unknown } | undefined)
+        ?._sharedChangesPending === true,
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -785,6 +808,7 @@ export default function EditEntryPage({
             </div>
           )}
           {schedule.dialog}
+          {publishParts.dialog}
           <EntryForm
             revealOutline={<EditEntryPageSkeleton />}
             revealWaiting={partsStartup.pending}
@@ -830,15 +854,19 @@ export default function EditEntryPage({
             onViewApi={() =>
               navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
             }
-            /* Contributed to the editor's action model, which places both on
-             the Publish split's arrow: they decide when this goes live, and
-             the toolbar is reserved for the verbs an author reaches for while
-             writing. Schedule first, the one most often reached for. A
-             document whose collection was removed from code offers none. */
+            /* Contributed to the editor's action model, which places them on
+             the Publish split's arrow: they decide what goes live and when,
+             and the toolbar is reserved for the verbs an author reaches for
+             while writing. Choosing what to publish first, as it publishes
+             now; then Schedule. A document whose collection was removed from
+             code offers none. */
             documentActions={
               removedFromCode
                 ? []
                 : [
+                    ...(publishParts.contributed === null
+                      ? []
+                      : [publishParts.contributed]),
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),
