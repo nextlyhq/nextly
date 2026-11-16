@@ -52,11 +52,12 @@ export function SharedStylesStudio({
   const mayChange = useCan("update-site-style");
   const access = useSharedStylesClient();
   const initialOpenId = useStyleToOpen();
-  const { search, setSearch } = useDesignBrowse();
-  // The Design panel's one search, across its tabs.
+  const { search, setSearch, searchRef } = useDesignBrowse();
+  // The Design panel's one search, across its tabs, and its box, where focus
+  // goes once a style is removed.
   const hostSearch = useMemo(
-    () => ({ query: search, onQuery: setSearch }),
-    [search, setSearch]
+    () => ({ query: search, onQuery: setSearch, searchRef }),
+    [search, setSearch, searchRef]
   );
   return (
     <SharedStylesHostSearch.Provider value={hostSearch}>

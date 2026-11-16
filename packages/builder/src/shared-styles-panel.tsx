@@ -43,19 +43,12 @@ import { Input } from "@nextlyhq/ui";
 import { Search } from "lucide-react";
 import * as React from "react";
 
-import {
-  blockLookGroups,
-  lookKeyOf,
-  type BlockLookGroup,
-} from "./block-look-rows";
+import { lookKeyOf, type BlockLookGroup } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
 import { ShowMore, withOpenRow } from "./panel-actions";
 import {
   inSharedStyleFilter,
   sharedStyleUse,
-  searchSharedStyles,
-  sharedStyleRows,
-  sharedStylesOnly,
   sharedStyleSearchText,
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
@@ -82,6 +75,11 @@ import {
   unusedWithheld,
 } from "./shared-styles-list";
 import { RemoveUnusedHead } from "./shared-styles-remove-unused";
+import {
+  foundLooks,
+  foundSharedStyles,
+  stylesTabSource,
+} from "./styles-tab-matches";
 import type {
   PageClassBlocks,
   PanelLookEditing,
@@ -164,24 +162,27 @@ function FiltersWhenListed(
 /** No pending names, as one value rather than a fresh record each render. */
 const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
 
-/** The rows the library gives, kept while the library and the code's ids are. */
+/**
+ * The rows the library gives, from the listing the Design panel counts with,
+ * kept while the library and the code's ids are.
+ */
 function useRows(
   library: readonly NamedClass[] | undefined,
   suppliedClassIds: readonly string[] | undefined
-): { rows: SharedStyleRow[]; lookIds: string[] } {
+): { rows: SharedStyleRow[]; groups: BlockLookGroup[]; lookIds: string[] } {
   // Keyed by the ids rather than the array, which a host may build afresh on
   // every render: the search text compiles every style, once per library,
   // not once per render.
   const suppliedKey = idsKey(suppliedClassIds ?? []);
   return React.useMemo(() => {
-    if (library === undefined) return { rows: [], lookIds: [] };
-    const supplied = new Set(idsOf(suppliedKey));
-    return {
-      rows: sharedStyleRows(sharedStylesOnly(library), supplied),
-      // The worn looks, whose counts are read with the styles' in one read,
-      // so the tab's counting and failure notes speak for both.
-      lookIds: wornLookIds(blockLookGroups(library, supplied)),
-    };
+    if (library === undefined) return { rows: [], groups: [], lookIds: [] };
+    const { rows, groups } = stylesTabSource(
+      library,
+      new Set(idsOf(suppliedKey))
+    );
+    // The worn looks, whose counts are read with the styles' in one read, so
+    // the tab's counting and failure notes speak for both.
+    return { rows, groups, lookIds: wornLookIds(groups) };
   }, [library, suppliedKey]);
 }
 
@@ -217,7 +218,7 @@ function useListedRows({
       ),
     [rows, styleContext]
   );
-  const found = searchSharedStyles(rows, query, row => texts.get(row.id) ?? "");
+  const found = foundSharedStyles(rows, query, row => texts.get(row.id) ?? "");
   return { rows, lookIds, found, paint };
 }
 
@@ -231,14 +232,7 @@ function useLookGroups(
   query: string,
   styleContext: StyleCompileContext | undefined
 ): BlockLookGroup[] {
-  const suppliedKey = idsKey(suppliedClassIds ?? []);
-  const groups = React.useMemo(
-    () =>
-      library === undefined
-        ? []
-        : blockLookGroups(library, new Set(idsOf(suppliedKey))),
-    [library, suppliedKey]
-  );
+  const { groups } = useRows(library, suppliedClassIds);
   // Each look's search text, as each shared style's is: its name and every
   // property and value it declares, so a search the box promises finds both.
   // Keyed by look, its type with its id, since two types' own looks may
@@ -255,17 +249,7 @@ function useLookGroups(
       ),
     [groups, styleContext]
   );
-  if (query.trim() === "") return groups;
-  return groups
-    .map(group => ({
-      ...group,
-      rows: searchSharedStyles(
-        group.rows,
-        query,
-        row => texts.get(lookKeyOf(row)) ?? ""
-      ),
-    }))
-    .filter(group => group.rows.length > 0);
+  return foundLooks(groups, query, row => texts.get(lookKeyOf(row)) ?? "");
 }
 
 /**
