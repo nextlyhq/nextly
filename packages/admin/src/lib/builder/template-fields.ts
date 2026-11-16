@@ -9,7 +9,15 @@
 import type { FieldDefinition } from "@admin/types/collection";
 
 import type { SchemaTemplate, SchemaTemplateField } from "./schema-templates";
-import { templateFieldKey } from "./template-check";
+
+/**
+ * A field's key: its position among its siblings after its container's key,
+ * outermost first (`2.0`). Fields are left out by key, so two siblings of the
+ * very same name are still told apart.
+ */
+export function templateFieldKey(parentKey: string | null, at: number): string {
+  return parentKey === null ? String(at) : `${parentKey}.${at}`;
+}
 
 /** A stored field, with a plugin type's own settings where the loader reads them. */
 type StoredField = FieldDefinition & {
@@ -45,6 +53,14 @@ function storedField(
     ...(pluginOptions ? { pluginOptions: { ...pluginOptions } } : {}),
     ...(fields ? { fields: storedFields(fields, key, leftOut) } : {}),
   };
+}
+
+/**
+ * One template field as the Builder stores it, every field inside it kept:
+ * the shape the template check judges, as the save would see it.
+ */
+export function storedTemplateField(field: SchemaTemplateField): StoredField {
+  return storedField(field, "", new Set());
 }
 
 function storedFields(
