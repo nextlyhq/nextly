@@ -20,6 +20,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute: vi.fn() }));
 const { canvasListCount, canvasListData, canvasListReadsIn } = await import(
   "./list-entries-client"
 );
+const { canvasSourcesChanged } = await import("./canvas-sources");
 
 const ANSWER = {
   items: [{ id: "p1" }],
@@ -34,19 +35,34 @@ const ANSWER = {
 };
 
 describe("the canvas's list data", () => {
-  it("reads each distinct query once while its answer is kept, and again after", async () => {
-    let clock = 0;
-    const read = vi.fn(async () => ANSWER);
-    const data = canvasListData(read, () => clock);
-    const query = { collection: "posts", limit: 3 };
-    expect(await data.find(query)).toEqual({ items: ANSWER.items, total: 1 });
-    await data.find({ ...query });
-    expect(read).toHaveBeenCalledTimes(1);
-    await data.find({ collection: "posts", limit: 4 });
-    expect(read).toHaveBeenCalledTimes(2);
-    clock = 60_000;
-    await data.find(query);
-    expect(read).toHaveBeenCalledTimes(3);
+  it("reads each distinct query once, and keeps its answer however long", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const read = vi.fn(async () => ANSWER);
+      const data = canvasListData(read);
+      const query = { collection: "posts", limit: 3 };
+      expect(await data.find(query)).toEqual({
+        items: ANSWER.items,
+        total: 1,
+      });
+      await data.find({ ...query });
+      expect(read).toHaveBeenCalledTimes(1);
+      await data.find({ collection: "posts", limit: 4 });
+      expect(read).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await data.find(query);
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads afresh once the canvas's sources have changed", async () => {
+    const kept = canvasListReadsIn("en", "author-c");
+    expect(canvasListReadsIn("en", "author-c")).toBe(kept);
+    canvasSourcesChanged();
+    // New reads, which keep nothing from before the change.
+    expect(canvasListReadsIn("en", "author-c")).not.toBe(kept);
   });
 
   it("keeps no refusal, so the next draw asks again", async () => {

@@ -57,6 +57,7 @@ import {
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
+import { onCanvasSourcesChanged } from "./canvas-sources";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
  * gave, so the editor's read meter adds the binding reads as the route made
@@ -120,24 +121,11 @@ const NONE: PageBindings = Object.freeze({});
 
 /**
  * The asks answered so far, by ask, for the current person only. An answer
- * is kept for as long as its ask is the same, with no lifetime of its own: a
- * lock renewal, an unrelated edit or a minute's wait reads nothing again.
- * What it read changing is what drops it ({@link dropKeptCanvasReads}).
+ * is kept for as long as its ask is the same, with no lifetime of its own,
+ * and dropped when the sources the canvas reads change (`canvas-sources`).
  */
 const KEPT = new Map<string, { read: Promise<PageBindings> }>();
-
-/** Every mounted canvas read, told when the sources it read have changed. */
-const SOURCES_CHANGED = new Set<() => void>();
-
-/**
- * The sources the canvas reads have changed: a save in this browser, or the
- * change check finding one made elsewhere. Every kept answer goes, and each
- * mounted canvas asks again for what it draws.
- */
-export function dropKeptCanvasReads(): void {
-  KEPT.clear();
-  for (const told of [...SOURCES_CHANGED]) told();
-}
+onCanvasSourcesChanged(() => KEPT.clear());
 /**
  * The person whose answers `KEPT` holds. Always a known person: until the
  * signed-in person is known nothing is asked, so no answer is ever kept under
@@ -492,13 +480,10 @@ export function useCanvasBindings(
   // made again: a source can change while what the page asks stays the same
   // (a saved title, an updated Single).
   const [round, setRound] = useState(0);
-  useEffect(() => {
-    const told = () => setRound(value => value + 1);
-    SOURCES_CHANGED.add(told);
-    return () => {
-      SOURCES_CHANGED.delete(told);
-    };
-  }, []);
+  useEffect(
+    () => onCanvasSourcesChanged(() => setRound(value => value + 1)),
+    []
+  );
   // The retry this read last answered, so a retry the editor asks for reads
   // afresh rather than from what was kept for the same ask.
   const answeredRetry = useRef(retry);

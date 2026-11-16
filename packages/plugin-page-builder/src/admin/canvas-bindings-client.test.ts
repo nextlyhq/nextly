@@ -32,12 +32,12 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const {
   canvasBindingsFor,
   canvasBindingsRequest,
-  dropKeptCanvasReads,
   listConditionsFor,
   siteTimeZoneFor,
   useCanvasBindings,
 } = await import("./canvas-bindings-client");
 const { CanvasEntryProvider } = await import("./editor/canvas-entry");
+const { canvasSourcesChanged } = await import("./canvas-sources");
 
 /** The retries the editor has asked for, which a wrapper hands the canvas. */
 let retries = 0;
@@ -430,7 +430,7 @@ describe("the canvas's binding sources", () => {
         title: "Before the save",
       })
     );
-    dropKeptCanvasReads();
+    canvasSourcesChanged();
     await waitFor(() =>
       expect(result.current.entry).toEqual({
         id: "p1",
