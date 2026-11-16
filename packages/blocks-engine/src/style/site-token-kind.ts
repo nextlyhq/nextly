@@ -120,114 +120,158 @@ export function checkTokenKind(
 
   const measured = MEASUREMENT.exec(text);
   // Text plainly trying to be a number but failing to be one — `1.px`, `1..2` —
-  // reaches no verdict below, because nothing matches and every branch reads
+  // reaches no verdict below, because nothing matches and every check reads
   // `undefined` as "cannot judge". For the kinds that ARE numbers, failing to
   // parse is itself the answer.
   if (
     measured === null &&
     NUMERIC_LOOKING.test(text) &&
-    (kind === "dimension" ||
-      kind === "duration" ||
-      kind === "number" ||
-      kind === "fontWeight" ||
-      // A colour too. Tightening the measurement pattern moved `1.px` out of
-      // the colour branch below without putting it anywhere else, so it stopped
-      // being reported at all — the silence this branch exists to end.
-      kind === "color")
+    NUMBER_LIKE.has(kind)
   ) {
     return kind === "color"
       ? "opens like a number and is not one, so it is not a colour"
       : "is not a number CSS can read";
   }
-  // A unit is an identifier, so `1m\\73` IS `1ms`. Read raw, the check reaches
+  // A family is any text, a shadow is a list this does not parse, and
+  // `custom` exists precisely so a site can hold something with no rules:
+  // those kinds have no check.
+  const check = KIND_CHECKS[kind];
+  return check === undefined ? undefined : check(readingOf(text, measured));
+}
+
+/**
+ * The kinds for which text that opens like a number and is not one is an
+ * answer. A colour too: tightening the measurement pattern moved `1.px` out
+ * of the colour check without putting it anywhere else, so it stopped being
+ * reported at all, the silence this exists to end.
+ */
+const NUMBER_LIKE: ReadonlySet<TokenKind> = new Set<TokenKind>([
+  "dimension",
+  "duration",
+  "number",
+  "fontWeight",
+  "color",
+]);
+
+/** A value as each kind's check reads it. */
+interface ValueReading {
+  readonly text: string;
+  /** Whether the whole text is a number with an optional unit. */
+  readonly measured: boolean;
+  /** The unit decoded and lower-cased: `""` for none, absent for no number. */
+  readonly unit: string | undefined;
+  /** What the unit measures, as `unitCategory` names it. */
+  readonly measures: ReturnType<typeof unitCategory> | undefined;
+  readonly isPercentage: boolean;
+  readonly amount: number | undefined;
+  readonly isColor: boolean;
+}
+
+function readingOf(
+  text: string,
+  measured: RegExpExecArray | null
+): ValueReading {
+  // A unit is an identifier, so `1m\73` IS `1ms`. Read raw, the check reaches
   // no verdict and stays silent about a value the browser drops.
   const rawUnit = measured === null ? undefined : (measured[1] ?? "");
-  const unit =
-    rawUnit === undefined ? undefined : asciiLower(decodeIdentifier(rawUnit));
-  // A percentage is its own token and cannot be spelled with an escape: `1\\%`
-  // and `1\\25` decode to a unit reading `%`, but CSS sees an invalid dimension
-  // and drops the declaration. Only the literal counts.
-  const isPercentage = rawUnit === "%";
-  // `unitCategory` resolves the spelling itself, so it is handed the unit as
-  // written. Decoding first and passing the result resolves the escape twice,
-  // and `1\\5c s` — a dimension whose unit decodes to the two characters `\s`,
-  // which measures nothing — comes back reading `s` and passes as a duration
-  // the browser drops.
-  const measures = rawUnit === undefined ? undefined : unitCategory(rawUnit);
-  const amount = measured === null ? undefined : Number.parseFloat(text);
-  const isColor = parseColor(text) !== undefined;
+  return {
+    text,
+    measured: measured !== null,
+    unit:
+      rawUnit === undefined ? undefined : asciiLower(decodeIdentifier(rawUnit)),
+    // A percentage is its own token and cannot be spelled with an escape:
+    // `1\%` and `1\25` decode to a unit reading `%`, but CSS sees an invalid
+    // dimension and drops the declaration. Only the literal counts.
+    isPercentage: rawUnit === "%",
+    // `unitCategory` resolves the spelling itself, so it is handed the unit as
+    // written. Decoding first and passing the result resolves the escape
+    // twice, and `1\5c s` — a dimension whose unit decodes to the two
+    // characters `\s`, which measures nothing — comes back reading `s` and
+    // passes as a duration the browser drops.
+    measures: rawUnit === undefined ? undefined : unitCategory(rawUnit),
+    amount: measured === null ? undefined : Number.parseFloat(text),
+    isColor: parseColor(text) !== undefined,
+  };
+}
 
-  switch (kind) {
-    case "color":
-      // A number is never a colour, whatever unit it wears.
-      if (measured) {
-        return `is a ${unit === "" ? "number" : "measurement"}, not a colour`;
-      }
-      // A hex is the one colour spelling read here in full, so one that
-      // `parseColor` cannot read is certainly not a colour.
-      return text.startsWith("#") && !isColor ? HEX_MALFORMED : undefined;
-    case "dimension": {
-      if (isColor) return "is a colour, not a length";
-      // Not a measurement. A function may be one this does not know, so it
-      // passes; a word passes only if some property reading the token takes
-      // it.
-      if (unit === undefined) {
-        return text.includes("(") || LENGTH_TOKEN_KEYWORDS.has(asciiLower(text))
-          ? undefined
-          : LENGTH_WORDS;
-      }
-      // Only zero may go without a unit; `16` is not `16px` to CSS.
-      if (unit === "") {
-        return amount === 0
-          ? undefined
-          : "is a number with no unit, so it is not a length";
-      }
-      // A percentage stands in for a length wherever a length token is used.
-      // Anything else that measures something — `150ms`, `20deg` — measures the
-      // wrong quantity, and the browser drops the declaration that reads it.
-      // Judged by what the unit MEASURES rather than by a second list of length
-      // units kept beside the one the value checker already has.
-      if (isPercentage) return undefined;
-      return measures === "length"
-        ? undefined
-        : `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
-    }
-    case "duration": {
-      if (isColor) return "is a colour, not a duration";
-      if (unit === undefined) return undefined;
-      // CSS allows a unitless zero for a time, and only a unitless one: `0px`
-      // is still a length, and `animation-duration: var(--site-time)` reading
-      // it is a declaration the browser drops.
-      if (unit === "" && amount === 0) return undefined;
-      return measures === "time"
-        ? undefined
-        : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
-    }
-    case "number":
-      if (isColor) return "is a colour, not a number";
-      return unit !== undefined && unit !== ""
-        ? `carries the unit "${unit}", so it is not a plain number`
-        : undefined;
-    case "fontWeight":
-      if (unit !== undefined && unit !== "") {
-        return `carries the unit "${unit}", so it is not a font weight`;
-      }
-      if (amount !== undefined) {
-        return amount < 1 || amount > 1000
-          ? "is outside the 1 to 1000 a font weight may take"
-          : undefined;
-      }
-      // Not a number, so it has to be one of the four words the property
-      // takes. Accepting every other word meant a weight of `heavy` was
-      // emitted with nothing said about it and dropped where it was used.
-      return FONT_WEIGHT_KEYWORDS.has(asciiLower(text))
-        ? undefined
-        : `is not a font weight; the words are ${[...FONT_WEIGHT_KEYWORDS].join(", ")}`;
-    // A family is any text, a shadow is a list this does not parse, and
-    // `custom` exists precisely so a site can hold something with no rules.
-    case "fontFamily":
-    case "shadow":
-    case "custom":
-      return undefined;
+/** Each kind's check, for the kinds that have one. */
+const KIND_CHECKS: Partial<
+  Record<TokenKind, (reading: ValueReading) => string | undefined>
+> = {
+  color: colourIssue,
+  dimension: lengthIssue,
+  duration: durationIssue,
+  number: numberIssue,
+  fontWeight: fontWeightIssue,
+};
+
+function colourIssue({ text, measured, unit, isColor }: ValueReading) {
+  // A number is never a colour, whatever unit it wears.
+  if (measured) {
+    return `is a ${unit === "" ? "number" : "measurement"}, not a colour`;
   }
+  // A hex is the one colour spelling read here in full, so one that
+  // `parseColor` cannot read is certainly not a colour.
+  return text.startsWith("#") && !isColor ? HEX_MALFORMED : undefined;
+}
+
+function lengthIssue(reading: ValueReading): string | undefined {
+  const { text, unit, measures, amount } = reading;
+  if (reading.isColor) return "is a colour, not a length";
+  // Not a measurement. A function may be one this does not know, so it
+  // passes; a word passes only if some property reading the token takes it.
+  if (unit === undefined) {
+    return text.includes("(") || LENGTH_TOKEN_KEYWORDS.has(asciiLower(text))
+      ? undefined
+      : LENGTH_WORDS;
+  }
+  // Only zero may go without a unit; `16` is not `16px` to CSS.
+  if (unit === "") {
+    return amount === 0
+      ? undefined
+      : "is a number with no unit, so it is not a length";
+  }
+  // A percentage stands in for a length wherever a length token is used.
+  // Anything else that measures something — `150ms`, `20deg` — measures the
+  // wrong quantity, and the browser drops the declaration that reads it.
+  // Judged by what the unit MEASURES rather than by a second list of length
+  // units kept beside the one the value checker already has.
+  if (reading.isPercentage || measures === "length") return undefined;
+  return `is measured in ${unit}, which is ${measures ?? "not a unit CSS knows"}, not a length`;
+}
+
+function durationIssue({ unit, measures, amount, isColor }: ValueReading) {
+  if (isColor) return "is a colour, not a duration";
+  if (unit === undefined) return undefined;
+  // CSS allows a unitless zero for a time, and only a unitless one: `0px` is
+  // still a length, and `animation-duration: var(--site-time)` reading it is
+  // a declaration the browser drops.
+  if (unit === "" && amount === 0) return undefined;
+  return measures === "time"
+    ? undefined
+    : `is measured in ${unit === "" ? "no unit" : unit}, not seconds or milliseconds`;
+}
+
+function numberIssue({ unit, isColor }: ValueReading) {
+  if (isColor) return "is a colour, not a number";
+  return unit !== undefined && unit !== ""
+    ? `carries the unit "${unit}", so it is not a plain number`
+    : undefined;
+}
+
+function fontWeightIssue({ text, unit, amount }: ValueReading) {
+  if (unit !== undefined && unit !== "") {
+    return `carries the unit "${unit}", so it is not a font weight`;
+  }
+  if (amount !== undefined) {
+    return amount < 1 || amount > 1000
+      ? "is outside the 1 to 1000 a font weight may take"
+      : undefined;
+  }
+  // Not a number, so it has to be one of the four words the property takes.
+  // Accepting every other word meant a weight of `heavy` was emitted with
+  // nothing said about it and dropped where it was used.
+  return FONT_WEIGHT_KEYWORDS.has(asciiLower(text))
+    ? undefined
+    : `is not a font weight; the words are ${[...FONT_WEIGHT_KEYWORDS].join(", ")}`;
 }
