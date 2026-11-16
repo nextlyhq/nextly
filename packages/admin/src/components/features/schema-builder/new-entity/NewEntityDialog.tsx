@@ -33,11 +33,11 @@ import {
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
 
+import { BUILDER_KIND_NOUN, type BuilderConfig } from "../builder-config";
 import {
-  type AdvancedField,
-  BUILDER_KIND_NOUN,
-  type BuilderConfig,
-} from "../builder-config";
+  ADVANCED_SWITCHES,
+  isSwitchOn,
+} from "../builder-settings-modal/advanced-switches";
 import { AdvancedTab } from "../builder-settings-modal/AdvancedTab";
 import {
   ICON_PICKER_ICONS,
@@ -64,21 +64,6 @@ type Props = {
   creating?: boolean;
 };
 
-/**
- * The options the fold names when they are on, in the words it uses, each with
- * what its switch shows while it holds no value: cache revalidation and webhook
- * recording are drawn on until turned off, so they are named on too.
- */
-const OPTION_WORDS: ReadonlyArray<
-  [AdvancedField & keyof BuilderSettingsValues, string, boolean]
-> = [
-  ["status", "drafts and publishing", false],
-  ["versions", "version history", false],
-  ["i18n", "translation", false],
-  ["revalidate", "cache revalidation", true],
-  ["webhooks", "webhook recording", true],
-];
-
 /** Why Create is not offered yet, or `null` when it is. */
 function createBlockedBy(
   values: BuilderSettingsValues,
@@ -102,11 +87,12 @@ function optionsName(
   config: BuilderConfig,
   values: BuilderSettingsValues
 ): string {
-  const on = OPTION_WORDS.filter(
-    ([key, , onWhenUnset]) =>
-      config.advancedFields.includes(key) &&
-      (values[key] ?? onWhenUnset) === true
-  ).map(([, words]) => words);
+  // From the switches' own descriptions, so the fold names an option as on
+  // exactly when its switch is drawn on.
+  const on = ADVANCED_SWITCHES.filter(
+    entry =>
+      config.advancedFields.includes(entry.key) && isSwitchOn(values, entry.key)
+  ).map(entry => entry.summary);
   return on.length === 0
     ? "More options, none on"
     : `More options, on: ${on.join(", ")}`;
