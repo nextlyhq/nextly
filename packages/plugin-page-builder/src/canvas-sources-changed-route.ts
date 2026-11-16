@@ -118,11 +118,15 @@ export async function sourcesChangedStamp(
   return parts.join("|");
 }
 
-/** The save time a read answered with, or nothing. */
+/**
+ * What marks a read document's last save: its version, which every save
+ * changes, else its save time; nothing for no document. The version, because
+ * a save time stored to the second would miss a second save within it.
+ */
 function updatedAtOf(found: unknown): unknown {
-  return typeof found === "object" && found !== null
-    ? (found as { updatedAt?: unknown }).updatedAt
-    : undefined;
+  if (typeof found !== "object" || found === null) return undefined;
+  const { _rev, updatedAt } = found as { _rev?: unknown; updatedAt?: unknown };
+  return _rev ?? updatedAt;
 }
 
 /** The sources read through the Direct API as the caller, drafts included. */
