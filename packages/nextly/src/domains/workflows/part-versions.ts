@@ -49,23 +49,12 @@ export interface DocumentTable {
 }
 
 /**
- * The table a document lives in, from the collection registry. Read before a step's transaction
- * opens: the registry reads on the pool. A Single is refused: its steps are not offered yet.
+ * The table a document lives in, a collection's or a Single's, from its registry. Read before a
+ * step's transaction opens: the registry reads on the pool.
  */
-export async function documentTableOf(
+export function documentTableOf(
   document: ReviewDocument
 ): Promise<DocumentTable> {
-  if (document.scopeKind !== "collection") {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "document",
-          code: "WORKFLOW_SINGLES_NOT_SUPPORTED",
-          message: "Workflow steps on a Single are not available yet.",
-        },
-      ],
-    });
-  }
   return documentTableOn(document);
 }
 

@@ -228,7 +228,6 @@ const WORKFLOW_STEP_ERROR_CODES = {
   nothingToApprove: "WORKFLOW_NOTHING_TO_APPROVE",
   // A part with nothing unpublished: published content stays live, with no review to open.
   nothingToReview: "WORKFLOW_NOTHING_TO_REVIEW",
-  singlesNotSupported: "WORKFLOW_SINGLES_NOT_SUPPORTED",
 } as const;
 
 /** @experimental */
@@ -1072,9 +1071,11 @@ function approvalChange(
       // Without the fields an edit may change while an approval stands, and for the shared part
       // of a translated document without its translations, so a save compared with it leaves out
       // the same ones.
+      // Under the document's own kind: a Single's digest leaves out a Single's framework columns,
+      // as the publish gate's comparison does.
       digest: approvalDigest(
         shown.snapshot,
-        "collection",
+        c.input.document.scopeKind,
         partExemptFields(
           c.workflow.onEdit.exemptFields,
           part,
