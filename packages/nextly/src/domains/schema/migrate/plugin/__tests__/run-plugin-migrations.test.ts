@@ -99,47 +99,35 @@ function fakeRepo() {
   const started: string[] = [];
   const applied: string[] = [];
   const failed: string[] = [];
+  // The ledger's writes, defined once: the fake has one store, so the repository and every handle
+  // it is bound to reach the same methods.
+  const ledger = {
+    recordStart: async (args: { filename: string }) => {
+      started.push(args.filename);
+      return `id-${args.filename}`;
+    },
+    markApplied: async (id: string) => {
+      applied.push(id);
+      return true as const;
+    },
+    markFailed: async (id: string) => {
+      failed.push(id);
+    },
+    // A plugin module in these tests never stops for a busy table, so no attempt is recorded
+    // as having applied nothing.
+    markNothingApplied: async () => {},
+    discardAttempt: async () => {},
+    supersede: async () => {},
+  };
   return {
     started,
     applied,
     failed,
     repo: {
-      recordStart: async (args: { filename: string }) => {
-        started.push(args.filename);
-        return `id-${args.filename}`;
-      },
-      markApplied: async (id: string) => {
-        applied.push(id);
-        return true;
-      },
-      markFailed: async (id: string) => {
-        failed.push(id);
-      },
-      // A plugin module in these tests never stops for a busy table, so no attempt is recorded
-      // as having applied nothing.
-      markNothingApplied: async () => {},
-      discardAttempt: async () => {},
-      supersede: async () => {},
+      ...ledger,
       findFileApplies: async () => [],
-      // The applied row is written through the handle the module ran on;
-      // the fake ledger has one store, so every handle reaches it.
-      boundTo: () => ({
-        recordStart: async (args: { filename: string }) => {
-          started.push(args.filename);
-          return `id-${args.filename}`;
-        },
-        markApplied: async (id: string) => {
-          applied.push(id);
-          return true;
-        },
-        supersede: async () => {},
-        // A stopped module's record, written through a bounded handle; never reached here.
-        markFailed: async (id: string) => {
-          failed.push(id);
-        },
-        markNothingApplied: async () => {},
-        discardAttempt: async () => {},
-      }),
+      // The applied row is written through the handle the module ran on.
+      boundTo: () => ledger,
     } satisfies ReconcileRepo,
   };
 }
