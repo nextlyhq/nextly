@@ -551,6 +551,23 @@ export class DynamicCollectionSchemaService {
    * a later one that turns it back on must replay as a drop and then a create, whatever the table
    * shows while both are waiting.
    */
+  /**
+   * Refuses a list marked unique among a change's fields as declared, nested ones included: the
+   * full list where the change's own lists are a localized collection's shared subset, so a
+   * translated list is judged as one kept on the row is.
+   */
+  private refuseDeclaredUniqueLists(
+    tableName: string,
+    declaredNewFields: FieldDefinition[],
+    options: { junctionFields?: { new: FieldDefinition[] } } | undefined
+  ): void {
+    refuseUniqueOnList(
+      tableName,
+      options?.junctionFields?.new ?? declaredNewFields,
+      this.dialect
+    );
+  }
+
   private uniquenessToggleStatements(
     tableName: string,
     pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
@@ -1722,13 +1739,8 @@ ${allColumnDefs.join(",\n")}
       isSingle?: boolean;
     }
   ): string {
-    // A list marked unique is refused as declared, as at the create: the full list where the lists
-    // here are a localized collection's shared subset, and nested ones included.
-    refuseUniqueOnList(
-      tableName,
-      options?.junctionFields?.new ?? declaredNewFields,
-      this.dialect
-    );
+    // A list marked unique is refused as declared, as at the create (`refuseDeclaredUniqueLists`).
+    this.refuseDeclaredUniqueLists(tableName, declaredNewFields, options);
     // The fields whose columns sit on the row before and after, those inside a group with no name
     // among them, as the creating SQL reads them (`fieldsStoredOnRow`): the group has no name to
     // pair or to name a column by, and the fields it holds are columns that stay where they are.

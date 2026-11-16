@@ -314,7 +314,7 @@ export function refuseUniqueOnList(
  * that judges it: no dialect keeps such uniqueness (`relationHoldsReferenceList` says why), so the
  * mark is refused before any statement, naming the field and what to do instead.
  */
-export function uniqueNotOnListError(
+function uniqueNotOnListError(
   tableName: string,
   fieldName: string,
   dialect: string
