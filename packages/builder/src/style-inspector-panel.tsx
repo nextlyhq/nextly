@@ -1592,10 +1592,14 @@ function sideKeysId(fieldId: string): string {
   return `${fieldId}-keys`;
 }
 
-/**
- * What a value field is described by: the refusal of what was typed, if any,
- * and for a side of the spacing box its reset key as well.
- */
+/** The side a field draws, when it is drawn inside the spacing box. */
+function spacingBoxSide(
+  side: string | undefined,
+  inSpacingBox: boolean
+): string | undefined {
+  return inSpacingBox ? side : undefined;
+}
+
 /**
  * The key handler of a spacing-box side, which resets by key rather than by
  * Tab: its reset is out of the Tab order, so typing round the box goes side
@@ -1613,6 +1617,10 @@ function sideResetKeyDown(
   const resettable = stored !== undefined && !readOnly;
   return event => {
     if (!resettable || !isResetKey(event)) return;
+    // From this field only. React carries a key press out of a portal to the
+    // component that opened it, so Alt+Backspace (delete a word) in the
+    // variables list's search would otherwise reset the side behind it.
+    if (!event.currentTarget.contains(event.target as Node)) return;
     // Taken from the field, where Alt+Backspace would otherwise delete the
     // word before the caret: here it is the side's reset.
     event.preventDefault();
@@ -1653,6 +1661,10 @@ function isResetKey(event: React.KeyboardEvent): boolean {
   );
 }
 
+/**
+ * What a value field is described by: the refusal of what was typed, if any,
+ * and for a side of the spacing box its reset key as well.
+ */
 function fieldDescribedBy(
   refusal: string | undefined,
   side: boolean,
@@ -2351,6 +2363,10 @@ function StyleControlField({
   // field, or meets several rejected controls, has no way to tell which message
   // belongs to which without the relationship being stated.
   const errorId = `${id}-error`;
+  // A side of the spacing box, which resets by key: the one place that asks,
+  // so its key, its reset's Tab stop and its description agree. A side box
+  // drawn on its own, outside the spacing box, keeps a reset to Tab to.
+  const boxSide = spacingBoxSide(side, React.useContext(CompactSides));
   const address: StyleAddress = {
     state,
     breakpoint,
@@ -2399,7 +2415,7 @@ function StyleControlField({
   }
 
   // A side of the spacing box resets by key; see `sideResetKeyDown`.
-  const onSideKeyDown = sideResetKeyDown(side, stored, readOnly, () =>
+  const onSideKeyDown = sideResetKeyDown(boxSide, stored, readOnly, () =>
     commit(null)
   );
 
@@ -2451,9 +2467,9 @@ function StyleControlField({
         onReset={() => commit(null)}
         stored={stored}
         readOnly={readOnly}
-        resetByKey={side !== undefined}
+        resetByKey={boxSide !== undefined}
       />
-      <SideResetKeys side={side} fieldId={id} />
+      <SideResetKeys side={boxSide} fieldId={id} />
       <SharedValueLine
         target={target}
         answer={answer}

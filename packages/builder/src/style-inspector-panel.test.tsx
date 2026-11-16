@@ -5414,9 +5414,71 @@ describe("a per-side property is drawn as a box", () => {
     const { editor, box } = mountSpacingBox(LTR);
     const top = within(box as HTMLElement).getByLabelText("Margin top");
 
-    fireEvent.keyDown(top, { key: "Backspace", altKey: true });
+    // `fireEvent` answers whether the default went ahead: the key still
+    // deletes a word in the field when there is nothing to reset.
+    const wentAhead = fireEvent.keyDown(top, {
+      key: "Backspace",
+      altKey: true,
+    });
+
+    expect(wentAhead).toBe(true);
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("does not reset a side from the variables list it opened", () => {
+    /*
+     * The list is drawn in a layer at the end of the page, but React carries
+     * a key press from it back through the side that opened it. Alt+Backspace
+     * there (delete a word, in the list's search) is not the side's reset.
+     */
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
+    } as unknown as NodeStyles;
+    register({ spacing: true });
+    const editor = editorFor(documentOf(styles));
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        sideOrientation={LTR}
+        tokens={{
+          tokens: [
+            { name: "space.sm", kind: "dimension", values: { light: "8px" } },
+          ],
+        }}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Variables for Margin top" })
+    );
+    const list = screen.getByRole("listbox", { name: "Variables" });
+    // The control: the list really is outside the side's field.
+    expect(list.closest(".nx-spacing-box")).toBeNull();
+
+    fireEvent.keyDown(list, { key: "Backspace", altKey: true });
 
     expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+
+  it("goes round the box mirrored on a right-to-left element", () => {
+    // The order is the sides' logical one: top, inline end, bottom, inline
+    // start, which on a right-to-left element is top, left, bottom, right.
+    const { box } = mountSpacingBox({
+      writingMode: "horizontal-tb",
+      direction: "rtl",
+    });
+    const names = Array.from(
+      box?.querySelectorAll<HTMLInputElement>(
+        "[data-ring='margin'] > [data-side] input"
+      ) ?? [],
+      input => input.labels?.[0]?.textContent?.trim() ?? ""
+    );
+
+    expect(names).toEqual([
+      "Margin top",
+      "Margin left",
+      "Margin bottom",
+      "Margin right",
+    ]);
   });
 
   it("names Alt+Backspace in each side's description", () => {

@@ -91,14 +91,55 @@ function drawnAsBox(page: Page): Promise<boolean> {
     .evaluate(element => getComputedStyle(element).display === "grid");
 }
 
-/** The inspector's own width, and whether it is scrolling. */
+/**
+ * Whether the drawn box is whole: no side of the padding ring reaching past
+ * its ring or over a margin side. A grid alone is not enough, since a box
+ * kept as a grid too narrow for it draws its inner sides over the outer ones.
+ */
+function boxIsWhole(page: Page): Promise<boolean> {
+  return page.locator(".nx-spacing-box").evaluate(box => {
+    const rect = (element: Element) => element.getBoundingClientRect();
+    const meets = (a: DOMRect, b: DOMRect) =>
+      a.left < b.right - 0.5 &&
+      b.left < a.right - 0.5 &&
+      a.top < b.bottom - 0.5 &&
+      b.top < a.bottom - 0.5;
+    const margin = box.querySelector('[data-ring="margin"]');
+    const padding = box.querySelector('[data-ring="padding"]');
+    if (margin === null || padding === null) return false;
+    const ring = rect(padding);
+    const outer = [...margin.querySelectorAll(":scope > [data-side]")].map(
+      rect
+    );
+    return [...padding.querySelectorAll(":scope > [data-side]")].every(side => {
+      const own = rect(side);
+      return (
+        own.left >= ring.left - 0.5 &&
+        own.right <= ring.right + 0.5 &&
+        outer.every(other => !meets(own, other))
+      );
+    });
+  });
+}
+
+/**
+ * The inspector's own width, whether it is scrolling, and how much room its
+ * scrollbar takes from its content (0 for an overlay scrollbar).
+ */
 function inspectorState(
   page: Page
-): Promise<{ width: number; scrolls: boolean }> {
-  return page.locator(".nx-inspector").evaluate(element => ({
-    width: Math.round(element.getBoundingClientRect().width),
-    scrolls: element.scrollHeight > element.clientHeight,
-  }));
+): Promise<{ width: number; scrolls: boolean; gutter: number }> {
+  return page.locator(".nx-inspector").evaluate(element => {
+    const html = element as HTMLElement;
+    const style = getComputedStyle(html);
+    const borders =
+      parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
+    return {
+      width: Math.round(html.getBoundingClientRect().width),
+      scrolls: html.scrollHeight > html.clientHeight,
+      gutter: html.offsetWidth - borders - html.clientWidth,
+    };
+  });
 }
 
 /** A side's field, by the start of its label. */
@@ -131,14 +172,18 @@ test("keeps the box at the inspector's default and minimum widths, with classic 
   // The control: the panel really is scrolling, so a classic scrollbar is
   // there taking its room.
   expect(atDefault.scrolls).toBe(true);
+  // And the scrollbar is a classic one, taking its width from the panel.
+  expect(atDefault.gutter).toBeGreaterThanOrEqual(15);
   expect(await drawnAsBox(page)).toBe(true);
+  expect(await boxIsWhole(page)).toBe(true);
 
   // To the minimum width, from the keyboard, as the divider allows.
   const divider = page.getByRole("separator", { name: "Canvas and inspector" });
   await divider.focus();
   await page.keyboard.press("End");
-  await expect.poll(async () => (await inspectorState(page)).width).toBe(280);
+  await expect.poll(async () => (await inspectorState(page)).width).toBe(308);
   expect(await drawnAsBox(page)).toBe(true);
+  expect(await boxIsWhole(page)).toBe(true);
 });
 
 test("tabs round the box, margin then padding, each Top, Right, Bottom, Left, never onto a reset", async ({

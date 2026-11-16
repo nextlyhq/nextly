@@ -8124,13 +8124,13 @@ label[data-named-above] .nx-style-inspector__field-label-text {
 
 /*
  * The box falls back to a column of rows only below the width it really
- * needs. Measured with the narrow rule off, the full box holds until its
- * column is about 12.75rem wide (each side at its 3.5rem floor, margin around
- * padding); 13rem keeps it whole at the inspector's default and minimum
- * widths, a classic scrollbar's gutter included, where 18rem turned it into
- * a list at the default width whenever that scrollbar showed.
+ * needs. Measured with the narrow rule off, the padding ring's sides start to
+ * spill over the margin's at 262px, so the box holds whole from 16.5rem; the
+ * inspector's minimum width leaves it at least that, a classic scrollbar's
+ * gutter included. At 18rem it turned into a list at the default width
+ * whenever that scrollbar showed.
  */
-@container nx-inspector-fields (max-width: 13rem) {
+@container nx-inspector-fields (width < 16.5rem) {
   .nx-style-inspector__side-box {
     display: flex;
     flex-direction: column;
