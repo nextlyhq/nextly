@@ -7,13 +7,17 @@ import { describe, expect, it } from "vitest";
 import { renderHook } from "@admin/__tests__/utils";
 import { buildOutline } from "@admin/lib/builder/outline/outline-model";
 
-import { nestedFixtureFields } from "../../__fixtures__/nested-fixture";
+import {
+  nestedFixtureFieldGroups,
+  nestedFixtureFields,
+} from "../../__fixtures__/nested-fixture";
 import { useOutlineFocus } from "../useOutlineFocus";
 
 describe("useOutlineFocus", () => {
   it("returns the same object when it is drawn again with the same rows", () => {
     const nodes = buildOutline(nestedFixtureFields(), {
       entityReadOnly: false,
+      fieldGroups: nestedFixtureFieldGroups(),
     });
     const { result, rerender } = renderHook(() => useOutlineFocus(nodes));
     const first = result.current;
