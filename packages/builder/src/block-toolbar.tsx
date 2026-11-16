@@ -75,6 +75,7 @@ import {
   CHROME_ATTRIBUTE,
   outermostElementsOf,
 } from "./canvas";
+import { nodeAddressOf } from "./canvas-addressing";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
@@ -100,7 +101,7 @@ import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "./keyboard-actions";
-import { layerLabel } from "./layers";
+import { layerLabel, pathTo } from "./layers";
 import { lockBlockingEdit } from "./locking";
 import { clearanceWith } from "./scroll-clearance";
 import { useSelectionActions } from "./selection-actions";
@@ -147,14 +148,21 @@ function typingMark(aside: boolean): { "data-typing"?: "" } {
 /**
  * The bar's fade marker: present while the pointer is over a block that is
  * not selected.
+ *
+ * Not over a block inside the selection when the bar is drawn inside it:
+ * there the bar sits over what it names, and pointing under it is pointing
+ * at the selected block's own content, so it stays, and stays pressable.
  */
 function fadedAside(
   hovered: string | null,
-  selectedIds: readonly string[]
+  selectedIds: readonly string[],
+  over: { inside: boolean; document: EditorState["document"] }
 ): { "data-faded"?: "" } {
-  return hovered !== null && !selectedIds.includes(hovered)
-    ? { "data-faded": "" }
-    : {};
+  if (hovered === null || selectedIds.includes(hovered)) return {};
+  const within =
+    over.inside &&
+    pathTo(over.document, hovered).some(node => selectedIds.includes(node.id));
+  return within ? {} : { "data-faded": "" };
 }
 
 /**
@@ -271,7 +279,12 @@ function useTypingAside(
   bar: React.RefObject<HTMLDivElement | null>,
   inside: boolean,
   selectedIds: readonly string[],
-  canvasFrame: CanvasFrame
+  canvasFrame: CanvasFrame,
+  /**
+   * Whether the bar is drawn. A bar hidden for a drag is drawn again as a new
+   * element, which the listeners have to move to.
+   */
+  drawn: boolean
 ): boolean {
   const [aside, setAside] = React.useState(false);
   // Keyed on the ids, not the array, which a render may hand over afresh:
@@ -283,14 +296,14 @@ function useTypingAside(
   React.useEffect(() => {
     setAside(false);
     const element = bar.current;
-    if (!inside || element === null) return;
+    if (!inside || !drawn || element === null) return;
     return listenForTyping(
       canvas ?? element.ownerDocument,
       element,
       selected.split("\n"),
       setAside
     );
-  }, [bar, inside, selected, canvas]);
+  }, [bar, inside, selected, canvas, drawn]);
   return aside;
 }
 
@@ -375,8 +388,10 @@ function typingIn(
   if (!isHTMLElement(target) || !root.contains(target)) return null;
   const editing = target.closest(`[${EDITING_ATTRIBUTE}]`);
   const owner = editing?.closest(`[${NODE_ID_ATTRIBUTE}]`);
-  const id = owner?.getAttribute(NODE_ID_ATTRIBUTE);
-  return editing !== null && typeof id === "string" && selectedIds.includes(id)
+  // The canvas's address of the element: a component's text answers with
+  // its placement, which is what is selected.
+  const id = owner == null ? null : nodeAddressOf(owner);
+  return editing !== null && id !== null && selectedIds.includes(id)
     ? editing
     : null;
 }
@@ -689,7 +704,8 @@ export function BlockToolbar({
     bar,
     placement?.side === "inside",
     selectedIds,
-    canvasFrame
+    canvasFrame,
+    !hidden && actions.length > 0
   );
 
   /*
@@ -795,7 +811,10 @@ export function BlockToolbar({
   // author points at it. Faded, not removed, so a pointer heading for the bar
   // still reaches its buttons, and reaching them is pointing at chrome, which
   // lets the hovered block go.
-  const faded = fadedAside(hovered, selectedIds);
+  const faded = fadedAside(hovered, selectedIds, {
+    inside: placement?.side === "inside",
+    document,
+  });
 
   return (
     <div

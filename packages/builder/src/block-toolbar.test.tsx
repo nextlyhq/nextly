@@ -185,6 +185,32 @@ function unseenButton(name: string): HTMLButtonElement | null {
   );
 }
 
+/**
+ * The boxes of a page whose first block, `top`, is at the very top of a
+ * 900px screen and 60px tall, so its bar is drawn inside it.
+ */
+function topBlockBoxes(top = "a") {
+  return vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: Element) {
+      const box = (y: number, width: number, height: number) =>
+        new DOMRect(0, y, width, height);
+      if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+      if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+      if (this.matches(`[data-nx-node="${top}"]`)) return box(0, 1000, 60);
+      if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+      return box(0, 0, 0);
+    });
+}
+
+/** A block's element, marked as the text being typed into. */
+function typedText(id: string): HTMLElement {
+  const text = document.querySelector(`[data-nx-node="${id}"]`);
+  if (!(text instanceof HTMLElement)) throw new Error(`no block ${id}`);
+  text.setAttribute(EDITING_ATTRIBUTE, "text");
+  return text;
+}
+
 describe("BlockToolbar", () => {
   it("leaves the editor around its menu in the accessibility tree", () => {
     // A modal menu marks everything outside it aria-hidden while those
@@ -1106,6 +1132,96 @@ describe("BlockToolbar", () => {
       fireEvent.keyDown(text, { key: "F10", code: "F10", altKey: true });
       expect(bar.contains(document.activeElement)).toBe(true);
       expect(bar.hasAttribute("data-typing")).toBe(false);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("steps aside again after a drag has hidden and redrawn the bar", () => {
+    // A drag unmounts the bar's element and draws a new one after; the
+    // selection, the side and the document stay as they were.
+    const boxes = topBlockBoxes();
+    try {
+      const editor = editorSpy(pair(), "a");
+      const shown = (hidden: boolean) => (
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editor, { hidden })}
+        </div>
+      );
+      const { rerender } = render(shown(false));
+      rerender(shown(true));
+      rerender(shown(false));
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("inside");
+      const text = typedText("a");
+      fireEvent.keyDown(text, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("steps aside for typing in a component's text, addressed by its placement", () => {
+    // A placement's text carries the component's own minted id, and the
+    // placement's address in data-nx-instance: the placement is selected.
+    const boxes = topBlockBoxes();
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const placement = document.querySelector('[data-nx-node="a"]');
+      const minted = document.createElement("span");
+      minted.setAttribute("data-nx-node", "a::heading");
+      minted.setAttribute("data-nx-instance", "a");
+      minted.setAttribute(EDITING_ATTRIBUTE, "text");
+      placement?.append(minted);
+      fireEvent.keyDown(minted, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("stays, and pressable, while the pointer is over a block inside the selection whose bar is inside it", () => {
+    // A Section at the top holding a Heading: the bar is drawn over the
+    // Section's own content, so pointing at the Heading under it does not
+    // fade it; pointing at the next block does.
+    function PointAt({ id }: { id: string | null }) {
+      const point = useHoveredBlockSetter();
+      React.useEffect(() => point(id), [id, point]);
+      return null;
+    }
+    const boxes = topBlockBoxes("hero");
+    const doc = documentOf([
+      {
+        id: "hero",
+        type: "acme/leaf",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "inner", type: "acme/leaf", version: 1, props: {} }],
+        },
+      } as BlockNode,
+      { id: "b", type: "acme/leaf", version: 1, props: {} } as BlockNode,
+    ]);
+    const drawn = (hovered: string) => (
+      <HoveredBlockProvider>
+        <PointAt id={hovered} />
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(doc, "hero"), {})}
+        </div>
+      </HoveredBlockProvider>
+    );
+    try {
+      const { rerender } = render(drawn("inner"));
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      expect(bar.getAttribute("data-side")).toBe("inside");
+      expect(bar.hasAttribute("data-faded")).toBe(false);
+      rerender(drawn("b"));
+      expect(bar.hasAttribute("data-faded")).toBe(true);
     } finally {
       boxes.mockRestore();
     }
