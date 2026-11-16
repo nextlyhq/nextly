@@ -58,6 +58,8 @@ import {
   type UnpublishedDependency,
 } from "../publish-readiness-contract";
 
+import { PUBLISHING_ACTIONS } from "./publishing-actions";
+
 /** What is being published, in the words the dialog uses for it. */
 export type PublishSubject = "page" | "component" | "Layout";
 
@@ -82,9 +84,6 @@ export interface PublishOfferInput {
    */
   readonly enabled?: boolean;
 }
-
-/** The action ids that put the document live. */
-const PUBLISHING_ACTIONS: ReadonlySet<string> = new Set(["publish"]);
 
 /**
  * How many times one publish asks, the draft having changed while it was

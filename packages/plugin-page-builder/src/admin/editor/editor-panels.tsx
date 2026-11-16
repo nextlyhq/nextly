@@ -32,6 +32,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
+import { lazyPart } from "../lazy-part";
 import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
@@ -51,8 +52,8 @@ import {
   type ComponentGraph,
 } from "./offered-library";
 import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
+import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
-  FontsPanelWithUpload,
   offerableFaces,
   offerableTokens,
   renderedTokens,
@@ -63,6 +64,15 @@ import {
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
+
+/**
+ * The site's fonts panel, fetched when the Design panel's Fonts tab first
+ * draws it rather than with the editor: the upload and the font catalogue
+ * are of no use to an author who never opens the tab.
+ */
+const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
+  import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+);
 
 /** A key for the document the editor has open, from its identity. */
 function identityKey(
