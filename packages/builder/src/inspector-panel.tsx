@@ -91,11 +91,14 @@ import { placedDefinition } from "./variant-picker";
 // What the panel takes, the style state it edits, the Content and Style tabs,
 // the Content tab's fields and the panel for several blocks live in modules
 // of their own beside it; every name this module exported still is.
+// Part of this module's exported names; no importer in the package reads them.
+// fallow-ignore-next-line unused-type
+export type { ComponentLibrary } from "./inspector-panel-types";
+// fallow-ignore-next-line unused-type
+export type { StyleStateBinding } from "./inspector-panel-types";
 export type {
   BlockInspectorResolver,
-  ComponentLibrary,
   InspectorPanelProps,
-  StyleStateBinding,
 } from "./inspector-panel-types";
 export { editedStyleState } from "./inspector-style-state";
 
