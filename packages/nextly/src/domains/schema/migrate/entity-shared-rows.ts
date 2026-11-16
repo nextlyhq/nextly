@@ -28,6 +28,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
 import {
+  countEntityComponentRows,
   countEntityComponentTree,
   type TeardownComponentDataAdapter,
 } from "../../field-groups/services/teardown-entity-field-group-data";
@@ -451,14 +452,27 @@ async function fieldGroupRows(
   deadline: number
 ): Promise<Deletion[]> {
   if (!isTeardownAdapter(reader.adapter)) return [deletion];
-  const owned = await within(
-    countEntityComponentTree({
-      adapter: reader.adapter,
-      parentTable: deletion.owner,
-    }),
-    deadline
-  );
-  if (owned === undefined) return [deletion];
+  const args = { adapter: reader.adapter, parentTable: deletion.owner };
+  const tree = await within(countEntityComponentTree(args), deadline);
+  if (tree !== undefined) return countedIn(deletion, tree);
+  // The walk reads each level through the ORM, which cannot address a component table no schema
+  // registers (a command run outside a booted instance), and refuses where one holds rows. The
+  // entity's own level is still counted, by its parent table; what is nested below it goes too,
+  // and is listed as the field groups' tables, uncounted. Nothing is nested where nothing is held.
+  const direct = await within(countEntityComponentRows(args), deadline);
+  if (direct === undefined) return [deletion];
+  if (direct.length === 0) return [];
+  return [
+    ...countedIn(deletion, direct),
+    { ...deletion, reason: "the field-group values nested in them" },
+  ];
+}
+
+/** The entity's field-group values, one entry per table, each with its count. */
+function countedIn(
+  deletion: EntityRows,
+  owned: readonly { table: string; rows: number }[]
+): Deletion[] {
   return owned.map(({ table, rows }) => ({
     ...deletion,
     table,

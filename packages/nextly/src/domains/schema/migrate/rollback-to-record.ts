@@ -98,6 +98,7 @@ import {
   addedEntities,
   clearedSettings,
   touchedEntities,
+  type SlugsByKind,
 } from "./registry-history";
 import {
   readRegistryRecord,

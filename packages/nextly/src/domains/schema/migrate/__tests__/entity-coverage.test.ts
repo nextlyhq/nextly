@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   consentCovers,
@@ -16,8 +16,10 @@ import {
   type CoveredEntity,
 } from "../entity-coverage";
 import {
+  countEntityRows,
   coverRunDeletions,
   entityRowsOf,
+  FIELD_GROUP_TABLES,
   retiredByRun,
   withEntityCoverage,
 } from "../entity-shared-rows";
@@ -343,5 +345,42 @@ describe("counting within the time a run allows", () => {
     });
     expect(Date.now() - started).toBeLessThan(2000);
     expect(listed).toEqual([[table("dc_posts")]]);
+  });
+});
+
+describe("an entity's field-group values where the walk cannot read a table", () => {
+  it("counts the entity's own level by its parent table, and lists what is nested below it", async () => {
+    // A command outside a booted instance: no schema registers `comp_seo`, so the ORM cannot
+    // address it and the walk refuses, while a raw count by parent table still reads it.
+    const adapter = {
+      dialect: "sqlite" as const,
+      listTables: vi.fn().mockResolvedValue(["comp_seo"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(),
+      getDrizzle: vi.fn(),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 2 }]),
+      select: vi.fn(async (table: string) => {
+        if (table === "comp_seo") {
+          throw new Error(
+            'Table "comp_seo" not found in schema registry. Ensure setTableResolver() has been called during boot.'
+          );
+        }
+        return [];
+      }),
+    };
+    const [values] = entityRowsOf(posts);
+    const listed = await countEntityRows([values], {
+      db: { all: () => [] },
+      dialect: "sqlite",
+      adapter,
+    });
+    expect(listed).toEqual([
+      { ...values, table: "comp_seo", count: 2 },
+      {
+        ...values,
+        table: FIELD_GROUP_TABLES,
+        reason: "the field-group values nested in them",
+      },
+    ]);
   });
 });
