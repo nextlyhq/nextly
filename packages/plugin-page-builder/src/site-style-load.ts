@@ -15,7 +15,7 @@
  * @module site-style-load
  */
 import type { BlockRegistryReader } from "@nextlyhq/blocks-engine";
-import { offeredSiteBlocks } from "@nextlyhq/blocks-react";
+import { offeredSiteBlocks, siteCopyOf } from "@nextlyhq/blocks-react";
 
 import { withRegisteredLooks } from "./core-looks";
 import type { SiteStyleData } from "./site-style";
@@ -47,7 +47,14 @@ export async function loadSiteStyle(
   // The looks are taken after the read, not before it: a host's reader may
   // start the site on its first read, and the site's plugins register their
   // blocks as it starts.
-  const blocks = args.blocks ?? (await processSiteBlocks());
+  // Blocks bound to a page builder that did not start in this module copy
+  // (a production route's) are read from the started site, as a route
+  // reads them.
+  const given = args.blocks;
+  const blocks =
+    given !== undefined && siteCopyOf(given)?.started() !== false
+      ? given
+      : await processSiteBlocks();
   return resolvedSiteStyleOf(
     stored,
     withRegisteredLooks(args.defaults, blocks.all())

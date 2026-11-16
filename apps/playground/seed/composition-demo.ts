@@ -38,13 +38,11 @@ import {
   applyOps,
   planInsertPattern,
   type BlockDocument,
+  type NestingSource,
   type BlockNode,
   type ComponentDocument,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
-import { blocksOf } from "@nextlyhq/plugin-page-builder";
-
-import { pageBuilderPlugin } from "../nextly.config";
 
 /** Where the welcome page is served: `/site/welcome`, and `/welcome`. */
 const DEMO_PAGE_SLUG = "welcome";
@@ -653,7 +651,9 @@ function welcomePageBody(cardId: string): BlockNode[] {
  */
 export function welcomePageDocument(
   pattern: { id: string; document: BlockDocument },
-  cardId: string
+  cardId: string,
+  /** The site's nesting rules, which the insert is planned under. */
+  nesting: NestingSource
 ): BlockDocument {
   const body: BlockDocument = {
     formatVersion: 1,
@@ -664,8 +664,7 @@ export function welcomePageDocument(
     body,
     pattern,
     { index: 0 },
-    // The site's own nesting rules, from the page builder the seed started.
-    blocksOf(pageBuilderPlugin).nestingSource()
+    nesting
   );
   if (plan.problem !== undefined) {
     throw new Error(
@@ -759,6 +758,8 @@ export async function seedCompositionDemo(
   options: {
     /** The hero's image id, asked for only when the page is to be made. */
     heroImage: () => Promise<string | null>;
+    /** The site's nesting rules, which the welcome page is planned under. */
+    nesting: NestingSource;
   }
 ): Promise<{ created: number }> {
   if ((await storedRow(nextly, "pages", DEMO_SLUGS.page)) !== undefined) {
@@ -808,7 +809,8 @@ export async function seedCompositionDemo(
     noHeaderFooter: false,
     content: welcomePageDocument(
       { id: pattern.id, document: pattern.content as BlockDocument },
-      feature.id
+      feature.id,
+      options.nesting
     ),
   }));
   return { created: page.created ? 1 : 0 };
