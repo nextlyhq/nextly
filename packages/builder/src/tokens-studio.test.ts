@@ -27,6 +27,8 @@ import {
   labelNewVariable,
   relabelToken,
   variableGroups,
+  variableMatchesByTab,
+  DESIGN_TAB_GROUPS,
   variableLabelIssue,
   clearDarkValue,
   removeToken,
@@ -553,18 +555,58 @@ describe("variables, grouped as the Design panel shows them", () => {
       ])
     );
 
-  it("puts each variable in one of four groups, in the panel's order", () => {
+  it("puts each variable in one of five groups, in the panel's order", () => {
     expect(variableGroups(SET).map(group => group.heading)).toEqual([
       "Colours",
       "Type scale",
+      "Fonts and weights",
       "Spacing, radius & shadows",
-      "Other",
+      "Other values",
     ]);
+    // A font sits with the type, and only what belongs to no other group is
+    // an other value.
     expect(grouped()).toEqual({
       colours: ["Brand"],
       type: ["Body", "Loose"],
+      fonts: ["Body"],
       spacing: ["Space 4", "Card", "Card"],
-      other: ["Content width", "Body"],
+      other: ["Content width"],
+    });
+  });
+
+  it("lists each group under one Design tab", () => {
+    expect(DESIGN_TAB_GROUPS).toEqual({
+      colours: ["colours"],
+      type: ["type", "fonts"],
+      spacing: ["spacing", "other"],
+      styles: [],
+    });
+    // Every group is under exactly one tab.
+    const listed = Object.values(DESIGN_TAB_GROUPS).flat();
+    expect([...listed].sort()).toEqual(
+      variableGroups(SET)
+        .map(group => group.group)
+        .sort()
+    );
+  });
+
+  it("counts a search's matches per tab, by the names shown", () => {
+    // "Body" is a type size and a font: two in Type, none elsewhere.
+    expect(variableMatchesByTab(SET, "body")).toEqual({
+      colours: 0,
+      type: 2,
+      spacing: 0,
+    });
+    expect(variableMatchesByTab(SET, "card")).toEqual({
+      colours: 0,
+      type: 0,
+      spacing: 2,
+    });
+    // Code names are hidden, so they are not what a search matches.
+    expect(variableMatchesByTab(SET, "font-size")).toEqual({
+      colours: 0,
+      type: 0,
+      spacing: 0,
     });
   });
 
