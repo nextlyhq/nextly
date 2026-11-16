@@ -158,7 +158,7 @@ describe("a route bound to a page builder that did not start in its module copy"
         },
       },
     };
-    const own = marked({ definitionOf: () => undefined }, false);
+    const own = marked({ definitionOf: (_name: string) => undefined }, false);
     const { namedQueries } = siteBoundConfig({
       collections: ["pages"],
       field: "content",

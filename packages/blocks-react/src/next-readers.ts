@@ -31,9 +31,9 @@ import type {
   BlocksDataProvider,
   BlocksDataProviderFactory,
   BlocksPublicReader,
+  NamedQueryLookup,
 } from "./context";
 import type { BlocksPageConfig } from "./next-page-config";
-import type { NamedQueryLookup } from "./context";
 import {
   offeredSiteBlocks,
   SITE_BLOCKS_SERVICE,
