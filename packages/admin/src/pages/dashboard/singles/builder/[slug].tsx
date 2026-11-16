@@ -55,7 +55,6 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
-import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";

@@ -61,7 +61,6 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
-import { navigateTo } from "@admin/lib/navigation";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import { schemaApi } from "@admin/services/schemaApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";

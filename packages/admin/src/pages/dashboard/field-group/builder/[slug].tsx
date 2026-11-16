@@ -42,9 +42,9 @@ import {
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
-import { useFieldGroupUsedBy } from "@admin/hooks/useFieldGroupUsedBy";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import { useFieldGroupUsedBy } from "@admin/hooks/useFieldGroupUsedBy";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
   displayLabel,
@@ -60,7 +60,6 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
-import { navigateTo } from "@admin/lib/navigation";
 import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
