@@ -108,10 +108,10 @@ describe("the content-width rule", () => {
       '@property --nx-contain-inset{syntax:"<length-percentage>";inherits:false;initial-value:0px}'
     );
     expect(css).toContain(
-      ".nx-pb-page :where(*){--nx-contain-inset:0px;--nx-sized-width:0;--nx-sized-max-width:0;--nx-sized-item:0;--nx-out-of-flow:0;--nx-column-flow:0}"
+      ".nx-pb-page :where(*){--nx-contain-inset:0px;--nx-sized-width:0;--nx-sized-max-width:0;--nx-sized-item:0;--nx-out-of-flow:0;--nx-column-flow:0;--nx-fills-row:0}"
     );
     expect(css).toContain(
-      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2 * (1 - max(var(--nx-sized-width), var(--nx-sized-max-width), var(--nx-sized-item) * (1 - var(--nx-out-of-flow)) * (1 - var(--nx-column-flow)))));padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset));margin-inline:auto}"
+      ".nx-pb-page :where(.nx-pb-contained){--nx-contain-inset:max(0px, (100% - var(--site-content-width)) / 2 * (1 - max(var(--nx-sized-width), var(--nx-sized-max-width), var(--nx-sized-item) * (1 - var(--nx-out-of-flow)) * (1 - var(--nx-column-flow)) * (1 - var(--nx-fills-row)))));padding-inline:max(var(--site-space-gutter, 0px), var(--nx-contain-inset));margin-inline:auto}"
     );
     // The box is never narrowed. Its auto margin is 0 while it fills the box
     // it is laid out in, and centres it only when an author sized it.
@@ -137,6 +137,7 @@ describe("the content-width rule", () => {
       "--nx-sized-item",
       "--nx-out-of-flow",
       "--nx-column-flow",
+      "--nx-fills-row",
     ]) {
       expect(css).toContain(
         `@property ${flag}{syntax:"<number>";inherits:false;initial-value:0}`
