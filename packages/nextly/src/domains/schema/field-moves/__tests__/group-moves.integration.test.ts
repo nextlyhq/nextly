@@ -339,6 +339,57 @@ describe.each(getConfiguredTestDialects())(
       await expectEachOutOfTheGroup(t, before);
     });
 
+    it("from one group to another, whose columns both stand, in a file of its own", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      const tag: Field = { name: "tag", type: "text" };
+      await createPosts(t, SLUG, {
+        fields: [group("meta", [NOTE, summary]), group("extra", [tag])],
+      });
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", meta: { summary: "First" } },
+      });
+      const files = await filesWritten();
+
+      await save(
+        t,
+        [group("meta", [NOTE]), group("extra", [tag, summary])],
+        [{ from: ["meta", "summary"], to: ["extra", "summary"] }]
+      );
+
+      // No column changes, and the save still writes and runs the file that moves the values.
+      expect(await filesWritten()).toBe(files + 1);
+      const one = (await readAll(t)).get("one");
+      expect((one?.extra as Record<string, unknown>).summary).toBe("First");
+      expect(
+        Object.keys((one?.meta ?? {}) as Record<string, unknown>)
+      ).not.toContain("summary");
+    });
+
+    it("clears a key the group kept from a field it once had, where the moved field holds nothing", async () => {
+      const t = await boot(dialect);
+      await createPosts(t);
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "Empty", slug: "empty" },
+      });
+      // A group keeps the keys of a field taken out of it: its JSON is not rewritten.
+      await run(
+        t,
+        `UPDATE ${q(TABLE)} SET ${q("meta")} = '{"summary":"old"}' WHERE ${q("slug")} = 'empty'`
+      );
+
+      await save(t, INSIDE, INTO);
+
+      expect(movedValues((await readAll(t)).get("empty")?.meta)).toEqual({
+        summary: null,
+        views: null,
+        featured: null,
+        published: null,
+      });
+    });
+
     it("through nextly migrate, replaying the dialog's files into a second database", async () => {
       const first = await boot(dialect);
       await createPosts(first);

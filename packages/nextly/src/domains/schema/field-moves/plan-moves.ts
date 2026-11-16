@@ -27,6 +27,7 @@ import {
 
 import {
   checkMove,
+  placeOf,
   type FieldMoveRequest,
   type PlannedMove,
 } from "./check-move";
@@ -117,6 +118,58 @@ function refuseUnplaceable(
   }
 }
 
+const samePath = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((segment, at) => segment === b[at]);
+
+/** Whether `outer` is `inner` or a group above it. */
+const reaches = (outer: readonly string[], inner: readonly string[]): boolean =>
+  outer.length <= inner.length &&
+  outer.every((segment, at) => segment === inner[at]);
+
+/**
+ * Refuses moves that reach the same field: a group and a field inside it, or one field twice.
+ * Each move's statements copy and then clear, so one clearing a place another still copies from
+ * would strand that value; saved apart, each keeps its values.
+ */
+function refuseOverlapping(moves: readonly FieldMoveRequest[]): void {
+  for (const [at, one] of moves.entries()) {
+    for (const other of moves.slice(at + 1)) {
+      const overlaps =
+        reaches(one.from, other.from) ||
+        reaches(other.from, one.from) ||
+        reaches(one.to, other.to) ||
+        reaches(other.to, one.to);
+      if (overlaps) {
+        throw refused(
+          other,
+          "This save moves a group and a field inside it, or one field twice. Save each move on its own."
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Refuses a move the save's fields do not show: a field still at the place it moves from, or one
+ * already at the place it moves to. A move is the request's word for which field went where, so
+ * one naming another field would copy that field's values over the wrong place.
+ */
+function refuseUnmatched(
+  before: readonly FieldDefinition[],
+  after: readonly FieldDefinition[],
+  request: FieldMoveRequest
+): void {
+  if (
+    placeOf(after, request.from) !== null ||
+    placeOf(before, request.to) !== null
+  ) {
+    throw refused(
+      request,
+      `The move from ${request.from.join(".")} to ${request.to.join(".")} does not match the save's fields: a field is still at the first place, or was already at the second.`
+    );
+  }
+}
+
 /** The moved field's column on `table`: its kind, and its type as the dialect declares it. */
 function moveColumn(
   move: PlannedMove,
@@ -155,7 +208,11 @@ export function planEntityMoves(args: {
     before: rowColumns(args.before),
     after: rowColumns(args.after),
   };
+  refuseOverlapping(args.moves);
   for (const request of args.moves) {
+    // A field that keeps its path (moved into or out of a group with no name) keeps its place.
+    if (samePath(request.from, request.to)) continue;
+    refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,
     });

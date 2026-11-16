@@ -235,6 +235,8 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       moveDataStatements({ from: column("views"), to: key("meta", "views") }, pg)
         .copy
     ).toEqual([
+      // A key left in the group from a field it once had is cleared where there is nothing to carry.
+      `UPDATE "dc_posts" SET "meta" = "meta" #- '{"views"}' WHERE NOT ("views" IS NOT NULL) AND ("meta" #> '{"views"}') IS NOT NULL;`,
       `UPDATE "dc_posts" SET "meta" = jsonb_set(COALESCE("meta", '{}'::jsonb), '{"views"}', to_jsonb("views"), true) WHERE "views" IS NOT NULL;`,
     ]);
     const out = moveDataStatements(
@@ -260,6 +262,7 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
       moveDataStatements({ from: column("title"), to: key("meta", "title") }, mysql)
         .copy
     ).toEqual([
+      "UPDATE `dc_posts` SET `meta` = JSON_REMOVE(`meta`, '$.\"title\"') WHERE NOT (`title` IS NOT NULL) AND JSON_CONTAINS_PATH(`meta`, 'one', '$.\"title\"');",
       "UPDATE `dc_posts` SET `meta` = JSON_SET(COALESCE(`meta`, JSON_OBJECT()), '$.\"title\"', `title`) WHERE `title` IS NOT NULL;",
     ]);
     const out = moveDataStatements(

@@ -135,10 +135,12 @@ const MYSQL: JsonDialect = {
   holds: (c, k) =>
     `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) IS NOT NULL AND JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) <> 'NULL'`,
   hasKey: (c, k) => `JSON_CONTAINS_PATH(${c}, 'one', ${dollarPath(k)})`,
-  set: (c, k, v) => `JSON_SET(COALESCE(${c}, JSON_OBJECT()), ${dollarPath(k)}, ${v})`,
+  set: (c, k, v) =>
+    `JSON_SET(COALESCE(${c}, JSON_OBJECT()), ${dollarPath(k)}, ${v})`,
   remove: (c, k) => `JSON_REMOVE(${c}, ${dollarPath(k)})`,
   emptyObject: "JSON_OBJECT()",
-  isObject: (c, k) => `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT'`,
+  isObject: (c, k) =>
+    `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT'`,
   toJson: (c, target) => {
     if (target.kind === "boolean") {
       return `IF(${c}, CAST('true' AS JSON), CAST('false' AS JSON))`;
@@ -284,6 +286,9 @@ export function moveDataStatements(
           } WHERE ${source.holds};`,
         ]
       : [
+          // A key the group still holds from a field it once had, on an entry with nothing to
+          // carry: cleared, so it does not show again as the moved field's value.
+          `UPDATE ${table} SET ${q(to.column)} = ${json.remove(q(to.column), to.keys)} WHERE NOT (${source.holds}) AND ${json.hasKey(q(to.column), to.keys)};`,
           ...containersFor(json, table, q(to.column), to.keys, source.holds),
           `UPDATE ${table} SET ${q(to.column)} = ${json.set(q(to.column), to.keys, source.asJson)} WHERE ${source.holds};`,
         ];

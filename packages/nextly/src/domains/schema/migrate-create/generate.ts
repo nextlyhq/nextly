@@ -997,6 +997,9 @@ export async function generateMigration(
   // What a run writes a file for even when no table changes.
   const changesBeyondTables =
     hasSettingsChanges || changedPermissions.length > 0;
+  // Statements the caller adds are a change of their own though no table's shape changes with
+  // them: a field's values moved between two groups, whose columns both stand.
+  const appendsStatements = addsStatements(args.appendedStatements);
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1021,7 +1024,12 @@ export async function generateMigration(
     },
   });
   if (recorded !== undefined) return recorded;
-  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
+  if (
+    operations.length === 0 &&
+    !hasCompanions &&
+    !changesBeyondTables &&
+    !appendsStatements
+  ) {
     return null;
   }
 
@@ -1079,7 +1087,12 @@ export async function generateMigration(
     previous: previousSnapshot,
     dialect: args.dialect,
   });
-  if (operations.length === 0 && !hasCompanions && !changesBeyondTables) {
+  if (
+    operations.length === 0 &&
+    !hasCompanions &&
+    !changesBeyondTables &&
+    !appendsStatements
+  ) {
     return null;
   }
 
@@ -1553,6 +1566,13 @@ function refuseUnrecordedTranslations(
  * settings-only migration it is, and its snapshot records the translated fields as every snapshot
  * does.
  */
+/** Whether the caller adds a statement the file runs on its way up. */
+function addsStatements(added: GenerateArgs["appendedStatements"]): boolean {
+  return (
+    added !== undefined && added.up.first.length + added.up.last.length > 0
+  );
+}
+
 async function recordedUnlessChanged(
   args: GenerateArgs,
   run: {

@@ -13,7 +13,11 @@ const text = (name: string, extra: Record<string, unknown> = {}) =>
 const group = (name: string, fields: FieldDefinition[]) =>
   ({ name, label: name, type: "group", fields }) as FieldDefinition;
 
-const base = { table: "dc_posts", dialect: "sqlite" as const, localized: false };
+const base = {
+  table: "dc_posts",
+  dialect: "sqlite" as const,
+  localized: false,
+};
 
 describe("planEntityMoves", () => {
   it("copies a field into an existing group before the file drops its column, and back on the way down", () => {
@@ -23,12 +27,18 @@ describe("planEntityMoves", () => {
       after: [group("meta", [text("title")])],
       moves: [{ from: ["title"], to: ["meta", "title"] }],
     });
-    expect(planned.up.first).toHaveLength(1);
-    expect(planned.up.first[0]).toContain(`UPDATE "dc_posts" SET "meta" = json_set`);
+    // The stale key cleared where there is nothing to carry, then the copy.
+    expect(planned.up.first).toHaveLength(2);
+    expect(planned.up.first[0]).toContain(`json_remove`);
+    expect(planned.up.first[1]).toContain(
+      `UPDATE "dc_posts" SET "meta" = json_set`
+    );
     expect(planned.up.last).toEqual([]);
     // Down: the file re-adds the column first; the value comes back after it, and the key goes.
     expect(planned.down.first).toEqual([]);
-    expect(planned.down.last.join("\n")).toContain(`SET "title" = json_extract`);
+    expect(planned.down.last.join("\n")).toContain(
+      `SET "title" = json_extract`
+    );
     expect(planned.down.last.join("\n")).toContain(`json_remove`);
     expect(planned.movedColumns).toEqual([
       { table: "dc_posts", column: "title", into: "meta" },
@@ -117,6 +127,69 @@ describe("planEntityMoves", () => {
         },
       })
     );
+  });
+
+  it("refuses a move naming a field other than the one that moved, before it copies over that field", () => {
+    // `title` moved to `meta.title`, but the move names `meta.other`, a field the group had.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("meta", [text("other")])],
+        after: [group("meta", [text("other"), text("title")])],
+        moves: [{ from: ["title"], to: ["meta", "other"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message: expect.stringContaining(
+                "does not match the save's fields"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("refuses a group moved beside a field inside it, which the group's clearing would strand", () => {
+    const details = (fields: FieldDefinition[]) => group("details", fields);
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [group("a", [details([text("title")])]), group("b", [])],
+        after: [text("title"), group("a", []), group("b", [details([])])],
+        moves: [
+          { from: ["a", "details"], to: ["b", "details"] },
+          { from: ["a", "details", "title"], to: ["title"] },
+        ],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining("Save each move on its own."),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("plans nothing for a field keeping its path, into or out of a group with no name", () => {
+    const nameless = (fields: FieldDefinition[]) =>
+      ({ label: "Box", type: "group", fields }) as FieldDefinition;
+    expect(
+      planEntityMoves({
+        ...base,
+        before: [text("title")],
+        after: [nameless([text("title")])],
+        moves: [{ from: ["title"], to: ["title"] }],
+      }).up
+    ).toEqual({ first: [], last: [] });
   });
 
   it("plans nothing for a save that moves nothing", () => {
