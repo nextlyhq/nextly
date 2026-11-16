@@ -81,6 +81,21 @@ export function sitesVersionFormat(
     : { format: "code", blocks: null };
 }
 
+/**
+ * A version as its blocks compile now: the site's blocks kept through a
+ * review or an undo send what they say, though their HTML was stored by a
+ * release that wrote blocks as other markup.
+ */
+export function compiledVersion<
+  T extends { htmlContent: string; plainTextContent: string | null },
+>(version: T, blocks: WrittenDocument): T {
+  return {
+    ...version,
+    htmlContent: compileWrittenHtml(blocks),
+    plainTextContent: compileWrittenText(blocks),
+  };
+}
+
 /** A stored format as the record reads it: anything but `written` is coded. */
 function formatOf(stored: unknown): TemplateFormat {
   return stored === "written" ? "written" : "code";
@@ -151,31 +166,29 @@ export function writtenForCreate<T extends FormatInput>(data: T): T {
 /**
  * An update as it is stored. A coded template is never turned into blocks. A
  * written template's HTML and plain text are written from its blocks, so they
- * change only when its blocks do.
+ * change only when its blocks do, until it is converted to code
+ * (`format: "code"`).
  *
- * @throws NextlyError BUSINESS_RULE_VIOLATION for a change of format, blocks
- *   on a coded template, or HTML given for a written one
+ * @throws NextlyError BUSINESS_RULE_VIOLATION for a coded template turned
+ *   into blocks, blocks sent with a conversion to code, or HTML given for a
+ *   written template
  */
 export function writtenForUpdate<T extends Omit<FormatInput, "kind">>(
-  record: { format: TemplateFormat },
+  record: {
+    format: TemplateFormat;
+    blocks: WrittenDocument | null;
+    htmlContent?: string;
+    plainTextContent?: string | null;
+  },
   data: T
 ): T {
-  if (
-    data.format !== undefined &&
-    checkedFormat(data.format) !== record.format
-  ) {
-    throw record.format === "code"
-      ? refused(
-          "A coded template can't be turned into blocks.",
-          "code-to-written"
-        )
-      : refused(
-          "A written template can't be turned into code here.",
-          "written-to-code"
-        );
-  }
+  const format =
+    data.format === undefined ? record.format : checkedFormat(data.format);
   if (record.format === "code") {
-    if (data.blocks !== undefined && data.blocks !== null) {
+    if (
+      format === "written" ||
+      (data.blocks !== undefined && data.blocks !== null)
+    ) {
       throw refused(
         "A coded template can't be turned into blocks.",
         "code-to-written"
@@ -183,12 +196,22 @@ export function writtenForUpdate<T extends Omit<FormatInput, "kind">>(
     }
     return data;
   }
-  if (data.htmlContent !== undefined || data.plainTextContent !== undefined) {
+  if (format === "code") return convertedToCode(record.blocks, data);
+  // A form that saves every field sends back the HTML and plain text it was
+  // given; those are the blocks' own, and only a change to them is refused.
+  const { htmlContent, plainTextContent, ...rest } = data;
+  const sameHtml =
+    htmlContent === undefined || htmlContent === record.htmlContent;
+  const sameText =
+    plainTextContent === undefined ||
+    (plainTextContent ?? null) === (record.plainTextContent ?? null);
+  if (!sameHtml || !sameText) {
     throw refused(
       "A written template's HTML is written from its blocks. Change its blocks instead.",
       "html-on-written-template"
     );
   }
+  data = rest as T;
   if (data.blocks === undefined) return data;
   const fields = writtenFields(data.blocks);
   return {
@@ -196,5 +219,34 @@ export function writtenForUpdate<T extends Omit<FormatInput, "kind">>(
     blocks: fields.blocks,
     htmlContent: fields.htmlContent,
     plainTextContent: fields.plainTextContent,
+  };
+}
+
+/**
+ * A written template converted to code. It keeps the Liquid its blocks
+ * compile to now, as a send renders them (chips, conditions and lists
+ * included), unless the same save gives its own HTML or plain text, and its
+ * blocks go. One way: a coded template is never turned back into blocks.
+ */
+function convertedToCode<T extends Omit<FormatInput, "kind">>(
+  blocks: WrittenDocument | null,
+  data: T
+): T {
+  if (data.blocks !== undefined && data.blocks !== null) {
+    throw refused(
+      "A template converted to code has no blocks. Convert it, then edit its code.",
+      "blocks-on-coded-template"
+    );
+  }
+  if (!blocks) return { ...data, format: "code", blocks: null };
+  return {
+    ...data,
+    format: "code",
+    blocks: null,
+    htmlContent: data.htmlContent ?? compileWrittenHtml(blocks),
+    plainTextContent:
+      data.plainTextContent === undefined
+        ? compileWrittenText(blocks)
+        : data.plainTextContent,
   };
 }

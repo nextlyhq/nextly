@@ -41,6 +41,7 @@ import {
 
 import type {
   BuilderField,
+  BuilderSettingsValues,
   PaletteDragData,
   FieldListDragData,
 } from "@admin/components/features/schema-builder";
@@ -134,28 +135,65 @@ export interface UseFieldBuilderReturn<T extends FieldValues = FieldValues> {
   validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
 
   // Undo history
-  /** Show `fields` with no history before them: a load, or a discard. */
-  resetFields: (fields: BuilderField[]) => void;
+  /** The entity's settings as shown, null until they are loaded. */
+  settings: BuilderSettingsValues | null;
+  /**
+   * Change the settings: one step of the history, never joined with another,
+   * so Undo takes back exactly this change.
+   */
+  setSettings: (next: BuilderSettingsValues) => void;
+  /** The fields and settings shown, as the history holds them. */
+  snapshot: BuilderSnapshot;
+  /**
+   * Change every state the history holds alike, adding no step: a change that
+   * is no edit, such as an unsaved entity's address moving, which Undo must
+   * not take back.
+   */
+  rewriteSnapshots: (
+    change: (snapshot: BuilderSnapshot) => BuilderSnapshot
+  ) => void;
+  /**
+   * Show `fields` with no history before them: a load, or a discard. With
+   * `settings`, those are shown too; without, the settings shown stay.
+   */
+  resetFields: (
+    fields: BuilderField[],
+    settings?: BuilderSettingsValues | null
+  ) => void;
   /**
    * Nothing before `saved` can be undone any more: it has just been saved.
    * Edits made after it, while the save was on its way, stay undoable. With
-   * no `saved`, the fields shown are the start.
+   * no `saved`, what is shown is the start.
    */
-  clearHistory: (saved?: BuilderField[], step?: number) => void;
-  /** Where the fields shown stand in the history; `clearHistory` takes it. */
+  clearHistory: (
+    saved?: BuilderSnapshot,
+    step?: number,
+    before?: BuilderSnapshot
+  ) => void;
+  /** Where the snapshot shown stands in the history; `clearHistory` takes it. */
   historyStep: number;
   canUndo: boolean;
   canRedo: boolean;
-  /** Step back; the fields before and after, or null with nothing to undo. */
+  /** Step back; the snapshots before and after, or null with nothing to undo. */
   undo: () => BuilderFieldsStep | null;
-  /** Step forward; the fields before and after, or null with nothing to redo. */
+  /** Step forward; the snapshots before and after, or null with nothing to redo. */
   redo: () => BuilderFieldsStep | null;
 }
 
-/** One undo or redo: the fields it left, and the fields it showed. */
+/**
+ * What one place in the editor's history holds: the fields and the entity's
+ * settings together, so a settings change is a step Undo, Redo and Discard all
+ * take back as they do a field's.
+ */
+export interface BuilderSnapshot {
+  fields: BuilderField[];
+  settings: BuilderSettingsValues | null;
+}
+
+/** One undo or redo: the snapshot it left, and the one it showed. */
 export interface BuilderFieldsStep {
-  from: BuilderField[];
-  to: BuilderField[];
+  from: BuilderSnapshot;
+  to: BuilderSnapshot;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,14 +217,17 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
   // -------------------------------------------------------------------------
   // Field state
   // -------------------------------------------------------------------------
-  // The fields as states of an undo history, the last shown being the one
-  // edited. Every change to the fields goes through `commitFields`, so each is
-  // a step that undo can take back; one field's settings typed in a row are
-  // one step, keyed by the field.
-  const [history, setHistory] = useState<BuilderHistory<BuilderField[]>>(() =>
-    createHistory(initialFields)
+  // The fields and the entity's settings as states of one undo history, the
+  // last shown being the one edited. Every change to the fields goes through
+  // `commitFields` and every change to the settings through `setSettings`, so
+  // each is a step that undo can take back; one field's settings typed in a
+  // row are one step, keyed by the field.
+  const [history, setHistory] = useState<BuilderHistory<BuilderSnapshot>>(() =>
+    createHistory({ fields: initialFields, settings: null })
   );
-  const fields = currentState(history);
+  const snapshot = currentState(history);
+  const fields = snapshot.fields;
+  const settings = snapshot.settings;
   // Undo and redo answer with the fields they left and showed, which a
   // functional update could not hand back; they read the history as last
   // rendered, which is what the person was looking at.
@@ -195,16 +236,31 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
 
   const commitFields = useCallback(
     (next: SetStateAction<BuilderField[]>, key?: string) => {
-      setHistory(prev =>
-        commit(
+      setHistory(prev => {
+        const shown = currentState(prev);
+        const nextFields =
+          typeof next === "function" ? next(shown.fields) : next;
+        // The same fields are no step. Checked here, since the snapshot built
+        // below is always a new object to the history's own check.
+        if (Object.is(nextFields, shown.fields)) return prev;
+        return commit(
           prev,
-          typeof next === "function" ? next(currentState(prev)) : next,
+          { fields: nextFields, settings: shown.settings },
           key
-        )
-      );
+        );
+      });
     },
     []
   );
+  // No key: a change of the settings is a step of its own, which neither a
+  // field's edits nor another settings change join.
+  const setSettings = useCallback((next: BuilderSettingsValues) => {
+    setHistory(prev => {
+      const shown = currentState(prev);
+      if (Object.is(next, shown.settings)) return prev;
+      return commit(prev, { fields: shown.fields, settings: next });
+    });
+  }, []);
   const setFields = useCallback<Dispatch<SetStateAction<BuilderField[]>>>(
     next => commitFields(next),
     [commitFields]
@@ -450,17 +506,47 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     [commitFields]
   );
 
-  const resetFields = useCallback((next: BuilderField[]) => {
-    setHistory(createHistory(next));
-  }, []);
+  const resetFields = useCallback(
+    (next: BuilderField[], nextSettings?: BuilderSettingsValues | null) => {
+      setHistory(prev =>
+        createHistory({
+          fields: next,
+          settings:
+            nextSettings === undefined
+              ? currentState(prev).settings
+              : nextSettings,
+        })
+      );
+    },
+    []
+  );
 
-  const clearHistory = useCallback((saved?: BuilderField[], step?: number) => {
-    setHistory(prev =>
-      saved === undefined
-        ? createHistory(currentState(prev))
-        : startFrom(prev, saved, step)
-    );
-  }, []);
+  const rewriteSnapshots = useCallback(
+    (change: (snapshot: BuilderSnapshot) => BuilderSnapshot) => {
+      setHistory(prev => ({ ...prev, states: prev.states.map(change) }));
+    },
+    []
+  );
+
+  const clearHistory = useCallback(
+    (saved?: BuilderSnapshot, step?: number, before?: BuilderSnapshot) => {
+      setHistory(prev => {
+        if (saved === undefined) return createHistory(currentState(prev));
+        const from = startFrom(prev, saved, step);
+        if (!before) return from;
+        // One state kept before what was saved, so Undo can still take back
+        // what the save has yet to write (its settings), and nothing else.
+        return {
+          ...from,
+          states: [before, ...from.states],
+          ids: [from.nextId, ...from.ids],
+          index: from.index + 1,
+          nextId: from.nextId + 1,
+        };
+      });
+    },
+    []
+  );
 
   const undo = useCallback((): BuilderFieldsStep | null => {
     const before = historyRef.current;
@@ -533,6 +619,10 @@ export function useFieldBuilder<T extends FieldValues = FieldValues>(
     handleNestedFieldAdd,
     handleEditorClose,
     validateFields,
+    settings,
+    setSettings,
+    snapshot,
+    rewriteSnapshots,
     resetFields,
     clearHistory,
     historyStep: currentId(history),
