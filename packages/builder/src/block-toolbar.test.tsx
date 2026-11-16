@@ -396,6 +396,51 @@ describe("BlockToolbar", () => {
     ).not.toContain("Locked");
   });
 
+  it("keeps a keyboard author in the bar after Unlock, on its new first stop", async () => {
+    register();
+    const editor = editorSpy(pair({ locked: true }), "a");
+    const { rerender } = render(tree(editor, {}));
+    const unlock = screen.getByRole("button", { name: "Unlock" });
+    unlock.focus();
+    // Arrows move across the lock as across any stop.
+    fireEvent.keyDown(unlock, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Select parent" })
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Home",
+    });
+    expect(document.activeElement).toBe(unlock);
+
+    fireEvent.click(unlock);
+    // The store's answer: the block, unlocked, drawn again.
+    rerender(tree({ ...editor, document: pair() }, {}));
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(bar.querySelector('[tabindex="0"]'))
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Select parent" })
+    );
+  });
+
+  it("keeps the bar's tab stop when it loses a stop under the last one", () => {
+    // The stop on the last button, then the lock lifted elsewhere (Layers):
+    // one stop fewer, and the bar still holds exactly one tab stop.
+    register();
+    const editor = editorSpy(pair({ locked: true }), "a");
+    const { rerender } = render(tree(editor, {}));
+    const bar = screen.getByRole("toolbar", { name: "Block actions" });
+    const first = bar.querySelector<HTMLElement>('[tabindex="0"]');
+    first?.focus();
+    fireEvent.keyDown(first ?? bar, { key: "End" });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    rerender(tree({ ...editor, document: pair() }, {}));
+    expect(bar.querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+  });
+
   it("says Locked, with the reason, where the author may not lift the lock", () => {
     const HELD =
       "This area of Frame is locked to its content. Leaf's design and settings can't change here.";
@@ -994,29 +1039,72 @@ describe("BlockToolbar", () => {
       );
       const bar = screen.getByRole("toolbar", { name: "Block actions" });
       expect(bar.getAttribute("data-side")).toBe("inside");
-      expect(bar.style.visibility).toBe("");
+      // Stepped aside is `data-typing`, which the stylesheet draws
+      // transparent and lets presses through.
+      const aside = () => bar.hasAttribute("data-typing");
+      expect(aside()).toBe(false);
 
       // Typing in the block's own text, as inline editing marks it.
       const text = document.querySelector('[data-nx-node="a"]');
       if (!(text instanceof HTMLElement)) throw new Error("no block a");
       text.setAttribute(EDITING_ATTRIBUTE, "text");
       fireEvent.keyDown(text, { key: "h" });
-      expect(bar.hasAttribute("data-typing")).toBe(true);
-      expect(bar.style.visibility).toBe("hidden");
+      expect(aside()).toBe(true);
 
       fireEvent.pointerMove(document);
-      expect(bar.hasAttribute("data-typing")).toBe(false);
-      expect(bar.style.visibility).toBe("");
+      expect(aside()).toBe(false);
 
       // Typing again, then the editing ends: back without a pointer move.
       fireEvent.keyDown(text, { key: "i" });
-      expect(bar.style.visibility).toBe("hidden");
+      expect(aside()).toBe(true);
       text.removeAttribute(EDITING_ATTRIBUTE);
-      await waitFor(() => expect(bar.style.visibility).toBe(""));
+      await waitFor(() => expect(aside()).toBe(false));
 
-      // The control: a key pressed outside the text being edited is not
-      // typing in the block.
+      // The controls: a key pressed outside the text being edited, and a
+      // shortcut or a key that writes nothing pressed in it, are not typing.
       fireEvent.keyDown(document.body, { key: "j" });
+      text.setAttribute(EDITING_ATTRIBUTE, "text");
+      fireEvent.keyDown(text, { key: "z", metaKey: true });
+      fireEvent.keyDown(text, { key: "ArrowLeft" });
+      fireEvent.keyDown(text, { key: "Shift" });
+      expect(aside()).toBe(false);
+      // And a key that does write still counts, held with Shift.
+      fireEvent.keyDown(text, { key: "H", shiftKey: true });
+      expect(aside()).toBe(true);
+    } finally {
+      boxes.mockRestore();
+    }
+  });
+
+  it("comes back when Alt+F10 takes focus to it from the text being typed", () => {
+    // The keyboard route to the bar while editing: a stepped-aside bar is
+    // transparent, not hidden, so it can take focus, and focus brings it back.
+    const boxes = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const box = (y: number, width: number, height: number) =>
+          new DOMRect(0, y, width, height);
+        if (this.matches("[data-scroller]")) return box(0, 1000, 900);
+        if (this.matches(".nx-canvas")) return box(0, 1000, 3000);
+        if (this.matches('[data-nx-node="a"]')) return box(0, 1000, 60);
+        if (this.matches(".nx-block-toolbar")) return box(0, 200, 40);
+        return box(0, 0, 0);
+      });
+    try {
+      render(
+        <div data-scroller="" style={{ overflowY: "auto" }}>
+          {tree(editorSpy(pair(), "a"), {})}
+        </div>
+      );
+      const bar = screen.getByRole("toolbar", { name: "Block actions" });
+      const text = document.querySelector('[data-nx-node="a"]');
+      if (!(text instanceof HTMLElement)) throw new Error("no block a");
+      text.setAttribute(EDITING_ATTRIBUTE, "text");
+      fireEvent.keyDown(text, { key: "h" });
+      expect(bar.hasAttribute("data-typing")).toBe(true);
+
+      fireEvent.keyDown(text, { key: "F10", code: "F10", altKey: true });
+      expect(bar.contains(document.activeElement)).toBe(true);
       expect(bar.hasAttribute("data-typing")).toBe(false);
     } finally {
       boxes.mockRestore();

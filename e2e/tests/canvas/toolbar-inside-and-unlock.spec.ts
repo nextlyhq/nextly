@@ -387,10 +387,14 @@ test.describe("the block toolbar with no room above, and on a locked block", () 
       timeout: 30_000,
     });
     await page.keyboard.type(" now");
-    await expect(toolbar(page)).toBeHidden();
+    // Stepped aside: transparent, so the line being typed shows through, and
+    // still focusable for Alt+F10.
+    await expect(toolbar(page)).toHaveAttribute("data-typing", "");
+    await expect(toolbar(page)).toHaveCSS("opacity", "0");
 
     await page.mouse.move(point.x + 30, point.y + 10);
-    await expect(toolbar(page)).toBeVisible();
+    await expect(toolbar(page)).not.toHaveAttribute("data-typing", "");
+    await expect(toolbar(page)).toHaveCSS("opacity", "1");
     await expect(toolbar(page)).toHaveAttribute("data-side", "inside");
   });
 

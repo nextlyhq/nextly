@@ -245,10 +245,8 @@ function barLockOf(
 /**
  * Hidden while the author types in the selected block, where the bar is drawn
  * inside it: there it sits over the block's first line, which is what is
- * being typed. Back as soon as the pointer moves, or the editing ends.
- *
- * Heard in the canvas's own document, where the typing is, and the pointer in
- * both that one and the bar's, which differ when the canvas is in a frame.
+ * being typed. Back as soon as the pointer moves, the editing ends, or focus
+ * comes to the bar (Alt+F10 from the text being edited).
  */
 function useTypingAside(
   bar: React.RefObject<HTMLDivElement | null>,
@@ -261,43 +259,80 @@ function useTypingAside(
   const selected = selectedIds.join("\n");
   React.useEffect(() => {
     setAside(false);
-    const ids = selected.split("\n");
     const element = bar.current;
     if (!inside || element === null) return;
     const root = overlaySpaceOf(element, CANVAS_ROOT_CLASS)?.root;
     if (root === undefined) return;
-    const canvas = root.ownerDocument;
-    const documents = new Set([canvas, element.ownerDocument]);
-    let watched: MutationObserver | null = null;
-    const back = (): void => {
-      watched?.disconnect();
-      watched = null;
-      setAside(false);
-    };
-    const typed = (event: KeyboardEvent): void => {
-      const typing = typingIn(event.target, root, ids);
-      if (typing === null) return;
-      setAside(true);
-      if (watched !== null) return;
-      // The editing ends when the block's text stops being edited.
-      const Watch = canvas.defaultView?.MutationObserver;
-      if (typeof Watch !== "function") return;
-      watched = new Watch(() => {
-        if (!typing.hasAttribute(EDITING_ATTRIBUTE)) back();
-      });
-      watched.observe(typing, { attributeFilter: [EDITING_ATTRIBUTE] });
-    };
-    canvas.addEventListener("keydown", typed, true);
-    for (const each of documents) each.addEventListener("pointermove", back);
-    return () => {
-      watched?.disconnect();
-      canvas.removeEventListener("keydown", typed, true);
-      for (const each of documents) {
-        each.removeEventListener("pointermove", back);
-      }
-    };
+    return listenForTyping(root, element, selected.split("\n"), setAside);
   }, [bar, inside, selected]);
   return aside;
+}
+
+/**
+ * Whether a key press writes into the text: a character, or a key that
+ * removes one or breaks the line. Not a shortcut held with a modifier, nor a
+ * key such as F10 or Escape, so Alt+F10 still reaches the bar.
+ */
+function writesText(event: KeyboardEvent): boolean {
+  if (event.altKey || event.ctrlKey || event.metaKey) return false;
+  return (
+    event.key.length === 1 ||
+    event.key === "Backspace" ||
+    event.key === "Delete" ||
+    event.key === "Enter"
+  );
+}
+
+/**
+ * Listen for typing in the selected blocks' text, telling `aside` when the
+ * bar should step aside and when it should come back; returns the way to stop.
+ *
+ * The typing is heard in the canvas's own document, the pointer in both that
+ * one and the bar's, which differ when the canvas is in a frame. The end of
+ * the editing is the element being typed into losing its editing mark, so
+ * that element is watched, and the watch moves with the typing.
+ */
+function listenForTyping(
+  root: HTMLElement,
+  bar: HTMLElement,
+  ids: readonly string[],
+  aside: (value: boolean) => void
+): () => void {
+  const canvas = root.ownerDocument;
+  const documents = new Set([canvas, bar.ownerDocument]);
+  let watched: { element: Element; observer: MutationObserver } | null = null;
+  const back = (): void => {
+    watched?.observer.disconnect();
+    watched = null;
+    aside(false);
+  };
+  const watch = (typing: Element): void => {
+    if (watched?.element === typing) return;
+    watched?.observer.disconnect();
+    watched = null;
+    const Watch = canvas.defaultView?.MutationObserver;
+    if (typeof Watch !== "function") return;
+    const observer = new Watch(() => {
+      if (!typing.hasAttribute(EDITING_ATTRIBUTE)) back();
+    });
+    observer.observe(typing, { attributeFilter: [EDITING_ATTRIBUTE] });
+    watched = { element: typing, observer };
+  };
+  const typed = (event: KeyboardEvent): void => {
+    const typing = typingIn(event.target, root, ids);
+    if (typing === null || !writesText(event)) return;
+    aside(true);
+    watch(typing);
+  };
+  canvas.addEventListener("keydown", typed, true);
+  bar.addEventListener("focusin", back);
+  for (const each of documents) each.addEventListener("pointermove", back);
+  return () => {
+    watched?.observer.disconnect();
+    canvas.removeEventListener("keydown", typed, true);
+    bar.removeEventListener("focusin", back);
+    for (const each of documents) each.removeEventListener("pointermove", back);
+  };
 }
 
 /**
@@ -337,6 +372,29 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "update-pattern": RefreshCw,
   delete: Trash2,
 };
+
+/**
+ * The roving stop kept on the focused button when the bar gains or loses its
+ * lock control around it: a keyboard press of Select parent onto a locked
+ * block keeps focus on that button while every index after the lock moves
+ * by one.
+ */
+function useStopFollowsFocus(
+  bar: React.RefObject<HTMLDivElement | null>,
+  lead: number,
+  stops: number,
+  setActiveIndex: (index: number) => void
+): void {
+  React.useEffect(() => {
+    const element = bar.current;
+    if (element === null) return;
+    const focused = element.ownerDocument.activeElement;
+    const index = [...element.querySelectorAll("button")].findIndex(
+      button => button === focused
+    );
+    if (index >= 0) setActiveIndex(index);
+  }, [bar, lead, stops, setActiveIndex]);
+}
 
 export interface BlockToolbarProps {
   /** The editor whose selection this acts on. */
@@ -441,6 +499,11 @@ export function BlockToolbar({
     }
     setActiveIndex(0);
   }, [selectedId]);
+  useStopFollowsFocus(bar, lead, stops, setActiveIndex);
+  // Kept inside the bar when it loses a stop, as when Unlock leaves it with
+  // the stop on its last button: an index past the end holds no tab stop,
+  // and the bar would be out of reach.
+  const stop = Math.min(activeIndex, Math.max(stops - 1, 0));
 
   /*
    * Measure after the DOM has the block but before the browser paints, so the
@@ -645,9 +708,9 @@ export function BlockToolbar({
       // is five buttons, and stopping at the ends makes reaching Delete from
       // Select parent four presses instead of one.
       if (event.key === "ArrowRight") {
-        focusAt((activeIndex + 1) % count);
+        focusAt((stop + 1) % count);
       } else if (event.key === "ArrowLeft") {
-        focusAt((activeIndex - 1 + count) % count);
+        focusAt((stop - 1 + count) % count);
       } else if (event.key === "Home") {
         focusAt(0);
       } else if (event.key === "End") {
@@ -659,7 +722,7 @@ export function BlockToolbar({
       // every shortcut the shell binds to reach their own handlers.
       event.preventDefault();
     },
-    [stops, activeIndex, focusAt]
+    [stops, stop, focusAt]
   );
 
   /*
@@ -721,23 +784,17 @@ export function BlockToolbar({
       // Kept out of sight rather than unmounted until the first measurement.
       // The bar has to be in the DOM to be measured at all, and mounting it at
       // a default position would show it in the wrong place for one frame.
-      // Out of sight too while it steps aside for typing, which also takes
-      // it out of the tab order until it is back.
       style={
         placement === null
           ? { visibility: "hidden" }
-          : {
-              left: placement.x,
-              top: placement.y,
-              ...(typingAside ? { visibility: "hidden" } : {}),
-            }
+          : { left: placement.x, top: placement.y }
       }
       onKeyDown={onKeyDown}
     >
       {lock === undefined ? null : (
         <BarLockControl
           lock={lock}
-          active={activeIndex === 0}
+          active={stop === 0}
           onFocus={() => setActiveIndex(0)}
           onUnlock={unlock}
           onSelect={selectHolder}
@@ -780,7 +837,7 @@ export function BlockToolbar({
              * without writing a third list that can disagree with both.
              */
             title={action.reason ?? action.label}
-            tabIndex={lead + index === activeIndex ? 0 : -1}
+            tabIndex={lead + index === stop ? 0 : -1}
             onFocus={() => setActiveIndex(lead + index)}
             onClick={() => run(action)}
           >
@@ -798,7 +855,7 @@ export function BlockToolbar({
           editor={editor}
           actions={menu}
           index={lead + buttons.length}
-          activeIndex={activeIndex}
+          activeIndex={stop}
           onFocus={setActiveIndex}
           run={run}
         />
@@ -826,6 +883,8 @@ function BarLockControl({
   onSelect: (id: string) => void;
 }): React.JSX.Element {
   const stop = { tabIndex: active ? 0 : -1, onFocus };
+  // One editor's reason apart from another's, where two are on one page.
+  const reasonId = React.useId();
   if (lock.kind === "unlock") {
     return (
       <button
@@ -850,13 +909,13 @@ function BarLockControl({
         // is the description.
         aria-label="Locked"
         aria-disabled={true}
-        aria-describedby="nx-toolbar-reason-lock"
+        aria-describedby={reasonId}
         title={lock.reason}
         {...stop}
       >
         <Lock size={14} aria-hidden="true" />
         Locked
-        <span id="nx-toolbar-reason-lock" className="nx-sr-only">
+        <span id={reasonId} className="nx-sr-only">
           {lock.reason}
         </span>
       </button>

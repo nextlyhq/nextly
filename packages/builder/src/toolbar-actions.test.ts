@@ -922,6 +922,17 @@ describe("toolbarPlacement", () => {
         const at = toolbarPlacement(block, bar, canvas, TOOLBAR_GAP_PX, screen);
         expect(at.side).not.toBe("below");
         expect(at.y).toBeLessThan(y + height);
+        // Above ends clear of the block; inside starts within it; pinned is
+        // over the block, at the screen's top.
+        if (at.side === "above") {
+          expect(at.y + bar.height).toBeLessThanOrEqual(y);
+        } else if (at.side === "inside") {
+          expect(at.y).toBe(y + TOOLBAR_INSET_PX);
+          expect(y).toBeGreaterThanOrEqual(screen.top);
+        } else {
+          expect(at.y).toBe(screen.top + TOOLBAR_GAP_PX);
+          expect(y).toBeLessThan(screen.top);
+        }
       }
     }
   });

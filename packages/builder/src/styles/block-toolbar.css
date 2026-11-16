@@ -136,6 +136,19 @@
 }
 
 /*
+ * Stepped aside while the author types in the block it is drawn inside.
+ * Transparent rather than hidden, so Alt+F10 from the text can still focus
+ * it, and focus in it brings it back.
+ */
+.nx-block-toolbar[data-typing]:not(:focus-within) {
+  opacity: 0;
+}
+
+.nx-block-toolbar[data-typing]:not(:focus-within) button {
+  pointer-events: none;
+}
+
+/*
  * A bar drawn inside a block shorter than itself runs over the top of the
  * next block. While it is faded for that block, a press there goes to the
  * block, not to a button the author cannot see. Its part over its own block is
