@@ -46,6 +46,7 @@ function callbacks(entityReadOnly = false) {
     addAt: vi.fn(),
     duplicate: vi.fn(),
     rename: vi.fn(),
+    canRename: vi.fn(() => true),
     remove: vi.fn(),
     setHidden: vi.fn(),
     openFieldGroup: vi.fn(),

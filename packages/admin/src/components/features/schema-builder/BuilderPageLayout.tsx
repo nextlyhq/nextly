@@ -26,6 +26,7 @@ import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
 import type { DuplicateNaming } from "@admin/lib/builder/duplicate-field";
+import { findFieldPlacement } from "@admin/lib/builder/field-placement";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
 import {
   judgeMove,
@@ -43,6 +44,7 @@ import {
   fieldsWithDeleted,
   markPending,
 } from "@admin/lib/builder/outline/pending-rows";
+import { renameOffered } from "@admin/lib/builder/rename-field";
 import { navigateTo } from "@admin/lib/navigation";
 import type { StoredHookConfig } from "@admin/types/collection";
 
@@ -309,12 +311,13 @@ function EditedFieldSettings({
     <BuilderFieldSettings
       // Keyed by the field, so its tab and any half-typed list entry start
       // fresh when another field is selected.
-      // A row's Rename… on the field already open starts it afresh, with its rename asked for.
-      key={`${active.fieldId}:${active.renaming === true}`}
+      // Each row's Rename… starts it afresh too, with its rename asked for, even on the field
+      // already open.
+      key={`${active.fieldId}:${active.renaming ?? 0}`}
       kind={config.kind}
       fields={builder.fields}
       fieldId={active.fieldId}
-      startRenaming={active.renaming === true}
+      startRenaming={active.renaming !== undefined}
       savedFieldIds={savedFieldIds}
       readOnly={locked}
       docked={docked}
@@ -344,10 +347,14 @@ function EditedFieldSettings({
  * The field list and what sits above it: the read-only notice a code-first
  * entity gets, the page's own region, and the drag context around the list.
  */
+/** Each row's Rename… request, numbered, so asking again on the same field asks again. */
+let renameRequests = 0;
+
 function FieldListRegion({
   config,
   builder,
   entitySlug,
+  savedFieldIds,
   outline,
   fieldGroups,
   fieldGroupsLoad,
@@ -365,6 +372,7 @@ function FieldListRegion({
   | "builder"
   | "entitySlug"
   | "locked"
+  | "savedFieldIds"
   | "configPath"
   | "beforeFieldList"
   | "active"
@@ -396,8 +404,22 @@ function FieldListRegion({
 
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
-    rename: fieldId =>
-      onActiveChange({ kind: "edit", fieldId, renaming: true }),
+    rename: fieldId => {
+      renameRequests += 1;
+      onActiveChange({ kind: "edit", fieldId, renaming: renameRequests });
+    },
+    canRename: fieldId => {
+      const placement = findFieldPlacement(builder.fields, fieldId);
+      return (
+        placement !== null &&
+        renameOffered(
+          placement.field,
+          placement.ancestors,
+          savedFieldIds.has(fieldId),
+          locked
+        )
+      );
+    },
     addAt: position => onActiveChange({ kind: "picker", position }),
     fields: builder.fields,
     judgeMove: (fieldId, target) =>

@@ -20,6 +20,8 @@ interface OutlineFieldActions {
    * rows offer no Rename….
    */
   rename?: (id: string) => void;
+  /** Whether a row offers Rename…: where its settings can rename the field. Absent, none does. */
+  canRename?: (id: string) => boolean;
   remove: (id: string) => void;
   setHidden: (id: string, hidden: boolean) => void;
   openFieldGroup: (slug: string) => void;

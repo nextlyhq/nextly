@@ -301,6 +301,65 @@ describe("BuilderPageLayout", () => {
     });
   });
 
+  // Rename… is on a row only where the field's own settings can rename it: a saved field with a
+  // column of its own. Each request is its own, so asking again on the same field asks again.
+  describe("a row's Rename…", () => {
+    async function openMenu(user: ReturnType<typeof userEvent.setup>) {
+      screen.getByTestId("field-row-excerpt").focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      return screen.findByRole("menu");
+    }
+
+    it("is not offered for a field not yet saved", async () => {
+      renderLayout();
+      const menu = await openMenu(userEvent.setup());
+      expect(
+        within(menu).queryByRole("menuitem", { name: "Rename…" })
+      ).toBeNull();
+    });
+
+    it("opens the saved field's settings to rename it, afresh each time it is asked", async () => {
+      const user = userEvent.setup();
+      const { onActiveChange } = renderLayout({
+        savedFieldIds: new Set(["u1"]),
+      });
+      await openMenu(user);
+      await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
+      await openMenu(user);
+      await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
+
+      const asked = onActiveChange.mock.calls.map(([active]) => active);
+      expect(asked).toHaveLength(2);
+      expect(asked[0]).toMatchObject({ kind: "edit", fieldId: "u1" });
+      expect(asked[0].renaming).not.toBe(asked[1].renaming);
+    });
+
+    it("asks again when the settings are already open on that field", async () => {
+      const user = userEvent.setup();
+      const { rerender, props } = renderLayout({
+        savedFieldIds: new Set(["u1"]),
+        active: { kind: "edit", fieldId: "u1", renaming: 1 },
+      });
+      await user.click(
+        within(
+          screen.getByRole("dialog", { name: /Rename Excerpt/ })
+        ).getByRole("button", { name: "Cancel" })
+      );
+      expect(
+        screen.queryByRole("dialog", { name: /Rename Excerpt/ })
+      ).toBeNull();
+      rerender(
+        <BuilderPageLayout
+          {...props}
+          active={{ kind: "edit", fieldId: "u1", renaming: 2 }}
+        />
+      );
+      expect(
+        screen.getByRole("dialog", { name: /Rename Excerpt/ })
+      ).toBeInTheDocument();
+    });
+  });
+
   // Hiding from the outline changes the field in the Builder's draft, and the
   // save sends it hidden: the outline's Hide is the same edit as the panel's.
   it("hides a field from its row's menu, into the draft the save sends", async () => {

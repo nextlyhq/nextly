@@ -37,3 +37,22 @@ export function renameUnavailableReason(
   }
   return null;
 }
+
+/**
+ * Whether Rename… is offered for `field`, under `ancestors`: a saved field, not read-only and not
+ * built in, that has a column of its own. The settings panel and the outline's row menu both ask
+ * this, so a row never offers a rename its settings will not make.
+ */
+export function renameOffered(
+  field: BuilderField,
+  ancestors: readonly BuilderField[],
+  saved: boolean,
+  readOnly: boolean
+): boolean {
+  return (
+    saved &&
+    !readOnly &&
+    field.isSystem !== true &&
+    renameUnavailableReason(field, ancestors) === null
+  );
+}

@@ -58,6 +58,7 @@ import {
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 import {
   RENAME_HOW,
+  renameOffered,
   renameUnavailableReason,
 } from "@admin/lib/builder/rename-field";
 
@@ -243,11 +244,7 @@ function panelStateOf(
     fieldReadOnly,
     canDelete: !fieldReadOnly && field.isSystem !== true,
     fieldTitle: field.label || "Untitled field",
-    renamable:
-      saved &&
-      !fieldReadOnly &&
-      field.isSystem !== true &&
-      unavailable === null,
+    renamable: renameOffered(field, ancestors, saved, fieldReadOnly),
     nameFixedReason: unavailable ?? RENAME_HOW,
   };
 }

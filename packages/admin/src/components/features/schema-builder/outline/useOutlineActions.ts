@@ -249,6 +249,7 @@ export function useOutlineActions(
       },
       duplicate: id => call().duplicate(id),
       rename: id => call().rename?.(id),
+      canRename: id => call().canRename?.(id) === true,
       remove: id => {
         const node = nodeOf(id);
         call().remove(id);
