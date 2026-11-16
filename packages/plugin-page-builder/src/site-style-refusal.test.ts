@@ -1,4 +1,4 @@
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import type { SiteToken, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { checkStoredTokens, tokensKeptAfterRefusal } from "./site-style-record";
@@ -51,12 +51,34 @@ describe("a refused save takes back only the variable refused", () => {
     expect(tokensKeptAfterRefusal(refused, STORED)).toBe(STORED);
   });
 
-  it("falls back to nothing stored when nothing was", () => {
+  it("pins nothing when what is stored is not known", () => {
+    // Every variable would read as just added, and one refused alone would
+    // be dropped and its removal saved: without a stored set to judge
+    // against, the whole edit is taken back, as for any refusal.
     const refused: SiteTokenSet = {
       tokens: [
         { name: "space.4", kind: "dimension", values: { light: "big" } },
       ],
     };
-    expect(tokensKeptAfterRefusal(refused, null)?.tokens).toEqual([]);
+    expect(tokensKeptAfterRefusal(refused, null)).toBeNull();
+  });
+
+  it("never pins a refusal on a value that was already stored", () => {
+    // A value stored before the check refused it is unchanged by the edit:
+    // it is neither dropped nor taken back, and with no change refused on
+    // its own, the set stored before stands.
+    const stored: SiteTokenSet = {
+      tokens: [
+        STORED.tokens[0] as SiteToken,
+        { name: "space.gap", kind: "dimension", values: { light: "big" } },
+      ],
+    };
+    const refused: SiteTokenSet = {
+      tokens: [
+        { name: "color.brand", kind: "color", values: { light: "#2563eb" } },
+        { name: "space.gap", kind: "dimension", values: { light: "big" } },
+      ],
+    };
+    expect(tokensKeptAfterRefusal(refused, stored)).toBe(stored);
   });
 });

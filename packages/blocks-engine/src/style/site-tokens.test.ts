@@ -267,6 +267,9 @@ describe("a value that cannot be its kind", () => {
     ["color", "#abcd"],
     ["color", "#aabbcc"],
     ["color", "#aabbccdd"],
+    // A hex with an escaped digit: CSS reads it, though the contrast parser
+    // does not.
+    ["color", "#\\66 ff"],
     // Words a property that takes a length variable accepts in its place, in
     // any case, as CSS reads keywords.
     ["dimension", "auto"],

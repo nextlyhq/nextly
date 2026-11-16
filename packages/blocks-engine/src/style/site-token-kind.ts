@@ -14,6 +14,7 @@ import { shapeLeaves } from "./catalog-types";
 import { parseColor } from "./contrast";
 import {
   asciiLower,
+  checkColorValue,
   decodeIdentifier,
   isCssWideKeyword,
   unitCategory,
@@ -205,14 +206,17 @@ const KIND_CHECKS: Partial<
   fontWeight: fontWeightIssue,
 };
 
-function colourIssue({ text, measured, unit, isColor }: ValueReading) {
+function colourIssue({ text, measured, unit }: ValueReading) {
   // A number is never a colour, whatever unit it wears.
   if (measured) {
     return `is a ${unit === "" ? "number" : "measurement"}, not a colour`;
   }
-  // A hex is the one colour spelling read here in full, so one that
-  // `parseColor` cannot read is certainly not a colour.
-  return text.startsWith("#") && !isColor ? HEX_MALFORMED : undefined;
+  // A hex is the one colour spelling judged in full here, by the CSS colour
+  // validator rather than the contrast parser, which reads only literal
+  // digits: `#\66 ff` is a colour CSS reads.
+  return text.startsWith("#") && checkColorValue(text) !== null
+    ? HEX_MALFORMED
+    : undefined;
 }
 
 function lengthIssue(reading: ValueReading): string | undefined {

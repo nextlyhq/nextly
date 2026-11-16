@@ -266,13 +266,16 @@ export function checkStoredTokens(
  * own check, so a refusal is pinned on the change that causes it. When no one
  * change is refused alone, as with a removal refused for a use the save
  * counted, nothing here can say which it was, and the set stored before
- * stands, as for any refusal.
+ * stands, as for any refusal. Nor is anything pinned when what is stored is
+ * not known: every variable would read as just added, and a stored one
+ * refused alone would be dropped and its removal saved.
  */
 export function tokensKeptAfterRefusal(
   refused: SiteTokenSet,
   persisted: SiteTokenSet | null
 ): SiteTokenSet | null {
-  const before: SiteTokenSet = persisted ?? { ...refused, tokens: [] };
+  if (persisted === null) return null;
+  const before = persisted;
   const stored = new Map(
     before.tokens.map(token => [tokenIdentity(token), token])
   );

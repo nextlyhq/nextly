@@ -292,7 +292,9 @@ function useTokenCommits(
       const kept =
         result.saved || latest.current !== next
           ? undefined
-          : partlyKept(next, persisted.current);
+          : // Judged against what is known stored: the last set a save
+            // stored, or the set as loaded before any save here.
+            partlyKept(next, persisted.current ?? editable ?? null);
       if (kept !== undefined) {
         show(kept);
         // Said as any refusal of the latest edit is said.
