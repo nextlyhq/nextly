@@ -1147,7 +1147,7 @@ export function refusalReasons({
     ? "Fix the errors on this page first."
     : undefined;
   const nothingChanged =
-    isPublishedEditState && !isDirty ? "Nothing has changed yet." : undefined;
+    isPublishedEditState && !isDirty ? NOTHING_CHANGED_REASON : undefined;
   const saveReason =
     lockedReason ?? busyReason ?? invalidReason ?? nothingChanged;
   const writeReason = lockedReason ?? busyReason;
@@ -1171,6 +1171,13 @@ export function refusalReasons({
           : "refused",
   };
 }
+
+/**
+ * Why Save is refused on a published document holding nothing new: what is
+ * stored already is the work. Exported so a surface asking whether the work
+ * is stored reads this refusal rather than a copy of its words.
+ */
+export const NOTHING_CHANGED_REASON = "Nothing has changed yet.";
 
 /**
  * Why a write is refused while the document is held elsewhere.

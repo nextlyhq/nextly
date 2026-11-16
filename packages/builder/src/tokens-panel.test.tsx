@@ -97,6 +97,26 @@ describe("the rows", () => {
     ]);
   });
 
+  it("offers no \"Space between blocks\" above the spacing variables, whatever a host hands it", () => {
+    // Spacing is set per container and by the spacing variables: there is no
+    // site-wide spacing switch. A host still passing the old `spacing` prop,
+    // as one written against an earlier version would, draws nothing for it.
+    const stale: Record<string, unknown> = {
+      spacing: { mode: "classic", onChange: () => undefined },
+    };
+    render(<Hosted tokens={SITE} {...stale} />);
+    const spacing = screen.getByRole("region", {
+      name: "Spacing, radius & shadows",
+    });
+    expect(screen.queryByText("Space between blocks")).toBeNull();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByText(/classic/i)).toBeNull();
+    // The spacing variables are listed as before.
+    expect(
+      within(spacing).getByRole("button", { name: "Space 4, 1rem" })
+    ).toBeTruthy();
+  });
+
   it("labels the colour columns beside the Colours heading, for sight only", () => {
     render(<Hosted tokens={SITE} />);
     const colours = screen.getByRole("region", { name: "Colours" });

@@ -19,6 +19,7 @@ import { useVersionDocumentTitle } from "@admin/components/features/versions/use
 import {
   readLocaleParam,
   readFromParam,
+  readViewParam,
   readVersionParam,
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
@@ -71,6 +72,9 @@ export default function SingleVersionsPage({
       // is reachable by anyone who can reach this page at all.
       readOnlyHref={ROUTES.DASHBOARD}
       from={readFromParam(searchParams?.from)}
+      {...(readViewParam(searchParams?.view)
+        ? { view: readViewParam(searchParams?.view) }
+        : {})}
       to={readVersionParam(searchParams?.to)}
       locale={locale}
     />
