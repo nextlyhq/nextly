@@ -96,6 +96,11 @@ import {
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import {
+  appliedSnapshotsOf,
+  databaseBehindError,
+  missingFromDatabase,
+} from "../../domains/schema/migrate/database-behind-migrations";
 import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
@@ -161,6 +166,7 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
+import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
   migrationsToCompare,
@@ -182,12 +188,6 @@ import {
   previewRequiredColumns,
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
-import {
-  appliedSnapshotsOf,
-  databaseBehindError,
-  missingFromDatabase,
-} from "../../domains/schema/migrate/database-behind-migrations";
-import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   constructsAdded,

@@ -1202,8 +1202,7 @@ export function databaseBehindMigrations(
   return new CliError("DATABASE_BEHIND_MIGRATIONS", {
     what: `The database lacks ${count} table${count === 1 ? "" : "s"} or column${count === 1 ? "" : "s"} its applied migrations created, so it no longer matches its ledger. Nothing was changed.`,
     why: lines.join("\n"),
-    next:
-      "Restore what is missing (from a backup, or by running again the statements of the migration named), then run `nextly migrate` again. Nothing applies until the database holds what its ledger says it does.",
+    next: "Restore what is missing (from a backup, or by running again the statements of the migration named), then run `nextly migrate` again. Nothing applies until the database holds what its ledger says it does.",
     context: { lines },
   });
 }

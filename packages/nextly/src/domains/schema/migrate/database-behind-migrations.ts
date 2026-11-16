@@ -21,8 +21,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import { databaseBehindMigrations } from "../../../cli/errors/areas/migrations";
 import type { CliError } from "../../../cli/errors";
+import { databaseBehindMigrations } from "../../../cli/errors/areas/migrations";
 import {
   parseSnapshotFile,
   SnapshotFileError,
@@ -149,7 +149,9 @@ export async function appliedSnapshotsOf(
 }
 
 /** One line per missing table or column, as the refusal names them. */
-export function missingLines(missing: readonly MissingFromDatabase[]): string[] {
+export function missingLines(
+  missing: readonly MissingFromDatabase[]
+): string[] {
   return missing.map(m =>
     m.column === undefined
       ? `- table ${m.table} (created by ${m.createdBy})`

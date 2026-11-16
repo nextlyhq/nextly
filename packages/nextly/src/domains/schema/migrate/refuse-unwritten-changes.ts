@@ -43,7 +43,11 @@ export type RefuseUnwrittenChangesArgs = Omit<
 > & {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
-  logger: { warn(message: string): void; error(message: string): void; debug?(message: string): void };
+  logger: {
+    warn(message: string): void;
+    error(message: string): void;
+    debug?(message: string): void;
+  };
 };
 
 /**

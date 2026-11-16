@@ -68,15 +68,15 @@ import {
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
-  permissionDifferences,
-  unwrittenChangesError,
-} from "../../domains/schema/migrate/unwritten-changes";
-import {
   marksNoTransaction,
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import {
+  permissionDifferences,
+  unwrittenChangesError,
+} from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,

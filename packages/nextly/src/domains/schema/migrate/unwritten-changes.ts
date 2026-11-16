@@ -27,6 +27,9 @@
  *
  * @module domains/schema/migrate/unwritten-changes
  */
+import { readdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { CliError } from "../../../cli/errors";
@@ -57,6 +60,7 @@ import {
 } from "../migrate-create/generate";
 import {
   EMPTY_SNAPSHOT,
+  isOlderFormatSnapshot,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import { describeOp } from "../pipeline/diff/describe-operation";
@@ -135,11 +139,7 @@ export function compareWithNewestSnapshot(args: {
   return {
     tables: diffSnapshots(stream.previous, stream.desired),
     settings: settingsDifferences(entities, latest, args.recorded),
-    permissions: permissionDifferences(
-      args.permissions,
-      latest,
-      args.recorded
-    ),
+    permissions: permissionDifferences(args.permissions, latest, args.recorded),
     noSnapshot: latest === null,
   };
 }
@@ -210,8 +210,7 @@ export function livePermissionsByOwner(
   const plugins: Record<string, OwnerPermissions> = {};
   for (const row of rows) {
     if (row.owner === null) continue;
-    const owned =
-      row.owner === appOwner ? app : (plugins[row.owner] ??= {});
+    const owned = row.owner === appOwner ? app : (plugins[row.owner] ??= {});
     owned[row.slug] = {
       action: row.action,
       resource: row.resource,
@@ -238,8 +237,12 @@ function tableLine(op: Operation): string {
 export function unwrittenChangeLines(changes: UnwrittenChanges): string[] {
   return [
     ...changes.tables.map(tableLine),
-    ...changes.settings.map(change => `~ settings ${describeSettingsChange(change)}`),
-    ...changes.permissions.map(change => `~ permissions ${describePermissionChange(change)}`),
+    ...changes.settings.map(
+      change => `~ settings ${describeSettingsChange(change)}`
+    ),
+    ...changes.permissions.map(
+      change => `~ permissions ${describePermissionChange(change)}`
+    ),
   ];
 }
 
@@ -263,9 +266,10 @@ export function unwrittenChangesError(
   if (nothingUnwritten(changes)) return undefined;
   const lines = unwrittenChangeLines(changes);
   const count = lines.length;
-  const next = options.baselineFirst === true
-    ? `${CREATE_MIGRATION}\n${BASELINE_FIRST}`
-    : CREATE_MIGRATION;
+  const next =
+    options.baselineFirst === true
+      ? `${CREATE_MIGRATION}\n${BASELINE_FIRST}`
+      : CREATE_MIGRATION;
   const why = [
     "The database is not reported as up to date while the configuration holds changes no migration records. Nothing was changed.",
     ...lines,
@@ -287,10 +291,45 @@ export function unwrittenChangesError(
       });
 }
 
+/**
+ * Whether the newest snapshot in the folder, the one `loadLatestSnapshot`
+ * reads, is a template's older-format one. False where there is none, or it
+ * is not JSON (the reader then refuses it as it always has).
+ */
+async function newestSnapshotIsOlderFormat(
+  migrationsDir: string
+): Promise<boolean> {
+  const metaDir = resolve(migrationsDir, "meta");
+  let names: string[];
+  try {
+    names = await readdir(metaDir);
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return false;
+    throw error;
+  }
+  const newest = names
+    .filter(name => name.endsWith(".snapshot.json"))
+    .sort()
+    .at(-1);
+  if (newest === undefined) return false;
+  try {
+    return isOlderFormatSnapshot(
+      JSON.parse(await readFile(resolve(metaDir, newest), "utf-8")) as unknown
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** What {@link unwrittenChangesOf} reads the declared schema from. */
 export type UnwrittenChangesArgs = Pick<
   AppMigrationInputsArgs,
-  "config" | "deferredExtends" | "projectRoot" | "migrationsDir" | "dialect" | "logger"
+  | "config"
+  | "deferredExtends"
+  | "projectRoot"
+  | "migrationsDir"
+  | "dialect"
+  | "logger"
 > & {
   /**
    * What the database records, asked only where the newest snapshot predates
@@ -317,6 +356,13 @@ export type UnwrittenChangesArgs = Pick<
 export async function unwrittenChangesOf(
   args: UnwrittenChangesArgs
 ): Promise<UnwrittenChanges> {
+  // A template's older-format snapshot (`isOlderFormatSnapshot`) lists entities, not tables,
+  // settings or permissions as they are recorded now, and `nextly migrate` runs its migration as
+  // written. It records nothing this comparison reads, so, as an earlier version's snapshot, its
+  // silence is never a difference; and it is no snapshot the comparison could parse.
+  if (await newestSnapshotIsOlderFormat(args.migrationsDir)) {
+    return { tables: [], settings: [], permissions: [], noSnapshot: false };
+  }
   const inputs = await appMigrationInputs({
     config: args.config,
     ...(args.deferredExtends === undefined

@@ -20,12 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import {
-  defineCollection,
-  defineConfig,
-  number,
-  text,
-} from "../../../config";
+import { defineCollection, defineConfig, number, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
@@ -209,7 +204,9 @@ async function columns(t: TestNextly, dialect: TestDialect) {
 async function permissionRows(t: TestNextly, dialect: TestDialect) {
   const { permissions } = loadedDialect(dialect).tables;
   const db = (t.adapter as unknown as DrizzleAdapter).getDrizzle() as {
-    select(f: unknown): { from(t: unknown): Promise<Record<string, unknown>[]> };
+    select(f: unknown): {
+      from(t: unknown): Promise<Record<string, unknown>[]>;
+    };
   };
   const rows = await db
     .select({
@@ -219,7 +216,10 @@ async function permissionRows(t: TestNextly, dialect: TestDialect) {
     })
     .from(permissions);
   return rows
-    .map(r => `${String(r.slug)}:${String(r.owner)}:${r.orphanedAt === null ? "live" : "orphaned"}`)
+    .map(
+      r =>
+        `${String(r.slug)}:${String(r.owner)}:${r.orphanedAt === null ? "live" : "orphaned"}`
+    )
     .sort();
 }
 
@@ -227,7 +227,11 @@ type Field = ReturnType<typeof text> | ReturnType<typeof number>;
 
 const config = (
   fields: Field[],
-  extra: { description?: string; permissions?: string[]; noPosts?: boolean } = {}
+  extra: {
+    description?: string;
+    permissions?: string[];
+    noPosts?: boolean;
+  } = {}
 ) =>
   defineConfig({
     collections: extra.noPosts
@@ -288,8 +292,16 @@ describe.each(getConfiguredTestDialects())(
 
     it.each([
       ["a field removed", [TITLE], `- drop_column ${TABLE}.body`],
-      ["a field's type changed", [TITLE, number({ name: "body" })], `~ change_column_type ${TABLE}.body`],
-      ["a field made required", [TITLE, text({ name: "body", required: true })], `~ change_column_nullable ${TABLE}.body`],
+      [
+        "a field's type changed",
+        [TITLE, number({ name: "body" })],
+        `~ change_column_type ${TABLE}.body`,
+      ],
+      [
+        "a field made required",
+        [TITLE, text({ name: "body", required: true })],
+        `~ change_column_nullable ${TABLE}.body`,
+      ],
     ])("%s: names it and changes nothing", async (_what, fields, line) => {
       await migrateCreate(config([TITLE, BODY]), "create_posts");
       expect((await migrate(config([TITLE, BODY]))).code).toBeUndefined();
@@ -332,31 +344,51 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("a settings-only edit, and a description cleared, fail naming the entity", async () => {
-      await migrateCreate(config([TITLE], { description: "Posts" }), "create_posts");
-      expect((await migrate(config([TITLE], { description: "Posts" }))).code).toBeUndefined();
+      await migrateCreate(
+        config([TITLE], { description: "Posts" }),
+        "create_posts"
+      );
+      expect(
+        (await migrate(config([TITLE], { description: "Posts" }))).code
+      ).toBeUndefined();
 
-      const edited = await migrate(config([TITLE], { description: "Articles" }));
+      const edited = await migrate(
+        config([TITLE], { description: "Articles" })
+      );
       expect(edited.code).toBe(1);
       expect(edited.said).toContain(`~ settings ${SLUG}: description`);
 
       const cleared = await migrate(config([TITLE]));
       expect(cleared.code).toBe(1);
-      expect(cleared.said).toContain(`~ settings ${SLUG}: description (cleared)`);
+      expect(cleared.said).toContain(
+        `~ settings ${SLUG}: description (cleared)`
+      );
     });
 
     it("a plugin permission added, then one removed: named, permission rows unchanged", async () => {
-      await migrateCreate(config([TITLE], { permissions: ["export"] }), "create_posts");
-      expect((await migrate(config([TITLE], { permissions: ["export"] }))).code).toBeUndefined();
+      await migrateCreate(
+        config([TITLE], { permissions: ["export"] }),
+        "create_posts"
+      );
+      expect(
+        (await migrate(config([TITLE], { permissions: ["export"] }))).code
+      ).toBeUndefined();
       const before = await permissionRows(instance!, dialect);
 
-      const added = await migrate(config([TITLE], { permissions: ["export", "archive"] }));
+      const added = await migrate(
+        config([TITLE], { permissions: ["export", "archive"] })
+      );
       expect(added.code).toBe(1);
-      expect(added.said).toContain(`~ permissions ${PLUGIN}: + archive-uw_submissions`);
+      expect(added.said).toContain(
+        `~ permissions ${PLUGIN}: + archive-uw_submissions`
+      );
       expect(await permissionRows(instance!, dialect)).toEqual(before);
 
       const removed = await migrate(config([TITLE], { permissions: [] }));
       expect(removed.code).toBe(1);
-      expect(removed.said).toContain(`~ permissions ${PLUGIN}: - export-uw_submissions`);
+      expect(removed.said).toContain(
+        `~ permissions ${PLUGIN}: - export-uw_submissions`
+      );
       expect(await permissionRows(instance!, dialect)).toEqual(before);
     });
 
@@ -395,16 +427,22 @@ describe.each(getConfiguredTestDialects())(
       };
       const q = dialect === "mysql" ? "`" : '"';
       await db.executeQuery(`DROP TABLE ${q}dc_${TAGS}${q}`);
-      await db.executeQuery(`ALTER TABLE ${q}${TABLE}${q} DROP COLUMN ${q}body${q}`);
+      await db.executeQuery(
+        `ALTER TABLE ${q}${TABLE}${q} DROP COLUMN ${q}body${q}`
+      );
 
       const run = await migrate(both([TITLE, BODY]));
 
       expect(run.code).toBe(1);
       expect(run.said).toMatch(
-        new RegExp(`- table dc_${TAGS} \\(created by \\d+_\\d+_\\d+_create_posts\\)`)
+        new RegExp(
+          `- table dc_${TAGS} \\(created by \\d+_\\d+_\\d+_create_posts\\)`
+        )
       );
       expect(run.said).toMatch(
-        new RegExp(`- column ${TABLE}\\.body \\(created by \\d+_\\d+_\\d+_add_body\\)`)
+        new RegExp(
+          `- column ${TABLE}\\.body \\(created by \\d+_\\d+_\\d+_add_body\\)`
+        )
       );
       expect(run.said).toContain("no longer matches its ledger");
       expect(run.said).not.toContain(UP_TO_DATE);
@@ -418,7 +456,12 @@ describe.each(getConfiguredTestDialects())(
           collections: [
             defineCollection({ slug: SLUG, fields }),
             ...(tags
-              ? [defineCollection({ slug: TAGS, fields: [text({ name: "label" })] })]
+              ? [
+                  defineCollection({
+                    slug: TAGS,
+                    fields: [text({ name: "label" })],
+                  }),
+                ]
               : []),
           ],
           db: { migrationsDir: "./migrations" },
@@ -428,7 +471,9 @@ describe.each(getConfiguredTestDialects())(
       await migrateCreate(both([TITLE], false), "drop_them", {
         acceptDataLoss: true,
       });
-      const dropped = await migrate(both([TITLE], false), { acceptDataLoss: true });
+      const dropped = await migrate(both([TITLE], false), {
+        acceptDataLoss: true,
+      });
       expect(dropped.code, dropped.said).toBeUndefined();
 
       const again = await migrate(both([TITLE], false));
@@ -440,7 +485,9 @@ describe.each(getConfiguredTestDialects())(
       const db = instance!.adapter as unknown as {
         executeQuery(sql: string): Promise<unknown>;
       };
-      await db.executeQuery(`CREATE TABLE ${TABLE} (id varchar(36) PRIMARY KEY)`);
+      await db.executeQuery(
+        `CREATE TABLE ${TABLE} (id varchar(36) PRIMARY KEY)`
+      );
       const run = await migrate(config([TITLE]));
       expect(run.code).toBe(1);
       expect(run.said).toContain("nextly migrate:baseline");

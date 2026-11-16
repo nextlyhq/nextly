@@ -152,7 +152,11 @@ describe("compareWithNewestSnapshot", () => {
   });
 
   it("names a relation that changes its storage", () => {
-    const author = { name: "author", type: "relationship", relationTo: "users" };
+    const author = {
+      name: "author",
+      type: "relationship",
+      relationTo: "users",
+    };
     const changes = compare(
       entitiesOf(collection([TITLE, author])),
       entitiesOf(collection([TITLE, { ...author, hasMany: true }]))
@@ -341,13 +345,10 @@ describe("unwrittenChangesError", () => {
   });
 
   it("names migrate:baseline when asked to", () => {
-    const changes = compare(
-      entitiesOf([]),
-      entitiesOf(collection([TITLE]))
-    );
-    expect(unwrittenChangesError(changes, { baselineFirst: true })?.next).toContain(
-      "nextly migrate:baseline"
-    );
+    const changes = compare(entitiesOf([]), entitiesOf(collection([TITLE])));
+    expect(
+      unwrittenChangesError(changes, { baselineFirst: true })?.next
+    ).toContain("nextly migrate:baseline");
   });
 
   it("is undefined when nothing differs", () => {
