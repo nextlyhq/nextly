@@ -66,7 +66,11 @@
  *
  * @module layout-removal/page-reference-guard
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type FieldRewriteRequest,
+  type FieldRewriteResult,
+} from "@nextlyhq/plugin-sdk";
 import type { Nextly } from "nextly";
 
 import { layoutExists, relationId } from "../default-layout/store";
@@ -307,6 +311,115 @@ export async function clearPageReference(
   for (let attempt = 1; ; attempt++) {
     try {
       return await clearOnce(nextly, pages, pageId, layoutId, writeAs);
+    } catch (error) {
+      if (
+        attempt >= CLEAR_ATTEMPTS ||
+        !NextlyError.isCode(error, "STALE_VERSION")
+      ) {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * A field rewrite of one page, made as the person moving pages and attributed
+ * to the Page Builder: core's rewrite, which changes the live copy and every
+ * draft holding the field in one transaction, without publishing, from the
+ * version read (`STALE_VERSION` otherwise). A person needs the right to update
+ * the page and to publish it.
+ */
+export type PageFieldRewrite = (
+  request: FieldRewriteRequest
+) => Promise<FieldRewriteResult>;
+
+/** How a move reaches one page: as the person, with the reason history keeps. */
+export interface PageMoveWriter {
+  readonly rewrite: PageFieldRewrite;
+  /** Why, as the page's history records it. */
+  readonly reason: string;
+  /** The person, for the draft-only clear a rewrite they may not make falls back to. */
+  readonly writeAs: PersonReads;
+}
+
+/**
+ * Move page `pageId` off `layoutId`, as the person moving pages: its live copy
+ * and every draft naming the Layout are cleared in one rewrite, each draft
+ * staying a draft and the page's status unchanged. Answers whether it cleared
+ * anything.
+ *
+ * Where the rewrite is refused (the person may update the page but not
+ * publish it, or may not change it at all), the page is cleared as it was
+ * before the rewrite existed (`clearPageReference`, as the person): its
+ * working draft or its unpublished row, and the live copy left, which draws
+ * the site default once the Layout is gone. A page they may not edit is then
+ * refused by that write, with its own error.
+ */
+export async function movePageOffLayout(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string,
+  writer: PageMoveWriter
+): Promise<boolean> {
+  try {
+    const moved = await rewritePageLayout(
+      nextly,
+      pages,
+      pageId,
+      layoutId,
+      writer
+    );
+    if (moved !== null) return moved;
+  } catch (error) {
+    // Refused before anything was written: core judges the person's update
+    // and publish rights first. A page they may not read answers as missing.
+    if (
+      !NextlyError.isCode(error, "FORBIDDEN") &&
+      !NextlyError.isCode(error, "NOT_FOUND")
+    ) {
+      throw error;
+    }
+  }
+  return clearPageReference(nextly, pages, pageId, layoutId, writer.writeAs);
+}
+
+/**
+ * The rewrite half of {@link movePageOffLayout}: the page read as the system
+ * for its version, and `layout` rewritten on every copy that names this
+ * Layout, from that version. A save of the page in between refuses it
+ * (`STALE_VERSION`), and the page is read again, up to {@link CLEAR_ATTEMPTS}
+ * times; past that the refusal is thrown and the page reported. A copy naming
+ * another Layout keeps that choice. `null` for a page whose read gives no
+ * version to rewrite from, which is cleared the way a save is instead.
+ */
+async function rewritePageLayout(
+  nextly: PageReads,
+  pages: string,
+  pageId: string,
+  layoutId: string,
+  writer: PageMoveWriter
+): Promise<boolean | null> {
+  for (let attempt = 1; ; attempt++) {
+    const current = await currentPage(nextly, pages, pageId);
+    if (current === null) return false;
+    const version = documentVersionOf(current);
+    if (version === undefined) return null;
+    try {
+      const done = await writer.rewrite({
+        collection: pages,
+        id: pageId,
+        field: "layout",
+        expectedVersion: version,
+        set: {
+          // A copy holding nothing answers `null`, which the rewrite reads
+          // as unchanged rather than as a missing answer.
+          from: value =>
+            relationId(value) === layoutId ? null : (value ?? null),
+        },
+        reason: writer.reason,
+      });
+      return done.copies.length > 0;
     } catch (error) {
       if (
         attempt >= CLEAR_ATTEMPTS ||

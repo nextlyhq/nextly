@@ -3,7 +3,11 @@
 import { useState, useEffect } from "react";
 
 import { forgetEntryBehind, recordPushFrom } from "@admin/lib/admin-history";
-import { resolveRoute, type RouteResult } from "@admin/lib/routing";
+import {
+  resolveRoute,
+  startRouteCode,
+  type RouteResult,
+} from "@admin/lib/routing";
 
 import { useHydration } from "./useHydration";
 
@@ -59,6 +63,10 @@ export function useRouter(): {
 
       // Resolve admin routes (keep full path with /admin)
       const resolved = resolveRoute(pathname, window.location.search);
+      // The screen's code is fetched from here, beside the session check: a
+      // private screen renders only once the server confirms the session, and
+      // its page would otherwise start downloading after that answer.
+      startRouteCode(resolved);
       // Read here, in the handler, so rendering stays free of the clock.
       const now = Date.now();
       setRouterState(previous => ({

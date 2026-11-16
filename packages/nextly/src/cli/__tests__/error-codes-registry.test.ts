@@ -22,6 +22,7 @@ import {
   toCliError,
   type CliErrorCode,
 } from "../errors";
+import type { CliCodeDefinition } from "../errors/define";
 import { CLI_ERROR_MAPPINGS } from "../errors/from-thrown";
 import { CLI_ERROR_AREAS } from "../errors/registry";
 import releasedCodes from "../errors/released-codes.json";
@@ -499,6 +500,31 @@ describe("what a message tells the user to type", () => {
     expect([...unknown].sort()).toEqual([]);
   });
 
+  /** A code's definition, read as the general shape every area's codes share. */
+  const definition = (code: CliErrorCode): CliCodeDefinition =>
+    CLI_ERROR_CODES[code];
+
+  it("maps no error to a retired code, and says why it was retired", () => {
+    // A retired code's cause can no longer happen: nothing may end a command as it, and its
+    // docs page must say what removed the cause, or a reader takes it for a live error.
+    const retired = codes.filter(code => definition(code).retired);
+    for (const code of retired) {
+      expect(definition(code).from ?? [], code).toEqual([]);
+      expect(
+        CLI_ERROR_MAPPINGS.filter(m => m.to === code),
+        code
+      ).toEqual([]);
+      const page = readFileSync(
+        join(DOCS, `${code.toLowerCase().replaceAll("_", "-")}.mdx`),
+        "utf8"
+      );
+      expect(page, code).toContain("retired");
+      expect(page, code).toContain(
+        definition(code).retired?.why ?? "(no reason)"
+      );
+    }
+  });
+
   it("raises every code from product code, except the two the guides reserve", () => {
     // A released code nothing raises is a promise about an error that never happens. A code is
     // raised by a mapping, or by its name in a CliError a command or an area's helper builds.
@@ -511,6 +537,7 @@ describe("what a message tells the user to type", () => {
     const unraised = codes.filter(
       code =>
         !reserved.has(code) &&
+        definition(code).retired === undefined &&
         !mapped.has(code) &&
         !product.includes(`new CliError("${code}"`) &&
         !new RegExp(`new CliError\\(\\s*"${code}"`).test(product) &&

@@ -9,9 +9,39 @@
 /** The display name of a From value: `Name <address>` gives the name. */
 import type { JSX } from "react";
 
-function senderName(from: string): string {
-  const named = /^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/.exec(from);
-  return (named ? named[1] : from).trim();
+export function senderName(from: string): string {
+  const trimmed = from.trim();
+  const match = /^(.*)<[^>]+>\s*$/.exec(trimmed);
+  if (!match) return trimmed;
+  let name = match[1].trim();
+  if (name.startsWith('"') && name.endsWith('"')) {
+    name = name.slice(1, -1).replace(/\\"/g, '"').trim();
+  }
+  return name || trimmed;
+}
+
+/** The three fields of the inbox line. */
+export interface InboxLine {
+  subject: string;
+  preheader: string;
+  from: string;
+}
+
+/**
+ * What the inbox line shows: the server's render once there is one, a field
+ * that renders empty included, since that is what a reader sees; the text as
+ * written only until the first render arrives.
+ */
+export function shownInboxLine(
+  written: InboxLine,
+  rendered: { subject: string; preheader: string; from: string | null } | null
+): InboxLine {
+  if (!rendered) return written;
+  return {
+    subject: rendered.subject,
+    preheader: rendered.preheader,
+    from: rendered.from ?? "",
+  };
 }
 
 export function InboxStrip({

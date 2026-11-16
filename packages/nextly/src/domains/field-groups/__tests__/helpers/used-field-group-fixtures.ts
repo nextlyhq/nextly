@@ -1,7 +1,7 @@
 /**
  * The schema the field-group and Single delete refusals are tested against: a
- * field group something uses in each way it can be used, a Single, and the
- * plugins that key their tables or add to them.
+ * field group something uses in each way it can be used, a Single, the app's
+ * table that keys theirs, and the plugin that adds to them.
  *
  * Shared by the field-group and the Single suites, so both refuse over the
  * same plugins. The live-catalog readers come from the collection suites'
@@ -17,6 +17,7 @@ import {
   text,
 } from "../../../../config";
 import { definePlugin } from "../../../../plugins/plugin-context";
+import type { SchemaHook } from "../../../schema/extension/draft";
 import { col, defineTable } from "../../../schema/extension/dsl";
 import { resolveComponentTableName } from "../../../schema/utils/resolve-table-name";
 
@@ -87,35 +88,41 @@ export const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
 /** The message a delete of SEO gets while every host above places it. */
 export const PLACED_MESSAGE = `"${SEO}" cannot be deleted while other schema depends on it. Fields that place it: ${ARTICLES}.seo, ${ARTICLES}.extra.more, the Single ${HOME}.seo, the field group ${CARD}.meta.seo. Remove those fields, or have them place another field group, then delete "${SEO}".`;
 
-/** A plugin whose own table has a declared foreign key to `target`. */
-export function linksPluginTo(target: string) {
-  return definePlugin({
-    name: LINKS_PLUGIN,
-    version: "1.0.0",
-    nextly: ">=0.0.0",
-    contributes: {
-      schema: {
-        prefix: "fgdeplinks",
-        tables: [
-          defineTable(
-            "links",
-            { id: col.id(), targetId: col.shortText({ nullable: true }) },
+/**
+ * The app's own table, with a declared foreign key to `target`. The app declares it, not a
+ * plugin: a plugin's migrations run before the app's, which create the field-group and Single
+ * tables, so a plugin's key to one is refused at boot. The app's run last and may key to them.
+ */
+export function linksTo(target: string): SchemaHook {
+  return ({ schema }) => {
+    schema.addTable(
+      defineTable(
+        LINKS_TABLE,
+        { id: col.id(), targetId: col.shortText({ nullable: true }) },
+        {
+          foreignKeys: [
             {
-              foreignKeys: [
-                {
-                  columns: ["targetId"],
-                  references: { table: target, columns: ["id"] },
-                },
-              ],
-            }
-          ),
-        ],
-      },
-    },
-  });
+              columns: ["targetId"],
+              references: { table: target, columns: ["id"] },
+            },
+          ],
+        }
+      )
+    );
+  };
 }
-export const LINKS_PLUGIN = "@t/fg-dep-links";
-export const LINKS_TABLE = "fgdeplinks__links";
+export const LINKS_TABLE = "dep_links";
+/** How a refusal names the owner of `LINKS_TABLE`'s key. */
+export const LINKS_OWNER = "the app";
+
+/** The config's `db` block declaring `linksTo(target)`, with the default paths. */
+export function linksDb(target: string) {
+  return {
+    migrationsDir: "./migrations",
+    uiSchemaFile: "./ui-schema.json",
+    schema: { extend: [linksTo(target)] },
+  };
+}
 
 /** A plugin that adds a hidden column, and an index on it, to `target`. */
 export function markerPluginOn(target: string) {

@@ -126,8 +126,15 @@ function documentOf(
   );
   if (entry !== null) {
     const [, slug, id, view] = entry;
-    if (id === "create" || !isViewOf("collection", slug, view, fields))
-      return undefined;
+    // A new entry is the create page itself, with no id to hang a view on:
+    // its own address, with or without a part of it named in the query, is
+    // that one unsaved entry, and no view address is.
+    if (id === "create") {
+      return view === undefined
+        ? JSON.stringify(["collection", slug, "create"])
+        : undefined;
+    }
+    if (!isViewOf("collection", slug, view, fields)) return undefined;
     return JSON.stringify(["collection", slug, id]);
   }
   const single = /^\/admin\/singles\/([^/]+)(?:\/([^/]+))?$/.exec(pathname);

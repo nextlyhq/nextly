@@ -11,6 +11,7 @@ export default defineConfig({
     "src/schema/index.ts",
     "src/migrations.ts",
     "src/schema-name.ts",
+    "src/serverless.ts",
     "src/text-match.ts",
     "src/version-check.ts",
   ],

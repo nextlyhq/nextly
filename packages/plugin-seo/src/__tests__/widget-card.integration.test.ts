@@ -212,10 +212,10 @@ describe.each(getConfiguredTestDialects())(
     it("draws, kind by kind, what the list answers the same person", async () => {
       const { t, card } = await boot();
       const ids: string[] = [];
-      // A title longer than Google shows, and no description, on a page of
+      // A title wider than Google shows, and no description, on a page of
       // each collection; two pages sharing a title.
       for (const [collection, slug, title] of [
-        [PAGES, "a", "t".repeat(70)],
+        [PAGES, "a", "W".repeat(40)],
         [POSTS, "b", "Harbour"],
         [POSTS, "c", "Harbour"],
       ] as const) {
@@ -257,11 +257,11 @@ describe.each(getConfiguredTestDialects())(
       const { t } = await boot();
       const page = await t.nextly.create({
         collection: PAGES,
-        data: { title: "t".repeat(70), slug: "a" },
+        data: { title: "W".repeat(40), slug: "a" },
       });
       const other = await t.nextly.create({
         collection: POSTS,
-        data: { title: "t".repeat(70), slug: "b" },
+        data: { title: "W".repeat(40), slug: "b" },
       });
       await checked(t, [String(page.item.id), String(other.item.id)]);
       const pagesOnly = await holding(t, "pages-only", [`read-${PAGES}`]);

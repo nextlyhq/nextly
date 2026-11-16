@@ -61,13 +61,20 @@ const {
  * A PostgreSQL adapter reporting `schema`, on a database with no tables.
  *
  * Empty, so first-run setup runs; too thin for anything after it, so boot
- * then rejects.
+ * then rejects. `installedIn` is what the catalogue answers for the schemas
+ * holding an installation's history: none, by default, as on a new database.
  */
-function postgresAdapter(schema: string | undefined): Record<string, unknown> {
+function postgresAdapter(
+  schema: string | undefined,
+  installedIn: readonly string[] = []
+): Record<string, unknown> {
   return {
     dialect: "postgresql",
     connect: () => undefined,
-    getDrizzle: () => ({}),
+    getDrizzle: () => ({
+      execute: () =>
+        Promise.resolve({ rows: installedIn.map(name => ({ schema: name })) }),
+    }),
     getCapabilities: () => ({ dialect: "postgresql" }),
     getConfiguredSchema: () => schema,
     setTableResolver: () => undefined,
@@ -101,8 +108,7 @@ describe("the first boot, and where first-run's push looks", () => {
   it("publishes the resolved schema before first-run's push reads it", async () => {
     // A stale value is the failure: whatever an earlier config or process
     // left published is what the push introspects if boot publishes after it.
-    // `public` is the only schema accepted today, so staleness is what can
-    // separate the two orders here.
+    // Publishing `public` over a stale value is what separates the two orders.
     setActivePostgresSchema("stale");
     await bootError(postgresAdapter("public"), "public");
 
@@ -111,17 +117,65 @@ describe("the first boot, and where first-run's push looks", () => {
     expect(schemasPushedInto).toEqual(["public"]);
   });
 
-  it("refuses a schema other than public before first-run pushes anything", async () => {
-    // The push cannot yet create tables in another schema — drizzle-kit reads
-    // every desired table as `public` and proposes dropping the configured
-    // schema — so the refusal has to land before it runs at all.
+  it("pushes first-run's tables into a named schema", async () => {
     const error = await bootError(postgresAdapter("cms"), "cms");
 
-    expect(
-      NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
-    ).toBe(true);
+    // The thin adapter still fails later; what matters is which rejection.
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      false
+    );
+    expect(schemasPushedInto).toEqual(["cms"]);
+  });
+
+  it("refuses a setting moved off an existing installation before first-run pushes anything", async () => {
+    // The database holds an installation in `public`; the config now names
+    // `cms`. Pushing would build a second, empty installation there.
+    const error = await bootError(postgresAdapter("cms", ["public"]), "cms");
+
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
+    expect((error as NextlyError).publicMessage).toContain('"public"');
+    expect((error as NextlyError).publicMessage).toContain('"cms"');
     expect(schemasPushedInto).toEqual([]);
-    expect(activePostgresSchema()).toBe("public");
+  });
+
+  it("refuses the setting removed from an installation in a named schema", async () => {
+    const error = await bootError(
+      postgresAdapter(undefined, ["cms"]),
+      undefined
+    );
+
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
+    expect(schemasPushedInto).toEqual([]);
+  });
+
+  it("starts a separate installation beside another when the flag allows it", async () => {
+    vi.stubEnv("NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL", "1");
+    try {
+      const error = await bootError(postgresAdapter("cms", ["public"]), "cms");
+
+      expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+        false
+      );
+      expect(schemasPushedInto).toEqual(["cms"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("starts as usual when the named schema already holds the installation", async () => {
+    // Another schema holding one too is a second site sharing the database.
+    const error = await bootError(
+      postgresAdapter("cms", ["cms", "public"]),
+      "cms"
+    );
+
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      false
+    );
   });
 });
 
@@ -160,9 +214,9 @@ describe("db.postgres.schema against an adapter the application supplied", () =>
       expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MISMATCH")).toBe(
         false
       );
-      expect(
-        NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
-      ).toBe(false);
+      expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+        false
+      );
       expect(activePostgresSchema()).toBe("public");
     }
   );
@@ -180,9 +234,9 @@ describe("db.postgres.schema against an adapter the application supplied", () =>
     expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MISMATCH")).toBe(
       false
     );
-    expect(
-      NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
-    ).toBe(false);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      false
+    );
     expect(activePostgresSchema()).toBe("public");
   });
 });

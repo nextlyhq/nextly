@@ -6,9 +6,10 @@
  *
  * Read from the Releases list's own Needs attention tab, narrowed to the row's
  * part, so the names are exactly the releases the row's Review leads to. The
- * first few only, as the row's Review lists every one; nothing is drawn while
- * the read is on its way or when it failed, since the row's count and Review
- * already stand for them.
+ * first few only, as the row's Review lists every one. While the read is on
+ * its way the names' line is held empty, so the rows under this one do not
+ * move down when the names land; nothing is drawn when it failed or found
+ * none, since the row's count and Review already stand for them.
  *
  * @module components/features/dashboard/AttentionReleaseNames
  */
@@ -22,6 +23,14 @@ import type { ReleaseAttentionReason } from "@admin/types/releases";
 /** How many releases a row names: the row's Review lists the rest. */
 const NAMED_RELEASES = 3;
 
+/**
+ * The names' line: indented to the row's text, past its severity mark, so the
+ * names read as the row's own, in small text, with the space under it. The
+ * line held while the names are on their way is drawn with the same classes,
+ * so it is exactly as tall.
+ */
+const NAMES_LINE = "pb-2 pl-9 text-xs";
+
 export function AttentionReleaseNames({
   reason,
 }: {
@@ -29,15 +38,22 @@ export function AttentionReleaseNames({
 }): JSX.Element | null {
   const read = useReleasesNeedingAttention(NAMED_RELEASES, reason);
   const releases = read.data?.items ?? [];
+  if (read.isPending) {
+    // One line of the names' own size and spacing, empty: a row that counts
+    // releases names at least one, so its line is as good as there.
+    return (
+      <div aria-hidden className={NAMES_LINE}>
+        {"\u00a0"}
+      </div>
+    );
+  }
   if (releases.length === 0) return null;
   return (
     <ul
       aria-label={
         reason === "stopped" ? "Stopped releases" : "Overdue releases"
       }
-      // Indented to the row's text, past its severity mark, so the names read
-      // as the row's own.
-      className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 pb-2 pl-9 text-xs"
+      className={`flex min-w-0 flex-wrap gap-x-3 gap-y-1 ${NAMES_LINE}`}
     >
       {releases.map(release => (
         <li key={release.id} className="min-w-0 max-w-full truncate">

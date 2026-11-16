@@ -19,6 +19,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { RequiredColumnEntity } from "../../schema/required-column-refusal";
 import { requiredColumnSaveRefusals } from "../../schema/required-column-save-refusals";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
@@ -92,7 +93,11 @@ export async function refusalsForCollectionSave(args: {
 }): Promise<SaveRefusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
-  const before = new Map(args.oldFields.map(f => [f.name, f]));
+  // The fields whose columns sit on the row, those inside a group with no name among them, as the
+  // migration this guards reads them (`fieldsStoredOnRow`): the group has no column of its own.
+  const oldFields = fieldsStoredOnRow(args.oldFields);
+  const newFields = fieldsStoredOnRow(args.newFields);
+  const before = new Map(oldFields.map(f => [f.name, f]));
   const previousOf = (field: FieldDefinition) =>
     args.rename?.to.name === field.name
       ? args.rename.from
@@ -110,7 +115,7 @@ export async function refusalsForCollectionSave(args: {
   };
 
   const refusals: SaveRefusal[] = [];
-  for (const field of args.newFields) {
+  for (const field of newFields) {
     const column = getColumnDescriptor(field, dialect, "collection");
     if (!column) continue;
     const previous = previousOf(field);
@@ -127,6 +132,7 @@ export async function refusalsForCollectionSave(args: {
       ...(
         await requiredColumnSaveRefusals({
           ...args,
+          newFields,
           ...args.requiredColumns,
           previousOf,
         })

@@ -193,3 +193,224 @@ describe("diffSnapshots — constraint drops", () => {
     });
   });
 });
+
+describe("diffSnapshots — a key moved to another target", () => {
+  // The column keeps its place; its key moves from `authors` to `editors` under a name of its own.
+  const before: TableSpec = {
+    ...table("posts", ["authors"]),
+    columns: [
+      { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+      { name: "author", type: "varchar(36)", nullable: true },
+    ],
+    foreignKeys: [key("posts", "author", "authors")],
+  };
+  const moved: TableSpec = {
+    ...before,
+    foreignKeys: [
+      {
+        ...key("posts", "author", "editors"),
+        name: "fk_posts_author_to_editors",
+      },
+    ],
+  };
+  const steps = (ops: Operation[]) =>
+    ops.flatMap(op =>
+      op.type === "add_foreign_key" || op.type === "drop_foreign_key"
+        ? [`${op.type} ${op.foreignKey.name}`]
+        : []
+    );
+
+  it("adds the new key before dropping the one it replaces", () => {
+    expect(
+      steps(diffSnapshots({ tables: [before] }, { tables: [moved] }))
+    ).toEqual([
+      "add_foreign_key fk_posts_author_to_editors",
+      "drop_foreign_key fk_posts_author",
+    ]);
+  });
+
+  it("does the same the other way round in the down", () => {
+    const up = diffSnapshots({ tables: [before] }, { tables: [moved] });
+    expect(steps(buildInverseOperations(up, { tables: [before] }))).toEqual([
+      "add_foreign_key fk_posts_author",
+      "drop_foreign_key fk_posts_author_to_editors",
+    ]);
+  });
+
+  it("still drops first a key whose change of shape keeps its name", () => {
+    const sameName: TableSpec = {
+      ...before,
+      foreignKeys: [key("posts", "author", "editors")],
+    };
+    expect(
+      steps(diffSnapshots({ tables: [before] }, { tables: [sameName] }))
+    ).toEqual([
+      "drop_foreign_key fk_posts_author",
+      "add_foreign_key fk_posts_author",
+    ]);
+  });
+});
+
+describe("diffSnapshots — a key moved off a table this diff drops", () => {
+  it("drops the old key first, so the table it points at can go", () => {
+    const authors = table("authors");
+    const editors = table("editors");
+    const posts: TableSpec = {
+      ...table("posts", ["authors"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "varchar(36)", nullable: true },
+      ],
+      foreignKeys: [key("posts", "author", "authors")],
+    };
+    const moved: TableSpec = {
+      ...posts,
+      foreignKeys: [
+        {
+          ...key("posts", "author", "editors"),
+          name: "fk_posts_author_to_editors",
+        },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [authors, editors, posts] },
+      { tables: [editors, moved] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    const dropOld = at(
+      op =>
+        op.type === "drop_foreign_key" &&
+        op.foreignKey.name === "fk_posts_author"
+    );
+    expect(dropOld).toBeGreaterThan(-1);
+    expect(dropOld).toBeLessThan(
+      at(op => op.type === "drop_table" && op.tableName === "authors")
+    );
+  });
+});
+
+describe("diffSnapshots — a key renamed while its column is retyped", () => {
+  it("drops the old key before the type change, which MySQL refuses under a key", () => {
+    const before: TableSpec = {
+      ...table("posts", ["authors"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "int", nullable: true },
+      ],
+      foreignKeys: [key("posts", "author", "authors")],
+    };
+    const after: TableSpec = {
+      ...before,
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "bigint", nullable: true },
+      ],
+      foreignKeys: [
+        { ...key("posts", "author", "authors"), name: "fk_posts_author_2" },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [table("authors"), before] },
+      { tables: [table("authors"), after] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    expect(
+      at(
+        op =>
+          op.type === "drop_foreign_key" &&
+          op.foreignKey.name === "fk_posts_author"
+      )
+    ).toBeLessThan(at(op => op.type === "change_column_type"));
+  });
+});
+
+describe("diffSnapshots — a key renamed while its referenced column is dropped", () => {
+  it("drops the old key before the column it references", () => {
+    const authors: TableSpec = {
+      ...table("authors"),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "code", type: "varchar(36)", nullable: true },
+      ],
+    };
+    const authorsAfter: TableSpec = { ...table("authors") };
+    const posts: TableSpec = {
+      ...table("posts", ["authors"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "varchar(36)", nullable: true },
+      ],
+      foreignKeys: [
+        { ...key("posts", "author", "authors"), referencesColumns: ["code"] },
+      ],
+    };
+    const moved: TableSpec = {
+      ...posts,
+      foreignKeys: [
+        { ...key("posts", "author", "authors"), name: "fk_posts_author_2" },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [authors, posts] },
+      { tables: [authorsAfter, moved] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    expect(
+      at(
+        op =>
+          op.type === "drop_foreign_key" &&
+          op.foreignKey.name === "fk_posts_author"
+      )
+    ).toBeLessThan(
+      at(op => op.type === "drop_column" && op.columnName === "code")
+    );
+  });
+});
+
+describe("diffSnapshots — a key renamed while the index under its referenced column is dropped", () => {
+  it("drops the old key before the index it depends on", () => {
+    const codes: TableSpec = {
+      ...table("codes"),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "code", type: "varchar(36)", nullable: true },
+      ],
+      indexes: [{ name: "uq_codes_code", columns: ["code"], unique: true }],
+    };
+    const codesAfter: TableSpec = { ...codes, indexes: [] };
+    const notes: TableSpec = {
+      ...table("notes", ["codes"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "code", type: "varchar(36)", nullable: true },
+      ],
+      foreignKeys: [
+        { ...key("notes", "code", "codes"), referencesColumns: ["code"] },
+      ],
+    };
+    const moved: TableSpec = {
+      ...notes,
+      foreignKeys: [
+        {
+          ...key("notes", "code", "codes"),
+          referencesColumns: ["code"],
+          name: "fk_notes_code_2",
+        },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [codes, notes] },
+      { tables: [codesAfter, moved] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    expect(
+      at(
+        op =>
+          op.type === "drop_foreign_key" &&
+          op.foreignKey.name === "fk_notes_code"
+      )
+    ).toBeLessThan(
+      at(op => op.type === "drop_index" && op.index.name === "uq_codes_code")
+    );
+  });
+});

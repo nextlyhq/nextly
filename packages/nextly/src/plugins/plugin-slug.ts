@@ -1,13 +1,14 @@
 /**
  * How a plugin's package name becomes the identifier the admin addresses it by.
  *
- * Its own module, with no imports, for the same reason as the category
- * vocabulary: `admin-meta.ts` reaches the client-config validator and the
+ * Its own module, importing nothing but a type, for the same reason as the
+ * category vocabulary: `admin-meta.ts` reaches the client-config validator and the
  * collection-slug helpers, and a browser bundle that only needs to turn
  * `"@acme/p"` into `"acme-p"` must not pull those in.
  *
  * @module nextly/plugins/plugin-slug
  */
+import type { PluginDefinition } from "./plugin-context";
 
 /**
  * Derive a plugin's admin slug from its name (e.g. `"@acme/p"` → `"acme-p"`).
@@ -48,4 +49,19 @@ export function isInPluginNamespace(pluginName: string, name: string): boolean {
  */
 export function pluginPageAddress(slug: string, path: string): string {
   return `/admin/plugins/${slug}/${path.replace(/^\/+/, "")}`;
+}
+
+/**
+ * A slug a plugin declares under `contributes.admin.views`, after the
+ * plugin's rename map, read from the map's OWN keys: `constructor` is a legal
+ * slug, and an inherited lookup answers it with a function the admin would
+ * receive as no slug at all. Here, beside the plugin's own slug, so the
+ * prebuilt admin page can read it without the boot checks' modules.
+ */
+export function renamedSlug(
+  plugin: PluginDefinition,
+  declared: string
+): string {
+  const renames = plugin.renameMap ?? {};
+  return Object.hasOwn(renames, declared) ? renames[declared] : declared;
 }

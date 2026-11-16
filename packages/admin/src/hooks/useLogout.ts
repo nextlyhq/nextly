@@ -2,7 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { invalidateSessionCache } from "@admin/lib/auth/session";
 import { resetSetupStatusCache } from "@admin/lib/auth/setup-status";

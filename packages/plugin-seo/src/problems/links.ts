@@ -1,7 +1,9 @@
 /**
- * Which links in a page lead nowhere: those to an address a content type
- * serves (`/blog/{slug}`) that no page holds, read from the site's record of
- * who holds each address.
+ * What a page's links reach: the pages holding each address they name, read
+ * from the site's record of who holds each address, and which links lead
+ * nowhere, those to an address a content type serves (`/blog/{slug}`) that
+ * no page holds. One read gives both, so the link counts and the broken-link
+ * check never read a page's links differently.
  *
  * Only addresses under a content type's own prefix are judged. A type served
  * from the root (`/{slug}`) shares every address with the pages a site
@@ -14,6 +16,7 @@ import { originOf } from "../origin";
 import { isRecord } from "../plain-values";
 import { pathOf } from "../redirects/addresses";
 
+import { linkedPageKey } from "./link-graph";
 import type { LinkFact } from "./page-checks";
 
 /** The addresses one content type serves. */
@@ -80,8 +83,33 @@ export interface LinkJudge {
    * language serves it.
    */
   keptOf: (url: URL) => Promise<{ locale: string; path: string } | undefined>;
-  /** Whether a page holds `path` in `locale`. */
-  isHeld: (path: string, locale: string) => Promise<boolean>;
+  /** What holds `path` in `locale`: none for an address nothing holds. */
+  holders: (
+    path: string,
+    locale: string
+  ) => Promise<readonly { collection: string; id: string }[]>;
+  /**
+   * The pages a request for `path`, which `holders` hold, arrives at: a
+   * redirect followed to the page it sends people to, with the language it
+   * is reached in where a redirect crossed into another. Each holder as it
+   * is where not given.
+   */
+  pagesOf?: (
+    holders: readonly { collection: string; id: string }[],
+    locale: string,
+    path: string
+  ) => Promise<readonly { collection: string; id: string; locale?: string }[]>;
+}
+
+/** What a page's links reach. */
+export interface LinkReading {
+  /** The links to an address a content type serves that no page holds. */
+  broken: LinkFact[];
+  /**
+   * The pages the links reach, each once, by `linkedPageKey` with the
+   * language its address is served in, in the order first linked.
+   */
+  to: string[];
 }
 
 /** The origin a path from the root is read on where the site names none. */
@@ -107,35 +135,78 @@ function requestOf(
     : undefined;
 }
 
+/** A holder of an address, as the record names it. */
+type Holder = { collection: string; id: string };
+
+/** What one link reaches: its address as kept, what holds it, and the pages. */
+interface LinkTarget {
+  path: string;
+  holders: readonly Holder[];
+  /** The pages reached, by `linkedPageKey`. */
+  pages: string[];
+}
+
 /**
- * The links in `links` to an address a content type serves that no page
- * holds in the language the address is served in. Each address is asked
- * about once in each language, however many links name it.
+ * What `link` reaches on the site, or nothing for a link off it. Who holds
+ * each address is asked once per language, whatever links name it, through
+ * `asked`.
  */
+async function targetOf(
+  link: LinkFact,
+  judge: LinkJudge,
+  asked: Map<string, Promise<readonly Holder[]>>
+): Promise<LinkTarget | undefined> {
+  const request = requestOf(link.url, judge.productionAddresses, judge.origin);
+  const kept = request === undefined ? undefined : await judge.keptOf(request);
+  if (kept === undefined) return undefined;
+  const path = pathOf(kept.path);
+  const key = `${kept.locale}\u0000${path}`;
+  const held = asked.get(key) ?? judge.holders(path, kept.locale);
+  asked.set(key, held);
+  const holders = await held;
+  const pages: readonly (Holder & { locale?: string })[] = judge.pagesOf
+    ? await judge.pagesOf(holders, kept.locale, path)
+    : holders;
+  return {
+    path,
+    holders,
+    // In the language the page is reached in, which a redirect may change.
+    pages: pages.map(page =>
+      linkedPageKey(page.collection, page.id, page.locale ?? kept.locale)
+    ),
+  };
+}
+
+/**
+ * What `links` reach: each page holding an address they name on the site,
+ * and the links to an address a content type serves that no page holds in
+ * the language the address is served in. Each address is asked about once
+ * in each language, however many links name it.
+ */
+export async function readLinks(
+  links: readonly LinkFact[],
+  judge: LinkJudge
+): Promise<LinkReading> {
+  const asked = new Map<string, Promise<readonly Holder[]>>();
+  const broken: LinkFact[] = [];
+  const to = new Set<string>();
+  for (const link of links) {
+    const target = await targetOf(link, judge, asked);
+    if (target === undefined) continue;
+    for (const page of target.pages) to.add(page);
+    // Held, by a page or a redirect sending people on, is not broken.
+    const unheld = target.holders.length === 0;
+    if (unheld && judge.shapes.some(shape => shape.pattern.test(target.path))) {
+      broken.push(link);
+    }
+  }
+  return { broken, to: [...to] };
+}
+
+/** The links in `links` that lead nowhere, as {@link readLinks} reads them. */
 export async function brokenLinks(
   links: readonly LinkFact[],
   judge: LinkJudge
 ): Promise<LinkFact[]> {
-  const answers = new Map<string, Promise<boolean>>();
-  const broken: LinkFact[] = [];
-  for (const link of links) {
-    const request = requestOf(
-      link.url,
-      judge.productionAddresses,
-      judge.origin
-    );
-    const kept =
-      request === undefined ? undefined : await judge.keptOf(request);
-    if (kept === undefined) continue;
-    const path = pathOf(kept.path);
-    if (!judge.shapes.some(shape => shape.pattern.test(path))) continue;
-    const key = `${kept.locale}\u0000${path}`;
-    let held = answers.get(key);
-    if (held === undefined) {
-      held = judge.isHeld(path, kept.locale);
-      answers.set(key, held);
-    }
-    if (!(await held)) broken.push(link);
-  }
-  return broken;
+  return (await readLinks(links, judge)).broken;
 }
