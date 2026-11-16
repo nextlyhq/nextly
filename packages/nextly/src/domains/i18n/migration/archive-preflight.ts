@@ -972,13 +972,17 @@ export function joiningFieldsLosingValues(
 }
 
 /**
- * Refuses, before anything changes, turning translation on or off where a translated field's values
- * would move out of a column with part of a definition the column receiving them would not have
- * (`lostOnMove`): a comment, or a character set or collation other than the receiving table's.
- * Turning it on moves them from the main table to the companion; off, back again. The receiving
- * column is created naming none of these, and the column the values leave is dropped with it. A
- * change that keeps translation on moves only the fields joining it (`fieldsJoiningTranslation`),
- * from the main table to the companion, and one that keeps it off moves nothing and asks nothing.
+ * Refuses, before anything changes, a change whose move of a field's values into a new column would
+ * lose part of the column they leave (`lossesOnMove`): a comment; a character set or collation
+ * other than the receiving column's, or the receiving table's for a column the move adds; or a
+ * default the receiving column cannot take (`carriableDefault`, `defaultFitsType`). On SQLite,
+ * turning translation off is also refused for a non-constant default (`nonConstantSqliteDefaults`).
+ *
+ * The fields judged: turning translation on, every translated field, from the main table to the
+ * companion; off, every translated field, back again; kept on, only the fields joining it
+ * (`fieldsJoiningTranslation`), from the main table to the companion. A field leaving translation
+ * while the entity stays translated is not judged here; the leaving-field rules judge its type
+ * alone. A change that keeps translation off moves nothing and asks nothing.
  */
 export async function refuseTranslationMovesLosingDefinition(args: {
   adapter: DrizzleAdapter;

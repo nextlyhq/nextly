@@ -135,7 +135,7 @@ describe.each(getConfiguredTestDialects())(
         `SELECT COUNT(*) AS n FROM ${q("dc_mkd_docs")} WHERE ${q("heading")} IS NULL OR ${q("heading")} IS NOT NULL`
       )) as unknown as { n: unknown }[];
       expect(row).toBeDefined();
-    }, 120_000);
+    });
 
     // SQLite cannot give an existing column a default without rebuilding its table.
     it.skipIf(dialect === "sqlite")(
@@ -214,8 +214,7 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           query(`SELECT 1 FROM ${q("dc_mkd_docs_locales")}`)
         ).resolves.toBeDefined();
-      },
-      120_000
+      }
     );
 
     // SQLite cannot give an existing column a default without rebuilding its table.
@@ -293,8 +292,7 @@ describe.each(getConfiguredTestDialects())(
             (refused as { publicData?: unknown }).publicData ?? refused
           )
         ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/);
-      },
-      120_000
+      }
     );
 
     /**
@@ -383,8 +381,7 @@ describe.each(getConfiguredTestDialects())(
               refused
           )
         ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/);
-      },
-      120_000
+      }
     );
 
     // The companion a development start makes spells some types otherwise than the main table
@@ -421,8 +418,7 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(outcome).toBe("applied");
-      },
-      120_000
+      }
     );
 
     // An existing receiving column is judged as it is, not by its table's defaults.
@@ -445,8 +441,7 @@ describe.each(getConfiguredTestDialects())(
               refused
           )
         ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own collation/);
-      },
-      120_000
+      }
     );
 
     it.runIf(dialect === "postgresql")(
@@ -469,8 +464,7 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(outcome).toBe("applied");
-      },
-      120_000
+      }
     );
   }
 );
