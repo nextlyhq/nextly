@@ -2,7 +2,7 @@
  * The comparison page's choices: a baseline the server resolves, named in the
  * address; "Compare with", which rewrites the address; the view, inline or
  * side by side, from the address; the newer version marked as seen; and
- * "Restore…", which hands the version to the editor.
+ * "Restore…", which hands the version to the editor, in its language.
  */
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -239,6 +239,46 @@ describe("VersionComparePage, its choices", () => {
     expect(navigateMock).toHaveBeenCalledWith(
       "/admin/collections/posts/e1?history=1&version=5&restore=1"
     );
+  });
+
+  it("hands a comparison in another language to the editor in that language", async () => {
+    // The editor offers a version's restore only when it is open in that
+    // version's language, so an editor opened in its default language would
+    // take the hand-off and never show the restore list.
+    useVersionsMock.mockReturnValue({
+      data: {
+        pages: [
+          {
+            items: [
+              { ...row(5), locale: "de" },
+              { ...row(4), locale: "de" },
+            ],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    });
+
+    renderPage({ from: 4, to: 5, locale: "de" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+
+    const target = new URL(
+      String(navigateMock.mock.calls.at(-1)?.[0]),
+      "http://admin.test"
+    );
+    expect(target.pathname).toBe("/admin/collections/posts/e1");
+    expect(Object.fromEntries(target.searchParams)).toEqual({
+      history: "1",
+      version: "5",
+      restore: "1",
+      locale: "de",
+    });
   });
 
   it("offers no restore to a reader who may not edit the document", () => {

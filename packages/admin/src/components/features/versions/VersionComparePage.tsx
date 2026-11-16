@@ -18,6 +18,8 @@ import type { JSX } from "react";
 import { useCallback, useMemo } from "react";
 
 import { Alert, AlertDescription, Button } from "@admin/components/ui";
+import { withQuery } from "@admin/constants/routes";
+import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   scopeKey,
   useBaselineDiff,
@@ -30,6 +32,7 @@ import type { VersionScope } from "@admin/services/versionApi";
 
 import type { ChangesLayout } from "./diff/changes-layout";
 import { VersionDiffView } from "./diff/VersionDiffView";
+import { HISTORY_PARAM, RESTORE_PARAM, VERSION_PARAM } from "./history-address";
 import {
   HISTORY_FRAME,
   HISTORY_HEAD,
@@ -472,9 +475,20 @@ export function VersionComparePage({
                 className="ml-auto"
                 // The editor restores it: the values go back as unsaved
                 // edits through its list, and nothing is saved from here.
+                // The comparison's language goes with it, under the key the
+                // editor reads its language from: the editor offers a
+                // version's restore only while open in that version's
+                // language, so one opened in its default language would take
+                // the hand-off and never show the restore list. Absent for a
+                // comparison that names no language, as the editor expects.
                 onClick={() =>
                   navigateTo(
-                    `${documentHref}?history=1&version=${shown.to}&restore=1`
+                    withQuery(documentHref, {
+                      [HISTORY_PARAM]: 1,
+                      [VERSION_PARAM]: shown.to,
+                      [RESTORE_PARAM]: 1,
+                      [LOCALE_PARAM]: locale,
+                    })
                   )
                 }
               >
