@@ -131,7 +131,9 @@ describe("mergeNewestFirst", () => {
 
   it("holds back what a list with more to load could still precede", () => {
     // The queued list has more beyond 10:00, so a delivery at 09:00 could be
-    // preceded by a queued email not loaded yet: it waits for the next page.
+    // preceded by a queued email not loaded yet: it waits for the next page,
+    // as does the queued email at 10:00 itself, which another at 10:00 on
+    // that page could precede.
     const rows = mergeNewestFirst([
       {
         rows: [
@@ -142,7 +144,29 @@ describe("mergeNewestFirst", () => {
       },
       { rows: [q("2026-11-16T10:00:00Z", "q1")], more: true },
     ]);
-    expect(rows.map(row => row.id)).toEqual(["d1", "q1"]);
+    expect(rows.map(row => row.id)).toEqual(["d1"]);
+  });
+
+  it("holds back a row at the very time a list with more stopped at", () => {
+    // The queued list stopped at 10:00 with more to load: its next page can
+    // hold another email at 10:00 that sorts before the delivery at 10:00.
+    const rows = mergeNewestFirst([
+      {
+        rows: [
+          at("2026-11-16T11:00:00Z", "d1"),
+          at("2026-11-16T10:00:00Z", "d0"),
+        ],
+        more: false,
+      },
+      {
+        rows: [
+          q("2026-11-16T10:30:00Z", "q2"),
+          q("2026-11-16T10:00:00Z", "q1"),
+        ],
+        more: true,
+      },
+    ]);
+    expect(rows.map(row => row.id)).toEqual(["d1", "q2"]);
   });
 
   it("shows every row once no list has more", () => {
@@ -183,9 +207,24 @@ describe("whatHappened", () => {
       })
     );
     expect(whatHappened(row, NOW)).toEqual({
-      title: "Trying again in 10 min",
+      title: "Next attempt in 10 min",
       detail: "Resend answered 503",
     });
+  });
+
+  it("says when a waiting email's first attempt is due, or how late it is", () => {
+    expect(
+      whatHappened(
+        queuedRow(queued({ nextAttemptAt: "2026-11-16T12:05:00.000Z" })),
+        NOW
+      ).title
+    ).toBe("First attempt in 5 min");
+    expect(
+      whatHappened(
+        queuedRow(queued({ nextAttemptAt: "2026-11-16T11:00:00.000Z" })),
+        NOW
+      ).title
+    ).toBe("First attempt overdue by 1 h");
   });
 
   it("says a late retry is late", () => {

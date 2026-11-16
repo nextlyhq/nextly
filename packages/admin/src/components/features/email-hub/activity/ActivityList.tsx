@@ -6,6 +6,7 @@ import type { JSX } from "react";
 import { Lock, User } from "@admin/components/icons";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 
+import { notStoredLabel } from "./activity-choices";
 import {
   RECIPIENT_KIND_LABELS,
   outcomeBadge,
@@ -63,7 +64,7 @@ function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
   const email =
     name ??
     row.templateSlug ??
-    (row.source === "queued" ? "Template not recorded" : "No template");
+    (row.source === "queued" ? "No template recorded" : "No template");
   return {
     key: `${row.source}:${row.id}`,
     when: WHEN.format(row.at),
@@ -88,7 +89,7 @@ function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
       row.source === "delivery"
         ? row.provider.id
           ? (names.provider(row.provider.id) ?? row.provider.type)
-          : `${row.provider.type} (deleted)`
+          : notStoredLabel(row.provider.type)
         : "—",
     recipient:
       row.source === "delivery"
@@ -272,8 +273,9 @@ export function ActivityList({
     <div className="space-y-3">
       <p className="flex items-start gap-2 text-xs text-muted-foreground">
         <Lock className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
-        No addresses, subjects or bodies are kept: only what happened, the
-        template, the provider and the kind of recipient.
+        This log keeps no addresses, subjects or bodies: only what happened, the
+        template, the provider and the kind of recipient. A queued email&rsquo;s
+        own message is held, encrypted, only while it can still be sent.
       </p>
       {isLoading ? (
         <div

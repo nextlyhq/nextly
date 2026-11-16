@@ -4,14 +4,19 @@ import { Alert, AlertDescription, AlertTitle } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { Clock } from "@admin/components/icons";
+import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import type { QueuedEmailOverdue } from "@admin/services/emailActivityApi";
 
 /** Where the docs say how to run the jobs queue on a schedule. */
 export const JOBS_TRIGGER_DOCS =
   "https://nextlyhq.com/docs/jobs#running-the-queue";
 
-/** The call that runs the jobs queue, which a schedule makes every minute. */
-export const JOBS_TRIGGER_PATH = "/admin/api/jobs/run";
+/**
+ * The call that runs the jobs queue, which a schedule makes every minute,
+ * under the same mount the admin's own requests go to, so the instruction
+ * moves with it.
+ */
+export const JOBS_TRIGGER_PATH = `${API_PATH_PREFIX}/jobs/run`;
 
 /** "3 queued emails", or "100+ queued emails" when the count stopped at its ceiling. */
 export function overdueCountText(overdue: QueuedEmailOverdue): string {

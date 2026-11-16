@@ -10,6 +10,7 @@ import {
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
+import type { ProviderOption, TemplateOption } from "./activity-choices";
 import {
   OUTCOME_FILTERS,
   TIME_WINDOWS,
@@ -18,23 +19,20 @@ import {
   type ProviderChoice,
 } from "./activity-model";
 
-/** Sentinel for "no filter": Radix Select forbids an empty value. */
+/**
+ * Sentinel for "no filter": Radix Select forbids an empty value. Every other
+ * value carries a prefix, so no template slug or provider can be mistaken
+ * for it, a template named `any` included.
+ */
 const ANY = "any";
 
-/** A provider the filter offers: a stored one by id, or a deleted one by type. */
-export interface ProviderOption {
-  choice: ProviderChoice;
-  label: string;
-}
-
-/** A template the filter offers. */
-export interface TemplateOption {
-  slug: string;
-  label: string;
+/** The value a template is selected by. */
+export function templateValue(slug: string): string {
+  return `template:${slug}`;
 }
 
 /** The value a provider choice is selected by. */
-function providerValue(choice: ProviderChoice): string {
+export function providerValue(choice: ProviderChoice): string {
   return "id" in choice ? `id:${choice.id}` : `type:${choice.type}`;
 }
 
@@ -94,9 +92,13 @@ export function ActivityFilters({
         </Select>
         {templates && (
           <Select
-            value={filter.template ?? ANY}
+            value={filter.template ? templateValue(filter.template) : ANY}
             onValueChange={value =>
-              set({ template: value === ANY ? undefined : value })
+              set({
+                template: templates.find(
+                  option => templateValue(option.slug) === value
+                )?.slug,
+              })
             }
           >
             <SelectTrigger aria-label="Template" className="lg:w-56">
@@ -105,7 +107,10 @@ export function ActivityFilters({
             <SelectContent>
               <SelectItem value={ANY}>Any template</SelectItem>
               {templates.map(option => (
-                <SelectItem key={option.slug} value={option.slug}>
+                <SelectItem
+                  key={option.slug}
+                  value={templateValue(option.slug)}
+                >
                   {option.label}
                 </SelectItem>
               ))}

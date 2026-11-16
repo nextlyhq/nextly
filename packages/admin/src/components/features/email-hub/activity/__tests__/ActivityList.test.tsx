@@ -94,14 +94,16 @@ describe("the Activity list", () => {
     expect(text[1]).toContain("Retrying");
     expect(text[1]).toContain("Attempt 2");
     expect(text[1]).toContain("Queued");
-    expect(text[1]).toContain("Trying again in 10 min");
+    expect(text[1]).toContain("Next attempt in 10 min");
     expect(text[1]).toContain("Resend answered 503");
     // A template the hub cannot name is shown by its slug.
     expect(text[1]).toContain("order-shipped");
 
-    // A delivery without a template, by a provider deleted since, erased.
+    // A delivery without a template, by a provider that isn't stored (set in
+    // code, or deleted since: the log doesn't say which), erased.
     expect(text[2]).toContain("No template");
-    expect(text[2]).toContain("postmark (deleted)");
+    expect(text[2]).toContain("postmark (not stored)");
+    expect(text[2]).not.toContain("deleted");
     expect(text[2]).toContain("Erased");
     expect(text[2]).toContain("Mailbox does not exist");
   });
@@ -112,14 +114,39 @@ describe("the Activity list", () => {
     expect(cards).toHaveLength(3);
     expect(cards[0].textContent).toContain("Password reset");
     expect(cards[0].textContent).toContain("Resend (main)");
-    expect(cards[2].textContent).toContain("postmark (deleted)");
+    expect(cards[2].textContent).toContain("postmark (not stored)");
   });
 
-  it("says that no address, subject or body is kept", () => {
+  it("says what this log keeps, and that a queued email's message is held only while it can be sent", () => {
     renderList();
-    expect(
-      screen.getByText(/No addresses, subjects or bodies are kept/)
-    ).toBeTruthy();
+    const line = screen.getByText(
+      /This log keeps no addresses, subjects or bodies/
+    );
+    expect(line.textContent).toContain(
+      "message is held, encrypted, only while it can still be sent"
+    );
+  });
+
+  it("says a queued email without a template slug has none recorded, which is true of both causes", () => {
+    renderList({
+      rows: [
+        queuedRow({
+          id: "q9",
+          createdAt: "2026-11-16T10:00:00.000Z",
+          updatedAt: "2026-11-16T10:00:00.000Z",
+          settledAt: null,
+          state: "waiting",
+          attempts: 0,
+          nextAttemptAt: "2026-11-16T12:05:00.000Z",
+          lastFailure: null,
+          messageHeld: true,
+          templateSlug: null,
+          queuedBy: "site",
+        }),
+      ],
+    });
+    const row = within(screen.getByRole("table")).getAllByRole("row")[1];
+    expect(row.textContent).toContain("No template recorded");
   });
 
   it("says why it is empty, filtered or not", () => {

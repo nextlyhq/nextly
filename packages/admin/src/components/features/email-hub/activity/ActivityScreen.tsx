@@ -2,7 +2,7 @@
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import {
@@ -18,13 +18,12 @@ import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
-import type { ActivityFilter, ActivityRow } from "./activity-model";
+import { providerChoices, templateChoices } from "./activity-choices";
+import type { ActivityFilter } from "./activity-model";
 import {
   ActivityFilters,
   DEFAULT_ACTIVITY_FILTER,
   isFiltered,
-  type ProviderOption,
-  type TemplateOption,
 } from "./ActivityFilters";
 import { ActivityList, type ActivityNames } from "./ActivityList";
 import { OverdueBanner } from "./OverdueBanner";
@@ -32,29 +31,21 @@ import { OverdueBanner } from "./OverdueBanner";
 /** The most providers the name lookup and the provider filter read at once. */
 const PROVIDERS_READ = 100;
 
+/** How often the list's relative times are worked out again while it is open. */
+const CLOCK_TICK_MS = 30_000;
+
 /**
- * The providers the filter offers: every stored one, by name, and each
- * deleted one the loaded rows name, by the type the log kept for it.
+ * The time, read again every `CLOCK_TICK_MS`, so "10 min ago" and "Next
+ * attempt in 10 min" stay true on a page left open, whether or not anything
+ * else renders it again.
  */
-function providerOptions(
-  stored: ReadonlyArray<{ id: string; name: string }> | undefined,
-  rows: readonly ActivityRow[]
-): ProviderOption[] | undefined {
-  if (!stored) return undefined;
-  const options: ProviderOption[] = stored.map(provider => ({
-    choice: { id: provider.id },
-    label: provider.name,
-  }));
-  const deleted = new Set<string>();
-  for (const row of rows) {
-    if (row.source === "delivery" && row.provider.id === null) {
-      deleted.add(row.provider.type);
-    }
-  }
-  for (const type of [...deleted].sort()) {
-    options.push({ choice: { type }, label: `${type} (deleted)` });
-  }
-  return options;
+export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
 }
 
 /**
@@ -62,7 +53,8 @@ function providerOptions(
  * newest-first list of every delivery and queued email.
  *
  * Templates and providers are named from the hub's own lists when the reader
- * may read them, and by their slug or type otherwise.
+ * may read them, and by their slug or type otherwise; the filters offer them
+ * either way (`activity-choices`).
  */
 export function ActivityScreen(): JSX.Element {
   const [filter, setFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
@@ -96,11 +88,7 @@ export function ActivityScreen(): JSX.Element {
     template: slug => templateNames.get(slug),
     provider: id => providerNames.get(id),
   };
-  const templateOptions: TemplateOption[] | undefined = templates.data
-    ? templates.data
-        .map(t => ({ slug: t.slug, label: t.name }))
-        .sort((a, b) => a.label.localeCompare(b.label))
-    : undefined;
+  const now = useTickingNow();
   const filtered = isFiltered(filter);
 
   return (
@@ -109,8 +97,16 @@ export function ActivityScreen(): JSX.Element {
       <ActivityFilters
         filter={filter}
         onChange={setFilter}
-        templates={templateOptions}
-        providers={providerOptions(providers.data?.data, activity.rows)}
+        templates={templateChoices(
+          templates.data,
+          activity.rows,
+          filter.template
+        )}
+        providers={providerChoices(
+          providers.data?.data,
+          activity.rows,
+          filter.provider
+        )}
       />
       {filter.provider && (
         <p className="text-xs text-muted-foreground">
@@ -157,7 +153,7 @@ export function ActivityScreen(): JSX.Element {
         <ActivityList
           rows={activity.rows}
           names={names}
-          now={new Date()}
+          now={now}
           isLoading={activity.isLoading}
           filtered={filtered}
           hasMore={activity.hasMore}

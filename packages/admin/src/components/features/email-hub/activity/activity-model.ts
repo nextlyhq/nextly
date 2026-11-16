@@ -195,9 +195,10 @@ export interface LoadedSource {
  * The loaded rows of every list as one list, newest first.
  *
  * A list with more to load could still hold a row newer than another list's
- * oldest loaded row, so nothing older than its own oldest loaded row is shown
+ * oldest loaded row, so nothing as old as its own oldest loaded row is shown
  * until it loads further: the merged list grows at its end and never has a
- * row appear above one already shown.
+ * row appear above one already shown. A row at that very time is held too,
+ * since the next page can hold another at the same time that sorts before it.
  */
 export function mergeNewestFirst(
   sources: readonly LoadedSource[]
@@ -211,7 +212,7 @@ export function mergeNewestFirst(
   }
   return sources
     .flatMap(source => source.rows)
-    .filter(row => row.at.getTime() >= frontier)
+    .filter(row => row.at.getTime() > frontier)
     .sort(
       (a, b) =>
         b.at.getTime() - a.at.getTime() ||
@@ -235,6 +236,18 @@ export function spanText(ms: number): string {
   return `${Math.round(hours / 24)} days`;
 }
 
+/**
+ * When an attempt is due, in words: "Next attempt in 10 min", or how late it
+ * is, "Next attempt overdue by 30 min", which a stalled jobs trigger makes it.
+ */
+function dueText(due: Date | null, now: Date, attempt: string): string {
+  if (due === null) return `${attempt} not scheduled`;
+  const ms = due.getTime() - now.getTime();
+  return ms >= 0
+    ? `${attempt} in ${spanText(ms)}`
+    : `${attempt} overdue by ${spanText(-ms)}`;
+}
+
 /** The row's "what happened" line. */
 export function whatHappened(row: ActivityRow, now: Date): WhatHappened {
   if (row.source === "delivery") {
@@ -248,19 +261,13 @@ export function whatHappened(row: ActivityRow, now: Date): WhatHappened {
   const failure = row.lastFailureReason ?? undefined;
   switch (row.state) {
     case "waiting":
-      return { title: "Waiting for its first attempt" };
+      return { title: dueText(row.nextAttemptAt, now, "First attempt") };
     case "sending":
       return { title: "With the provider now" };
     case "sent":
       return { title: "Sent" };
     case "retrying": {
-      const next = row.nextAttemptAt?.getTime();
-      const title =
-        next === undefined
-          ? "Trying again"
-          : next >= now.getTime()
-            ? `Trying again in ${spanText(next - now.getTime())}`
-            : `Next attempt overdue by ${spanText(now.getTime() - next)}`;
+      const title = dueText(row.nextAttemptAt, now, "Next attempt");
       return failure ? { title, detail: failure } : { title };
     }
     case "failed":

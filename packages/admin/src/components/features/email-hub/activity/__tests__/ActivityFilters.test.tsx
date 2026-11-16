@@ -12,6 +12,8 @@ import {
   ActivityFilters,
   DEFAULT_ACTIVITY_FILTER,
   isFiltered,
+  providerValue,
+  templateValue,
 } from "../ActivityFilters";
 
 describe("Activity's filters", () => {
@@ -79,5 +81,11 @@ describe("Activity's filters", () => {
     expect(
       isFiltered({ ...DEFAULT_ACTIVITY_FILTER, provider: { type: "smtp" } })
     ).toBe(true);
+  });
+
+  it('selects a template named "any" by a value no other choice has', () => {
+    expect(templateValue("any")).not.toBe("any");
+    expect(providerValue({ type: "any" })).not.toBe("any");
+    expect(providerValue({ id: "any" })).not.toBe("any");
   });
 });

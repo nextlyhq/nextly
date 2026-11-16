@@ -6,9 +6,17 @@
  * @module components/features/email-hub/activity/__tests__/OverdueBanner.test
  */
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { JOBS_TRIGGER_DOCS, OverdueBanner } from "../OverdueBanner";
+// A mount other than the default, so a path written out by hand would not
+// pass for one built from the mount the admin's requests go to.
+vi.mock("@admin/lib/api/fetcher", () => ({ API_PATH_PREFIX: "/cms/api" }));
+
+import {
+  JOBS_TRIGGER_DOCS,
+  JOBS_TRIGGER_PATH,
+  OverdueBanner,
+} from "../OverdueBanner";
 
 describe("the late-queue banner", () => {
   it("draws nothing while no queued email is overdue", () => {
@@ -35,7 +43,9 @@ describe("the late-queue banner", () => {
     expect(banner.textContent).toContain(
       "3 queued emails have waited more than 15 minutes"
     );
-    expect(banner.textContent).toContain("POST /admin/api/jobs/run");
+    expect(banner.textContent).toContain(`POST ${JOBS_TRIGGER_PATH}`);
+    // Under the mount the admin's own requests go to.
+    expect(JOBS_TRIGGER_PATH).toBe("/cms/api/jobs/run");
     expect(
       screen
         .getByRole("link", { name: "How to set it up" })
