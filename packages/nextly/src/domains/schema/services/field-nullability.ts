@@ -10,13 +10,11 @@
  * same source.
  *
  * **Not derived from `getColumnDescriptor`, deliberately.** That function
- * answers a different question — whether the DDL needs `NOT NULL` — and its
- * answer differs: it forces `nullable` for `fkSingle` regardless of `required`,
- * because a foreign key column is created without `NOT NULL` and the
- * requirement is enforced above the database. Reusing it here would type a
- * required relationship as nullable, which is accurate about the column and
- * wrong about the contract a reader is handed. Two questions, two answers, and
- * merging them would be the mistake this module exists to prevent.
+ * answers a different question — whether the DDL needs `NOT NULL` — for the
+ * fields that have a column of their own. This one is asked of every field,
+ * column or not, and of fields that never reach the schema pipeline, such as a
+ * user field. Two questions, two answers, and merging them would tie the
+ * contract a reader is handed to how a column happens to be stored.
  */
 
 /**
