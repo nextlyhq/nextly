@@ -54,6 +54,7 @@ type TemplateService = {
   previewTemplate: ReturnType<typeof vi.fn>;
   previewDraft: ReturnType<typeof vi.fn>;
   keptOnOldEngineIds: ReturnType<typeof vi.fn>;
+  ownerSentBy: ReturnType<typeof vi.fn>;
 };
 
 function makeProviderService(
@@ -86,6 +87,9 @@ function makeTemplateService(
     previewTemplate: vi.fn(),
     previewDraft: vi.fn(),
     keptOnOldEngineIds: vi.fn().mockResolvedValue(new Set()),
+    // The senders column reads each slug's owner declarations; empty is
+    // the honest answer for a mock that declares none.
+    ownerSentBy: vi.fn().mockReturnValue([]),
     ...overrides,
   };
 }
@@ -301,7 +305,7 @@ describe("dispatchEmailProviders, actions (respondAction)", () => {
 // ============================================================
 
 describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
-  it("listTemplates returns { templates: [...] } body and 200 status", async () => {
+  it("listTemplates returns { templates: [...], referencesComplete } body and 200 status", async () => {
     const fakeTemplates = [
       { id: "t1", slug: "welcome" },
       { id: "t2", slug: "password-reset" },
@@ -323,9 +327,23 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     // service once for the whole list.
     expect(body).toEqual({
       templates: [
-        { id: "t1", slug: "welcome", keptOnOldEngine: false },
-        { id: "t2", slug: "password-reset", keptOnOldEngine: true },
+        {
+          id: "t1",
+          slug: "welcome",
+          keptOnOldEngine: false,
+          // No owner declarations and no references: both lists empty.
+          sentBy: { declared: [], referenced: [] },
+        },
+        {
+          id: "t2",
+          slug: "password-reset",
+          keptOnOldEngine: true,
+          sentBy: { declared: [], referenced: [] },
+        },
       ],
+      // No plugin reported references here, and none threw, so the list is
+      // complete.
+      referencesComplete: true,
     });
     expect(keptOnOldEngineIds).toHaveBeenCalledTimes(1);
     expect(keptOnOldEngineIds).toHaveBeenCalledWith(fakeTemplates);
