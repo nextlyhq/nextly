@@ -327,9 +327,8 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
   );
 
   // MySQL only: a unique text field is kept in a bounded column, since MySQL cannot index a whole
-  // TEXT, so turning Unique on narrows the column. The rule sending a save to the push reads each
-  // kept field's declared column, and the push judges the stored value against the new width
-  // before any statement runs; the file alone would run the narrowing and stop on the value.
+  // TEXT, so turning Unique on narrows the column. The save judges the stored value against the
+  // new width before it writes or runs anything, as a shortened length is judged.
   it.skipIf(dialect !== "mysql")(
     "refuses turning Unique on for a text field whose value the bounded column cannot hold, changing nothing",
     async () => {
@@ -351,7 +350,13 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       expect(refused).toMatchObject({
         publicData: {
           errors: [
-            expect.objectContaining({ code: "NARROWING_WOULD_TRUNCATE" }),
+            expect.objectContaining({
+              code: "LENGTH_BELOW_VALUES",
+              path: "fields.heading",
+              message: expect.stringMatching(
+                /^1 entry holds a heading longer than 255 characters, the new length\./
+              ),
+            }),
           ],
         },
       });
