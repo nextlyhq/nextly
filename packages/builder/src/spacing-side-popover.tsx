@@ -219,7 +219,9 @@ export function SpacingSidePopover(
   return (
     <PopoverContent
       ref={content}
-      className="nx-spacing-popover"
+      // Drawn at the page's end, outside the builder's element: the class
+      // brings the builder's tokens (its borders, the shared green) with it.
+      className="nx-builder-tokens nx-spacing-popover"
       side="bottom"
       align="center"
       collisionPadding={8}
