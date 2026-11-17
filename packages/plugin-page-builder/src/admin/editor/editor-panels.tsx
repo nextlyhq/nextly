@@ -360,6 +360,18 @@ function requestedBlock(place: InsertPlaceRequest): string | null {
   return "after" in place ? place.after : place.selected;
 }
 
+/** The place a held request names, as the Add panel is handed it. */
+function heldPlaces(
+  held: InsertPlaceRequest | undefined
+): Pick<PanelRequests, "insertInside" | "insertAfter" | "insertAt"> {
+  return {
+    insertInside:
+      held !== undefined && "inside" in held ? held.inside : undefined,
+    insertAfter: held !== undefined && "after" in held ? held.after : undefined,
+    insertAt: held !== undefined && "at" in held ? held.at : undefined,
+  };
+}
+
 /** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {
   /*
@@ -420,19 +432,12 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   if (placeRequest !== undefined && held === undefined) {
     setPlaceRequest(undefined);
   }
-  const insertInside =
-    held !== undefined && "inside" in held ? held.inside : undefined;
-  const insertAfter =
-    held !== undefined && "after" in held ? held.after : undefined;
-  const insertAt = held !== undefined && "at" in held ? held.at : undefined;
 
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
-    insertInside,
-    insertAfter,
-    insertAt,
+    ...heldPlaces(held),
     addSummon: addPresses > answeredPress ? addPresses : undefined,
     onAddSummoned: setAnsweredPress,
   };
@@ -502,11 +507,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   });
 
   const library = useOfferedLibrary(mount);
-  const requests = usePanelRequests(editor.selectedId);
-  // The in-place picker, opened by "/" here and by the canvas's add
-  // controls, and its way on to the Add panel.
-  const insertPicker = useInsertPicker();
-  const browseAll = useBrowseAll(editor, requests.openInsertPanel);
+  const requests = useEditorRequests(editor);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -535,9 +536,29 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     layersRegions: layoutRegions.layers,
     ...library,
     ...requests,
-    insertPicker,
-    browseAll,
   };
+}
+
+/**
+ * The requests that open a panel from the canvas, and the in-place picker,
+ * opened by "/" and by the canvas's add controls, with its way on to Add.
+ */
+function useEditorRequests(
+  editor: EditorMount["editor"]
+): PanelRequests & Pick<EditorPanels, "insertPicker" | "browseAll"> {
+  const requests = usePanelRequests(editor.selectedId);
+  const picker = usePickerPanel(editor, requests.openInsertPanel);
+  return { ...requests, ...picker };
+}
+
+/** The in-place picker's state, and "Browse all" carrying its target on. */
+function usePickerPanel(
+  editor: EditorMount["editor"],
+  openInsertPanel: PanelRequests["openInsertPanel"]
+): Pick<EditorPanels, "insertPicker" | "browseAll"> {
+  const insertPicker = useInsertPicker();
+  const browseAll = useBrowseAll(editor, openInsertPanel);
+  return { insertPicker, browseAll };
 }
 
 /**

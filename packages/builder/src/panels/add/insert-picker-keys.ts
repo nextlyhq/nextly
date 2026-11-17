@@ -14,7 +14,7 @@
 export type PickerLayout = "grid" | "list";
 
 /** How many cells a row of the six holds. */
-export const PICKER_COLUMNS = 3;
+const PICKER_COLUMNS = 3;
 
 /**
  * Where the highlight goes for a key, or `undefined` for a key that does not

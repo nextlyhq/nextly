@@ -9,7 +9,10 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 import { nodeElement } from "../../canvas/canvas-addressing";
-import { framePointInHost } from "../../canvas/geometry-dom";
+import {
+  boxInFrameViewport,
+  framePointInHost,
+} from "../../canvas/geometry-dom";
 import { isIFrame } from "../../dom-kind";
 
 import { NOWHERE, type Measurable } from "./insert-panel-summon";
@@ -57,15 +60,19 @@ export function selectionAnchor(
 }
 
 /**
- * An element's box in the editor's window. Inside the canvas's frame, both
- * corners are mapped out of the frame, which is scaled to fit the well.
+ * An element's box in the editor's window, read through the module that
+ * reads boxes. Inside the canvas's frame, both corners are mapped out of the
+ * frame, which is scaled to fit the well.
  */
 function hostBox(element: Element): DOMRect {
-  const box = element.getBoundingClientRect();
+  const box = boxInFrameViewport(element);
   const frame = element.ownerDocument.defaultView?.frameElement;
-  if (!isIFrame(frame)) return box;
-  const start = framePointInHost(frame, { x: box.left, y: box.top });
-  const end = framePointInHost(frame, { x: box.right, y: box.bottom });
+  if (!isIFrame(frame)) return new DOMRect(box.x, box.y, box.width, box.height);
+  const start = framePointInHost(frame, { x: box.x, y: box.y });
+  const end = framePointInHost(frame, {
+    x: box.x + box.width,
+    y: box.y + box.height,
+  });
   return new DOMRect(start.x, start.y, end.x - start.x, end.y - start.y);
 }
 
@@ -84,7 +91,7 @@ function viewportOf(element: Element): { width: number; height: number } {
  * The part of a box inside the window, or, for a box wholly off it, a line
  * at the nearest edge, so the picker is placed in view either way.
  */
-export function onScreen(
+function onScreen(
   box: DOMRect,
   viewport: { readonly width: number; readonly height: number }
 ): DOMRect {

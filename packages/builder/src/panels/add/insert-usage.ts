@@ -31,7 +31,7 @@ export const DEFAULT_MOST_USED: readonly string[] = [
 ];
 
 /** How many blocks the picker shows at rest. */
-export const MOST_USED_SIZE = 6;
+const MOST_USED_SIZE = 6;
 
 /** How many times each block has been added, by block name. */
 export type InsertCounts = Readonly<Record<string, number>>;

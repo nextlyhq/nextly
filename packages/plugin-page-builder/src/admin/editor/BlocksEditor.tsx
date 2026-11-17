@@ -736,16 +736,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             onShareVerbs={setCardVerbs}
             // "/" opens the in-place picker beside the selected block, or at
             // the end of the page, adding by the placement rule.
-            onAddBlockHere={() =>
-              panels.insertPicker.open(
-                { kind: "rule" },
-                selectionAnchor(
-                  canvas.canvasElement,
-                  editor.document,
-                  editor.selectedId
-                )
-              )
-            }
+            onAddBlockHere={addBlockHere(panels, editor, canvas.canvasElement)}
           >
             {/*
             Inside the verbs provider, which is what lets the palette run
@@ -811,6 +802,22 @@ function EditorBody<TFieldValues extends FieldValues>({
       </VisitorUnreadableProvider>
     </EditorFrame>
   );
+}
+
+/**
+ * What "/" runs: the in-place picker opened beside the selected block, or at
+ * the end of the page, placing by the rule.
+ */
+function addBlockHere(
+  panels: EditorPanels,
+  editor: EditorMount["editor"],
+  canvas: HTMLElement | null
+): () => void {
+  return () =>
+    panels.insertPicker.open(
+      { kind: "rule" },
+      selectionAnchor(canvas, editor.document, editor.selectedId)
+    );
 }
 
 /**

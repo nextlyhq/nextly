@@ -53,7 +53,7 @@ import {
 } from "./inserter";
 
 /** The picker's own words, exactly as decided. */
-export const PICKER_WORDS = {
+const PICKER_WORDS = {
   name: "Add a block",
   search: "Search blocks",
   browseAll: "Browse all blocks and sections →",

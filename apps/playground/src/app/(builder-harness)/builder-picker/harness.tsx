@@ -10,6 +10,7 @@ import {
   InsertPicker,
   useEditorState,
   useInsertPicker,
+  type InsertPickerState,
   type InsertPickerTarget,
   type InsertPlace,
 } from "@nextlyhq/builder/shell";
@@ -18,7 +19,7 @@ import {
   BUILDER_TOKENS_CLASS,
 } from "@nextlyhq/builder/shell-state";
 import { PortalProvider } from "@nextlyhq/ui";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 // The design system's sheet first, then the editor's, as the other harnesses.
 import "@nextlyhq/ui/styles.css";
@@ -31,12 +32,15 @@ const HARNESS_SOURCE = "e2e-picker-harness";
 /** The frame drawn at its own size, never fitted. */
 const ACTUAL_SIZE = { kind: "fixed", scale: 1 } as const;
 
+/** No breakpoints: this fixture asserts nothing responsive. */
+const NO_BREAKPOINTS = { breakpoints: { viewport: [], container: [] } };
+
 const HERO = "px-hero";
 const PRICING = "px-pricing";
 
-/** Hero and Pricing, two Sections with a gap between them. */
-function pickerHarnessDocument(): BlockDocument {
-  const section = (id: string, name: string, text: string) => ({
+/** A Section with one Heading in it. */
+function section(id: string, name: string, text: string) {
+  return {
     id,
     type: "core/section",
     version: 1,
@@ -52,7 +56,11 @@ function pickerHarnessDocument(): BlockDocument {
         },
       ],
     },
-  });
+  };
+}
+
+/** Hero and Pricing, two Sections with a gap between them. */
+function pickerHarnessDocument(): BlockDocument {
   return {
     formatVersion: 1,
     kind: "page",
@@ -83,6 +91,28 @@ function placeBlock(place: InsertPlace): string | null {
   return "after" in place ? place.after : null;
 }
 
+/** The page's blocks as types, one level deep, for a test to read. */
+function documentShape(document: BlockDocument): string {
+  return JSON.stringify(
+    document.nodes.map(node => ({
+      type: node.type,
+      children: (node.slots?.children ?? []).map(child => child.type),
+    }))
+  );
+}
+
+/** The window's size, which the frame is laid out at. */
+function useWindowSize(): string {
+  return useSyncExternalStore(
+    change => {
+      window.addEventListener("resize", change);
+      return () => window.removeEventListener("resize", change);
+    },
+    () => `${window.innerWidth}x${window.innerHeight}`,
+    () => "0x0"
+  );
+}
+
 /**
  * The canvas, the picker and the Add panel, mounted for real, with a "+" at
  * each corner that opens the picker on the gap between Hero and Pricing.
@@ -100,122 +130,103 @@ function HarnessBody() {
   const initialDocument = useMemo(() => pickerHarnessDocument(), []);
   const editor = useEditorState({ initialDocument });
   const picker = useInsertPicker();
-  // The Add panel, opened by "Browse all", and the place it was handed.
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [carried, setCarried] = useState<InsertPlace | null>(null);
-  // A carried place lasts while its block is selected, as in the editor.
-  const held =
-    carried !== null && placeBlock(carried) === editor.selectedId
-      ? carried
-      : null;
+  // The place "Browse all" handed on, or `null` while the panel is closed.
+  const [carried, setCarried] = useState<{ place?: InsertPlace } | null>(null);
   const [overlayHost, setOverlayHost] = useState<HTMLDivElement | null>(null);
-  const host = useRef<HTMLDivElement | null>(null);
-  const [size, setSize] = useState<{ width: number; height: number } | null>(
-    null
-  );
-  useEffect(() => {
-    const element = host.current;
-    if (element === null) return;
-    const read = (): void =>
-      setSize({ width: element.clientWidth, height: element.clientHeight });
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+  const [width, height] = useWindowSize().split("x").map(Number);
   const browseAll = (target: InsertPickerTarget): void => {
-    if (target.kind === "place") {
-      const block = placeBlock(target.place);
-      if (block !== null) editor.select(block);
-      setCarried(target.place);
-    }
-    setPanelOpen(true);
+    if (target.kind === "rule") return setCarried({});
+    const block = placeBlock(target.place);
+    if (block !== null) editor.select(block);
+    setCarried({ place: target.place });
   };
   return (
     <div
-      ref={host}
       data-testid="picker-harness"
       className={`${BUILDER_CHROME_CLASS} ${BUILDER_TOKENS_CLASS}`}
       style={{ height: "100vh", overflow: "hidden", position: "relative" }}
-      data-nx-selected={editor.selectedId ?? ""}
-      data-nx-document={JSON.stringify(
-        editor.document.nodes.map(node => ({
-          type: node.type,
-          children: (node.slots?.children ?? []).map(child => child.type),
-        }))
-      )}
+      data-nx-document={documentShape(editor.document)}
     >
       <div ref={setOverlayHost} />
       <PortalProvider container={overlayHost}>
-        {size === null ? null : (
+        {width === 0 ? null : (
           <CanvasFrame
-            width={size.width}
-            height={size.height}
+            width={width ?? 0}
+            height={height ?? 0}
             zoom={ACTUAL_SIZE}
             title="Picker harness"
           >
             <Canvas
               document={editor.document}
-              siteStyles={{ breakpoints: { viewport: [], container: [] } }}
-              render={{
-                styleContext: { breakpoints: { viewport: [], container: [] } },
-              }}
+              siteStyles={NO_BREAKPOINTS}
+              render={{ styleContext: NO_BREAKPOINTS }}
               selectedId={editor.selectedId}
               selectedIds={editor.selection.ids}
               onSelect={editor.select}
             />
           </CanvasFrame>
         )}
-        {CORNERS.map(corner => (
-          <button
-            key={corner.name}
-            type="button"
-            aria-label={`Add a block between Hero and Pricing (${corner.name})`}
-            style={{
-              position: "fixed",
-              width: 24,
-              height: 24,
-              ...corner.style,
-            }}
-            onClick={event =>
-              picker.open(BETWEEN, elementAnchor(event.currentTarget))
-            }
-          >
-            +
-          </button>
-        ))}
+        <CornerPluses picker={picker} />
         <InsertPicker
           request={picker.request}
           onClose={picker.close}
           editor={editor}
           onBrowseAll={browseAll}
         />
-        {panelOpen ? (
-          <aside
-            aria-label="Add panel"
-            style={{
-              position: "fixed",
-              top: 48,
-              left: 48,
-              width: 300,
-              bottom: 48,
-              overflow: "auto",
-              background: "var(--nx-background)",
-            }}
-          >
-            <InsertPanel
-              editor={editor}
-              {...(held !== null && "after" in held
-                ? { after: held.after }
-                : {})}
-              {...(held !== null && "inside" in held
-                ? { inside: held.inside }
-                : {})}
-              summoned={1}
-            />
-          </aside>
-        ) : null}
+        {carried === null ? null : (
+          <AddPanel editor={editor} place={carried.place} />
+        )}
       </PortalProvider>
     </div>
+  );
+}
+
+/** A stand-in "+" at each corner of the window, opening the picker on the gap. */
+function CornerPluses({ picker }: { picker: InsertPickerState }) {
+  return CORNERS.map(corner => (
+    <button
+      key={corner.name}
+      type="button"
+      aria-label={`Add a block between Hero and Pricing (${corner.name})`}
+      style={{ position: "fixed", width: 24, height: 24, ...corner.style }}
+      onClick={event =>
+        picker.open(BETWEEN, elementAnchor(event.currentTarget))
+      }
+    >
+      +
+    </button>
+  ));
+}
+
+/**
+ * The Add panel "Browse all" opened, with the place it was handed while its
+ * block stays selected, as the editor holds it.
+ */
+function AddPanel({
+  editor,
+  place,
+}: {
+  editor: ReturnType<typeof useEditorState>;
+  place: InsertPlace | undefined;
+}) {
+  const held =
+    place !== undefined && placeBlock(place) === editor.selectedId
+      ? place
+      : undefined;
+  return (
+    <aside
+      aria-label="Add panel"
+      style={{
+        position: "fixed",
+        top: 48,
+        left: 48,
+        width: 300,
+        bottom: 48,
+        overflow: "auto",
+        background: "var(--nx-background)",
+      }}
+    >
+      <InsertPanel editor={editor} {...held} summoned={1} />
+    </aside>
   );
 }

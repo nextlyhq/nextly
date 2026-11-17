@@ -34,8 +34,6 @@ import type {
   PickerOutcome,
 } from "./insert-picker-types";
 
-export { PICKER_WORDS } from "./insert-picker-body";
-
 /**
  * The picker, drawn while `request` is open.
  *
@@ -94,14 +92,25 @@ function settleFocus(
     readonly editText: ((nodeId: string) => boolean) | undefined;
   }
 ): void {
-  if (outcome.kind === "browse") return;
   if (outcome.kind === "inserted") {
-    if (editText?.(outcome.node.id) === true) return;
-    if (frame !== null) returnFocusToCanvas(frame);
+    // A block with text opens for typing; anything else, the canvas.
+    if (editText?.(outcome.node.id) !== true) focusCanvas(frame);
     return;
   }
-  if (!outcome.returnFocus || opener === null || !opener.isConnected) return;
-  // Back to the canvas the way Escape returns there, with its outline.
+  if (outcome.kind === "dismissed" && outcome.returnFocus) focusOpener(opener);
+}
+
+/** Focus on the canvas's frame, with its outline, where there is one. */
+function focusCanvas(frame: HTMLIFrameElement | null): void {
+  if (frame !== null) returnFocusToCanvas(frame);
+}
+
+/**
+ * Focus back on what opened the picker, while it is still on the page: the
+ * canvas, the way Escape returns there, or the control itself.
+ */
+function focusOpener(opener: HTMLElement | null): void {
+  if (opener === null || !opener.isConnected) return;
   if (isIFrame(opener)) returnFocusToCanvas(opener);
   else opener.focus({ preventScroll: true });
 }

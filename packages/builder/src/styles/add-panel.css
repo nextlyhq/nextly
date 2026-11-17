@@ -730,7 +730,10 @@
   flex-direction: column;
   gap: 0.375rem;
   width: 20rem;
-  max-height: min(26.25rem, var(--radix-popover-content-available-height));
+  max-height: min(
+    26.25rem,
+    var(--radix-popover-content-available-height, 100vh)
+  );
   padding: 0.5rem;
   border: 1px solid var(--nx-builder-divider);
   border-radius: 0.625rem;
