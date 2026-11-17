@@ -11026,8 +11026,11 @@ export class CollectionMutationService extends BaseService {
       // publish left it and as it stood before, for the update hooks run once
       // the publish is durable. The closure rebuilds it each attempt.
       let promotedForHooks: {
-        /** The language whose pending change went live. */
-        locale: string;
+        /**
+         * The language whose pending change went live; absent for the change
+         * of a collection that keeps no translations, which names none.
+         */
+        locale?: string;
         data: Record<string, unknown>;
         originalData: Record<string, unknown> | null;
       }[] = [];
@@ -11988,7 +11991,10 @@ export class CollectionMutationService extends BaseService {
               ? []
               : [
                   {
-                    locale: promoted.locale,
+                    // A change kept under no language is told none.
+                    ...(promoted.locale === null
+                      ? {}
+                      : { locale: promoted.locale }),
                     data,
                     originalData: storedBefore.get(promoted.locale) ?? null,
                   },
