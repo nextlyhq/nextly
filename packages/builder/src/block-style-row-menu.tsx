@@ -146,8 +146,9 @@ export function BlockStyleMenu({
             event.preventDefault();
             return;
           }
-          const back = returnTo?.current;
-          if (back === null || back === undefined) return;
+          if (returnTo === undefined) return;
+          const back = returnTo.current;
+          if (back === null) return;
           returnTo.current = null;
           event.preventDefault();
           back.focus();

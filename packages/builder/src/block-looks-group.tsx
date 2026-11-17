@@ -80,7 +80,7 @@ export interface BlockLooksGroupProps {
 }
 
 /** A block type's group in the author's folds. */
-export function blockStyleFoldId(blockType: string): string {
+function blockStyleFoldId(blockType: string): string {
   return `block-styles:${blockType}`;
 }
 

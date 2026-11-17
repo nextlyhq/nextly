@@ -133,6 +133,18 @@ function nextOrderIndex(library: readonly NamedClass[]): number {
   );
 }
 
+/**
+ * The block style a block can wear with this id, or `undefined`: none is on
+ * the site, or the id is a block's own style, which no block wears.
+ */
+function wornStyleOf(
+  library: readonly NamedClass[],
+  id: string
+): NamedClass | undefined {
+  const source = library.find(entry => entry.id === id && isLook(entry));
+  return source === undefined || isDefaultLook(source) ? undefined : source;
+}
+
 /** A block's own style, which stores the site's edits to its base. */
 function ownStyleOf(
   library: readonly NamedClass[],
@@ -216,10 +228,8 @@ export function duplicateBlockStylePlan(
   blockTitle: string,
   mintId: () => string = newId
 ): BlockStylePlan {
-  const source = library.find(entry => entry.id === id && isLook(entry));
-  if (source === undefined || isDefaultLook(source)) {
-    return { ok: false, reason: BLOCK_STYLE_GONE };
-  }
+  const source = wornStyleOf(library, id);
+  if (source === undefined) return { ok: false, reason: BLOCK_STYLE_GONE };
   const blockType = source.blockType as string;
   const label = copyName(
     library,
@@ -241,10 +251,8 @@ export function renameBlockStylePlan(
   name: string,
   blockTitle: string
 ): BlockStylePlan {
-  const source = library.find(entry => entry.id === id && isLook(entry));
-  if (source === undefined || isDefaultLook(source)) {
-    return { ok: false, reason: BLOCK_STYLE_GONE };
-  }
+  const source = wornStyleOf(library, id);
+  if (source === undefined) return { ok: false, reason: BLOCK_STYLE_GONE };
   const blockType = source.blockType as string;
   const label = name.trim();
   const refused =

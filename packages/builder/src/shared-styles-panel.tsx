@@ -361,9 +361,9 @@ export function SharedStylesPanel({
   currentRenameAttempt,
   pendingNames = NO_NAMES,
   looks,
-  onEditClasses,
-  folds,
   initialOpenId,
+  // The Block styles section's own props, handed to it whole.
+  ...section
 }: SharedStylesPanelProps): React.JSX.Element {
   const { query, setQuery, box: search } = usePanelSearch();
   const [filter, setFilter] = React.useState<SharedStyleFilter>("all");
@@ -400,7 +400,7 @@ export function SharedStylesPanel({
     pendingNames,
     setIssue,
   });
-  const blockStyles = useBlockStyleActions(onEditClasses, access);
+  const blockStyles = useBlockStyleActions(section.onEditClasses, access);
   if (library === undefined) return <Unread absence={absence} />;
 
   const blocksOf = (id: string): BlocksOnThisPage =>
@@ -449,7 +449,7 @@ export function SharedStylesPanel({
           blocksOf={blocksOf}
           actions={blockStyles}
           readOnly={readOnly}
-          folds={folds}
+          folds={section.folds}
         />
         <section
           className="nx-vars__group"
@@ -458,7 +458,7 @@ export function SharedStylesPanel({
         >
           <RemoveUnusedHead
             rows={rows}
-            offered={!readOnly && access !== undefined}
+            offered={removalOffered(readOnly, access)}
             access={access}
             reason={reason}
             held={held}
@@ -487,7 +487,7 @@ export function SharedStylesPanel({
               <StyleRow
                 key={row.id}
                 row={row}
-                name={pendingName(pendingNames, row.id) ?? row.name}
+                name={shownName(pendingNames, row)}
                 details={{
                   styleContext,
                   blocks: blocksOf(row.id),
@@ -509,7 +509,7 @@ export function SharedStylesPanel({
                 }}
                 paint={paint}
                 open={openId === row.id}
-                onOpenChange={open => setOpenId(open ? row.id : null)}
+                onOpenChange={openedOrClosed(setOpenId, row.id)}
               />
             ))}
           </StyleList>
@@ -522,6 +522,30 @@ export function SharedStylesPanel({
       </div>
     </div>
   );
+}
+
+/** A row's name: the one it is being renamed to while that is stored. */
+function shownName(
+  pendingNames: Readonly<Record<string, string>>,
+  row: SharedStyleRow
+): string {
+  return pendingName(pendingNames, row.id) ?? row.name;
+}
+
+/** A row's details opened or closed: its id while open, none once closed. */
+function openedOrClosed(
+  setOpenId: (id: string | null) => void,
+  id: string
+): (open: boolean) => void {
+  return open => setOpenId(open ? id : null);
+}
+
+/** Whether removing styles is offered: a writable tab with the routes. */
+function removalOffered(
+  readOnly: boolean,
+  access: SharedStylesAccess | undefined
+): boolean {
+  return !readOnly && access !== undefined;
 }
 
 /** The style whose details open first: the one another tab asked for, or none. */
