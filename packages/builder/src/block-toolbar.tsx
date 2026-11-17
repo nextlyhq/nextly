@@ -42,6 +42,7 @@
  * @module block-toolbar
  */
 
+import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -58,6 +59,7 @@ import {
   Ellipsis,
   LayoutTemplate,
   Lock,
+  LockOpen,
   Palette,
   RefreshCw,
   SquarePen,
@@ -73,6 +75,7 @@ import {
   CHROME_ATTRIBUTE,
   outermostElementsOf,
 } from "./canvas";
+import { nodeAddressOf } from "./canvas-addressing";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
@@ -89,10 +92,16 @@ import {
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import {
+  layersLockChangeable,
+  lockOp,
+  lockStatusOf,
+  lockViewOf,
+} from "./inspector";
+import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "./keyboard-actions";
-import { layerLabel } from "./layers";
+import { layerLabel, pathTo } from "./layers";
 import { lockBlockingEdit } from "./locking";
 import { clearanceWith } from "./scroll-clearance";
 import { useSelectionActions } from "./selection-actions";
@@ -105,6 +114,7 @@ import {
   type ToolbarScreen,
   unionRect,
 } from "./toolbar-actions";
+import { EDITING_ATTRIBUTE } from "./use-inline-text";
 
 /** A rectangle on screen as the top and bottom a toolbar keeps to. */
 function screenBand(rect: Rect): ToolbarScreen {
@@ -117,16 +127,42 @@ function screenBand(rect: Rect): ToolbarScreen {
 }
 
 /**
+ * The bar's stops: the lock, where one holds the block, leads the bar (on a
+ * locked block it is what an author meets first), then the buttons, then
+ * "More" where it holds any verbs.
+ */
+function barStopsOf(
+  lock: BarLock | undefined,
+  buttons: number,
+  menu: number
+): { lock: BarLock | undefined; lead: number; stops: number } {
+  const lead = lock === undefined ? 0 : 1;
+  return { lock, lead, stops: lead + buttons + (menu > 0 ? 1 : 0) };
+}
+
+/** The bar's stepped-aside marker: present while it steps aside for typing. */
+function typingMark(aside: boolean): { "data-typing"?: "" } {
+  return aside ? { "data-typing": "" } : {};
+}
+
+/**
  * The bar's fade marker: present while the pointer is over a block that is
  * not selected.
+ *
+ * Not over a block inside the selection when the bar is drawn inside it:
+ * there the bar sits over what it names, and pointing under it is pointing
+ * at the selected block's own content, so it stays, and stays pressable.
  */
 function fadedAside(
   hovered: string | null,
-  selectedIds: readonly string[]
+  selectedIds: readonly string[],
+  over: { inside: boolean; document: EditorState["document"] }
 ): { "data-faded"?: "" } {
-  return hovered !== null && !selectedIds.includes(hovered)
-    ? { "data-faded": "" }
-    : {};
+  if (hovered === null || selectedIds.includes(hovered)) return {};
+  const within =
+    over.inside &&
+    pathTo(over.document, hovered).some(node => selectedIds.includes(node.id));
+  return within ? {} : { "data-faded": "" };
 }
 
 /**
@@ -193,22 +229,179 @@ function useScrollClearance(
 }
 
 /**
- * The selected block's Layers lock, its own or one around it, said on the bar
- * itself: the canvas draws nothing else that tells a locked block from any
- * other, and the dimmed buttons only say why one at a time. Nothing for a
- * set of blocks, or a block no lock holds.
+ * The selected block's Layers lock, its own or one around it, as the bar says
+ * it: the canvas draws nothing else that tells a locked block from any other,
+ * and the dimmed buttons only say why one at a time. Nothing for a set of
+ * blocks, or a block no lock holds.
+ *
+ * - `unlock`: the block's own lock, which whoever edits the page may lift, so
+ *   the bar offers to lift it where the author is looking.
+ * - `held`: its own lock, pinned where it sits (a `contentOnly` area fixes it
+ *   with the block's design), so the bar says Locked and why.
+ * - `around`: the lock of a block it sits inside. Unlock acts on a block's own
+ *   lock only, so the bar names that block and offers to select it, where its
+ *   own bar offers Unlock.
  */
-function lockNoteOf(
-  document: EditorState["document"],
+type BarLock =
+  | { readonly kind: "unlock"; readonly id: string }
+  | { readonly kind: "held"; readonly reason: string }
+  | { readonly kind: "around"; readonly id: string; readonly name: string };
+
+/** What a pinned lock says where the area it sits in gives no reason. */
+const HELD_REASON = "The area it sits in fixes this.";
+
+function barLockOf(
+  editor: EditorState,
   selectedId: string | null,
   selectedIds: readonly string[]
-): string | undefined {
+): BarLock | undefined {
   if (selectedId === null || selectedIds.length > 1) return undefined;
-  const holder = lockBlockingEdit(document, selectedId);
+  const holder = lockBlockingEdit(editor.document, selectedId);
   if (holder === undefined) return undefined;
-  return holder.id === selectedId
-    ? "Locked"
-    : `Locked by ${layerLabel(holder)}`;
+  if (holder.id !== selectedId) {
+    return { kind: "around", id: holder.id, name: layerLabel(holder) };
+  }
+  // Asked only of a block locked itself, so a click on any other block reads
+  // no slot locks.
+  const status = lockStatusOf(editor.document, selectedId, lockViewOf(editor));
+  return layersLockChangeable(status)
+    ? { kind: "unlock", id: selectedId }
+    : { kind: "held", reason: status.slot?.reason ?? HELD_REASON };
+}
+
+/**
+ * Hidden while the author types in the selected block, where the bar is drawn
+ * inside it: there it sits over the block's first line, which is what is
+ * being typed. Back as soon as the pointer moves, the editing ends, or focus
+ * comes to the bar (Alt+F10 from the text being edited).
+ */
+function useTypingAside(
+  bar: React.RefObject<HTMLDivElement | null>,
+  inside: boolean,
+  selectedIds: readonly string[],
+  canvasFrame: CanvasFrame,
+  /**
+   * Whether the bar is drawn. A bar hidden for a drag is drawn again as a new
+   * element, which the listeners have to move to.
+   */
+  drawn: boolean
+): boolean {
+  const [aside, setAside] = React.useState(false);
+  // Keyed on the ids, not the array, which a render may hand over afresh:
+  // re-listening would bring the bar back mid-word.
+  const selected = selectedIds.join("\n");
+  // The canvas's document, held by the frame's provider: a frame that loads
+  // another page replaces it, and the listeners move to the new one.
+  const canvas = canvasFrame.document;
+  React.useEffect(() => {
+    setAside(false);
+    const element = bar.current;
+    if (!inside || !drawn || element === null) return;
+    return listenForTyping(
+      canvas ?? element.ownerDocument,
+      element,
+      selected.split("\n"),
+      setAside
+    );
+  }, [bar, inside, selected, canvas, drawn]);
+  return aside;
+}
+
+/**
+ * Whether a key press writes into the text: a character, or a key that
+ * removes one or breaks the line. Not a shortcut held with a modifier, nor a
+ * key such as F10 or Escape, so Alt+F10 still reaches the bar.
+ */
+function writesText(event: KeyboardEvent): boolean {
+  if (event.altKey || event.ctrlKey || event.metaKey) return false;
+  return (
+    event.key.length === 1 ||
+    event.key === "Backspace" ||
+    event.key === "Delete" ||
+    event.key === "Enter"
+  );
+}
+
+/**
+ * Listen for typing in the selected blocks' text, telling `aside` when the
+ * bar should step aside and when it should come back; returns the way to stop.
+ *
+ * The typing is heard in the canvas's own document, the pointer in both that
+ * one and the bar's, which differ when the canvas is in a frame. The end of
+ * the editing is the element being typed into losing its editing mark, so
+ * that element is watched, and the watch moves with the typing.
+ */
+function listenForTyping(
+  canvas: Document,
+  bar: HTMLElement,
+  ids: readonly string[],
+  aside: (value: boolean) => void
+): () => void {
+  const documents = new Set([canvas, bar.ownerDocument]);
+  let watched: { element: Element; observer: MutationObserver } | null = null;
+  const back = (): void => {
+    watched?.observer.disconnect();
+    watched = null;
+    aside(false);
+  };
+  const watch = (typing: Element): void => {
+    if (watched?.element === typing) return;
+    watched?.observer.disconnect();
+    watched = null;
+    const Watch = canvas.defaultView?.MutationObserver;
+    if (typeof Watch !== "function") return;
+    const observer = new Watch(() => {
+      if (!typing.hasAttribute(EDITING_ATTRIBUTE)) back();
+    });
+    observer.observe(typing, { attributeFilter: [EDITING_ATTRIBUTE] });
+    watched = { element: typing, observer };
+  };
+  // A key that writes, or text put in some other way: an input method's
+  // composition or a software keyboard sends `beforeinput` with no key a
+  // `keydown` names.
+  const typed = (event: Event): void => {
+    if (event.type === "keydown" && !writesText(event as KeyboardEvent)) {
+      return;
+    }
+    // The root as it is now, which a page loaded into the frame replaces.
+    const root = overlaySpaceOf(bar, CANVAS_ROOT_CLASS)?.root;
+    if (root === undefined) return;
+    const typing = typingIn(event.target, root, ids);
+    if (typing === null) return;
+    aside(true);
+    watch(typing);
+  };
+  canvas.addEventListener("keydown", typed, true);
+  canvas.addEventListener("beforeinput", typed, true);
+  bar.addEventListener("focusin", back);
+  for (const each of documents) each.addEventListener("pointermove", back);
+  return () => {
+    watched?.observer.disconnect();
+    canvas.removeEventListener("keydown", typed, true);
+    canvas.removeEventListener("beforeinput", typed, true);
+    bar.removeEventListener("focusin", back);
+    for (const each of documents) each.removeEventListener("pointermove", back);
+  };
+}
+
+/**
+ * The element being typed into inside one of the selected blocks, or `null`
+ * when the key was pressed anywhere else.
+ */
+function typingIn(
+  target: EventTarget | null,
+  root: HTMLElement,
+  selectedIds: readonly string[]
+): Element | null {
+  if (!isHTMLElement(target) || !root.contains(target)) return null;
+  const editing = target.closest(`[${EDITING_ATTRIBUTE}]`);
+  const owner = editing?.closest(`[${NODE_ID_ATTRIBUTE}]`);
+  // The canvas's address of the element: a component's text answers with
+  // its placement, which is what is selected.
+  const id = owner == null ? null : nodeAddressOf(owner);
+  return editing !== null && id !== null && selectedIds.includes(id)
+    ? editing
+    : null;
 }
 
 const ICONS: Record<ToolbarActionId, LucideIcon> = {
@@ -230,6 +423,29 @@ const ICONS: Record<ToolbarActionId, LucideIcon> = {
   "update-pattern": RefreshCw,
   delete: Trash2,
 };
+
+/**
+ * The roving stop kept on the focused button when the bar gains or loses its
+ * lock control around it: a keyboard press of Select parent onto a locked
+ * block keeps focus on that button while every index after the lock moves
+ * by one.
+ */
+function useStopFollowsFocus(
+  bar: React.RefObject<HTMLDivElement | null>,
+  lead: number,
+  stops: number,
+  setActiveIndex: (index: number) => void
+): void {
+  React.useEffect(() => {
+    const element = bar.current;
+    if (element === null) return;
+    const focused = element.ownerDocument.activeElement;
+    const index = [...element.querySelectorAll("button")].findIndex(
+      button => button === focused
+    );
+    if (index >= 0) setActiveIndex(index);
+  }, [bar, lead, stops, setActiveIndex]);
+}
 
 export interface BlockToolbarProps {
   /** The editor whose selection this acts on. */
@@ -295,7 +511,11 @@ export function BlockToolbar({
     () => actions.filter(action => action.inMenu === true),
     [actions]
   );
-  const stops = buttons.length + (menu.length > 0 ? 1 : 0);
+  const { lock, lead, stops } = barStopsOf(
+    barLockOf(editor, selectedId, selectedIds),
+    buttons.length,
+    menu.length
+  );
 
   /*
    * Which button holds the tab stop, per the WAI-ARIA toolbar pattern: one stop
@@ -330,6 +550,11 @@ export function BlockToolbar({
     }
     setActiveIndex(0);
   }, [selectedId]);
+  useStopFollowsFocus(bar, lead, stops, setActiveIndex);
+  // Kept inside the bar when it loses a stop, as when Unlock leaves it with
+  // the stop on its last button: an index past the end holds no tab stop,
+  // and the bar would be out of reach.
+  const stop = Math.min(activeIndex, Math.max(stops - 1, 0));
 
   /*
    * Measure after the DOM has the block but before the browser paints, so the
@@ -483,6 +708,43 @@ export function BlockToolbar({
   const hovered = useHoveredBlock();
 
   useScrollClearance(bar, hidden, placement, canvasFrame);
+  const typingAside = useTypingAside(
+    bar,
+    placement?.side === "inside",
+    selectedIds,
+    canvasFrame,
+    !hidden && actions.length > 0
+  );
+
+  /*
+   * After a press that takes its own button away (Unlock, Select it), focus
+   * goes to the bar's stop rather than to nothing, so a keyboard author keeps
+   * their place in the bar.
+   */
+  const keepFocus = React.useCallback(() => {
+    const element = bar.current;
+    if (element === null) return;
+    if (!element.contains(element.ownerDocument.activeElement)) return;
+    element.ownerDocument.defaultView?.requestAnimationFrame(() => {
+      bar.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus();
+    });
+  }, []);
+  const unlock = React.useCallback(
+    (id: string) => {
+      keepFocus();
+      // The op Layers' padlock applies, through the store's one apply, so it
+      // is one edit undo takes back.
+      editor.apply(lockOp(id, false));
+    },
+    [editor, keepFocus]
+  );
+  const selectHolder = React.useCallback(
+    (id: string) => {
+      keepFocus();
+      editor.select(id);
+    },
+    [editor, keepFocus]
+  );
 
   const focusAt = React.useCallback((index: number) => {
     setActiveIndex(index);
@@ -499,9 +761,9 @@ export function BlockToolbar({
       // is five buttons, and stopping at the ends makes reaching Delete from
       // Select parent four presses instead of one.
       if (event.key === "ArrowRight") {
-        focusAt((activeIndex + 1) % count);
+        focusAt((stop + 1) % count);
       } else if (event.key === "ArrowLeft") {
-        focusAt((activeIndex - 1 + count) % count);
+        focusAt((stop - 1 + count) % count);
       } else if (event.key === "Home") {
         focusAt(0);
       } else if (event.key === "End") {
@@ -513,7 +775,7 @@ export function BlockToolbar({
       // every shortcut the shell binds to reach their own handlers.
       event.preventDefault();
     },
-    [stops, activeIndex, focusAt]
+    [stops, stop, focusAt]
   );
 
   /*
@@ -557,9 +819,10 @@ export function BlockToolbar({
   // author points at it. Faded, not removed, so a pointer heading for the bar
   // still reaches its buttons, and reaching them is pointing at chrome, which
   // lets the hovered block go.
-  const faded = fadedAside(hovered, selectedIds);
-
-  const lockNote = lockNoteOf(document, selectedId, selectedIds);
+  const faded = fadedAside(hovered, selectedIds, {
+    inside: placement?.side === "inside",
+    document,
+  });
 
   return (
     <div
@@ -573,6 +836,7 @@ export function BlockToolbar({
       aria-label="Block actions"
       data-side={placement?.side}
       {...faded}
+      {...typingMark(typingAside)}
       // Kept out of sight rather than unmounted until the first measurement.
       // The bar has to be in the DOM to be measured at all, and mounting it at
       // a default position would show it in the wrong place for one frame.
@@ -583,14 +847,13 @@ export function BlockToolbar({
       }
       onKeyDown={onKeyDown}
     >
-      {lockNote === undefined ? null : (
-        // Text, not a control: it takes no tab stop in the bar's one roving
-        // stop, and a screen reader reads it with the bar.
-        <span className="nx-block-toolbar__lock" data-lock-note="">
-          <Lock size={12} aria-hidden="true" />
-          {lockNote}
-        </span>
-      )}
+      <BarLockControl
+        lock={lock}
+        active={stop === 0}
+        onFocus={() => setActiveIndex(0)}
+        onUnlock={unlock}
+        onSelect={selectHolder}
+      />
       {buttons.map((action, index) => {
         const Icon = ICONS[action.id];
         const describedBy =
@@ -628,8 +891,8 @@ export function BlockToolbar({
              * without writing a third list that can disagree with both.
              */
             title={action.reason ?? action.label}
-            tabIndex={index === activeIndex ? 0 : -1}
-            onFocus={() => setActiveIndex(index)}
+            tabIndex={lead + index === stop ? 0 : -1}
+            onFocus={() => setActiveIndex(lead + index)}
             onClick={() => run(action)}
           >
             <Icon size={16} aria-hidden="true" />
@@ -645,13 +908,89 @@ export function BlockToolbar({
         <MoreMenu
           editor={editor}
           actions={menu}
-          index={buttons.length}
-          activeIndex={activeIndex}
+          index={lead + buttons.length}
+          activeIndex={stop}
           onFocus={setActiveIndex}
           run={run}
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The bar's first stop on a locked block: Unlock where the author may lift
+ * the lock; Locked, dimmed with the reason, where they may not; and for a
+ * block inside a locked one, the block that holds it with "Select it".
+ */
+function BarLockControl({
+  lock,
+  active,
+  onFocus,
+  onUnlock,
+  onSelect,
+}: {
+  lock: BarLock | undefined;
+  active: boolean;
+  onFocus: () => void;
+  onUnlock: (id: string) => void;
+  onSelect: (id: string) => void;
+}): React.JSX.Element | null {
+  const stop = { tabIndex: active ? 0 : -1, onFocus };
+  // One editor's reason apart from another's, where two are on one page.
+  const reasonId = React.useId();
+  if (lock === undefined) return null;
+  if (lock.kind === "unlock") {
+    return (
+      <button
+        type="button"
+        className="nx-block-toolbar__lock-button"
+        {...stop}
+        onClick={() => onUnlock(lock.id)}
+      >
+        <LockOpen size={14} aria-hidden="true" />
+        Unlock
+      </button>
+    );
+  }
+  if (lock.kind === "held") {
+    // Dimmed but reachable, as the bar's other unavailable verbs are, so the
+    // reason reaches a keyboard author as well as a pointer.
+    return (
+      <button
+        type="button"
+        className="nx-block-toolbar__lock-button"
+        // The name is the word alone, as the other buttons' are; the reason
+        // is the description.
+        aria-label="Locked"
+        aria-disabled={true}
+        aria-describedby={reasonId}
+        title={lock.reason}
+        {...stop}
+      >
+        <Lock size={14} aria-hidden="true" />
+        Locked
+        <span id={reasonId} className="nx-sr-only">
+          {lock.reason}
+        </span>
+      </button>
+    );
+  }
+  return (
+    <span className="nx-block-toolbar__lock" data-lock-note="">
+      <Lock size={12} aria-hidden="true" />
+      Locked by {lock.name}
+      {" · "}
+      <button
+        type="button"
+        className="nx-block-toolbar__lock-select"
+        title={`Select ${lock.name}`}
+        {...stop}
+        onClick={() => onSelect(lock.id)}
+      >
+        Select it
+      </button>
+    </span>
   );
 }
 

@@ -979,6 +979,8 @@ describe("the layouts option at boot", () => {
   it("refuses a bare function", () => {
     expect(() =>
       createBlocksPage({
+        // No blocks registered, as the page needs none.
+        blocks: createBlockResolver([]),
         collections: ["pages"],
         field: "content",
         layouts: (async () => "main") as never,
@@ -989,6 +991,8 @@ describe("the layouts option at boot", () => {
   it("refuses a provider that names no singles", () => {
     expect(() =>
       createBlocksPage({
+        // No blocks registered, as the page needs none.
+        blocks: createBlockResolver([]),
         collections: ["pages"],
         field: "content",
         layouts: { readDefault: async () => "main" } as never,
@@ -1002,6 +1006,8 @@ describe("the layouts option at boot", () => {
     const route = createSinglePage({
       slug: "homepage",
       field: "content",
+      // No blocks registered, as the page needs none.
+      blocks: createBlockResolver([]),
       nextly: {
         ...(r.nextly as object),
         findSingle: async () => ({ id: "h", content: PAGE_BODY }),

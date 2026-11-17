@@ -18,10 +18,6 @@
  * `@nextlyhq/blocks-react`, so the plugin contributes the FIELD and not the
  * editor behind it.
  *
- * `BlocksSummary` stays because it is the blocks field's own admin surface
- * rather than part of that editor: it reads the stored document through the
- * entry form's control and describes it, importing nothing from this package.
- *
  * @module @nextlyhq/plugin-page-builder/admin
  */
 
@@ -46,7 +42,6 @@ import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 import type { BindingsToFixCard as BindingsToFixCardPart } from "./bindings-report/BindingsToFixCard";
 import type { BindingsToFixPage as BindingsToFixPagePart } from "./bindings-report/BindingsToFixPage";
 import type { BlocksField as BlocksFieldPart } from "./BlocksField";
-import type { BlocksSummary as BlocksSummaryPart } from "./BlocksSummary";
 import type {
   ComponentListTools as ComponentListToolsPart,
   ComponentStoreDeleteHost as ComponentStoreDeleteHostPart,
@@ -88,9 +83,6 @@ const BindingsToFixPage: typeof BindingsToFixPagePart = lazyPart(() =>
 const BlocksField: typeof BlocksFieldPart = lazyPart(
   () => withEditorStylesheet(import("./BlocksField")).then(m => m.BlocksField),
   { holdsActions: PUBLISHING_ACTIONS }
-);
-const BlocksSummary: typeof BlocksSummaryPart = lazyPart(() =>
-  import("./BlocksSummary").then(m => m.BlocksSummary)
 );
 const ComponentListTools: typeof ComponentListToolsPart = lazyPart(() =>
   import("./DeleteComponentAction").then(m => m.ComponentListTools)
@@ -147,16 +139,6 @@ const TransferImport: typeof TransferImportPart = lazyPart(() =>
 const BLOCKS_FIELD_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksField";
 
 /**
- * Still registered under its own specifier.
- *
- * `BlocksField` composes it, so the field no longer resolves to it — but the
- * summary is a usable control in its own right for a host that wants the
- * account of a document without the way in to change it, and unregistering a
- * published specifier would break any such host silently.
- */
-const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
-
-/**
  * The template form's address control. Must match
  * `TEMPLATE_ADDRESS_FIELD_COMPONENT`, for the reason `BLOCKS_FIELD_PATH`
  * gives.
@@ -174,7 +156,6 @@ const TEMPLATE_COLLECTION_FIELD_PATH =
 
 const COMPONENTS = {
   [BLOCKS_FIELD_PATH]: BlocksField,
-  [BLOCKS_SUMMARY_PATH]: BlocksSummary,
   [TRANSFER_IMPORT_COMPONENT]: TransferImport,
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
@@ -219,7 +200,6 @@ export {
   BindingsToFixCard,
   BindingsToFixPage,
   BlocksField,
-  BlocksSummary,
   ComponentListTools,
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
@@ -245,4 +225,3 @@ export { registerBlockEditorModules } from "./block-editor-modules";
 export type { BindingsToFixCardData } from "./bindings-report/BindingsToFixCard";
 export type { BlockEditorModules } from "./block-editor-modules";
 export type { BlocksFieldProps } from "./BlocksField";
-export type { BlocksSummaryProps } from "./BlocksSummary";

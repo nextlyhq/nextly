@@ -208,7 +208,8 @@ test("the eye hides a block on the device being edited only, and selecting it sh
         '.nx-canvas-mark[data-mark="selected"][data-hidden]'
       )
     ).toHaveAttribute("data-label", "Hidden on Tablet");
-    // "Visible on" says the same, device by device.
+    // "Visible on", on the Advanced tab, says the same, device by device.
+    await page.getByRole("tab", { name: "Advanced" }).click();
     await expect(page.getByRole("group", { name: "Visible on" })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Tablet", exact: true })

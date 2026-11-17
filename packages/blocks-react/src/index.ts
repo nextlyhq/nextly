@@ -266,9 +266,23 @@ export type { BlockPlaceholderProps, PlaceholderReason } from "./placeholder";
 export {
   createBlockResolver,
   migrationSourceFor,
+  offeredSiteBlocks,
   registeredBlocks,
+  SITE_BLOCKS_SERVICE,
+  SITE_COPY,
+  SITE_NAMED_QUERIES_SERVICE,
+  siteCopyOf,
 } from "./resolver";
-export type { BlockResolver } from "./resolver";
+export type { BlockResolver, SiteCopyMark } from "./resolver";
+// What `offeredSiteBlocks` answers, a site's blocks read-only, and the views
+// it hands out.
+export type {
+  BlockRegistryReader,
+  BlockTypeLookup,
+  NestingSource,
+  SlotDefaultSource,
+  SupportDefinition,
+} from "@nextlyhq/blocks-engine";
 
 export {
   // Public because the WRITE path needs it, and unlike the shared-input identity

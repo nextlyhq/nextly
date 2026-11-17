@@ -22,6 +22,7 @@ import {
 import {
   registerCoreBlocks,
   registerDeclaredBlocks,
+  runningBlocks,
 } from "./blocks/registration-service";
 import { collectionReach } from "./collection-reach";
 import {
@@ -58,6 +59,7 @@ import {
 import {
   declaredFieldGroups,
   installContext,
+  sitesBlocks,
   sitesQueries,
 } from "./plugin-definition/install-context";
 import {
@@ -115,6 +117,7 @@ import { countThePages } from "./usage-count-after-migrate";
 import { variablesInUseCheck } from "./variables-routes";
 
 export {
+  blocksOf,
   installContext,
   namedQueriesOf,
   registeredCollectionSlugs,
@@ -243,14 +246,19 @@ export const pageBuilder = (
         addresses: templateAddresses,
         own: () => new Set(Object.values(ctx.self.collections)),
       });
-      registerCoreBlocks(ctx);
-      registerDeclaredBlocks(ctx);
+      registerCoreBlocks(ctx, def.blocks);
+      registerDeclaredBlocks(ctx, def.blocks);
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
       state.namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
-      refreshCodeTier(configStyle, configClassIds, opts.siteStyle);
+      refreshCodeTier(
+        configStyle,
+        configClassIds,
+        opts.siteStyle,
+        def.blocks.all()
+      );
       // Class-usage maintenance. Registered here rather than beside the
       // collection, because it is a property of the plugin being INSTALLED: the
       // index table exists whether or not anything maintains it, and a host
@@ -379,7 +387,13 @@ export const pageBuilder = (
       // validated against the same set the canvas draws with. With none
       // configured this is the empty set, which the engine treats permissively.
       fieldTypes: [
-        blocksFieldType(siteBreakpoints(configStyle), () => state.composition),
+        blocksFieldType(
+          siteBreakpoints(configStyle),
+          () => state.composition,
+          // The started site's registry: a dev server's config reload builds
+          // this field type again from a definition whose init never runs.
+          runningBlocks(def.blocks)
+        ),
       ],
       // The one read the insert panel makes. A route rather than a collection
       // read from the browser, because the index it serves has two sources —
@@ -501,6 +515,8 @@ export const pageBuilder = (
   sitesQueries.set(plugin, {
     definitionOf: name => state.namedQueries.definitionOf(name),
   });
+  // And its blocks through `blocksOf`, for a process serving several sites.
+  sitesBlocks.set(plugin, def.blocks);
   // A host's component store must not share a slug with the plugin's own
   // collections: refused while the config is read, before anything is keyed
   // by it. A rename is judged again in `init`, once it is known.

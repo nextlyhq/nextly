@@ -52,6 +52,7 @@ import {
   DesignGroup,
   DesignPanel,
   DesignReveal,
+  ReportStylesMatches,
   type DesignView,
 } from "./design-panel";
 import {
@@ -731,33 +732,43 @@ export function editorPanelRenderer({
           // The studio surrounds every tab, so the header it draws stays the
           // same whichever is open.
           frame={designTabs => (
-            <TokensStudio
-              merged={offerableTokens(
-                canvasSiteStyle,
-                siteStylePending,
-                siteStyleError
-              )}
-              supplied={configSiteStyle?.tokens}
-              pending={siteStylePending}
-              // The class surface's library, the one the Shared styles tab
-              // lists, so a style using a variable says what it sets.
-              {...(classes.library === undefined
-                ? {}
-                : { classes: classes.library })}
-              // A shared style using a variable opens in its own tab; a
-              // block look, which that tab does not list, in the inspector.
-              opens={{
-                sharedStyles: () => view.choose("styles"),
-                ...(lookEditing === undefined
+            <>
+              {/* The Styles tab's matches, counted whichever tab is open. */}
+              <ReportStylesMatches
+                library={classes.library}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                styleContext={classSummaryContext}
+              />
+              <TokensStudio
+                merged={offerableTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                supplied={configSiteStyle?.tokens}
+                pending={siteStylePending}
+                // The class surface's library, the one the Shared styles tab
+                // lists, so a style using a variable says what it sets.
+                {...(classes.library === undefined
                   ? {}
-                  : { look: lookEditing.edit }),
-              }}
-              // The switch in the panel's header picks the mode the canvas is
-              // drawn in, held by the editor so it outlasts the panel.
-              preview={previewMode}
-            >
-              {designTabs}
-            </TokensStudio>
+                  : { classes: classes.library })}
+                // A shared style using a variable opens in its own tab; a
+                // block look, which that tab does not list, in the inspector.
+                opens={{
+                  sharedStyles: () => view.choose("styles"),
+                  ...(lookEditing === undefined
+                    ? {}
+                    : { look: lookEditing.edit }),
+                }}
+                // The switch in the panel's header picks the mode the canvas is
+                // drawn in, held by the editor so it outlasts the panel.
+                preview={previewMode}
+              >
+                {designTabs}
+              </TokensStudio>
+            </>
           )}
           tabs={{
             colours: () => <VariablesTab tab="colours" />,

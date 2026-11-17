@@ -409,8 +409,8 @@ export function PropExposeControl({
 }
 
 /**
- * Above a block's props while a component is edited: its Shown row, with the
- * same icon, letting each page hide the block.
+ * In the Advanced tab's Visibility section while a component is edited: its
+ * Shown row, with the same icon, letting each page hide the block.
  */
 export function VisibilityExposeControl({
   binding,

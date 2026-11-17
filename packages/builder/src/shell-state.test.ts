@@ -14,7 +14,6 @@ import {
   DEFAULT_PREFERENCES,
   fitsFullShell,
   isLeftPanel,
-  RAIL_GROUPS,
   LEFT_PANELS,
   MIN_CANVAS_PANEL_WIDTH,
   MIN_CANVAS_WIDTH,
@@ -65,8 +64,11 @@ describe("which panel the rail selects", () => {
       "design",
       "layers",
       "pages",
-      "settings",
     ]);
+  });
+
+  it("does not list Settings, which always opens as a dialog", () => {
+    expect(LEFT_PANELS as readonly string[]).not.toContain("settings");
   });
 
   it("opens the panel that was clicked", () => {
@@ -317,22 +319,15 @@ describe("preferences round-trip", () => {
   });
 });
 
-describe("the rail's items, in the order an author meets them", () => {
-  it("puts the daily tools at the top and Settings at the bottom", () => {
-    expect(RAIL_GROUPS.top).toEqual([
+describe("the rail's panels, in the order an author meets them", () => {
+  it("lists the daily tools in order", () => {
+    expect(LEFT_PANELS).toEqual([
       "add",
       "layers",
       "pages",
       "components",
       "design",
     ]);
-    expect(RAIL_GROUPS.bottom).toEqual(["settings"]);
-  });
-
-  it("covers every panel exactly once between the two groups", () => {
-    expect([...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom].sort()).toEqual(
-      [...LEFT_PANELS].sort()
-    );
   });
 });
 
@@ -371,18 +366,25 @@ describe("preferences saved before panels had parts", () => {
   });
 });
 
-describe("a panel stored under an id from before the rail was relabelled", () => {
-  it.each([
-    ["insert", "add", null],
-    ["tokens", "design", "variables"],
-    ["classes", "design", "classes"],
-    ["fonts", "design", "fonts"],
-  ] as const)("opens %s as %s, on %s", (stored, panel, view) => {
+describe("a panel stored under an id this shell no longer has", () => {
+  it.each(["insert", "tokens", "classes", "fonts", "settings", "gallery"])(
+    "opens the default panel for %s, with no part chosen",
+    stored => {
+      const read = readPreferences(
+        memoryStore(
+          JSON.stringify({ leftPanel: stored, leftPanelView: "variables" })
+        )
+      );
+      expect(read.leftPanel).toBe(DEFAULT_PREFERENCES.leftPanel);
+      expect(read.leftPanelView).toBe(DEFAULT_PREFERENCES.leftPanelView);
+    }
+  );
+
+  it("keeps the part chosen while no panel is open, for the next one to open on", () => {
     const read = readPreferences(
-      memoryStore(JSON.stringify({ leftPanel: stored }))
+      memoryStore(JSON.stringify({ leftPanel: null, leftPanelView: "type" }))
     );
-    expect(read.leftPanel).toBe(panel);
-    expect(read.leftPanelView).toBe(view);
+    expect(read).toMatchObject({ leftPanel: null, leftPanelView: "type" });
   });
 
   it("keeps the view stored with a current id", () => {

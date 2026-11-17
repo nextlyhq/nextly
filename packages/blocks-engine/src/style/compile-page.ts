@@ -65,6 +65,7 @@ import {
   STATE_SELECTORS,
   TYPOGRAPHIC_ELEMENTS,
 } from "./compile-page-states";
+import { contentWidthRules } from "./content-width";
 import { escapeIdentifier } from "./css-value";
 import {
   compileStyleValues,
@@ -723,6 +724,14 @@ export function compilePageCss(
           routing,
         }
       ),
+      // The container's own content width, which the site sheet's rule reads.
+      ...contentWidthRules(node, {
+        selector,
+        path,
+        tokenPrefix,
+        warnings,
+        warningAllowance,
+      }),
       ...visibilityRules(
         node,
         selector,

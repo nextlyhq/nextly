@@ -9,6 +9,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-render-inputs
  */
 import {
+  allBlocks,
   BASE_BREAKPOINT,
   registryNestingSource,
   getBlock,
@@ -158,7 +159,11 @@ export function useSiteStyleInputs(
   // editor reads them from its own registry, through the one function the
   // published page's site style takes its looks from too.
   const configSiteStyle = useMemo(
-    () => withRegisteredLooks(readSiteStyleRecord(clientConfig?.siteStyle)),
+    () =>
+      withRegisteredLooks(
+        readSiteStyleRecord(clientConfig?.siteStyle),
+        allBlocks()
+      ),
     [clientConfig]
   );
   const {

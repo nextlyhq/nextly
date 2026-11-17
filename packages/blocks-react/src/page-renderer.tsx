@@ -65,7 +65,12 @@ export interface PageRendererProps {
    * which is what makes a document renderable with no CMS present.
    */
   context?: PageContext;
-  /** Where block definitions come from. Defaults to the process registry. */
+  /**
+   * Where block definitions come from. Defaults to this bundle's registry,
+   * which the admin's editor fills in the browser. A server holds a registry
+   * per site and fills none here, so a server render passes its site's
+   * blocks (the Next.js routes do).
+   */
   blocks?: BlockResolver;
   /**
    * The component definitions this page may inline, at the posture the caller
@@ -687,7 +692,7 @@ export function PageRenderer({
 
   // Migrated against the SAME resolver that will render, so the versions nodes
   // are upgraded to are the versions the definitions doing the rendering
-  // expect. Reading migrations from the global registry while rendering from a
+  // expect. Reading migrations from another registry while rendering from a
   // fixture set would produce props no one asked for and no error to explain
   // them.
   // The shape is made sound before anything walks it. The engine's migrator,
