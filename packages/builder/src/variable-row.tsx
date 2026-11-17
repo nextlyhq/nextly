@@ -45,7 +45,7 @@ import {
   type VariableEntry,
 } from "./tokens-studio";
 import { VariableEditor, type VariableEditorProps } from "./variable-editor";
-import { RowMenu } from "./variable-row-menu";
+import { RowMenu, type RowMenuActions } from "./variable-row-menu";
 import { swatchStyle } from "./variable-swatch";
 import { variableCountWords, type VariableReach } from "./variable-usage";
 import { CountTip, type VariableUsageHere } from "./variable-usage-view";
@@ -114,10 +114,7 @@ export function VariableRow({
   const onKeyDown = rowKeys(changing, {
     rename: setRenaming,
     menu: setMenuOpen,
-    move: colourMoveOf(entry, tokens, next => {
-      onChange(next);
-      onMoved?.(next);
-    }),
+    move: colourMoveOf(entry, tokens, onChange, onMoved),
   });
   // A colour row can be dragged to another place in the colour order.
   const drag = useColourRowDrag(entry.row);
@@ -161,14 +158,12 @@ export function VariableRow({
               open={menuOpen}
               onOpenChange={setMenuOpen}
               onChange={onChange}
-              actions={{
-                onRename: () => setRenaming(true),
+              actions={menuActionsOf({
+                setRenaming,
+                setRemoving,
                 onDuplicate,
-                onEdit: startRemove => {
-                  setRemoving(startRemove);
-                  onOpenChange(true);
-                },
-              }}
+                onOpenChange,
+              })}
             />
           </div>
         </PopoverAnchor>
@@ -187,6 +182,26 @@ export function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * What the row's ⋯ menu does: rename in place, copy, and open the editor,
+ * at its remove step where asked.
+ */
+function menuActionsOf(row: {
+  setRenaming: (renaming: boolean) => void;
+  setRemoving: (removing: boolean) => void;
+  onDuplicate: () => void;
+  onOpenChange: (open: boolean) => void;
+}): RowMenuActions {
+  return {
+    onRename: () => row.setRenaming(true),
+    onDuplicate: row.onDuplicate,
+    onEdit: startRemove => {
+      row.setRemoving(startRemove);
+      row.onOpenChange(true);
+    },
+  };
 }
 
 /** The row's ⋯ menu, where its variable can be changed; nothing otherwise. */
@@ -329,10 +344,16 @@ function rowKeys(
 function colourMoveOf(
   entry: VariableEntry,
   tokens: SiteTokenSet,
-  onChange: (tokens: SiteTokenSet) => void
+  onChange: (tokens: SiteTokenSet) => void,
+  onMoved: ((next: SiteTokenSet) => void) | undefined
 ): ((by: -1 | 1) => void) | undefined {
   if (entry.row.kind !== "color") return undefined;
-  return by => onChange(moveColour(tokens, entry.row.identity, by));
+  return by => {
+    const next = moveColour(tokens, entry.row.identity, by);
+    onChange(next);
+    // The host then keeps the moved row open and focused where it is drawn.
+    onMoved?.(next);
+  };
 }
 
 /** Which way Alt+Up or Alt+Down moves a row, or nothing for any other key. */
