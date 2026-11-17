@@ -22,6 +22,8 @@ import { containerRootTag } from "@nextlyhq/blocks-react";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { BUILT_IN_WRITES } from "./code-hints";
+import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 
@@ -100,13 +102,16 @@ export function NeverQuote({
         <h3 id={titleId} className="nx-list-query__title">
           Keep out of search previews
         </h3>
-        <Switch
-          aria-labelledby={titleId}
-          aria-describedby={describedBy}
-          checked={on}
-          disabled={heldBy !== undefined}
-          onCheckedChange={next => editor.apply(neverQuoteOp(nodeId, next))}
-        />
+        {/* What it writes: `data-nosnippet` on the block's root. */}
+        <CssHint writes={BUILT_IN_WRITES.searchPreviews}>
+          <Switch
+            aria-labelledby={titleId}
+            aria-describedby={describedBy}
+            checked={on}
+            disabled={heldBy !== undefined}
+            onCheckedChange={next => editor.apply(neverQuoteOp(nodeId, next))}
+          />
+        </CssHint>
       </div>
       <p className="nx-inspector__note" id={`${id}-help`}>
         Google won&apos;t show this block&apos;s text under the page&apos;s

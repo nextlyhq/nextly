@@ -84,6 +84,7 @@ import {
   installSiteStyleLocks,
   routesForSiteStyle,
 } from "./plugin-definition/site-style";
+import { routesForStartup } from "./plugin-definition/startup";
 import { createDefinition } from "./plugin-definition/state";
 import {
   installTemplates,
@@ -156,6 +157,14 @@ export const pageBuilder = (
   const siteStyle = routesForSiteStyle(def, {
     usageSourceOf,
     uncoveredPagesOf,
+  });
+  // The reads the builder opens on, asked in one request.
+  const startup = routesForStartup({
+    loopCollections: bindings.loopCollections,
+    namedQueries: bindings.namedQueries,
+    patternCapability: components.patternCapability,
+    siteStyle: siteStyle.siteStyle,
+    pageCollection: pages.pageCollection,
   });
   const plugin = definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,
@@ -469,6 +478,7 @@ export const pageBuilder = (
         ...siteStyle.fonts,
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
+        startup.builderStartup,
       ],
       // The grant that lets a role change the site's settings in the editor's
       // Settings: its breakpoints, through the one route that changes them,

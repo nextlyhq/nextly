@@ -71,6 +71,7 @@ import {
   CanvasTokenModeProvider,
   useCanvasTokenModeAt,
 } from "./canvas/prefers-dark";
+import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
@@ -387,11 +388,13 @@ export function StyleInspectorPanel(
     <FontChoicesContext.Provider value={props.fonts}>
       {/* The panel's own folds where nothing above lends them. */}
       <PanelFoldsProvider>
-        {props.tokenMode === undefined ? (
-          <StyleInspectorOwnMode {...props} />
-        ) : (
-          <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
-        )}
+        <CssNamesProvider>
+          {props.tokenMode === undefined ? (
+            <StyleInspectorOwnMode {...props} />
+          ) : (
+            <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+          )}
+        </CssNamesProvider>
       </PanelFoldsProvider>
     </FontChoicesContext.Provider>
   );

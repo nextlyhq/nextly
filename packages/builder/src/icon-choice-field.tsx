@@ -78,6 +78,7 @@ import {
 import * as React from "react";
 
 import { ChromeTooltip } from "./chrome-tooltip";
+import { useFieldDescription } from "./css-hint";
 import { InheritedValue } from "./inherited-value";
 import type { AlignmentGroup, AlignmentOption } from "./style-alignment-icons";
 import {
@@ -412,6 +413,8 @@ function OtherValues({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const value =
     current !== undefined && values.includes(current) ? current : "";
   // An inherited value with no icon of its own lives here: More is ringed
@@ -434,7 +437,7 @@ function OtherValues({
             ? `More ${actionName} values`
             : `More ${actionName} values, showing ${keywordLabel(cssProperty, shows)}`
         }
-        aria-describedby={describedBy}
+        aria-describedby={described}
         aria-invalid={describedBy === undefined ? undefined : true}
       >
         <SelectValue
