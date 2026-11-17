@@ -48,6 +48,17 @@ const localisationValuesStep: UpgradeStep = {
     (await import("./localisation-values")).valuesMoveReport(context),
 };
 
+/** Keeping every pending change by part, split against what is live. */
+const localisationDraftsStep: UpgradeStep = {
+  title: "split pending changes into shared and language drafts",
+  pending: async context =>
+    (await import("./localisation-drafts")).documentsWithDraftsToSplit(context),
+  run: async context =>
+    (await import("./localisation-drafts")).splitDraftsByPart(context),
+  report: async context =>
+    (await import("./localisation-drafts")).draftsSplitReport(context),
+};
+
 export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   schemaEventsStep,
   storedPasswordsStep,
@@ -55,4 +66,5 @@ export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   retiredManageStep,
   zonedDatesStep,
   localisationValuesStep,
+  localisationDraftsStep,
 ];
