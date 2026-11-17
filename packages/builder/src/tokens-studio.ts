@@ -50,12 +50,19 @@ import {
   tokenCustomProperty,
   tokenIdentity,
   type SiteToken,
+  type SiteTextMap,
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  colourOrder,
+  orderWithCopy,
+  renamedInOrder,
+  withoutIdentity,
+} from "./colour-groups";
 import {
   DEFAULT_FLUID_RANGE,
   fluidValue,
@@ -499,7 +506,27 @@ export function setFluidRange(
             values: { ...token.values, light: fluidValue(token.fluid, range) },
           }
     ),
+    // A Site text row's own size made with Fluid… is remade across the
+    // range too, in the same edit.
+    ...(tokens.siteText === undefined
+      ? {}
+      : { siteText: siteTextAcross(tokens.siteText, range) }),
   };
+}
+
+/** Site text with each row's own fluid size remade across a range. */
+function siteTextAcross(
+  siteText: SiteTextMap,
+  range: FluidRangeWidths
+): SiteTextMap {
+  return Object.fromEntries(
+    Object.entries(siteText).map(([role, row]) => [
+      role,
+      row?.fluid === undefined
+        ? row
+        : { ...row, fontSize: fluidValue(row.fluid, range) },
+    ])
+  );
 }
 
 /**
@@ -688,9 +715,17 @@ export function clearDarkValue(tokens: SiteTokenSet, at: number): SiteTokenSet {
  * both, which is the opposite of what an author repairing a collision means.
  */
 export function removeToken(tokens: SiteTokenSet, at: number): SiteTokenSet {
+  const removed = tokens.tokens[at];
+  // Its place in the colour order goes with it, so a later variable given
+  // its free name is not listed where it was.
+  const order =
+    removed === undefined
+      ? tokens.order
+      : withoutIdentity(tokens.order, removed);
   return {
     ...tokens,
     tokens: tokens.tokens.filter((_, index) => index !== at),
+    ...(order === undefined ? {} : { order }),
   };
 }
 
@@ -1039,9 +1074,33 @@ export function variableGroups(
     group,
     heading,
     entries: withKindWhereNamesClash(
-      (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
+      inListedOrder(
+        group,
+        (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row)),
+        tokens
+      )
     ),
   }));
+}
+
+/**
+ * A group's rows in the order they are listed: colours in the site's colour
+ * order, the one every picker lists them in; any other kind as stored.
+ */
+function inListedOrder(
+  group: VariableGroup,
+  entries: VariableEntry[],
+  tokens: SiteTokenSet | undefined
+): VariableEntry[] {
+  if (group !== "colours") return entries;
+  const rank = new Map(
+    colourOrder(tokens).map((identity, at) => [identity, at])
+  );
+  return [...entries].sort(
+    (a, b) =>
+      (rank.get(a.row.identity) ?? rank.size) -
+      (rank.get(b.row.identity) ?? rank.size)
+  );
 }
 
 /**
@@ -1286,7 +1345,18 @@ export function labelNewVariable(
   if (partner !== undefined) {
     next[partnerAt] = { ...partner, name: `${LINE_HEIGHT_PREFIX}${words}` };
   }
-  return { ...relabelled, tokens: next };
+  // With no id, its code name is its identity, so the colour order follows
+  // the new name: the variable keeps its place.
+  const order = renamedInOrder(
+    relabelled.order,
+    token.name,
+    `${prefix}.${words}`
+  );
+  return {
+    ...relabelled,
+    tokens: next,
+    ...(order === undefined ? {} : { order }),
+  };
 }
 
 /**
@@ -1330,7 +1400,14 @@ export function duplicateVariable(
   }
   const next = [...tokens.tokens];
   next.splice(at + 1, 0, ...copies);
-  return { tokens: { ...tokens, tokens: next }, at: at + 1 };
+  return {
+    tokens: {
+      ...tokens,
+      tokens: next,
+      ...orderWithCopy(tokens, token, copies),
+    },
+    at: at + 1,
+  };
 }
 
 /**

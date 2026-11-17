@@ -74,6 +74,11 @@ let undoEdit: (() => void) | undefined;
  * one followed by the other.
  */
 let beforeStore: (() => void) | undefined;
+/**
+ * Every mounted caller's handler, as the admin keeps them: each runs before a
+ * store, not only the one that registered last.
+ */
+const storeHandlers = new Set<() => void>();
 let storedAt: Date | null = null;
 const storeListeners = new Set<() => void>();
 let documentActions: { storedAt: Date | null } | null = null;
@@ -297,7 +302,20 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: (handler: () => void) => {
-    beforeStore = handler;
+    const latest = React.useRef(handler);
+    React.useEffect(() => {
+      latest.current = handler;
+    });
+    React.useEffect(() => {
+      const run = (): void => latest.current();
+      storeHandlers.add(run);
+      return () => {
+        storeHandlers.delete(run);
+      };
+    }, []);
+    beforeStore = () => {
+      for (const run of storeHandlers) run();
+    };
   },
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,

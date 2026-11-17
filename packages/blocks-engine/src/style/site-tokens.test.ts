@@ -1163,6 +1163,79 @@ describe("stored data reaching the stylesheet", () => {
 });
 
 describe("resolveSiteTokens", () => {
+  it("keeps the site's colour order, a site-wide setting like the prefix", () => {
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      order: ["color.text", "color.primary"],
+    });
+    expect(resolved.order).toEqual(["color.text", "color.primary"]);
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("order");
+  });
+
+  it("names the built-in colours in words an author reads", () => {
+    const labels = resolveSiteTokens()
+      .tokens.filter(token => token.kind === "color")
+      .map(token => tokenDisplayLabel(token));
+    expect(labels).toEqual([
+      "Primary",
+      "Text",
+      "Background",
+      "Surface",
+      "Border",
+      "Strong border",
+      "Muted text",
+    ]);
+  });
+
+  it("starts a site's colours in two groups: Brand, and Text and surfaces", () => {
+    const groups = Object.fromEntries(
+      resolveSiteTokens()
+        .tokens.filter(token => token.kind === "color")
+        .map(token => [token.name, token.group])
+    );
+    expect(groups).toEqual({
+      "color.primary": "Brand",
+      "color.text": "Text and surfaces",
+      "color.muted": "Text and surfaces",
+      "color.background": "Text and surfaces",
+      "color.surface": "Text and surfaces",
+      "color.border": "Text and surfaces",
+      "color.border-strong": "Text and surfaces",
+    });
+  });
+
+  it("keeps a built-in colour's group and name where the site's own value of it says neither", () => {
+    // A site that set its own text and muted colours before colours had
+    // groups stores them with neither a group nor a label.
+    const resolved = resolveSiteTokens({
+      tokens: [
+        { name: "color.text", kind: "color", values: { light: "#111111" } },
+        { name: "color.muted", kind: "color", values: { light: "#555555" } },
+        {
+          name: "color.border",
+          kind: "color",
+          label: "Hairline",
+          group: "Lines",
+          values: { light: "#dddddd" },
+        },
+      ],
+    });
+    const of = (name: string) =>
+      resolved.tokens.find(token => token.name === name);
+    expect(of("color.text")).toMatchObject({
+      group: "Text and surfaces",
+      values: { light: "#111111" },
+    });
+    expect(of("color.muted")?.group).toBe("Text and surfaces");
+    const muted = of("color.muted");
+    expect(muted && tokenDisplayLabel(muted)).toBe("Muted text");
+    // A group or name of the site's own is kept.
+    expect(of("color.border")).toMatchObject({
+      label: "Hairline",
+      group: "Lines",
+    });
+  });
+
   it("keeps the site's fluid range, a site-wide setting like the prefix", () => {
     // Dropped here, a reopened editor read the default range while the stored
     // sizes were made across the site's own, and the next "Make fluid" used
@@ -1769,5 +1842,53 @@ describe("the default spacing", () => {
       "--site-space-section-y:clamp(3rem, 2rem + 4vw, 5rem)"
     );
     expect(css).toContain("--site-button-padding-x:1.25rem");
+  });
+});
+
+describe("the built-in type sizes", () => {
+  /** A built-in variable's light value, by name. */
+  const builtIn = (name: string): string | undefined =>
+    defaultSiteTokens().find(token => token.name === name)?.values.light;
+
+  it.each([
+    // The heading sizes the block library drew before, at a 16px root, as
+    // `rem`: a heading inside a container with its own size no longer scales.
+    ["h1", "2.25rem", "1.15"],
+    ["h2", "1.75rem", "1.2"],
+    ["h3", "1.375rem", "1.3"],
+    ["h4", "1.125rem", "1.4"],
+    ["h5", "1rem", "1.45"],
+    ["h6", "0.875rem", "1.5"],
+    ["small", "0.875rem", "1.5"],
+  ])(
+    "gives %s its size and the line height it pairs with",
+    (name, size, line) => {
+      expect(builtIn(`font-size.${name}`)).toBe(size);
+      expect(builtIn(`line-height.${name}`)).toBe(line);
+    }
+  );
+
+  it("names them as an author reads them", () => {
+    const label = (name: string): string | undefined => {
+      const token = defaultSiteTokens().find(entry => entry.name === name);
+      return token === undefined ? undefined : tokenDisplayLabel(token);
+    };
+    expect(label("font-size.h2")).toBe("H2");
+    expect(label("font-size.small")).toBe("Small");
+  });
+
+  it("are sizes and numbers, so each field offers them", () => {
+    const kinds = defaultSiteTokens()
+      .filter(token => /^(font-size|line-height)\./.test(token.name))
+      .map(token => `${token.name}:${token.kind}`);
+    expect(kinds).toContain("font-size.h1:dimension");
+    expect(kinds).toContain("line-height.h1:number");
+  });
+
+  it("passes a site's text through a resolve, as it passes its fluid range", () => {
+    const siteText = { h2: { fontSize: "40px" } };
+    expect(resolveSiteTokens({ tokens: [], siteText }).siteText).toEqual(
+      siteText
+    );
   });
 });

@@ -105,6 +105,12 @@ describe("Circle on a 16:9 picture, on the published path", () => {
     ["captioned", { caption: "Our team" }],
     ["linked", { href: "/about" }],
     ["captioned and linked", { caption: "Our team", href: "/about" }],
+    // Inside the button that opens its lightbox, in a figure.
+    ["set to Enlarge", { whenClicked: "enlarge" }],
+    [
+      "captioned and set to Enlarge",
+      { caption: "Our team", whenClicked: "enlarge" },
+    ],
   ] as const) {
     it(`is cropped to a round square when ${name}`, async () => {
       const doc = await page(props);

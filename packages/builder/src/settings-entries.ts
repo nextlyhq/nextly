@@ -15,6 +15,7 @@ import {
 
 import {
   BUTTON_BLOCK,
+  ICON_BLOCK,
   SECTION_BLOCK,
   sizesOffered,
   type ShortcutAt,
@@ -305,6 +306,17 @@ function shortcutRows(
         options: Object.values(HEIGHT_LABELS),
         css: ["min-height"],
         set: stores("minHeight"),
+      },
+    ];
+  }
+  if (node.type === ICON_BLOCK) {
+    return [
+      {
+        id: SHORTCUT_IDS.size,
+        label: "Size",
+        options: Object.values(SIZE_LABELS),
+        css: ["font-size"],
+        set: stores("fontSize"),
       },
     ];
   }

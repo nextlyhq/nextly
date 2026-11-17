@@ -340,3 +340,85 @@ describe("the site's fluid range across the tiers", () => {
     ).toEqual({ min: 360, max: 1280 });
   });
 });
+
+describe("the site's text across the two tiers", () => {
+  const defaults = {
+    tokens: {
+      tokens: [],
+      siteText: {
+        h1: { fontSize: "50px" },
+        body: { fontSize: "17px" },
+      },
+    },
+  };
+
+  it("lays a stored row over the code's, row by row", () => {
+    const merged = resolveSiteStyle(defaults, {
+      tokens: { tokens: [], siteText: { h1: { fontSize: "60px" } } },
+    });
+    expect(merged.tokens?.siteText).toEqual({
+      h1: { fontSize: "60px" },
+      body: { fontSize: "17px" },
+    });
+  });
+
+  it("stores only the rows that differ from the code's", () => {
+    const stored = tokenOverrideOf(defaults.tokens, {
+      tokens: [],
+      siteText: { h1: { fontSize: "60px" }, body: { fontSize: "17px" } },
+    });
+    expect(stored.siteText).toEqual({ h1: { fontSize: "60px" } });
+  });
+
+  it("stores no site text where every row is the code's", () => {
+    const stored = tokenOverrideOf(defaults.tokens, {
+      tokens: [],
+      siteText: { h1: { fontSize: "50px" }, body: { fontSize: "17px" } },
+    });
+    expect(stored).not.toHaveProperty("siteText");
+  });
+
+  it("stores the range a fluid row was made across, though no variable is fluid", () => {
+    const range = { min: 360, max: 1280 };
+    const stored = tokenOverrideOf(
+      { tokens: [], fluidRange: range },
+      {
+        tokens: [],
+        fluidRange: range,
+        siteText: {
+          h2: {
+            fontSize: "clamp(1.5rem, 1.2rem + 1.4vw, 2.5rem)",
+            fluid: { small: 24, large: 40 },
+          },
+        },
+      }
+    );
+    expect(stored.fluidRange).toEqual(range);
+  });
+
+  it("keeps an empty row, which leaves that text to the site's own CSS", () => {
+    const stored = tokenOverrideOf(undefined, {
+      tokens: [],
+      siteText: { h3: {} },
+    });
+    expect(stored.siteText).toEqual({ h3: {} });
+  });
+});
+
+describe("the site's colour order across the tiers", () => {
+  it("is stored where the site set one, and read back over the code's", () => {
+    const order = ["color.text", "color.primary"];
+    expect(
+      tokenOverrideOf({ tokens: [] }, { tokens: [], order }).order
+    ).toEqual(order);
+    expect(tokenOverrideOf({ tokens: [] }, { tokens: [] })).not.toHaveProperty(
+      "order"
+    );
+    expect(
+      resolveSiteStyle(
+        { tokens: { tokens: [] } },
+        { tokens: { tokens: [], order } }
+      ).tokens?.order
+    ).toEqual(order);
+  });
+});

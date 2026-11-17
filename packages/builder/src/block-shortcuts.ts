@@ -28,6 +28,7 @@ import { readStyleValue } from "./style-values";
 /** The core blocks these shortcuts belong to. */
 export const SECTION_BLOCK = "core/section";
 export const BUTTON_BLOCK = "core/button";
+export const ICON_BLOCK = "core/icon";
 
 /** Where a shortcut writes: the state and the device being edited. */
 export interface ShortcutAt {
@@ -362,6 +363,63 @@ export function planSize(
     ["padding", padding],
     ["fontSize", SIZES[size].text],
   ]);
+}
+
+// --- an Icon's size
+
+/**
+ * What Small and Large set an Icon's font size to, since the glyph is drawn
+ * at the font size: a step below and above its own 1.5rem, in rem so an icon
+ * keeps its size wherever it is placed.
+ */
+export const ICON_SIZES = {
+  small: "1rem",
+  large: "2rem",
+} as const;
+
+/** The font size the block's definition draws it at, when it sets one. */
+function baseFontSize(node: BlockNode): string | undefined {
+  const size = (
+    getBlock(node.type)?.baseStyles as
+      | { base?: { base?: Record<string, unknown> } }
+      | undefined
+  )?.base?.base?.fontSize;
+  return typeof size === "string" ? size : undefined;
+}
+
+/**
+ * Medium while no font size is set here or reaches, or the icon's own is
+ * what shows; Small or Large where its size is shown; else none of the three.
+ */
+export function iconSizeOf(
+  node: BlockNode,
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
+): SizeChoice | undefined {
+  const shown = storedAt(node, at, "fontSize") ?? reaching("font-size");
+  if (shown === undefined || shown === baseFontSize(node)) return "medium";
+  if (shown === ICON_SIZES.small) return "small";
+  if (shown === ICON_SIZES.large) return "large";
+  return undefined;
+}
+
+/**
+ * Small or Large writes its font size here. Medium clears it, or, where a
+ * size reaches from elsewhere, writes the icon's own over it, since a clear
+ * would leave that one in force.
+ */
+export function planIconSize(
+  node: BlockNode,
+  size: SizeChoice,
+  at: ShortcutAt,
+  reaching: Reaching = NOTHING_REACHES
+): BuilderOp | null {
+  if (size !== "medium") {
+    return written(node, at, [["fontSize", ICON_SIZES[size]]]);
+  }
+  const over =
+    reaching("font-size") === undefined ? null : (baseFontSize(node) ?? null);
+  return written(node, at, [["fontSize", over]]);
 }
 
 // --- a Button's full width

@@ -1011,3 +1011,85 @@ describe("the site's fluid range", () => {
     }
   });
 });
+
+describe("the site's text", () => {
+  it("is kept by a save, each row as written", () => {
+    const siteText = {
+      body: { fontSize: "18px", lineHeight: 1.6 },
+      h2: {
+        fontSize: { $token: "font-size.h2" },
+        lineHeight: { $token: "line-height.h2" },
+      },
+      h3: {},
+      link: { color: "#0044cc", hoverColor: "#002266", underline: "hover" },
+    };
+    const checked = checkStoredTokens({ tokens: [], siteText });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.siteText).toEqual(siteText);
+  });
+
+  it("is refused, naming the row, for a row or a value it cannot hold", () => {
+    const checked = checkStoredTokens({
+      tokens: [],
+      siteText: {
+        h1: { fontSize: "huge" },
+        link: { fontSize: "16px" },
+        quote: {},
+      },
+    });
+    expect(checked.issues.join(" ")).toContain("Heading 1");
+    expect(checked.issues.join(" ")).toContain("Links has no");
+    expect(checked.issues.join(" ")).toContain('"quote" is not a row');
+  });
+
+  it("is read back keeping the rows that can be read, and dropping the rest", () => {
+    const read = readSiteStyleRecord({
+      tokens: {
+        tokens: [],
+        siteText: { h1: { fontSize: "huge" }, h2: { fontSize: "40px" } },
+      },
+    });
+    expect(read.tokens?.siteText).toEqual({ h2: { fontSize: "40px" } });
+  });
+});
+
+describe("colour groups and the colour order", () => {
+  const brand = {
+    name: "color.brand",
+    kind: "color",
+    values: { light: "#123456" },
+  };
+
+  it("keeps a colour's group and the site's order", () => {
+    const checked = checkStoredTokens({
+      tokens: [{ ...brand, group: "Accents" }],
+      order: ["color.brand", "color.text"],
+    });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.tokens[0]?.group).toBe("Accents");
+    expect(checked.value?.order).toEqual(["color.brand", "color.text"]);
+  });
+
+  it("refuses a group that is no name, saying why", () => {
+    for (const group of ["", "   ", 7, "x".repeat(500)]) {
+      const issues = checkStoredTokens({
+        tokens: [{ ...brand, group }],
+      }).issues;
+      expect(issues.join(" "), String(group)).toMatch(/group/);
+    }
+  });
+
+  it("refuses an order that is not a list of different code names", () => {
+    for (const order of [
+      "color.brand",
+      ["color.brand", "color.brand"],
+      ["color.brand", 3],
+      ["x".repeat(500)],
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [brand], order }).issues.join(" "),
+        JSON.stringify(order)
+      ).toMatch(/order/);
+    }
+  });
+});

@@ -24,26 +24,8 @@ import {
   useDocumentLocale,
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
-import {
-  Button,
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  Label,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@nextlyhq/ui";
-import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { Button, Label } from "@nextlyhq/ui";
+import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import {
   useController,
   useWatch,
@@ -61,15 +43,20 @@ import {
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import { useBuilderRoute } from "./builder-route-read";
+import { HeaderFooterMenu, type MenuSearch } from "./header-footer-menu";
+import { useSetPictures } from "./header-footer-pictures";
 import {
   layoutPickerView,
   layoutValue,
+  NO_HEADER_FOOTER_VALUE,
+  SITE_DEFAULT_VALUE,
   storedFor,
   type EffectiveLayout,
   type LayoutChoicesState,
   type LayoutPickerView,
   type PickerOption,
 } from "./layout-choice-view";
+import { useRefreshOnReturn } from "./refresh-on-return";
 
 /** The page's stored Layout reference, as the pages collection names it. */
 const LAYOUT_FIELD = "layout";
@@ -87,7 +74,7 @@ const SWITCH_FIELD = "noHeaderFooter";
 function useLayoutChoices(
   enabled: boolean,
   selected: string | null,
-  search?: string
+  ask: { search?: string; pictures?: boolean } = {}
 ): {
   state: LayoutChoicesState;
   /** Whether `state` is the last answer, held while a new one is asked. */
@@ -96,12 +83,14 @@ function useLayoutChoices(
 } {
   // In the language being edited, so the regions read as the page reads.
   const locale = useDocumentLocale()?.code ?? null;
+  const { search, pictures } = ask;
   const read = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: layoutChoicesPath(
-      selected,
-      search === undefined ? { locale } : { locale, search }
-    ),
+    path: layoutChoicesPath(selected, {
+      locale,
+      ...(search === undefined ? {} : { search }),
+      ...(pictures === true ? { pictures } : {}),
+    }),
     enabled,
     // Asked again on every mount, and when the author comes back to the tab
     // (below): a Layout published or made the default in another tab, from
@@ -134,33 +123,6 @@ function useLayoutChoices(
   const stale =
     read.data === undefined && read.error === null && held !== undefined;
   return { state, stale, retry: read.refetch };
-}
-
-/**
- * Ask again when the author returns to this tab: on window focus, and when
- * the page becomes visible. The admin turns refetch-on-focus off for every
- * read, so this one read asks for it itself.
- */
-function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
-  // The newest `refetch`, without re-attaching the listeners on each render:
-  // the read hands out a new function every time.
-  const latest = useRef(refetch);
-  useEffect(() => {
-    latest.current = refetch;
-  });
-  useEffect(() => {
-    if (!enabled) return;
-    const onFocus = () => latest.current();
-    const onVisible = () => {
-      if (document.visibilityState !== "hidden") latest.current();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [enabled]);
 }
 
 /**
@@ -273,11 +235,12 @@ function PageLayoutSection<T extends FieldValues>({
 }
 
 /**
- * The page's Layout picker, or nothing for a form that is not a page's.
+ * The page's "Header & footer" menu, or nothing for a form that is not a
+ * page's.
  *
- * Drawn with the admin's own Select, label and button, so it is one product
- * with the form around it. The "why" line under it says which Layout is in
- * effect and why, and is the picker's description for a screen reader.
+ * Labelled and described as the admin's own fields are, so it is one product
+ * with the form around it. The "why" line under it says which set is in
+ * effect and why, and is the menu's description for a screen reader.
  */
 export function PageLayoutPicker<T extends FieldValues>({
   control,
@@ -290,6 +253,72 @@ export function PageLayoutPicker<T extends FieldValues>({
   const stored = useStoredLayout(control);
   if (stored === undefined) return null;
   return <Picker control={control} stored={stored} disabled={disabled} />;
+}
+
+/** Above this many sets the menu is searched rather than scrolled. */
+const SEARCH_ABOVE = 10;
+
+/**
+ * How many sets the site has, as the answer lists them. Counted from the
+ * answer rather than the menu's rows: the menu draws the default set as
+ * "Site default" and drops its named row, so its rows run one short of the
+ * sets whenever the page follows the default. Before an answer, the rows
+ * named are all there is to count.
+ */
+function setCount(state: LayoutChoicesState, view: LayoutPickerView): number {
+  if (state.kind === "ready") return state.choices.items.length;
+  return view.options.filter(
+    option =>
+      option.value !== SITE_DEFAULT_VALUE &&
+      option.value !== NO_HEADER_FOOTER_VALUE
+  ).length;
+}
+
+/**
+ * Each option's picture. Every listed set's definitions are asked for once
+ * the menu first opens, not before, so a page's form opens with the canvas's
+ * own read only; until they arrive, the two sets the page can be drawn inside
+ * (its own and the default) are drawn from that read.
+ */
+function useOptionPictures(
+  opened: boolean,
+  selected: string | null,
+  state: LayoutChoicesState,
+  /** What a search found, past the list: its sets' definitions, once in. */
+  found: LayoutChoicesResponse["meta"]["regionDefinitions"] | undefined
+): (option: PickerOption) => JSX.Element {
+  const [wanted, setWanted] = useState(false);
+  useEffect(() => {
+    if (opened) setWanted(true);
+  }, [opened]);
+  const { state: all } = useLayoutChoices(wanted, selected, {
+    pictures: true,
+  });
+  const listed =
+    all.kind === "ready"
+      ? all.choices.meta.regionDefinitions
+      : state.kind === "ready"
+        ? state.choices.meta.regionDefinitions
+        : NO_DEFINITIONS;
+  // A search's matches can sit past the list, so their definitions come with
+  // the search's own answer, drawn beside the list's.
+  const definitions = useMemo(
+    () => (found === undefined ? listed : { ...listed, ...found }),
+    [listed, found]
+  );
+  // Answered, or failed: a region still without its definition then draws
+  // the broken-picture icon rather than waiting on a read that is done.
+  const settled = all.kind !== "pending";
+  const picture = useSetPictures(definitions, settled);
+  return option => <>{picture(option.picture)}</>;
+}
+
+const NO_DEFINITIONS: LayoutChoicesResponse["meta"]["regionDefinitions"] = {};
+
+/** Where "Manage headers & footers ↗" opens: the admin's list of sets. */
+function manageHrefOf(state: LayoutChoicesState): string | undefined {
+  if (state.kind !== "ready") return undefined;
+  return `/admin/collections/${encodeURIComponent(state.choices.meta.layoutsCollection)}`;
 }
 
 function Picker<T extends FieldValues>({
@@ -310,16 +339,17 @@ function Picker<T extends FieldValues>({
     control,
     name: SWITCH_FIELD as Path<T>,
   });
-  const { state, retry } = useLayoutChoices(true, selectedOf(stored));
+  const selected = selectedOf(stored);
+  const { state, retry } = useLayoutChoices(true, selected);
   const view = layoutPickerView(stored, state);
+  const [open, setOpen] = useState(false);
   const id = useId();
   const whyId = `${id}-why`;
   const errorId = `${id}-error`;
-  // A save the server refused for this field, such as a Layout being removed.
-  // The `layout` field is hidden from the form, so this picker is the only
+  // A save the server refused for this field, such as a set being removed.
+  // The `layout` field is hidden from the form, so this menu is the only
   // place the reason can be shown.
   const refused = fieldState.error?.message;
-  const describedBy = describedByOf(whyId, errorId, refused);
 
   const choose = (value: string) => {
     const next = storedFor(value, stored);
@@ -327,92 +357,48 @@ function Picker<T extends FieldValues>({
     switchField.onChange(next.noHeaderFooter);
   };
 
-  // More Layouts than one answer lists: the rest are reached by title, so the
-  // picker searches. Otherwise the plain dropdown, which lists them all.
+  // More sets than ten, or than one answer lists: the menu searches titles on
+  // the server, so every set the author may read can be found and chosen.
   const capped = state.kind === "ready" && state.choices.meta.more;
+  const searchable = capped || setCount(state, view) > SEARCH_ABOVE;
+  const { definitions: foundDefinitions, ...search } = useLayoutSearch(
+    open && searchable,
+    stored,
+    view
+  );
+  const picture = useOptionPictures(open, selected, state, foundDefinitions);
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-slot="page-layout">
       <Label htmlFor={id}>Header & footer</Label>
-      {capped ? (
-        <SearchingPicker
-          id={id}
-          whyId={describedBy}
-          view={view}
-          stored={stored}
-          disabled={disabled || view.readOnly}
-          onChoose={choose}
-        />
-      ) : (
-        <Select
-          value={view.value}
-          onValueChange={choose}
-          disabled={disabled || view.readOnly || state.kind === "pending"}
-        >
-          {/* One line, cut with an ellipsis: a long Layout title or the
-            deleted-choice wording must not grow the control, and the line
-            under it says the whole of it. Styled through the trigger, since
-            the value element takes no class of its own. */}
-          <SelectTrigger
-            id={id}
-            aria-describedby={describedBy}
-            aria-invalid={invalidOf(refused)}
-            className="[&>span]:min-w-0 [&>span]:truncate [&>span]:text-left"
-          >
-            <SelectValue
-              placeholder={
-                state.kind === "pending"
-                  ? "Loading header & footer sets…"
-                  : undefined
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {view.options.map(option => (
-              <SelectItem
-                key={option.value}
-                value={option.value}
-                disabled={option.disabled === true}
-                {...optionDescription(option)}
-              >
-                <OptionText option={option} />
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      <HeaderFooterMenu
+        id={id}
+        describedBy={describedByOf(whyId, errorId, refused)}
+        invalid={refused !== undefined}
+        view={view}
+        pending={state.kind === "pending"}
+        disabled={disabled || view.readOnly}
+        open={open}
+        onOpenChange={setOpen}
+        onChoose={choose}
+        picture={picture}
+        {...(searchable
+          ? { search: { ...search, ...(capped ? { note: CAPPED_NOTE } : {}) } }
+          : {})}
+        {...withManage(manageHrefOf(state))}
+      />
       <WhyLine id={whyId} view={view} state={state} retry={retry} />
       <RefusedLine id={errorId} refused={refused} />
     </div>
   );
 }
 
-/**
- * An option's words: its label, and a short note muted after it when it
- * has one (the default Layout's name, or why a Layout behind Remove Layout's
- * fence is not offered).
- */
-function OptionText({ option }: { option: PickerOption }): JSX.Element {
-  if (option.note === undefined) return <>{option.label}</>;
-  return (
-    <>
-      {option.label}
-      <span className="text-muted-foreground"> · {option.note}</span>
-    </>
-  );
+/** The menu's "Manage headers & footers ↗", where there is a list to open. */
+function withManage(href: string | undefined): { manageHref?: string } {
+  return href === undefined ? {} : { manageHref: href };
 }
 
-/** An option's whole reason, as its tooltip and accessible description. */
-function optionDescription(option: PickerOption): {
-  title?: string;
-  "aria-description"?: string;
-} {
-  return option.description === undefined
-    ? {}
-    : { title: option.description, "aria-description": option.description };
-}
-
-/** The picker's description: why the Layout applies, and a refusal if any. */
+/** The menu's description: why the set applies, and a refusal if any. */
 function describedByOf(
   whyId: string,
   errorId: string,
@@ -421,12 +407,7 @@ function describedByOf(
   return refused === undefined ? whyId : `${whyId} ${errorId}`;
 }
 
-/** `aria-invalid` while a refusal stands. */
-function invalidOf(refused: string | undefined): true | undefined {
-  return refused === undefined ? undefined : true;
-}
-
-/** The server's reason a save was refused for this field, under the picker. */
+/** The server's reason a save was refused for this field, under the menu. */
 function RefusedLine({
   id,
   refused,
@@ -442,26 +423,30 @@ function RefusedLine({
   );
 }
 
-/** How long typing pauses before Layout titles are searched again. */
+/** How long typing pauses before set titles are searched again. */
 const SEARCH_PAUSE_MS = 200;
 
 /** The words under a capped list, saying how to reach the rest. */
 const CAPPED_NOTE = "Showing the first 200; search to find more.";
 
 /**
- * A capped list's search: what is typed, the server's answer for it once the
+ * The menu's search: what is typed, the server's answer for it once the
  * typing pauses, and the options to show.
  *
  * Searching from the first keystroke: what is typed is the query, and until
  * its own answer arrives nothing shown may claim to match it. A search's
  * answer belongs to its own query, so the last one's matches are never shown
- * for the next.
+ * for the next. Titles are matched by the database, by its own collation, so
+ * a search finds what the site's own search would.
  */
 function useLayoutSearch(
   open: boolean,
   stored: { layout: unknown; noHeaderFooter: boolean },
   view: LayoutPickerView
-) {
+): MenuSearch & {
+  /** The answered search's set definitions, for its matches' pictures. */
+  definitions: LayoutChoicesResponse["meta"]["regionDefinitions"] | undefined;
+} {
   const [typed, setTyped] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -472,7 +457,8 @@ function useLayoutSearch(
   const { state: found, retry } = useLayoutChoices(
     open && search !== "",
     selectedOf(stored),
-    search
+    // With the pictures of what it finds, which may be past the list.
+    { search, pictures: true }
   );
   const current = searching && search === typed.trim();
   const answered = current && found.kind === "ready";
@@ -483,16 +469,29 @@ function useLayoutSearch(
     : found.kind === "ready" && answered
       ? matchingOptions(stored, found)
       : [];
-  return { typed, setTyped, searching, answered, failed, options, retry };
+  const definitions =
+    answered && found.kind === "ready"
+      ? found.choices.meta.regionDefinitions
+      : undefined;
+  return {
+    typed,
+    setTyped,
+    searching,
+    answered,
+    failed,
+    options,
+    retry,
+    definitions,
+  };
 }
 
 /**
  * The options a search found: exactly the rows the server says matched.
  *
  * The answer also carries rows the route adds whatever the query (the page's
- * own Layout and the default), and the view adds the default and "No header
- * or footer" to every list; none of those matched, so none is a result, and
- * "No Layouts match" can say so. Which rows matched is the server's answer
+ * own set and the default), and the view adds the default and "None" to
+ * every list; none of those matched, so none is a result, and "No header &
+ * footer sets match." can say so. Which rows matched is the server's answer
  * alone: the database compares by its own collation ("cafe" finds "Café" on
  * one dialect), which no comparison here could repeat. The current choice
  * stays in the trigger.
@@ -507,143 +506,7 @@ function matchingOptions(
   );
 }
 
-/** What the list says when it shows no Layouts: why, and what to do. */
-function SearchNote({
-  searching,
-  answered,
-  failed,
-  retry,
-}: {
-  searching: boolean;
-  answered: boolean;
-  failed: boolean;
-  retry: () => void;
-}): JSX.Element {
-  if (failed) {
-    return (
-      <span className="flex items-center justify-center gap-2">
-        Couldn&apos;t search header & footer sets
-        <Button type="button" variant="ghost" size="sm" onClick={retry}>
-          Try again
-        </Button>
-      </span>
-    );
-  }
-  return (
-    <>
-      {searching && !answered ? "Searching…" : "No header & footer sets match."}
-    </>
-  );
-}
-
-/**
- * The picker for a site with more Layouts than one answer lists: the same
- * choices behind a search field, as the admin's other searchable choices are
- * drawn. Titles are searched on the server, so every Layout the author may
- * read can be found and chosen.
- */
-function SearchingPicker({
-  id,
-  whyId,
-  view,
-  stored,
-  disabled,
-  onChoose,
-}: {
-  id: string;
-  whyId: string;
-  view: LayoutPickerView;
-  stored: { layout: unknown; noHeaderFooter: boolean };
-  disabled: boolean;
-  onChoose: (value: string) => void;
-}): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const { typed, setTyped, searching, answered, failed, options, retry } =
-    useLayoutSearch(open, stored, view);
-  const current = view.options.find(option => option.value === view.value);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          id={id}
-          type="button"
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-describedby={whyId}
-          disabled={disabled}
-          className="w-full justify-between font-normal"
-        >
-          <span className="min-w-0 truncate text-left">
-            {current === undefined ? (
-              "Choose a header & footer set"
-            ) : (
-              <OptionText option={current} />
-            )}
-          </span>
-          <ChevronDown aria-hidden="true" className="h-4 w-4 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        // As wide as the trigger, whatever the titles: a long one is cut
-        // to its row rather than widening the list.
-        className="w-[var(--radix-popover-trigger-width)] p-0"
-      >
-        {/* Filtered by the server, not here: the list holds only the first
-            answer, and a Layout past it is found only by asking. */}
-        {/* The menu's label names its search field, which the field
-            reads by reference rather than by a label of its own. */}
-        <Command shouldFilter={false} label="Search header & footer sets">
-          <CommandInput
-            placeholder="Search header & footer sets"
-            value={typed}
-            onValueChange={setTyped}
-          />
-          <CommandList>
-            <CommandEmpty>
-              <SearchNote
-                searching={searching}
-                answered={answered}
-                failed={failed}
-                retry={retry}
-              />
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map(option => (
-                <CommandItem
-                  key={option.value}
-                  value={option.value}
-                  disabled={option.disabled === true}
-                  {...optionDescription(option)}
-                  onSelect={() => {
-                    onChoose(option.value);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    <OptionText option={option} />
-                  </span>
-                  {option.value === view.value ? (
-                    <Check aria-hidden="true" className="h-4 w-4" />
-                  ) : null}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-          {searching ? null : (
-            <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-              {CAPPED_NOTE}
-            </p>
-          )}
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** Which Layout is in effect and why; or the read's own state. */
+/** Which set is in effect and why; or the read's own state. */
 function WhyLine({
   id,
   view,
@@ -661,7 +524,7 @@ function WhyLine({
         id={id}
         className="flex items-center gap-2 text-xs text-muted-foreground"
       >
-        Couldn&apos;t load header & footer sets
+        Couldn&apos;t load headers & footers
         <Button type="button" variant="ghost" size="sm" onClick={retry}>
           Try again
         </Button>
@@ -670,7 +533,7 @@ function WhyLine({
   }
   return (
     <p id={id} className="text-xs text-muted-foreground" aria-live="polite">
-      {state.kind === "pending" ? "Loading header & footer sets…" : view.why}
+      {state.kind === "pending" ? "Loading headers & footers…" : view.why}
     </p>
   );
 }
