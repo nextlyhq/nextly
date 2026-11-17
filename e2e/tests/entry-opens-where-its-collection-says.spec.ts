@@ -18,7 +18,7 @@ import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { createEntry } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 // Reads the dashboard's Continue card, which other specs arrange.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -224,6 +224,9 @@ test("with the builder's views not published, a row opens the form", async ({
   await expect(rowLink(page, title)).toHaveAttribute("href", formAt(id));
   await rowLink(page, title).click();
   await expect(excerpt(page)).toHaveValue("A short summary.");
-  // Nothing offers the builder where its views are not published.
-  await expect(page.getByText("Open in builder")).toHaveCount(0);
+  // Nothing offers the builder where its views are not published, not even
+  // in a hidden copy of the page.
+  await expect(includingHidden(page).getByText("Open in builder")).toHaveCount(
+    0
+  );
 });
