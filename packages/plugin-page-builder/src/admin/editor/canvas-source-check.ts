@@ -8,7 +8,9 @@
  * the plugin's change check, which answers one mark for every source the
  * canvas reads:
  * - once when the canvas opens, whether or not its tab is in sight, so the
- *   mark compared with is taken with the canvas's first reads;
+ *   mark compared with is taken with the canvas's first reads: once those
+ *   are in, when the browser is next idle, so opening the builder waits on
+ *   nothing for it;
  * - once whenever what the canvas kept is dropped, for the same reason;
  * - then a minute after the last check settled while the builder's tab is
  *   visible,
@@ -45,6 +47,23 @@ import {
 /** The longest the canvas goes without asking while its tab is visible. */
 export const SOURCE_CHECK_EVERY_MS = 60_000;
 
+/** The longest the first mark waits for the browser to be idle. */
+const FIRST_MARK_IDLE_MS = 1_000;
+
+/** Runs `run` when the browser is next idle; answers how to call it off. */
+function whenIdle(run: () => void): () => void {
+  if (
+    typeof requestIdleCallback === "function" &&
+    typeof cancelIdleCallback === "function"
+  ) {
+    const handle = requestIdleCallback(run, { timeout: FIRST_MARK_IDLE_MS });
+    const cancel = cancelIdleCallback;
+    return () => cancel(handle);
+  }
+  const handle = setTimeout(run, 0);
+  return () => clearTimeout(handle);
+}
+
 /** Ask the change check for the mark of the sources `ask` names. */
 export type AskSourcesMark = (
   ask: CanvasSourcesChangedRequest
@@ -68,11 +87,17 @@ async function askRoute(ask: CanvasSourcesChangedRequest): Promise<string> {
  * Keep the canvas's kept reads in step with saves made elsewhere, for the
  * sources `asked` names, as `userId`. Asks nothing for a page that reads no
  * source, or while the signed-in person is not known.
+ *
+ * `firstReadsIn` says the canvas's first reads have answered. A fresh open
+ * takes its first mark only then, and when the browser is next idle, so the
+ * builder draws without waiting on the check; it is taken with those reads
+ * all the same, and a save made elsewhere after them is seen by the next ask.
  */
 export function useCanvasSourceCheck(
   asked: CanvasSourcesChangedRequest | undefined,
   userId: string | null,
-  ask: AskSourcesMark = askRoute
+  ask: AskSourcesMark = askRoute,
+  firstReadsIn = true
 ): void {
   // The sources by name: an edit that leaves them the same asks nothing new.
   const key =
@@ -82,6 +107,10 @@ export function useCanvasSourceCheck(
   // a changed ask drops what was kept, and its first mark is taken with the
   // reads that drop asks for.
   const previous = useRef("");
+  // Opening: no mark is taken yet, and the first waits for the first reads.
+  const opening = useRef(true);
+  // The open ask's check, for the first mark once the first reads are in.
+  const takeFirstMark = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     if (key === "") return;
     const sources = JSON.parse(key) as CanvasSourcesChangedRequest;
@@ -133,6 +162,7 @@ export function useCanvasSourceCheck(
     // canvas reads again now, so the mark is taken again now too.
     const stopHearing = onCanvasSourcesChanged(() => {
       if (telling) return;
+      opening.current = false;
       known = undefined;
       baselineMissed = false;
       void check(true);
@@ -143,20 +173,34 @@ export function useCanvasSourceCheck(
       // What was kept predates every mark of the new ask: drop it, which
       // asks the check again through the listener above.
       canvasSourcesChanged();
-    } else {
+    } else if (!opening.current) {
       void check(true);
     }
+    // On a fresh open the first mark waits for the first reads (below).
+    takeFirstMark.current = () => void check(true);
     const onVisible = () => {
       if (document.visibilityState === "visible") void check(false);
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      takeFirstMark.current = undefined;
       clearTimeout(next);
       document.removeEventListener("visibilitychange", onVisible);
       stopHearing();
     };
   }, [key, ask]);
+  // The first mark of a fresh open, once the canvas's first reads are in and
+  // the browser is next idle; after it, the answers coming in again ask
+  // nothing on their own.
+  useEffect(() => {
+    if (key === "" || !firstReadsIn || !opening.current) return;
+    return whenIdle(() => {
+      if (!opening.current) return;
+      opening.current = false;
+      takeFirstMark.current?.();
+    });
+  }, [key, firstReadsIn]);
   // Signed out: nothing kept for the person who was may answer again.
   const signedIn = useRef(userId !== null);
   useEffect(() => {

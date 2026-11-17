@@ -362,7 +362,10 @@ function useWatchedSources(
       sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
     [request, drawn, identity, namedQueries, locale, bound]
   );
-  useCanvasSourceCheck(asked, userId);
+  // The canvas's first reads are in once its bindings are answered, or at
+  // once for a page that reads none: the first mark waits for that.
+  const firstReadsIn = request === undefined || bound !== undefined;
+  useCanvasSourceCheck(asked, userId, undefined, firstReadsIn);
 }
 
 /** The entry an ask is made for, as the route takes it. */
