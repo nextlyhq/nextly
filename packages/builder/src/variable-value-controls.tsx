@@ -76,7 +76,7 @@ export function useDraft(value: string): [string, (next: string) => void] {
 }
 
 /** A text field that commits when it loses focus or on Enter. */
-export function TextValue({
+function TextValue({
   label,
   value,
   readOnly,
@@ -106,7 +106,7 @@ export function TextValue({
  * refused value, the value it held before is committed too, since putting it
  * back is how the author answers the refusal.
  */
-export function CommitInput({
+function CommitInput({
   id,
   label,
   value,
@@ -241,7 +241,7 @@ export function SizeInput({
 }
 
 /** A size under its own label, as a variable's Light and Dark are laid out. */
-export function SizeValue({
+function SizeValue({
   label,
   value,
   readOnly,
