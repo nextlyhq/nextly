@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { formatWithOptions } from "node:util";
 
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { definePlugin } from "@nextlyhq/plugin-sdk";
@@ -125,11 +126,26 @@ function landed(response: Response): string | null {
 const idOf = (created: unknown): string =>
   String((created as { item: { id: string | number } }).item.id);
 
+/**
+ * Every line the instance's logger is given, its context printed in full,
+ * as the plugin's `ctx.logger` reaches it.
+ */
+const logged: string[] = [];
+const recordingLogger = Object.fromEntries(
+  (["debug", "info", "warn", "error"] as const).map(level => [
+    level,
+    (message: string, meta?: Record<string, unknown>) => {
+      logged.push(formatWithOptions({ depth: Infinity }, level, message, meta));
+    },
+  ])
+) as unknown as NonNullable<Parameters<typeof createTestNextly>[0]["logger"]>;
+
 let current: TestNextly | undefined;
 const servers: Server[] = [];
 
 afterEach(async () => {
   accepted.length = 0;
+  logged.length = 0;
   vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
@@ -153,6 +169,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
         seedPublic: true,
+        logger: recordingLogger,
       });
       return current;
     }
@@ -267,10 +284,19 @@ describe.each(getConfiguredTestDialects())(
         })
       );
 
-      const said: string[] = [];
+      // Everything said while the posts are made: every line the instance's
+      // logger is given, each console call as Node prints it, nested objects
+      // in full, and anything written straight to the process's own output.
+      const said = logged;
       for (const method of ["log", "info", "warn", "error", "debug"] as const) {
         vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
-          said.push(args.map(String).join(" "));
+          said.push(formatWithOptions({ depth: Infinity }, ...args));
+        });
+      }
+      for (const stream of [process.stdout, process.stderr]) {
+        vi.spyOn(stream, "write").mockImplementation((chunk: unknown) => {
+          said.push(String(chunk));
+          return true;
         });
       }
       const answer = { email: "unique-7f3c@example.com", extra: "dropped" };
@@ -331,6 +357,14 @@ describe.each(getConfiguredTestDialects())(
       ).toBe("/contact#form-simple-error");
       expect(reached).toBe(0);
 
+      // The control: an answer logged deep in an object, and one written
+      // straight out, are both caught by this capture. (The logger's own
+      // lines were shown caught by logging the answers from the receiver,
+      // which fails the assertion below.)
+      console.info("control", { post: { answers: { email: "control-9d1a" } } });
+      process.stdout.write("control-b52e\n");
+      expect(said.join("\n")).toContain("control-9d1a");
+      expect(said.join("\n")).toContain("control-b52e");
       expect(said.join("\n")).not.toContain("unique-7f3c");
     });
 

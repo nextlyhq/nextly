@@ -367,6 +367,9 @@ describe("where the visitor is sent back to", () => {
     ["//evil.example/path", "/"],
     ["https://evil.example/", "/"],
     ["/\\evil.example", "/"],
+    // Normalized by the URL parser into `//evil.example/path`.
+    ["/a/..//evil.example/path", "/"],
+    ["/./\\evil.example", "/"],
     ["javascript:alert(1)", "/"],
     ["contact", "/"],
     ["/ok\nLocation: https://evil.example", "/"],
@@ -673,6 +676,13 @@ describe("a form picked from a provider", () => {
       [
         { kind: "sent", afterSending: { kind: "page", href: "/thanks?x=1" } },
         "/thanks?x=1",
+      ],
+      [
+        {
+          kind: "sent",
+          afterSending: { kind: "page", href: "/x/..//evil.example/" },
+        },
+        "/contact#form-f1-sent",
       ],
       [
         {

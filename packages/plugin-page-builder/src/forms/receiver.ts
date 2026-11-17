@@ -284,7 +284,11 @@ function sameSitePath(raw: string | undefined): string | null {
   const base = "https://site.invalid";
   try {
     const url = new URL(raw, base);
-    return url.origin === base ? `${url.pathname}${url.search}` : null;
+    if (url.origin !== base) return null;
+    // Judged again once normalized: `/a/..//elsewhere` normalizes to
+    // `//elsewhere`, which a browser reads as another host.
+    const path = `${url.pathname}${url.search}`;
+    return path.startsWith("//") ? null : path;
   } catch {
     return null;
   }
