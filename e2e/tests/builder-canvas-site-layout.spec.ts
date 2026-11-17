@@ -20,7 +20,7 @@ import { test } from "./support/test";
 // Writes the homepage's layout, which other specs share; see support/locks.ts.
 test.describe.configure({ lock: [LOCK.homepage] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const BUILDER_URL = /\/admin\/singles\/homepage\/builder\?field=layout$/;
 /** The playground's canvas route, its `canvasPath`. */

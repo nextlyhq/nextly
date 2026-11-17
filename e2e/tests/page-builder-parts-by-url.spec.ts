@@ -24,7 +24,7 @@ test.describe.configure({ lock: [LOCK.homepage, LOCK.postsTemplate] });
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const PLUGIN = "/admin/api/plugins/@nextlyhq/plugin-page-builder";
 const TEMPLATES = "/admin/api/collections/templates/entries";
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 const HEADING = "parts-by-url-heading";
 
 /** A selector the editor's stylesheet styles, and no other sheet does. */
