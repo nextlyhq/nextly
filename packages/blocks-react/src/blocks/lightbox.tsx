@@ -9,7 +9,12 @@
  * history entry, as a `:target` fragment would. A closed popover is not
  * drawn, so its `loading="lazy"` file is fetched only when it opens.
  *
- * Close is the only control: nothing here steps to another picture.
+ * Close is the only control: nothing here steps to another picture. With no
+ * script, a Next inside one popover opens the next one nested over it rather
+ * than in its place, so Close and Escape step back a picture at a time and
+ * Previous can't reach a picture still open beneath; a `:target` fragment per
+ * picture instead adds a history entry for every step, so Back walks the
+ * pictures rather than leaving the page.
  *
  * Shared by the Image block and the pictures of a Gallery, which are Image
  * blocks of their own.
