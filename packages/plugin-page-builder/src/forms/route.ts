@@ -10,6 +10,7 @@
  *
  * @module forms/route
  */
+import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import { COMPONENT_DOCUMENT_FIELD } from "@nextlyhq/blocks-react";
 import type {
   LimitRule,
@@ -17,10 +18,15 @@ import type {
   PluginRouteContext,
 } from "@nextlyhq/plugin-sdk";
 
+import {
+  CONTENT_ADDRESS_SERVICE,
+  type ContentAddressService,
+} from "../address-claims/content-addresses";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
 import { TEMPLATES_SLUG } from "../collections/templates";
+import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import type { ComponentStore } from "../library-route";
 
 import {
@@ -52,7 +58,7 @@ export const FORM_SEND_LIMITS: Readonly<Record<string, LimitRule>> = {
 };
 
 /** Where this site stores each kind of document a form can be defined in. */
-function definingStores(
+export function definingStores(
   self: PluginRouteContext["self"],
   componentStore: ComponentStore
 ): DefiningStores {
@@ -73,6 +79,8 @@ function definingStores(
 export function formReceiverRoute(parts: {
   readonly providers: FormProviders;
   readonly componentStore: ComponentStore;
+  /** The site's document limits, which its pages are drawn under. */
+  readonly limits?: DocumentLimits;
 }): PluginRoute {
   return {
     method: "POST",
@@ -88,12 +96,55 @@ export function formReceiverRoute(parts: {
       const stores = definingStores(ctx.self, parts.componentStore);
       return receiveFormPost(request, {
         readNode: (document, nodeId, locale) =>
-          publishedNode(api, stores, document, nodeId, locale),
+          publishedNode(api, stores, document, nodeId, locale, parts.limits),
         provider: id => parts.providers.get(id),
         limits: ctx.limits,
         deliver: (address, answers) => deliverAnswers(address, answers),
+        entryAddress: (collection, id, locale, from) =>
+          servedAddressOf(api, collection, id, locale, from),
         logger: ctx.logger,
       });
     },
   };
+}
+
+/**
+ * Where the site serves a page or an entry, from the page builder's address
+ * store, as the live page's content route reads it; `null` where it serves
+ * it nowhere, or the store cannot be read.
+ */
+async function servedAddressOf(
+  api: unknown,
+  collection: string,
+  id: string,
+  locale: string | undefined,
+  from: string
+): Promise<string | null> {
+  const plugins = (api as { plugins?: unknown }).plugins;
+  const service = (
+    plugins as Record<string, Record<string, unknown> | undefined> | undefined
+  )?.[PAGE_BUILDER_PLUGIN_NAME]?.[CONTENT_ADDRESS_SERVICE] as
+    | Pick<ContentAddressService, "pathHeldBy">
+    | undefined;
+  if (typeof service?.pathHeldBy !== "function") return null;
+  const path = await service.pathHeldBy(locale, collection, id);
+  return path === null ? null : addressInLanguageOf(path, locale, from);
+}
+
+/**
+ * `path`, the address store's language-free path of a page in `locale`, as
+ * the page the visitor sent from was addressed: under that language's
+ * segment where the page's own path starts with it (`/de/kontakt` sends to
+ * `/de/danke`), and as it is where the page carries none, as the default
+ * language and a site mounting one language itself serve their pages.
+ */
+export function addressInLanguageOf(
+  path: string,
+  locale: string | undefined,
+  from: string
+): string {
+  if (locale === undefined) return path;
+  const segment = from.split("/")[1] ?? "";
+  if (segment.toLowerCase() !== locale.toLowerCase()) return path;
+  return path === "/" ? `/${segment}` : `/${segment}${path}`;
 }

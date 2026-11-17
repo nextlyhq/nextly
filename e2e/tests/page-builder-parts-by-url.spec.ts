@@ -25,6 +25,11 @@ const HOMEPAGE_API = "/admin/api/singles/homepage";
 const PLUGIN = "/admin/api/plugins/@nextlyhq/plugin-page-builder";
 const TEMPLATES = "/admin/api/collections/templates/entries";
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 const HEADING = "parts-by-url-heading";
 
 /** A selector the editor's stylesheet styles, and no other sheet does. */
@@ -126,7 +131,9 @@ test.describe("the page builder's parts, opened by their address", () => {
     await gotoAdmin(page, "/singles/homepage");
 
     await expect(
-      page.getByRole("link", { name: OPEN_BUILDER_ACTION })
+      page
+        .locator(PAGE_BUILDER_CARD)
+        .getByRole("link", { name: OPEN_BUILDER_ACTION })
     ).toBeVisible({ timeout: 30_000 });
   });
 
@@ -160,7 +167,9 @@ test.describe("the page builder's parts, opened by their address", () => {
       page.getByRole("textbox", { name: "Address", exact: true })
     ).toBeVisible({ timeout: 30_000 });
     await expect(
-      page.getByRole("link", { name: OPEN_BUILDER_ACTION })
+      page
+        .locator(PAGE_BUILDER_CARD)
+        .getByRole("link", { name: OPEN_BUILDER_ACTION })
     ).toBeVisible();
   });
 });

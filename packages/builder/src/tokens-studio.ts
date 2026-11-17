@@ -56,6 +56,12 @@ import {
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "./fluid-size";
 import { lineHeightFromText } from "./style-folded";
 
 /**
@@ -443,8 +449,69 @@ export function setTokenValue(
   const token = tokens.tokens[at];
   if (token === undefined) return tokens;
   return withToken(tokens, at, {
-    ...token,
+    ...(mode === "light" ? withoutFluid(token) : token),
     values: { ...token.values, [mode]: value },
+  });
+}
+
+/**
+ * A token whose light value is being typed by hand: no longer the one its
+ * fluid sizes made, so it keeps no sizes, and a change of the site's fluid
+ * range leaves it. Every write of a light value by hand goes through here.
+ */
+function withoutFluid(token: SiteToken): SiteToken {
+  const { fluid: _made, ...rest } = token;
+  return rest;
+}
+
+/** The site's fluid range: its own, else 360px to 1280px. */
+export function fluidRangeOf(tokens: SiteTokenSet): FluidRangeWidths {
+  return tokens.fluidRange ?? DEFAULT_FLUID_RANGE;
+}
+
+/**
+ * The set with a new fluid range, and every size made with "Fluid…" made
+ * again across it from its own two sizes, so each still reads the same at
+ * the smallest and the largest screen. A fluid value written by hand, the
+ * built-in spacing among them, has no sizes and is left as it is. One set,
+ * so the range and the sizes it remakes are saved and undone together.
+ */
+export function setFluidRange(
+  tokens: SiteTokenSet,
+  range: FluidRangeWidths
+): SiteTokenSet {
+  return {
+    ...tokens,
+    fluidRange: { min: range.min, max: range.max },
+    tokens: tokens.tokens.map(token =>
+      token.fluid === undefined
+        ? token
+        : {
+            ...token,
+            values: { ...token.values, light: fluidValue(token.fluid, range) },
+          }
+    ),
+  };
+}
+
+/**
+ * The set with a size made fluid from two sizes: its light value grows
+ * from `small` on the range's smallest screen to `large` on its largest,
+ * and the two sizes are kept beside it so it can be made again when the
+ * site's fluid range changes.
+ */
+export function setFluidSize(
+  tokens: SiteTokenSet,
+  at: number,
+  sizes: FluidSizes,
+  range: FluidRangeWidths
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (token === undefined) return tokens;
+  return withToken(tokens, at, {
+    ...token,
+    values: { ...token.values, light: fluidValue(sizes, range) },
+    fluid: { small: sizes.small, large: sizes.large },
   });
 }
 
@@ -580,7 +647,7 @@ export function writeTokenValue(
   const darkFits = dark === undefined || lineHeightKindOf(dark) === kind;
   return {
     tokens: withToken(tokens, at, {
-      ...token,
+      ...withoutFluid(token),
       kind,
       values: darkFits ? { ...token.values, light: value } : { light: value },
     }),

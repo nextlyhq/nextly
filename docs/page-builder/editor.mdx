@@ -7,6 +7,35 @@ The editor opens with the page on the canvas, the inspector on the right for the
 selected block, and a rail of named panels on the left. One panel is open at a time.
 Choosing a panel's item again closes it and gives the canvas the room back.
 
+## Where a page opens
+
+Clicking a page in the Pages list opens it in the editor, on the page itself. So
+does any entry whose collection's first shown field, after its title and address,
+is a Page Builder field, a collection made in the Schema Builder included, and so do the dashboard's
+Continue card, the list's search and a middle click into a new tab. A collection
+with two Page Builder fields opens on the first one. Old links to a page's form
+still open the form.
+
+The rest of the page is one step away, in the top bar's **⋯** menu at its far end:
+
+- **Open as form** opens the page's form, which holds its history, versions,
+  languages, scheduling, releases and other plugins' panels. Unsaved changes go
+  with you and nothing asks; the form's **Open in builder** brings you back with
+  them.
+- **Pin to dashboard** (or **Unpin from dashboard**) is the same pin as on the
+  form, with its message and **Undo**. Your pins show in the dashboard's
+  Continue card.
+
+In the Pages list, a row's **⋯** menu offers **Edit details**, which opens the form.
+
+The arrow at the start of the top bar reads **Back to Pages** (the list's own
+name for other collections) and returns to the list, asking first if there are
+unsaved changes. On an entry that opens as a form, such as a post, it reads
+**Exit editor** and returns to the form.
+
+To keep a collection's entries opening as a form, set `admin: { opensIn: "form" }`
+on it in code. See [Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens).
+
 ## With nothing selected
 
 Click empty canvas space, or press <kbd>Esc</kbd> until nothing is selected, and the
@@ -282,6 +311,18 @@ Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, I
 CSS properties, each shown only where the block offers it. Advanced lists Visibility, then
 HTML.
 
+Each section shows the settings people reach for first. Everything else the block can use
+is in **CSS properties**, the last section, by its CSS name. **+ Add CSS property** opens a
+list you can search, of only the properties that work on this block as it is now: a block
+laid out as a plain stack isn't offered the flex or grid ones, and **z-index** is offered
+once the block is positioned or sits in a row or grid. Each entry shows its CSS name, its
+plain name and the section it belongs to. Pick one and its row appears with its value
+ready to type. A row stays while it holds a value, and its **✕** (**Remove z-index**, for
+example) clears the value and removes the row in one step that **Undo** brings back. When
+everything that applies is already there, the list says **Nothing left that applies
+here.** "Find a setting" finds these too: a property you haven't added is listed under CSS
+properties with **Add**.
+
 **Animation when it appears**, in Effects, gives a block an entrance: **None** (the
 default), **Fade in**, **Rise**, **Slide in from the left**, **Slide in from the right** or
 **Zoom in**. **Duration** and **Delay** are in milliseconds (600 and 0 when you leave them
@@ -386,6 +427,28 @@ click outside closes the picker without adding anything and puts you back where 
 were.
 
 While you are typing in a block's text, <kbd>/</kbd> is just a character.
+
+## Adding an image
+
+A new Image starts empty: on the canvas it is a box, 16:9 unless you set its own
+proportion, reading **Add an image** with three ways to fill it.
+
+- **Upload** opens your computer's file chooser. The picture goes into the media
+  library, with the same checks as the library's own upload, and its progress shows on
+  the block.
+- **Media library** opens the library to choose a picture that is already there. A click
+  anywhere on a picture's tile chooses it, and a double-click chooses it and closes the
+  library.
+- **Link** takes the address of a picture elsewhere. It is kept only once it loads as a
+  picture; otherwise the block says **This link didn't load an image**, with **Try
+  another link**, and stays empty.
+
+You can also drop a picture file on the box, or on an Image that already has a picture
+to replace it. A file that isn't a picture is refused with **That file isn't an image**,
+and nothing changes. If an Image's file is deleted from the media library, the block says
+**This image's file is missing**, with **Replace**.
+
+An Image with no picture draws nothing on the published page.
 
 ## Pages
 

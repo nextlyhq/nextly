@@ -48,6 +48,20 @@ export interface FoundMedia extends MediaSummary {
   readonly id: string;
 }
 
+/**
+ * Put one file in the host's media library, through the library's own upload
+ * and its checks (the types and size the site accepts, and the author's
+ * right to upload), telling `onProgress` how far it is, from 0 to 100.
+ * Resolves to the stored item, and rejects with the reason the upload was
+ * refused, in words an author can read.
+ *
+ * @experimental Settles with the canvas's image empty state.
+ */
+export type UploadMedia = (
+  file: File,
+  onProgress?: (percent: number) => void
+) => Promise<PickedMedia>;
+
 /** What the content controls hand the host's media picker. */
 export interface MediaPickerProps {
   open: boolean;
@@ -177,6 +191,14 @@ export interface ListEntriesCount {
 export interface ContentServices extends BindingServices {
   /** The admin's media library, as a dialog the control opens. */
   readonly MediaPicker?: React.ComponentType<MediaPickerProps>;
+  /**
+   * The admin's media library upload, for a file an author drops on an
+   * Image or chooses from its empty state. Absent, an Image offers no
+   * Upload and takes no dropped file.
+   *
+   * @experimental Settles with the canvas's image empty state.
+   */
+  readonly uploadMedia?: UploadMedia;
   /** The shared rich-text editor, loaded when a passage is first focused. */
   readonly loadRichTextEditor?: InlineRichTextEditorLoader;
   /**
@@ -252,6 +274,20 @@ export interface ContentServices extends BindingServices {
    * picker offers no Recent row.
    */
   readonly recentIcons?: PreferenceStore;
+  /**
+   * A form a Form block picked from a provider, read with the signed-in
+   * author's own access, for what its own "After sending" setting is.
+   * Absent, or answering `undefined`, the panel names the choice without
+   * saying what it is.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly describeForm?: (form: {
+    readonly provider: string;
+    readonly ref: string;
+  }) => Promise<
+    { readonly afterSending: { readonly kind: "message" | "page" } } | undefined
+  >;
 }
 
 /**

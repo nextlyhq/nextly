@@ -50,7 +50,6 @@ import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import { propWrites } from "./code-hints";
-import { CssHint } from "./css-hint";
 import { CollectionControl, SortControl } from "./collection-loop-controls";
 import {
   CONTENT_CONTROL_TYPES,
@@ -58,6 +57,7 @@ import {
   type ContentControlType,
 } from "./content-control-types";
 import type { ContentControl, ContentControlProps } from "./content-services";
+import { CssHint } from "./css-hint";
 import { EntryFieldControl } from "./entry-field-control";
 import { propLabel, type EditableProp } from "./inspector";
 import { loadLucideIcons } from "./lucide-icon-source";

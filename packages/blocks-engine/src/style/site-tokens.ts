@@ -130,6 +130,14 @@ export interface SiteToken {
    */
   extensions?: Readonly<Record<string, unknown>>;
   /**
+   * The two sizes a fluid size was made from, in px: on the smallest screen
+   * of the site's fluid range and on its largest. Kept beside the value it
+   * gave, so the size can be made again when the range changes; a value
+   * typed by hand has none, and a range change leaves it as it is. Never
+   * read by the emitter: the value is what reaches the page.
+   */
+  fluid?: { readonly small: number; readonly large: number };
+  /**
    * Fields found under THIS system's own extension key that this build does not
    * read, kept so it can write them back out.
    *
@@ -166,6 +174,13 @@ export interface SiteTokenSet {
    * {@link DarkModeStrategy}.
    */
   darkMode?: DarkModeStrategy;
+  /**
+   * The page widths a size made with "Fluid…" grows across, in px: the
+   * smallest screen and the largest. 360 to 1280 where unset. Never
+   * emitted: each fluid size's value already holds it, and a change of it
+   * remakes those values.
+   */
+  fluidRange?: { readonly min: number; readonly max: number };
 }
 
 /**
@@ -675,7 +690,7 @@ function typeInstead(kind: TokenKind): string {
  * that agree today drift, and the drift is invisible because a missing token
  * looks exactly like a token whose value did not apply.
  *
- * `prefix` and `darkMode` come from the override when it states them, because
+ * `prefix`, `darkMode` and `fluidRange` come from the override when it states them, because
  * they are site-wide decisions rather than per-token values. A site that sets a
  * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
  * for declaring and for referencing from a single value for exactly this
@@ -707,6 +722,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.darkMode === undefined
       ? {}
       : { darkMode: override.darkMode }),
+    // Site-wide too: the widths the sizes made with Fluid… grow between.
+    ...(override?.fluidRange === undefined
+      ? {}
+      : { fluidRange: override.fluidRange }),
   };
 }
 

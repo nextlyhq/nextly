@@ -212,16 +212,19 @@ ${ROOT} [contenteditable="true"] * {
 ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
 /* An empty container always has an area to aim at, since without one it has
-   no height and cannot be clicked. Drawn in the page's own text colour, faint,
-   so it reads on a light page and a dark section alike. Its height is held
-   apart, at no specificity, so a min height the block sets (a Section at Full
-   screen) wins over it, as it does on the page. */
+   no height and cannot be clicked. Its height is held apart, at no
+   specificity, so a min height the block sets (a Section at Full screen) wins
+   over it, as it does on the page.
+   It is marked by a dashed OUTLINE drawn just inside its edges, square and
+   unfilled: an outline takes no room and paints over no property the author
+   styles, so the block's own background, border and corners show exactly as
+   they are set, edge to edge. In the page's own text colour, so it reads on
+   a light page and a dark section alike. */
 :where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
-  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 0.25rem;
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
 }
 
 /* The cursor says what a press does: grab a block, place a caret in text being

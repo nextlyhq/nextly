@@ -11,7 +11,34 @@
  *
  * @module fluid-size
  */
-import { lengthInPx } from "./style-variables";
+import type { FluidRangeWidths, FluidSizes } from "@nextlyhq/blocks-engine";
+
+/**
+ * The CSS pixels a root-relative length is at the browser's default size.
+ *
+ * `em` is read as `rem` is: what it resolves to depends on the element it is
+ * used on, and a sample has no element, so the default size is the honest
+ * single answer.
+ */
+const ROOT_PX = 16;
+
+/**
+ * How many CSS pixels a length is, or `undefined` for one this cannot measure
+ * without a page: a percentage, a viewport unit, `clamp()`, a keyword.
+ *
+ * One reading of a length for every sample that sizes itself by one, the
+ * Design panel's type specimen and the inspector's bars, so the two draw the
+ * same variable at the same scale.
+ */
+export function lengthInPx(value: string): number | undefined {
+  const match = /^(-?\d*\.?\d+)(px|rem|em)?$/.exec(value.trim());
+  if (match === null) return undefined;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  // Only zero may go without a unit; any other bare number is not a length.
+  if (unit === undefined) return amount === 0 ? 0 : undefined;
+  return unit === "px" ? amount : amount * ROOT_PX;
+}
 
 /** The smallest and largest a fluid length comes to, in px. */
 export interface FluidRange {
@@ -67,4 +94,28 @@ export function fluidRange(value: string): FluidRange | undefined {
   return minPx === undefined || maxPx === undefined
     ? undefined
     : { minPx, maxPx };
+}
+
+// The value a size made with Fluid… takes is a rule of the stored data, so
+// it is the engine's; the editor reads it from there.
+export {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "@nextlyhq/blocks-engine";
+/**
+ * The two sizes a written value comes to at the range's ends, rounded to
+ * the px, to start "Fluid…" from on a value written by hand; `undefined`
+ * for one that can't be read.
+ */
+export function nearestFluidSizes(
+  value: string,
+  range: FluidRangeWidths
+): FluidSizes | undefined {
+  const small = pxAtWidth(value, range.min);
+  const large = pxAtWidth(value, range.max);
+  return small === undefined || large === undefined
+    ? undefined
+    : { small: Math.round(small), large: Math.round(large) };
 }

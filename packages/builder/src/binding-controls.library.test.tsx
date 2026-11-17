@@ -53,6 +53,16 @@ const SOURCES: readonly BindingFieldSource[] = [
   },
 ];
 
+/**
+ * What a block holds beyond its example, where its example draws only part
+ * of its controls: an Image placed with no picture shows the library side of
+ * its Source, and its address field (with its own bind button) only once it
+ * holds an address.
+ */
+const HOLDING: Readonly<Record<string, Record<string, unknown>>> = {
+  "core/image": { src: "https://cdn.example/a.png" },
+};
+
 /** The block alone on a page, as its example fills it over its defaults. */
 function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
   const document = {
@@ -66,6 +76,7 @@ function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
         props: {
           ...(block.defaultProps as Record<string, unknown>),
           ...(block.example?.props as Record<string, unknown> | undefined),
+          ...HOLDING[block.name],
         },
       },
     ],
@@ -93,6 +104,17 @@ function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
   );
   return document;
 }
+
+/**
+ * Settings the builder draws as a choice of its own, which no field fills, or
+ * only once that choice asks for them: a Form's After sending says what the
+ * block does once a send is accepted, and its page is drawn (with its bind
+ * button) only once it goes to a page.
+ */
+const CHOSEN_NEVER_FILLED: ReadonlySet<string> = new Set([
+  "core/form.afterSending",
+  "core/form.href",
+]);
 
 describe("the core block library's bind buttons", () => {
   it("offers one on every bindable prop of every core block, but the props a group draws without binding", () => {
@@ -127,8 +149,21 @@ describe("the core block library's bind buttons", () => {
         ...props.filter(prop => advanced.has(prop.name)),
       ];
       let onAdvanced = false;
+      // Every Content section unfolded, as an author opens one: a section
+      // holding no value yet (a Form's After sending) starts folded.
+      for (const trigger of screen.queryAllByRole("button", {
+        expanded: false,
+      })) {
+        if (trigger.classList.contains("nx-style-inspector__section-trigger")) {
+          fireEvent.click(trigger);
+        }
+      }
       for (const prop of inTabOrder) {
         if (bindablePropKind(prop.schema) === undefined) continue;
+        if (CHOSEN_NEVER_FILLED.has(`${block.name}.${prop.name}`)) {
+          unbound.push(`${block.name}.${prop.name}`);
+          continue;
+        }
         if (grouped.has(prop.name) && !binds.has(prop.name)) {
           unbound.push(`${block.name}.${prop.name}`);
           continue;
@@ -166,6 +201,10 @@ describe("the core block library's bind buttons", () => {
         "core/collection-loop.offset",
         "core/collection-loop.paginate",
         "core/collection-loop.sort",
+        "core/form.afterSending",
+        "core/form.entryCollection",
+        "core/form.entryId",
+        "core/form.href",
         "core/heading.rel",
         "core/heading.target",
         "core/icon.entryCollection",

@@ -191,6 +191,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { Plus } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -216,6 +217,7 @@ import {
   renderSkips,
   viewportPositioned,
 } from "./geometry-dom";
+import { useHoveredBlock } from "./hovered-block";
 
 /**
  * The one property this component ever reads off a block's definition.
@@ -331,7 +333,13 @@ const UNMEASURED_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
  * to run a pass against.
  */
 type RecordedPlacement =
-  | { readonly kind: "measured"; readonly rect: Rect }
+  | {
+      readonly kind: "measured";
+      /** Where the control is drawn, centred in the container. */
+      readonly rect: Rect;
+      /** The container's own box, which its hover overlay covers. */
+      readonly area: Rect;
+    }
   | { readonly kind: "declined" };
 
 /** A container's state, including the one a pass records by omission. */
@@ -371,6 +379,18 @@ function controlRectFor(
 }
 
 /**
+ * The container's own box, for the overlay drawn over it while it is pointed
+ * at or its control has focus: only once a pass has measured it.
+ */
+function areaRectFor(
+  placements: ReadonlyMap<string, RecordedPlacement>,
+  id: string
+): Rect | null {
+  const placement = placements.get(id);
+  return placement?.kind === "measured" ? placement.area : null;
+}
+
+/**
  * The control's fixed side length, in the canvas's content pixels.
  *
  * Matches `builder-chrome.css`'s `[data-nx-slots]:empty` rule, whose
@@ -387,8 +407,11 @@ const APPENDER_SIZE_PX = 44;
  */
 const APPENDER_WIDTH_PX = 320;
 
-/** What the control says, beside its "+". */
-const APPENDER_WORDS = "Drop a block here, or click to add one";
+/**
+ * What the control says, after its "+" icon: both ways a block gets in,
+ * pressing here and dropping one here ("＋ Add a block, or drop one here").
+ */
+const APPENDER_WORDS = "Add a block, or drop one here";
 
 /**
  * A control of the given size centred inside a rectangle, never larger than
@@ -618,14 +641,15 @@ export interface EmptyContainerAppendersProps {
    */
   blocks: BlockLookup;
   /**
-   * Raised with the container's node id when its control is pressed.
+   * Raised with the container's node id when its control is pressed, and the
+   * control itself, which the host opens its in-place picker beside.
    *
    * This component decides only WHICH containers may be filled and draws the
    * control; it does not select anything or open an inserter itself. Turning
-   * an id into a selection and an opened inserter is the caller's wiring, kept
-   * out of here so this component's tests do not need a whole editor to exist.
+   * an id into an opened picker is the caller's wiring, kept out of here so
+   * this component's tests do not need a whole editor to exist.
    */
-  onAppend: (nodeId: string) => void;
+  onAppend: (nodeId: string, control: HTMLElement) => void;
   /**
    * Suppress every control, for a host that is mid-gesture.
    *
@@ -647,6 +671,8 @@ export function EmptyContainerAppenders({
   hidden = false,
 }: EmptyContainerAppendersProps): ReactElement | null {
   const layer = useRef<HTMLDivElement | null>(null);
+  // The block pointed at on the canvas, whose overlay is drawn while it is.
+  const hovered = useHoveredBlock();
 
   // WHICH containers get a control, decided from the document alone — see the
   // module docblock on why this must not wait on geometry to succeed.
@@ -717,6 +743,7 @@ export function EmptyContainerAppenders({
           APPENDER_WIDTH_PX,
           APPENDER_SIZE_PX
         ),
+        area: measured,
       });
     }
     setPlacements(next);
@@ -787,40 +814,94 @@ export function EmptyContainerAppenders({
         // control an author can focus and never see — see the module docblock.
         if (rect === null) return null;
         return (
-          <button
-            key={container.id}
-            type="button"
-            className="nx-empty-container-appenders__button"
-            style={{
-              left: rect.x,
-              top: rect.y,
-              width: rect.width,
-              height: rect.height,
-            }}
-            // The block's own name, so a control an author meets is one they
-            // can find by searching for the thing it fills rather than for a
-            // generic "add block" that says nothing about which container.
-            // Its name starts with the words it shows, so a voice command
-            // speaking them reaches it (WCAG 2.5.3), then says which container.
-            aria-label={`${APPENDER_WORDS}, in ${container.label}`}
-            title={`Add a block to ${container.label}`}
-            onClick={() => onAppend(container.id)}
-          >
-            {/* On a plate of the editor's own surface: the box is drawn over
-                the SITE's ground, which can be any colour, and the editor's
-                text colour holds its contrast only against the editor's own
-                surface. */}
-            <span className="nx-empty-container-appenders__plate">
-              <Plus size={16} aria-hidden="true" />
-              {/* The words the editor's design gives an empty box, so the "+"
-                  says what a drop or a press here does. */}
-              <span className="nx-empty-container-appenders__words">
-                {APPENDER_WORDS}
-              </span>
-            </span>
-          </button>
+          <Fragment key={container.id}>
+            <ContainerOverlay
+              area={areaRectFor(placements, container.id)}
+              pointed={hovered === container.id}
+            />
+            <AppendControl
+              container={container}
+              rect={rect}
+              onAppend={onAppend}
+            />
+          </Fragment>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The overlay over an empty container while it is pointed at, on the canvas
+ * or at its control, or its control has keyboard focus: a solid outline in
+ * the selection colour and a light tint of it, drawn as chrome over the
+ * block so the block's own background is never touched. Drawn before the
+ * control, so the stylesheet can show it for the control's hover and focus.
+ */
+function ContainerOverlay({
+  area,
+  pointed,
+}: {
+  readonly area: Rect | null;
+  readonly pointed: boolean;
+}): ReactElement | null {
+  if (area === null) return null;
+  return (
+    <span
+      className="nx-empty-container-appenders__area"
+      aria-hidden="true"
+      data-pointed={pointed ? "" : undefined}
+      style={{
+        left: area.x,
+        top: area.y,
+        width: area.width,
+        height: area.height,
+      }}
+    />
+  );
+}
+
+/** One container's "+" and its words, centred in the container. */
+function AppendControl({
+  container,
+  rect,
+  onAppend,
+}: {
+  readonly container: EmptyContainer;
+  readonly rect: Rect;
+  readonly onAppend: EmptyContainerAppendersProps["onAppend"];
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      className="nx-empty-container-appenders__button"
+      style={{
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }}
+      // The block's own name, so a control an author meets is one they can
+      // find by searching for the thing it fills rather than for a generic
+      // "add block" that says nothing about which container. Its name starts
+      // with the words it shows, so a voice command speaking them reaches it
+      // (WCAG 2.5.3), then says which container.
+      aria-label={`${APPENDER_WORDS}, in ${container.label}`}
+      title={`Add a block inside ${container.label}`}
+      onClick={event => onAppend(container.id, event.currentTarget)}
+    >
+      {/* On a plate of the editor's own surface: the box is drawn over the
+          SITE's ground, which can be any colour, and the editor's text colour
+          holds its contrast only against the editor's own surface. */}
+      <span className="nx-empty-container-appenders__plate">
+        {/* The "＋" of the words as decided, drawn as the icon every "+" on
+            the canvas is, and kept whole when a narrow box shortens the
+            words. */}
+        <Plus size={16} aria-hidden="true" />
+        <span className="nx-empty-container-appenders__words">
+          {APPENDER_WORDS}
+        </span>
+      </span>
+    </button>
   );
 }

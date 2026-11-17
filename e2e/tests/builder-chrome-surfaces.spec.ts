@@ -29,6 +29,11 @@ test.describe.configure({ lock: [LOCK.homepage] });
 
 const HOMEPAGE = "/admin/api/singles/homepage";
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 const BLOCK_ID = "surfaces-text";
 
 async function openBuilder(
@@ -56,7 +61,10 @@ async function openBuilder(
   });
   expect(stored.ok(), `seeding the homepage: ${stored.status()}`).toBe(true);
   await gotoAdmin(page, "/singles/homepage", theme);
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   await expect(await block(page, BLOCK_ID)).toBeVisible({ timeout: 60_000 });
 }
 

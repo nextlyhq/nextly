@@ -29,11 +29,15 @@ import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
 import * as React from "react";
 
+import { FluidButton, type FluidHook } from "./fluid-popover";
 import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
   labelNewVariable,
+  fluidRangeOf,
+  setFluidRange,
+  setFluidSize,
   relabelToken,
   variableLabelIssue,
   writeTokenValue,
@@ -162,10 +166,7 @@ export function VariableEditor({
           isNew={isNew}
         />
       </div>
-      <VariableDescription
-        token={token}
-        supplied={suppliedOf(row.identity)}
-      />
+      <VariableDescription token={token} supplied={suppliedOf(row.identity)} />
       {token === undefined ? null : (
         <Values
           entry={entry}
@@ -448,6 +449,7 @@ function Values({
       onCommit={(mode, value) => write(at, mode, value)}
       onClear={() => onChange(clearDarkValue(tokens, at))}
       refusedIn={mode => refusalAt(refused, at, mode)}
+      fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
     />
   );
   const lineToken =
@@ -468,6 +470,30 @@ function Values({
       refused={refused}
     />
   );
+}
+
+/** "Fluid…" for a type size's size, where it can be changed. */
+function TypeSizeFluid({
+  size,
+  sizeAt,
+  tokens,
+  onChange,
+  readOnly,
+}: {
+  size: SiteToken;
+  sizeAt: number;
+  tokens: SiteTokenSet;
+  onChange: (tokens: SiteTokenSet) => void;
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  const hook = fluidHookOf({
+    token: size,
+    tokens,
+    at: sizeAt,
+    onChange,
+    readOnly,
+  });
+  return hook === undefined ? null : <FluidButton hook={hook} />;
 }
 
 /**
@@ -576,6 +602,15 @@ function TypePair({
         readOnly={readOnly}
         onCommit={value => write(lineAt, "light", value)}
       />
+      {/* "Fluid…" for the size: a type size is where a fluid size is most
+          wanted. */}
+      <TypeSizeFluid
+        size={size}
+        sizeAt={sizeAt}
+        tokens={tokens}
+        onChange={onChange}
+        readOnly={readOnly}
+      />
       {line.values.dark === undefined ? null : (
         <LineHeightHint
           value={line.values.dark}
@@ -629,6 +664,35 @@ function HalfInput({
 }
 
 /**
+ * "Fluid…" for a size that can be changed: what it needs to read the
+ * value's sizes and to store a size made fluid from two. Nothing for any
+ * other kind, or where the variables are read-only.
+ */
+function fluidHookOf({
+  token,
+  tokens,
+  at,
+  onChange,
+  readOnly,
+}: {
+  token: SiteToken;
+  tokens: SiteTokenSet;
+  at: number;
+  onChange: (tokens: SiteTokenSet) => void;
+  readOnly: boolean;
+}): FluidHook | undefined {
+  if (readOnly || token.kind !== "dimension") return undefined;
+  const range = fluidRangeOf(tokens);
+  return {
+    sizes: token.fluid,
+    value: token.values.light,
+    range,
+    onFluid: sizes => onChange(setFluidSize(tokens, at, sizes, range)),
+    onRange: next => onChange(setFluidRange(tokens, next)),
+  };
+}
+
+/**
  * One variable's Light value, then its Dark value, for every kind: a colour
  * with its swatch and picker, anything else as text.
  */
@@ -639,6 +703,7 @@ function ModeValues({
   onCommit,
   onClear,
   refusedIn,
+  fluid,
 }: {
   token: SiteToken;
   /** The CSS a value of this variable writes. */
@@ -648,6 +713,8 @@ function ModeValues({
   onClear: () => void;
   /** The reason's element while a mode's field holds a refused value. */
   refusedIn: (mode: TokenMode) => string | undefined;
+  /** "Fluid…" on a size's light value, where it can be changed. */
+  fluid: FluidHook | undefined;
 }): React.JSX.Element {
   const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
   return (
@@ -661,6 +728,7 @@ function ModeValues({
         css={cssOf(token.values.light)}
         mode="light"
       />
+      {fluid === undefined ? null : <FluidButton hook={fluid} />}
       <DarkValue
         token={token}
         cssOf={cssOf}

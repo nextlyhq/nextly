@@ -958,3 +958,56 @@ describe("referableClassIds", () => {
     expect(ids.has(`id-${MAX_NAMED_CLASSES}`)).toBe(false);
   });
 });
+
+describe("a fluid size's two sizes", () => {
+  const fluid = {
+    name: "font-size.lead",
+    kind: "dimension",
+    values: { light: "clamp(1rem, 0.9022rem + 0.4348vw, 1.25rem)" },
+    fluid: { small: 16, large: 20 },
+  };
+
+  it("are kept by a save, so the size can be made again from them", () => {
+    const checked = checkStoredTokens({ tokens: [fluid] });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("are refused unless they are two positive sizes in px", () => {
+    for (const bad of [
+      { small: 16 },
+      { small: "16px", large: 20 },
+      { small: -1, large: 20 },
+      { small: 16, large: Number.POSITIVE_INFINITY },
+      "16-20",
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [{ ...fluid, fluid: bad }] }).issues
+      ).not.toEqual([]);
+    }
+  });
+});
+
+describe("the site's fluid range", () => {
+  it("is kept by a save", () => {
+    const checked = checkStoredTokens({
+      tokens: [],
+      fluidRange: { min: 320, max: 1440 },
+    });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.fluidRange).toEqual({ min: 320, max: 1440 });
+  });
+
+  it("is refused unless it is two positive widths, the smallest first", () => {
+    for (const bad of [
+      { min: 1440, max: 320 },
+      { min: 0, max: 1280 },
+      { min: 360 },
+      "360-1280",
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [], fluidRange: bad }).issues
+      ).not.toEqual([]);
+    }
+  });
+});

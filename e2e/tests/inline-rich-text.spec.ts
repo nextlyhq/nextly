@@ -35,6 +35,11 @@ import { LOCK } from "./support/locks";
  * the source of both strings is `PageBuilderCard`.
  */
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 const HOMEPAGE = "/admin/api/singles/homepage";
 
@@ -125,7 +130,10 @@ async function openBuilderWith(page: Page, children: unknown[]): Promise<void> {
   );
 
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   // The passage must be ON SCREEN before anything is aimed at it: a gesture
   // sent at an element that has not rendered lands on the page behind it.
   await expect(canvasFrame(page).locator(PASSAGE).first()).toBeVisible({
