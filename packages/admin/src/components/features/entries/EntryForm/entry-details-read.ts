@@ -12,13 +12,20 @@
  * reading the entry did not allow.
  *
  * Keyed under the entry's own detail key, so whatever refreshes the entry
- * after a save refreshes this too.
+ * after a save refreshes this too. A Single's are read the same way, from
+ * the Single's own read and under its own document key.
+ *
+ * Asked by what draws the answer (the address chip under the title, and the
+ * side panel), not by the editor around them: a document view such as the
+ * page builder covers both, so opening one makes no request for details it
+ * does not show. Both ask under one key, so the entry page reads them once.
  *
  * @module components/features/entries/EntryForm/entry-details-read
  */
 
 import { useQuery } from "@tanstack/react-query";
 
+import { singleDocumentKeys } from "@admin/hooks/queries/useSingles";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { entryKeys } from "@admin/services/entryApi";
 
@@ -51,22 +58,33 @@ export interface EntryDetails {
   address: EntryAddress | null;
 }
 
-/**
- * The entry's details, once it exists; undefined while they load, before the
- * first save, or where the server answered none.
- */
-export function useEntryDetails({
-  collectionSlug,
-  entryId,
-  locale,
-}: {
+/** The document whose details are read. */
+export interface EntryDetailsTarget {
+  /** Whether `collectionSlug` names a collection or a Single. */
+  scope?: "collection" | "single";
+  /** The collection's slug, or the Single's. */
   collectionSlug: string;
+  /** The entry's id; for a Single, its document's, once it exists. */
   entryId: string | undefined;
   locale: string | undefined;
-}): EntryDetails | undefined {
+}
+
+/**
+ * The entry's details, once it exists; undefined while they load, before the
+ * first save, where the server answered none, or where nothing is named.
+ */
+export function useEntryDetails(
+  target: EntryDetailsTarget | undefined
+): EntryDetails | undefined {
+  const scope = target?.scope ?? "collection";
+  const collectionSlug = target?.collectionSlug ?? "";
+  const entryId = target?.entryId;
+  const locale = target?.locale;
   const { data } = useQuery({
     queryKey: [
-      ...entryKeys.detail(collectionSlug, entryId ?? ""),
+      ...(scope === "single"
+        ? singleDocumentKeys.detail(collectionSlug)
+        : entryKeys.detail(collectionSlug, entryId ?? "")),
       "details",
       { locale: locale ?? null },
     ],
@@ -81,7 +99,9 @@ export function useEntryDetails({
       });
       if (locale) query.set("locale", locale);
       const entry = await protectedApi.get<{ _details?: EntryDetails }>(
-        `/collections/${collectionSlug}/entries/${entryId}?${query.toString()}`
+        scope === "single"
+          ? `/singles/${collectionSlug}?${query.toString()}`
+          : `/collections/${collectionSlug}/entries/${entryId}?${query.toString()}`
       );
       // Kept under its own key in the cached value, so a write that patches
       // every read of the entry in the cache leaves the details as they are.

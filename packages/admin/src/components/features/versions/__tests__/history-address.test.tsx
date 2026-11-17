@@ -74,6 +74,33 @@ describe("useHistoryAddress", () => {
     expect(search().get("locale")).toBe("es");
   });
 
+  it("closes by stepping back off the entry opening added, whichever control of the page opened it", async () => {
+    // The side panel's History opens it, and the document bar's sheet closes
+    // it: two readers of the one address.
+    window.history.replaceState(
+      { opener: true },
+      "",
+      "/admin/singles/homepage?locale=es"
+    );
+    const panel = renderHook(() => useHistoryAddress());
+    const bar = renderHook(() => useHistoryAddress());
+
+    act(() => panel.result.current.setOpen(true));
+    expect(search().get("history")).toBe("1");
+    // The admin's router announces every move; here nothing patches history.
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    await waitFor(() => expect(bar.result.current.open).toBe(true));
+
+    act(() => bar.result.current.setOpen(false));
+    await waitFor(() => expect(search().get("history")).toBeNull());
+    // Back on the entry before opening: no closed copy left for Back to
+    // land on first.
+    expect(window.history.state).toEqual({ opener: true });
+    expect(search().get("locale")).toBe("es");
+  });
+
   it("closes in place, undoing nothing, once the author has moved on from the entry opening added", async () => {
     at("/admin/collections/posts/e1?locale=es");
     const { result } = renderHook(() => useHistoryAddress());

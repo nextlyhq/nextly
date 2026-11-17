@@ -125,6 +125,7 @@ import { readLocksRows } from "../../../shared/lib/read-transaction-scope";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
+import { entryDetails } from "../../collections/services/entry-details";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { statedDefaultFits } from "../../dynamic-collections/services/stated-default";
@@ -1739,6 +1740,16 @@ export class SingleQueryService extends BaseService {
         countersFirst,
         locale: options.locale,
       });
+
+      // After every gate above: only a read already granted is told who
+      // changed the Single and where the site serves it, as an entry's is.
+      if (options.details && doc.id !== undefined && doc.id !== null) {
+        doc._details = await entryDetails({
+          type: { kind: "single", slug },
+          entry: doc,
+          locale: options.locale,
+        });
+      }
 
       return {
         success: true,

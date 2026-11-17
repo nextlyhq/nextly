@@ -189,6 +189,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     error: null,
     refetch: () => {},
   }),
+  // The builder's start-up read, answering none of its reads: each one is
+  // then the route read above.
+  readPluginRoute: async () => ({ reads: {} }),
   useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
@@ -278,8 +281,11 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the page drawn again per selection, in the page builder's editor", () => {
-  it("the counter sees the page drawn: opening the editor draws it", () => {
-    render(<Host />);
+  it("the counter sees the page drawn: opening the editor draws it", async () => {
+    // Once the start-up read has answered, as the editor opens on it.
+    await act(async () => {
+      render(<Host />);
+    });
     expect(counted.pageDraws).toBeGreaterThan(0);
     // The control for the cases below: the canvas holds the page's blocks.
     expect(document.querySelectorAll("[data-nx-node]").length).toBe(12);

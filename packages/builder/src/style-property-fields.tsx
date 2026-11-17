@@ -14,6 +14,7 @@ import {
 import * as React from "react";
 
 import { batchStyleClearOps } from "./batch-style";
+import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import { radioGroupStep } from "./roving-radios";
@@ -120,12 +121,13 @@ export function StylePropertyFields({
       data-property={property.property}
     >
       {headed ? (
-        <p
-          className="nx-style-inspector__property-label"
-          title={property.summary}
+        // What the property does, then the CSS its fields write, on hover.
+        <CssHint
+          summary={property.summary}
+          writes={writtenProperties(property.controls)}
         >
-          {property.label}
-        </p>
+          <p className="nx-style-inspector__property-label">{property.label}</p>
+        </CssHint>
       ) : null}
       {/*
         The forms the catalog offers at each union position, so every one is
@@ -380,4 +382,12 @@ function FormChoice({
       </div>
     </div>
   );
+}
+
+/** The CSS properties a property's fields write, each once, in their order. */
+function writtenProperties(
+  controls: readonly { readonly leaf: { readonly cssProperty: string } }[]
+): string | undefined {
+  const names = [...new Set(controls.map(control => control.leaf.cssProperty))];
+  return names.length === 0 ? undefined : names.join("; ");
 }

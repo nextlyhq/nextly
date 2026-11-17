@@ -161,6 +161,7 @@ const SCALAR_PREFERENCES = [
   "inspectorHidden",
   "leftPinned",
   "panelKeys",
+  "showCssNames",
   "editingBreakpoint",
 ] as const satisfies readonly (keyof ShellPreferences)[];
 
