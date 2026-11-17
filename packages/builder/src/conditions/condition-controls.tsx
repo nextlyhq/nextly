@@ -35,7 +35,31 @@ import {
 import { AlertCircle, FileText, Plus, Repeat } from "lucide-react";
 import * as React from "react";
 
-import { LoopPicker, useLoopCollections } from "./collection-loop-controls";
+import { LoopPicker, useLoopCollections } from "../collection-loop-controls";
+import type {
+  ContentServices,
+  LoopCollection,
+  LoopListField,
+} from "../content-controls";
+import type { EditorState } from "../editor-state";
+import {
+  fieldList,
+  fieldSourceOf,
+  FilterValue,
+  LimitNote,
+  listLimit,
+  PUBLIC_ONLY,
+  useCustomSources,
+  useEntryTitles,
+} from "../list-query-controls";
+import { customSourceLookup, type CustomSource } from "../named-query-model";
+import {
+  SentenceRow,
+  useSentenceRows,
+  type SentenceRows,
+  type ShownRow,
+} from "../sentence-row";
+
 import { storedGroups } from "./condition-checks";
 import { gatedAsStored } from "./condition-gate";
 import {
@@ -54,29 +78,6 @@ import {
   type DraftCondition,
 } from "./condition-model";
 import { conditionsOp } from "./condition-ops";
-import type {
-  ContentServices,
-  LoopCollection,
-  LoopListField,
-} from "./content-controls";
-import type { EditorState } from "./editor-state";
-import {
-  fieldList,
-  fieldSourceOf,
-  FilterValue,
-  LimitNote,
-  listLimit,
-  PUBLIC_ONLY,
-  useCustomSources,
-  useEntryTitles,
-} from "./list-query-controls";
-import { customSourceLookup, type CustomSource } from "./named-query-model";
-import {
-  SentenceRow,
-  useSentenceRows,
-  type SentenceRows,
-  type ShownRow,
-} from "./sentence-row";
 
 export interface ShowWhenProps {
   readonly editor: EditorState;
