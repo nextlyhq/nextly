@@ -14,6 +14,8 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
+import type { UsageState } from "./variable-usage";
+
 /**
  * The variables another variable names through `var()` of the custom
  * property each is written under, by identity: a shadow keeps its colour
@@ -47,4 +49,20 @@ export function namedBySite(
 function propertiesIn(value: unknown): readonly string[] {
   if (typeof value !== "string" || !value.includes("(")) return [];
   return customPropertiesReferenced(value) ?? [];
+}
+
+/** Which colours the Colours tab lists: all, the unused, or this page's. */
+export type ColourFilter = "all" | "unused" | "page";
+
+/**
+ * Whether a colour is listed under a filter: under Unused only where the
+ * site's count has shown it unused, never while it is still counting.
+ */
+export function keepsColour(
+  filter: ColourFilter,
+  state: UsageState,
+  onPage: boolean
+): boolean {
+  if (filter === "all") return true;
+  return filter === "unused" ? state === "unused" : onPage;
 }

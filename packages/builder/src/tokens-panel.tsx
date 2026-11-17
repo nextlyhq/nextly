@@ -49,6 +49,7 @@ import {
   useColourGroupHost,
 } from "./colour-group-ui";
 import { colourGroups, inColourGroup } from "./colour-groups";
+import { useColourFilter } from "./colour-usage-filter";
 import {
   GroupToggle,
   OwnSearch,
@@ -187,6 +188,12 @@ export interface TokensPanelProps {
   searchRef?: React.RefObject<HTMLInputElement | null>;
   /** Which groups are folded, and the way to fold one. Absent: none fold. */
   folds?: GroupFolds;
+  /**
+   * The variables the open page and its components use, by identity, for
+   * the Colours tab's "Used on this page"; read by the host from the
+   * editor's document, so it follows unsaved edits. Absent: none.
+   */
+  usedOnPage?: ReadonlySet<string>;
 }
 
 /**
@@ -340,8 +347,17 @@ function VariablesView({
   const groups = useListedGroups(tokens, mode, hosted.groups);
   // A row just added stays shown while its editor is open, though the
   // search would hide it: added where the author is, it is not lost.
-  const { shown, held } = searched(groups, needle, fresh);
+  const { shown: matched, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
+  // The Colours tab's usage filter, over what the search matched.
+  const colourFilter = useColourFilter({
+    shown: matched,
+    tokens,
+    usage,
+    usedOnPage: hosted.usedOnPage,
+    openKey,
+  });
+  const { shown } = colourFilter;
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -383,6 +399,7 @@ function VariablesView({
           onChange={onChange}
           readOnly={readOnly}
         />
+        {colourFilter.control}
         <VariableGroups
           shown={shown}
           searching={searching}

@@ -130,7 +130,12 @@ describe("the rows", () => {
     render(<Hosted tokens={SITE} {...stale} />);
     const spacing = screen.getByRole("region", { name: "Spacing" });
     expect(screen.queryByText("Space between blocks")).toBeNull();
-    expect(screen.queryByRole("radiogroup")).toBeNull();
+    // The colours' usage filter is the only choice of its kind drawn.
+    expect(
+      screen
+        .queryAllByRole("radiogroup")
+        .map(group => group.getAttribute("aria-label"))
+    ).toEqual(["Show colours"]);
     expect(screen.queryByText(/classic/i)).toBeNull();
     // The spacing variables are listed as before.
     expect(

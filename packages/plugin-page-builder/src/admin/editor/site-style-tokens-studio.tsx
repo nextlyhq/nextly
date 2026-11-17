@@ -10,6 +10,9 @@
  */
 import {
   resolveSiteTokens,
+  type BlockDocument,
+  type ComponentLookup,
+  type DocumentLimits,
   type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
@@ -50,6 +53,7 @@ import { useShown } from "../use-shown";
 import { useVariablesClient } from "../variables-client";
 
 import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
+import { usedOnPage } from "./used-on-page";
 
 /**
  * The tokens studio, and the state that belongs to it rather than to the editor.
@@ -556,9 +560,12 @@ const VariablesStudio = createContext<TokensPanelProps | null>(null);
 /** The Variables tab: the studio's variables, in the panel its frame holds. */
 export function VariablesTab({
   tab,
+  usedOnPage,
 }: {
   /** The Design tab this is: its groups are the ones listed. */
   tab: Exclude<DesignTab, "styles">;
+  /** The variables the open page uses, for "Used on this page". */
+  usedOnPage?: ReadonlySet<string>;
 }): React.JSX.Element | null {
   const studio = useContext(VariablesStudio);
   const { search, searchRef, folds } = useDesignBrowse();
@@ -569,8 +576,30 @@ export function VariablesTab({
       search={search}
       searchRef={searchRef}
       {...(folds === undefined ? {} : { folds })}
+      {...(usedOnPage === undefined ? {} : { usedOnPage })}
     />
   );
+}
+
+/**
+ * The Colours tab, with what the open page and the components it places use,
+ * read from the editor's document so it follows an edit before any save.
+ */
+export function ColoursTab({
+  document,
+  components,
+  limits,
+}: {
+  document: BlockDocument;
+  components: ComponentLookup;
+  limits: DocumentLimits;
+}): React.JSX.Element | null {
+  const tokens = useContext(VariablesStudio)?.tokens;
+  const used = useMemo(
+    () => usedOnPage(document, components, limits, tokens),
+    [document, components, limits, tokens]
+  );
+  return <VariablesTab tab="colours" usedOnPage={used} />;
 }
 
 /**
