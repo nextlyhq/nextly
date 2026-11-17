@@ -170,6 +170,14 @@ describe("a Headings font with no bold", () => {
     expect(
       missingBold(withFontRole(SITE, "heading", '"Lora", serif'), bold)
     ).toBeUndefined();
+    // An italic bold leaves upright headings with a fake bold.
+    const italic = roleFamilies(
+      [face("Lora", "400", LORA), { ...face("Lora", "700", LORA), style: "italic" }],
+      []
+    );
+    expect(
+      missingBold(withFontRole(SITE, "heading", '"Lora", serif'), italic)?.family
+    ).toBe("Lora");
     // A variable face covering 700 draws a bold.
     const variable = roleFamilies([face("Lora", "400 700", LORA)], []);
     expect(

@@ -555,11 +555,13 @@ export function roleStack(family: string, category?: string): string {
 }
 
 /**
- * Whether the faces draw a bold: some face at weight 600 or heavier, which a
- * browser picks for a bold heading rather than thickening a lighter one.
+ * Whether the faces draw an upright bold: some upright face at weight 600 or
+ * heavier, which a browser picks for a bold heading rather than thickening a
+ * lighter one. An italic bold leaves upright headings thickened.
  */
 export function drawsBold(faces: readonly FontFaceDef[]): boolean {
-  return [...weightsDrawn(faces)].some(weight => weight >= 600);
+  const upright = faces.filter(face => !slanted(face.style));
+  return [...weightsDrawn(upright)].some(weight => weight >= 600);
 }
 
 /** The specimen, one sentence with ascenders, descenders and round forms. */
