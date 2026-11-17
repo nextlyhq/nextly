@@ -51,9 +51,16 @@ import { applyDueReleases } from "../../releases/apply-due-releases";
 import { createReleaseMutations } from "../../releases/release-mutations";
 import { ReleasesRepository } from "../../releases/releases-repository";
 import { defineWorkflow } from "../define-workflow";
+import { workflowDefinitionHash } from "../hash";
 import { takeWorkflowStep, type WorkflowCaller } from "../steps";
 
-import { partOf, person, stateOf, versionOf } from "./helpers/step-harness";
+import {
+  partOf,
+  person,
+  seedState,
+  stateOf,
+  versionOf,
+} from "./helpers/step-harness";
 
 /** Draft → Review → Approved, which allows publishing. The next draft after a publish: Draft. */
 const gated = defineWorkflow({
@@ -659,6 +666,78 @@ describe.each(getConfiguredTestDialects())(
           );
         }
       );
+    });
+
+    describe("publishing every language", () => {
+      const everyLanguage = () =>
+        DOORS.find(door => door.name === "REST publish of every language")!;
+
+      it("puts the approved parts live where a configured language holds nothing at all", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        // Saved in English only: Spanish has no translation, no draft and no version.
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await approve(POSTS, id, ["en", null]);
+
+        const answer = (await everyLanguage().publish(id, session)) as Answer;
+
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await visitorRead(POSTS, id))?.title).toBe("Hello");
+      });
+
+      it("asks a publish of chosen parts naming every language only of the languages it moves", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        // Saved in English only: Spanish has no translation, no draft and no version.
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await approve(POSTS, id, ["en", null]);
+
+        const answer = await rest(
+          "POST",
+          ["collections", POSTS, "entries", id, "publish"],
+          session,
+          { locales: "all", _overwrite: true }
+        );
+
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await visitorRead(POSTS, id))?.title).toBe("Hello");
+      });
+
+      it("puts a changed language live past one already live and unchanged, whatever stage that one is in", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await approve(POSTS, id, ["en", "es", null]);
+        const first = (await everyLanguage().publish(id, session)) as Answer;
+        expect(first.status, JSON.stringify(first.json)).toBeLessThan(400);
+        // Spanish stays live and unchanged, in a stage that would refuse it were it judged.
+        await seedState(app(), partOf(POSTS, id, "es"), "review", {
+          definitionHash: workflowDefinitionHash(gated),
+        });
+        await save(POSTS, id, { title: "Hello again" }, "en");
+        await approve(POSTS, id, ["en", null]);
+
+        const answer = (await everyLanguage().publish(id, session)) as Answer;
+
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await visitorRead(POSTS, id))?.title).toBe("Hello again");
+        expect((await visitorRead(POSTS, id, "es"))?.title).toBe("Hola");
+      });
+
+      it("still refuses a language it moves that holds no approval, which is the control", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await approve(POSTS, id, ["en", null]);
+
+        const answer = (await everyLanguage().publish(id, session)) as Answer;
+
+        expect(answer.status).toBe(400);
+        expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
+        expect(await visitorRead(POSTS, id)).toBeNull();
+      });
     });
 
     describe("creating as published", () => {
