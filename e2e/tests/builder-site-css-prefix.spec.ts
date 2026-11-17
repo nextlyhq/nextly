@@ -139,8 +139,15 @@ async function showSettings(page: Page): Promise<Locator> {
  * prefix back at `--site-` first (only Settings' route may change it).
  */
 let found: { tokens: unknown } | null = null;
+/** The page the test made, removed first: it uses the variable put back. */
+let made: string | null = null;
 
 test.afterEach(async ({ page }) => {
+  if (made !== null) {
+    const removed = await page.request.delete(`${ENTRIES}/${made}`);
+    expect(removed.ok(), `removing the page: ${removed.status()}`).toBe(true);
+    made = null;
+  }
   if (found === null) return;
   const { tokens } = found;
   found = null;
@@ -162,6 +169,7 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
   found = { tokens: await storedTokens(page.request) };
   await writeTokens(page.request, { tokens: [BRAND] });
   const { id, slug } = await createPage(page.request);
+  made = id;
 
   // The published page before: visited once, so a cached copy exists that
   // the change must not leave standing.
@@ -203,12 +211,15 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
     ],
   ] as const) {
     await field.fill(typed);
-    await expect(site.getByRole("alert")).toHaveText(reason);
+    // By its words: the Site tab carries an alert of its own (changes apply
+    // to the live site at once).
+    await expect(site.getByText(reason, { exact: true })).toBeVisible();
+    await expect(field).toHaveAttribute("aria-invalid", "true");
     await expect(change).toBeDisabled();
   }
 
   await field.fill("--brand-");
-  await expect(site.getByRole("alert")).toHaveCount(0);
+  await expect(field).toHaveAttribute("aria-invalid", "false");
   await change.click();
   const question = page.getByRole("alertdialog");
   await expect(question).toContainText("Change the prefix to --brand-?");
