@@ -550,7 +550,13 @@ export function useCanvasBindings(
   /** The site's named queries, once the canvas has read them. */
   namedQueries?: NamedQueryLookup,
   /** What the page's conditions ask of the reads, where it holds any. */
-  conditions?: ConditionDemand
+  conditions?: ConditionDemand,
+  /**
+   * The site's page data limit (`readPageDataLimit`), which the published
+   * page reads its bindings under: `Infinity` for none. Absent, the ask
+   * names none and the route reads under its default.
+   */
+  allowance?: number
 ): PageBindings {
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
@@ -560,15 +566,11 @@ export function useCanvasBindings(
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
-      canvasBindingsRequest(
-        drawn,
-        identity,
-        locale,
-        component,
-        namedQueries,
-        conditions === undefined ? {} : { conditions }
-      ),
-    [drawn, identity, locale, component, namedQueries, conditions]
+      canvasBindingsRequest(drawn, identity, locale, component, namedQueries, {
+        ...(conditions === undefined ? {} : { conditions }),
+        ...(allowance === undefined ? {} : { allowance }),
+      }),
+    [drawn, identity, locale, component, namedQueries, conditions, allowance]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
