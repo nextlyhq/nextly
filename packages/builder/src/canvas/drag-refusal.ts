@@ -38,7 +38,7 @@ import {
   type PlacementRefused,
 } from "@nextlyhq/blocks-engine";
 
-import { blockLabel } from "../inserter";
+import { blockLabel } from "../panels/add/inserter";
 
 import type { DropRefusal } from "./drop-targets";
 

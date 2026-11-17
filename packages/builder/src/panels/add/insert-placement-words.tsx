@@ -10,8 +10,9 @@
 import { findNode, type BlockDocument } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
 
+import { layerLabel } from "../layers/layers";
+
 import type { InsertionCandidate } from "./inserter";
-import { layerLabel } from "./layers";
 
 /**
  * One piece of a place's words: a place named by a block ("after Heading",

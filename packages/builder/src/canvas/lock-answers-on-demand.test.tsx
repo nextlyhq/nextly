@@ -67,7 +67,7 @@ import {
   BlockKeyboardActions,
   type SharedBlockVerbs,
 } from "../keyboard-actions";
-import { LayerRowMenu } from "../layer-row-menu";
+import { LayerRowMenu } from "../panels/layers/layer-row-menu";
 import { lockRefusalWording } from "../lock-refusal";
 import type { BuilderOp } from "../op-vocabulary";
 

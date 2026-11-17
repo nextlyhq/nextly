@@ -38,7 +38,7 @@ import * as React from "react";
 
 import { ChromeTooltip } from "../chrome-tooltip";
 import type { Point, Rect } from "../geometry";
-import { blockNameOf, type ComponentTitleOf } from "../layers";
+import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
 
 import {
   CANVAS_ROOT_CLASS,

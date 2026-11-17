@@ -34,7 +34,7 @@ import { Canvas, CANVAS_ROOT_CLASS } from "./canvas";
 import { useCanvasDrag } from "./canvas-drag";
 import { CanvasFrameProvider } from "./canvas-frame-context";
 import { useEditorState, type EditorState } from "../editor-state";
-import { registrySlotSource } from "../inserter";
+import { registrySlotSource } from "../panels/add/inserter";
 
 afterEach(async () => {
   // A click suppressor is armed for one task after a release; let it lapse

@@ -19,8 +19,8 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { placementSources } from "./canvas/drop-targets";
-import { holdsBlocks } from "./keyboard-move";
+import { placementSources } from "../../canvas/drop-targets";
+import { holdsBlocks } from "../../keyboard-move";
 import {
   LAYERS_DEPTH_PX,
   layersDrop,
@@ -31,8 +31,8 @@ import {
   type LayersPlacement,
   type LayersRow,
 } from "./layers-drop";
-import type { LockRefusalFacts } from "./lock-refusal";
-import type { BuilderOp } from "./ops";
+import type { LockRefusalFacts } from "../../lock-refusal";
+import type { BuilderOp } from "../../ops";
 
 const base = {
   version: 1,

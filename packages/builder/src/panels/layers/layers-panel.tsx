@@ -97,28 +97,33 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { BlockIconMark } from "./block-icon";
-import { DRAG_SOURCE_ATTRIBUTE } from "./canvas/canvas";
-import { useHoveredBlockSetter } from "./canvas/hovered-block";
-import { revealNode } from "./canvas/reveal-node";
-import { isElement } from "./dom-kind";
-import type { EditorState } from "./editor-state";
-import { EDITOR_WORDS } from "./editor-words";
-import {
-  EntryContentRowFact,
-  useEntryContentRows,
-  type EntryContentRowFacts,
-} from "./entry-content-layers";
+import { BlockIconMark } from "../../block-icon";
+import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
+import { useHoveredBlockSetter } from "../../canvas/hovered-block";
+import { revealNode } from "../../canvas/reveal-node";
+import { isElement } from "../../dom-kind";
+import type { EditorState } from "../../editor-state";
+import { EDITOR_WORDS } from "../../editor-words";
 import {
   layersLockChangeable,
   lockOp,
   lockStatusOf,
   lockViewOf,
   renameOp,
-} from "./inspector";
-import { keyHint } from "./key-hint";
-import { MOVE_KEYS, type SharedBlockVerbs } from "./keyboard-actions";
-import type { MoveDirection } from "./keyboard-move";
+} from "../../inspector";
+import { keyHint } from "../../key-hint";
+import { MOVE_KEYS, type SharedBlockVerbs } from "../../keyboard-actions";
+import type { MoveDirection } from "../../keyboard-move";
+import { lockRefusalWording } from "../../lock-refusal";
+import { refusalAnnouncement } from "../../move-refusal";
+import type { BuilderOp } from "../../op-vocabulary";
+import { deviceLabel } from "../../shell/breakpoint-switcher";
+
+import {
+  EntryContentRowFact,
+  useEntryContentRows,
+  type EntryContentRowFacts,
+} from "./entry-content-layers";
 import {
   ROW_KEYS,
   rowKeyAction,
@@ -144,10 +149,6 @@ import {
   LayersDropOverlay,
   useLayersDrag,
 } from "./layers-drag";
-import { lockRefusalWording } from "./lock-refusal";
-import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./op-vocabulary";
-import { deviceLabel } from "./shell/breakpoint-switcher";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */

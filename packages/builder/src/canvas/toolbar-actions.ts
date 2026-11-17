@@ -62,7 +62,6 @@ import {
   type KeyboardMove,
   type MoveDirection,
 } from "../keyboard-move";
-import { pathTo } from "../layers";
 import {
   lockedBlockWording,
   lockRefusalWording,
@@ -76,6 +75,7 @@ import {
 } from "../locking";
 import { refusalAnnouncement } from "../move-refusal";
 import type { BuilderOp, OpPosition } from "../op-vocabulary";
+import { pathTo } from "../panels/layers/layers";
 import {
   isRefusal,
   selectionDeletion,

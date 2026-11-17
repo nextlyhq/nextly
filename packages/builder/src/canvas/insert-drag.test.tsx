@@ -37,7 +37,7 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { Canvas, CANVAS_ROOT_CLASS } from "./canvas";
 import { DEFAULT_SWITCH_PX, DropIndicator, useCanvasDrag } from "./canvas-drag";
 import { useEditorState, type EditorState } from "../editor-state";
-import { registrySlotSource } from "../inserter";
+import { registrySlotSource } from "../panels/add/inserter";
 
 afterEach(async () => {
   // Let a pending click-suppression teardown run before the next case starts.

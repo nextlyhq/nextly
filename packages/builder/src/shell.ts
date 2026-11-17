@@ -245,15 +245,18 @@ export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
 export { StyleInspectorPanel } from "./style-inspector-panel";
 export type { StyleInspectorPanelProps } from "./style-inspector-panel";
 
-export { InsertPanel } from "./insert-panel";
-export type { InsertPanelProps, LibraryTierState } from "./insert-panel";
+export { InsertPanel } from "./panels/add/insert-panel";
+export type {
+  InsertPanelProps,
+  LibraryTierState,
+} from "./panels/add/insert-panel";
 export { ComponentsPanel } from "./components-panel";
 export type { ComponentsPanelProps } from "./components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
 // reads before it can map them.
-export type { SavedPattern } from "./inserter";
+export type { SavedPattern } from "./panels/add/inserter";
 
 /**
  * The site's breakpoints, as a trigger and the dialog behind it.
@@ -635,8 +638,11 @@ export type {
  * The tree they draw is derived in `layers`, which is plain functions over a
  * document and ships from the root entry.
  */
-export { LayersPanel } from "./layers-panel";
-export type { LayersPanelProps, LayersRegionRow } from "./layers-panel";
+export { LayersPanel } from "./panels/layers/layers-panel";
+export type {
+  LayersPanelProps,
+  LayersRegionRow,
+} from "./panels/layers/layers-panel";
 /*
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.

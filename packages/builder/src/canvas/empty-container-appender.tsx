@@ -201,8 +201,8 @@ import {
 } from "react";
 
 import type { Rect } from "../geometry";
-import type { SlotSource } from "../inserter";
-import { authoredName } from "../layers";
+import type { SlotSource } from "../panels/add/inserter";
+import { authoredName } from "../panels/layers/layers";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";

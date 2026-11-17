@@ -30,7 +30,7 @@ import {
   type ConditionField,
 } from "./condition-model";
 import type { ContentServices } from "./content-controls";
-import { layerLabel, type ComponentTitleOf } from "./layers";
+import { layerLabel, type ComponentTitleOf } from "./panels/layers/layers";
 import type { PreviewedEntry } from "./previewed-entry";
 
 /**

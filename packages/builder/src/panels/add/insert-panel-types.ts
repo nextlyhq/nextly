@@ -13,8 +13,9 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { InsertDragEntry } from "./canvas/canvas-drag";
-import type { EditorState } from "./editor-state";
+import type { InsertDragEntry } from "../../canvas/canvas-drag";
+import type { EditorState } from "../../editor-state";
+
 import type { InsertEntry, SavedComponent, SavedPattern } from "./inserter";
 
 /**

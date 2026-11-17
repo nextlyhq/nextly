@@ -27,7 +27,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as React from "react";
 
-import { PreviewedEntryProvider } from "./previewed-entry";
+import { PreviewedEntryProvider } from "../../previewed-entry";
 import {
   clearBlocks,
   hasBlock,
@@ -36,11 +36,11 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { keyHint } from "./key-hint";
-import { MOVE_KEYS } from "./keyboard-actions";
+import { keyHint } from "../../key-hint";
+import { MOVE_KEYS } from "../../keyboard-actions";
 import { LAYERS_DEPTH_PX } from "./layers-drop";
 import { LayersPanel } from "./layers-panel";
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../../editor-state";
 
 afterEach(() => {
   cleanup();
