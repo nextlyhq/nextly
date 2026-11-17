@@ -455,6 +455,7 @@ export const pageBuilder = (
         layouts.removeLayout,
         ...components.componentDelete,
         layouts.layoutChoices,
+        layouts.layoutCounts,
         pages.pageCollection,
         breakpoints.siteSettings,
         breakpoints.siteBreakpoints,

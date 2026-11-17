@@ -30,7 +30,7 @@
  * @module scrub-gesture
  */
 
-import { DEFAULT_ACTIVATION_PX } from "./canvas-drag";
+import { DEFAULT_ACTIVATION_PX } from "./canvas/canvas-drag";
 
 /**
  * How far the pointer travels before a press becomes a drag.

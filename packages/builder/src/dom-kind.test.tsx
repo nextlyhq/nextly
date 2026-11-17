@@ -28,7 +28,7 @@ import {
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BlockToolbar } from "./block-toolbar";
+import { BlockToolbar } from "./canvas/block-toolbar";
 import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
@@ -36,9 +36,13 @@ import {
   contextMenuTargetOf,
   DropRefusal,
   nodeIdFromEvent,
-} from "./canvas";
-import type { CanvasDragState } from "./canvas-drag";
-import { escapeOutcome, isTextEntry, pressOrigin } from "./canvas-escape";
+} from "./canvas/canvas";
+import type { CanvasDragState } from "./canvas/canvas-drag";
+import {
+  escapeOutcome,
+  isTextEntry,
+  pressOrigin,
+} from "./canvas/canvas-escape";
 import { CommandPalette } from "./shell/command-palette";
 import {
   deepActiveElement,

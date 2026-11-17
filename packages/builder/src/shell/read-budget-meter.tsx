@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import type { CanvasRegion } from "../canvas-regions";
+import type { CanvasRegion } from "../canvas/canvas-regions";
 import type { EditorState } from "../editor-state";
 import { blockNameOf, type ComponentTitleOf } from "../layers";
 import { BUILDER_TOKENS_CLASS } from "../shell-state";

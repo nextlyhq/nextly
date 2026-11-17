@@ -22,9 +22,9 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { InheritedValue } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
-import { useCanvasTokenMode } from "./prefers-dark";
 import { CompactSides } from "./spacing-box";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";

@@ -18,7 +18,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { offeredTiers } from "./canvas-width";
+import { offeredTiers } from "./canvas/canvas-width";
 import type { BuilderOp } from "./op-vocabulary";
 import {
   readStyleValue,

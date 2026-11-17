@@ -35,11 +35,11 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./canvas/drag-refusal";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
 } from "./content-control-types";
-import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
 import { blockLabel, insertionPropSets } from "./inserter";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
