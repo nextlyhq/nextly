@@ -50,10 +50,10 @@ import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import { lockOp } from "./inspector";
 import { keyboardMovePosition } from "./keyboard-move";
-import { layerLabel } from "./layers";
 import { lockedBlockSentence } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 import type { BuilderOp } from "./op-vocabulary";
+import { layerLabel } from "./panels/layers/layers";
 import { normalizeSelection } from "./selection";
 
 /** A planned group, with what to say about it. */

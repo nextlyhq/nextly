@@ -71,6 +71,8 @@ describe("Single create page", () => {
     submit?.(values("blocks"), []);
 
     expect(unsavedEntity("single", "home-page")).toEqual({
+      // The store gives each entity a token of its own.
+      token: expect.any(String),
       kind: "single",
       address: "home-page",
       settings: expect.objectContaining({

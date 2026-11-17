@@ -31,9 +31,10 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { ToolbarActionId } from "./canvas/toolbar-actions";
 import { layersLockChangeable, type BlockLockStatus } from "./inspector";
 import type { SharedBlockVerbs } from "./keyboard-actions";
-import type { ToolbarActionId } from "./toolbar-actions";
+import { useAskedSharedVerbs } from "./selection-offer";
 
 /**
  * The block verbs the card's menu runs, handed in by the host: the SAME verbs
@@ -276,7 +277,11 @@ function CardMenu({
   );
 }
 
-/** The shared block verbs in the card's menu, after a separator. */
+/**
+ * The shared block verbs in the card's menu, after a separator, as the locks
+ * answer them: drawn only while the menu is open, so the locks are asked when
+ * it opens.
+ */
 function VerbItems({
   offered,
   verbs,
@@ -284,11 +289,15 @@ function VerbItems({
   offered: CardVerbs["actions"];
   verbs: CardVerbs | undefined;
 }): React.JSX.Element | null {
-  if (offered.length === 0) return null;
+  const all = useAskedSharedVerbs(verbs);
+  if (offered.length === 0 || verbs === undefined) return null;
+  const asked = all.filter(action =>
+    offered.some(each => each.id === action.id)
+  );
   return (
     <>
       <DropdownMenuSeparator />
-      {offered.map(action => (
+      {asked.map(action => (
         <MenuItem
           key={action.id}
           label={action.label}

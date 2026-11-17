@@ -105,6 +105,13 @@ export interface ReleaseCheckReads {
    */
   declaresLifecycle(scope: ReleaseCheckScope): Promise<boolean>;
   /**
+   * Whether the scope is a collection or Single removed from code: its
+   * registry row says the app's code defines it, and the running
+   * configuration no longer declares it. The run's write to it is refused,
+   * by the same decision this answers with.
+   */
+  removedFromCode(scope: ReleaseCheckScope): Promise<boolean>;
+  /**
    * Whether the scope declares a per-language lifecycle its translation table
    * physically lacks, which a document-wide write refuses on.
    */
@@ -187,6 +194,48 @@ export interface ReleaseCheckSource<Code extends string = string> {
    * are wired to the early stop where they happen.
    */
   signal?: (recheck: (target: ReleaseRecheckTarget) => Promise<void>) => void;
+}
+
+/**
+ * Whether each scope is removed from code, asked once per check: every
+ * source and every batch of one check share its context.
+ */
+const removedByCheck = new WeakMap<
+  ReleaseCheckContext,
+  Map<string, Promise<boolean>>
+>();
+
+/**
+ * The members whose collection or Single the configuration still declares:
+ * the only ones a check that reads a document's own tables may ask about.
+ *
+ * A removed entity's tables may already be gone (half-retired, or lost
+ * outside a migration), so asking about its documents would fail the whole
+ * check rather than answer, and nothing may write to them whatever such a
+ * check found. `core.removed-from-code` reports each such document, and is
+ * the one problem named for it.
+ */
+export async function membersInDeclaredScopes<M extends ReleaseMemberRow>(
+  members: readonly M[],
+  ctx: ReleaseCheckContext
+): Promise<M[]> {
+  let asked = removedByCheck.get(ctx);
+  if (asked === undefined) {
+    asked = new Map();
+    removedByCheck.set(ctx, asked);
+  }
+  const keyOf = (member: M) => `${member.scopeKind}:${member.scopeSlug}`;
+  const removed = new Set<string>();
+  for (const member of members) {
+    const key = keyOf(member);
+    let answer = asked.get(key);
+    if (answer === undefined) {
+      answer = ctx.reads.removedFromCode(member);
+      asked.set(key, answer);
+    }
+    if (await answer) removed.add(key);
+  }
+  return members.filter(member => !removed.has(keyOf(member)));
 }
 
 /**

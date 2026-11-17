@@ -20,6 +20,7 @@ import {
   DOCUMENT_KINDS,
   LIST_ISSUE_CODES,
   type BlockDocument,
+  type BlockRegistryReader,
   type BreakpointSet,
   type IssueCode,
 } from "@nextlyhq/blocks-engine";
@@ -127,6 +128,23 @@ export function onceAsked<T>(
   return () => (answer ??= read());
 }
 
+/**
+ * The site's block registry the field was built with. A field built without
+ * one (a host using the field type on its own) refuses to judge a document
+ * rather than judging it against no blocks: an empty registry silently
+ * refuses nothing.
+ */
+function siteBlocksOf(
+  blocks: BlockRegistryReader | undefined
+): BlockRegistryReader {
+  if (blocks === undefined) {
+    throw new Error(
+      "[page-builder] the site's block registry is not installed"
+    );
+  }
+  return blocks;
+}
+
 function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
   // Delegated rather than repeated. The admin editor asks the same question of
   // the same declaration, and a field validated under one reading and edited
@@ -146,7 +164,8 @@ function judgedByRules(
   value: unknown,
   args: PluginFieldValidateArgs,
   breakpoints: BreakpointSet | undefined,
-  composition: (() => CompositionSetup | undefined) | undefined
+  composition: (() => CompositionSetup | undefined) | undefined,
+  blocks: BlockRegistryReader | undefined
 ): PluginFieldValidationResult | Promise<PluginFieldValidationResult> {
   const judge = (stored?: readonly BlockDocument[]) =>
     validateBlocksValue(
@@ -154,6 +173,7 @@ function judgedByRules(
       args.path,
       typeof args.field.label === "string" ? args.field.label : args.path,
       policyOf(args.field),
+      siteBlocksOf(blocks),
       // The set this factory was built with; the empty set otherwise,
       // which the engine treats permissively (a breakpoint reference warns).
       breakpoints ?? siteBreakpoints(),
@@ -262,7 +282,13 @@ export function blocksFieldType(
    * how a component's hosts are found. A getter, because the plugin knows its
    * store only once it is installed; absent, only the document's own rules run.
    */
-  composition?: () => CompositionSetup | undefined
+  composition?: () => CompositionSetup | undefined,
+  /**
+   * The site's block registry, whose nesting rules, locks and bindings a
+   * document is judged by. Absent, a document's validation throws rather than
+   * judging it against no blocks.
+   */
+  blocks?: BlockRegistryReader
 ): PluginFieldType {
   return {
     type: BLOCKS_TYPE,
@@ -293,7 +319,7 @@ export function blocksFieldType(
       const emptied = value === null || value === undefined || value === "";
       const verdict = emptied
         ? true
-        : judgedByRules(value, args, breakpoints, composition);
+        : judgedByRules(value, args, breakpoints, composition, blocks);
       const label =
         typeof args.field.label === "string" ? args.field.label : args.path;
       // The classes a write adds, and the breakpoints it brings styles or
@@ -322,6 +348,7 @@ export function blocksFieldType(
             : await newBindingIssues(value, args, label, {
                 shapesOf: bindingShapes,
                 storedForms,
+                blocks: siteBlocksOf(blocks),
                 ...(templates === undefined ? {} : { templates }),
                 ...(maxNodes === undefined ? {} : { maxNodes }),
                 // A list's item bindings, against its query's rows.

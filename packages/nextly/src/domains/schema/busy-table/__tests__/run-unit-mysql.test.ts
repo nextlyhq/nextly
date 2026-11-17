@@ -111,6 +111,92 @@ describe("runMigrationStatements on MySQL after a schema statement's implicit co
     const after = events.slice(events.indexOf(create) + 1);
     expect(after.slice(0, 3)).toEqual(["at 1", "settled", "START TRANSACTION"]);
   });
+
+  /** The statements a unit sends, with `ledger` where its ledger write starts. */
+  async function sentAroundLedger(
+    statements: string[],
+    from?: number
+  ): Promise<string[]> {
+    const events: string[] = [];
+    const { adapter } = mysqlAdapter({
+      failStatement: statement => {
+        events.push(statement);
+        return undefined;
+      },
+    });
+    await runMigrationStatements(
+      adapter,
+      statements,
+      unit,
+      () => {
+        events.push("ledger");
+        return Promise.resolve();
+      },
+      { tryMs: 1_000, ...(from === undefined ? {} : { from }) }
+    );
+    return events;
+  }
+
+  it("leaves the session in autocommit after the unit's last statement, so each ledger write commits on its own", async () => {
+    // A down section's rollback row and the retirement of the applied row it names: committed
+    // together, a stop between them would lose the rollback over statements that committed.
+    const events = await sentAroundLedger(["DROP TABLE two", "DROP TABLE one"]);
+    const tail = events.slice(events.indexOf("DROP TABLE one") + 1);
+    expect(tail.slice(0, tail.indexOf("ledger"))).not.toContain(
+      "START TRANSACTION"
+    );
+  });
+
+  it("commits the try's transaction before the ledger write where a try resumes past every statement", async () => {
+    // The try before ended in the ledger write, every statement committed: this one writes only
+    // the ledger, in autocommit, as the try that ran the last statement would have.
+    const events = await sentAroundLedger(
+      ["DROP TABLE two", "DROP TABLE one"],
+      2
+    );
+    expect(events).not.toContain("DROP TABLE one");
+    expect(events.slice(0, events.indexOf("ledger"))).toContain("COMMIT");
+  });
+
+  it.each([
+    ["after the unit's last statement", undefined],
+    ["where a try resumes past every statement", 2],
+  ] as const)(
+    "turns autocommit on for the ledger write %s, and gives the session back the value it had",
+    async (_case, from) => {
+      // On a server whose sessions start with autocommit off, the first ledger write would open
+      // a transaction of its own, and the writes would commit together after all. The session's
+      // own value is kept and put back, not the server's default: a session of the adapter's own
+      // runs with autocommit on whatever the server's default, and a session at 0 stays at 0.
+      const events = await sentAroundLedger(
+        ["DROP TABLE two", "DROP TABLE one"],
+        from
+      );
+      const ledger = events.indexOf("ledger");
+      const before = events.slice(0, ledger);
+      const saved = before.indexOf(
+        "SET @nextly_ledger_autocommit = @@SESSION.autocommit"
+      );
+      expect(saved).toBeGreaterThanOrEqual(0);
+      expect(before.indexOf("SET SESSION autocommit = 1")).toBeGreaterThan(
+        saved
+      );
+      expect(events.slice(ledger)).toContain(
+        "SET SESSION autocommit = @nextly_ledger_autocommit"
+      );
+      expect(events).not.toContain("SET SESSION autocommit = DEFAULT");
+    }
+  );
+
+  it("leaves autocommit alone where the ledger write is in the unit's transaction", async () => {
+    // A row change last: the transaction reopened after the DROP is still open, and the ledger
+    // write commits with it.
+    const events = await sentAroundLedger([
+      "DROP TABLE two",
+      "UPDATE counters SET n = n + 1",
+    ]);
+    expect(events).not.toContain("SET SESSION autocommit = 1");
+  });
 });
 
 describe("runUnitInTries on MySQL in one transaction", () => {
@@ -134,7 +220,11 @@ describe("runUnitInTries on MySQL in one transaction", () => {
 
     // The ADD committed before the fill; the fill was rolled back with the transaction the
     // checkpoint's wait ended, and is sent again before the NOT NULL is.
-    const ofUnit = sent.filter(s => s !== "START TRANSACTION");
+    // The unit's own statements: not the transaction's reopening, nor the autocommit the ledger
+    // write after its last schema statement runs under.
+    const ofUnit = sent.filter(
+      s => s !== "START TRANSACTION" && !s.includes("autocommit")
+    );
     expect(ofUnit).toEqual([add, fill, fill, require]);
   });
 

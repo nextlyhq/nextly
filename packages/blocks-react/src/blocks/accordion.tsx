@@ -64,8 +64,9 @@ import {
 } from "./accordion-item";
 import { INTERACTIVE } from "./categories";
 import {
-  CONTAINER_SUPPORTS,
   containerContentModel,
+  CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
   renderContainer,
 } from "./container";
 import type { ContainerProps } from "./container";
@@ -139,15 +140,16 @@ export const accordion: BlockDefinition<AccordionProps, PageContext> =
     },
     props: {
       as: htmlTagProp(["div", "section", "article"]),
-      contained: { label: "Constrain content width", type: "checkbox" },
+      ...CONTENT_WIDTH_PROPS,
       // What the titles ARE, for screen readers and search engines: their
       // place in the page's outline. How they look is the Style tab's.
       titlesAs: {
         label: "Titles as",
+        section: "Behaviour",
         type: "select",
         options: [...ACCORDION_TITLE_LEVELS],
         optionLabels: {
-          text: "Text",
+          text: "Plain text",
           h2: "Heading 2",
           h3: "Heading 3",
           h4: "Heading 4",

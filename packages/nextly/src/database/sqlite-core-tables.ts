@@ -412,7 +412,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       "revision" INTEGER NOT NULL DEFAULT 0,
       "base_version_no" INTEGER,
       "base_draft_revision" INTEGER,
-      "field_sources" TEXT
+      "field_sources" TEXT,
+      "changed_locales" TEXT,
+      "shared_changed" INTEGER
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
@@ -485,6 +487,31 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_review_states" ("scope_kind", "scope_slug", "stage")`,
     `CREATE INDEX IF NOT EXISTS "nextly_review_states_assignee_idx"
       ON "nextly_review_states" ("assignee_kind", "assignee_id")`,
+    // Where each translated value came from, per field and language. Columns
+    // match schemas/translation-provenance/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_translation_provenance" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "locale" TEXT NOT NULL,
+      "part_state" TEXT NOT NULL,
+      "field_path" TEXT NOT NULL,
+      "value_fingerprint" TEXT NOT NULL,
+      "origin" TEXT NOT NULL,
+      "engine" TEXT,
+      "actor_kind" TEXT,
+      "actor_id" TEXT,
+      "actor_principal_kind" TEXT,
+      "source_locale" TEXT,
+      "source_fingerprint" TEXT,
+      "origin_row_id" TEXT,
+      "written_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_translation_provenance_uidx"
+      ON "nextly_translation_provenance" ("scope_kind", "scope_slug", "entry_id", "locale", "part_state", "field_path")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_translation_provenance_field_idx"
+      ON "nextly_translation_provenance" ("scope_kind", "scope_slug", "entry_id", "field_path", "part_state")`,
     // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -962,6 +989,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("principal_kind", "principal_id")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_key_idx"
       ON "email_deliveries" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_type_idx"
+      ON "email_deliveries" ("provider_type", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_template_idx"
+      ON "email_deliveries" ("template_slug", "status", "created_at")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
@@ -989,6 +1020,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_kind" TEXT,
       "principal_id" TEXT,
       "failure" TEXT,
+      "template_slug" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
       "settled_at" INTEGER
@@ -997,6 +1029,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${EMAIL_QUEUE_TABLE}" ("state", "settled_at")`,
     `CREATE INDEX IF NOT EXISTS "email_queue_principal_idx"
       ON "${EMAIL_QUEUE_TABLE}" ("principal_kind", "principal_id")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_created_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("created_at", "id")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_template_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("template_slug", "created_at")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
       "queued_id" TEXT NOT NULL,
       "recipient_hash" TEXT NOT NULL,

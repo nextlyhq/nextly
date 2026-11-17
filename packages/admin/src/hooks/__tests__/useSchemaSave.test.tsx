@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { parseApiError } from "@admin/lib/api/parseApiError";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
@@ -92,6 +93,14 @@ type Overrides = {
   onApplied?: (fields: FieldDefinition[]) => void | Promise<void>;
   /** The settings the preview and the apply are sent with, read at each render. */
   previewedWith?: () => unknown;
+  /** The entity's settings changed since the save, read at each render. */
+  settingChanges?: () => readonly SettingChange[];
+  /** The field groups not saved yet that the fields use. */
+  fieldGroupsFirst?: {
+    creates: readonly { address: string; label: string }[];
+    create: () => Promise<string | null>;
+    letGoUnused?: () => void;
+  };
 };
 
 function setup(overrides: Overrides = {}) {
@@ -117,6 +126,8 @@ function setup(overrides: Overrides = {}) {
       onNoChanges,
       onApplied,
       previewedWith: overrides.previewedWith?.(),
+      settingChanges: overrides.settingChanges?.() ?? [],
+      fieldGroupsFirst: overrides.fieldGroupsFirst,
     })
   );
 
@@ -180,7 +191,7 @@ describe("handleSave", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("persists settings and asks nothing when there is no schema change", async () => {
+  it("asks nothing when neither the schema nor a setting changed", async () => {
     const { result, confirmation, onNoChanges } = setup({
       previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
     });
@@ -461,5 +472,253 @@ describe("confirmApply", () => {
     expect(applyFn).not.toHaveBeenCalled();
     expect(startRestart).not.toHaveBeenCalled();
     expect(confirmation.beginApply).not.toHaveBeenCalled();
+  });
+});
+
+// A change of the entity's settings alone is a pending change like a field's,
+// so it is reviewed before it is saved: the review lists it, and only its
+// confirmation saves it.
+describe("a settings-only save", () => {
+  const RENAMED: SettingChange = {
+    key: "singularName",
+    label: "name",
+    from: "Post",
+    to: "Article",
+  };
+
+  it("is put in front of the user, and saved only once confirmed", async () => {
+    const unchanged = preview({ hasChanges: false });
+    const confirmation = confirmationStub(unchanged);
+    const { result, onNoChanges, applyFn } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(unchanged)),
+      settingChanges: () => [RENAMED],
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(unchanged)
+    );
+    expect(onNoChanges).not.toHaveBeenCalled();
+
+    await act(async () => result.current.confirmApply({}, []));
+    expect(onNoChanges).toHaveBeenCalledWith(FIELDS);
+    // No schema change, so nothing is applied and nothing restarts.
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(startRestart).not.toHaveBeenCalled();
+    expect(confirmation.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves nothing when a setting changed after it was reviewed", async () => {
+    const unchanged = preview({ hasChanges: false });
+    const confirmation = confirmationStub(unchanged);
+    let changes: SettingChange[] = [RENAMED];
+    const { result, rerender, onNoChanges } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(unchanged)),
+      settingChanges: () => changes,
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(unchanged)
+    );
+
+    changes = [{ ...RENAMED, to: "Story" }];
+    rerender();
+    await act(async () => result.current.confirmApply({}, []));
+
+    expect(onNoChanges).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith(
+      "The fields or settings changed after the preview. Save again to review what changes."
+    );
+  });
+});
+
+// A field group made from the picker and not saved yet is created by its host's save: listed in
+// the review, and created only once the review is confirmed, before the host, so cancelling
+// creates nothing and a refused group leaves the host as it was.
+describe("field groups not saved yet", () => {
+  const HERO = { address: "hero", label: "Hero" };
+
+  it("creates them after the confirmation and before the apply", async () => {
+    const order: string[] = [];
+    const create = vi.fn(async () => {
+      order.push("create the field groups");
+      return null;
+    });
+    const confirmation = confirmationStub(preview());
+    const { result, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: { creates: [HERO], create },
+      applyFn: vi.fn(async () => {
+        order.push("apply the host");
+        return { success: true };
+      }),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["create the field groups", "apply the host"]);
+  });
+
+  it("stops before the host when one is refused, keeping the change pending", async () => {
+    const confirmation = confirmationStub(preview());
+    const { result, applyFn, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(
+          async () => "Another field group already uses this address."
+        ),
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(confirmation.endApply).toHaveBeenCalledTimes(1));
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(onApplied).not.toHaveBeenCalled();
+    expect(confirmation.settle).not.toHaveBeenCalled();
+    expect(stopRestart).toHaveBeenCalledWith(
+      false,
+      "Another field group already uses this address."
+    );
+  });
+
+  it("creates nothing before the review is confirmed", async () => {
+    const create = vi.fn(async () => null);
+    const { result, confirmation } = setup({
+      fieldGroupsFirst: { creates: [HERO], create },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(confirmation.request).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("puts a save in front of the user when a field group is all it creates", async () => {
+    const { result, confirmation, onNoChanges } = setup({
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      fieldGroupsFirst: { creates: [HERO], create: vi.fn(async () => null) },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(confirmation.request).toHaveBeenCalledTimes(1);
+    expect(onNoChanges).not.toHaveBeenCalled();
+  });
+
+  it("creates them first when the confirmed save changes no schema", async () => {
+    const order: string[] = [];
+    const confirmation = confirmationStub(preview({ hasChanges: false }));
+    const { result } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(async () => {
+          order.push("create the field groups");
+          return null;
+        }),
+      },
+      onNoChanges: vi.fn(() => {
+        order.push("save the host");
+      }),
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() =>
+      expect(order).toEqual(["create the field groups", "save the host"])
+    );
+  });
+
+  it("lets go of the host's unused ones once the save has landed", async () => {
+    const letGoUnused = vi.fn();
+    const confirmation = confirmationStub(preview());
+    const { result, onApplied } = setup({
+      confirmation,
+      fieldGroupsFirst: {
+        creates: [HERO],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(letGoUnused).toHaveBeenCalledTimes(1));
+    expect(onApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps them when the save is refused", async () => {
+    const letGoUnused = vi.fn();
+    const confirmation = confirmationStub(preview());
+    const { result } = setup({
+      confirmation,
+      applyFn: vi.fn(async () => ({ success: false, message: "Refused." })),
+      fieldGroupsFirst: {
+        creates: [],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.confirmApply({}, []));
+
+    await waitFor(() => expect(confirmation.endApply).toHaveBeenCalledTimes(1));
+    expect(letGoUnused).not.toHaveBeenCalled();
+  });
+
+  it("keeps them through a save with nothing to review, whose write lands later", async () => {
+    const letGoUnused = vi.fn();
+    const { result, onNoChanges } = setup({
+      previewFn: vi.fn(() => Promise.resolve(preview({ hasChanges: false }))),
+      fieldGroupsFirst: {
+        creates: [],
+        create: vi.fn(async () => null),
+        letGoUnused,
+      },
+    });
+
+    await act(async () => result.current.handleSave());
+
+    expect(onNoChanges).toHaveBeenCalledTimes(1);
+    expect(letGoUnused).not.toHaveBeenCalled();
+  });
+});
+
+describe("the settings a review shows", () => {
+  it("are those its preview was made with, not ones changed while it was on its way", async () => {
+    const RENAMED: SettingChange = {
+      key: "singularName",
+      label: "name",
+      from: "Post",
+      to: "Article",
+    };
+    const unchanged = preview({ hasChanges: false });
+    let changes: SettingChange[] = [RENAMED];
+    const confirmation = confirmationStub(unchanged);
+    const { result, rerender } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(unchanged)),
+      settingChanges: () => changes,
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(unchanged)
+    );
+    changes = [{ ...RENAMED, to: "Story" }];
+    rerender();
+    expect(result.current.reviewedSettingChanges).toEqual([RENAMED]);
   });
 });

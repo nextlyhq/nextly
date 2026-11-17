@@ -20,7 +20,8 @@
  *    conditions tier is that the markup never leaves the server.
  * 3. The route's lifecycle scope holds — an unpublished entry 404s.
  * 4. The metadata the blocks declared reaches the document head, including a
- *    canonical carrying this route's mount point.
+ *    canonical carrying this route's mount point, and the browser tab reads
+ *    the page's own title, never the H1 its first block draws.
  *
  * Safe to write against: the suite owns its database and empties it before
  * every run.
@@ -38,6 +39,8 @@ const PUBLISHED_SLUG = "dogfood";
 const DRAFT_SLUG = "dogfood-draft";
 
 const PAGE_HEADING = "Rendered by blocks-react";
+/** The published entry's own title, which its tab reads. */
+const PAGE_TITLE = "Dogfood";
 const BUTTON_LABEL = "Read the docs";
 
 /**
@@ -188,7 +191,7 @@ test.beforeAll(async ({ playwright }, testInfo) => {
   try {
     for (const row of [
       {
-        title: "Dogfood",
+        title: PAGE_TITLE,
         slug: PUBLISHED_SLUG,
         content: DOCUMENT,
         status: "published",
@@ -353,11 +356,18 @@ test("an unpublished entry is not served", async ({ page }) => {
   }
 });
 
-test("block-declared metadata reaches the head", async ({ page }) => {
+test("block-declared metadata reaches the head, and the tab reads the page's title", async ({
+  page,
+}) => {
   await page.goto(`/blocks/${PUBLISHED_SLUG}`);
 
-  // `core/heading` declares the title through its `seo` hook.
-  await expect(page).toHaveTitle(PAGE_HEADING);
+  // The page opens with an H1 worded unlike its title, and the heading never
+  // sets the tab: the page's own title does (in its title pattern where the
+  // SEO plugin runs, as here, with no site name set).
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    PAGE_HEADING
+  );
+  await expect(page).toHaveTitle(PAGE_TITLE);
 
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
     "content",

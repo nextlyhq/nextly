@@ -54,8 +54,10 @@ import {
   assertBootMigrationsNotRefused,
 } from "../../../init/boot-migrations-gate";
 import { runProdMigrationsIfEnabled } from "../../../init/prod-migrations";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { runMigrateBaseline } from "../migrate-baseline";
 import { runMigrateCheck } from "../migrate-check";
+import { runMigrateCreate } from "../migrate-create";
 import { runMigrateDown } from "../migrate-down";
 import { runMigrateResolve } from "../migrate-resolve";
 import { runMigrateStatus } from "../migrate-status";
@@ -598,20 +600,32 @@ describe.each(getConfiguredTestDialects())(
       });
 
       // A boot catches a refusal so the app still starts; it logs it and
-      // closes the gate serving waits on, so both are read.
+      // closes the gate serving waits on, so both are read. A boot also
+      // refuses a configuration no migration records, which would close the
+      // gate whatever it made of this file, so the migration for the declared
+      // collection is written first: the gate then stays open only if the boot
+      // ignores this file.
       it("a production boot still ignores it", async () => {
+        const created = command();
+        setNonInteractive(true);
+        const createCode = await exitCode(() =>
+          runMigrateCreate("add_posts_dc_tags", { cwd: dir }, created.context)
+        ).finally(() => setNonInteractive(false));
+        expect(createCode, created.said.join("\n")).toBeUndefined();
         const logged: string[] = [];
         const keep = (message: unknown) => {
           logged.push(String(message));
         };
         vi.stubEnv("NODE_ENV", "production");
         try {
+          const config = declaring({
+            runMigrationsOnBoot: true,
+            migrationsDir: join(dir, "migrations"),
+            uiSchemaFile: join(dir, "ui-schema.json"),
+          }) as never;
           await runProdMigrationsIfEnabled({
-            config: declaring({
-              runMigrationsOnBoot: true,
-              migrationsDir: join(dir, "migrations"),
-              uiSchemaFile: join(dir, "ui-schema.json"),
-            }) as never,
+            config,
+            served: config,
             adapter: Object.assign(instance!.adapter, { dialect }) as never,
             logger: { debug: keep, info: keep, warn: keep, error: keep },
           }).catch(keep);

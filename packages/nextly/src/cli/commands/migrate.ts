@@ -37,7 +37,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
 import { container } from "../../di/container";
-import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
@@ -47,7 +46,6 @@ import {
 } from "../../domains/i18n/migration/migration-intent";
 import { refuseMigrationFilesLosingDefinition } from "../../domains/i18n/migration/move-keeps-definition";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
-import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import {
   filesWithinStep,
   stepContinuedNotice,
@@ -80,10 +78,7 @@ import {
   checksumOf,
 } from "../../domains/schema/migrate/applied-checksums";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import {
-  pluginsRecordedNotInstalled,
-  seedAccessOnCommandConnection,
-} from "../../domains/schema/migrate/command-access";
+import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
 import {
   planCoreDeletions,
   planCoreReconcile,
@@ -96,6 +91,16 @@ import {
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import {
+  appliedSnapshotsOf,
+  databaseBehindError,
+  missingFromDatabase,
+} from "../../domains/schema/migrate/database-behind-migrations";
+import {
+  deployStepDeps,
+  recordedBeforeTheRun,
+  serviceLoggerOf,
+} from "../../domains/schema/migrate/deploy-step-deps";
 import { addDocumentColumns } from "../../domains/schema/migrate/document-columns";
 import {
   assertNotPartiallyApplied,
@@ -109,7 +114,6 @@ import {
   runStatements,
 } from "../../domains/schema/migrate/file-deletions";
 import {
-  configurationRegistryRows,
   configurationRowsMessage,
   declaredRowCount,
   firstRunOf,
@@ -132,8 +136,6 @@ import {
   type OldBuilderLedger,
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
-  keepingUnrecordedPlugins,
-  leavingPluginsNotInstalled,
   orphanScopeOf,
   type MigrationOrphanScope,
 } from "../../domains/schema/migrate/permission-orphans";
@@ -161,6 +163,7 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
+import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
   migrationsToCompare,
@@ -188,12 +191,17 @@ import {
   refuseUnitTheServerCannotHold,
 } from "../../domains/schema/migrate/server-constructs";
 import {
+  danglingOnAddedKeys,
+  proveStatements,
+} from "../../domains/schema/migrate/snapshot-proof";
+import {
   assertRunnableStatements,
   marksNoTransaction,
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
+import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
   adoptUniqueIndexesAlreadyThere,
@@ -203,6 +211,7 @@ import {
 } from "../../domains/schema/migrate/unique-column-guard";
 import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
 import {
+  coreTableNames,
   mergeContributions,
   narrowToContributions,
 } from "../../domains/schema/migrate-create/app-stream";
@@ -228,7 +237,10 @@ import {
   createOwnerRegistry,
   ownerRecordKey,
 } from "../../domains/schema/ownership/owner-registry";
-import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
+import {
+  introspectLiveSnapshot,
+  liveColumnNames,
+} from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -277,7 +289,6 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
-import { withCommandServicesLent } from "../utils/lend-command-services";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   migrationFilesInRunOrder,
@@ -641,7 +652,32 @@ export async function runMigrate(
       logger: { warn: m => logger.warn(m) },
     });
 
+    // The configuration holding a change no migration records ends the run, a dry run's too,
+    // naming each one, before the lock or anything else changes the database: the run would
+    // otherwise report a database as up to date that the configuration is ahead of.
+    const refuseUnwritten = () =>
+      refuseUnwrittenChanges({
+        config: configResult.config,
+        ...(configResult.deferredExtends === undefined
+          ? {}
+          : { deferredExtends: configResult.deferredExtends }),
+        projectRoot: cwd,
+        migrationsDir: appMigrationsDir,
+        dialect,
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger: {
+          warn: m => logger.warn(m),
+          error: m => logger.error(m),
+          debug: m => logger.debug(m),
+        },
+      });
+
     if (options.dryRun) {
+      try {
+        await refuseUnwritten();
+      } catch (error) {
+        fail(error);
+      }
       await previewMigrate({
         adapter,
         db,
@@ -674,13 +710,10 @@ export async function runMigrate(
 
     // Every entity as the registry records it before any file applies, so the companion pass
     // after the migrations can tell a field this run newly translates from one translated before.
-    const recordedBefore = await readRecordedEntities(
+    const recordedBefore = await recordedBeforeTheRun(
       adapter as unknown as DrizzleAdapter,
       configResult.config,
-      error =>
-        logger.warn(
-          `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
-        )
+      logger
     );
 
     // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The
@@ -727,6 +760,9 @@ export async function runMigrate(
         // A file with a Builder name the signature does not recognise is
         // refused, never run as written.
         refuseUnrecognisedBuilderFiles: true,
+        refuseUnwrittenChanges: refuseUnwritten,
+        // A database that lacks what its applied migrations made is never reported up to date.
+        refuseDatabaseBehind: true,
         knownJunctions: resolvedSchema.knownJunctions,
         declared,
         // What the core upgrade deletes is judged with the files' deletions,
@@ -738,61 +774,27 @@ export async function runMigrate(
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // The first run's record, the orphan marks an applied migration sets, and the refusal of
+        // a translations column that cannot hold a newly translated field: the same for the
+        // migrations at start (`deployStepDeps`).
+        ...deployStepDeps({
+          adapter: adapter as unknown as DrizzleAdapter,
+          db,
+          dialect,
+          migrationsDir: appMigrationsDir,
+          logger,
+          declared,
+          config: configResult.config,
+          recordedBefore,
+        }),
         // A production start does not add permissions or set grants, so the deploy step does:
         // through the services a start seeds with, on this command's connection and config.
-        // A database with no registry record has its first run on this release: the record is
-        // written once, and where no migration carries the registry, the rows come from this
-        // configuration, as the starts before this release wrote them.
-        firstRun: {
-          configurationRows: () =>
-            configurationRegistryRows(configResult.config),
-        },
         seedPermissions: () =>
           seedAccessOnCommandConnection(
             adapter as unknown as DrizzleAdapter,
             configResult,
             logger
           ),
-        // A permission leaves when the recorded migration whose snapshot drops it applies, on
-        // this command's connection, keeping its grants.
-        markOrphanedPermissions: async (scope, migration) => {
-          const dz = adapter as unknown as DrizzleAdapter;
-          await markOrphansOnCommandConnection(
-            dz,
-            // A configured plugin the migration does not record keeps its permissions, even one
-            // stored under the app's own owner key; one recorded uninstalled is not declared by
-            // it, so the marks its uninstall wrote stay.
-            leavingPluginsNotInstalled(
-              keepingUnrecordedPlugins(scope, configResult.config),
-              await pluginsRecordedNotInstalled(dz)
-            ),
-            migration,
-            logger
-          );
-        },
-        // A translations column already in place that cannot hold a field the config newly
-        // translates, judged as the files left it and before the registry records them: refused
-        // here, the registry keeps its definitions and the next run is refused the same way.
-        // Judged only once no file is pending, since a later one may still change the column.
-        beforeMetadata: async () => {
-          const pending = await findPendingFiles(
-            adapter,
-            db,
-            dialect,
-            appMigrationsDir,
-            logger,
-            declared
-          );
-          if (pending.length > 0) return;
-          const { refuseCompanionColumnsThatCannotHold } = await import(
-            "../../domains/i18n/runtime/companion-io"
-          );
-          await refuseCompanionColumnsThatCannotHold(
-            adapter as unknown as DrizzleAdapter,
-            configResult.config,
-            recordedBefore
-          );
-        },
       });
 
       logger.newline();
@@ -896,12 +898,7 @@ export async function runMigrate(
           configResult.configPath ? configResult.config : null,
           configResult.configPath ?? null,
           adapter as unknown as DrizzleAdapter,
-          {
-            debug: (message: string) => logger.debug(message),
-            info: (message: string) => logger.info(message),
-            warn: (message: string) => logger.warn(message),
-            error: (message: string) => logger.error(message),
-          }
+          serviceLoggerOf(logger)
         );
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
@@ -993,39 +990,6 @@ export async function runMigrate(
     logger.success(`migrate completed in ${formatDuration(duration)}`);
   } finally {
     await adapter.disconnect();
-  }
-}
-
-/**
- * What an applied migration orphans (`MigrateCoreDeps.markOrphanedPermissions`), on the command's
- * own connection, lent to the services a permission write retires the cached answers through
- * (`withCommandServicesLent`), as Phase 4 writes. Each mark set or cleared is logged with the
- * grants the permission keeps (`logOrphanMarkChange`), at the operator's level, since a permission
- * leaving the role editor is what the operator needs to hear of. A mark that could not be written
- * is warned of by the service and named here with its migration.
- */
-async function markOrphansOnCommandConnection(
-  adapter: DrizzleAdapter,
-  scope: MigrationOrphanScope,
-  migration: string,
-  logger: CommandContext["logger"]
-): Promise<void> {
-  const serviceLogger = {
-    debug: (message: string) => logger.debug(message),
-    info: (message: string) => logger.info(message),
-    warn: (message: string) => logger.warn(message),
-    error: (message: string) => logger.error(message),
-  };
-  const result = await withCommandServicesLent(adapter, serviceLogger, () =>
-    new PermissionSeedService(adapter, serviceLogger).markOrphanedPermissions(
-      scope.declared,
-      scope
-    )
-  );
-  if (result.errors > 0) {
-    logger.warn(
-      `The orphan marks of the permissions ${migration}.sql no longer declares were not all written; those not written stay as they were.`
-    );
   }
 }
 
@@ -1261,6 +1225,27 @@ export interface MigrateCoreDeps {
   refuseUnrecognisedBuilderFiles?: boolean;
   /** The unrecognised-file refusal; injected for tests (`refuseUnrecognisedBuilderFiles`). */
   refuseUnrecognisedBuilderFilesFn?: typeof refuseUnrecognisedBuilderFiles;
+  /**
+   * Refuse, reading only, a configuration that holds a change no migration
+   * records (`refuse-unwritten-changes.ts`): asked after the history checks,
+   * so a folder that is itself wrong is named first, and before the lock and
+   * anything else changes the database.
+   *
+   * `nextly migrate` and the production boot pass it. The development boot
+   * does not: there the configuration is ahead of the migrations by design,
+   * and its own push brings the database to it.
+   */
+  refuseUnwrittenChanges?: () => Promise<void>;
+  /**
+   * Refuse, reading only, a database that lacks a table or column the newest
+   * applied app snapshot records (`database-behind-migrations.ts`), naming
+   * each with the migration that last created it: before the lock, and again
+   * under it before Phase 1.
+   *
+   * `nextly migrate` and the production boot pass it. The development boot
+   * does not: its push makes the database match the configuration.
+   */
+  refuseDatabaseBehind?: boolean;
 }
 
 export interface MigrateCoreResult {
@@ -1698,8 +1683,10 @@ function previewPendingFile(
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
   previewDeletions(deletions, logger);
-  // The file's own UP section. A run that finds the schema already at the file's target adopts it
-  // without running these, and one that finds it at neither end refuses it for drift.
+  // The file's own UP section. A run that finds the schema already at the file's target records it
+  // without running these only when its snapshot proves all of them, and otherwise refuses it
+  // (`MIGRATION_NOT_PROVEN`); one that finds it at neither end refuses it for drift. Neither is
+  // previewed: both depend on where the live schema stands.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
 }
 
@@ -2619,6 +2606,14 @@ export async function migrateCore(
   // refused with nothing changed, since nothing would record the registry
   // after it. Asked again under the lock, below.
   await refuseMigrationsOutOfOrder(deps);
+  // Once the folder and the ledger are known sound: a configuration ahead of
+  // its migrations is refused, naming each change, before the lock or any
+  // write. Asked once, since what it compares is the configuration and the
+  // folder, which no other run changes.
+  await deps.refuseUnwrittenChanges?.();
+  // And a database that lacks what its applied migrations made, read-only;
+  // asked again under the lock, below.
+  await refuseDatabaseBehindLedger(deps);
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
   // stands then, accepting only what was agreed here.
@@ -2893,6 +2888,9 @@ export async function migrateCore(
           command: deps.lockCommand ?? "nextly migrate",
         }
       );
+      // The ledger as no other run changes it now: what it says applied is
+      // still in the database, before Phase 1's first write.
+      await refuseDatabaseBehindLedger(deps);
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does
@@ -3179,6 +3177,59 @@ function firstRunSteps(
  * Each app migration in run order, with whether the ledger records it applied
  * and what its snapshot says of the registry (`snapshotMetadataOf`).
  */
+/**
+ * Refuses, reading only, where the database lacks a table or column the newest
+ * applied app snapshot records (`MigrateCoreDeps.refuseDatabaseBehind`).
+ * Nextly's own tables are left to the core reconcile, which brings them to
+ * this release whatever a snapshot froze of them.
+ */
+async function refuseDatabaseBehindLedger(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (deps.refuseDatabaseBehind !== true) return;
+  // The applied app migrations in run order, as the files are discovered.
+  const appliedInOrder = (
+    await listMigrationFiles(
+      deps.adapter,
+      deps.db,
+      deps.dialect,
+      deps.migrationsDir,
+      deps.logger,
+      deps.declared
+    )
+  )
+    .filter(entry => entry.applied)
+    .map(entry => entry.file.name);
+  if (appliedInOrder.length === 0) return;
+  const applied = new Set(appliedInOrder);
+  const core = coreTableNames(deps.dialect);
+  const snapshots = (
+    await appliedSnapshotsOf(deps.migrationsDir, sql =>
+      Promise.resolve(applied.has(sql.replace(/\.sql$/, "")))
+    )
+  ).map(entry => ({
+    ...entry,
+    snapshot: {
+      ...entry.snapshot,
+      tables: entry.snapshot.tables.filter(table => !core.has(table.name)),
+    },
+  }));
+  const newest = snapshots.at(-1);
+  if (newest === undefined || newest.snapshot.tables.length === 0) return;
+  // An applied migration with no snapshot of its own (`migrate:create --blank`, a translations
+  // file) ordered after the newest applied snapshot may have dropped or renamed what that snapshot
+  // records, and no snapshot says what it left. The database's end state cannot be read from the
+  // files then, so nothing is named rather than a table or column it removed on purpose.
+  if (appliedInOrder.at(-1) !== newest.migration) return;
+  const live = await liveColumnNames(
+    deps.db,
+    deps.dialect,
+    newest.snapshot.tables.map(table => table.name)
+  );
+  const refusal = databaseBehindError(missingFromDatabase(snapshots, live));
+  if (refusal !== undefined) throw refusal;
+}
+
 async function appMigrationStandings(
   deps: MigrateCoreDeps
 ): Promise<AppMigrationStanding[]> {
@@ -4049,11 +4100,13 @@ export function historyRefusalOf(error: unknown): string | undefined {
 
 /**
  * The exit code a command that checks the app's history ends with on `error`:
- * 2 for an applied file edited since it ran, 3 for an app migration the
- * folder lacks, the codes the guide documents, so a deploy script can tell
- * them from any other failure (1).
+ * 2 for an applied file edited since it ran, or a pending file the database
+ * stands at the end of whose snapshot does not prove all of it, 3 for an app
+ * migration the folder lacks, the codes the guide documents, so a deploy
+ * script can tell them from any other failure (1).
  */
 export function migrateExitCode(error: unknown): 1 | 2 | 3 {
+  if (NextlyError.isCode(error, "NEXTLY_MIGRATION_NOT_PROVEN")) return 2;
   if (!(error instanceof CliError)) return 1;
   if (error.code === "MIGRATION_TAMPERED") return 2;
   return error.code === "MIGRATION_MISSING" ? 3 : 1;
@@ -4827,6 +4880,42 @@ export async function runFileMigrations(args: {
         ...(withFile === undefined
           ? {}
           : { beforeRecorded: () => withFile(m.transaction) }),
+        // Where the database already stands at the file's end, it is recorded without running
+        // only when its snapshot proves all of it: each statement as written, judged against both
+        // sides whole, and the checksum the snapshot recorded when the file was written.
+        // Read only where the database stands at the file's end, with each statement judged
+        // against the live database too: the snapshot comparison cannot see an index left invalid
+        // or a constraint not validated.
+        snapshotProof: async () => ({
+          statements: await proveStatements({
+            statements: upStatements,
+            dialect,
+            sides: { before, target },
+            live: {
+              schema: await readLiveSchema(db, dialect, upStatements),
+              // Loaded where it is used, as the core upgrade loads it: most runs never reach here.
+              nullsIn: async (table, column) => {
+                const { countNulls } = await import(
+                  "../../domains/schema/pipeline/classifier/count-helpers"
+                );
+                return countNulls(db, dialect, table, column);
+              },
+            },
+          }),
+          recordedChecksum: targetFile?.migrationHash ?? "",
+          // SQLite enforces a foreign key only as a run's check finds it; a record without running
+          // is held to the same check, for the keys this file adds.
+          dangling:
+            dialect === "sqlite"
+              ? danglingOnAddedKeys(
+                  { before, target },
+                  await danglingReferences({
+                    read: <T>(statement: string) =>
+                      dz.executeQuery<T>(statement),
+                  })
+                )
+              : [],
+        }),
       });
       applied++;
       lastApplied = filename;

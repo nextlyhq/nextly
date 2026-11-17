@@ -67,6 +67,8 @@ describe("Field group create page", () => {
     submit?.(VALUES, []);
 
     expect(unsavedEntity("field-group", "hero_banner")).toEqual({
+      // The store gives each entity a token of its own.
+      token: expect.any(String),
       kind: "field-group",
       address: "hero_banner",
       settings: expect.objectContaining({

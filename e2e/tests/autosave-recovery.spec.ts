@@ -53,16 +53,10 @@ async function createSavedPost(page: Page, title: string): Promise<string> {
   page.getByRole("textbox", { name: "Title", exact: true }).fill(title);
   await page.getByRole("button", { name: /save draft/i }).click();
 
-  // The editor moves to the saved entry's own URL, which is also the signal
-  // that an id now exists. Waiting on the URL rather than on a toast keeps this
-  // independent of notification copy.
-  // Saving a NEW entry returns to the LIST rather than staying in the editor,
-  // so the entry has to be reopened from there. Measured, not assumed: waiting
-  // for an entry-shaped url here times out on a page that is showing the list.
-  await page.waitForURL(/\/collections\/posts$/, { timeout: 30_000 });
-  await page.getByRole("link", { name: title }).click();
-
-  // Now an entry url, and the negative lookahead keeps `create` from matching.
+  // The first save stays on the new entry, replacing the create address with
+  // the entry's own, which is also the signal that an id now exists. Waiting
+  // on the URL rather than on a toast keeps this independent of notification
+  // copy, and the negative lookahead keeps `create` from matching.
   await page.waitForURL(/\/collections\/posts\/(?!create$)[^/]+$/, {
     timeout: 30_000,
   });

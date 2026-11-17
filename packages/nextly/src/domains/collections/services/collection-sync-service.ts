@@ -314,6 +314,10 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     isPlugin: admin.isPlugin,
     disableCreate: admin.disableCreate,
     disableDelete: admin.disableDelete,
+    // Where the admin opens the collection's entries. Read by the admin from
+    // the collection it already has, as `useAsTitle` is; a setting, not a
+    // column, so it leaves the schema hash alone.
+    opensIn: admin.opensIn,
     // Sidebar placement. Both are read by `DynamicCollectionNav`, which takes its collections
     // from the persisted registry — so omitting them here meant a code-first collection could
     // set them, type-check, and still sort by the default.

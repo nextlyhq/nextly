@@ -7,13 +7,17 @@
  *    own fields; the canvas badges the block, and the save stores the
  *    condition as the engine reads it.
  * 2. On a page whose conditioned block's conditions don't hold for it,
- *    Apply conditions draws that block as a one-line marker saying why, and
- *    the strip counts it.
- * 3. On a page listing entries whose block shows for some of them only, Apply
- *    conditions reads the list as a visitor does: the draft entry goes, the
+ *    "Preview as visitor", in the top bar's Preview menu, draws that block as
+ *    a one-line marker saying why, shows the item checked and a strip saying
+ *    what was hidden, whose Stop turns it off; nothing stored changes, and a
+ *    reload starts with it off. No "Apply conditions" switch is left above
+ *    the canvas, and a page with no conditioned block lists the item
+ *    disabled, saying why.
+ * 3. On a page listing entries whose block shows for some of them only,
+ *    previewing as a visitor reads the list as a visitor does: the draft entry goes, the
  *    entry the block's conditions don't hold for draws the block's marker,
  *    the list says how many of the author's entries a visitor sees, and
- *    switching off brings the author's entries back.
+ *    Stop brings the author’s entries back.
  * 4. On a page placing a component, a block of the component's own whose
  *    conditions don't hold for the page is drawn as its marker, and counted,
  *    as the published page leaves it out; its other blocks draw as before.
@@ -33,7 +37,7 @@ import {
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { storedPageNodes } from "./support/stored-page";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
 const COMPONENTS = "/admin/api/collections/components/entries";
@@ -138,8 +142,34 @@ async function openBuilder(page: Page, id: string): Promise<void> {
   });
 }
 
-const applyConditions = (page: Page) =>
-  page.getByRole("switch", { name: "Apply conditions" });
+/**
+ * Opens Preview's menu in the top bar: its arrow, or the menu's own button
+ * where no preview press sits beside it.
+ */
+async function openPreviewMenu(page: Page): Promise<void> {
+  await page
+    .locator('[data-topbar="end"]')
+    .getByRole("button", { name: /^Preview( options)?$/ })
+    .last()
+    .click();
+}
+
+/** "Preview as visitor" in Preview's menu, which must be open. */
+const visitorItem = (page: Page) =>
+  page.getByRole("menuitemcheckbox", { name: /Preview as visitor/ });
+
+/** Turns "Preview as visitor" on or off from Preview's menu. */
+async function previewAsVisitor(page: Page, on: boolean): Promise<void> {
+  await openPreviewMenu(page);
+  await expect(visitorItem(page)).toHaveAttribute(
+    "aria-checked",
+    on ? "false" : "true"
+  );
+  await visitorItem(page).click();
+}
+
+/** The strip above the canvas while previewing as a visitor. */
+const visitorStrip = (page: Page) => page.locator("[data-visitor-preview]");
 
 /** The titles the canvas's list draws, in order. */
 async function listedTitles(page: Page): Promise<string[]> {
@@ -165,8 +195,12 @@ test.describe("a block's visibility conditions in the editor", () => {
     await openLayers(page);
     await layerRow(page, PACK).click();
 
+    // Show when is on the Advanced tab, under Visibility.
+    await page.getByRole("tab", { name: "Advanced" }).click();
     const showWhen = page.getByRole("region", { name: "Show when" });
-    await expect(showWhen.getByText("Always shown.")).toBeVisible();
+    await expect(
+      showWhen.getByText("Always shown", { exact: true })
+    ).toBeVisible();
     await showWhen.getByRole("button", { name: "Add condition" }).click();
     // Only fields visitors can read are offered, and a new row opens on them.
     const fields = page.getByRole("listbox", { name: "Fields to check" });
@@ -199,7 +233,7 @@ test.describe("a block's visibility conditions in the editor", () => {
       .toEqual({ conditions: FOR_MEMBERS });
   });
 
-  test("applies a page's conditions: a block they hide is drawn as its marker, and counted", async ({
+  test("previews a page as a visitor: a block its conditions hide is drawn as its marker, said, and stopped", async ({
     page,
   }) => {
     await gotoAdmin(page, "/");
@@ -211,23 +245,76 @@ test.describe("a block's visibility conditions in the editor", () => {
       status: "published",
       content: packPage(FOR_MEMBERS),
     });
+    const stored = await storedPageNodes(page.request, PAGES, id);
     await openBuilder(page, id);
     const pack = (await canvasRoot(page)).locator(`[data-nx-node="${PACK}"]`);
-    // CONTROL: switched off, the canvas draws the block as itself.
+    // CONTROL: off, the canvas draws the block as itself.
     await expect(pack).toContainText("Your member pack");
-
-    await applyConditions(page).click();
-    await expect(applyConditions(page)).toBeChecked();
+    // The switch that sat above the canvas is gone, and nothing is said.
     await expect(
-      page.getByRole("status").filter({ hasText: "1 block hidden for this" })
+      page.getByRole("switch", { name: "Apply conditions" })
+    ).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText("Apply conditions")
+    ).toHaveCount(0);
+    // No strip at all above a page's canvas while the view is off, where
+    // the switch's own strip used to sit.
+    await expect(page.locator(".nx-preview-strip")).toHaveCount(0);
+
+    await previewAsVisitor(page, true);
+    await expect(visitorStrip(page)).toContainText("Previewing as a visitor");
+    await expect(
+      visitorStrip(page)
+        .getByRole("status")
+        .filter({ hasText: "1 block hidden for this" })
     ).toBeVisible({ timeout: 30_000 });
     await expect(pack).toContainText("Member pack");
     await expect(pack).toContainText(/hidden for this .+: Title/);
     await expect(pack).not.toContainText("Your member pack");
+    // The item shows it is on.
+    await openPreviewMenu(page);
+    await expect(visitorItem(page)).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
 
-    // Switched off, the block is drawn as itself again.
-    await applyConditions(page).click();
+    // Stop turns it off: the block is drawn as itself again.
+    await visitorStrip(page).getByRole("button", { name: "Stop" }).click();
     await expect(pack).toContainText("Your member pack");
+    await expect(visitorStrip(page)).toHaveCount(0);
+    // Nothing stored changed.
+    expect(await storedPageNodes(page.request, PAGES, id)).toEqual(stored);
+
+    // It lasts only for the session: on again, then a reload, and it's off.
+    await previewAsVisitor(page, true);
+    await expect(visitorStrip(page)).toBeVisible();
+    await openBuilder(page, id);
+    await expect(
+      (await canvasRoot(page)).locator(`[data-nx-node="${PACK}"]`)
+    ).toContainText("Your member pack");
+    await expect(visitorStrip(page)).toHaveCount(0);
+    await openPreviewMenu(page);
+    await expect(visitorItem(page)).toHaveAttribute("aria-checked", "false");
+  });
+
+  test("lists Preview as visitor disabled on a page with no conditioned block, saying why", async ({
+    page,
+  }) => {
+    await gotoAdmin(page, "/");
+    const mark = `V${Date.now().toString(36)}`;
+    const id = await created(page.request, PAGES, {
+      title: `Plain page ${mark}`,
+      slug: `conditions-none-${mark.toLowerCase()}`,
+      status: "published",
+      content: packPage(),
+    });
+    await openBuilder(page, id);
+    await openPreviewMenu(page);
+    await expect(visitorItem(page)).toHaveAttribute("aria-disabled", "true");
+    await expect(visitorItem(page)).toContainText(
+      "No block on this page has conditions"
+    );
+    await expect(
+      page.getByRole("switch", { name: "Apply conditions" })
+    ).toHaveCount(0);
   });
 
   test("applies conditions to a list: read as a visitor, each entry checked, and the shrink said", async ({
@@ -252,14 +339,14 @@ test.describe("a block's visibility conditions in the editor", () => {
     await openBuilder(page, id);
     const list = (await canvasRoot(page)).locator(`[data-nx-node="${LIST}"]`);
 
-    // CONTROL: switched off, the author's entries, the draft among them,
+    // CONTROL: off, the author's entries, the draft among them,
     // each drawing the badge.
     await expect
       .poll(() => listedTitles(page), { timeout: 30_000 })
       .toEqual([`${mark} Alder`, `${mark} Birch`, `${mark} Cedar`]);
     await expect(list.getByText("Premium pick")).toHaveCount(3);
 
-    await applyConditions(page).click();
+    await previewAsVisitor(page, true);
     // A visitor reads the published entries only.
     await expect
       .poll(() => listedTitles(page), { timeout: 30_000 })
@@ -280,8 +367,8 @@ test.describe("a block's visibility conditions in the editor", () => {
         .filter({ hasText: "Conditions checked for each entry in the list" })
     ).toBeVisible();
 
-    // Switched off, the author's own entries again.
-    await applyConditions(page).click();
+    // Stopped, the author's own entries again.
+    await visitorStrip(page).getByRole("button", { name: "Stop" }).click();
     await expect
       .poll(() => listedTitles(page), { timeout: 30_000 })
       .toEqual([`${mark} Alder`, `${mark} Birch`, `${mark} Cedar`]);
@@ -339,13 +426,13 @@ test.describe("a block's visibility conditions in the editor", () => {
     });
     await openBuilder(page, id);
     const root = await canvasRoot(page);
-    // CONTROL: switched off, the component draws both its blocks.
+    // CONTROL: off, the component draws both its blocks.
     await expect(root.getByText("Members get the archive.")).toBeVisible({
       timeout: 30_000,
     });
     await expect(root.getByText("News from the journal.")).toBeVisible();
 
-    await applyConditions(page).click();
+    await previewAsVisitor(page, true);
     await expect(
       page.getByRole("status").filter({ hasText: "1 block hidden for this" })
     ).toBeVisible({ timeout: 30_000 });
@@ -356,8 +443,8 @@ test.describe("a block's visibility conditions in the editor", () => {
     await expect(root.getByText("Members get the archive.")).toHaveCount(0);
     await expect(root.getByText("News from the journal.")).toBeVisible();
 
-    // Switched off, the component draws both again.
-    await applyConditions(page).click();
+    // Turned off from the menu, the component draws both again.
+    await previewAsVisitor(page, false);
     await expect(root.getByText("Members get the archive.")).toBeVisible();
   });
 });

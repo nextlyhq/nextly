@@ -171,6 +171,28 @@ function boundPage(binding: Record<string, unknown>): BlockDocument {
   ) as BlockDocument;
 }
 
+/**
+ * A page of one line of prose whose text is bound: what a page's metadata is
+ * described by, since a heading never offers the page's title.
+ */
+function boundProse(binding: Record<string, unknown>): BlockDocument {
+  return JSON.parse(
+    JSON.stringify({
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "p",
+          type: "core/text",
+          version: 1,
+          props: { text: "Own" },
+          bindings: { text: { fallback: "Fallback", ...binding } },
+        },
+      ],
+    })
+  ) as BlockDocument;
+}
+
 /** Whether a Direct API read is the public reader's: its fixed options. */
 function isPublicRead(args: Record<string, unknown>): boolean {
   return (
@@ -393,19 +415,19 @@ describe("a routed page's bindings", () => {
   });
 
   it("metadata derives from bound props", async () => {
-    let title: string | undefined;
+    let description: string | undefined;
     const route = createBlocksPage({
       collections: ["pages"],
       field: "content",
       blocks,
-      nextly: instance(boundPage({ $bind: "title" })) as never,
+      nextly: instance(boundProse({ $bind: "title" })) as never,
       metadata: (_entry, _context, derived) => {
-        title = derived.title;
+        description = derived.description;
         return {};
       },
     });
     await route.generateMetadata({ params: { slug: ["about"] } });
-    expect(title).toBe("Public");
+    expect(description).toBe("Public");
   });
 
   it("offers a list item's bound image outside any list as the page draws it: its fallback, never its own", async () => {
@@ -1054,6 +1076,119 @@ describe("a routed page's bindings", () => {
     expect(other.tags).toEqual(nextlySingleTags("campaign-style"));
   });
 
+  it("tells a page's sizing when the site's classes size blocks", async () => {
+    // A named class drawing blocks at a minimum width: no block's own width
+    // may narrow its images' slot. Observed on the context the route builds.
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "box",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children: [] },
+        },
+      ],
+    };
+    const breakpoints = {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    };
+    const slotOf = async (classes: unknown[]) => {
+      const { element } = await renderedPage(
+        createPublicBlocksPage,
+        {
+          collections: ["pages"],
+          field: "content",
+          blocks,
+          imageCopies: async () => [],
+          styleContext: { breakpoints },
+          siteStyles: { classes } as never,
+        },
+        instance(page)
+      );
+      return element.props.context?.imageSlot;
+    };
+    expect(
+      (
+        await slotOf([
+          {
+            id: "wide",
+            name: "Wide",
+            styles: { base: { base: { minWidth: "1000px" } } },
+          },
+        ])
+      )?.siteSizesBlocks
+    ).toBe(true);
+    expect((await slotOf([]))?.siteSizesBlocks).toBeUndefined();
+  });
+
+  it("keeps a public route's image copies under its cache scope, on their own allowance", async () => {
+    const page: BlockDocument = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          // A first section's background: looked up by its address.
+          id: "hero",
+          type: "core/section",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              base: { background: { url: "/media/a.jpg", size: "cover" } },
+            },
+          },
+          slots: { children: [] },
+        },
+      ],
+    };
+    const asked: { upTo: number; reads: unknown }[] = [];
+    const imageCopies = vi.fn(
+      async (_source: unknown, upTo: number, reads?: unknown) => {
+        asked.push({ upTo, reads });
+        return [];
+      }
+    );
+    const keyOf = async (cacheScope: string) => {
+      runtime.reads = [];
+      await renderedPage(
+        createPublicBlocksPage,
+        {
+          collections: ["pages"],
+          field: "content",
+          blocks,
+          cacheScope,
+          imageCopies,
+        },
+        instance(page)
+      );
+      const read = runtime.reads.find(
+        entry => entry.keyParts[0] === "page-builder-image-copies"
+      );
+      if (read === undefined) throw new Error("no cached image-copy read");
+      return read.keyParts;
+    };
+    const first = await keyOf("site-a");
+    const again = await keyOf("site-a");
+    const other = await keyOf("site-b");
+    // The same route names one entry; another site's never shares it.
+    expect(again).toEqual(first);
+    expect(other).not.toEqual(first);
+    expect(first).toContain("site-a");
+    // Each lookup is handed an allowance of its own to claim from, not the
+    // page's reads, which the editor counts a published render against.
+    expect(asked.length).toBeGreaterThan(0);
+    for (const { reads } of asked) {
+      expect(typeof (reads as { take?: unknown } | undefined)?.take).toBe(
+        "function"
+      );
+      expect(reads).not.toHaveProperty("report");
+    }
+  });
+
   it("prepares each document once per render, and the renderer reuses that preparation", async () => {
     const element = await throughBoundary<PageRendererProps>(
       createBlocksPage({
@@ -1123,7 +1258,7 @@ describe("a routed page's bindings", () => {
       nodes: [
         {
           id: "hb",
-          type: "core/text",
+          type: "core/heading",
           version: 1,
           props: { text: "Header" },
         },
@@ -1134,7 +1269,7 @@ describe("a routed page's bindings", () => {
       layouts: { main: [{ area: "header", component: "hdr" }] },
     };
     for (let maxQueries = 0; maxQueries <= 4; maxQueries += 1) {
-      let title: string | undefined;
+      let description: string | undefined;
       const config = {
         collections: ["pages"],
         field: "content",
@@ -1147,23 +1282,24 @@ describe("a routed page's bindings", () => {
         metadata: (
           _entry: unknown,
           _context: unknown,
-          derived: { title?: string }
+          derived: { description?: string }
         ) => {
-          title = derived.title;
+          description = derived.description;
           return {};
         },
       };
       const route = createBlocksPage({
         ...config,
-        nextly: instance(boundPage({ $bind: "title" }), extras) as never,
+        nextly: instance(boundProse({ $bind: "title" }), extras) as never,
       } as Parameters<typeof createBlocksPage>[0]);
       await route.generateMetadata({ params: { slug: ["about"] } });
       const element = await throughBoundary<PageRendererProps>(
         route.ContentPage({ params: { slug: ["about"] } })
       );
       const html = await renderToHtml(element);
-      const shown = /<h1[^>]*>(.*?)<\/h1>/.exec(html)?.[1];
-      expect(shown, `maxQueries ${String(maxQueries)}`).toBe(title);
+      // The page's one line of prose; the header draws a heading.
+      const shown = /<p[^>]*>(.*?)<\/p>/.exec(html)?.[1];
+      expect(shown, `maxQueries ${String(maxQueries)}`).toBe(description);
     }
   });
 
@@ -1580,6 +1716,31 @@ describe("a page's blocks shown by their visibility conditions", () => {
     expect(html).not.toContain("Never shown");
   });
 
+  it("finds the first section the page draws, past a first block it hides", async () => {
+    // The stored first block is left out for this entry, so the section
+    // after it is the first a visitor sees, and its images load first.
+    const imageCopies = vi.fn(async () => []);
+    const { element } = await renderedPage(
+      createBlocksPage,
+      { ...base, imageCopies },
+      instance(
+        page(
+          shownWhen("hidden", "Never shown", [
+            [{ field: "title", op: "equals", value: "Elsewhere" }],
+          ]),
+          {
+            id: "hero",
+            type: "core/section",
+            version: 1,
+            props: {},
+            slots: { children: [] },
+          }
+        )
+      )
+    );
+    expect(element.props.context?.firstBlockId).toBe("hero");
+  });
+
   it("decides by the entry as the public reads it, never the route's own read", async () => {
     // The route's row says "Trusted"; the public's says "Public".
     const { html } = await renderedPage(
@@ -1762,16 +1923,16 @@ describe("a page's blocks shown by their visibility conditions", () => {
   });
 
   it("describes the page in its metadata by the blocks it draws", async () => {
-    let title: string | undefined;
+    let description: string | undefined;
     const route = createBlocksPage({
       ...base,
       nextly: instance(
         page(
           {
             id: "h1",
-            type: "core/heading",
+            type: "core/text",
             version: 1,
-            props: { text: "Members area", level: "h1" },
+            props: { text: "Members area" },
             visibility: {
               conditions: [
                 [{ field: "title", op: "equals", value: "Elsewhere" }],
@@ -1780,9 +1941,9 @@ describe("a page's blocks shown by their visibility conditions", () => {
           },
           {
             id: "h2",
-            type: "core/heading",
+            type: "core/text",
             version: 1,
-            props: { text: "Public area", level: "h1" },
+            props: { text: "Public area" },
             visibility: {
               conditions: [[{ field: "title", op: "equals", value: "Public" }]],
             },
@@ -1790,12 +1951,12 @@ describe("a page's blocks shown by their visibility conditions", () => {
         )
       ) as never,
       metadata: (_entry, _context, derived) => {
-        title = derived.title;
+        description = derived.description;
         return {};
       },
     });
     await route.generateMetadata({ params: { slug: ["about"] } });
-    expect(title).toBe("Public area");
+    expect(description).toBe("Public area");
   });
 });
 

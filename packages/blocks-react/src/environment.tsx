@@ -5,8 +5,9 @@
  * own code should measure and listen against.
  *
  * A block renders in more than one place. On the published site it is in the
- * page's own document; in the editor it is drawn inside the canvas, which is
- * meant to become a frame of its own. A block that reaches for the globals
+ * page's own document; in the editor it is drawn inside the canvas, a frame of
+ * its own laid out at the width of the device being previewed. A block that
+ * reaches for the globals
  * (`window.innerWidth`, `document.addEventListener`) keeps RENDERING in both
  * places, but its measurements and listeners would target the admin page
  * rather than the frame it is drawn in. So block code asks here, or reads its
@@ -34,8 +35,7 @@ import {
  * Where a block is drawn: the document holding its elements and that
  * document's window.
  *
- * @experimental The editor's canvas frame is still being built, and this may
- *   grow with it.
+ * @experimental This may grow with the editor's canvas frame.
  */
 export interface BlockEnvironment {
   readonly document: Document;
@@ -99,7 +99,9 @@ function ownEnvironment(): BlockEnvironment | undefined {
  * The document and window this block is drawn in.
  *
  * - Inside the editor, what the canvas provides: its frame's own document and
- *   window, from the first render.
+ *   window, once the canvas has mounted in the frame, and `undefined` before.
+ *   A block that has mounted earlier, such as one on the page as it opens,
+ *   gets the frame's on its next render, so key an effect on the value.
  * - Anywhere else, the page's own, but only once the block has MOUNTED.
  *   `undefined` on the server, which has neither, and on the first render in
  *   the browser too, so the markup a hydrating render produces is the markup

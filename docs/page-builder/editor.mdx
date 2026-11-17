@@ -1,11 +1,45 @@
 ---
 title: Using the editor
-description: The editor's rail and panels, the Design panel's tabs, editing a template, Help, and the keyboard shortcuts.
+description: The editor's rail and panels, the inspector's tabs, the Design panel's tabs, editing a template, Help, and the keyboard shortcuts.
 ---
 
 The editor opens with the page on the canvas, the inspector on the right for the
 selected block, and a rail of named panels on the left. One panel is open at a time.
 Choosing a panel's item again closes it and gives the canvas the room back.
+
+## With nothing selected
+
+Click empty canvas space, or press <kbd>Esc</kbd> until nothing is selected, and the
+inspector shows **Page settings**: the page's **Title**, its **Address** with a button
+that copies it, its **Header & footer**, and the search result the page would show.
+Changes there are the same fields **Settings** edits: the title in the top bar follows
+as you type, and they're saved with the page when you save. **All page settings…**
+opens **Settings** on the page's own tab, for every other field. The inspector keeps
+its width, so the canvas doesn't move as you select and deselect.
+
+The search result is built from the page's title and address. Where the SEO plugin
+sets search and sharing for the page's type, the result is left to it.
+
+**Page data** says how much data the page loads each time someone opens it, against
+the site's limit: "Page data: 12 of 500". A list's entries, an image, a link to an
+entry and a related entry each count once. Past the limit, the blocks that need more
+come up empty on the live site. Choose the line to see what the page loads and, over
+the limit, which blocks come up empty; choose one of those to select it.
+
+The top bar shows the same count only once the page nears its limit, from 80% of it:
+"Page data: 430 of 500 · what's this?" in amber, and in red with "· over the limit"
+once the limit is used up or passed. If the count can't be made, it says "Page data:
+couldn't count · Retry", since a page whose count is hidden could be over its limit.
+
+The limit is 500 unless the site's code sets another with
+`pageBuilder({ maxQueries })`, a whole number up to 100,000. The page routes use it too, so the editor and the live
+page count against one number. A route given its own `maxQueries` uses that instead,
+and the editor doesn't know it. `Infinity` sets no limit, and the top bar then never
+shows the count.
+
+A component, a saved section and a collection template show their own settings in
+the same place: **Component settings**, **Saved section settings** and **Collection
+template settings**. A component's lists its fields and variants.
 
 ## The top bar
 
@@ -15,7 +49,15 @@ The top bar runs across the editor in three parts.
 | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Left   | The way back to the entry, the page's title (choose it to switch to a recent page or to all pages), whether it's a draft or published, and **Undo** and **Redo**. |
 | Centre | The devices to edit and preview the page at, and the zoom. The device you choose is the breakpoint your style changes go to.                                      |
-| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** where the admin offers one, and **Publish**.  |
+| Right  | The buttons that hide or show the left panel and the inspector, **Search**, whether your work is saved, **Preview** and its menu, and **Publish**.                |
+
+**Preview** shows this version of the page, where the admin offers a preview. With
+unsaved work, it saves a draft first (never publishing), so the preview shows what the
+canvas shows; if the save fails, the preview doesn't open and the error says why. If you
+can't save the page, it shows the saved version instead. Its arrow opens a menu:
+**Preview this version** does the same, and says "Saves a draft first" while there is
+unsaved work; **Preview as visitor** hides the blocks whose conditions don't match, on
+the canvas ([Previewing as a visitor](#previewing-as-a-visitor), below).
 
 **Publish** is the entry's own leading action: **Publish**, **Publish changes** or
 **Save**, as on the entry's page. Its arrow holds **Save draft**, **Schedule publish…**
@@ -34,23 +76,45 @@ shows only on a page that has one.
 The site-wide list is **Bindings to fix**, under **Checks** in the Page Builder's panel
 (`/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`), for people who can edit
 pages. The Page Builder overview leads with it while any need fixing. It lists every document whose bindings no longer fit, by place (pages, components,
-patterns, Layouts, other entries and Singles), each with **Open in editor** at its block.
+saved sections, header & footer sets, other entries and Singles), each with **Open in editor** at its block.
 The dashboard's **Needs your attention** card counts them and links to it, and a
 **Bindings to fix** card can be added under **Customize**.
 
-A binding in a page's Layout region opens the component that region places, where it is
+A binding in a page's header & footer set region opens the component that region places, where it is
 edited. One in a language other than the default has no link, since the editor edits the
 default language. A document's draft is checked as well, so a binding broken only in a
 draft is listed before that draft is published. Until the first check of every document
 finishes, the list says it hasn't checked yet rather than that every binding fits.
 
+### Where a Single's values are shown
+
+A Single's side panel has a **Shown on (from the builder)** section. It lists each page,
+header & footer set and component where the builder shows one of the Single's values,
+with the block it's in: **Home, Hero section**. Each row opens that document in the editor
+with the block selected. A block takes its name from Layers: the name you gave it, or its
+block's name.
+
+- A binding inside a component is listed once, on the component, not on every page that
+  places it.
+- Bindings in a draft count, so a binding you haven't published yet is listed.
+- You see only the places you're allowed to open. The rest are counted: **and 2 you can't
+  open**.
+- The section shows 10 rows. **and N more** opens the full list.
+- The list knows only documents made with the builder. Code that reads the Single
+  directly isn't listed, and the section says so.
+
+The list comes from an index of every builder document's bindings to Singles. It's kept
+by the same check as **Bindings to fix**, on every save and whenever a field or a block
+changes. After you upgrade and run `nextly migrate`, the section says **Still checking
+pages…** until the first check of every document finishes. That takes a jobs pass or two.
+
 ### Publishing a page whose parts aren't published
 
-A page, the components it places and its Layout are published separately. When you
+A page, the components it places and its header & footer set are published separately. When you
 publish a page that places a component that isn't published, or one placed inside
-another component, or names a Layout that isn't published, the editor tells you before
+another component, or names a header & footer set that isn't published, the editor tells you before
 it publishes. The dialog lists each part, and what visitors see meanwhile: nothing where
-an unpublished component sits, and the site's default Layout around the page until its
+an unpublished component sits, and the site's default header & footer set around the page until its
 own is published.
 
 - **Publish page only** publishes the page and leaves the parts as they are. It's the
@@ -123,13 +187,94 @@ returns you to the entry with that row's **Open Page Builder** focused.
   starting blocks alone. The server log notes each save whose Layers locks it couldn't
   check. Layers locks inside a group aren't checked on save either.
 
+## The inspector
+
+The inspector edits the selected block in up to three tabs, in this order:
+
+| Tab      | What it holds                                                                                                                                                                                                                |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                                                                                      |
+| Style    | How the block looks.                                                                                                                                                                                                         |
+| Advanced | Where and when it shows (**Visible on**, **Show when**, and **Keep out of search previews** on every container), then its HTML: its **HTML tag** where it has a choice, **Anchor (ID)**, **CSS classes** and **Attributes**. |
+
+A tab with nothing in it for the selected block isn't shown: a Spacer or a Section,
+which say nothing themselves, have only Style and Advanced. The tab you choose stays
+chosen as you select other blocks. A block without it opens on its first tab, and the
+next block that has it opens on yours again. If the editor opens with a state such as
+Hover already chosen, it opens on Style.
+
+At the top of **Style**, one line says what a change will affect:
+
+- **● This block** (pink), or **◆** and the name of a shared style (green) when you
+  chose to edit that style instead;
+- the device the canvas shows, such as **Desktop**. You choose the device in the top
+  bar; hover the chip to see which devices a change reaches;
+- the state, **Normal** or another such as **Hover** (amber).
+
+Open the first chip to choose between this block and each shared style it uses, to
+**Detach** or **Remove** one, or to **Apply a shared style…** or **Save as shared
+style…**. These items are always there, in the same order: one you can't use yet is
+greyed out with the reason under it. While a shared style is chosen, a line under the
+chips says where it's used and that changes there change all of them. While a state
+other than Normal is chosen, the settings below are tinted and say which look you're
+editing. This line and the tabs stay in view as you scroll the panel.
+
+In Advanced:
+
+- **Show when** reads "Always shown" until you add a condition. Inside a Collection
+  list it also names whose fields the conditions read, such as "Each post in the list".
+- **Keep out of search previews** marks the block's element `data-nosnippet`, so Google
+  doesn't quote its text under the page's link or in AI Overviews. Google reads the mark
+  on `<section>` and `<div>` only, and the panel says so when the tag is another one.
+- **HTML tag** lists each tag once, with a plain name and what it means: "Section — a
+  themed part of the page `<section>`".
+- **Anchor (ID)** lets a link jump to the block: `#your-id`.
+- **CSS classes** takes names separated by spaces, added to the block's element beside
+  the classes Nextly generates. A name that starts with a digit, `.`, `#` or `nx-`, or
+  holds a character a class can't, is refused under the field with the reason, and the
+  other names are kept.
+- **+ Add attribute** adds a `data-`, `aria-` or other open attribute. A class goes in
+  CSS classes, not here.
+
+Each tab is a list of sections divided by lines. Click a section's name to fold it or open
+it; any number can be open at once. A dot beside a section's name means it holds a value
+for the block you're editing. Sections stay as you left them, for every block and the
+next time you open the editor. A section you've never folded opens if it holds a value or
+is the tab's first. **Expand all** and **Collapse all** in the panel's **⋯** menu fold
+every section of the tab you're on.
+
+Every control says what it writes. Hover it, or reach it with the keyboard, and a tooltip
+shows the CSS or HTML it sets: `min-height: 120px`, `<section>`, `id`. The tooltip stays
+while your pointer is over it, and Escape closes it. If you'd rather always see them,
+turn on **Show CSS names** in the **⋯** menu: each control then prints its CSS property
+names in small type under its label. The editor remembers the choice in this browser.
+
+The Style tab lists its sections in the same order for every block: Block style, Layout,
+Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and
+CSS properties, each shown only where the block offers it. Advanced lists Visibility, then
+HTML.
+
+**Animation when it appears**, in Effects, gives a block an entrance: **None** (the
+default), **Fade in**, **Rise**, **Slide in from the left**, **Slide in from the right** or
+**Zoom in**. **Duration** and **Delay** are in milliseconds (600 and 0 when you leave them
+empty), and **Start** is **When scrolled into view** (the default) or **When the page
+loads**. Like any style, it's set per device: a block can rise on desktop and stay still on
+mobile with **None** there. Scrolled into view, the block moves in as it enters the window,
+following the scroll, and a delay holds it back for part of that. The published page
+animates with CSS alone and adds no script, and only the block's opacity and position move,
+so nothing around it shifts. The canvas always shows blocks where they end, and so does the
+published page for a visitor whose device asks for reduced motion, for a printed page, and,
+for **When scrolled into view**, in a browser that can't run scroll-driven animation. A page
+using a slide clips what sticks out past its sides.
+
 ## Search
 
 **Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a
 Mac), finds four kinds of thing as you type, each under its own heading:
 
 - **Add**: blocks and your components to add. Each says where it will go, as the Add panel
-  does ("Adding after Heading"), and choosing one adds it there.
+  does ("Adding inside Hero, at the end"), and choosing one adds it there, by the same
+  rule as a click in the Add panel (see [Where a clicked block lands](#where-a-clicked-block-lands)).
 - **On this page**: the page's blocks, by the names Layers shows, with what each is and
   what it sits in. Choosing one selects it and scrolls it into view.
 - **Pages**: the site's other pages you may open, by title, with **Draft** beside a page
@@ -147,7 +292,7 @@ has no item at all, so nothing on the rail opens an empty panel.
 
 | Item         | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Add**      | The blocks, components and saved patterns you can place. Drag one onto the canvas, or choose it to place it after the selected block, or at the end of the page when nothing is selected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Add**      | The blocks, components and saved sections you can place. Drag one onto the canvas, or choose it to place it by the selected block (see [Where a clicked block lands](#where-a-clicked-block-lands)), or at the end of the page when nothing is selected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | **Layers**   | The page as a tree. Select, expand, move, hide, lock and rename blocks here. See [Working with a block's row in Layers](#working-with-a-blocks-row-in-layers).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | **Pages**    | The site's pages, with search. Open, add, duplicate, rename or delete one without leaving the editor. See [Pages](#pages).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Design**   | The site's look, in three tabs: **Variables** (named colours, type sizes and spacing, each with a light and a dark value), **Shared styles** and **Fonts** (see [Fonts](#fonts)). A variable's dark value applies when a visitor's device prefers dark. The Variables tab imports and exports DTCG files, including one file per mode for Figma. A variable that a page, a component, a shared style or a block's default style still uses can't be removed: change those uses first. Some pages are never fully counted: a page too large to read in full, or one that keeps its blocks in a field under a named group. Before removing a variable, the editor reads those pages for it. If one of them uses the variable, or can't be read in time, the removal is refused and that page is named, or counted instead when you can't open it or its title can't be looked up in time. |
@@ -159,6 +304,58 @@ Add, Layers and Design sit at the top. Settings and Help sit at the bottom.
 The editor remembers the panel you left open, and on Design the tab you left on, the
 next time you open it. It remembers them for you, not for the browser, so two people
 who share a browser each find their own.
+
+## Where a clicked block lands
+
+Choosing a block in the Add panel (a click, or <kbd>Enter</kbd> on a tile), the
+Components panel or search places it by what is selected and what you add:
+
+- **Nothing selected**: at the end of the page, above the footer.
+- **A block that holds blocks is selected** (a Section, Box, Columns, Card, Accordion,
+  Gallery…):
+  - a content block (Heading, Text, Image, Button…) goes **inside it, at the end**;
+  - a layout block (Box, Columns, Column, Card) goes **after it**, so Box then Box gives
+    two Boxes one after the other, not one inside the other.
+- **A block that holds no blocks is selected** (a Heading, say): anything goes after it.
+- **A Section or a saved section** goes after the top-level block that holds the
+  selection, never inside another section.
+- **A component** is placed as a layout block when one of its top-level blocks is one,
+  and as a content block otherwise.
+
+If the place the rule picks can't take the block (Columns hold only Column blocks, so a
+Heading can't go inside them), it goes after the selected block instead, then after each
+block around it, out to the page. A Column added with Columns selected goes inside them,
+since nothing after them takes it. A container's own **+** adds inside that container,
+whatever you add.
+
+The line at the top of the Add panel says where the next block goes before you choose
+it: "Adding inside Hero, at the end", "Adding after Heading, inside Hero" or "Adding at
+the end of the page". Each tile tells a screen reader where it goes, and after an insert
+a screen reader hears what was added and where ("Heading added inside Hero, at the
+end"). The new block is selected, so the next one goes after it.
+
+## Adding a block where you are
+
+Press <kbd>/</kbd> on the canvas, with a block selected or nothing selected, and a small
+picker opens beside the block (or at the end of the page), so you can add a block
+without going to the Add panel. It holds:
+
+- **Search blocks**, with the cursor in it. Typing lists the blocks, saved sections and
+  components that can go there, from the same list and words as the Add panel.
+- **The six blocks you add most**, in a grid. Until you have added any they are Heading,
+  Text, Image, Button, Box and Columns. They are counted for you in this browser, and a
+  block that can't go there is skipped for the next one.
+- **Browse all blocks and sections →**, which opens the Add panel instead.
+
+A line at the top says where the block will go, by the same rule as the Add panel's
+(see [Where a clicked block lands](#where-a-clicked-block-lands)). Arrow keys move
+through the blocks, <kbd>Enter</kbd> adds the highlighted one, and <kbd>Tab</kbd> moves
+to **Browse all**. The new block is selected; a block with text, such as a Heading,
+opens for typing, and anything else leaves you on the canvas. <kbd>Escape</kbd> or a
+click outside closes the picker without adding anything and puts you back where you
+were.
+
+While you are typing in a block's text, <kbd>/</kbd> is just a character.
 
 ## Pages
 
@@ -209,7 +406,7 @@ every file you add are fetched by your server, from `api.fontsource.org` and
 **Upload a font file.** Choose **+**, then **Upload a font file**: a `.woff2` or `.woff`
 file, its family, weight and style, and a confirmation that you may use it on the web.
 
-**In the inspector**, Style → Typography → **Font** offers only the site's font
+**In the inspector**, Style → Text → **Font** offers only the site's font
 variables, the fonts on this site and the system fonts. **Add or manage fonts…** opens
 this tab.
 
@@ -239,8 +436,8 @@ pageBuilder({
 
 ## Spacing
 
-Blocks have no outer margin of their own. The space between two blocks comes from the
-block that holds them:
+Blocks have no outer margin of their own. The space between two blocks is the gap of
+the container holding them, set per container or by the spacing variables:
 
 - **Section, Box, Card, Column**, an accordion item and a Collection list put a gap above
   every block after the first. Set the container to flex or grid and the same gap
@@ -249,6 +446,25 @@ block that holds them:
 - **Rich text** spaces its own paragraphs, headings and lists, inside the block.
 - **Section** pads its content above, below and beside it. **Card** pads its content.
   Box and Column have no padding.
+
+Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
+width**. A new Section starts Boxed, and every other container starts Full width.
+
+A Boxed Section is a full-width band: its background reaches both edges of the page, and
+only its content is held to the site's content width (`content.width`), with at least
+`space.gutter` at each side. Box, Columns, Column, Card, Accordion, Gallery, Collection
+list and Entry content work the same way when Boxed. Padding you set at a Boxed block's
+sides takes the gutter's place: more moves the content further in, and 0 removes the
+gutter, but the content never runs wider than the content width. A Boxed block you give
+its own width (under **Size**) is centred at that width instead. Full width lets the
+content run edge to edge.
+
+The line under the buttons says what is in force: "Boxed to 1152px · site default".
+**Change for this section** gives that one container a width of its own, typed (`1400px`,
+`90%`) or picked from the site's variables. It applies to that container only: a Boxed
+block inside it still boxes to the site's width. **Use site default** takes it away.
+Content width is one setting for every device and state, so it is held while you edit a
+shared style or a state other than Normal.
 
 Each value is a variable under **Design → Variables**, and most grow with the screen:
 
@@ -282,34 +498,6 @@ gap above it; give that block a top margin of 0 on that device to remove it.
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
 
-### Space between blocks: classic or the container's gap
-
-**Design → Variables** opens with **Space between blocks**, which decides how the
-whole site is spaced:
-
-- **From the container's gap**: the model described above. A new site starts here.
-- **From each block's margins (classic)**: the spacing pages had before container
-  gaps. Headings carry 1.5em above and 0.5em below, paragraphs 1em below, Divider
-  and Quote 1.5em above and below; Section and Card have no padding; Columns,
-  Gallery and Accordion keep the `space.4` gap; an Accordion's sections keep the
-  browser's own triangle (its Icon is **Browser default**); a Button is padded
-  0.5rem × 1rem; and no container puts a gap between its blocks. The variables in the table above
-  are not used.
-
-A site that already had a page, a component or a Layout of its own when it first
-started on the version that added container gaps (the seeded default Layout does not
-count) is put on **Classic** once, so its pages look exactly as they did. That step
-never runs again and never changes a choice made here. To move such a site to
-container gaps, choose **From the container's gap**; the canvas redraws at once, and
-published pages follow on their next render. Changing it needs the permission to
-update the site style.
-
-The choice is kept in the plugin's own table `page_builder__site_options`, created by
-the plugin's migration (`npx nextly migrate`). A route that renders with
-`loadSiteStyle({ nextly })` reads it with the rest of the site style, and a change to it
-expires the cached pages that name the `site-style` single among their `singles`, as a
-saved variable does.
-
 ## The bottom bar
 
 The bottom bar shows where you are: **Page**, then each block holding the selected
@@ -331,8 +519,8 @@ entry's page draws them. Where a plugin adds a tab of its own, such as the
 [SEO plugin](/docs/plugins/seo#in-the-page-builder), these sit under **General**, with
 the plugin's tab beside them. They save with the page, from **Save** or **Publish** in the top
 bar. Below them, a preview shows roughly how a link to the page looks when it is shared.
-It uses the SEO fields where the page has them, then the page's first heading, text and
-image, then its title. Your site's own metadata may differ. Pressing Enter in a field
+It uses the SEO fields where the page has them, then the page's first text and image, and
+the page's title. A heading never sets the title. Your site's own metadata may differ. Pressing Enter in a field
 never saves the page.
 
 **Site** applies to the live site as soon as you change it. You see it only if your role
@@ -342,9 +530,9 @@ may manage the page builder's site settings.
   **Edit breakpoints** opens the editor in place. **Save breakpoints** stores the whole
   set at once, after checking it, and **Cancel** leaves it as it was. If you close
   Settings with an edit open, it asks before throwing the edit away.
-- **Default Layout** is the Layout pages without one of their own are shown in. Choosing
+- **Default header & footer set** is the header & footer set pages without one of their own are shown in. Choosing
   another saves it at once and says **Saved**, or **Not saved** with **Retry**. Changing
-  it also needs the rights to update and publish Layouts. Without them, you can see it
+  it also needs the rights to update and publish header & footer sets. Without them, you can see it
   but not change it.
 
 The site's breakpoints change only here. A write to the site style that changes them
@@ -373,7 +561,7 @@ contributes: {
 },
 ```
 
-The tab is drawn for a page or a design, never for a Layout or a component. Besides
+The tab is drawn for a page or a design, never for a header & footer set or a component. Besides
 `setBadge`, it receives:
 
 - `context`: `userId`, `document` (`"page"` or `"template"`), the edited document's
@@ -408,7 +596,7 @@ up**, **Move down**, **Move in** or **Move out**.
   on the device you are editing, on the canvas and on the published page. Every other
   device keeps showing it. A hidden row is dimmed and says **Hidden**. Select a hidden
   block in Layers and the canvas shows it while it is selected, tagged "Hidden on" the
-  device. **Visible on**, in the Content tab, shows each device and hides or shows the
+  device. **Visible on**, in the Advanced tab, shows each device and hides or shows the
   block on any one of them.
 - **Lock a block** with the padlock on its row. A locked block can't be moved, changed or
   deleted, nor can anything inside it, until it is unlocked.
@@ -512,21 +700,24 @@ again, rather than naming an entry the canvas isn't drawing.
 Which entry you preview is not saved with the template. When the template is saved, its
 lists and conditions are checked against the collection it draws.
 
-### Applying conditions
+### Previewing as a visitor
 
 While the canvas draws every block, a block with visibility conditions carries a
-**Conditional** badge, whoever the page would show it to. When a template holds such a
-block, the **Previewing** strip offers an **Apply conditions** switch after the entry.
-Turn it on to see the page as a visitor reading that entry would get it:
+**Conditional** badge, whoever the page would show it to. To see the page as a visitor
+gets it, open the arrow beside **Preview** in the top bar and choose **Preview as
+visitor**. On a template, it checks the conditions against the entry being previewed:
 
 - **A block a visitor would see** is drawn as usual, with the badge **Shown for this
   post** (named after the collection's entries).
 - **A block a visitor wouldn't see** is drawn as one dashed line in its place, naming
   it and why: "Members' worksheet · hidden for this post: Category is not Guides". It
   stays selectable, so you can change its conditions.
-- **The strip's far end** says what the conditions did: "1 block hidden for this post",
-  or "Every conditioned block shows for this post" ("Every block checked shows" while the
-  template also holds blocks it doesn't check, below).
+- **A strip above the canvas** reads "Previewing as a visitor", then what the
+  conditions did: "1 block hidden for this post", or "Every conditioned block shows for
+  this post" ("Every block checked shows" while the template also holds blocks it doesn't
+  check, below). On a template it sits under the **Previewing** strip. **Stop** turns
+  the visitor's view off, as choosing the menu item again does; the item shows a tick
+  while it's on.
 
 The conditions are checked against the entry as a visitor reads it: its published values
 and the fields visitors may read, not your unpublished changes. An entry that was never
@@ -535,42 +726,48 @@ checked, for example on a field visitors can't see, hides its block from every v
 and its line says so, with a warning sign.
 
 A block inside a list's entries is checked against each entry the list draws, as the
-published page checks it. While the switch is on, the canvas's lists show what a visitor
-would see: published entries only, with only the fields visitors may read, not the drafts
-you can see. An entry that hides the block draws its line in the block's place, saying why
-for that entry: "Premium badge · hidden for this entry: Price isn't more than 10". A list that
-shows a visitor fewer entries than you see says so above its entries: "Showing what
-visitors see: 4 of 6 entries". Turn the switch off to see your own entries again, drafts
-included. The switch is offered when only a list's blocks have conditions, too; the
-strip's count is of the page's own blocks, and says "Conditions checked for each entry in
-the list" when a list's blocks are all there is to check, adding "some blocks aren't
-checked" when a Layout region also holds conditions.
+published page checks it. While you preview as a visitor, the canvas's lists show what a
+visitor would see: published entries only, with only the fields visitors may read, not
+the drafts you can see. An entry that hides the block draws its line in the block's
+place, saying why for that entry: "Premium badge · hidden for this entry: Price isn't
+more than 10". A list that shows a visitor fewer entries than you see says so above its
+entries: "Showing what visitors see: 4 of 6 entries". Stop to see your own entries
+again, drafts included. The strip's count is of the page's own blocks, and says
+"Conditions checked for each entry in the list" when a list's blocks are all there is to
+check, adding "some blocks aren't checked" when a header & footer set region also holds conditions.
 
 Blocks inside a placed component are checked with the page's: a component's own block
 whose conditions don't hold is drawn as its line where it would be, "Members offer ·
 hidden for this page: Title doesn't contain Members", and the strip counts it, once for
 each place the component is drawn. A press on the line selects the placement, as a press
-on any of the component's blocks does. The switch is offered even when only a placed
-component's blocks have conditions.
+on any of the component's blocks does.
 
-Blocks inside a region of the page's Layout aren't checked yet: they keep their
-**Conditional** badge while conditions are applied, and the strip says some blocks aren't
-checked.
+Blocks inside a region of the page's header & footer set aren't checked yet: they keep their
+**Conditional** badge while you preview as a visitor, and the strip says some blocks
+aren't checked.
 
 Blocks inside the entry's own content, drawn by **Entry content** (below), are checked
 with the template's: a hidden one is drawn as its line inside Entry content, and the
-strip counts it. The switch is offered even when only those blocks have conditions.
+strip counts it.
 
-On a page, the conditions read the page's own fields. When a page holds a block whose
-conditions read it, a strip above the canvas offers the same **Apply conditions** switch,
-with nothing to choose: the page is checked as a visitor reads it, its published values
-and the fields visitors may read. "1 block hidden for this page" says what the conditions
-did. A page that was never published hides every conditioned block.
+On a page, the conditions read the page's own fields. The page is checked as a visitor
+reads it, its published values and the fields visitors may read: "1 block hidden for
+this page" says what the conditions did. A page that was never published hides every
+conditioned block.
 
-Editing a component or a Layout that holds a conditioned block, the switch is shown but
-turned off: there's no entry to check against there. The published page checks them
-where the component or the Layout is placed. The switch is yours for this session and is
-never saved.
+**Preview as visitor** is always in the menu, but it can't be turned on everywhere. It
+is greyed out, with the reason under it:
+
+- "No block on this page has conditions", when nothing on the page, its placed
+  components included, has a condition;
+- "No entry to check here. The published page checks them where it's placed.", when
+  you edit a component or a header & footer set's header or footer: the published page checks them
+  where it is placed;
+- "Needs an entry to check its conditions against.", on a template with no entry to
+  preview, or on a Single, which is no entry of a collection.
+
+The visitor's view is yours for this session: nothing is saved, and it is off again
+when you reload the editor.
 
 ### Showing the entry's own content
 
@@ -600,7 +797,7 @@ while a template is open, and a template holds one: with one placed, its tile sa
 Entry content is refused when it is saved anywhere but a template, an entry's own blocks
 field included, and so is a second one, or a field the collection doesn't have as a
 blocks field. A blocks field inside a repeater is stored on each row, not on the entry,
-so it is never offered. **Save as pattern**, **Update a pattern** and **Turn into
+so it is never offered. **Save as section…**, **Update a saved section** and **Turn into
 component** are turned off, with the reason, while the selection holds Entry content.
 
 ## Help
@@ -623,6 +820,7 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
 | <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                                   | Move the selected block into the container above it, or out of its container                                                      |

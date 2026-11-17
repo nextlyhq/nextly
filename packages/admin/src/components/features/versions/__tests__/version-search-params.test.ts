@@ -7,11 +7,13 @@
  * request as a version number, and that arriving without a pair still shows
  * something useful rather than an error.
  */
+import { isComparisonBaselineName } from "nextly/comparison-baseline-name";
 import { describe, expect, it } from "vitest";
 
 import {
   readFromParam,
   readLocaleParam,
+  readViewParam,
   readVersionParam,
   resolvePair,
 } from "../version-search-params";
@@ -46,10 +48,71 @@ describe("readFromParam", () => {
     expect(readFromParam(["previous", "3"])).toBe("previous");
   });
 
-  it("rejects anything else", () => {
-    expect(readFromParam("prev")).toBeUndefined();
-    expect(readFromParam("0")).toBeUndefined();
+  it("reads each baseline the server resolves, by its own name", () => {
+    expect(readFromParam("published")).toBe("published");
+    expect(readFromParam("draft")).toBe("draft");
+    expect(readFromParam("last-viewed")).toBe("last-viewed");
+  });
+
+  it("reads a baseline another feature registers, such as the workflow ones", () => {
+    // The server's registry is the one list of baselines: a name it knows
+    // reaches it, whichever feature registered it.
+    expect(readFromParam("since-submitted")).toBe("since-submitted");
+    expect(readFromParam("since-approved")).toBe("since-approved");
+  });
+
+  it("leaves a well-formed name it does not know for the server to refuse", () => {
+    // The server answers an unknown name with the baselines it does know,
+    // which says more than quietly drawing another comparison.
+    expect(readFromParam("prev")).toBe("prev");
+  });
+
+  it("reads as a baseline exactly the names the server's grammar admits", () => {
+    // One grammar, the server's: a name it would register reaches it, and
+    // one it never could is not sent.
+    for (const value of [
+      "since-approved",
+      "prev",
+      "a1-b2",
+      "Draft",
+      "since_approved",
+      "a--b",
+      "x-",
+      "-x",
+      "0",
+    ]) {
+      expect(typeof readFromParam(value) === "string").toBe(
+        isComparisonBaselineName(value)
+      );
+    }
+  });
+
+  it("rejects anything that cannot name a baseline", () => {
+    for (const value of [
+      "0",
+      "-1",
+      "Draft",
+      "since_approved",
+      "a--b",
+      "",
+      " ",
+    ]) {
+      expect(readFromParam(value)).toBeUndefined();
+    }
     expect(readFromParam(undefined)).toBeUndefined();
+  });
+});
+
+describe("readViewParam", () => {
+  it("reads the two ways a comparison is drawn", () => {
+    expect(readViewParam("inline")).toBe("inline");
+    expect(readViewParam("side")).toBe("side");
+  });
+
+  it("is undefined for anything else, so the reader's own choice stands", () => {
+    expect(readViewParam("split")).toBeUndefined();
+    expect(readViewParam(undefined)).toBeUndefined();
+    expect(readViewParam(["side", "inline"])).toBe("side");
   });
 });
 
@@ -119,6 +182,20 @@ describe("resolvePair", () => {
     // One beyond the loaded page: Load more would find what precedes it.
     expect(resolvePair(interleaved, "previous", 2, true)).toEqual({
       kind: "not-loaded",
+    });
+  });
+
+  it("leaves a baseline the server resolves to the server, with the version the address names", () => {
+    const versions = [{ versionNo: 5, locale: null }];
+
+    expect(resolvePair(versions, "published", 5, false)).toEqual({
+      kind: "baseline",
+      baseline: "published",
+      to: 5,
+    });
+    expect(resolvePair(versions, "last-viewed", undefined, false)).toEqual({
+      kind: "baseline",
+      baseline: "last-viewed",
     });
   });
 

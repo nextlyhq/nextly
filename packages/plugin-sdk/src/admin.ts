@@ -173,6 +173,9 @@ export {
  * For a field that shows the page it holds — the page builder's entry view —
  * and offers to open it whole. `open` is the editor's own Preview handler, so
  * the field opens the page the header would, in the language being edited.
+ * `openBeside` opens the preview beside the form, as the header's Preview
+ * press does, folding the document panel; it is absent where the editor has
+ * no such pane, and a control then opens the preview with `open`.
  *
  * `null` wherever the editor offers no Preview action: no preview configured,
  * an entry never saved, a reader, and outside a form. A field shows no such
@@ -261,7 +264,11 @@ export { useReportUnsavedWork } from "@nextlyhq/admin/kit/document";
  *   same leading action, the same reasons one cannot run — with `run(id)`,
  *   which does what that action's control does and resolves to what it came
  *   to, and `saveState`, the one answer to whether the work is stored. Null
- *   outside a document editor.
+ *   outside a document editor. `saveWithoutPublishing` runs Save the same
+ *   way, and is undefined wherever that Save is not offered or would publish,
+ *   for a surface that must never publish, such as a preview that saves
+ *   first. `useDocumentPreview().open(before)` runs such a step once its tab
+ *   is claimed, and opens nothing when the step answers false.
  * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
  *   stores the editor's work, from any control, the shortcut or `run`, while
  *   the caller is mounted: commit work held outside the form there. Throwing
@@ -318,6 +325,33 @@ export {
 export {
   DocumentSaveIndicator,
   DocumentPrimaryAction,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * The document's Save and Publish as one builder-density pair whose controls
+ * say the document's state themselves (@experimental), for a full-window
+ * view that replaces the header.
+ *
+ * - `<DocumentSaveAndPublish />`: Save reads "Save", "Saving…", "Retry save"
+ *   or a quiet "✓ Saved" (when, in its tooltip); beside it, where the
+ *   collection keeps drafts and the person may publish, Publish reads
+ *   "Publish", "Publish changes", "Publishing…", "Published" or
+ *   "Scheduled", with its arrow keeping Schedule, Add to release and
+ *   Unpublish. Elsewhere Save leads alone. Inert states stay focusable, so
+ *   their tooltips can be read by keyboard; failures are announced
+ *   assertively with their reason and shown in a notice with Retry.
+ * - `useDocumentLifeStage()`: where the document is in its life (Draft,
+ *   Published or Scheduled), never "Changed" or "Modified", for a pill
+ *   beside the pair; null outside a document editor or where the
+ *   collection has no lifecycle.
+ *
+ * Drawn by the admin from the same model as the entry header, so the two
+ * can't disagree. Nothing outside a document editor.
+ */
+export {
+  DocumentSaveAndPublish,
+  useDocumentLifeStage,
+  type DocumentLifeStage,
 } from "@nextlyhq/admin/kit/document";
 
 /**

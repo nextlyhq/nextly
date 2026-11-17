@@ -67,12 +67,13 @@ import {
 } from "react";
 
 import { classUsageOf } from "../../class-usage";
-import { withBlockLooks } from "../../core-looks";
+import { withRegisteredLooks } from "../../core-looks";
 import {
   hostFetchPolicy,
   readRemotePatterns,
   type HostFetchPolicy,
 } from "../../host-policy";
+import { readPageDataLimit } from "../../page-allowance";
 import { siteSheet, type SiteStyleData } from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useCanvasBindings } from "../canvas-bindings-client";
@@ -156,10 +157,14 @@ export function useSiteStyleInputs(
    */
   // With every registered block's looks, other plugins' among them: the
   // published config is a copy taken before those blocks registered, so the
-  // editor reads them from its own registry, by the same rule the server does.
+  // editor reads them from its own registry, through the one function the
+  // published page's site style takes its looks from too.
   const configSiteStyle = useMemo(
     () =>
-      withBlockLooks(readSiteStyleRecord(clientConfig?.siteStyle), allBlocks()),
+      withRegisteredLooks(
+        readSiteStyleRecord(clientConfig?.siteStyle),
+        allBlocks()
+      ),
     [clientConfig]
   );
   const {
@@ -278,6 +283,12 @@ export type SiteStyleInputs = {
 type CanvasRender = {
   canvasRender: PageRenderInputs;
   classSummaryContext: StyleCompileContext;
+  /**
+   * The site's page data limit (`pageBuilder({ maxQueries })`), which the
+   * canvas draws under and the page data meter counts against: `Infinity`
+   * for none, `undefined` for the default.
+   */
+  pageDataLimit: number | undefined;
 };
 
 /** Nothing marked: no sources read yet, or none of their shapes known. */
@@ -377,6 +388,10 @@ function useCanvasRender({
   // The list the page splits into pages draws its links on the canvas, as
   // on its first published page, so an author sees and styles them.
   const pagedList = paginatedList(editor.document.nodes)?.id;
+  // The site's page data limit, which its page routes render under where
+  // they set none of their own: the canvas draws under it too, so a block
+  // past it comes up empty here as on the live page.
+  const pageDataLimit = readPageDataLimit(clientConfig);
   // While the conditions are applied, the lists read as a visitor of the
   // document, and those a visitor sees fewer entries of say so.
   const canvasContext = useCanvasPageContext(
@@ -385,7 +400,8 @@ function useCanvasRender({
     initialDocument,
     pagedList,
     editor.listsStillShowing,
-    asVisitor
+    asVisitor,
+    pageDataLimit
   );
   const pageInputs = useMemo(
     () =>
@@ -441,7 +457,7 @@ function useCanvasRender({
     [canvasRender.styleContext, stylePolicy]
   );
 
-  return { canvasRender, classSummaryContext };
+  return { canvasRender, classSummaryContext, pageDataLimit };
 }
 
 /** What `useCanvasViewport` returns. */
@@ -1040,7 +1056,12 @@ export function useBoundCanvasRender(
   },
   locale: string | undefined,
   /** Whether the document is a component's own, which has no entry. */
-  component: boolean
+  component: boolean,
+  /**
+   * The site's page data limit, which the bindings are read under as the
+   * published page reads them: `Infinity` for none, the default when absent.
+   */
+  pageDataLimit?: number
 ): {
   /**
    * The canvas's render inputs with the sources its bindings read, the
@@ -1112,7 +1133,8 @@ export function useBoundCanvasRender(
     locale,
     component,
     canvasRender.context?.namedQueries,
-    conditions
+    conditions,
+    pageDataLimit
   );
   const bound = useMemo(
     () => ({ ...canvasRender, bindings }),

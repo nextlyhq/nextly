@@ -22,9 +22,15 @@ import {
 import type { JSX } from "react";
 
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewChange } from "@admin/services/schemaApi";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
+import {
+  FieldGroupCreatesList,
+  type FieldGroupCreate,
+} from "./FieldGroupCreatesList";
+import { SettingChangesList } from "./SettingChangesList";
 
 interface CreateEntityConfirmDialogProps {
   open: boolean;
@@ -35,8 +41,12 @@ interface CreateEntityConfirmDialogProps {
   entityName: string;
   /** Every field is in `added`; a create removes and changes nothing. */
   changes: SchemaPreviewChange;
+  /** Settings changed since the dialog set them, which the create saves too. */
+  settingChanges?: readonly SettingChange[];
   onConfirm: () => void;
   isApplying: boolean;
+  /** The field groups not saved yet that this save creates first, listed before all else. */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
 }
 
 export function CreateEntityConfirmDialog({
@@ -45,8 +55,10 @@ export function CreateEntityConfirmDialog({
   kind,
   entityName,
   changes,
+  settingChanges = [],
   onConfirm,
   isApplying,
+  fieldGroupCreates = [],
 }: CreateEntityConfirmDialogProps): JSX.Element {
   const typeLabel = useFieldTypeLabel();
   const noun = BUILDER_KIND_NOUN[kind];
@@ -66,6 +78,8 @@ export function CreateEntityConfirmDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
 
+        <FieldGroupCreatesList groups={fieldGroupCreates} />
+
         {hasFields && (
           <div className="flex flex-col gap-2 py-2">
             {changes.added.map(f => (
@@ -81,6 +95,8 @@ export function CreateEntityConfirmDialog({
             ))}
           </div>
         )}
+
+        <SettingChangesList changes={settingChanges} />
 
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>

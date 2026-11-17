@@ -335,7 +335,7 @@ describe("NewEntityDialog", () => {
     );
   });
 
-  it("counts an address an unsaved entity holds as used", async () => {
+  it("an address held by a pending create", async () => {
     addUnsavedEntity({
       kind: "collection",
       address: "product",
@@ -359,7 +359,7 @@ describe("NewEntityDialog", () => {
     expect(createButton()).toBeDisabled();
   });
 
-  it("refuses a hyphenated address whose snake_case form an unsaved entity holds", async () => {
+  it("a hyphenated address whose snake_case form a pending create holds", async () => {
     addUnsavedEntity({
       kind: "collection",
       address: "blog_posts",

@@ -693,3 +693,224 @@
   white-space: nowrap;
   border-width: 0;
 }
+
+/*
+ * Highlighted for a moment when an add control on the canvas asks for the
+ * panel, so the author sees where the next block goes even when the panel
+ * was already open. A stronger tint and a ring of the same accent; it fades
+ * back where the author allows motion.
+ */
+.nx-insert-panel__placement[data-flash] {
+  background: color-mix(in oklch, var(--nx-primary) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--nx-primary) 45%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nx-insert-panel__placement {
+    transition:
+      background-color 400ms ease,
+      box-shadow 400ms ease;
+  }
+}
+
+/*
+ * The in-place picker: a search, the line saying where a block goes, the six
+ * blocks the author adds most (a grid of three) or the search's results (a
+ * list), and "Browse all blocks and sections →".
+ *
+ * Portalled to the shell's overlay host, inside the chrome, so it reads the
+ * builder's tokens and is drawn on the panel surface. Doubled class for
+ * weight over the shared popover's width and padding utilities, whatever
+ * order the two stylesheets load in. At most 420px tall, and never taller
+ * than the room the popover found, so the choices scroll rather than the
+ * picker running off the window.
+ */
+.nx-insert-picker.nx-insert-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  width: 20rem;
+  max-height: min(
+    26.25rem,
+    var(--radix-popover-content-available-height, 100vh)
+  );
+  padding: 0.5rem;
+  border: 1px solid var(--nx-builder-divider);
+  border-radius: 0.625rem;
+  color: var(--nx-builder-text);
+  background: var(--nx-builder-panel);
+  font-size: var(--nx-builder-font-size);
+}
+
+/* No opening movement where the system asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .nx-insert-picker.nx-insert-picker {
+    animation: none;
+  }
+}
+
+.nx-insert-picker__search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.375rem;
+  height: var(--nx-builder-control-height);
+  padding: 0 var(--nx-builder-control-padding-x);
+  border: 1px solid var(--nx-builder-border);
+  border-radius: 0.375rem;
+  color: var(--nx-builder-text-muted);
+  background: var(--nx-background);
+}
+
+.nx-insert-picker__search:focus-within {
+  border-color: var(--nx-ring);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--nx-ring) 30%, transparent);
+}
+
+/* The field has a class of its own, so its placeholder needs no descendant. */
+.nx-insert-picker__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  color: var(--nx-builder-text);
+  background: transparent;
+  font: inherit;
+}
+
+.nx-insert-picker__input::placeholder {
+  color: var(--nx-builder-text-muted);
+}
+
+/* The panel line's look, smaller: the same words in the same colours. */
+.nx-insert-picker__line {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3125rem;
+  margin: 0;
+  padding: 0.1875rem 0.375rem;
+  border-radius: 0.3125rem;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: color-mix(in oklch, var(--nx-primary) 55%, var(--nx-foreground));
+  background: color-mix(in oklch, var(--nx-primary) 10%, transparent);
+}
+
+.nx-insert-picker__line svg {
+  flex: none;
+}
+
+.nx-insert-picker__line b {
+  font-weight: 600;
+}
+
+.nx-insert-picker__grid,
+.nx-insert-picker__list {
+  display: grid;
+  gap: 0.25rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.nx-insert-picker__row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.nx-insert-picker__choice {
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  color: var(--nx-builder-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.nx-insert-picker__grid .nx-insert-picker__choice {
+  display: grid;
+  justify-items: center;
+  gap: 0.3125rem;
+  padding: 0.625rem 0.25rem 0.5rem;
+  text-align: center;
+}
+
+.nx-insert-picker__list .nx-insert-picker__choice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+}
+
+.nx-insert-picker__choice svg {
+  flex: none;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-insert-picker__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* The group a result is in, kept to the right of its name. */
+.nx-insert-picker__group {
+  margin-left: auto;
+  padding-left: 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--nx-builder-text-muted);
+  white-space: nowrap;
+}
+
+/*
+ * The highlighted choice, from the arrows or the pointer: an accent border as
+ * well as the soft wash, as an Add panel tile is drawn.
+ */
+.nx-insert-picker__choice[data-highlighted] {
+  border-color: var(--nx-primary);
+  background: color-mix(in oklch, var(--nx-primary) 12%, transparent);
+}
+
+.nx-insert-picker__choice[data-highlighted] svg {
+  color: var(--nx-builder-text);
+}
+
+.nx-insert-picker__empty {
+  margin: 0;
+  padding: 0.75rem 0.5rem;
+  text-align: center;
+  color: var(--nx-builder-text-muted);
+}
+
+/* The way to everything else, set apart from the choices by a rule. */
+.nx-insert-picker__all {
+  flex: none;
+  margin: 0 -0.5rem -0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-top: 1px solid var(--nx-builder-divider);
+  border-radius: 0 0 0.625rem 0.625rem;
+  color: color-mix(in oklch, var(--nx-primary) 70%, var(--nx-foreground));
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nx-insert-picker__all:hover {
+  background: color-mix(in oklch, var(--nx-primary) 8%, transparent);
+}
+
+.nx-insert-picker__all:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -2px;
+}
+
+/* Forced colours: the highlight keeps a border the system draws. */
+@media (forced-colors: active) {
+  .nx-insert-picker__choice[data-highlighted] {
+    border-color: Highlight;
+  }
+}

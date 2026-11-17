@@ -144,8 +144,27 @@ export interface EntryFormContextValue {
  * resolving either of those itself would open a different page.
  */
 export interface DocumentPreview {
-  /** Opens the preview; resolving its address may take a round trip. */
-  open: () => void | Promise<void>;
+  /**
+   * Opens the preview; resolving its address may take a round trip.
+   *
+   * `before`, when given, runs once the preview's tab is claimed and before
+   * it opens: the place for a save that brings the stored row up to what the
+   * author sees, which awaited before `open` would cost the click its gesture
+   * and get the tab blocked. It answers whether to go on; on `false` (or a
+   * throw) the claimed tab closes and nothing opens, and it has already said
+   * why. It never runs when the browser blocks the tab.
+   */
+  open: (before?: () => Promise<boolean>) => void | Promise<void>;
+  /**
+   * Opens the preview beside the form, as the document bar's Preview press
+   * does, which folds the document panel. It only opens: pressed again while
+   * the pane is open, nothing changes.
+   *
+   * Absent where the editor offers no preview beside the form: a translation
+   * view, a document view that takes the window, an editor in a modal. A
+   * control offering the preview then opens it with `open`.
+   */
+  openBeside?: () => void;
 }
 
 /**
@@ -267,9 +286,16 @@ export interface EntryFormContextProviderProps {
   /**
    * The editor's handler for its full-page preview. Pass it exactly where the
    * editor offers its own Preview action, so a field offers one on the same
-   * terms.
+   * terms. It takes the step `DocumentPreview.open` describes.
    */
-  openPreview?: () => void | Promise<void>;
+  openPreview?: (before?: () => Promise<boolean>) => void | Promise<void>;
+
+  /**
+   * The editor's opener for its preview beside the form. Pass it exactly
+   * where the editor offers that pane; `DocumentPreview.openBeside` says
+   * what it does.
+   */
+  openPreviewBeside?: () => void;
 
   /** The document's own fields, for a field's address inside a row. */
   fields?: readonly FieldConfig[];
@@ -322,6 +348,7 @@ export function EntryFormContextProvider({
   documentStatus,
   renderEntryFields,
   openPreview,
+  openPreviewBeside,
   fields,
   keepsRecoveryPoints,
   children,
@@ -354,7 +381,17 @@ export function EntryFormContextProvider({
        */
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
       // Spread for the same reason: absent means the editor offers no preview.
-      ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
+      // A preview beside the form comes only with the preview itself.
+      ...(openPreview === undefined
+        ? {}
+        : {
+            preview: {
+              open: openPreview,
+              ...(openPreviewBeside === undefined
+                ? {}
+                : { openBeside: openPreviewBeside }),
+            },
+          }),
       // Spread for the same reason: absent means the surface did not say.
       ...(fields === undefined ? {} : { fields }),
       // Spread for the same reason: absent means the editor did not say.
@@ -369,6 +406,7 @@ export function EntryFormContextProvider({
       hasWorkingDraft,
       renderEntryFields,
       openPreview,
+      openPreviewBeside,
       fields,
       keepsRecoveryPoints,
     ]

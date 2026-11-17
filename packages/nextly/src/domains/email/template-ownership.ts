@@ -25,6 +25,9 @@ import type {
 import { parseLiquid } from "./services/liquid-engine";
 import { declarationSubstance, pluginDeclarations } from "./template-variables";
 import type { EmailConfig } from "./types";
+import { compileWrittenHtml, compileWrittenText } from "./written/compile";
+import { contributedBlocks, contributionProblem } from "./written/contribution";
+import type { WrittenDocument } from "./written/document";
 
 /** An owner as the registry records it: a plugin there is always running. */
 export type RegisteredOwner =
@@ -35,7 +38,11 @@ export type RegisteredOwner =
  * A template as its owner declares it: the row it ships, and whether it
  * carries a secret, which only an owner can say and no edit can change.
  */
-export type OwnerTemplate = EmailTemplateInsert & { carriesSecret?: boolean };
+export type OwnerTemplate = EmailTemplateInsert & {
+  carriesSecret?: boolean;
+  /** What sends it, as its owner says; never stored on the row. */
+  sentBy?: string[];
+};
 
 /** One owned template's current default. */
 export interface OwnedTemplate {
@@ -43,12 +50,26 @@ export interface OwnedTemplate {
   owner: RegisteredOwner;
   /** The full default the owner ships, as it would be inserted. */
   defaults: EmailTemplateInsert;
-  /** The versioned part of `defaults`. */
+  /**
+   * The versioned part of `defaults`. For a written owner, its HTML and plain
+   * text are what its blocks compile to now.
+   */
   version: EmailTemplateVersion;
-  /** `versionDigest(version)`, computed once. */
+  /**
+   * @experimental A written owner's blocks (`defaults` stores them too);
+   * absent for a coded one.
+   */
+  blocks?: WrittenDocument;
+  /**
+   * `versionDigest(version)`, computed once; for a written owner,
+   * `writtenVersionDigest` over its subject, preheader and blocks, so a change
+   * in how Nextly writes blocks as HTML is no change of the owner's.
+   */
   digest: string;
   /** Whether the owner marks it as carrying a secret. */
   carriesSecret: boolean;
+  /** What sends it, as its owner says; empty when it says nothing. */
+  sentBy: string[];
   /**
    * The engine the owner wrote its version for, where it says. Unsaid, the
    * version is Liquid unless Liquid can't read it.
@@ -150,11 +171,19 @@ export function sendSource(input: {
   return input.hasCode ? "code" : "none";
 }
 
-/** Whether a version is the owner's, current or earlier, rather than the site's. */
+/**
+ * Whether a version is the owner's, current or earlier, rather than the
+ * site's. A written owner's version is the one with its blocks, whatever
+ * HTML they were written as when stored.
+ */
 export function isOwnersVersion(
   entry: OwnedTemplate,
-  version: EmailTemplateVersion
+  version: EmailTemplateVersion,
+  blocks?: WrittenDocument | null
 ): boolean {
+  if (entry.blocks) {
+    return !!blocks && writtenVersionDigest(version, blocks) === entry.digest;
+  }
   const digest = versionDigest(version);
   return digest === entry.digest || (entry.earlier ?? []).includes(digest);
 }
@@ -236,6 +265,21 @@ export function versionDigest(version: EmailTemplateVersion): string {
     .digest("hex");
 }
 
+/**
+ * The digest of a written version: its subject and preheader as compared,
+ * and its blocks whatever order their keys were stored in. Not its HTML,
+ * which is written from the blocks and moves with Nextly's markup.
+ */
+export function writtenVersionDigest(
+  version: EmailTemplateVersion,
+  blocks: WrittenDocument
+): string {
+  const v = normalizeVersion(version);
+  return createHash("sha256")
+    .update(JSON.stringify(["written", v.subject, v.preheader, stable(blocks)]))
+    .digest("hex");
+}
+
 /** Whether two versions would deliver the same email. */
 export function sameVersion(
   a: EmailTemplateVersion,
@@ -252,39 +296,64 @@ function owned(
     earlier?: ReadonlyArray<EmailTemplateVersion>;
   } = {}
 ): OwnedTemplate {
-  const { carriesSecret, ...defaults } = declared;
+  const { carriesSecret, sentBy, ...defaults } = declared;
   const version = versionOf(defaults);
+  const blocks =
+    defaults.format === "written" && defaults.blocks
+      ? defaults.blocks
+      : undefined;
   return {
     slug: defaults.slug,
     owner,
     defaults,
     version,
-    digest: versionDigest(version),
+    ...(blocks ? { blocks } : {}),
+    digest: blocks
+      ? writtenVersionDigest(version, blocks)
+      : versionDigest(version),
     // Strictly true: a plugin is plain JavaScript at runtime, and only an
     // explicit mark should count as one.
     carriesSecret: carriesSecret === true,
+    // Only sentences: a plugin is plain JavaScript at runtime.
+    sentBy: (Array.isArray(sentBy) ? sentBy : []).filter(
+      (line): line is string => typeof line === "string" && line.trim() !== ""
+    ),
     ...(extras.engine ? { engine: extras.engine } : {}),
     earlier: (extras.earlier ?? []).map(versionDigest),
   };
 }
 
-/** A plugin's contribution, in the shape core inserts. */
+/**
+ * A plugin's contribution, in the shape core inserts. A written one is
+ * stored written, with its HTML and plain text written from its blocks.
+ */
 function pluginDefaults(
   template: PluginEmailTemplate,
   variables: EmailTemplateVariable[] | null
 ): OwnerTemplate {
+  const blocks = contributedBlocks(template);
   return {
     name: template.name,
     slug: template.slug,
     kind: "template",
     subject: template.subject,
-    htmlContent: template.htmlContent,
-    plainTextContent: template.plainTextContent ?? null,
+    ...(blocks
+      ? {
+          htmlContent: compileWrittenHtml(blocks),
+          plainTextContent: compileWrittenText(blocks),
+          format: "written" as const,
+          blocks,
+        }
+      : {
+          htmlContent: template.htmlContent ?? "",
+          plainTextContent: template.plainTextContent ?? null,
+        }),
     variables,
     useLayout: template.useLayout ?? true,
     description: template.description ?? null,
     replyTo: template.replyTo ?? null,
     carriesSecret: template.carriesSecret,
+    sentBy: template.sentBy,
   };
 }
 
@@ -400,8 +469,10 @@ export interface RegistryConflict {
 }
 
 /**
- * A contribution refused for its engine: it names one there is none of, or
- * declares Liquid and Liquid can't read it, which would fail every send.
+ * A contribution refused: it is not one template (HTML and blocks, neither,
+ * or blocks that don't pass the written rules), it names an engine there is
+ * none of, or it declares Liquid and Liquid can't read it, which would fail
+ * every send.
  */
 /**
  * A plugin template whose declared variables don't parse: kept as names,
@@ -422,8 +493,10 @@ export interface RefusedEngine {
   reason: string;
 }
 
-/** Why a contribution can't be registered on the engine it declares, or null. */
+/** Why a contribution can't be registered, or null. */
 function engineRefusal(template: PluginEmailTemplate): string | null {
+  const problem = contributionProblem(template);
+  if (problem !== null) return `it ${problem}`;
   const engine: unknown = template.engine;
   if (engine === undefined) return null;
   if (!TEMPLATE_ENGINES.has(engine as string)) {

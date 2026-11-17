@@ -196,6 +196,9 @@ export type {
 // reader.
 export { isReadRefusal } from "./runtime/routing/miss-or-denied";
 export { deferToRequest } from "./runtime/routing/defer-to-request";
+// Whether the request is in Next's draft mode, the one check a public content
+// route asks before its draft gate. `@experimental` with the content routes.
+export { isDraftModeRequest } from "./runtime/routing/draft-mode";
 
 // The frame a page builder named query's `run` executes in: inside it, the
 // Direct API refuses every call, and only the reader handed to the query

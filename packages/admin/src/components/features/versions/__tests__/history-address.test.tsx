@@ -74,6 +74,33 @@ describe("useHistoryAddress", () => {
     expect(search().get("locale")).toBe("es");
   });
 
+  it("closes by stepping back off the entry opening added, whichever control of the page opened it", async () => {
+    // The side panel's History opens it, and the document bar's sheet closes
+    // it: two readers of the one address.
+    window.history.replaceState(
+      { opener: true },
+      "",
+      "/admin/singles/homepage?locale=es"
+    );
+    const panel = renderHook(() => useHistoryAddress());
+    const bar = renderHook(() => useHistoryAddress());
+
+    act(() => panel.result.current.setOpen(true));
+    expect(search().get("history")).toBe("1");
+    // The admin's router announces every move; here nothing patches history.
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    await waitFor(() => expect(bar.result.current.open).toBe(true));
+
+    act(() => bar.result.current.setOpen(false));
+    await waitFor(() => expect(search().get("history")).toBeNull());
+    // Back on the entry before opening: no closed copy left for Back to
+    // land on first.
+    expect(window.history.state).toEqual({ opener: true });
+    expect(search().get("locale")).toBe("es");
+  });
+
   it("closes in place, undoing nothing, once the author has moved on from the entry opening added", async () => {
     at("/admin/collections/posts/e1?locale=es");
     const { result } = renderHook(() => useHistoryAddress());
@@ -106,6 +133,29 @@ describe("useHistoryAddress", () => {
     expect(search().get("history")).toBeNull();
     expect(search().get("version")).toBeNull();
     expect(window.history.length).toBe(start);
+  });
+
+  it("drops a restore hand-off when history closes before it was answered", () => {
+    // "Restore…" on the comparison page asks once, for the version it names.
+    // Closed before that version loaded, the ask left behind would open a
+    // restore list the next time any version is chosen.
+    at("/admin/collections/posts/e1?history=1&version=5&restore=1");
+    const { result } = renderHook(() => useHistoryAddress());
+
+    act(() => result.current.setOpen(false));
+
+    expect(search().get("restore")).toBeNull();
+    expect(search().get("history")).toBeNull();
+  });
+
+  it("drops a restore hand-off when another version is chosen before it was answered", () => {
+    at("/admin/collections/posts/e1?history=1&version=5&restore=1");
+    const { result } = renderHook(() => useHistoryAddress());
+
+    act(() => result.current.setVersion(3));
+
+    expect(search().get("restore")).toBeNull();
+    expect(search().get("version")).toBe("3");
   });
 
   it("adds no entry when asked to open what a link already opened, and closes it in place", () => {

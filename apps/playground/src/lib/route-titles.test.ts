@@ -4,8 +4,10 @@
  *
  * Each route is loaded against the real `nextly.config.ts`, twice: once as a
  * site without the SEO plugin, and once with it, through the switch the
- * config reads. A page whose first block is an H2 is the case that went
- * wrong: its heading offered itself as the title and won over the page's own.
+ * config reads. A page whose first block is an H1 worded unlike its title is
+ * the case that went wrong: its heading offered itself as the title and won
+ * over the page's own. No heading offers one now; a block from outside the
+ * core set still may, so the routes are handed one and must not take it.
  */
 import {
   type BlockDocument,
@@ -18,9 +20,12 @@ import type { RenderContext } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const PAGE_TITLE = "Pricing";
-const HEADING = "A section title";
+const HEADING = "Plans for every team";
+const LEAD = "Pick the plan that fits.";
+/** A title a block from outside the core set offers. */
+const OFFERED = "Offered by a block";
 
-/** The page's content: an H2 as its first block. */
+/** The page's content: an H1 as its first block, then its lead. */
 const content: BlockDocument = {
   formatVersion: DOCUMENT_FORMAT_VERSION,
   kind: "page",
@@ -29,12 +34,13 @@ const content: BlockDocument = {
       id: "heading",
       type: "core/heading",
       version: 1,
-      props: { text: HEADING, level: "h2" },
+      props: { text: HEADING, level: "h1" },
     },
+    { id: "lead", type: "core/text", version: 1, props: { text: LEAD } },
   ],
 };
 
-/** A page titled "Pricing" whose first block is an H2. */
+/** A page titled "Pricing" whose first block is an H1. */
 const entry = { id: "page-1", title: PAGE_TITLE, slug: "pricing", content };
 
 /**
@@ -67,7 +73,7 @@ async function routes(seoPlugin: boolean) {
       import("./block-pages-route"),
       import("./site-content"),
     ]);
-  const derived = derivedOf(content);
+  const derived = { ...derivedOf(content), title: OFFERED };
   return {
     pages: await pagesRoute.metadata?.(entry, context, derived),
     blockPages: await blockPagesRoute.metadata?.(entry, context, derived),
@@ -80,10 +86,9 @@ afterEach(() => {
 });
 
 describe("the browser tab's title", () => {
-  it("is offered the heading by the page's blocks", () => {
-    // The control: without it, a derivation that offered nothing would make
-    // every assertion below pass for the wrong reason.
-    expect(derivedOf(content).title).toBe(HEADING);
+  it("is never offered the heading by the page's blocks", () => {
+    // The page's blocks were read: its lead is offered as the description.
+    expect(derivedOf(content)).toEqual({ description: LEAD });
   });
 
   it(

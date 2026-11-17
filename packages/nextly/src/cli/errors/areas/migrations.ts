@@ -291,6 +291,22 @@ function concurrentRunParts(error: NextlyError): CliErrorParts {
   };
 }
 
+/**
+ * A pending file refused for what its snapshot does not prove (`refuseUnlessProven`): its message's
+ * first sentence says where the database stands, the rest of that line why it was not recorded,
+ * the lines after it the statements a recording would have skipped, and the last line the step.
+ */
+function notProvenParts(error: NextlyError): CliErrorParts {
+  const lines = error.publicMessage.split("\n");
+  const [what, reasons] = splitFirst(lines[0] ?? error.publicMessage);
+  if (lines.length < 3) return { what, why: reasons, next: RUN_AGAIN };
+  return {
+    what,
+    why: [reasons, ...lines.slice(1, -1)].join("\n"),
+    next: lines[lines.length - 1],
+  };
+}
+
 /** How `assertNotPartiallyApplied` ends the sentence that says what it refuses. */
 const UNFINISHED_REFUSAL_ENDS = [
   "so it is not recorded as applied without running.",
@@ -710,6 +726,17 @@ export const MIGRATION_CODES = defineCodes({
   MIGRATION_MISSING: {
     cause:
       "A migration recorded as applied has no file in the migrations folder.",
+  },
+  MIGRATION_NOT_PROVEN: {
+    cause:
+      "A pending migration's schema is already in the database, but its snapshot does not prove everything the file does, so it was not recorded as applied without running.",
+    from: [
+      {
+        code: "NEXTLY_MIGRATION_NOT_PROVEN",
+        reason: "not-proven",
+        describe: notProvenParts,
+      },
+    ],
   },
   OLD_BUILDER_FILE_SNAPSHOT_ADDED: {
     cause:
@@ -1132,6 +1159,10 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "An entity's settings changed in the configuration, and no migration records the change.",
   },
+  DATABASE_BEHIND_MIGRATIONS: {
+    cause:
+      "The database lacks a table or column that the migrations it records as applied created.",
+  },
 });
 
 /** A refused data-loss verdict as the command's error, under the code for its reason. */
@@ -1236,5 +1267,21 @@ export function settingsChangeWithoutMigration(
     what: `${count} entit${count === 1 ? "y's" : "ies'"} settings changed with no migration.`,
     why: lines.join("\n"),
     next: CREATE_MIGRATION,
+  });
+}
+
+/**
+ * Tables and columns the applied migrations created that the database no longer holds, each as
+ * a line naming the migration that last created it.
+ */
+export function databaseBehindMigrations(
+  count: number,
+  lines: readonly string[]
+): CliError {
+  return new CliError("DATABASE_BEHIND_MIGRATIONS", {
+    what: `The database lacks ${count} table${count === 1 ? "" : "s"} or column${count === 1 ? "" : "s"} its applied migrations created, so it no longer matches its ledger. Nothing was changed.`,
+    why: lines.join("\n"),
+    next: "Restore what is missing (from a backup, or by running again the statements of the migration named), then run `nextly migrate` again. Nothing applies until the database holds what its ledger says it does.",
+    context: { lines },
   });
 }

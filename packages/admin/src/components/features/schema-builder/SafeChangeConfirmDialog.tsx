@@ -20,9 +20,15 @@ import { CheckCircle2 } from "lucide-react";
 import type { JSX } from "react";
 
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewChange } from "@admin/services/schemaApi";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
+import {
+  FieldGroupCreatesList,
+  type FieldGroupCreate,
+} from "./FieldGroupCreatesList";
+import { SettingChangesList } from "./SettingChangesList";
 
 interface SafeChangeConfirmDialogProps {
   open: boolean;
@@ -32,8 +38,12 @@ interface SafeChangeConfirmDialogProps {
   /** Slug of the entity being saved. */
   entityName: string;
   changes: SchemaPreviewChange;
+  /** The entity's settings saved with the fields, each listed. */
+  settingChanges?: readonly SettingChange[];
   onConfirm: () => void;
   isApplying: boolean;
+  /** The field groups not saved yet that this save creates first, listed before all else. */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
 }
 
 export function SafeChangeConfirmDialog({
@@ -42,8 +52,10 @@ export function SafeChangeConfirmDialog({
   kind,
   entityName,
   changes,
+  settingChanges = [],
   onConfirm,
   isApplying,
+  fieldGroupCreates = [],
 }: SafeChangeConfirmDialogProps): JSX.Element {
   // Rows name a field's type by its plain name, never its internal id.
   const typeLabel = useFieldTypeLabel();
@@ -81,6 +93,8 @@ export function SafeChangeConfirmDialog({
             restart so the new schema is picked up.
           </AlertDialogDescription>
         </AlertDialogHeader>
+
+        <FieldGroupCreatesList groups={fieldGroupCreates} />
 
         {hasChanges && (
           <div className="flex flex-col gap-2 py-2">
@@ -120,6 +134,8 @@ export function SafeChangeConfirmDialog({
             ))}
           </div>
         )}
+
+        <SettingChangesList changes={settingChanges} />
 
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>

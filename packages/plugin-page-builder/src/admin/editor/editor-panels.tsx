@@ -11,39 +11,70 @@ import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
-import type { LeftPanel, SavedPattern } from "@nextlyhq/builder";
+import type {
+  LeftPanel,
+  PreferenceStore,
+  SavedPattern,
+} from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
   ComponentsPanel,
+  EDITOR_WORDS,
   InsertPanel,
+  InsertPicker,
   LayersPanel,
+  useInsertPicker,
   useBuilderChecklist,
   type BuilderShell,
   type CanvasRegion,
+  type InsertPickerState,
+  type InsertPickerTarget,
+  type InsertPlace,
   type LayersRegionRow,
   type LibraryTierState,
+  type MiniatureSession,
+  useMiniatureSession,
   type VariablesPreview,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
 import type { ComponentLibraryRead } from "../component-library-client";
+import { lazyPart } from "../lazy-part";
 import { usePageLayoutRegions, usePageLayoutSettings } from "../page-layout";
 import {
   usePatternLibrary,
   type LibraryReadState,
 } from "../pattern-library-client";
 
+import { usePictureContext } from "./canvas-page-context";
 import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
-import { DesignPanel } from "./design-panel";
-import { checklistStoreFor } from "./editor-preference-stores";
+import {
+  DesignFonts,
+  DesignGroup,
+  DesignPanel,
+  DesignReveal,
+  ReportStylesMatches,
+  SITE_FONTS_GROUP,
+  type DesignView,
+} from "./design-panel";
+import {
+  checklistStoreFor,
+  designFoldsStoreFor,
+} from "./editor-preference-stores";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
@@ -52,7 +83,11 @@ import {
 } from "./offered-library";
 import { usePagesPanel, type PagesPanelMount } from "./pages-panel";
 import {
-  FontsPanelWithUpload,
+  useSectionPictures,
+  type SectionPictureInputs,
+} from "./section-pictures";
+import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
+import {
   offerableFaces,
   offerableTokens,
   renderedTokens,
@@ -63,6 +98,15 @@ import {
 import type { ComponentView } from "./use-component-view";
 import type { EditorMount } from "./use-editor-mount";
 import type { CanvasInputs, SiteStyleInputs } from "./use-render-inputs";
+
+/**
+ * The site's fonts panel, fetched when the Design panel's Fonts tab first
+ * draws it rather than with the editor: the upload and the font catalogue
+ * are of no use to an author who never opens the tab.
+ */
+const FontsPanelWithUpload: typeof FontsPanelWithUploadPart = lazyPart(() =>
+  import("./site-style-fonts").then(m => m.FontsPanelWithUpload)
+);
 
 /** A key for the document the editor has open, from its identity. */
 function identityKey(
@@ -113,6 +157,7 @@ const AVAILABLE_PANELS = [
 function InsertPanelWithLibrary({
   components,
   offerablePatterns,
+  pictures,
   ...props
 }: {
   editor: React.ComponentProps<typeof InsertPanel>["editor"];
@@ -121,6 +166,13 @@ function InsertPanelWithLibrary({
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
   /** The container to add inside, when its "+" asked for it. */
   inside?: string;
+  /** The block to add right after, when the "+" in the gap below it asked. */
+  after?: string;
+  /** Any other place chosen by position, carried from the in-place picker. */
+  at?: React.ComponentProps<typeof InsertPanel>["at"];
+  /** A canvas press still to answer, and where to say it was answered. */
+  summoned: React.ComponentProps<typeof InsertPanel>["summoned"];
+  onSummoned: React.ComponentProps<typeof InsertPanel>["onSummoned"];
   /**
    * The component tier, read by the EDITOR rather than here.
    *
@@ -143,8 +195,18 @@ function InsertPanelWithLibrary({
   offerablePatterns: (
     patterns: readonly SavedPattern[]
   ) => readonly SavedPattern[];
+  /**
+   * What a saved section's picture is drawn with, beside the component
+   * definitions above: the site's style as the canvas draws with it, the mode
+   * the canvas is previewed in, and the editor's picture session.
+   */
+  pictures: Omit<SectionPictureInputs, "definitions">;
 }): React.JSX.Element {
   const library = usePatternLibrary();
+  const renderPicture = useSectionPictures({
+    ...pictures,
+    definitions: components.definitions,
+  });
   const patterns = useMemo(
     () => offerablePatterns(library.patterns),
     [offerablePatterns, library.patterns]
@@ -153,6 +215,7 @@ function InsertPanelWithLibrary({
     <InsertPanel
       {...props}
       patterns={patterns}
+      renderPicture={renderPicture}
       components={components.components}
       componentDefinitions={components.definitions}
       library={{
@@ -258,15 +321,75 @@ type PanelRequests = {
   openPanelRequest:
     | { panel: LeftPanel; view?: string; count: number }
     | undefined;
-  requestPanel: (panel: LeftPanel, view?: string) => void;
+  requestPanel: RequestPanel;
   /**
-   * Open Add; given a container, add inside it (its empty-container "+"),
-   * which is never implied by selecting it.
+   * Open Add; given a place a "+" chose, add there whatever the block: inside
+   * a container (its empty-container "+"), or in the gap right after a block
+   * (the "+" between sections). Neither is what selecting the block implies.
    */
-  openInsertPanel: (inside?: string) => void;
+  openInsertPanel: (place?: InsertPlaceRequest) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
+  /** The block the last gap's "+" chose to add right after, if any. */
+  insertAfter: string | undefined;
+  /** The position the in-place picker carried into Add, if any. */
+  insertAt: InsertPosition | undefined;
+  /**
+   * The count of canvas add presses Add has yet to answer, or `undefined`
+   * when it has answered them all: each new one has the panel focus its
+   * search, go back to the top and highlight where the block goes, whether
+   * it opens for the press or was already open.
+   */
+  addSummon: number | undefined;
+  /** Told by Add each press it has answered. */
+  onAddSummoned: (count: number) => void;
 };
+
+/**
+ * Asks the shell for a panel, and for Design names one of its own tabs, so
+ * a request naming a tab Design does not have is refused when compiled
+ * rather than opening the first tab.
+ */
+interface RequestPanel {
+  (panel: LeftPanel): void;
+  (panel: "design", view?: DesignView): void;
+  (panel: Exclude<LeftPanel, "design">, view?: string): void;
+}
+
+/** A position in the page, as the in-place picker names one. */
+type InsertPosition = Extract<InsertPlace, { at: unknown }>["at"];
+
+/**
+ * A place a canvas "+" or the in-place picker chose: inside a container,
+ * right after a block, or any other position, with the selection it was
+ * chosen under.
+ */
+type InsertPlaceRequest =
+  | { readonly inside: string }
+  | { readonly after: string }
+  | { readonly at: InsertPosition; readonly selected: string | null };
+
+/**
+ * The selection a place request lasts while: the block it is about, or, for
+ * a position, the selection it was chosen under. Selecting anything else
+ * drops it.
+ */
+function requestedBlock(place: InsertPlaceRequest): string | null {
+  if ("inside" in place) return place.inside;
+  return "after" in place ? place.after : place.selected;
+}
+
+/** The place a held request names, as the Add panel is handed it. */
+function heldPlaces(
+  held: InsertPlaceRequest | undefined
+): Pick<PanelRequests, "insertInside" | "insertAfter" | "insertAt"> {
+  return {
+    insertInside:
+      held !== undefined && "inside" in held ? held.inside : undefined,
+    insertAfter: held !== undefined && "after" in held ? held.after : undefined,
+    insertAt: held !== undefined && "at" in held ? held.at : undefined,
+  };
+}
 
 /** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {
@@ -297,31 +420,62 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const [insideRequest, setInsideRequest] = useState<string | undefined>(
-    undefined
-  );
+  const [placeRequest, setPlaceRequest] = useState<
+    InsertPlaceRequest | undefined
+  >(undefined);
+  /*
+   * Canvas presses for Add, counted apart from the panel request: opening a
+   * panel that is already open changes nothing the shell can show, so the
+   * panel answers each press itself, and says when it has, so a later open
+   * from the rail replays no press.
+   */
+  const [addPresses, setAddPresses] = useState(0);
+  const [answeredPress, setAnsweredPress] = useState(0);
   const openInsertPanel = useCallback(
-    (inside?: string): void => {
-      setInsideRequest(inside);
+    (place?: InsertPlaceRequest): void => {
+      setPlaceRequest(place);
+      setAddPresses(count => count + 1);
       requestPanel("add");
     },
     [requestPanel]
   );
   /*
-   * A "+"'s choice lasts while its container stays selected. Selecting
-   * anything else, the block just added included, ends it, so selecting the
-   * container again later adds after it, as any selection does.
+   * A "+"'s choice lasts while its block stays selected. Selecting anything
+   * else, the block just added included, ends it, so selecting the block
+   * again later places as any selection does.
    */
-  if (insideRequest !== undefined && selectedId !== insideRequest) {
-    setInsideRequest(undefined);
+  const held =
+    placeRequest !== undefined && requestedBlock(placeRequest) === selectedId
+      ? placeRequest
+      : undefined;
+  if (placeRequest !== undefined && held === undefined) {
+    setPlaceRequest(undefined);
   }
-  const insertInside = insideRequest === selectedId ? insideRequest : undefined;
 
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
-    insertInside,
+    ...heldPlaces(held),
+    addSummon: addPresses > answeredPress ? addPresses : undefined,
+    onAddSummoned: setAnsweredPress,
+  };
+}
+
+/**
+ * What the canvas and the pictures are drawn in, held above the panels so
+ * both outlast them: the site mode the canvas is previewed in (picked in the
+ * Design panel; plain state, never stored, so a reload draws the page's own
+ * mode again) and the editor's picture session (what pictures' async blocks
+ * drew, and which sections were already seen).
+ */
+function useDrawnLook(): {
+  readonly previewMode: CanvasPreviewMode;
+  readonly pictureSession: MiniatureSession;
+} {
+  return {
+    previewMode: useCanvasPreviewMode(),
+    pictureSession: useMiniatureSession(usePictureContext()),
   };
 }
 
@@ -372,6 +526,11 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     () => checklistStoreFor(mount.userId),
     [mount.userId]
   );
+  // The author's folded Design groups, kept under their own key.
+  const designFolds = useMemo(
+    () => designFoldsStoreFor(mount.userId),
+    [mount.userId]
+  );
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
@@ -384,7 +543,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   });
 
   const library = useOfferedLibrary(mount);
-  const requests = usePanelRequests(editor.selectedId);
+  const requests = useEditorRequests(editor);
   // Whether the editor's search is open: ⌘K opens it, and so does the top
   // bar's button, so the state sits above both.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -393,17 +552,16 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   // Which look the inspector edits on its own: chosen in the Design panel,
   // left by selecting a block, by the bar's Back, or by Esc.
   const lookEditing = useLookEditing(editor);
-  // The site mode the canvas is previewed in: picked in the Design panel and
-  // held here, above it, so it outlasts the panel; plain state, never stored,
-  // so a reload draws the page's own mode again.
-  const previewMode = useCanvasPreviewMode();
+  const { previewMode, pictureSession } = useDrawnLook();
   return {
     entryFields,
     lookEditing,
     previewMode,
+    pictureSession,
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
+    designFolds,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
     availablePanels: AVAILABLE_PANELS,
@@ -416,6 +574,131 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
 }
 
 /**
+ * The requests that open a panel from the canvas, and the in-place picker,
+ * opened by "/" and by the canvas's add controls, with its way on to Add.
+ */
+function useEditorRequests(
+  editor: EditorMount["editor"]
+): PanelRequests & Pick<EditorPanels, "insertPicker" | "browseAll"> {
+  const requests = usePanelRequests(editor.selectedId);
+  const picker = usePickerPanel(editor, requests.openInsertPanel);
+  return { ...requests, ...picker };
+}
+
+/** The in-place picker's state, and "Browse all" carrying its target on. */
+function usePickerPanel(
+  editor: EditorMount["editor"],
+  openInsertPanel: PanelRequests["openInsertPanel"]
+): Pick<EditorPanels, "insertPicker" | "browseAll"> {
+  const insertPicker = useInsertPicker();
+  const browseAll = useBrowseAll(editor, openInsertPanel);
+  return { insertPicker, browseAll };
+}
+
+/**
+ * "Browse all blocks and sections →": the Add panel opened with the picker's
+ * target, so a block clicked there lands where it would have in the picker.
+ *
+ * - By the rule ("/"), nothing is carried: the panel places each block from
+ *   the selection, as the picker did.
+ * - A container's inside, or the gap after a block: that block is selected
+ *   and the place carried, as the canvas's "+" does, so the place holds
+ *   until another block is selected or a block is added.
+ * - Any other position: carried while the selection stays as it is.
+ */
+function useBrowseAll(
+  editor: EditorMount["editor"],
+  openInsertPanel: PanelRequests["openInsertPanel"]
+): (target: InsertPickerTarget) => void {
+  return useCallback(
+    (target: InsertPickerTarget): void => {
+      if (target.kind === "rule") {
+        openInsertPanel();
+        return;
+      }
+      const { place } = target;
+      if ("at" in place) {
+        openInsertPanel({ at: place.at, selected: editor.selectedId });
+        return;
+      }
+      editor.select("inside" in place ? place.inside : place.after);
+      openInsertPanel(place);
+    },
+    [editor, openInsertPanel]
+  );
+}
+
+/** No saved sections, while the library is not being read. */
+const NO_PATTERNS: readonly SavedPattern[] = [];
+
+/**
+ * The in-place picker, with the Add panel's own sources: the registry's
+ * blocks, the offered components, and the saved sections, which are read
+ * only while the picker is open, as the Add panel reads them only while it
+ * is.
+ */
+export function EditorInsertPicker({
+  panels,
+  editor,
+  onEditText,
+}: {
+  panels: Pick<
+    EditorPanels,
+    "insertPicker" | "browseAll" | "offered" | "offerablePatterns"
+  >;
+  editor: EditorMount["editor"];
+  /** Opens a new block's text for typing, as Enter does. */
+  onEditText: ((nodeId: string) => boolean) | undefined;
+}): React.JSX.Element {
+  const [patterns, setPatterns] =
+    useState<readonly SavedPattern[]>(NO_PATTERNS);
+  const { request, close } = panels.insertPicker;
+  return (
+    <>
+      {request === null ? null : (
+        <PickerPatternRead
+          offerablePatterns={panels.offerablePatterns}
+          onRead={setPatterns}
+        />
+      )}
+      <InsertPicker
+        request={request}
+        onClose={close}
+        editor={editor}
+        categoryOrder={CORE_CATEGORIES}
+        blockOrder={CORE_PALETTE_ORDER}
+        patterns={patterns}
+        components={panels.offered.components}
+        componentDefinitions={panels.offered.definitions}
+        onBrowseAll={panels.browseAll}
+        {...(onEditText === undefined ? {} : { onEditText })}
+      />
+    </>
+  );
+}
+
+/**
+ * The saved sections the picker may offer, read while it is mounted and
+ * handed up: the picker itself stays mounted after it closes, so the sentence
+ * announcing an insert outlives it.
+ */
+function PickerPatternRead({
+  offerablePatterns,
+  onRead,
+}: {
+  offerablePatterns: OfferedLibrary["offerablePatterns"];
+  onRead: (patterns: readonly SavedPattern[]) => void;
+}): null {
+  const library = usePatternLibrary();
+  const patterns = useMemo(
+    () => offerablePatterns(library.patterns),
+    [offerablePatterns, library.patterns]
+  );
+  useEffect(() => onRead(patterns), [onRead, patterns]);
+  return null;
+}
+
+/**
  * The panels' side of the editor, as `useEditorPanels` reads it: the offered
  * library's and the panel requests' own results, so a value either adds
  * reaches this type without being listed again, beside the members this hook
@@ -425,6 +708,8 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
+    /** Where the author's folded Design groups are kept, once they are known. */
+    designFolds: PreferenceStore | undefined;
     /** The page's Layout section for Settings, or null for another form. */
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
@@ -436,12 +721,18 @@ export type EditorPanels = OfferedLibrary &
     pages: PagesPanelMount;
     /** The look edited on its own from the Design panel, with no block. */
     lookEditing: LookEditingState;
+    /** The in-place picker's state, opened by "/" and the canvas's controls. */
+    insertPicker: InsertPickerState;
+    /** "Browse all" from the picker: Add, with the picker's target carried. */
+    browseAll: (target: InsertPickerTarget) => void;
     /**
      * The site mode the author picked to preview the canvas in, for this
      * editing session only: the Design panel's switch picks it, the frame is
      * drawn in it, and the tag over the canvas clears it.
      */
     previewMode: CanvasPreviewMode;
+    /** What the editor's pictures share for as long as it is open. */
+    pictureSession: MiniatureSession;
   };
 
 /**
@@ -469,8 +760,11 @@ export function editorPanelRenderer({
   classes,
   pageClassBlocks,
   classSummaryContext,
-  requestPanel,
   insertInside,
+  insertAfter,
+  insertAt,
+  addSummon,
+  onAddSummoned,
   pages,
   canvasRender,
   editedBreakpoint,
@@ -479,6 +773,8 @@ export function editorPanelRenderer({
   documentDirty,
   lookEditing,
   previewMode,
+  designFolds,
+  pictureSession,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -520,7 +816,16 @@ export function editorPanelRenderer({
   > &
   Pick<
     EditorPanels,
-    "offered" | "offerablePatterns" | "requestPanel" | "insertInside" | "pages"
+    | "offered"
+    | "offerablePatterns"
+    | "insertInside"
+    | "insertAfter"
+    | "insertAt"
+    | "addSummon"
+    | "onAddSummoned"
+    | "pages"
+    | "designFolds"
+    | "pictureSession"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -542,6 +847,19 @@ export function editorPanelRenderer({
           offerablePatterns={offerablePatterns}
           // Inside the container a "+" chose, while it is the selection.
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // In the gap a "+" chose, while the block above it is selected.
+          {...(insertAfter === undefined ? {} : { after: insertAfter })}
+          // At the position the in-place picker carried, while it holds.
+          {...(insertAt === undefined ? {} : { at: insertAt })}
+          // A canvas press still to answer, whether Add opened for it or
+          // was already open.
+          summoned={addSummon}
+          onSummoned={onAddSummoned}
+          pictures={{
+            siteStyle: canvasSiteStyle,
+            mode: previewMode?.picked,
+            session: pictureSession,
+          }}
         />
       ),
       /*
@@ -568,6 +886,8 @@ export function editorPanelRenderer({
           }
           beginInsertDrag={drag.beginInsertDrag}
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          {...(insertAfter === undefined ? {} : { after: insertAfter })}
+          {...(insertAt === undefined ? {} : { at: insertAt })}
           // From the panel there is no placement, so Back returns to the
           // editor as the author left it.
           {...(componentView.onEditComponent === undefined
@@ -622,40 +942,113 @@ export function editorPanelRenderer({
       design: () => (
         <DesignPanel
           view={view}
+          {...(designFolds === undefined ? {} : { foldStore: designFolds })}
           // The studio surrounds every tab, so the header it draws stays the
           // same whichever is open.
           frame={designTabs => (
-            <TokensStudio
-              merged={offerableTokens(
-                canvasSiteStyle,
-                siteStylePending,
-                siteStyleError
-              )}
-              supplied={configSiteStyle?.tokens}
-              pending={siteStylePending}
-              // The class surface's library, the one the Shared styles tab
-              // lists, so a style using a variable says what it sets.
-              {...(classes.library === undefined
-                ? {}
-                : { classes: classes.library })}
-              // A shared style using a variable opens in its own tab; a
-              // block look, which that tab does not list, in the inspector.
-              opens={{
-                sharedStyles: () => view.choose("classes"),
-                ...(lookEditing === undefined
-                  ? {}
-                  : { look: lookEditing.edit }),
-              }}
-              // The switch in the panel's header picks the mode the canvas is
-              // drawn in, held by the editor so it outlasts the panel.
-              preview={previewMode}
-            >
-              {designTabs}
-            </TokensStudio>
+            <>
+              {/* The Styles tab's matches, counted whichever tab is open. */}
+              <ReportStylesMatches
+                library={classes.library}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                styleContext={classSummaryContext}
+              />
+              <DesignFonts
+                faces={offerableFaces(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                fromCode={configSiteStyle?.fonts ?? []}
+                onManageFonts={() => view.choose("type")}
+              >
+                <TokensStudio
+                  merged={offerableTokens(
+                    canvasSiteStyle,
+                    siteStylePending,
+                    siteStyleError
+                  )}
+                  supplied={configSiteStyle?.tokens}
+                  pending={siteStylePending}
+                  // The class surface's library, the one the Shared styles tab
+                  // lists, so a style using a variable says what it sets.
+                  {...(classes.library === undefined
+                    ? {}
+                    : { classes: classes.library })}
+                  // A shared style using a variable opens in its own tab; a
+                  // block look, which that tab does not list, in the inspector.
+                  opens={{
+                    sharedStyles: () => view.choose("styles"),
+                    ...(lookEditing === undefined
+                      ? {}
+                      : { look: lookEditing.edit }),
+                  }}
+                  // The switch in the panel's header picks the mode the canvas is
+                  // drawn in, held by the editor so it outlasts the panel.
+                  preview={previewMode}
+                >
+                  {designTabs}
+                </TokensStudio>
+              </DesignFonts>
+            </>
           )}
           tabs={{
-            variables: () => <VariablesTab />,
-            classes: () => (
+            colours: () => <VariablesTab tab="colours" />,
+            // Type: the site's fonts, then the type sizes and the font and
+            // weight variables.
+            type: () => (
+              <>
+                <DesignGroup
+                  id={SITE_FONTS_GROUP}
+                  heading={EDITOR_WORDS.fonts}
+                  count={
+                    offerableFaces(
+                      canvasSiteStyle,
+                      siteStylePending,
+                      siteStyleError
+                    )?.length
+                  }
+                >
+                  <DesignReveal>
+                    {reveal => (
+                      <FontsPanelWithUpload
+                        faces={offerableFaces(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        codeFaces={configSiteStyle?.fonts}
+                        tokens={renderedTokens(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        absence={siteStyleError !== null ? "failed" : "pending"}
+                        /*
+                          The fix for a token naming a family this site does not provide
+                          is to edit that token, and editing belongs to the studio. This
+                          shell offers one, so the jump is wired: without the callback
+                          the panel suppresses the action and an author is left to find
+                          the right panel and the right row themselves.
+                        */
+                        // The font variables are in this same tab: their group
+                        // is opened and brought into view, rather than the tab
+                        // asked for again.
+                        onOpenTokens={() => reveal("fonts")}
+                        storedFaces={storedSiteStyle?.fonts}
+                        storedPending={siteStylePending}
+                        unreadableFonts={unreadableStoredFonts}
+                      />
+                    )}
+                  </DesignReveal>
+                </DesignGroup>
+                <VariablesTab tab="type" />
+              </>
+            ),
+            spacing: () => <VariablesTab tab="spacing" />,
+            styles: () => (
               <SharedStylesStudio
                 {...(lookEditing === undefined
                   ? {}
@@ -677,33 +1070,6 @@ export function editorPanelRenderer({
                   siteStylePending,
                   siteStyleError
                 )}
-              />
-            ),
-            fonts: () => (
-              <FontsPanelWithUpload
-                faces={offerableFaces(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                codeFaces={configSiteStyle?.fonts}
-                tokens={renderedTokens(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                absence={siteStyleError !== null ? "failed" : "pending"}
-                /*
-                      The fix for a token naming a family this site does not provide
-                      is to edit that token, and editing belongs to the studio. This
-                      shell offers one, so the jump is wired: without the callback
-                      the panel suppresses the action and an author is left to find
-                      the right panel and the right row themselves.
-                    */
-                onOpenTokens={() => requestPanel("design", "variables")}
-                storedFaces={storedSiteStyle?.fonts}
-                storedPending={siteStylePending}
-                unreadableFonts={unreadableStoredFonts}
               />
             ),
           }}
