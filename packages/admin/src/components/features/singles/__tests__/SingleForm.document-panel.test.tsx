@@ -346,6 +346,25 @@ describe("what the Single's panel says about the Single", () => {
     ).toHaveTextContent("The first page visitors see.");
   });
 
+  it("prefers the Single's own description to the one under admin", () => {
+    render(
+      <SingleForm
+        schema={
+          {
+            ...(schema as object),
+            description: "Where visitors reach the team.",
+            admin: { description: "The first page visitors see." },
+          } as never
+        }
+        document={document}
+        onSubmit={vi.fn()}
+      />
+    );
+    const about = docked().getByRole("region", { name: "What this is" });
+    expect(about).toHaveTextContent("Where visitors reach the team.");
+    expect(about).not.toHaveTextContent("The first page visitors see.");
+  });
+
   it("reads who changed it from the Single's own details, in the language being edited", () => {
     details.answer = {
       createdBy: null,

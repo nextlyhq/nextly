@@ -3,7 +3,7 @@ title: Singles
 description: Define single-document content like site settings, headers, and footers.
 ---
 
-import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
 A single is a one-off document — content that exists as exactly one instance. Site settings, navigation headers, footers, and homepage configurations are typical singles. Unlike [collections](/docs/configuration/collections), singles have no list view, no create/delete operations, and are auto-created on first access. When several requests reach a single that has no document yet at the same moment, such as the first page views of a new site, one document is created from its defaults and every request gets it.
 
@@ -17,13 +17,7 @@ A single is a one-off document — content that exists as exactly one instance. 
 Use `defineSingle()` from `nextly`:
 
 ```typescript title="src/singles/site-settings.ts"
-import {
-  defineSingle,
-  text,
-  upload,
-  group,
-  repeater,
-} from "nextly";
+import { defineSingle, text, upload, group, repeater } from "nextly";
 
 export default defineSingle({
   slug: "site-settings",
@@ -107,15 +101,15 @@ The Schema Builder produces the same `SingleConfig` that code-first singles use.
 
 ## How singles differ from collections
 
-| | Collections | Singles |
-|---|---|---|
-| **Entries** | Many | Exactly one |
-| **List view** | Yes | No |
-| **Create/Delete** | Yes | No (auto-created on first access; cannot be deleted) |
-| **Access control operations** | `create`, `read`, `update`, `delete`, `publish`, `unpublish` | `read`, `update`, `publish`, `unpublish` |
-| **Hooks** | 8 hooks | 4 hooks (`beforeRead`, `afterRead`, `beforeChange`, `afterChange`) |
-| **Default table prefix** | None — uses slug as table name | `single_` (e.g. `single_site_settings`) |
-| **API endpoint** | `/admin/api/collections/[slug]/entries` | `/admin/api/singles/[slug]` |
+|                               | Collections                                                  | Singles                                                            |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------ |
+| **Entries**                   | Many                                                         | Exactly one                                                        |
+| **List view**                 | Yes                                                          | No                                                                 |
+| **Create/Delete**             | Yes                                                          | No (auto-created on first access; cannot be deleted)               |
+| **Access control operations** | `create`, `read`, `update`, `delete`, `publish`, `unpublish` | `read`, `update`, `publish`, `unpublish`                           |
+| **Hooks**                     | 8 hooks                                                      | 4 hooks (`beforeRead`, `afterRead`, `beforeChange`, `afterChange`) |
+| **Default table prefix**      | None — uses slug as table name                               | `single_` (e.g. `single_site_settings`)                            |
+| **API endpoint**              | `/admin/api/collections/[slug]/entries`                      | `/admin/api/singles/[slug]`                                        |
 
 ## Single options
 
@@ -125,72 +119,72 @@ A Single's slug follows the [address rule](/docs/configuration/collections#the-a
 
 ### `slug`
 
-| | |
-|---|---|
-| **Type** | `string` |
-| **Required** | Yes |
+|              |          |
+| ------------ | -------- |
+| **Type**     | `string` |
+| **Required** | Yes      |
 
 Unique identifier across all singles **and** collections **and** field groups. Used as the API endpoint path and database table name (with the `single_` prefix unless `dbName` is set). Must be lowercase and URL-friendly.
 
 ### `fields`
 
-| | |
-|---|---|
-| **Type** | `FieldConfig[]` |
-| **Required** | Yes |
+|              |                 |
+| ------------ | --------------- |
+| **Type**     | `FieldConfig[]` |
+| **Required** | Yes             |
 
 Array of field definitions. Singles support the same field types as collections. See [Fields](/docs/configuration/fields).
 
 ### `label`
 
-| | |
-|---|---|
-| **Type** | `{ singular: string }` |
+|             |                          |
+| ----------- | ------------------------ |
+| **Type**    | `{ singular: string }`   |
 | **Default** | Auto-generated from slug |
 
 Display label in the admin sidebar, breadcrumbs, and page titles. Singles only need a singular label since there is exactly one document.
 
 ### `dbName`
 
-| | |
-|---|---|
-| **Type** | `string` |
+|             |                                               |
+| ----------- | --------------------------------------------- |
+| **Type**    | `string`                                      |
 | **Default** | `single_[slug]` (e.g. `single_site_settings`) |
 
 Custom database table name.
 
 ### `description`
 
-| | |
-|---|---|
-| **Type** | `string` |
+|             |             |
+| ----------- | ----------- |
+| **Type**    | `string`    |
 | **Default** | `undefined` |
 
 Description displayed in the admin UI, including as the first line of the Single's side panel ("What this is"). Falls back to `admin.description`.
 
 ### `sanitize`
 
-| | |
-|---|---|
-| **Type** | `boolean` |
-| **Default** | `true` |
+|             |           |
+| ----------- | --------- |
+| **Type**    | `boolean` |
+| **Default** | `true`    |
 
 When enabled, the global sanitization hook strips HTML tags from plain-text fields (`text`, `textarea`, `email`) before storage. Set to `false` only if the single intentionally stores HTML in those fields.
 
 ### `custom`
 
-| | |
-|---|---|
-| **Type** | `Record<string, unknown>` |
-| **Default** | `undefined` |
+|             |                           |
+| ----------- | ------------------------- |
+| **Type**    | `Record<string, unknown>` |
+| **Default** | `undefined`               |
 
 Arbitrary metadata for hooks, plugins, or custom code. Not persisted to the database.
 
 ### `publicAddress`
 
-| | |
-|---|---|
-| **Type** | `string` |
+|             |             |
+| ----------- | ----------- |
+| **Type**    | `string`    |
 | **Default** | `undefined` |
 
 Where the Single is served on your site, as a fixed path: `"/"` for a homepage, `"/about"`. A Single is one page, so its address has no placeholder. `publicAddressOf` answers that a Single without one has no address. Two Singles can't share an address: the configuration stops loading, naming both. See [Public addresses](/docs/configuration/public-addresses).
@@ -199,14 +193,14 @@ Where the Single is served on your site, as a fixed path: `"/"` for a homepage, 
 
 Configure how the single appears in the admin panel via the `admin` property.
 
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `group` | `string` | None | Sidebar group name. |
-| `icon` | `string` | None | Lucide icon name (e.g. `"Settings"`, `"Menu"`, `"Home"`). |
-| `hidden` | `boolean` | `false` | Hide from sidebar navigation (still reachable via direct URL and API). |
-| `order` | `number` | `100` | Sort order within sidebar group (lower = higher). |
-| `sidebarGroup` | `string` | None | Custom sidebar group slug; moves the entry from its default section to a custom group. |
-| `description` | `string` | None | Help text below the single title. |
+| Property       | Type      | Default | Description                                                                            |
+| -------------- | --------- | ------- | -------------------------------------------------------------------------------------- |
+| `group`        | `string`  | None    | Sidebar group name.                                                                    |
+| `icon`         | `string`  | None    | Lucide icon name (e.g. `"Settings"`, `"Menu"`, `"Home"`).                              |
+| `hidden`       | `boolean` | `false` | Hide from sidebar navigation (still reachable via direct URL and API).                 |
+| `order`        | `number`  | `100`   | Sort order within sidebar group (lower = higher).                                      |
+| `sidebarGroup` | `string`  | None    | Custom sidebar group slug; moves the entry from its default section to a custom group. |
+| `description`  | `string`  | None    | Help text below the single title.                                                      |
 
 > **Singles do not support `useAsTitle`, `pagination`, `preview`, or admin-component overrides** — those concepts are collection-specific.
 
@@ -242,13 +236,13 @@ Singles support four lifecycle hooks — a subset of the eight available on coll
 
 ### Five available hooks
 
-| Hook | Triggers on | Can modify |
-|---|---|---|
-| `beforeRead` | Before reading from the database. | Yes (query parameters) |
-| `afterRead` | After reading from the database. | Yes (transform output) |
-| `beforeValidate` | Before the schema's rules are enforced on an update. | Yes (data) |
-| `beforeChange` | After validation passes, before the database write. | Yes (data) |
-| `afterChange` | After the database write. | No (side effects) |
+| Hook             | Triggers on                                          | Can modify             |
+| ---------------- | ---------------------------------------------------- | ---------------------- |
+| `beforeRead`     | Before reading from the database.                    | Yes (query parameters) |
+| `afterRead`      | After reading from the database.                     | Yes (transform output) |
+| `beforeValidate` | Before the schema's rules are enforced on an update. | Yes (data)             |
+| `beforeChange`   | After validation passes, before the database write.  | Yes (data)             |
+| `afterChange`    | After the database write.                            | No (side effects)      |
 
 ### Execution order — read
 
