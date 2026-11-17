@@ -371,6 +371,12 @@ export interface GenerateArgs {
    */
   refilledColumns?: readonly { table: string; column: string }[];
   /**
+   * The tables whose values the appended statements move between places (a field moved into, out
+   * of or between groups): a change of those tables, named in the file's header with their
+   * registry rows, though no operation may name them.
+   */
+  valuesMovedIn?: readonly string[];
+  /**
    * Foreign keys a table this file creates is declared with, by table: a
    * Schema Builder collection's relationship keys, which the column mapping
    * does not describe. Rendered into the table's CREATE, as the Builder
@@ -1000,13 +1006,13 @@ export async function generateMigration(
       latest: previous === null ? null : previous.data.permissions,
       ...permissionScopeOf(args),
     });
-  // What a run writes a file for even when no table changes.
-  // Statements the caller adds are a change of their own though no table's shape changes with
-  // them: a field's values moved between two groups, whose columns both stand.
+  // What a run writes a file for even when no table changes. A move of values is a change of its
+  // own though no table's shape changes with it: a field's values moved between two groups,
+  // whose columns both stand.
   const changesBeyondTables =
     hasSettingsChanges ||
     changedPermissions.length > 0 ||
-    addsStatements(args.appendedStatements);
+    (args.valuesMovedIn?.length ?? 0) > 0;
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1166,11 +1172,9 @@ export async function generateMigration(
   //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set([
     ...operations.map(operationTableName),
-    // The caller's statements change the entity it scoped the file to, though no operation names
-    // its table: a field's values moved between two of its groups.
-    ...(addsStatements(args.appendedStatements)
-      ? (args.scope?.tables ?? [])
-      : []),
+    // A table whose values the appended statements move, though no operation may name it: a
+    // field's values moved between two of its groups.
+    ...(args.valuesMovedIn ?? []),
     // A renamed field group's parent changes with it, though no statement names that table.
     ...groupRenames.parentTables,
   ]);
@@ -1579,13 +1583,6 @@ function refuseUnrecordedTranslations(
  * settings-only migration it is, and its snapshot records the translated fields as every snapshot
  * does.
  */
-/** Whether the caller adds a statement the file runs on its way up. */
-function addsStatements(added: GenerateArgs["appendedStatements"]): boolean {
-  return (
-    added !== undefined && added.up.first.length + added.up.last.length > 0
-  );
-}
-
 async function recordedUnlessChanged(
   args: GenerateArgs,
   run: {

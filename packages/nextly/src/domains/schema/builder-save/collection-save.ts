@@ -1195,6 +1195,8 @@ async function generateFor(
     valueMoves?: GenerateArgs["valueMoves"];
     /** Columns the save adds that its moves fill last (`movesOf`). */
     refilledColumns?: GenerateArgs["refilledColumns"];
+    /** The table whose values the save's moves carry, where they carry any (`movesOf`). */
+    valuesMovedIn?: GenerateArgs["valuesMovedIn"];
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
     existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
@@ -1262,6 +1264,9 @@ async function generateFor(
     ...(args.refilledColumns === undefined || args.refilledColumns.length === 0
       ? {}
       : { refilledColumns: args.refilledColumns }),
+    ...(args.valuesMovedIn === undefined || args.valuesMovedIn.length === 0
+      ? {}
+      : { valuesMovedIn: args.valuesMovedIn }),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -1343,6 +1348,7 @@ async function movesOf(
   appended: { up: AddedStatements; down: AddedStatements };
   valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
   refilledColumns: NonNullable<GenerateArgs["refilledColumns"]>;
+  valuesMovedIn: NonNullable<GenerateArgs["valuesMovedIn"]>;
 }> {
   const moves = plannedMovesOf(deps, save, table);
   // The header names each dropped column as the move it is, with what the group does not carry.
@@ -1357,7 +1363,13 @@ async function movesOf(
         `moved into the group ${moved.into}; its values are copied there first`,
     })),
     refilledColumns: moves.refilledColumns,
+    valuesMovedIn: carriesValues(moves) ? [table] : [],
   };
+}
+
+/** Whether a save's planned moves carry any values, so its file changes the table's rows. */
+function carriesValues(moves: EntityMoves): boolean {
+  return moves.up.first.length + moves.up.last.length > 0;
 }
 
 /** What each column `moves` drops had that its group does not carry, by column (`movedColumnSentences`). */
