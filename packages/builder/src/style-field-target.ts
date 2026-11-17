@@ -9,6 +9,7 @@
  */
 import {
   findNode,
+  type BlockNode,
   type NodeStyles,
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
@@ -37,8 +38,10 @@ import {
 import type { StyleTarget } from "./style-target";
 import {
   readStyleValue,
+  styleWriteOps,
   type StyleAddress,
   type StylePolicy,
+  type StyleWriteRequest,
 } from "./style-values";
 
 /**
@@ -60,6 +63,7 @@ function writeStyleValue({
   policy,
   value,
   setIssue,
+  pairFor,
 }: {
   editor: EditorState;
   nodeId: string;
@@ -68,6 +72,8 @@ function writeStyleValue({
   /** `null` clears, which is not the same as writing an empty value. */
   value: StyleValue | null;
   setIssue: (message: string | null) => void;
+  /** A second value the same edit writes with this one, read from the block. */
+  pairFor?: PairFor | undefined;
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
@@ -99,6 +105,12 @@ function writeStyleValue({
    * therefore not a detour around the simple case — it IS the simple case,
    * with the count left open.
    */
+  // A type size picked where the block has no line height of its own
+  // writes the line height with it, as one op and one undo entry.
+  const paired = pairedWrites(address, value, current.styles, pairFor);
+  if (paired !== undefined) {
+    return writePaired(editor, current, paired, policy, setIssue);
+  }
   const write =
     value === null
       ? batchStyleClearOps([current], address, policy)
@@ -119,6 +131,49 @@ function writeStyleValue({
   // field goes on showing the draft and reads as saved while neither the
   // document nor the undo history moved.
   if (editor.applyAll(write.ops) === null) {
+    setIssue("This edit could not be applied to the document.");
+    return "refused";
+  }
+  return "applied";
+}
+
+/**
+ * A second value an edit writes with its own, given the value and the
+ * block's styles before the edit, or `undefined` for none.
+ */
+export type PairFor = (
+  value: StyleValue,
+  styles: NodeStyles | undefined
+) => { address: StyleAddress; value: StyleValue } | undefined;
+
+/** The two writes an edit makes where it brings a second value, else none. */
+function pairedWrites(
+  address: StyleAddress,
+  value: StyleValue | null,
+  styles: NodeStyles | undefined,
+  pairFor: PairFor | undefined
+): StyleWriteRequest[] | undefined {
+  if (value === null || pairFor === undefined) return undefined;
+  const paired = pairFor(value, styles);
+  return paired === undefined ? undefined : [{ address, value }, paired];
+}
+
+/** Two values written to one block as one op, so one undo takes both back. */
+function writePaired(
+  editor: EditorState,
+  node: BlockNode,
+  writes: readonly StyleWriteRequest[],
+  policy: StylePolicy | undefined,
+  setIssue: (message: string | null) => void
+): CommitOutcome {
+  const write = styleWriteOps(node.id, node.styles, writes, policy);
+  if (!write.ok) {
+    setIssue(write.issues[0]?.message ?? "This value cannot be used here.");
+    return "refused";
+  }
+  setIssue(null);
+  if (write.op === null) return "unchanged";
+  if (editor.applyAll([write.op]) === null) {
     setIssue("This edit could not be applied to the document.");
     return "refused";
   }
@@ -201,11 +256,14 @@ export function useFieldTarget({
   nodeId,
   address,
   policy,
+  pairFor,
 }: {
   editor: EditorState;
   nodeId: string;
   address: StyleAddress;
   policy: StylePolicy | undefined;
+  /** A second value a write to the block makes with this field's. */
+  pairFor?: PairFor | undefined;
 }): {
   target: StyleTarget;
   nodeStyles: NodeStyles | undefined;
@@ -290,7 +348,15 @@ export function useFieldTarget({
         return true;
       });
   const writeBlock = (value: StyleValue | null): CommitOutcome =>
-    writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
+    writeStyleValue({
+      editor,
+      nodeId,
+      address,
+      policy,
+      value,
+      setIssue,
+      pairFor,
+    });
   return {
     target,
     nodeStyles,

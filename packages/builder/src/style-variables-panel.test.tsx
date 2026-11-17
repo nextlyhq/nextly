@@ -281,11 +281,12 @@ describe("a field holding a variable", () => {
     const fontSize = fieldsOf("fontSize");
     expect(fontSize.queryByRole("textbox")).toBeNull();
     const chip = fontSize.getByRole("group", { name: "Font size" });
-    expect(chip.textContent).toBe("Display 48px");
+    // A type size reads as its name and pair.
+    expect(chip.textContent).toBe("Display · 48 / 56px");
     // The name the author gave it, never the code path it is stored under,
     // and the whole name and value on hover where the field cuts them short.
     expect(fontSize.queryByText(/font-size\.display/)).toBeNull();
-    expect(chip.title).toBe("Display 48px");
+    expect(chip.title).toBe("Display · 48 / 56px");
     fireEvent.click(
       within(chip).getByRole("button", {
         name: "Clear Font size",
@@ -407,7 +408,8 @@ describe("where focus goes as a field changes shape", () => {
         })
       )
     );
-    expect(chip.textContent).toBe("Display 48px");
+    // A type size reads as its name and pair.
+    expect(chip.textContent).toBe("Display · 48 / 56px");
   });
 
   it("lands on the typed field once ✕ removes the variable", async () => {
@@ -521,7 +523,7 @@ describe("the mode a field's variables are read in", () => {
       const chip = fieldsOf("fontSize").getByRole("group", {
         name: "Font size",
       });
-      await waitFor(() => expect(chip.textContent).toBe("Mode 24px"));
+      await waitFor(() => expect(chip.textContent).toBe("Mode · 24"));
       fireEvent.click(
         screen.getByRole("button", { name: "Variables for Font size" })
       );
@@ -595,7 +597,7 @@ describe("a held variable whose name another shares", () => {
     const chip = fieldsOf("fontSize").getByRole("group", {
       name: "Font size",
     });
-    expect(chip.textContent).toBe("Big (font-size.hero) 48px");
+    expect(chip.textContent).toBe("Big (font-size.hero) · 48");
     expect(
       within(chip).getByRole("button", {
         name: "Clear Font size",

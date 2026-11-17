@@ -242,6 +242,9 @@ describe("what uses a variable", () => {
     expect(siteTextRoleOf("root", "line-height")).toBe("body");
     expect(siteTextRoleOf("a", "color")).toBe("link");
     expect(siteTextRoleOf("h2", "font-weight")).toBeUndefined();
+    // A heading's colour is no row's: only Links writes a colour.
+    expect(siteTextRoleOf("h2", "color")).toBeUndefined();
+    expect(siteTextRoleOf("a", "font-size")).toBeUndefined();
     expect(siteTextRoleOf("p", "margin-block-start")).toBeUndefined();
   });
 });

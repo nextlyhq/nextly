@@ -52,6 +52,7 @@ import {
 import { isHTMLElement } from "./dom-kind";
 import { FluidRangeFields } from "./fluid-popover";
 import { ShowMore, withOpenRow } from "./panel-actions";
+import { SiteTextSection } from "./site-text-panel";
 import {
   addVariable,
   duplicateVariable,
@@ -360,6 +361,13 @@ function VariablesView({
         }
         overlays={placedOverlays(placed, header)}
       >
+        <TypeTabSiteText
+          groups={hosted.groups}
+          tokens={tokens}
+          onChange={onChange}
+          readOnly={readOnly}
+          mode={mode}
+        />
         <TypeTabRange
           groups={hosted.groups}
           tokens={tokens}
@@ -390,6 +398,20 @@ function VariablesView({
       </ViewBody>
     </div>
   );
+}
+
+/**
+ * The site's text, first where the view lists the type scale: what every
+ * page's headings, body text, links, buttons and captions look like.
+ */
+function TypeTabSiteText({
+  groups,
+  ...section
+}: React.ComponentProps<typeof SiteTextSection> & {
+  groups: readonly VariableGroup[] | undefined;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return <SiteTextSection {...section} />;
 }
 
 /**

@@ -221,9 +221,10 @@ describe("the ◇ beside a field", () => {
     const drawn = screen
       .getAllByRole("option")
       .map(option => option.textContent ?? "");
-    // The type sizes first and the engine's own Content width under Other,
-    // late, though the site's list starts with it.
-    expect(drawn.slice(0, 2)).toEqual(["Display 48px", "Body 16px"]);
+    // The type sizes first, the engine's built-in heading sizes leading, and
+    // the engine's own Content width under Other, late, though the site's
+    // list starts with it.
+    expect(drawn.slice(0, 2)).toEqual(["H1 2.25rem", "H2 1.75rem"]);
     expect(drawn.indexOf("Content width 72rem")).toBeGreaterThan(
       drawn.indexOf("Sm 8px")
     );
@@ -232,10 +233,10 @@ describe("the ◇ beside a field", () => {
         .getAllByRole("option")
         .find(option => option.getAttribute("aria-selected") === "true")
         ?.textContent ?? null;
-    expect(selected()).toBe("Display 48px");
+    expect(selected()).toBe("H1 2.25rem");
     const list = screen.getByRole("listbox", { name: "Variables" });
     fireEvent.keyDown(list, { key: "ArrowDown" });
-    expect(selected()).toBe("Body 16px");
+    expect(selected()).toBe("H2 1.75rem");
     fireEvent.keyDown(list, { key: "End" });
     expect(selected()).toBe(drawn.at(-1));
     fireEvent.keyDown(list, { key: "ArrowUp" });
@@ -357,7 +358,8 @@ describe("the chip a held variable shows", () => {
       />
     );
     const chip = screen.getByRole("group", { name: "Font size" });
-    expect(chip.textContent).toBe("Display 48px");
+    // A type size reads as its name and pair.
+    expect(chip.textContent).toBe("Display · 48");
     fireEvent.click(
       within(chip).getByRole("button", {
         name: "Clear Font size",
@@ -412,9 +414,12 @@ describe("the unit menu's item", () => {
     // the arrows move through the variables rather than a menu with no items.
     const submenu = screen.getAllByRole("menu").at(-1) as HTMLElement;
     act(() => submenu.focus());
-    expect(document.activeElement).toBe(
-      screen.getByRole("listbox", { name: "Variables" })
-    );
+    // On the list, or on the search a list this long offers above it.
+    const list = screen.getByRole("listbox", { name: "Variables" });
+    expect(
+      document.activeElement === list ||
+        document.activeElement?.getAttribute("aria-controls") === list.id
+    ).toBe(true);
     fireEvent.click(screen.getByRole("option", { name: "Display 48px" }));
     expect(onPick).toHaveBeenCalledWith("font-size.display");
   });
@@ -493,7 +498,8 @@ describe("a fluid variable in the list and on the chip", () => {
     );
     // On the chip itself, which never collapses, and in what it reads out.
     const chip = screen.getByRole("group", { name: "Font size" });
-    expect(chip.title).toBe("Display 48px");
-    expect(chip.textContent).toBe("Display 48px");
+    expect(chip.title).toBe("Display · 48");
+    // A type size reads as its name and pair.
+    expect(chip.textContent).toBe("Display · 48");
   });
 });

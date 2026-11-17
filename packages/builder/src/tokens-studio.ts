@@ -50,6 +50,7 @@ import {
   tokenCustomProperty,
   tokenIdentity,
   type SiteToken,
+  type SiteTextMap,
   type SiteTokenSet,
   type TokenKind,
   type TokenMode,
@@ -499,7 +500,27 @@ export function setFluidRange(
             values: { ...token.values, light: fluidValue(token.fluid, range) },
           }
     ),
+    // A Site text row's own size made with Fluid… is remade across the
+    // range too, in the same edit.
+    ...(tokens.siteText === undefined
+      ? {}
+      : { siteText: siteTextAcross(tokens.siteText, range) }),
   };
+}
+
+/** Site text with each row's own fluid size remade across a range. */
+function siteTextAcross(
+  siteText: SiteTextMap,
+  range: FluidRangeWidths
+): SiteTextMap {
+  return Object.fromEntries(
+    Object.entries(siteText).map(([role, row]) => [
+      role,
+      row?.fluid === undefined
+        ? row
+        : { ...row, fontSize: fluidValue(row.fluid, range) },
+    ])
+  );
 }
 
 /**

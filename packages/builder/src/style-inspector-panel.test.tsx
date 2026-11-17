@@ -4609,6 +4609,28 @@ describe("naming the place a value came from", () => {
       );
     });
 
+    it("names the Site text row a heading's size or the page's text came from", () => {
+      expect(
+        sourceFor({ kind: "element", tag: "h2" }, at({ property: "font-size" }))
+      ).toBe("From Site text: Heading 2");
+      const text = describeProvenance(
+        {
+          kind: "inherited",
+          entry: at({ property: "line-height" }),
+          from: { kind: "element", tag: "root" },
+        } as never,
+        editing as never
+      )?.text;
+      expect(text).toBe("From Site text: Body");
+      // A heading's weight is the element's own default, not a row's.
+      expect(
+        sourceFor(
+          { kind: "element", tag: "h2" },
+          at({ property: "font-weight" })
+        )
+      ).toBe("From H2 defaults");
+    });
+
     it("names no breakpoint after defaults, which no breakpoint edits", () => {
       // "From H2 defaults · Desktop" sends an author to a tier where the value
       // is not, since defaults are no tier's to edit.

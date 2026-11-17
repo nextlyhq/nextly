@@ -253,12 +253,18 @@ const ELEMENT_ROW: ReadonlyMap<string, SiteTextRole> = new Map(
   })
 );
 
-/** The CSS properties a row writes; the tier's own defaults write others. */
-const ROW_PROPERTIES: ReadonlySet<string> = new Set([
-  "font-size",
-  "line-height",
+/**
+ * The CSS properties a row writes: a link's colours and underline, every
+ * other row's size and line height. The tier's own defaults write the rest
+ * (a margin, a heading's weight).
+ */
+const LINK_PROPERTIES: ReadonlySet<string> = new Set([
   "color",
   "text-decoration",
+]);
+const TEXT_PROPERTIES: ReadonlySet<string> = new Set([
+  "font-size",
+  "line-height",
 ]);
 
 /**
@@ -275,7 +281,8 @@ export function siteTextRoleOf(
 ): SiteTextRole | undefined {
   const role = ELEMENT_ROW.get(key);
   if (role === undefined) return undefined;
-  return ROW_PROPERTIES.has(cssProperty) ? role : undefined;
+  const written = role === "link" ? LINK_PROPERTIES : TEXT_PROPERTIES;
+  return written.has(cssProperty) ? role : undefined;
 }
 
 /**

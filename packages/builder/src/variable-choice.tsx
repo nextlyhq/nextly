@@ -48,6 +48,7 @@ import {
   variableGroupOf,
   type VariableGroup,
 } from "./tokens-studio";
+import { pickedTypeSize } from "./type-size-pair";
 
 /** What {@link VariableChoice} is given. */
 export interface VariableChoiceProps {
@@ -402,6 +403,19 @@ function VariableRow({ entry }: { entry: VariableEntry }): React.JSX.Element {
  * the page, and the author is owed the string that names it and a way to
  * remove it.
  */
+/**
+ * What a chip names its variable: a type size by its name and pair, a
+ * scaled variable by its scale ("padding-y × 0.75"), any other by name.
+ */
+function chipName(
+  named: string,
+  pair: string | undefined,
+  times: number | undefined
+): string {
+  if (pair !== undefined) return `${named} · ${pair}`;
+  return times === undefined ? named : `${named} × ${String(times)}`;
+}
+
 export function VariableChip({
   leaf,
   tokens,
@@ -419,8 +433,15 @@ export function VariableChip({
   // here as they do there, and the chip says which one the document holds.
   const named =
     variable === undefined ? identity : variableLabel(variable, offered);
-  // Scaled, the chip says by how much: "padding-y × 0.75".
-  const name = times === undefined ? named : `${named} × ${String(times)}`;
+  // A type size in a font size field reads by its name and pair, "H2 ·
+  // 28 / 1.2", which says its line height too; its value is in the pair.
+  const typeSize =
+    leaf.cssProperty === "font-size" && times === undefined
+      ? pickedTypeSize(tokens, { $token: identity }, mode)
+      : undefined;
+  const name = chipName(named, typeSize?.pair, times);
+  // The pair already holds the value, so it is not said twice.
+  const shownValue = typeSize === undefined ? variable : undefined;
   return (
     // A group, so it can carry a name: a bare paragraph maps to a role that
     // prohibits one. Focusable by script only, as the field's label targets it.
@@ -428,7 +449,7 @@ export function VariableChip({
       className="nx-style-inspector__token nx-variable-chip"
       // The whole name and value on the chip, which never collapses, where the
       // value may be out of sight; its text, read out, holds both too.
-      title={variable === undefined ? name : `${name} ${variable.value}`}
+      title={shownValue === undefined ? name : `${name} ${shownValue.value}`}
       role="group"
       {...(labelledBy === undefined
         ? { "aria-label": label }
@@ -451,11 +472,11 @@ export function VariableChip({
             named={name}
           />
         )}
-        {variable === undefined ? null : (
+        {shownValue === undefined ? null : (
           <>
             {" "}
             <span className="nx-variable-chip__value">
-              {variableValueText(variable)}
+              {variableValueText(shownValue)}
             </span>
           </>
         )}
