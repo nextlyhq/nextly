@@ -672,28 +672,39 @@ export function sharedStyleReachSentence(
   if (reach.blocks !== undefined) {
     return siteWideSentence(blocks, reach, reach.blocks);
   }
+  return pageAndPlacesSentence(blocks, reach);
+}
+
+/**
+ * The sentence from a host that counts no blocks: the open page's blocks and
+ * the site's documents said apart, "3 blocks on this page · on 4 pages".
+ */
+function pageAndPlacesSentence(
+  blocks: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach
+): string {
   const parts: string[] = [];
   if (blocks !== undefined && blocks.count > 0) {
     const count = counted(blocks.count, ["block", "blocks"]);
     parts.push(`${blocks.complete ? "" : "at least "}${count} on this page`);
   }
-  if (reach !== undefined) {
-    const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[])
-      .filter(kind => reach.byKind[kind] > 0)
-      .map(kind => counted(reach.byKind[kind], KIND_WORDS[kind]));
-    if (kinds.length > 0) {
-      parts.push(
-        `on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`
-      );
-    }
+  const kinds = placesIn(reach.byKind);
+  if (kinds.length > 0) {
+    parts.push(`on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`);
   }
   if (parts.length > 0) {
     const sentence = parts.join(" · ");
     return sentence.charAt(0).toUpperCase() + sentence.slice(1);
   }
-  if (reach === undefined) return "";
   const exact = reach.complete && (blocks?.complete ?? true);
   return exact ? "Not used anywhere" : "No uses counted yet";
+}
+
+/** Each kind of place that holds the style, counted: "4 pages", "1 component". */
+function placesIn(byKind: Readonly<Record<SharedStyleKind, number>>): string[] {
+  return (Object.keys(KIND_WORDS) as SharedStyleKind[])
+    .filter(kind => byKind[kind] > 0)
+    .map(kind => counted(byKind[kind], KIND_WORDS[kind]));
 }
 
 /**
@@ -719,9 +730,7 @@ function siteWideSentence(
   const kind = here?.kind ?? "pages";
   byKind[kind] += (liveCount > 0 ? 1 : 0) - (savedHere > 0 ? 1 : 0);
   const complete = reach.complete && (live?.complete ?? true);
-  const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[])
-    .filter(each => byKind[each] > 0)
-    .map(each => counted(byKind[each], KIND_WORDS[each]));
+  const kinds = placesIn(byKind);
   if (blocks <= 0 || kinds.length === 0) {
     return complete ? "Not used anywhere" : "No uses counted yet";
   }
