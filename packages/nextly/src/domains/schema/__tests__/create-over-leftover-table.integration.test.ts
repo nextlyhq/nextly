@@ -34,6 +34,7 @@ import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec"
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import { junctionTablesOf } from "../services/field-column-descriptor";
+import { indexNameForColumn } from "../services/index-name";
 import { applyMigrationStatements } from "../services/apply-migration-statements";
 
 let t: TestNextly | undefined;
@@ -465,9 +466,9 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await liveColumns("dc_lcfg")).toContain("stale");
     });
 
-    // An index of the leftover's own under a name the create's index takes is the leftover's, and
-    // goes with it: the create is not refused as though the name were held elsewhere.
-    it("replaces an empty leftover holding an index under a name the create's index takes", async () => {
+    // An index the leftover keeps on the column the create indexes is the leftover's own, and goes
+    // with it: the create is not refused for it.
+    it("replaces an empty leftover with an index of its own on the column the create indexes", async () => {
       await leftoverCollectionTables("dc_lcidx", [
         { name: "code", type: "text", unique: true },
       ]);
@@ -478,6 +479,55 @@ for (const dialect of getConfiguredTestDialects()) {
 
       expect(await collectionStatus("lcidx")).toBe("applied");
       expect(await liveColumns("dc_lcidx")).toContain("code");
+    });
+
+    // The index-name check is a precondition: where a dialect shares index names beyond one table,
+    // a name the create's index takes held by an unrelated table refuses the create before
+    // anything changes, the leftover included. MySQL keeps index names per table, so no other
+    // table can hold it there.
+    it.skipIf(dialect === "mysql")(
+      "refuses a create whose index name another table holds, leaving the leftover as it was",
+      async () => {
+        await leftoverCollectionTables("dc_lcidxx");
+        const q = dialect === "mysql" ? "`" : '"';
+        await app().adapter.executeQuery(
+          `CREATE TABLE ${q}lcidx_holder${q} (${q}code${q} TEXT)`
+        );
+        await app().adapter.executeQuery(
+          `CREATE INDEX ${q}${indexNameForColumn("dc_lcidxx", "code")}${q} ON ${q}lcidx_holder${q} (${q}code${q})`
+        );
+
+        const refused = await refusalOf(
+          createCollection("lcidxx", [
+            { name: "code", type: "text", index: true },
+          ])
+        );
+
+        expect(refused).toBeDefined();
+        expect(await liveColumns("dc_lcidxx")).toContain("stale");
+        expect(await collectionStatus("lcidxx")).toBeNull();
+      }
+    );
+
+    // A field group may share a collection's address while its row stores anywhere: one storing in
+    // the create's own table keeps it, however empty.
+    it("refuses a collection create whose table a field group of the same address stores in", async () => {
+      await createFieldGroup("lcfgsame");
+      const q = dialect === "mysql" ? "`" : '"';
+      await app().adapter.executeQuery(
+        `ALTER TABLE ${q}comp_lcfgsame${q} RENAME TO ${q}dc_lcfgsame${q}`
+      );
+      await app().adapter.executeQuery(
+        `UPDATE dynamic_components SET table_name = 'dc_lcfgsame' WHERE slug = 'lcfgsame'`
+      );
+
+      const refused = await refusalOf(createCollection("lcfgsame"));
+
+      expect(refused).toMatchObject({ code: "DUPLICATE" });
+      expect(await liveColumns("dc_lcfgsame")).toEqual(
+        expect.arrayContaining(["title", "score"])
+      );
+      expect(await collectionStatus("lcfgsame")).toBeNull();
     });
 
     // A many-to-many keeps its links in a junction table the create makes beside its main table;

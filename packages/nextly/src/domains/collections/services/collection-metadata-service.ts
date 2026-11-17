@@ -724,11 +724,13 @@ export class CollectionMetadataService extends BaseService {
             entity.fields as Parameters<typeof collectionOwnTables>[1]
           )
         : [entity.tableName, `${entity.tableName}_locales`];
+    // Every registered entity, none left out by its slug: the slug guard has already ruled out a
+    // collection or Single of this one, and a field group may share it while storing anywhere.
     const owners = [
       ...collections,
       ...singles,
       ...fieldGroups.map(group => ({ ...group, fields: undefined })),
-    ].filter(entity => entity.slug !== slug);
+    ];
     for (const owner of owners) {
       const claimed = tablesOf(owner).find(table => wanted.has(table));
       if (claimed === undefined) continue;
@@ -790,18 +792,10 @@ export class CollectionMetadataService extends BaseService {
       // recorded, so a change the database refuses leaves no file, no registry row and nothing
       // reported as applied.
       if (this.isDevelopment()) {
-        // A table already standing where this create builds is never adopted: empty, it is
-        // dropped so the create renders every column from this request; holding rows, the create
-        // is refused before any statement runs (`clearLeftoverStorage`). First, so an index the
-        // leftover holds goes with it rather than reading as a name held elsewhere. What it throws
-        // is always a `NextlyError`, which the create's own handler below reports by its code.
-        await this.clearLeftoverCollection(
-          artifacts.metadata.slug,
-          artifacts.tableName,
-          artifacts.metadata.fields
-        );
         // An index name the new table takes may already be held elsewhere, where the create's
         // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
+        // A precondition, so it runs before the leftover below is cleared: a create it refuses
+        // has changed nothing.
         try {
           await refuseNewCollectionIndexNamesTaken(this.adapter, {
             slug: data.name,
@@ -819,6 +813,15 @@ export class CollectionMetadataService extends BaseService {
             this.dialect
           );
         }
+        // A table already standing where this create builds is never adopted: empty, it is
+        // dropped so the create renders every column from this request; holding rows, the create
+        // is refused before any statement runs (`clearLeftoverStorage`). What it throws is always
+        // a `NextlyError`, which the create's own handler below reports by its code.
+        await this.clearLeftoverCollection(
+          artifacts.metadata.slug,
+          artifacts.tableName,
+          artifacts.metadata.fields
+        );
       }
 
       // The definition, then the migration `migrate:create` would write for
