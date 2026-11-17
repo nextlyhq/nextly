@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   COLUMNS_LAYOUTS,
+  layoutHoldsValue,
   layoutOf,
   planLayout,
   planStack,
@@ -140,6 +141,30 @@ describe("layoutOf", () => {
     // No tile lays out one column, or five: none is chosen.
     expect(layoutOf(undefined, byDefault, 1)).toBe("none");
     expect(layoutOf(undefined, byDefault, 5)).toBe("none");
+  });
+});
+
+describe("layoutHoldsValue", () => {
+  const tiers = stackTiers(BREAKPOINTS);
+
+  it("is false for a row as placed, and true once it stores a layout or a stack", () => {
+    expect(layoutHoldsValue(row([column("a")]), tiers)).toBe(false);
+    expect(
+      layoutHoldsValue(
+        row([column("a")], {
+          base: { base: { gridTemplateColumns: "1fr 1fr" } },
+        }),
+        tiers
+      )
+    ).toBe(true);
+    expect(
+      layoutHoldsValue(
+        row([column("a")], {
+          base: { md: { display: "flex", flexDirection: "column" } },
+        }),
+        tiers
+      )
+    ).toBe(true);
   });
 });
 

@@ -12,6 +12,7 @@
  * @module columns-layout
  */
 import {
+  BASE_BREAKPOINT,
   getBlock,
   makeNode,
   type BlockNode,
@@ -436,6 +437,20 @@ export function stackOf(
     if (stack !== undefined) return { on: tier.on, reversed: stack.reversed };
   }
   return { on: "never", reversed: false };
+}
+
+/**
+ * Whether the row stores a layout of its own: a template on its base
+ * values, or a stack at any device. What the Content section's dot says.
+ */
+export function layoutHoldsValue(row: BlockNode, tiers: StackTiers): boolean {
+  const template = readStyleValue(row.styles, {
+    state: "base",
+    breakpoint: BASE_BREAKPOINT,
+    property: "gridTemplateColumns",
+    path: [],
+  });
+  return template !== undefined || stackOf(row, tiers, "base").on !== "never";
 }
 
 /** The display the block lays a row out with, from its own defaults. */

@@ -121,8 +121,11 @@ describe("the core block library's bind buttons", () => {
           unbound.push(`${block.name}.${prop.name}`);
           continue;
         }
+        // Hidden included: a prop placed in Advanced (a box's link
+        // relationship) is drawn in that tab, mounted while Content shows.
         const buttons = screen.queryAllByRole("button", {
           name: `Bind ${propLabel(prop.name, prop.schema)} to a field`,
+          hidden: true,
         });
         expect(buttons.length, `${block.name} ${prop.name}`).toBeGreaterThan(0);
       }
@@ -135,10 +138,16 @@ describe("the core block library's bind buttons", () => {
     // words' menu; a list's query is chosen, never filled from a field.
     expect(unbound.sort()).toEqual(
       [
+        "core/box.entryCollection",
+        "core/box.entryId",
+        "core/box.target",
         "core/button.entryCollection",
         "core/button.entryId",
         "core/button.rel",
         "core/button.target",
+        "core/card.entryCollection",
+        "core/card.entryId",
+        "core/card.target",
         "core/collection-loop.collection",
         "core/collection-loop.limit",
         "core/collection-loop.offset",
