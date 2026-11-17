@@ -153,8 +153,12 @@ describe("core/image's settings, as the panel is given them", () => {
   });
 
   it("places the shared link settings under When clicked", () => {
-    for (const name of ["href", "entryCollection", "entryId", "target", "rel"])
+    for (const name of ["href", "entryCollection", "entryId", "target"])
       expect(props[name]?.section).toBe("When clicked");
+  });
+
+  it("places the link relationship in Advanced › HTML", () => {
+    expect(props.rel).toMatchObject({ group: "advanced", section: "HTML" });
   });
 
   it("names the alt text, the decorative mark and the caption plainly", () => {

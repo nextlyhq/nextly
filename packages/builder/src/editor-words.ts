@@ -30,6 +30,8 @@ export const EDITOR_WORDS = {
   sharedStyles: "Shared styles",
   blockStyles: "Block styles",
   fonts: "Fonts",
+  // The Type tab's section setting every page's text.
+  siteText: "Site text",
   sections: "Saved sections",
   content: "Content",
   style: "Style",

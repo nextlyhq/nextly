@@ -67,7 +67,9 @@ import {
   safeTokenPrefix,
   tokenCustomProperty,
 } from "./declarations";
+import type { SiteTextMap } from "./site-text";
 import { checkTokenKind, tokenKindExample } from "./site-token-kind";
+import { typeSizeDefaultTokens } from "./type-size-defaults";
 
 /** The modes a token may carry a value for. */
 export type TokenMode = "light" | "dark";
@@ -188,6 +190,17 @@ export interface SiteTokenSet {
    * remakes those values.
    */
   fluidRange?: { readonly min: number; readonly max: number };
+  /**
+   * The site's text: Body, the six heading levels, Links, Buttons and
+   * Captions, each a size and line height (and for links a colour and an
+   * underline) set once for every page. A row left out keeps its built-in
+   * value (`resolveSiteText`). Never emitted here: the element tier writes
+   * it. Kept with the variables because a row points at them, so the two
+   * save, merge and undo as one.
+   *
+   * @experimental
+   */
+  siteText?: SiteTextMap;
   /**
    * The site's colours in the order its authors put them, by identity.
    * Colours it does not name follow in the set's own order, so a site that
@@ -760,6 +773,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.fluidRange === undefined
       ? {}
       : { fluidRange: override.fluidRange }),
+    // And the site's text, which the element tier reads beside the tokens.
+    ...(override?.siteText === undefined
+      ? {}
+      : { siteText: override.siteText }),
     // Site-wide as well: the order the site's colours are listed in.
     ...(override?.order === undefined ? {} : { order: override.order }),
   };
@@ -887,6 +904,7 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    ...typeSizeDefaultTokens(),
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
     ...SPACING_DEFAULTS.map(
       ({ name, value, description }): SiteToken => ({

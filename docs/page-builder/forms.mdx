@@ -29,7 +29,7 @@ Required fields carry a visible `*` and say "required" to a screen reader, and t
 malformed email or a link that isn't one with its own message, before anything is sent, and
 the server checks the same rules again.
 
-**After sending** chooses what a visitor sees once a send is accepted:
+In the **After sending** section, **Then** chooses what a visitor sees once a send is accepted:
 
 - **Show a message**: the form is replaced by the message, "Thanks, we got your message."
   unless you write another. The message takes the keyboard and screen reader focus.
@@ -207,7 +207,7 @@ A described `script` is added, as a module, only to pages that draw that form, o
 many of its forms a page holds. A closed form shows its own message (or "This form isn't
 taking answers right now.") in its place; a missing one draws nothing.
 
-"After sending" on a block with a provider's form starts as **Use the form's own setting**,
+**Then** (in After sending) on a block with a provider's form starts as **Use the form's own setting**,
 which follows `afterSending`. The block may choose a message or a page of its own instead.
 
 `accept` answers with one of:

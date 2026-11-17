@@ -220,14 +220,21 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
       type: "textarea",
       inline: true,
     },
-    attribution: { label: "Attribution", role: "content", type: "text" },
+    attribution: { label: "Who said it", role: "content", type: "text" },
     source: {
-      label: "Source title",
+      label: "Source",
+      section: "Source",
       role: "content",
       type: "text",
       inline: true,
     },
-    citeUrl: { label: "Source URL", role: "content", type: "url" },
+    // Where the quote comes from, drawn with its title in the Source section.
+    citeUrl: {
+      label: "Source URL",
+      section: "Source",
+      role: "content",
+      type: "url",
+    },
   },
   defaultProps: { text: "" },
   example: {

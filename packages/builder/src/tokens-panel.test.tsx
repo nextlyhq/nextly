@@ -110,7 +110,9 @@ describe("the rows", () => {
     const headings = screen
       .getAllByRole("heading", { level: 3 })
       .map(h => h.textContent);
+    // Site text leads the type groups, in a view of every group.
     expect(headings).toEqual([
+      "Site text",
       "Colours",
       "Type scale",
       "Spacing",

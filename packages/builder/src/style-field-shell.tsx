@@ -48,6 +48,7 @@ import { SharedValueLine, ProvenanceDot } from "./style-provenance-indicators";
 import { editableText } from "./style-text-field";
 import { labelFocusOnly } from "./style-value-fields";
 import type { StyleAddress, StylePolicy } from "./style-values";
+import { lineHeightPairFor, TypeSizeLineHint } from "./type-size-pair";
 
 /** One editable position, drawn as the control its leaf kind resolves to. */
 /**
@@ -231,7 +232,14 @@ export function StyleControlField({
     property: control.property,
     path: control.path,
   };
-  const writes = useFieldTarget({ editor, nodeId, address, policy });
+  const writes = useFieldTarget({
+    editor,
+    nodeId,
+    address,
+    policy,
+    // A type size picked here brings its line height where the block has none.
+    pairFor: lineHeightPairFor(address, tokens),
+  });
   const { target, nodeStyles, styles, stored, issue } = writes;
   const pairedColour = partnerColour(control.leaf, styles, address);
   // This node's own styles first, then every ancestor's. An ancestor's
@@ -342,6 +350,19 @@ export function StyleControlField({
               </InheritedValue.Provider>
             </LabelScrubRow>
             <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
+            <TypeSizeLineHint
+              address={address}
+              styles={nodeStyles}
+              tokens={tokens}
+              // A shared style's line height is the style's own: the hint
+              // speaks of a block's.
+              onBlock={target.kind !== "shared"}
+              // A held variable draws no typed field, so the field's own
+              // read-only answer is not this one: only a withdrawn property
+              // is, and a lock refuses the write itself.
+              readOnly={clearOnly}
+              onCommit={commit}
+            />
             <BreakpointAction
               answer={answer}
               label={actionName}

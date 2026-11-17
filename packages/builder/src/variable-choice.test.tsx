@@ -209,9 +209,10 @@ describe("the variables menu of a field with no menu of its own", () => {
     const drawn = screen
       .getAllByRole("option")
       .map(option => option.textContent ?? "");
-    // The type sizes first and the engine's own Content width under Other,
-    // late, though the site's list starts with it.
-    expect(drawn.slice(0, 2)).toEqual(["Display 48px", "Body 16px"]);
+    // The type sizes first, the engine's built-in heading sizes leading, and
+    // the engine's own Content width under Other, late, though the site's
+    // list starts with it.
+    expect(drawn.slice(0, 2)).toEqual(["H1 2.25rem", "H2 1.75rem"]);
     expect(drawn.indexOf("Content width 72rem")).toBeGreaterThan(
       drawn.indexOf("Sm 8px")
     );
@@ -220,10 +221,10 @@ describe("the variables menu of a field with no menu of its own", () => {
         .getAllByRole("option")
         .find(option => option.getAttribute("aria-selected") === "true")
         ?.textContent ?? null;
-    expect(selected()).toBe("Display 48px");
+    expect(selected()).toBe("H1 2.25rem");
     const list = screen.getByRole("listbox", { name: "Variables" });
     fireEvent.keyDown(list, { key: "ArrowDown" });
-    expect(selected()).toBe("Body 16px");
+    expect(selected()).toBe("H2 1.75rem");
     fireEvent.keyDown(list, { key: "End" });
     expect(selected()).toBe(drawn.at(-1));
     fireEvent.keyDown(list, { key: "ArrowUp" });
@@ -353,7 +354,8 @@ describe("the chip a held variable shows", () => {
       />
     );
     const chip = screen.getByRole("group", { name: "Font size" });
-    expect(chip.textContent).toBe("Display 48px");
+    // A type size reads as its name and pair.
+    expect(chip.textContent).toBe("Display · 48");
     // Green is the chip's class, which the stylesheet paints: see
     // variable-choice-styles.test.
     expect(chip.classList.contains("nx-variable-chip")).toBe(true);
