@@ -86,6 +86,28 @@ default language. A document's draft is checked as well, so a binding broken onl
 draft is listed before that draft is published. Until the first check of every document
 finishes, the list says it hasn't checked yet rather than that every binding fits.
 
+### Where a Single's values are shown
+
+A Single's side panel has a **Shown on (from the builder)** section. It lists each page,
+header & footer set and component where the builder shows one of the Single's values,
+with the block it's in: **Home, Hero section**. Each row opens that document in the editor
+with the block selected. A block takes its name from Layers: the name you gave it, or its
+block's name.
+
+- A binding inside a component is listed once, on the component, not on every page that
+  places it.
+- Bindings in a draft count, so a binding you haven't published yet is listed.
+- You see only the places you're allowed to open. The rest are counted: **and 2 you can't
+  open**.
+- The section shows 10 rows. **and N more** opens the full list.
+- The list knows only documents made with the builder. Code that reads the Single
+  directly isn't listed, and the section says so.
+
+The list comes from an index of every builder document's bindings to Singles. It's kept
+by the same check as **Bindings to fix**, on every save and whenever a field or a block
+changes. After you upgrade and run `nextly migrate`, the section says **Still checking
+pages…** until the first check of every document finishes. That takes a jobs pass or two.
+
 ### Publishing a page whose parts aren't published
 
 A page, the components it places and its header & footer set are published separately. When you
@@ -311,6 +333,29 @@ it: "Adding inside Hero, at the end", "Adding after Heading, inside Hero" or "Ad
 the end of the page". Each tile tells a screen reader where it goes, and after an insert
 a screen reader hears what was added and where ("Heading added inside Hero, at the
 end"). The new block is selected, so the next one goes after it.
+
+## Adding a block where you are
+
+Press <kbd>/</kbd> on the canvas, with a block selected or nothing selected, and a small
+picker opens beside the block (or at the end of the page), so you can add a block
+without going to the Add panel. It holds:
+
+- **Search blocks**, with the cursor in it. Typing lists the blocks, saved sections and
+  components that can go there, from the same list and words as the Add panel.
+- **The six blocks you add most**, in a grid. Until you have added any they are Heading,
+  Text, Image, Button, Box and Columns. They are counted for you in this browser, and a
+  block that can't go there is skipped for the next one.
+- **Browse all blocks and sections →**, which opens the Add panel instead.
+
+A line at the top says where the block will go, by the same rule as the Add panel's
+(see [Where a clicked block lands](#where-a-clicked-block-lands)). Arrow keys move
+through the blocks, <kbd>Enter</kbd> adds the highlighted one, and <kbd>Tab</kbd> moves
+to **Browse all**. The new block is selected; a block with text, such as a Heading,
+opens for typing, and anything else leaves you on the canvas. <kbd>Escape</kbd> or a
+click outside closes the picker without adding anything and puts you back where you
+were.
+
+While you are typing in a block's text, <kbd>/</kbd> is just a character.
 
 ## Pages
 
@@ -775,6 +820,7 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
 | <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                                   | Move the selected block into the container above it, or out of its container                                                      |
