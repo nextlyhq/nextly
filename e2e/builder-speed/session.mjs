@@ -163,7 +163,7 @@ export async function opens(page, cdp, watcher, id, count) {
     await page.goto(`${BASE}/admin/collections/pages/${id}`, {
       timeout: 120_000,
     });
-    const link = page.getByRole("link", { name: "Open Page Builder" });
+    const link = page.getByRole("link", { name: "Open in builder" });
     await link.waitFor({ timeout: SHOW_LIMIT_MS });
     await watcher.quiet();
     await slowNetwork(cdp, LATENCY_MS);

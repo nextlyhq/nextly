@@ -79,9 +79,13 @@ vi.mock("./entry-block-resolver", async () => {
 });
 
 const CONFIG = {};
+// The admin's media read, which the picture resolves images through: one
+// function for every call, as the admin's own hook keeps it.
+const READ_MEDIA = async () => null;
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   usePluginClientConfig: () => CONFIG,
+  useMediaResolver: () => READ_MEDIA,
 }));
 
 vi.mock("./site-style-client", () => ({

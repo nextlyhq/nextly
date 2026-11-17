@@ -631,3 +631,86 @@ describe("PageMiniature's sections", () => {
     expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 });
+
+describe("PageMiniature inside a header & footer set", () => {
+  /** A region holding one line of text, as a component instance fills it. */
+  function region(area: "header" | "footer", text: string) {
+    return {
+      area,
+      document: {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes: [
+          {
+            id: "a",
+            type: TEXT.name,
+            version: TEXT.version,
+            props: { text },
+          },
+        ],
+      } as unknown as BlockDocument,
+    };
+  }
+
+  it("draws the page between its header and its footer, as the canvas does", () => {
+    const { container } = render(
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={RENDER}
+        // Handed footer first: the order drawn is the page's, not the list's.
+        regions={[
+          region("footer", "Site footer"),
+          region("header", "Site header"),
+        ]}
+      />
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Site header");
+    expect(text).toContain("Site footer");
+    expect(text.indexOf("Site header")).toBeLessThan(
+      text.indexOf("Hello from the page")
+    );
+    expect(text.indexOf("Hello from the page")).toBeLessThan(
+      text.indexOf("Site footer")
+    );
+  });
+
+  it("compiles each part under its own scope, so a region's styles never restyle the page", () => {
+    // The region and the page hold a node with the same id, as two documents
+    // may: each keeps its own scope class on its own root.
+    const { container } = render(
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={RENDER}
+        regions={[region("header", "Site header")]}
+      />
+    );
+
+    const surface = container.querySelector(
+      '[data-slot="page-miniature-surface"]'
+    );
+    const scoped = [
+      ...(surface?.querySelectorAll("[class*='nx-pb-part-']") ?? []),
+    ]
+      .flatMap(element => [...element.classList])
+      .filter(name => name.startsWith("nx-pb-part-"));
+    expect(new Set(scoped)).toEqual(
+      new Set(["nx-pb-part-header", "nx-pb-part-page"])
+    );
+  });
+
+  it("draws the page alone where there is no region", () => {
+    const { container } = render(
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={RENDER}
+        regions={[]}
+      />
+    );
+    expect(container.textContent).toBe("Hello from the page");
+  });
+});
