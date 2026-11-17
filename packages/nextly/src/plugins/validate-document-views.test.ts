@@ -186,8 +186,13 @@ describe("assertDocumentViews", () => {
 function fieldTypePlugin(
   name: string,
   ownTypes: string[],
-  views: { path: string; fieldType: string; label?: string }[],
-  slugViews: Record<string, { path: string }[]> = {}
+  views: {
+    path: string;
+    fieldType: string;
+    label?: string;
+    opensFirst?: string;
+  }[],
+  slugViews: Record<string, { path: string; opensFirst?: string }[]> = {}
 ): unknown {
   return {
     name,
@@ -353,5 +358,83 @@ describe("contributedDocumentViews", () => {
         plugin: "@acme/forms",
       },
     ]);
+  });
+});
+
+describe("a view that asks to open first", () => {
+  it('accepts `opensFirst: "mainField"` on a field-type view and publishes it', () => {
+    const plugins = asPlugins([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", opensFirst: "mainField" }]
+      ),
+    ]);
+    expect(() => assertDocumentViews(plugins)).not.toThrow();
+    // The admin decides where an entry opens from what it is given, so the
+    // declaration has to reach it.
+    expect(contributedDocumentViews(plugins)).toEqual([
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder/admin#View",
+        opensFirst: "mainField",
+        plugin: "@acme/builder",
+      },
+    ]);
+  });
+
+  it("refuses it on a view declared on a slug, naming the plugin and the path", () => {
+    // A slug view has no field type, so there is no main field for it to match.
+    const error = refusal([
+      fieldTypePlugin("@acme/builder", ["blocks"], [], {
+        pages: [{ path: "builder", opensFirst: "mainField" }],
+      }),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("@acme/builder");
+    expect(error.logMessage).toContain('"builder"');
+    expect(error.logMessage).toContain("opensFirst");
+  });
+
+  it('refuses a value other than "mainField"', () => {
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks", opensFirst: "always" }]
+      ),
+    ]);
+    expect(error.logMessage).toContain('"always"');
+  });
+
+  it("refuses two views asking to open first on one field type", () => {
+    // Two answers to "where does this entry open" with nothing to choose
+    // between them.
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [
+          { path: "builder", fieldType: "blocks", opensFirst: "mainField" },
+          { path: "canvas", fieldType: "blocks", opensFirst: "mainField" },
+        ]
+      ),
+    ]);
+    expect(error.logMessage).toContain('"builder"');
+    expect(error.logMessage).toContain('"canvas"');
+  });
+
+  it("leaves `opensFirst` off a view that does not declare it", () => {
+    const [view] = contributedDocumentViews(
+      asPlugins([
+        fieldTypePlugin(
+          "@acme/builder",
+          ["blocks"],
+          [{ path: "builder", fieldType: "blocks" }]
+        ),
+      ])
+    );
+    expect(view).not.toHaveProperty("opensFirst");
   });
 });
