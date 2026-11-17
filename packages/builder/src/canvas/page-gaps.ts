@@ -52,6 +52,17 @@ export interface Gap {
   readonly y: number;
   /** How long the line along the gap is drawn. */
   readonly length: number;
+  /**
+   * How near the pointer must be to the line for the "+" to show: never more
+   * than a quarter of the shorter block beside it, so the middle of a block
+   * is never near a gap however short the block is drawn.
+   */
+  readonly reach: number;
+  /**
+   * Whether a "+" centred on the line leaves the middle of both blocks beside
+   * it uncovered: each is at least as deep as the "+" is.
+   */
+  readonly roomy: boolean;
 }
 
 /**
@@ -60,6 +71,27 @@ export interface Gap {
  * one line tall stays the block's to press.
  */
 const NEAR_GAP_PX = 8;
+
+/** The "+"'s side on screen, in the chrome's pixels: the 24px target floor. */
+export const GAP_CONTROL_PX = 24;
+
+/**
+ * How deep the blocks beside a gap are, across its line: their heights
+ * beside a line across, their widths beside a line down.
+ */
+function depthBeside(line: GapLine, rects: readonly Rect[]): number {
+  return Math.min(
+    ...rects.map(rect => (line === "across" ? rect.height : rect.width))
+  );
+}
+
+/** The reach and room of a gap between blocks this deep. */
+function clearance(depth: number): Pick<Gap, "reach" | "roomy"> {
+  return {
+    reach: Math.min(NEAR_GAP_PX, depth / 4),
+    roomy: depth >= GAP_CONTROL_PX,
+  };
+}
 
 /** A drawn block: its id and the union of the boxes it is drawn as. */
 interface Drawn {
@@ -128,6 +160,7 @@ function gapBetween(above: Drawn, below: Drawn, span?: Rect): Gap {
       x: edge,
       y: (top + bottom) / 2,
       length: bottom - top,
+      ...clearance(depthBeside("down", [a, b])),
     };
   }
   const run = span ?? unionRect([a, b]) ?? a;
@@ -138,6 +171,7 @@ function gapBetween(above: Drawn, below: Drawn, span?: Rect): Gap {
     x: run.x + run.width / 2,
     y: (a.y + a.height + b.y) / 2,
     length: run.width,
+    ...clearance(depthBeside("across", [a, b])),
   };
 }
 
@@ -205,6 +239,7 @@ export function measureGaps(
             x: page.x + page.width / 2,
             y: last.rect.y + last.rect.height,
             length: page.width,
+            ...clearance(last.rect.height),
           },
         ];
   return [
@@ -223,7 +258,7 @@ function readingOrder(a: Gap, b: Gap): number {
  * How far a point is from a gap's line, or `undefined` where it is past the
  * line's ends: beside a row's gap, not above or below the row.
  */
-function distanceTo(gap: Gap, x: number, y: number): number | undefined {
+export function distanceTo(gap: Gap, x: number, y: number): number | undefined {
   const [across, along] =
     gap.line === "across" ? [y - gap.y, x - gap.x] : [x - gap.x, y - gap.y];
   if (Math.abs(along) > gap.length / 2) return undefined;
@@ -231,8 +266,8 @@ function distanceTo(gap: Gap, x: number, y: number): number | undefined {
 }
 
 /**
- * The gap the pointer is within {@link NEAR_GAP_PX} of, by its key: the
- * nearest, where it is near two (a child's gap close to the page's).
+ * The gap the pointer is within reach of, by its key: the nearest, where it
+ * is near two (a child's gap close to the page's).
  */
 export function gapNear(
   gaps: readonly Gap[],
@@ -242,7 +277,7 @@ export function gapNear(
   let nearest: { key: string; distance: number } | undefined;
   for (const gap of gaps) {
     const distance = distanceTo(gap, x, y);
-    if (distance === undefined || distance > NEAR_GAP_PX) continue;
+    if (distance === undefined || distance > gap.reach) continue;
     if (nearest === undefined || distance < nearest.distance) {
       nearest = { key: gapKey(gap), distance };
     }

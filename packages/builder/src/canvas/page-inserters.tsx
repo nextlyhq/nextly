@@ -27,12 +27,24 @@
  * At rest a gap's "+" is not drawn, and takes no pointer events: a row of
  * buttons down the page would sit on every block's edge, and an unseen one
  * would take the press an author meant for a short block beside the gap. It
- * shows, and takes the pointer, while the pointer is near the gap or on the
- * "+" itself, and while it has keyboard focus. Nearness is measured rather
- * than read from the hovered block: a short block's middle is as close to its
- * edge as a "+" is tall, so "the pointer is in the block beside it" would put
- * the "+" under a press meant for that block. Nothing shows while a block is
- * dragged: the drag's own line says where it will land.
+ * shows, and takes the pointer, only while the pointer is within the gap's
+ * reach of its line, on the canvas or on the "+" itself, and while it has
+ * keyboard focus. Nearness is measured rather than read from the hovered
+ * block: a short block's middle is as close to its edge as a "+" is tall, so
+ * "the pointer is in the block beside it" would put the "+" under a press
+ * meant for that block.
+ *
+ * ## Never over a short block's middle
+ *
+ * The "+" is 24px on screen, so centred on the line between two blocks drawn
+ * shorter than that (a line of text at a zoomed-out canvas) it covers their
+ * middles. The reach is therefore at most a quarter of the shorter block,
+ * and it holds on the "+" too: moving from the line towards a block's middle
+ * lets the "+" go before the pointer gets there, so the press lands on the
+ * block. A touch screen, which has no pointer to come near, keeps a "+"
+ * shown only where both blocks beside it are at least as deep as the "+".
+ * Nothing shows while a block is dragged: the drag's own line says where it
+ * will land.
  *
  * ## The keyboard
  *
@@ -174,7 +186,7 @@ function useNearGap(
   layer: React.RefObject<HTMLDivElement | null>,
   gaps: readonly Gap[],
   hidden: boolean
-): string | undefined {
+): readonly [string | undefined, (key: string | undefined) => void] {
   const [near, setNear] = React.useState<string | undefined>(undefined);
   const canvasFrame = useCanvasFrame();
   React.useEffect(() => {
@@ -196,7 +208,7 @@ function useNearGap(
       root.removeEventListener("pointerleave", leave);
     };
   }, [layer, gaps, hidden, canvasFrame]);
-  return near;
+  return [near, setNear];
 }
 
 /**
@@ -277,11 +289,22 @@ function GapControl({
 }): React.JSX.Element {
   const key = gapKey(gap);
   const across = gap.line === "across";
+  // Held only while the pointer on the "+" is within the gap's reach of its
+  // line, which runs through the "+"'s middle: further, towards a block's
+  // middle, the "+" lets go so a press there is the block's.
+  const hold = (event: React.PointerEvent<HTMLButtonElement>): void => {
+    const button = event.currentTarget;
+    const off = across
+      ? event.nativeEvent.offsetY - button.offsetHeight / 2
+      : event.nativeEvent.offsetX - button.offsetWidth / 2;
+    onHold(Math.abs(off) <= gap.reach ? key : undefined);
+  };
   return (
     <div
       className="nx-page-inserters__gap"
       data-line={gap.line}
       data-near={shown ? "" : undefined}
+      data-roomy={gap.roomy ? "" : undefined}
       style={
         across
           ? { left: gap.x - gap.length / 2, top: gap.y, width: gap.length }
@@ -296,7 +319,8 @@ function GapControl({
           aria-label={words}
           {...{ [GAP_ATTRIBUTE]: key }}
           onClick={event => onAddAfter(gap.after, event.currentTarget)}
-          onPointerEnter={() => onHold(key)}
+          onPointerEnter={hold}
+          onPointerMove={hold}
           onPointerLeave={() => onHold(undefined)}
         >
           <Plus size={14} aria-hidden="true" />
@@ -357,12 +381,21 @@ export function PageInserters({
 }: PageInsertersProps): React.JSX.Element | null {
   const layer = React.useRef<HTMLDivElement | null>(null);
   const { gaps, start } = useMeasured(layer, document, selectedId, hidden);
-  const near = useNearGap(layer, gaps, hidden);
+  const [near, setNear] = useNearGap(layer, gaps, hidden);
   useTabToGap(layer, hidden ? [] : gaps, selectedId);
   // The gap whose "+" the pointer is on: a pointer moving onto the "+"
   // leaves the canvas's frame, which then reports no further move, so the
   // "+" holds itself shown while it is pointed at.
   const [held, setHeld] = React.useState<string | undefined>(undefined);
+  // Let go on the "+" is let go everywhere: the frame under it may not have
+  // heard the pointer leave, and a "+" still shown would take the press.
+  const hold = React.useCallback(
+    (key: string | undefined) => {
+      setHeld(key);
+      if (key === undefined) setNear(undefined);
+    },
+    [setNear]
+  );
   const empty = document.nodes.length === 0;
   const nameOf = (id: string): string =>
     blockNameOf(document, id, componentTitle) ?? "this block";
@@ -391,7 +424,7 @@ export function PageInserters({
                 gap.before === undefined ? undefined : nameOf(gap.before)
               )}
               shown={near === gapKey(gap) || held === gapKey(gap)}
-              onHold={setHeld}
+              onHold={hold}
               onAddAfter={onAddAfter}
             />
           ))

@@ -86,7 +86,8 @@ function section(
 
 /**
  * Hero, Pricing and Contact, each a Section holding a Heading but Pricing,
- * which lays out three Boxes in a row, each a third of the row's width.
+ * which lays out three Boxes in a row, each a third of the row's width and
+ * tall enough to point beside the line between two of them.
  */
 async function createPage(request: APIRequestContext): Promise<string> {
   const t = stamp();
@@ -111,7 +112,7 @@ async function createPage(request: APIRequestContext): Promise<string> {
               version: 1,
               name: `Box ${"ABC"[index] ?? ""}`,
               props: { as: "div" },
-              styles: { base: { base: { width: "30%" } } },
+              styles: { base: { base: { width: "30%", minHeight: "160px" } } },
               slots: {
                 children: [
                   heading(
@@ -164,11 +165,24 @@ function picker(page: Page): Locator {
   return page.getByRole("dialog", { name: "Add a block" });
 }
 
-/** Bring a "+" out by moving the pointer beside it, off to its side. */
+/**
+ * Bring a "+" out by moving the pointer near its gap, along the gap's line
+ * away from the "+" itself, and a few pixels to the block-before's side.
+ */
 async function pointNear(page: Page, add: Locator): Promise<void> {
   const spot = await add.boundingBox();
   if (spot === null) throw new Error("[e2e] the + is not laid out");
-  await page.mouse.move(spot.x - 160, spot.y + spot.height / 2, { steps: 4 });
+  const line = await add.evaluate(
+    element =>
+      element.closest("[data-line]")?.getAttribute("data-line") ?? "across"
+  );
+  const x = spot.x + spot.width / 2;
+  const y = spot.y + spot.height / 2;
+  await page.mouse.move(
+    line === "down" ? x - 3 : x - 160,
+    line === "down" ? y - 40 : y - 3,
+    { steps: 4 }
+  );
   await expect
     .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
     .toBe("1");
@@ -188,6 +202,36 @@ async function everyBox(page: Page): Promise<Record<string, object>> {
     boxes[id] = await boxOf(page, id);
   }
   return boxes;
+}
+
+/** Three lines of text, one after another, as short as a block gets. */
+const LINES = [
+  "00000000-0000-4000-8000-0000000ca531",
+  "00000000-0000-4000-8000-0000000ca532",
+  "00000000-0000-4000-8000-0000000ca533",
+] as const;
+
+async function createShortPage(request: APIRequestContext): Promise<string> {
+  const t = stamp();
+  const created = await request.post(PAGES, {
+    data: {
+      title: `Short blocks ${t}`,
+      slug: `short-blocks-${t}`,
+      status: "draft",
+      content: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: LINES.map((id, index) => ({
+          id,
+          type: "core/text",
+          version: 1,
+          props: { text: `Line ${String(index + 1)}` },
+        })),
+      },
+    },
+  });
+  expect(created.ok(), `creating the page: ${created.status()}`).toBe(true);
+  return ((await created.json()) as { item: { id: string } }).item.id;
 }
 
 test.describe("the + in the canvas's gaps", () => {
@@ -279,12 +323,11 @@ test.describe("the + in the canvas's gaps", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
     await clearSelection(page);
-    // At 1280×800 the desktop page is fitted at about half size.
-    const zoom = await page
-      .getByRole("button", { name: /^Canvas zoom:/ })
-      .getAttribute("aria-label");
-    const percent = Number(/(\d+)%/.exec(zoom ?? "")?.[1]);
-    expect(percent, `the canvas at ${zoom}`).toBeLessThanOrEqual(55);
+    // The canvas at half size, where the page is drawn at half its pixels.
+    const zoom = page.getByRole("button", { name: /^Canvas zoom:/ });
+    await zoom.click();
+    await page.getByRole("menuitemradio", { name: "50%", exact: true }).click();
+    await expect(zoom).toHaveAttribute("aria-label", "Canvas zoom: 50%");
 
     const add = gap(page, "Add a block between Hero and Pricing");
     await pointNear(page, add);
@@ -393,11 +436,10 @@ test.describe("the + in the canvas's gaps", () => {
     await picker(page)
       .getByRole("button", { name: "Browse all blocks and sections →" })
       .click();
-    const panel = page.getByRole("complementary", { name: "Add panel" });
-    await expect(panel.locator(".nx-insert-panel__placement")).toHaveText(
-      "Adding between Hero and Pricing"
-    );
-    await panel.getByRole("option", { name: "Heading", exact: true }).click();
+    await expect(
+      page.locator(".nx-insert-panel__placement").first()
+    ).toHaveText("Adding between Hero and Pricing");
+    await page.getByRole("option", { name: "Heading", exact: true }).click();
     await expect
       .poll(() => topLevel(page))
       .toEqual([HERO, expect.any(String), PRICING, CONTACT]);
@@ -429,5 +471,36 @@ test.describe("the + in the canvas's gaps", () => {
       await page.keyboard.press("Escape");
       await expect(picker(page)).toBeHidden();
     }
+  });
+  test("never takes a click at a short block's middle, at half size", async ({
+    page,
+  }) => {
+    const id = await createShortPage(page.request);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect.poll(async () => (await structure(page)).length).toBe(3);
+    const zoom = page.getByRole("button", { name: /^Canvas zoom:/ });
+    await zoom.click();
+    await page.getByRole("menuitemradio", { name: "50%", exact: true }).click();
+    await expect(zoom).toHaveAttribute("aria-label", "Canvas zoom: 50%");
+    await clearSelection(page);
+
+    const line = await boxOf(page, LINES[1]);
+    // Drawn shorter than the 24px "+".
+    expect(line.height).toBeLessThan(24);
+    const x = line.x + line.width * 0.75;
+    // On the line between the first two, where the "+" shows...
+    await page.mouse.move(x, line.y, { steps: 4 });
+    const add = gap(page, "Add a block between Line 1 and Line 2");
+    await expect
+      .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
+      .toBe("1");
+    // ...then a click at the second's middle selects it, and opens nothing.
+    await page.mouse.click(x, line.y + line.height / 2);
+    await expect.poll(() => selection(page)).toEqual([LINES[1]]);
+    await expect(picker(page)).toBeHidden();
   });
 });

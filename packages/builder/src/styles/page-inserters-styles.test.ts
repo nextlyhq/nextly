@@ -34,7 +34,10 @@ function mediaHolding(selector: string): { query: string; body: string } {
 
 describe("the + between sections on a touch screen", () => {
   it("is shown and pressable wherever ANY pointer is coarse", () => {
-    const { query, body } = mediaHolding(".nx-page-inserters__add");
+    // Only where the blocks beside it leave their middles clear of it.
+    const { query, body } = mediaHolding(
+      ".nx-page-inserters__gap[data-roomy] .nx-page-inserters__add"
+    );
     expect(query).toBe("@media (any-pointer: coarse)");
     expect(body).toContain("pointer-events: auto;");
     expect(body).toContain("opacity: 1;");

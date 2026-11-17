@@ -232,14 +232,21 @@
  * A touch screen has no pointer moving near a gap to reveal its "+", and a tap
  * is hit-tested before any movement, so there the "+" stays shown and
  * pressable: seen, it cannot take a tap meant for something else unawares.
+ * Only where both blocks beside it are at least as deep as the "+"
+ * (`data-roomy`), so it never covers a short block's middle.
  * `any-pointer`, not `pointer`: a touchscreen laptop's PRIMARY pointer is
  * its trackpad, and its screen still takes taps.
  */
 @media (any-pointer: coarse) {
-  .nx-page-inserters__add {
+  .nx-page-inserters__gap[data-roomy] .nx-page-inserters__add {
     pointer-events: auto;
     opacity: 1;
   }
+}
+
+/* Its offsets are read off the "+" itself, not the icon inside it. */
+.nx-page-inserters__add > svg {
+  pointer-events: none;
 }
 
 .nx-page-inserters__gap:has(.nx-page-inserters__add:hover)

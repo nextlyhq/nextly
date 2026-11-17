@@ -11,8 +11,8 @@
  *   changes them.
  * - The published page draws no marker. A rule that reached the site's own
  *   sheet would draw it for visitors.
- * - The words pass axe's contrast check on a white, a near-black and a
- *   photographic Section.
+ * - The words read at 4.5:1 or more, on an opaque plate, on a white, a
+ *   near-black and a photographic Section.
  * - Hovering the Section draws a solid outline in the selection colour and a
  *   light tint of it over the area, and leaves the Section's own background
  *   as it was. A hover written on the block itself changes it.
@@ -39,7 +39,6 @@ import {
   structure,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
-import { expectNoAxeViolations } from "./support/axe";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
@@ -195,17 +194,64 @@ test.describe("an empty Section in the editor", () => {
     expect(await styled(page, DARK)).toEqual(marked);
   });
 
-  test("keeps its words readable on a near-black, a white and a photo Section", async ({
+  test("keeps its words readable on a near-black, a white and a photo Section, in a contrast check", async ({
     page,
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
+    // The words sit on a plate of the editor's own surface, opaque, so the
+    // Section's colour or photo beneath cannot change what they are read
+    // against. Measured here rather than by axe, which cannot see through
+    // the canvas's frame to judge text drawn over it.
     for (const name of ["Dark", "Light", "Photo"]) {
-      await expect(words(page, name)).toBeVisible();
+      const control = words(page, name);
+      await control.scrollIntoViewIfNeeded();
+      await expect(control).toBeVisible();
+      const read = await control.evaluate(button => {
+        const plate = button.querySelector(
+          ".nx-empty-container-appenders__plate"
+        );
+        const text = button.querySelector(
+          ".nx-empty-container-appenders__words"
+        );
+        if (plate === null || text === null) return null;
+        const canvas = document.createElement("canvas");
+        canvas.width = 1;
+        canvas.height = 1;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (context === null) return null;
+        const rgba = (colour: string): number[] => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = colour;
+          context.fillRect(0, 0, 1, 1);
+          return [...context.getImageData(0, 0, 1, 1).data];
+        };
+        const luminance = ([r = 0, g = 0, b = 0]: number[]): number => {
+          const channel = (value: number) => {
+            const c = value / 255;
+            return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+          };
+          return (
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+          );
+        };
+        const ground = rgba(getComputedStyle(plate).backgroundColor);
+        const ink = rgba(getComputedStyle(text).color);
+        const [light, dark] = [luminance(ground), luminance(ink)].sort(
+          (a, b) => b - a
+        );
+        return {
+          opacity: ground[3] ?? 0,
+          ratio: ((light ?? 0) + 0.05) / ((dark ?? 0) + 0.05),
+        };
+      });
+      expect(read, name).not.toBeNull();
+      expect(read?.opacity, `${name}: the plate is opaque`).toBe(255);
+      expect(
+        read?.ratio ?? 0,
+        `${name}: the words' contrast`
+      ).toBeGreaterThanOrEqual(4.5);
     }
-    await expectNoAxeViolations(page, {
-      include: ".nx-empty-container-appenders__plate",
-    });
   });
 
   test("hovered, draws a solid outline and a tint as chrome over it, leaving its own background", async ({

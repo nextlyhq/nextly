@@ -13,6 +13,7 @@
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -671,5 +672,67 @@ describe("the + between the selected block's children", () => {
       BOXES["box-b"] = [350, 120, 300, 160];
       BOXES["box-c"] = [700, 120, 300, 160];
     }
+  });
+});
+
+describe("the + between blocks drawn shorter than it", () => {
+  // A line of text at a zoomed-out canvas: 10.8px tall, stacked from the top.
+  const TOPS: Record<string, number> = { story: 0, team: 10.8, contact: 21.6 };
+
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const id = this.getAttribute("data-nx-node");
+        return id !== null && id in TOPS
+          ? new DOMRect(0, TOPS[id], 1000, 10.8)
+          : new DOMRect(0, 0, 1000, 32.4);
+      }
+    );
+  });
+
+  /** A pointer move on the "+" itself, `offsetY` down from its top edge. */
+  function moveOnPlus(button: HTMLElement, offsetY: number): void {
+    const event = createEvent.pointerMove(button);
+    Object.defineProperty(event, "offsetY", { value: offsetY });
+    Object.defineProperty(event, "offsetX", { value: 0 });
+    fireEvent(button, event);
+  }
+
+  it("never shows over a short block's middle, only right at the line", async () => {
+    mount(THREE);
+    await act(async () => undefined);
+    const root = document.querySelector(".nx-canvas");
+    if (root === null) throw new Error("no canvas");
+    const near = () =>
+      gapButtons().map(button => button.closest("[data-near]") !== null);
+    // The middle of the second block, 5.4px from either edge: not near, so a
+    // press there selects the block.
+    fireEvent.pointerMove(root, { clientX: 500, clientY: 16.2 });
+    expect(near()).toEqual([false, false, false]);
+    // 2px from the line between the first two: near.
+    fireEvent.pointerMove(root, { clientX: 500, clientY: 12.8 });
+    expect(near()).toEqual([true, false, false]);
+  });
+
+  it("lets go of the + as the pointer on it moves towards a block's middle", async () => {
+    mount(THREE);
+    await act(async () => undefined);
+    const [first] = gapButtons();
+    if (first === undefined) throw new Error("no gap");
+    const shown = () => first.closest("[data-near]") !== null;
+    // On the "+", at its line (jsdom gives it no size, so its middle is 0).
+    moveOnPlus(first, 1);
+    expect(shown()).toBe(true);
+    // Further down the "+", over the next block's middle: let go.
+    moveOnPlus(first, 6);
+    expect(shown()).toBe(false);
+  });
+
+  it("keeps a touch screen's + only where the blocks beside it are as deep as it", async () => {
+    mount(THREE);
+    await act(async () => undefined);
+    expect(
+      gapButtons().map(button => button.closest("[data-roomy]") !== null)
+    ).toEqual([false, false, false]);
   });
 });

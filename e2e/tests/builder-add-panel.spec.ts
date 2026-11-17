@@ -236,7 +236,9 @@ test.describe("the Add panel", () => {
       "data-refused",
       "true"
     );
-    await saveDraft(page);
+    // The refused click changed nothing, so there is nothing to save: the
+    // save button reads "Saved", and the stored page is as it was made.
+    await expect(page.getByRole("button", { name: "Saved" })).toBeDisabled();
     const nodes = await storedNodes(page.request, id);
     expect(nodes.map(node => node.type)).toEqual([
       "core/heading",
