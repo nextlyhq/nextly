@@ -75,6 +75,8 @@ import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { isRemovedFromCode } from "../removed-from-code-notice";
 import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
+import { storedStampOf } from "../review/review-words";
+import { useEditorReview } from "../review/useEditorReview";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
@@ -1247,6 +1249,23 @@ export function EntryForm({
       pluginSurfaces.sectionProps
     );
 
+  // The workflow's next step, where a workflow holds this document's
+  // publishing: read for the saved document, in the language being edited.
+  const review = useEditorReview({
+    document:
+      savedEntryId === ""
+        ? undefined
+        : {
+            scopeKind: "collection",
+            scopeSlug: collection.name,
+            entryId: savedEntryId,
+          },
+    locale,
+    canEdit: mayEdit,
+    isDirty: hasUnsavedWork,
+    storedStamp: storedStampOf(entry),
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1280,6 +1299,7 @@ export function EntryForm({
       ? { onDelete: handleDelete }
       : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
+    ...(review.binding === undefined ? {} : { review: review.binding }),
   };
 
   // A save refused because the entry changed since: who changed it and when,
@@ -1903,6 +1923,7 @@ export function EntryForm({
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
         {conflictDialog}
+        {review.dialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

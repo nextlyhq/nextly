@@ -24,6 +24,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 
 import {
   documentActions,
+  reviewStepActionId,
   type EditorDocumentAction,
   type ReviewActionState,
 } from "./document-actions";
@@ -524,6 +525,7 @@ export function useDocumentActionBindings({
   onDelete,
   onDuplicate,
   onViewApi,
+  review,
 }: DocumentActionBindingsInput): DocumentActionBindings {
   const { defaultLocale } = useLocalization();
   // True while the document area is showing a past version rather than the
@@ -613,6 +615,7 @@ export function useDocumentActionBindings({
     isDirty: isDirty === true,
     canDuplicate: onDuplicate !== undefined,
     writesRefused,
+    ...(review === undefined ? {} : { review: review.state }),
   });
   // A plugin's overrides, applied to what the model offers and to what each
   // verb runs, so the row, its control and `run` agree about them.
@@ -662,15 +665,23 @@ export function useDocumentActionBindings({
     actionOverrides
   );
 
-  const actionBindings = withHeldRecoveries(
-    bindingsFor(performers, reasons, {
-      // A submit-typed control submits the form natively and never calls
-      // back; `run` calls the performer, which submits the same way.
-      submitForm: hasStatus ? undefined : formId,
-    }),
-    actionOverrides,
-    builtInVerbs
-  );
+  // The workflow's steps, each run through the review's own handler. A step
+  // stores nothing of the form, so only a save in flight holds it here; the
+  // model gives every other reason (a past version, unsaved edits).
+  const stepPerformers = reviewStepPerformers(review);
+  const performersWithSteps = { ...performers, ...stepPerformers };
+  const actionBindings = {
+    ...withHeldRecoveries(
+      bindingsFor(performers, reasons, {
+        // A submit-typed control submits the form natively and never calls
+        // back; `run` calls the performer, which submits the same way.
+        submitForm: hasStatus ? undefined : formId,
+      }),
+      actionOverrides,
+      builtInVerbs
+    ),
+    ...reviewStepBindings(stepPerformers, isSubmitting),
+  };
 
   /*
    * One merge for both halves. Splitting them would let the bar draw a built-in
@@ -700,7 +711,7 @@ export function useDocumentActionBindings({
   const run = (id: string): Promise<DocumentActionOutcome> =>
     runAction(id, {
       offered: withContributions,
-      builtIn: { performers, bindings: actionBindings },
+      builtIn: { performers: performersWithSteps, bindings: actionBindings },
       refusalFor,
     });
 
@@ -889,9 +900,7 @@ function runAction(
       bindings: Record<string, ActionBinding | undefined>;
     };
     builtIn: {
-      performers: Partial<
-        Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>
-      >;
+      performers: Partial<Record<string, () => Promise<DocumentActionOutcome>>>;
       bindings: Record<string, ActionBinding | undefined>;
     };
     refusalFor: (reason: string) => SubmitRefusal;
@@ -917,12 +926,48 @@ function runAction(
   // The built-in performer when this id is still the built-in action; a
   // contribution that took the id runs its own control, which says nothing
   // back beyond having run.
-  const perform = builtIn.performers[id as BuiltInActionId];
+  const perform = builtIn.performers[id];
   if (perform !== undefined && binding === builtIn.bindings[id]) {
     return perform();
   }
   binding.onSelect();
   return Promise.resolve(DONE);
+}
+
+/** What each workflow step the person holds runs, by its action id. */
+function reviewStepPerformers(
+  review: DocumentReviewBinding | undefined
+): Record<string, () => Promise<DocumentActionOutcome>> {
+  if (review === undefined) return {};
+  return Object.fromEntries(
+    review.state.steps
+      .filter(step => step.held)
+      .map(step => [
+        reviewStepActionId(step.name),
+        () => review.takeStep(step.name),
+      ])
+  );
+}
+
+/**
+ * The steps' controls: each runs its performer, and is held while a save is
+ * in flight, since the step names the version the save is replacing.
+ */
+function reviewStepBindings(
+  performers: Record<string, () => Promise<DocumentActionOutcome>>,
+  isSubmitting: boolean
+): Record<string, ActionBinding> {
+  return Object.fromEntries(
+    Object.entries(performers).map(([id, perform]) => [
+      id,
+      {
+        onSelect: () => {
+          void perform();
+        },
+        ...(isSubmitting ? { disabledReason: "Saving…" } : {}),
+      },
+    ])
+  );
 }
 
 /** Which handler Save runs for where this document's work lands. */

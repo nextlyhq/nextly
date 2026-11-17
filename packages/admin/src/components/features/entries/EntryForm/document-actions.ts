@@ -287,6 +287,17 @@ function primaryAction(
   // Nothing leads where every write is refused, not even a publish a
   // reader's own permission would offer.
   if (state.writesRefused === true) return undefined;
+  // Where a workflow holds publishing, its next step leads, or a Publish held
+  // with why, AHEAD of every rule below: a step stores nothing of the form,
+  // so it leads for a reviewer who may not edit the document too.
+  const blocked = state.readingHistory ? HISTORY_REASON : undefined;
+  const reviewLead = reviewPrimary(state);
+  if (reviewLead !== undefined) {
+    return withReason(
+      { id: reviewLead.id, label: reviewLead.label, placement: "primary" },
+      blocked ?? reviewLead.reason
+    );
+  }
   // Every leading action but a publish stores the form, which a user who may
   // not change the document cannot do: a page they may only read leads with a
   // publish or with nothing.
@@ -296,7 +307,6 @@ function primaryAction(
     : readerPrimary(state);
   if (chosen === undefined) return undefined;
   const { id, label } = chosen;
-  const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   return withReason(
     { id, label, placement: "primary" },
     /*
@@ -538,8 +548,194 @@ export function documentActions(
       (rule.mutates ? blocked : undefined) ?? rule.reason?.(state)
     )
   );
+  const reviewRows =
+    state.writesRefused === true ? [] : reviewActions(state, blocked);
   const primary = primaryAction(state);
-  return primary === undefined ? built : [primary, ...built];
+  return primary === undefined
+    ? [...built, ...reviewRows]
+    : [primary, ...built, ...reviewRows];
+}
+
+/** The id a workflow step is offered under, apart from every built-in. */
+export const REVIEW_STEP_ACTION_PREFIX = "review-step:";
+
+/** The action id of the workflow step `name`. */
+export function reviewStepActionId(name: string): string {
+  return `${REVIEW_STEP_ACTION_PREFIX}${name}`;
+}
+
+/**
+ * Which kinds of step may lead, most specific first. Asking for changes is
+ * never the main action: it sends the work back, beside the approval.
+ */
+const LEADING_STEP_KINDS: readonly ReviewStepKind[] = [
+  "approve",
+  "submit",
+  "move",
+];
+
+/**
+ * The step a stage leads with: an approval where it has one, else a
+ * submission, else a move. The review state does not name the stage's
+ * primary step, so it is derived by kind; asking for changes never leads.
+ */
+export function leadingReviewStep<T extends { kind: ReviewStepKind }>(
+  steps: readonly T[]
+): T | undefined {
+  for (const kind of LEADING_STEP_KINDS) {
+    const step = steps.find(candidate => candidate.kind === kind);
+    if (step !== undefined) return step;
+  }
+  return undefined;
+}
+
+/** Whether the workflow holds this document's publishing at its stage. */
+function heldByReview(
+  state: DocumentActionState
+): state is DocumentActionState & { review: ReviewActionState } {
+  return (
+    state.review !== undefined &&
+    !state.review.publishable &&
+    state.hasStatus &&
+    state.mode === "edit"
+  );
+}
+
+/** The step this person leads with, while the workflow holds publishing. */
+function stepThatLeads(
+  state: DocumentActionState
+): ReviewStepState | undefined {
+  if (!heldByReview(state)) return undefined;
+  const step = leadingReviewStep(state.review.steps);
+  return step?.held === true ? step : undefined;
+}
+
+/** Whether there is anything to publish: a draft, or changes held for a live page. */
+function hasSomethingToPublish(state: DocumentActionState): boolean {
+  return state.status !== "published" || state.hasWorkingDraft;
+}
+
+/** Publish's own words for the state, as its primary rows say them. */
+function publishLabel(state: DocumentActionState): string {
+  return isPublishedEdit(state) && state.hasWorkingDraft
+    ? "Publish changes"
+    : "Publish";
+}
+
+/**
+ * Why a held Publish cannot run: the stage it waits in, and who it waits for
+ * where the review state names anyone.
+ */
+export function needsApprovalReason(review: ReviewActionState): string {
+  return review.waitingFor === null
+    ? `Needs approval: ${review.stageLabel}`
+    : `Needs approval: ${review.stageLabel}, waiting for ${review.waitingFor}`;
+}
+
+/**
+ * What leads where a workflow holds publishing, or undefined to leave the
+ * choice to the rules every document follows:
+ *
+ * - a person holding the stage's leading step leads with it (Submit for
+ *   review, Approve);
+ * - otherwise a person who may publish sees Publish leading, drawn held with
+ *   the stage and who it waits for, so "not now" reads as a reason and not as
+ *   a missing control.
+ *
+ * In a stage that allows publishing the workflow says nothing, and Publish
+ * leads exactly as it does without one.
+ */
+function reviewPrimary(
+  state: DocumentActionState
+): { id: string; label: string; reason: string | undefined } | undefined {
+  const step = stepThatLeads(state);
+  if (step !== undefined) {
+    return {
+      id: reviewStepActionId(step.name),
+      label: step.label,
+      reason: state.review?.stepReason,
+    };
+  }
+  if (heldByReview(state) && state.canPublish && hasSomethingToPublish(state)) {
+    return {
+      id: "publish",
+      label: publishLabel(state),
+      reason: needsApprovalReason(state.review),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * The workflow's rows beside the one that leads.
+ *
+ * - Where a step leads, the work still needs a Save, and a person who may
+ *   publish still sees Publish, held with why. Both sit in the toolbar.
+ * - Every other step the person holds is offered too: beside the leading one
+ *   while the stage holds publishing (Request changes beside Approve), and in
+ *   the menu once the stage allows it, where asking for changes is the rarer
+ *   act.
+ */
+function reviewActions(
+  state: DocumentActionState,
+  blocked: string | undefined
+): EditorDocumentAction[] {
+  const review = state.review;
+  if (review === undefined || !state.hasStatus || state.mode !== "edit") {
+    return [];
+  }
+  const leading = stepThatLeads(state);
+  const rows: EditorDocumentAction[] = [];
+  if (leading !== undefined && state.canEdit && !builtInToolbarSave(state)) {
+    rows.push(
+      withReason(
+        { id: "save", label: saveLabel(state), placement: "toolbar" },
+        blocked
+      )
+    );
+  }
+  if (
+    leading !== undefined &&
+    state.canPublish &&
+    hasSomethingToPublish(state)
+  ) {
+    rows.push(
+      withReason(
+        { id: "publish", label: publishLabel(state), placement: "toolbar" },
+        blocked ?? needsApprovalReason(review)
+      )
+    );
+  }
+  for (const step of review.steps) {
+    if (!step.held || step === leading) continue;
+    rows.push(
+      withReason(
+        {
+          id: reviewStepActionId(step.name),
+          label: step.label,
+          ...(review.publishable
+            ? { placement: "menu" as const, group: "document" as const }
+            : { placement: "toolbar" as const }),
+        },
+        blocked ?? review.stepReason
+      )
+    );
+  }
+  return rows;
+}
+
+/** Whether a built-in rule already offers Save in the toolbar. */
+function builtInToolbarSave(state: DocumentActionState): boolean {
+  return BUILT_IN_ACTIONS.some(
+    rule =>
+      rule.id === "save" && rule.placement === "toolbar" && rule.applies(state)
+  );
+}
+
+/** Save's words where the work lands, as the rows above say them. */
+function saveLabel(state: DocumentActionState): string {
+  if (!isPublishedEdit(state)) return "Save draft";
+  return state.draftsEnabled ? "Save" : "Save changes";
 }
 
 /**
