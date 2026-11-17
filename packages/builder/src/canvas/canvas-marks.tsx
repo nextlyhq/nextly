@@ -466,28 +466,52 @@ function outlineOf(
 
 /**
  * Where a selection ring is drawn for an outline: outside the block by
- * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric.
- * The layer reaches as far past the frame, so a block flush with the page's
- * edge keeps its ring there too.
+ * {@link RING_OUTSIDE}, with its rounded corners grown to stay concentric,
+ * and never past the page's edges (`page`, in the chrome's coordinates).
+ *
+ * The page meets the canvas region's edges, and the region cuts off whatever
+ * is drawn past them, so a ring outside a block flush with the page's edge
+ * lost that side. On such a side the ring stays on the page, over the
+ * block's edge, so all four of its sides are on screen.
  *
  * A clipped outline is drawn where it is: the page shows nothing past the
  * clip, so a ring outside it would ring what the reader cannot see.
  */
-function ringOf(outline: Outline): Outline {
+function ringOf(outline: Outline, page: Rect): Outline {
   if (outline.clipped) return outline;
   const { x, y, width, height } = outline.rect;
   const radii = outsetCornerRadii(outline.radii, RING_OUTSIDE);
   return {
-    rect: {
-      x: x - RING_OUTSIDE,
-      y: y - RING_OUTSIDE,
-      width: width + 2 * RING_OUTSIDE,
-      height: height + 2 * RING_OUTSIDE,
-    },
+    rect: withinRect(
+      {
+        x: x - RING_OUTSIDE,
+        y: y - RING_OUTSIDE,
+        width: width + 2 * RING_OUTSIDE,
+        height: height + 2 * RING_OUTSIDE,
+      },
+      page
+    ),
     radius: borderRadiusOf(radii),
     radii,
     clipped: false,
     ...(outline.shaped === true ? { shaped: true } : {}),
+  };
+}
+
+/**
+ * `rect` cut to `bounds` on each side it runs past them; left as it is where
+ * it lies inside them. A rectangle wholly outside keeps no area.
+ */
+function withinRect(rect: Rect, bounds: Rect): Rect {
+  const left = Math.max(rect.x, bounds.x);
+  const top = Math.max(rect.y, bounds.y);
+  const right = Math.min(rect.x + rect.width, bounds.x + bounds.width);
+  const bottom = Math.min(rect.y + rect.height, bounds.y + bounds.height);
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
   };
 }
 
@@ -759,7 +783,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
         if (placement !== "") {
           gatherPlacement(placements, copies, marked, placement, outline, look);
         } else {
-          found.push(selectedMark(ringOf(outline), look, placedTag));
+          found.push(selectedMark(ringOf(outline, pageBox), look, placedTag));
         }
       }
       // An exposed part keeps its dash inside its placement's frame. A block
@@ -780,7 +804,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
       found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
     });
   placements.forEach(({ placement, parts, ...look }) => {
-    const ring = ringOf(placementOutline(parts));
+    const ring = ringOf(placementOutline(parts), pageBox);
     found.push({
       ...selectedMark(ring, look, placedTag, placement),
       // Measured from the top of what is on screen rather than of the page:

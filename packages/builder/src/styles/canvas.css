@@ -38,9 +38,12 @@
 }
 
 /*
- * A SHEET on the editor's surface: an outline rather than a border, so the
- * edge takes no room from the painted box the frame is fitted into, and the
- * shadow as the secondary cue.
+ * The page on the editor's well, edge to edge: no shadow, so it reads as the
+ * page rather than a card. Its 1px hairline edge is an outline rather than a
+ * border, so it takes no room from the painted box the frame is fitted into.
+ * Where the frame meets the canvas region, the region clips the outline, so a
+ * frame at the region's width touches the panels' dividers with no doubled
+ * line; a narrower frame, centred, shows the edge against the well.
  */
 .nx-canvas-frame {
   position: relative;
@@ -50,7 +53,6 @@
      the room below it rather than an empty band above. */
   margin: 0 auto auto;
   outline: 1px solid var(--nx-builder-frame-edge);
-  box-shadow: var(--shadow-md);
 }
 
 /*

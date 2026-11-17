@@ -1296,11 +1296,13 @@ describe("selection marks", () => {
     ).toBe(true);
   });
 
-  it("draws the ring outside the block, at the page's edge too", async () => {
+  it("draws the ring outside the block, and inside the page where the block meets its edge", async () => {
     /*
      * Drawn inside, the ring covered the first glyph of a heading set flush
-     * with its box. Outside, for a block flush with the page's edge, it runs
-     * past the page, into the room the layer keeps past the frame for it.
+     * with its box, so it stands outside a block. The page meets the canvas
+     * region's edges, which cut off anything past them, so on a side where
+     * the block meets the page's edge the ring stays on the page: all four
+     * sides of a full-width block's ring are on screen.
      */
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function boxOf(this: Element) {
@@ -1326,9 +1328,40 @@ describe("selection marks", () => {
       return { left, top, width, height };
     });
     expect(boxes).toEqual([
-      { left: "-4px", top: "-4px", width: "108px", height: "58px" },
+      // Flush with the page's top and left: in from both, out on the others.
+      { left: "0px", top: "0px", width: "104px", height: "54px" },
+      // Clear of every edge: 4px outside on each side.
       { left: "96px", top: "96px", width: "208px", height: "58px" },
     ]);
+  });
+
+  it("keeps a full-width block's ring on the page on every side", async () => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        // As wide and as tall as the page itself.
+        if (id === "a") return new DOMRect(0, 0, 1000, 1000);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId="a"
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    await waitFor(() => expect(halosIn(container)).toHaveLength(1));
+    const { left, top, width, height } = (halosIn(container)[0] as HTMLElement)
+      .style;
+    expect({ left, top, width, height }).toEqual({
+      left: "0px",
+      top: "0px",
+      width: "1000px",
+      height: "1000px",
+    });
   });
 
   it("draws only the part of a block its clipping ancestor leaves visible", async () => {
@@ -1381,8 +1414,13 @@ describe("selection marks", () => {
      * over content that is not the block's, so the ring is drawn without it,
      * as for a block an ancestor clips.
      */
+    // Clear of the page's edges, so the ring has room to stand outside it.
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      () => new DOMRect(0, 0, 100, 100)
+      function boxOf(this: Element) {
+        return this.hasAttribute(NODE_ID_ATTRIBUTE)
+          ? new DOMRect(10, 10, 100, 100)
+          : new DOMRect(0, 0, 1000, 1000);
+      }
     );
     // The computed `clip-path` a browser reports for the shaped block.
     const computed = window.getComputedStyle.bind(window);
@@ -1428,7 +1466,7 @@ describe("selection marks", () => {
       left: mark.style.left,
       top: mark.style.top,
       width: mark.style.width,
-    }).toEqual({ left: "-4px", top: "-4px", width: "108px" });
+    }).toEqual({ left: "6px", top: "6px", width: "108px" });
   });
 
   it("draws no mark for a block its clipping ancestor hides entirely", async () => {
@@ -1920,9 +1958,10 @@ describe("a selected block shown although the page hides it", () => {
     const mark = halosIn(container)[0] as HTMLElement;
     expect(mark.getAttribute("data-tag")).toBe("below");
     expect(mark.getAttribute("data-tag-edge")).toBe("right");
-    // The ring stands 4px outside the 1500px block, so it runs 504px past
-    // the 1000px screen, and the tag moves in by as much.
-    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("504px");
+    // The block is as wide as the 1500px page, so its ring keeps to the
+    // page's right edge, 500px past the 1000px screen, and the tag moves in
+    // by as much.
+    expect(mark.style.getPropertyValue("--nx-tag-inset-side")).toBe("500px");
   });
 
   it("does not put the primary block's tag above it where the block toolbar sits", async () => {

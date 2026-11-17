@@ -111,7 +111,8 @@ test.describe("the canvas with an embed on the page", () => {
     // At 1440 the region is narrower than 1280, so fitting is under 100%.
     await expect(
       devices(page).getByRole("radio", { checked: true })
-    ).toHaveText("Desktop · 1280px");
+    ).toHaveAccessibleName(/^Desktop · 1280px · /);
+    await expect(page.locator("[data-nx-active-width]")).toHaveText("1280px");
     await expect.poll(() => layoutWidth(page)).toBe(1280);
     const trigger = zoomTrigger(page);
     await expect
@@ -126,7 +127,8 @@ test.describe("the canvas with an embed on the page", () => {
       .click();
     await expect(
       devices(page).getByRole("radio", { checked: true })
-    ).toHaveText("Tablet · 1024px");
+    ).toHaveAccessibleName(/^Tablet · 1024px · /);
+    await expect(page.locator("[data-nx-active-width]")).toHaveText("1024px");
     await expect.poll(() => layoutWidth(page)).toBe(1024);
 
     // A chosen zoom draws the canvas at that scale.
