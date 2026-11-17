@@ -38,6 +38,11 @@ export interface LinkGroup {
   readonly drawn: ReadonlySet<string>;
 }
 
+/** The tab a prop is placed in, Content where it names none. */
+function tabOf(schema: EditableProp["schema"] | undefined): string {
+  return typeof schema?.group === "string" ? schema.group : "content";
+}
+
 /** The names a link's own prop is declared under, in the order they are tried. */
 const LINK_NAMES = ["href", "link"] as const;
 
@@ -61,18 +66,24 @@ function isNewTabTarget(schema: EditableProp["schema"] | undefined): boolean {
 /**
  * The link group of a block's props, or `undefined` when it declares no link.
  *
- * Each sibling joins only with the type its control writes: a `target` that
- * is not exactly this tab or a new tab is not one a switch can stand for
- * (see {@link isNewTabTarget}), and an entry
- * reference missing either half is not one a pick can complete. A sibling
- * that does not join keeps its own row.
+ * Each sibling joins only in the link's tab and with the type its control
+ * writes: a `target` that is not exactly this tab or a new tab is not one a
+ * switch can stand for (see {@link isNewTabTarget}), and an entry reference
+ * missing either half is not one a pick can complete. A sibling that does
+ * not join keeps its own row, in its own tab.
  */
 export function linkGroupOf(
   props: ReadonlyArray<Pick<EditableProp, "name" | "schema">>
 ): LinkGroup | undefined {
-  const schemas = new Map(props.map(prop => [prop.name, prop.schema]));
-  const link = LINK_NAMES.find(name => schemas.get(name)?.type === "url");
+  const all = new Map(props.map(prop => [prop.name, prop.schema]));
+  const link = LINK_NAMES.find(name => all.get(name)?.type === "url");
   if (link === undefined) return undefined;
+  // Only the siblings placed in the link's own tab: one the block places
+  // elsewhere (a link relationship in Advanced) is drawn there, on its row.
+  const tab = tabOf(all.get(link));
+  const schemas = new Map(
+    [...all].filter(([, schema]) => tabOf(schema) === tab)
+  );
   const target = isNewTabTarget(schemas.get("target")) ? "target" : undefined;
   const rel = schemas.get("rel")?.type === "text" ? "rel" : undefined;
   const entry =

@@ -21,8 +21,8 @@
  *
  * @module admin/site-style-read
  */
-import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
-import { useQuery } from "@tanstack/react-query";
+import { readPluginRoute, useCurrentUserId } from "@nextlyhq/plugin-sdk/admin";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
 import {
@@ -30,6 +30,8 @@ import {
   SITE_STYLE_ROUTE_PATH,
   type StoredSiteStyle,
 } from "../library-contract";
+
+import { readStarted } from "./startup-reads";
 
 /** The cache entry every surface shares; the plugin's own, so no other read collides with it. */
 const STORED_SITE_STYLE_KEY = [
@@ -72,14 +74,31 @@ export interface StoredSiteStyleRead {
 
 /** Read the stored site style through the plugin's route. */
 export function useStoredSiteStyle(): StoredSiteStyleRead {
+  const userId = useCurrentUserId();
+  const client = useQueryClient();
   const query = useQuery<StoredSiteStyle>({
     queryKey: STORED_SITE_STYLE_KEY,
     queryFn: async ({ signal }) => {
-      const body = await readPluginRoute<StoredSiteStyle>({
-        plugin: PAGE_BUILDER_PLUGIN_NAME,
-        path: SITE_STYLE_ROUTE_PATH,
-        signal,
-      });
+      const route = (): Promise<StoredSiteStyle | undefined> =>
+        readPluginRoute<StoredSiteStyle>({
+          plugin: PAGE_BUILDER_PLUGIN_NAME,
+          path: SITE_STYLE_ROUTE_PATH,
+          signal,
+        });
+      // The builder's start-up answer only for the opening read, while no
+      // answer is held. A read asked with one in hand is a refresh (a
+      // writer's after its save, or `readFresh` merging a refused save) and
+      // must see the site as it is now, never what was read as it opened.
+      const opening = client.getQueryData(STORED_SITE_STYLE_KEY) === undefined;
+      const body = opening
+        ? await readStarted(
+            SITE_STYLE_ROUTE_PATH,
+            route,
+            userId,
+            Date.now,
+            signal
+          )
+        : await route();
       // The route always answers its four sections. An empty answer is a
       // transport fault, and drawing the defaults over it would hide that.
       if (body === undefined) {

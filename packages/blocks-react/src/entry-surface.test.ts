@@ -30,6 +30,7 @@ import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as containerRootModule from "./blocks/container-root";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
+import * as imageSlotModule from "./image-slot";
 import * as listCollectionsModule from "./list-collections";
 import * as richTextModule from "./rich-text";
 import * as pagePartsModule from "./page-parts";
@@ -113,6 +114,25 @@ const SOURCE_MODULES: ReadonlyArray<{
     // Its one value is the consumer surface: which element a Section or Box
     // renders as its root, asked by an editor.
     internal: [],
+  },
+  {
+    name: "image-slot",
+    module: imageSlotModule,
+    // The entry publishes only the copy types a host's `imageCopies` option
+    // is written against. Working out each device's slot is the renderer's
+    // own, asked by the route and the blocks that draw images.
+    internal: [
+      "childImageContext",
+      "copiesWantedUpTo",
+      "hasDefaultColumnGap",
+      "imageSizingFor",
+      "narrowForColumns",
+      "narrowForOwnSize",
+      "narrowToWidth",
+      "rootImageSlot",
+      "siteSizesBlocks",
+      "sizesFor",
+    ],
   },
   {
     name: "component-source",
@@ -244,7 +264,12 @@ const SOURCE_MODULES: ReadonlyArray<{
     ],
   },
   { name: "page-style-trace", module: pageStyleTraceModule, internal: [] },
-  { name: "resolver", module: resolverModule, internal: [] },
+  {
+    name: "resolver",
+    module: resolverModule,
+    // Read by `next.ts`'s routes alone, through the instance.
+    internal: ["offeredSitePageDataLimit"],
+  },
   {
     name: "sanitize",
     module: sanitizeModule,
@@ -569,6 +594,15 @@ describe("the root entry", () => {
       "RichText",
       // The container marker. Public so an editor asks whether a block declares
       // slots instead of keeping a hardcoded list of container type names.
+      // Where the page builder offers a site's blocks, which a route given no
+      // `blocks` reads.
+      "SITE_BLOCKS_SERVICE",
+      // Whether site-bound blocks or queries started in this module copy.
+      "SITE_COPY",
+      "SITE_NAMED_QUERIES_SERVICE",
+      // Where the page builder offers the site's page data limit, which a
+      // route given no `maxQueries` renders under.
+      "SITE_PAGE_DATA_LIMIT_SERVICE",
       "SLOTS_ATTRIBUTE",
       "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
@@ -625,6 +659,8 @@ describe("the root entry", () => {
       // Whether a recorded lookup found no field a visitor may read, so the
       // editor can say a whole source is hidden from visitors.
       "noPublicFields",
+      // The one reading of the site's blocks an instance offers.
+      "offeredSiteBlocks",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
@@ -647,6 +683,8 @@ describe("the root entry", () => {
       // so the editor judges conditions on the tree the renderer draws.
       "sanitizeDocument",
       "sharedStyleInputs",
+      // The mark a site-bound value carries, read by the routes.
+      "siteCopyOf",
       "styleTextForInjection",
       // The render's own discovery, asked from outside the render. Public so a
       // publish-time check reports the components a VISITOR will not see,

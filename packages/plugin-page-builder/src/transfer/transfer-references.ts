@@ -16,13 +16,14 @@
  */
 import {
   bindablePropKind,
-  getBlock,
+  contentWidthTokenOf,
   imageValueOf,
   isComponentInstance,
   isPlainRecord,
   walkNodes,
   type BlockDocument,
   type BlockNode,
+  type BlockRegistryReader,
   type ComponentDocument,
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
@@ -54,7 +55,7 @@ export function emptyReferences(): TransferReferences {
 /** What the walk needs to know beyond the document itself. */
 export interface ReferenceLookups {
   /** The props a block type declares as media; none for an unknown type. */
-  readonly mediaProps?: (type: string) => readonly string[];
+  readonly mediaProps: (type: string) => readonly string[];
   /**
    * The ids of a placed component's exposures that hold an image, when its
    * definition is known. A placement whose definition is not known yet
@@ -69,8 +70,12 @@ export interface ReferenceLookups {
  * (`bindablePropKind`), so every prop whose value, or binding fallback, may
  * hold a media id is the one whose id a transfer carries.
  */
-export function registryMediaProps(type: string): readonly string[] {
-  const props = getBlock(type)?.props;
+export function registryMediaProps(
+  /** The site's block registry. */
+  blocks: BlockRegistryReader,
+  type: string
+): readonly string[] {
+  const props = blocks.get(type)?.props;
   if (props === undefined) return [];
   const media: string[] = [];
   for (const [name, schema] of Object.entries(props)) {
@@ -121,9 +126,9 @@ export function fallbackMediaIdOf(
 export function collectDocumentReferences(
   document: BlockDocument,
   into: TransferReferences,
-  lookups: ReferenceLookups = {}
+  lookups: ReferenceLookups
 ): void {
-  const mediaProps = lookups.mediaProps ?? registryMediaProps;
+  const mediaProps = lookups.mediaProps;
   collectStyleReferences(document.settings?.styles, into);
   for (const id of document.assets?.mediaIds ?? []) {
     const media = mediaIdOf(id);
@@ -154,13 +159,19 @@ export function collectStyleReferences(
   });
 }
 
-function collectNodeReferences(
+/**
+ * What a node's look names: the variables and breakpoints in its styles, the
+ * variable its own content width names, its shared styles, and the devices it
+ * is hidden on.
+ */
+function collectLookReferences(
   node: BlockNode,
-  into: TransferReferences,
-  mediaProps: (type: string) => readonly string[],
-  imageExposures: ((componentId: string) => ReadonlySet<string>) | undefined
+  into: TransferReferences
 ): void {
   collectStyleReferences(node.styles, into);
+  // A container's own content width names a variable the compiler writes.
+  const ownWidth = contentWidthTokenOf(node);
+  if (ownWidth !== undefined) into.tokens.add(ownWidth);
   for (const id of node.classes ?? []) {
     if (typeof id === "string" && id !== "") into.classes.add(id);
   }
@@ -169,6 +180,15 @@ function collectNodeReferences(
     for (const breakpoint of Object.keys(devices))
       into.breakpoints.add(breakpoint);
   }
+}
+
+function collectNodeReferences(
+  node: BlockNode,
+  into: TransferReferences,
+  mediaProps: (type: string) => readonly string[],
+  imageExposures: ((componentId: string) => ReadonlySet<string>) | undefined
+): void {
+  collectLookReferences(node, into);
   const props = isRecord(node.props) ? node.props : {};
   if (isComponentInstance(node)) {
     collectPlacement(props, into, imageExposures);

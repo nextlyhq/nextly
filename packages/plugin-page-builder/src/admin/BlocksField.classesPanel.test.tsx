@@ -92,7 +92,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "classes", choose: () => {} })}
+          {renderPanel?.("design", { current: "styles", choose: () => {} })}
         </div>
         {/* Rendered, not merely constructed: the inspector recorder only runs
             when the element is actually drawn, and the class-creation callback

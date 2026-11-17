@@ -20,22 +20,19 @@
  * typing to coalesce, and waiting for blur on a checkbox would leave the canvas
  * disagreeing with a control the author has already changed.
  *
- * This module draws the panel, its two tabs and the surface a selection gets,
- * and is the entry for the rest: what the panel takes is in
- * `inspector-panel-types.ts`, the style state it edits in
- * `inspector-style-state.ts`, the Content tab in `inspector-content-tab.tsx`
+ * This module draws the panel, its three tabs and the surface a selection
+ * gets, and is the entry for the rest: what the panel takes is in
+ * `inspector-panel-types.ts`, the style state it edits and the tab it shows
+ * in `inspector-style-state.ts`, the Content tab in `inspector-content-tab.tsx`
  * and its generated fields in `inspector-content-fields.tsx`, the Style tab
- * in `inspector-style-tab.tsx`, and the panel for several blocks in
+ * in `inspector-style-tab.tsx`, the Advanced tab in
+ * `inspector-advanced-tab.tsx`, and the panel for several blocks in
  * `many-blocks-panel.tsx`.
  *
  * @module inspector-panel
  */
 
-import {
-  BASE_BREAKPOINT,
-  type BlockDocument,
-  type ComponentLookup,
-} from "@nextlyhq/blocks-engine";
+import type { BlockDocument, ComponentLookup } from "@nextlyhq/blocks-engine";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -45,7 +42,8 @@ import {
   sameLook,
   type BlockLookRow,
 } from "./block-look-rows";
-import { CanvasPassageContext } from "./canvas-passage";
+import { CanvasPassageContext } from "./canvas/canvas-passage";
+import { useCanvasReading } from "./canvas/use-canvas-reading";
 import {
   ComponentFieldsContext,
   ComponentFieldsScope,
@@ -57,9 +55,11 @@ import {
   ComponentVariantsSection,
 } from "./component-variants-panel";
 import { ContentServicesContext } from "./content-controls";
+import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import {
+  inspectorTabsOf,
   inspectSelection,
   lockOp,
   lockStateOf,
@@ -69,23 +69,28 @@ import {
   renameOp,
   selectedNode,
   type BlockInspection,
+  type InspectorTab,
 } from "./inspector";
+import { AdvancedTab } from "./inspector-advanced-tab";
 import { commitProp, ContentTab } from "./inspector-content-tab";
 import type {
   ComponentLibrary,
+  DocumentSettingsView,
   InspectorPanelProps,
+  StyleStateBinding,
 } from "./inspector-panel-types";
 import {
   editedStyleState,
   openingTabFor,
-  tabChangeHandler,
+  shownTab,
 } from "./inspector-style-state";
 import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
-import { useCanvasReading } from "./use-canvas-reading";
+import { PanelFoldsProvider } from "./panel-folds-context";
+import { PanelOptions } from "./panel-options";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -98,23 +103,25 @@ export type { ComponentLibrary } from "./inspector-panel-types";
 export type { StyleStateBinding } from "./inspector-panel-types";
 export type {
   BlockInspectorResolver,
+  DocumentSettingsView,
   InspectorPanelProps,
 } from "./inspector-panel-types";
 export { editedStyleState } from "./inspector-style-state";
 
 /**
- * Which half of the inspector is showing: what the block says, and how it
- * looks.
+ * The inspector's tabs: what the block says, shows or links to; how it looks;
+ * and how it is built into the page (where and when it shows, its HTML).
  *
- * Two tabs, as Gutenberg's Settings and Styles and Webflow's two panels split
- * it. The CSS id and the custom attributes are Content's last section,
- * "Advanced", rather than a third tab: one place called Advanced, and it is
- * where an author looking for an anchor id goes after the block's own fields.
+ * Three, as Elementor, Divi and Breakdance split a block's settings, so the
+ * settings that change the HTML but not what a visitor reads have a place of
+ * their own rather than a fold at the end of Content. A block has only the
+ * tabs that hold something for it (`inspectorTabsOf`).
  */
-const INSPECTOR_TABS = [
+const INSPECTOR_TABS: readonly { value: InspectorTab; label: string }[] = [
   { value: "content", label: EDITOR_WORDS.content },
   { value: "style", label: EDITOR_WORDS.style },
-] as const;
+  { value: "advanced", label: EDITOR_WORDS.advanced },
+];
 
 /** The inspector's tab names, in order, as an author reads them. */
 export function inspectorTabLabels(): string[] {
@@ -157,7 +164,8 @@ function selectedInstance(
  * instance next, before the empty case: the block inspection IS empty for an
  * instance — its type is not in the registry — and answering "select a block"
  * to an author who just clicked a component was the state that surface
- * replaces. Nothing selected last: one note, and no tabs.
+ * replaces. Nothing selected last: the document's own settings, and no
+ * tabs.
  */
 function surfaceFor(
   editor: EditorState,
@@ -167,7 +175,9 @@ function surfaceFor(
   fields: ComponentFieldsBinding | undefined,
   definitions: ComponentLookup,
   /** The canvas's root, where the instance panel marks a placement's parts. */
-  canvasRoot?: HTMLElement | null
+  canvasRoot: HTMLElement | null | undefined,
+  /** The host's view of the open document, drawn while nothing is selected. */
+  documentSettings: DocumentSettingsView | undefined
 ):
   | { readonly tabless: React.JSX.Element }
   | { readonly block: BlockInspection } {
@@ -209,39 +219,43 @@ function surfaceFor(
     };
   }
   /*
-   * Nothing selected: one note, and no tabs.
+   * Nothing selected: the open document's own settings, drawn by the host
+   * (a page's title, address and header & footer), in the same frame and so
+   * at the same width, so the canvas never rescales on a click. Tabs are
+   * withheld: a Style tab over no selection would offer an author somewhere
+   * to click that can never show anything.
    *
-   * The entry's OWN fields are not drawn here. They already ship as a left
-   * panel the host renders, and reproducing them in this region would be the
-   * second surface-meaning-two-things the layout ruling removed, wearing a
-   * different shape. Tabs are withheld too: a Style tab over no selection would
-   * offer an author somewhere to click that can never show anything.
-   *
-   * In a component's own view, nothing selected means the component itself is
-   * what is being looked at, so its exposed fields are listed, and the
-   * variants that preset them under those.
+   * In a component's own view, nothing selected means the component itself
+   * is what is being looked at, so its exposed fields are listed, and the
+   * variants that preset them under those, handed to the host to place
+   * among its own rows.
    */
-  if (
-    inspection === null &&
-    editor.selectedId === null &&
-    fields !== undefined
-  ) {
-    return {
-      tabless: (
+  if (editor.selectedId === null) {
+    const own =
+      inspection === null && fields !== undefined ? (
         <ExposedFieldsList binding={fields} editor={editor}>
           <ComponentVariantsSection
             editor={editor}
             component={fields.context.component}
           />
         </ExposedFieldsList>
-      ),
-    };
-  }
-  if (inspection === null) {
+      ) : null;
     return {
       tabless: (
         <div className="nx-inspector" data-empty="no-selection">
-          <p className="nx-inspector__note">Select a block to edit it.</p>
+          {documentSettings === undefined ? own : documentSettings(own)}
+        </div>
+      ),
+    };
+  }
+  // A block whose type this site does not register: nothing to edit it with.
+  if (inspection === null) {
+    return {
+      tabless: (
+        <div className="nx-inspector" data-empty="unregistered">
+          <p className="nx-inspector__note">
+            {"This block can't be edited here: its type isn't on this site."}
+          </p>
         </div>
       ),
     };
@@ -287,7 +301,11 @@ export function InspectorPanel({
     <ComponentFieldsScope editor={panel.editor} host={componentFields}>
       <ComponentVariantsContext.Provider value={componentVariants}>
         <CanvasPassageContext.Provider value={canvasPassage}>
-          <SelectionInspector {...panel} />
+          <PanelFoldsProvider>
+            <CssNamesProvider>
+              <SelectionInspector {...panel} />
+            </CssNamesProvider>
+          </PanelFoldsProvider>
         </CanvasPassageContext.Provider>
       </ComponentVariantsContext.Provider>
     </ComponentFieldsScope>
@@ -309,6 +327,130 @@ function editedLook(
     .find(row => sameLook(row, key));
 }
 
+/**
+ * The tab the panel shows, and the author's choice of one.
+ *
+ * OPENS ON STYLE when a host mounts with a state already chosen. A binding
+ * naming a non-base state is a host restoring what an author was editing, and
+ * this panel's contract is that such a state and `Canvas.forcedState` are the
+ * same value — so opening on Content would leave the canvas drawing a block
+ * mid-hover with the only control that explains or clears it behind a tab
+ * nobody was told to open. The rule that drops the state on leaving Style
+ * cannot catch that: it acts on a CHANGE of tab, and a mount is not one.
+ * Honouring the state rather than clearing it, for the reason the multi-
+ * selection case does the same: the host asked for it deliberately, and
+ * resetting would silently discard what it restored.
+ *
+ * The tab on screen is the author's, or the selected block's first where it
+ * lacks the author's (`shownTab`).
+ *
+ * Leaving Style drops the forced interaction state. The state control sits
+ * inside the Style tab and goes off screen with it, so a state left on would
+ * be a canvas drawing a button mid-press with no control on screen saying
+ * why. However Style is left — a click on another tab, or a block that shows
+ * its first tab because it lacks the author's — the canvas goes back to
+ * Normal. On a CHANGE of the tab shown, compared with the last one, rather
+ * than on every render: a mount, or a render that reasserts the same tab, is
+ * no leaving, and a host that restored a state deliberately keeps it.
+ *
+ * @param styleState - the state the host restored, and its setter
+ * @param asked - the count of the latest ask to fix a list's sort, which is
+ *   on the Content tab
+ * @param inspection - the selected block, whose tabs decide the one shown
+ */
+function useInspectorTab(
+  styleState: StyleStateBinding | undefined,
+  asked: number | undefined,
+  inspection: BlockInspection | null
+): { readonly shown: string; readonly choose: (tab: string) => void } {
+  // The tab the AUTHOR chose, kept whichever block is selected.
+  const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
+  // A list's sort asked for from its canvas note is on the Content tab, so
+  // the author is taken there, once per ask, from wherever they were.
+  // Each ask moves the tab once: a new style-state setter is no new ask.
+  const answeredAsk = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (asked === undefined || asked === answeredAsk.current) return;
+    answeredAsk.current = asked;
+    setTab("content");
+  }, [asked]);
+
+  const shown =
+    inspection === null ? tab : shownTab(tab, inspectorTabsOf(inspection));
+  const onStyleStateChange = styleState?.onChange;
+  const lastShown = React.useRef(shown);
+  React.useEffect(() => {
+    const left = lastShown.current === "style" && shown !== "style";
+    lastShown.current = shown;
+    if (left) onStyleStateChange?.("base");
+  }, [shown, onStyleStateChange]);
+  return { shown, choose: setTab };
+}
+
+/** The tab list: one Tab stop, with arrows, Home and End between the tabs. */
+function InspectorTabList({
+  tabs,
+  shown,
+}: {
+  tabs: readonly InspectorTab[];
+  /** The tab showing, whose sections the options menu folds. */
+  shown: string;
+}): React.JSX.Element {
+  // Compact underlined tabs at the start of the panel; the classes carry the
+  // inspector's own tab rules over the shared tabs'. The options menu sits at
+  // the row's end, outside the tab list, so arrows still move between tabs.
+  return (
+    <div className="nx-inspector__tabrow">
+      <InspectorTabs tabs={tabs} />
+      <PanelOptions tab={shown} />
+    </div>
+  );
+}
+
+/** The tabs themselves: one Tab stop, with arrows, Home and End. */
+function InspectorTabs({
+  tabs,
+}: {
+  tabs: readonly InspectorTab[];
+}): React.JSX.Element {
+  return (
+    <TabsList className="nx-inspector__tablist">
+      {INSPECTOR_TABS.filter(tab => tabs.includes(tab.value)).map(tab => (
+        <TabsTrigger
+          key={tab.value}
+          value={tab.value}
+          className="nx-inspector__tab"
+        >
+          {tab.label}
+        </TabsTrigger>
+      ))}
+    </TabsList>
+  );
+}
+
+/**
+ * The Content tab's panel, where the block has one; a block without a
+ * Content tab mounts none.
+ */
+function ContentTabPanel({
+  tabs,
+  shown,
+  ...content
+}: {
+  tabs: readonly InspectorTab[];
+  shown: string;
+} & Omit<
+  React.ComponentProps<typeof ContentTab>,
+  "onScreen"
+>): React.JSX.Element | null {
+  if (!tabs.includes("content")) return null;
+  return (
+    <TabsContent value="content" forceMount hidden={shown !== "content"}>
+      <ContentTab {...content} onScreen={shown === "content"} />
+    </TabsContent>
+  );
+}
+
 function SelectionInspector({
   editor,
   canvasRoot,
@@ -322,6 +464,7 @@ function SelectionInspector({
   verbs,
   contentServices,
   breakpointsStatus = "ready",
+  documentSettings,
   // What only the Style tab reads, carried to it whole.
   ...styleOnly
 }: Omit<
@@ -363,34 +506,13 @@ function SelectionInspector({
    */
   const styleNode = selectedNode(editor.document, editor.selectedId);
 
-  /*
-   * Declared before the early returns below, because a hook has to run on every
-   * render of this component and "no selection" is one of them.
-   *
-   * OPENS ON STYLE when a host mounts with a state already chosen. A binding
-   * naming a non-base state is a host restoring what an author was editing, and
-   * this panel's contract is that such a state and `Canvas.forcedState` are the
-   * same value — so opening on Content would leave the canvas drawing a block
-   * mid-hover with the only control that explains or clears it behind a tab
-   * nobody was told to open. The tab handler cannot catch that: it fires on a
-   * CHANGE, and a mount is not one.
-   *
-   * Honouring the state rather than clearing it, for the reason the multi-
-   * selection case does the same: the host asked for it deliberately, and
-   * resetting would silently discard what it restored.
-   */
-  const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
-  // A list's sort asked for from its canvas note is on the Content tab, so
-  // the author is taken there, once per ask, from wherever they were.
-  // Each ask moves the tab once: a new style-state setter is no new ask.
-  const asked = editor.sortFieldAsked?.seq;
-  const onStyleStateChange = styleState?.onChange;
-  const answeredAsk = React.useRef<number | undefined>(undefined);
-  React.useEffect(() => {
-    if (asked === undefined || asked === answeredAsk.current) return;
-    answeredAsk.current = asked;
-    tabChangeHandler(setTab, onStyleStateChange)("content");
-  }, [asked, onStyleStateChange]);
+  // Declared before the early returns below, because a hook has to run on
+  // every render of this component and "no selection" is one of them.
+  const { shown, choose } = useInspectorTab(
+    styleState,
+    editor.sortFieldAsked?.seq,
+    inspection
+  );
 
   const commit = React.useCallback(
     (name: string, value: unknown): BlockDocument | null => {
@@ -417,7 +539,8 @@ function SelectionInspector({
     verbs,
     fields,
     (componentLibrary ?? NO_LIBRARY).definitions,
-    canvasRoot
+    canvasRoot,
+    documentSettings
   );
   // A tabless surface still reaches the host's media library: a component
   // placement's exposed image chooses a file as the Content tab does.
@@ -430,6 +553,7 @@ function SelectionInspector({
   }
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
+  const tabs = inspectorTabsOf(block);
 
   return (
     <div className="nx-inspector">
@@ -468,49 +592,38 @@ function SelectionInspector({
         Held HERE, so the chosen tab survives a change of selection — an author
         styling one block after another means to stay on Style. This element's
         position does not change, so the state lives across every selection; a
-        `key` on the node id would reset it on every click.
+        `key` on the node id would reset it on every click. A block without
+        the chosen tab shows its first, and the next block that has the
+        chosen one shows it again.
       */}
-      <Tabs
-        value={tab}
-        onValueChange={tabChangeHandler(setTab, styleState?.onChange)}
-        className="nx-inspector__tabs"
-      >
-        {/* Compact underlined tabs at the start of the panel; the classes
-            carry the inspector's own tab rules over the shared tabs'. */}
-        <TabsList className="nx-inspector__tablist">
-          {INSPECTOR_TABS.map(tab => (
-            <TabsTrigger
-              key={tab.value}
-              value={tab.value}
-              className="nx-inspector__tab"
-            >
-              {tab.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+      <Tabs value={shown} onValueChange={choose} className="nx-inspector__tabs">
+        <InspectorTabList tabs={tabs} shown={shown} />
 
         {/*
-          FORCE-MOUNTED: Advanced inside holds a draft, and unmounting it
-          threw away what the author typed and why a refused row was not
-          saved. HIDDEN here, not by Radix, which ties mounting to showing;
-          `hidden` takes it out of the accessibility tree as unmounting did.
+          FORCE-MOUNTED, Content and Advanced both: a field commits on blur
+          and the tabs activate on mousedown, before the blur, and Advanced
+          holds a draft, so unmounting either threw away what the author
+          typed and why a refused row was not saved. HIDDEN here, not by
+          Radix, which ties mounting to showing; `hidden` takes it out of the
+          accessibility tree as unmounting did. A block without a Content tab
+          mounts none.
         */}
-        <TabsContent value="content" forceMount hidden={tab !== "content"}>
-          <ContentTab
-            block={block}
-            editor={editor}
-            onCommit={commit}
-            inspectors={inspectors}
-            services={contentServices}
-            blocks={blocks}
-            onScreen={tab === "content"}
-            reasonId={reasonId}
-            fields={fields}
-            breakpoints={styleOnly.breakpoints}
-            breakpoint={breakpoint ?? BASE_BREAKPOINT}
-            breakpointsStatus={breakpointsStatus}
-          />
-        </TabsContent>
+        <ContentTabPanel
+          tabs={tabs}
+          shown={shown}
+          block={block}
+          editor={editor}
+          onCommit={commit}
+          inspectors={inspectors}
+          services={contentServices}
+          reasonId={reasonId}
+          fields={fields}
+          around={{
+            breakpoints: styleOnly.breakpoints,
+            cascade,
+            renderedTag: canvas.tag,
+          }}
+        />
 
         <TabsContent value="style">
           <StyleTab
@@ -526,6 +639,22 @@ function SelectionInspector({
             cascade={cascade}
             previewContainer={previewContainer}
             verbs={verbs}
+          />
+        </TabsContent>
+
+        <TabsContent value="advanced" forceMount hidden={shown !== "advanced"}>
+          <AdvancedTab
+            block={block}
+            editor={editor}
+            onCommit={commit}
+            services={contentServices}
+            blocks={blocks}
+            onScreen={shown === "advanced"}
+            reasonId={reasonId}
+            fields={fields}
+            breakpoints={styleOnly.breakpoints}
+            breakpoint={breakpoint}
+            breakpointsStatus={breakpointsStatus}
           />
         </TabsContent>
       </Tabs>

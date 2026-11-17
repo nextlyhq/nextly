@@ -30,23 +30,25 @@ import {
   type BlockNode,
   type ComponentPath,
   type NodeLock,
+  type PropGroup,
   type PropSchema,
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./canvas/drag-refusal";
+import { COLUMNS_ROW } from "./columns-layout";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
 } from "./content-control-types";
-import type { RefusalWording } from "./drag-refusal";
 import type { EditorState } from "./editor-state";
-import { blockLabel, insertionPropSets } from "./inserter";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
-import { layerLabel } from "./layers";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
 import { refusalAnnouncement } from "./move-refusal";
 import type { BuilderOp, NodePatch } from "./op-vocabulary";
+import { blockLabel, insertionPropSets } from "./panels/add/inserter";
+import { layerLabel } from "./panels/layers/layers";
 
 /**
  * The prop types this inspector can draw a control for.
@@ -474,6 +476,88 @@ export function inspectSelection(
     designLock,
     placedWith: insertionPropSets(definition),
   };
+}
+
+/** One of the block panel's tabs, named as a block places a setting in it. */
+export type InspectorTab = PropGroup;
+
+/**
+ * The block panel's tabs, in the order an author reads them: what the block
+ * says, how it looks, then how it is built into the page.
+ */
+const INSPECTOR_TAB_ORDER: readonly InspectorTab[] = [
+  "content",
+  "style",
+  "advanced",
+];
+
+/** Every row of a tab's sections, in the order the sections hold them. */
+function rowsIn(
+  sections: readonly InspectionSection[]
+): readonly EditableProp[] {
+  return sections.flatMap(section => section.rows);
+}
+
+/**
+ * The block's own settings the Content tab draws: those it places in
+ * Content, read from its sections so the tab and the placement are one
+ * answer. A setting placed in Style or Advanced is drawn there instead.
+ */
+export function contentRowsOf(
+  inspection: Pick<BlockInspection, "sections">
+): readonly EditableProp[] {
+  return rowsIn(inspection.sections.content);
+}
+
+/**
+ * The block's own settings the Advanced tab draws above the ones the builder
+ * draws for every block: those it places in Advanced.
+ */
+export function advancedRowsOf(
+  inspection: Pick<BlockInspection, "sections">
+): readonly EditableProp[] {
+  return rowsIn(inspection.sections.advanced);
+}
+
+/**
+ * The tabs the selected block has, in order: a tab that would hold nothing is
+ * left out.
+ *
+ * Style and Advanced are there for every block. Style always offers a shared
+ * style, which any block can carry, and Advanced always holds the settings
+ * the builder draws for every block (where it shows, when, its CSS id and its
+ * attributes). Content is there when the block declares a setting placed in
+ * it, names its own inspector to draw it, or is a core block whose Content
+ * section the builder draws ({@link builderContentSectionOf}). Judged by
+ * what the block declares rather than by which settings show right now, so
+ * a setting a condition hides does not make the tab come and go under the
+ * author.
+ */
+export function inspectorTabsOf(
+  inspection: Pick<BlockInspection, "sections" | "inspector" | "blockName">
+): readonly InspectorTab[] {
+  const holdsContent =
+    inspection.inspector !== undefined ||
+    contentRowsOf(inspection).length > 0 ||
+    builderContentSectionOf(inspection.blockName) !== undefined;
+  return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
+}
+
+/**
+ * The Content sections the builder draws itself for a core block, by block:
+ * Columns' layout, which writes the row's styles and adds or removes its
+ * columns, so it is no prop a generated field could draw. Content, because
+ * how many columns a row holds is its structure.
+ */
+const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, string>> = {
+  [COLUMNS_ROW]: "Columns",
+};
+
+/** The Content section the builder draws for a block, if it draws one. */
+export function builderContentSectionOf(blockName: string): string | undefined {
+  return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
+    ? BUILDER_CONTENT_SECTIONS[blockName]
+    : undefined;
 }
 
 /** What a Style section is called, by its key, as the Style tab names it. */

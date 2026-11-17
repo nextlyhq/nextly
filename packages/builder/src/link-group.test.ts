@@ -88,6 +88,28 @@ describe("linkGroupOf", () => {
     expect([...(group?.drawn ?? [])]).toEqual(["link"]);
   });
 
+  it("leaves a sibling the block places in another tab to that tab's own row", () => {
+    // A box's link relationship is HTML a visitor never reads, so Advanced:
+    // drawn there as its own field, not inside Content's link control.
+    const group = linkGroupOf(
+      propsOf({
+        link: { type: "url", section: "Link" },
+        entryCollection: { type: "text", section: "Link" },
+        entryId: { type: "text", section: "Link" },
+        target: { ...TARGET, section: "Link" },
+        rel: { type: "text", group: "advanced" },
+      })
+    );
+    expect(group).toMatchObject({ link: "link", target: "target" });
+    expect(group?.rel).toBeUndefined();
+    expect([...(group?.drawn ?? [])].sort()).toEqual([
+      "entryCollection",
+      "entryId",
+      "link",
+      "target",
+    ]);
+  });
+
   it("finds no link in a url prop under another name", () => {
     expect(
       linkGroupOf(propsOf({ src: { type: "url" }, alt: { type: "text" } }))

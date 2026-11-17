@@ -191,6 +191,12 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   ],
   // The Add panel's group of layout blocks, by its heading there.
   "docs/page-builder/index.mdx": ["Layout (section, box, columns"],
+  // The Style tab's Layout section: where a container's Content width is,
+  // and its place in the tab's one order of sections.
+  "docs/page-builder/editor.mdx": [
+    "Every container has **Content width** under **Style → Layout**: **Boxed** or **Full width**. A new Section starts Boxed, and every other container starts Full width.",
+    "The Style tab lists its sections in the same order for every block: Block style, Layout, Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and CSS properties, each shown only where the block offers it. Advanced lists Visibility, then HTML.",
+  ],
 };
 
 function findingsIn(

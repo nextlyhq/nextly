@@ -360,7 +360,7 @@ function FontList({
             className="nx-vars__link"
             onClick={onManageFonts}
           >
-            Add or manage fonts…
+            Manage fonts…
           </button>
         </div>
       )}

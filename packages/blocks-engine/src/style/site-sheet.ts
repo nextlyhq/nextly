@@ -30,6 +30,7 @@ import {
   SIZED_FLAG_PROPERTIES,
   SIZED_ITEM_PROPERTY,
 } from "./contain-inset";
+import { CONTENT_WIDTH_PROPERTY } from "./content-width";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -337,6 +338,8 @@ function emitContentWidth(
   const outOfFlow = OUT_OF_FLOW_PROPERTY;
   const columnFlow = COLUMN_FLOW_PROPERTY;
   const fillsRow = FILLS_ROW_PROPERTY;
+  // The width a container states for itself, which the rule reads first.
+  const ownWidth = CONTENT_WIDTH_PROPERTY;
   return [
     `@property ${inset}{syntax:"<length-percentage>";inherits:false;initial-value:0px}`,
     // The flags the page compile sets beside a block's own width and
@@ -352,7 +355,11 @@ function emitContentWidth(
     `@property ${columnFlow}{syntax:"<number>";inherits:false;initial-value:0}`,
     // And the one a block's own `min-width: 100%` sets: it fills the row.
     `@property ${fillsRow}{syntax:"<number>";inherits:false;initial-value:0}`,
-    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0;${sizedItem}:0;${outOfFlow}:0;${columnFlow}:0;${fillsRow}:0}`,
+    // The content width too, set to the site's on every element: a
+    // container's own width is written in its own rule (`content-width`), and
+    // a custom property inherits, so without this a contained block inside a
+    // container with a width of its own would box to that width.
+    `.${PAGE_ROOT_CLASS} :where(*){${inset}:0px;${sizedWidth}:0;${sizedMax}:0;${sizedItem}:0;${outOfFlow}:0;${columnFlow}:0;${fillsRow}:0;${ownWidth}:var(${property})}`,
     // After the reset and at its weight, so a contained element takes this.
     // `100%` resolves where the property is used, in the element's own
     // padding, so it is the width of the box the container is laid out in.
@@ -360,7 +367,7 @@ function emitContentWidth(
     // its inset is multiplied away; `margin-inline: auto` is 0 on a block that
     // fills its box and centres a sized one, and an author's own margin
     // outweighs it.
-    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${property})) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}), var(${sizedItem}) * (1 - var(${outOfFlow})) * (1 - var(${columnFlow})) * (1 - var(${fillsRow})))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
+    `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){${inset}:max(0px, (100% - var(${ownWidth}, var(${property}))) / 2 * (1 - max(var(${sizedWidth}), var(${sizedMax}), var(${sizedItem}) * (1 - var(${outOfFlow})) * (1 - var(${columnFlow})) * (1 - var(${fillsRow})))));padding-inline:max(var(${gutter}, 0px), var(${inset}));margin-inline:auto}`,
   ].join("\n");
 }
 

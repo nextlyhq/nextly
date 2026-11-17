@@ -5,7 +5,7 @@
  * queries, a list's entries, the canvas's bound props, the binding picker,
  * an unbind's plan and the report itself.
  */
-import { allBlocks, DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import type { PluginRoute, PluginRouteIdentity } from "@nextlyhq/plugin-sdk";
 
 import { bindingFieldsRoute } from "../binding-fields-route";
@@ -83,6 +83,8 @@ export function bindingReportParts(def: Definition): BindingReportParts {
     },
     // And a list's item bindings, against the rows its named query declares.
     namedQueries: namedQuerySource,
+    // The site's blocks, whose definitions the bindings are read by.
+    blocks: def.blocks,
     // Documents read as the walk reads them, and the components they place as
     // visitors are served them.
     reading: () => {
@@ -221,7 +223,7 @@ export function bindingReportParts(def: Definition): BindingReportParts {
             singles: () => singleRegistryRows(ctx),
             fieldGroups: () => fieldGroupRows(),
             namedQueries: () => namedQueryDeclarations(),
-            blocks: () => allBlocks(),
+            blocks: () => def.blocks.all(),
             designs: async () => {
               const saves = await latestSave([
                 state.rewriteInstall?.store.collection ?? COMPONENTS_SLUG,
@@ -303,6 +305,7 @@ export function routesForBindings(
     // the same decision as the page actions API's, applied by the editor.
     unbindPlan: unbindPlanRoute({
       limits: () => opts.limits ?? DEFAULT_LIMITS,
+      blocks: def.blocks,
     }),
     // The documents whose bindings no longer fit, for those who edit
     // pages, each listed only when the caller may read it.
@@ -335,6 +338,7 @@ export function routesForBindings(
       defaultLocale: () =>
         state.bindingReportCtx?.config.localization?.defaultLocale,
       readableSingles: (routeCtx, slugs) => readableSingles(routeCtx, slugs),
+      blocks: def.blocks,
     }),
   };
 }

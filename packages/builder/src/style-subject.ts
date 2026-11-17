@@ -34,7 +34,7 @@ import {
   locateNode,
 } from "@nextlyhq/blocks-engine";
 
-import { nodeElement } from "./canvas";
+import { nodeElement } from "./canvas/canvas";
 
 /** One node's own identity, without the chain above it. */
 type SubjectNode = Omit<StyleSubject, "ancestors">;

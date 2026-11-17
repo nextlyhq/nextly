@@ -59,10 +59,16 @@ export {
   getSupport,
   allSupports,
   clearBlocks,
+  createBlockRegistry,
   MAX_BLOCK_VERSION,
   registryBlockSource,
   registryLookup,
   registryMigrationSource,
   registryNestingSource,
 } from "../registry";
-export type { RegisterOptions, SupportDefinition } from "../registry";
+export type {
+  BlockRegistry,
+  BlockRegistryReader,
+  RegisterOptions,
+  SupportDefinition,
+} from "../registry";

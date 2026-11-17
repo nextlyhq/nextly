@@ -258,7 +258,9 @@ describe("the settings panel's work for a selection", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", { name: /Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -278,7 +280,9 @@ describe("the settings panel's work for a selection", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", { name: /Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -392,7 +396,9 @@ describe("what a Style section shows for the next block", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", { name: /Typography/ });
+    const typography = screen.getByRole("button", {
+      name: /^Text(has changes)?$/,
+    });
     if (typography.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(typography);
     }
@@ -427,13 +433,18 @@ describe("what a Style section shows for the next block", () => {
     render(<Host page={page} />);
     act(() => editor().select("first"));
     openTab("Style");
-    const background = () => screen.getByRole("button", { name: /Background/ });
+    const background = () =>
+      screen.getByRole("button", { name: /^Background(has changes)?$/ });
+    // A section holding a value opens; closed by the author, it stays closed
+    // for the next block too.
+    expect(background().getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(background());
     // The control: closed, and marked as holding values.
     expect(background().getAttribute("aria-expanded")).toBe("false");
-    expect(background().textContent).toContain("has values");
+    expect(background().textContent).toContain("has changes");
     counted.sections.clear();
     act(() => editor().select("second"));
-    expect(background().textContent).not.toContain("has values");
+    expect(background().textContent).not.toContain("has changes");
     expect(counted.sections.get("background")).toBe(1);
   });
 });
@@ -441,7 +452,7 @@ describe("what a Style section shows for the next block", () => {
 /** Opens Typography's "+ More" menu. */
 function openMore(): void {
   fireEvent.keyDown(
-    screen.getByRole("button", { name: "More typography properties" }),
+    screen.getByRole("button", { name: "More text properties" }),
     { key: "Enter" }
   );
 }
@@ -480,21 +491,14 @@ function firstAttributes(): unknown {
     .attributes;
 }
 
-function openAdvancedSection(): void {
-  const summary = screen.getByText("Advanced", { selector: "summary" });
-  if (!(summary.parentElement as HTMLDetailsElement).open) {
-    fireEvent.click(summary);
-  }
-}
-
 describe("what Advanced writes as it goes away", () => {
   it("writes nothing more once Style has settled it, so an undo made there holds", async () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
-    openAdvancedSection();
+    openTab("Advanced");
     // An id another block holds, refused and kept in the field with its
     // reason, so what the panel holds stays apart from what is stored.
-    const id = screen.getByLabelText("CSS id");
+    const id = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(id, { target: { value: "hero" } });
     fireEvent.blur(id);
     const value = screen.getByLabelText("Value of attribute 1");
@@ -512,11 +516,11 @@ describe("what Advanced writes as it goes away", () => {
     expect(firstAttributes()).toEqual({ "data-x": "1" });
   });
 
-  it("shows an undo made on Style when Content comes back, for the same block", async () => {
+  it("shows an undo made on Style when Advanced comes back, for the same block", async () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
-    openAdvancedSection();
-    const id = screen.getByLabelText("CSS id");
+    openTab("Advanced");
+    const id = screen.getByLabelText("Anchor (ID)");
     act(() => (id as HTMLInputElement).focus());
     fireEvent.change(id, { target: { value: "intro" } });
     leaveForStyle();
@@ -526,16 +530,16 @@ describe("what Advanced writes as it goes away", () => {
       await editor().undo();
     });
     expect(editor().document.nodes[0]?.cssId).toBeUndefined();
-    openTab("Content");
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      ""
-    );
+    openTab("Advanced");
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("");
   });
 
   it("still writes a draft typed while it shows, when another block is selected straight away", () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
-    openAdvancedSection();
+    openTab("Advanced");
     const value = screen.getByLabelText("Value of attribute 1");
     act(() => (value as HTMLInputElement).focus());
     fireEvent.change(value, { target: { value: "2" } });

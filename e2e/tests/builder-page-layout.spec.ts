@@ -192,32 +192,36 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
   await gotoAdmin(page, `/collections/pages/${pageId}`);
   const cardPicker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(cardPicker).toBeVisible({ timeout: 30_000 });
-  await expect(cardPicker).toContainText(`Site default · ${MAIN}`);
+  await expect(cardPicker).toContainText(`Site default (${MAIN})`);
 
   // And in the editor's Settings.
   await openBuilder(page, pageId);
   await openSettings(page);
+  // The dialog's, not the right panel's beside it, which says the same.
+  const settings = page.getByRole("dialog", { name: "Settings" });
   const picker = page.getByRole("combobox", { name: "Header & footer" });
   await expect(picker).toBeVisible();
   await expect(
-    page.getByText(
+    settings.getByText(
       `Follows the site default, ${MAIN}, because this page doesn't choose its own header & footer set.`
     )
   ).toBeVisible();
 
   await picker.click();
-  // The site default first, by name; published Layouts; an unpublished one
-  // marked; and no header or footer last. Other Layouts the suite's database
-  // holds sit among them, so the order is asserted between these.
+  // The site default first, by name, and not again under its own name;
+  // published Layouts; an unpublished one marked; and no header or footer
+  // last. Other Layouts the suite's database holds sit among them, so the
+  // order is asserted between these.
   const options = await page.getByRole("option").allTextContents();
-  expect(options[0]).toBe(`Site default · ${MAIN}`);
+  expect(options[0]).toBe(
+    `Site default (${MAIN}) · Follows the site if the default changes`
+  );
   expect(options.at(-1)).toBe("No header or footer");
   const unfinished = options.indexOf(
     `${UNFINISHED} (not published: the site default shows until it is)`
   );
   expect(options.indexOf(LANDING)).toBeGreaterThan(0);
-  expect(options.indexOf(MAIN)).toBeGreaterThan(0);
-  expect(unfinished).toBeGreaterThan(options.indexOf(MAIN));
+  expect(options).not.toContain(MAIN);
   expect(unfinished).toBeGreaterThan(options.indexOf(LANDING));
   await page.keyboard.press("Escape");
 
@@ -226,7 +230,9 @@ test("offers one Layout choice and says which Layout is in effect and why", asyn
     `${UNFINISHED} (not published: the site default shows until it is)`
   );
   await expect(
-    page.getByText(`${UNFINISHED} (not published, so the site default shows)`)
+    settings.getByText(
+      `${UNFINISHED} (not published, so the site default shows)`
+    )
   ).toBeVisible();
 
   await choose(page, "No header or footer");

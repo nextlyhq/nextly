@@ -17,7 +17,6 @@ import {
   Accordion,
   AccordionContent,
   AccordionItem,
-  AccordionTrigger,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -25,13 +24,15 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { ContentWidthFields } from "./content-width-fields";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
+import { useTabFolds } from "./panel-folds-context";
+import { SectionHeading } from "./panel-section";
 import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
 import { SpacingBox } from "./spacing-box-fields";
 import {
-  ColumnsLayoutFields,
   BlockShortcutsFields,
   BlockPresetsOver,
 } from "./style-block-shortcuts";
@@ -46,20 +47,17 @@ import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
 
 /**
- * The panel's sections, one open at a time, with the block's picture and fit
- * for the focal point drawn over it.
+ * The panel's sections, each folding on its own and remembered as the author
+ * left it (`panel-folds`), with the block's picture and fit for the focal
+ * point drawn over it.
  */
 export function StyleSections({
   sections,
-  open,
-  onOpen,
   readOnlyReason,
   surroundings,
   fit,
 }: {
   sections: readonly StyleSection[];
-  open: string;
-  onOpen: (group: string) => void;
   readOnlyReason: React.ComponentProps<
     typeof StyleSectionItem
   >["readOnlyReason"];
@@ -68,9 +66,17 @@ export function StyleSections({
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
+  const { open, onOpenChange } = useTabFolds(
+    "style",
+    sections.map(section => ({
+      key: section.key,
+      label: section.label,
+      holdsValue: holdsValues(section),
+    }))
+  );
   return (
     <FocalFrame.Provider value={{ picture, position, fit }}>
-      <Accordion type="single" collapsible value={open} onValueChange={onOpen}>
+      <Accordion type="multiple" value={open} onValueChange={onOpenChange}>
         {sections.map(section => (
           <StyleSectionItem
             // Keyed by group alone, so a closed section whose heading reads
@@ -78,7 +84,7 @@ export function StyleSections({
             // holds is keyed by node inside it (`SectionBody`).
             key={section.key}
             section={section}
-            open={open === section.key}
+            open={open.includes(section.key)}
             readOnlyReason={readOnlyReason}
             {...surroundings}
           />
@@ -257,32 +263,6 @@ function SectionBody({
   );
 }
 
-/** A section's heading: its name, the dot when it holds values, the chevron. */
-function SectionHeading({
-  label,
-  holdsValues,
-}: {
-  label: string;
-  holdsValues: boolean;
-}): React.JSX.Element {
-  return (
-    // The panel's own class sets the heading's height and turns the shared
-    // chevron to point right while closed and down while open.
-    <AccordionTrigger className="nx-style-inspector__section-trigger">
-      <span className="nx-style-inspector__section-label">
-        {label}
-        {/* Beside the name it qualifies, as the design sets it. */}
-        {holdsValues ? (
-          <span className="nx-style-inspector__section-dot" data-has-values="">
-            <span aria-hidden="true" className="nx-style-inspector__dot" />
-            <span className="nx-sr-only">has values</span>
-          </span>
-        ) : null}
-      </span>
-    </AccordionTrigger>
-  );
-}
-
 /**
  * A section's fields: the spacing box where the section draws one, then each
  * shown property as before.
@@ -307,7 +287,7 @@ function SectionFields({
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
-          <ColumnsLayoutFields surroundings={surroundings} />
+          <ContentWidthFields surroundings={surroundings} />
         ) : null}
         {sectionKey === "size" ? (
           <BlockShortcutsFields

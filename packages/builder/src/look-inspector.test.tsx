@@ -293,9 +293,12 @@ describe("editing a look with no block selected", () => {
     expect(screen.getByRole("tab", { name: "Style" })).toBeDefined();
   });
 
-  it("says to select a block when the look is no longer on the site", () => {
+  it("shows the panel for nothing selected when the look is no longer on the site", () => {
     mount("look:acme/box:gone");
-    expect(screen.getByText("Select a block to edit it.")).toBeDefined();
+    expect(screen.queryByRole("group", { name: /^Editing/ })).toBeNull();
+    expect(
+      document.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
   });
 });
 

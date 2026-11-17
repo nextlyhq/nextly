@@ -95,6 +95,13 @@ export type { PageRendererProps } from "./page-renderer";
  * cascade the page never had, and the shortfall is silent: no class declaration
  * reaches the trace, so every value from a named class reports as set by nobody.
  */
+/**
+ * Resized copies of an image, for a route that sizes a page's images to where
+ * they are drawn: the `imageCopies` option's shape.
+ *
+ * @experimental
+ */
+export type { ImageCopies, ImageCopy } from "./image-slot";
 export { pageStyleTrace } from "./page-style-trace";
 export type { PageStyleCascade, PageStyleTraceInput } from "./page-style-trace";
 
@@ -259,9 +266,24 @@ export type { BlockPlaceholderProps, PlaceholderReason } from "./placeholder";
 export {
   createBlockResolver,
   migrationSourceFor,
+  offeredSiteBlocks,
   registeredBlocks,
+  SITE_BLOCKS_SERVICE,
+  SITE_COPY,
+  SITE_NAMED_QUERIES_SERVICE,
+  SITE_PAGE_DATA_LIMIT_SERVICE,
+  siteCopyOf,
 } from "./resolver";
-export type { BlockResolver } from "./resolver";
+export type { BlockResolver, SiteCopyMark } from "./resolver";
+// What `offeredSiteBlocks` answers, a site's blocks read-only, and the views
+// it hands out.
+export type {
+  BlockRegistryReader,
+  BlockTypeLookup,
+  NestingSource,
+  SlotDefaultSource,
+  SupportDefinition,
+} from "@nextlyhq/blocks-engine";
 
 export {
   // Public because the WRITE path needs it, and unlike the shared-input identity

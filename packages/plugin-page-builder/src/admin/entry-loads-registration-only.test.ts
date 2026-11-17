@@ -113,4 +113,14 @@ describe("the admin entry, and the parts drawn on screens other than the builder
       expect(typeof registered.get(path)).toBe("function");
     }
   });
+
+  it("neither exports nor registers the old read-only blocks summary", async () => {
+    // The blocks field's card draws what the field holds, so the summary kept
+    // for an old component path is gone, with its path.
+    const entry: Record<string, unknown> = await import("./index");
+    expect("BlocksSummary" in entry).toBe(false);
+    expect(
+      registered.has("@nextlyhq/plugin-page-builder/admin#BlocksSummary")
+    ).toBe(false);
+  });
 });

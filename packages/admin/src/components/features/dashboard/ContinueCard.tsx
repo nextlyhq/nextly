@@ -36,6 +36,7 @@ import { StatusChip } from "@admin/components/features/widgets/frame/row-parts";
 import type { PinTarget } from "@admin/hooks/queries/useDashboardPins";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
+import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
 
 import {
   continueEmpty,
@@ -153,9 +154,11 @@ export const ContinueCard: React.FC<ContinueCardProps> = ({
   const { tier, drawn, density, now } = useListCard(settings.limit);
   const labelOf = useCollectionLabel();
   const pinItem = usePinRowItem();
+  // Each row opens where every other link to its document opens.
+  const addressOf = useDocumentAddress();
   const tab = continueTab(settings);
   // A row this build cannot read is left out rather than drawn from guesses.
-  const rows = continueRows(data);
+  const rows = continueRows(data, addressOf);
   if (rows.length === 0) {
     return (
       <FrameState state={{ kind: "empty", empty: continueEmpty(tab, data) }} />

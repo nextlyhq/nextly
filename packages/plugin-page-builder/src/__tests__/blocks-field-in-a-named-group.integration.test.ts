@@ -15,13 +15,10 @@
 import {
   DOCUMENT_FORMAT_VERSION,
   expandSlotDefaults,
-  hasBlock,
   makeNode,
-  registerBlocks,
-  registryBlockSource,
-  registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,6 +29,7 @@ import { group, text } from "nextly/config";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { blocks } from "../fields/blocksHelper";
+import { blockRegistry, blocksOf } from "../index";
 import { pageBuilder } from "../plugin";
 
 const base = {
@@ -57,13 +55,15 @@ const DRIFTING_DEFAULTS: Record<string, unknown> = {
 const RULE = { on: false };
 
 /**
- * The blocks under test, registered once per process: the registry refuses a
- * name registered twice, and it outlives each booted instance.
+ * The blocks under test, registered into the site's registry as each site
+ * boots: the registry refuses a name registered twice in one boot.
  */
-function registerGroupBlocks(): void {
-  if (hasBlock("grp/drifting-card")) return;
-  registerBlocks(
-    [
+const groupBlocks = definePlugin({
+  name: "grp",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    blockRegistry(ctx).register([
       {
         ...base,
         name: "grp/drifting-headline",
@@ -101,10 +101,12 @@ function registerGroupBlocks(): void {
         contentModel: () => ({ is: ["flow", "phrasing", "interactive"] }),
       },
       { ...base, name: "grp/note" },
-    ] as never,
-    { source: "grp" }
-  );
-}
+    ] as never);
+  },
+});
+
+/** The page builder of the site booted last, whose blocks are placed. */
+let builder: ReturnType<typeof pageBuilder>;
 
 /** A block as inserting it places it. */
 function placed(type: string): BlockNode {
@@ -112,7 +114,11 @@ function placed(type: string): BlockNode {
     type,
     1,
     {},
-    expandSlotDefaults(type, registryBlockSource(), registryNestingSource())
+    expandSlotDefaults(
+      type,
+      blocksOf(builder).blockSource(),
+      blocksOf(builder).nestingSource()
+    )
   );
 }
 
@@ -169,9 +175,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     async function boot(): Promise<TestNextly> {
+      builder = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [builder, groupBlocks],
         collections: [
           {
             slug: "features",
@@ -197,7 +204,6 @@ describe.each(getConfiguredTestDialects())(
           } as never,
         ],
       });
-      registerGroupBlocks();
       return current;
     }
 

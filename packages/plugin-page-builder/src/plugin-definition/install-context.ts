@@ -7,8 +7,11 @@
  * site through. Also the named queries each page builder registers, for
  * `namedQueriesOf`.
  */
-import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import type { NamedQueryLookup } from "@nextlyhq/blocks-react";
+import {
+  DEFAULT_LIMITS,
+  type BlockRegistryReader,
+} from "@nextlyhq/blocks-engine";
+import { SITE_COPY, type NamedQueryLookup } from "@nextlyhq/blocks-react";
 import {
   type definePlugin,
   NextlyError,
@@ -19,6 +22,11 @@ import {
   type PluginDefinition,
 } from "@nextlyhq/plugin-sdk";
 
+import {
+  hasStarted,
+  runningBlocks,
+  runningRegistry,
+} from "../blocks/registration-service";
 import { blocksFieldReach } from "../class-usage-blocks-fields";
 import type { CommittedWriteReconciler } from "../class-usage-hook";
 import { COMPONENT_RETIRED_SLUG } from "../collections/component-retired-exposures";
@@ -355,6 +363,8 @@ export function rewriteInstallFor(
     },
     store: composition.store,
     limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // The site's blocks, as the composition judges them.
+    blocks: composition.blocks,
     // The plugin's own service, so a converted document's history names the
     // Page Builder beside the person who deleted the component.
     rewriteField: (request, as) =>
@@ -571,6 +581,48 @@ function singlesDeclaringBlocksIn(
   return found;
 }
 
+/** The registry each page builder this process made holds. */
+export const sitesBlocks: WeakMap<PluginDefinition, BlockRegistryReader> =
+  new WeakMap<PluginDefinition, BlockRegistryReader>();
+
+/**
+ * The blocks the page builder `plugin` holds for its site: what a route
+ * rendering that site's pages takes as its `blocks` when one process serves
+ * several sites. A route serving the process's one site needs nothing: it
+ * reads that site's blocks itself. Refused for a plugin that is not a page
+ * builder.
+ *
+ * Read on each lookup from the page builder itself where it started in this
+ * module copy, else from the registry the last boot here started (a dev
+ * server's config reload makes a new definition and runs no `init`). A
+ * route reads the started site through the instance where neither exists:
+ * a production build bundles the plugin into each route, and the route's
+ * copy never starts. Refused, never answered empty, while no site has
+ * started, since every block would otherwise draw as an unknown one.
+ *
+ * ```ts
+ * export const builder = pageBuilder();
+ * // app/[...slug]/page.tsx
+ * createBlocksPage({ ..., blocks: blocksOf(builder) });
+ * ```
+ *
+ * @experimental Settles with the per-site block registry.
+ */
+export function blocksOf(plugin: PluginDefinition): BlockRegistryReader {
+  const own = sitesBlocks.get(plugin);
+  if (own === undefined) {
+    throw new Error(
+      "[page-builder] blocksOf() takes a page builder made with pageBuilder(); " +
+        `"${plugin.name}" is not one.`
+    );
+  }
+  // Marked, so a route reads the started site through the instance where
+  // this page builder did not start in its module copy.
+  return Object.assign(runningBlocks(own), {
+    [SITE_COPY]: { started: () => runningRegistry(own) !== undefined },
+  });
+}
+
 /** The named queries each page builder this process made registers. */
 export const sitesQueries: WeakMap<PluginDefinition, NamedQueryLookup> =
   new WeakMap<PluginDefinition, NamedQueryLookup>();
@@ -582,6 +634,12 @@ export const sitesQueries: WeakMap<PluginDefinition, NamedQueryLookup> =
  * one process never resolve each other's queries. Nothing for a plugin that
  * is not a page builder.
  *
+ * Read from the page builder itself; a route reads the started site's
+ * through the instance where this page builder did not start in its module
+ * copy, for the reason {@link blocksOf} gives, since the queries plugins
+ * declare are added as the site starts. Elsewhere, before any start, the
+ * site's own queries.
+ *
  * ```ts
  * export const builder = pageBuilder({ namedQueries: [upcomingEvents] });
  * // app/[...slug]/page.tsx
@@ -591,5 +649,15 @@ export const sitesQueries: WeakMap<PluginDefinition, NamedQueryLookup> =
  * @experimental
  */
 export function namedQueriesOf(plugin: PluginDefinition): NamedQueryLookup {
-  return sitesQueries.get(plugin) ?? { definitionOf: () => undefined };
+  const own = sitesQueries.get(plugin);
+  const blocks = sitesBlocks.get(plugin);
+  if (own === undefined || blocks === undefined) {
+    return { definitionOf: () => undefined };
+  }
+  // Marked as `blocksOf` is: a route reads the started site's queries,
+  // plugins' among them, where this page builder did not start here.
+  return {
+    definitionOf: name => own.definitionOf(name),
+    [SITE_COPY]: { started: () => hasStarted(blocks) },
+  } as NamedQueryLookup;
 }

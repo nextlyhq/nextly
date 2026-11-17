@@ -155,6 +155,7 @@ import {
   withFieldGroupEvidence,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
+import { fieldGroupFieldsToPopulate } from "../../field-groups/services/field-group-query-service";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
@@ -184,6 +185,7 @@ import {
   detachedCopy,
   judgeEachLanguage,
   keyedByLanguageReach,
+  languagesNotPublishedIn,
   narrowToRowFields,
   publishedInLanguageCondition,
   valuesBesideRow,
@@ -293,6 +295,7 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
+import { entryDetails } from "./entry-details";
 
 /**
  * A collection's declared top-level fields.
@@ -1239,6 +1242,48 @@ export class CollectionQueryService extends BaseService {
       scopeKind: "collection",
       scopeSlug: collectionName,
       now,
+    });
+  }
+
+  /**
+   * On a public read, the languages each of `ids` is not published in, by id: what the field
+   * groups it holds read their translations past (`skipLanguages`), as its own translated fields
+   * do. `undefined` where nothing is skipped; see `languagesNotPublishedIn`. `populates` is the
+   * fields and selection the field-group population reads with: a read that populates no field
+   * group skips nothing, and pays no query for it.
+   */
+  private async componentSkipLanguages(
+    companion: CompanionSchema | null | undefined,
+    statusFilter: StatusFilter | null,
+    ids: readonly (string | number)[],
+    revealed: Iterable<unknown>,
+    populates: {
+      fields: readonly FieldConfig[];
+      select: Record<string, boolean> | undefined;
+    }
+  ): Promise<Map<string, ReadonlySet<string>> | undefined> {
+    // Asked before the readiness probe, so a trusted or draft read pays nothing for it. Whether the
+    // read populates a field group is the population's own answer (`fieldGroupFieldsToPopulate`),
+    // so the languages are read exactly where a field group will be read with them.
+    if (
+      statusFilter?.isPublicRead !== true ||
+      companion?.hasStatus !== true ||
+      !this.fieldGroupDataService ||
+      fieldGroupFieldsToPopulate(populates.fields, populates.select).length ===
+        0
+    ) {
+      return undefined;
+    }
+    return languagesNotPublishedIn({
+      db: this.adapter.getDrizzle<
+        Parameters<typeof languagesNotPublishedIn>[0]["db"]
+      >(),
+      companion,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      statusFilter,
+      locales: (this.localization?.locales ?? []).map(l => l.code),
+      ids,
+      revealed,
     });
   }
 
@@ -4399,22 +4444,40 @@ export class CollectionQueryService extends BaseService {
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
       if (this.fieldGroupDataService) {
-        expandedEntries =
-          await this.fieldGroupDataService.populateComponentDataMany({
-            entries: expandedEntries,
-            // The physical table, as the write recorded it in `_parent_table`.
-            parentTable: collectionTableName(collection, params.collectionName),
-            fields: fields as FieldConfig[],
-            depth: params.depth,
-            select: params.select,
-            // i18n: thread the read locale so embedded localized components resolve
-            // per language across the list, and forward fallback control so the
-            // admin's no-fallback edit mode (`?fallback-locale=none`) leaves an
-            // untranslated embedded field blank instead of showing default text.
-            locale: params.locale,
-            fallbackLocale: params.fallbackLocale,
-            access: this.buildComponentReadAccess(params, localeChain, caches),
-          });
+        const fieldGroupData = this.fieldGroupDataService;
+        // On a public read, the languages each entry is not published in, which its field groups'
+        // translations fall back past as its own translated fields do.
+        const skipByEntry = await this.componentSkipLanguages(
+          companion,
+          statusFilter,
+          expandedEntries
+            .map(entry => entry.id)
+            .filter(
+              (id): id is string | number =>
+                typeof id === "string" || typeof id === "number"
+            ),
+          revealed,
+          // The fields and selection the population below reads with.
+          { fields: fields as FieldConfig[], select: params.select }
+        );
+        expandedEntries = await fieldGroupData.populateComponentDataMany({
+          entries: expandedEntries,
+          // The physical table, as the write recorded it in `_parent_table`.
+          parentTable: collectionTableName(collection, params.collectionName),
+          fields: fields as FieldConfig[],
+          depth: params.depth,
+          select: params.select,
+          // i18n: thread the read locale so embedded localized components resolve
+          // per language across the list, and forward fallback control so the
+          // admin's no-fallback edit mode (`?fallback-locale=none`) leaves an
+          // untranslated embedded field blank instead of showing default text.
+          locale: params.locale,
+          fallbackLocale: params.fallbackLocale,
+          // Asked per entry, so the whole page is still populated in one batch while each entry's
+          // field groups fall back past its own unpublished languages.
+          skipLanguagesOf: skipByEntry && (id => skipByEntry.get(id)),
+          access: this.buildComponentReadAccess(params, localeChain, caches),
+        });
       }
 
       // ============================================================
@@ -5434,6 +5497,13 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /**
+     * Attach `_details`: where the site serves the entry, and who made and
+     * changed it (`entryDetails`). Who is personal data, so the route asks
+     * for it only for a signed-in admin user; it is attached only once this
+     * read has been granted.
+     */
+    details?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -5851,6 +5921,18 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
+          // On a public read, the languages the entry is not published in, which its field
+          // groups' translations fall back past as its own translated fields do.
+          skipLanguages: (
+            await this.componentSkipLanguages(
+              companion,
+              statusFilter,
+              [entryId],
+              decisions.reveal,
+              // The fields and selection this population reads with.
+              { fields: fields as FieldConfig[], select: params.select }
+            )
+          )?.get(String(entryId)),
           // As on the list path: a related row reached through a component
           // is judged by its own collection's field rules.
           access: this.buildComponentReadAccess(params, localeChain, caches),
@@ -6213,6 +6295,15 @@ export class CollectionQueryService extends BaseService {
       // language's editor read says whether there is one.
       if (sharedChangesPending !== undefined) {
         finalData._sharedChangesPending = sharedChangesPending;
+      }
+      // After every gate above: only a read already granted is told where
+      // the entry is served and who made and changed it.
+      if (params.details) {
+        finalData._details = await entryDetails({
+          type: { kind: "collection", slug: params.collectionName },
+          entry: finalData,
+          locale: params.locale,
+        });
       }
 
       return {

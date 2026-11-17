@@ -407,7 +407,7 @@ export function SourceField({
   return (
     <div className="nx-inspector__field" data-content-control="listSource">
       <Label id={labelId} htmlFor={id}>
-        Source
+        Show entries from
       </Label>
       <LoopPicker
         id={id}

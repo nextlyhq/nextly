@@ -142,16 +142,15 @@ async function paintText(page: Page): Promise<void> {
   await expect(await block(page, TEXT_ID)).toBeVisible({ timeout: 30_000 });
   await clickBlock(page, TEXT_ID);
   await page.getByRole("tab", { name: "Style" }).click();
-  // Colour sits in Typography, which starts closed for a text block.
-  const section = page.getByRole("button", {
-    name: "Typography",
-    exact: true,
+  // Colour sits in Text, which starts closed for a text block.
+  const section = page.getByTestId("inspector").getByRole("button", {
+    name: /^Text(\s?has changes)?$/,
   });
   if ((await section.getAttribute("aria-expanded")) !== "true") {
     await section.click();
   }
   const color = page
-    .getByRole("region", { name: /^Typography/ })
+    .getByRole("region", { name: /^Text(\s?has changes)?$/ })
     .getByRole("textbox", { name: "Colour", exact: true });
   await color.fill("#1155cc");
   await color.press("Enter");
