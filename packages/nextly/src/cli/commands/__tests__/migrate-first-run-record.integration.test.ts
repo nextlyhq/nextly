@@ -786,6 +786,51 @@ describe.each(getConfiguredTestDialects())(
         expect(run.why).toMatch(/^~ permissions .*export-fr-reports/m);
       }, 240_000);
 
+      it("names a permission removed where the newest snapshot records settings and no permissions", async () => {
+        const withPermissions = (actions: readonly string[]) =>
+          defineConfig({
+            collections: [
+              defineCollection({
+                slug: SLUG,
+                fields: [text({ name: "title" }), text({ name: "summary" })],
+              }),
+            ],
+            permissions: actions.map(action => ({
+              action,
+              resource: "fr-reports",
+            })),
+            db: { migrationsDir: "./migrations" },
+          });
+        const url = await scratch();
+        use(url);
+        const base = await migrateCreate("one", withPermissions(["export"]));
+        // As a release between the two wrote it: the settings, no permissions.
+        const path = join(dir, "migrations", "meta", `${base}.snapshot.json`);
+        const snapshot = JSON.parse(readFileSync(path, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        delete snapshot.permissions;
+        writeFileSync(path, JSON.stringify(snapshot, null, 2));
+        // A database an earlier release migrated, then its first run here:
+        // the point carries the settings, so the record keeps no rows, and
+        // the owned permissions all the same.
+        await migrate(withPermissions(["export"]));
+        await on(url, deleteRecord);
+        await migrate(withPermissions(["export"]));
+        await on(url, async adapter => {
+          expect((await recordOf(adapter))?.baseline).toBeUndefined();
+          await adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'export-fr-reports'`
+          );
+        });
+
+        const run = await migrateRun(withPermissions([]));
+
+        expect(run.failure, run.said.join("\n")).toBeDefined();
+        expect(run.why).toMatch(/^~ permissions .*export-fr-reports/m);
+      }, 240_000);
+
       it("over a record written before owners were kept: names a permission added, and not one removed", async () => {
         const url = await scratch();
         use(url);
@@ -932,7 +977,15 @@ describe.each(getConfiguredTestDialects())(
           ]);
           expect(await live(adapter, "sync-fr-gone")).toBe(true);
           expect(await grantsOf(adapter, "admin")).toContain("sync-fr-gone");
-          expect(await recordOf(adapter)).toEqual({ point: first });
+          // No baseline: the point's snapshot says what the rows were. The
+          // owned permissions live then are kept all the same: here the one
+          // a plugin no build declares had left.
+          const record = await recordOf(adapter);
+          expect(record?.point).toBe(first);
+          expect(record?.baseline).toBeUndefined();
+          expect(record?.ownedPermissions?.map(p => p.slug)).toEqual([
+            "sync-fr-gone",
+          ]);
         });
       }, 180_000);
     });

@@ -36,6 +36,7 @@ import { buildExtensionSchema } from "../../../domains/schema/extension/build-ex
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { migrationChecksum } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { liveColumnNames } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -602,6 +603,53 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(run.said).toContain("no longer matches its ledger");
         expect(run.said).not.toContain(UP_TO_DATE);
+
+        // An applied module rewritten since, sealed again: its snapshot is
+        // not what ran, so the run refuses the changed history and names
+        // nothing from it as missing.
+        const { checksum: _sealed, ...content } = built!.module;
+        const rewritten = {
+          ...content,
+          snapshot: {
+            ...content.snapshot,
+            [dialect]: {
+              tables: [
+                ...content.snapshot[dialect].tables,
+                {
+                  ...content.snapshot[dialect].tables[0],
+                  name: "uwp__never_made",
+                },
+              ],
+            },
+          },
+        };
+        const edited = await migrate(
+          defineConfig({
+            collections: [],
+            plugins: [
+              definePlugin({
+                name: OWNER.name,
+                version: "1.0.1",
+                nextly: ">=0.0.1",
+                schemaVersion: 1,
+                contributes: {
+                  schema: {
+                    prefix: OWNER.prefix,
+                    tables: [things, extras],
+                    migrations: [
+                      { ...rewritten, checksum: migrationChecksum(rewritten) },
+                    ],
+                  },
+                },
+              }),
+            ],
+            db: { migrationsDir: "./migrations" },
+          })
+        );
+        expect(edited.code, edited.said).toBe(1);
+        expect(edited.said).not.toContain("uwp__never_made");
+        expect(edited.said).not.toContain("no longer matches its ledger");
+        expect(edited.said).toContain(built!.module.name);
       } finally {
         await db.executeQuery(`DROP TABLE IF EXISTS ${q}uwp__extras${q}`);
         await db.executeQuery(`DROP TABLE IF EXISTS ${q}uwp__things${q}`);

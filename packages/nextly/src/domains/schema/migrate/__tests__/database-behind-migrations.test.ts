@@ -151,12 +151,27 @@ describe("the database-behind check over an applied snapshot", () => {
       ]);
     });
 
-    it("leaves out a contributed table of a module that does not record which columns are its own", () => {
-      const unrecorded = { ...next, contributions: undefined };
-      const live = new Map([["fx__things", new Set(["id", "label"])]]);
-      expect(missingFromDatabase(snapshots([init, unrecorded]), live)).toEqual(
-        []
-      );
+    it("reads the columns of a module that does not record them from what it added to the other owner's table", () => {
+      // As a module generated before `contributions` was recorded: the
+      // dependency's table before and after, and nothing saying whose.
+      const unrecorded = {
+        ...next,
+        contributions: undefined,
+        contributedBefore: both({
+          tables: [table("dep__orders", ["id", "total"])],
+        }),
+      } as unknown as PluginMigration;
+      const live = new Map([
+        ["fx__things", new Set(["id", "label"])],
+        ["dep__orders", new Set(["id"])],
+      ]);
+      expect(missingFromDatabase(snapshots([init, unrecorded]), live)).toEqual([
+        {
+          table: "dep__orders",
+          column: "fx_mark",
+          createdBy: "plugin:@acme/fx/002_label",
+        },
+      ]);
     });
   });
 });

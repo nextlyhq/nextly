@@ -122,12 +122,13 @@ async function recordedInDatabase(
   if (record === undefined) return undefined;
   const { baseline } = record;
   // A record with no baseline was written at a point whose snapshot carries
-  // the settings, so only permissions can be asked here: the live ones.
+  // the settings, so only permissions can be asked here: the ones the record
+  // kept, or the live ones under a record written before it kept any.
   if (baseline === undefined) {
     return {
       settingsDiffer: await settingsBehindConfiguration(args),
       permissions: livePermissionsByOwner(
-        await livePermissionRows(db, args.dialect),
+        record.ownedPermissions ?? (await livePermissionRows(db, args.dialect)),
         APP_OWNER
       ),
     };

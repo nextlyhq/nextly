@@ -77,6 +77,14 @@ export interface RegistryRecord {
   point: string | null;
   /** The registry baseline, kept only where the point has no registry metadata. */
   baseline?: RegistryBaseline;
+  /**
+   * Each owned permission not orphaned when the record was written, kept
+   * where there is no baseline to hold them: the point's snapshot may carry
+   * the settings and still predate recording permissions, and a later
+   * comparison then needs them as they stood. Absent from a record written
+   * before owners were kept.
+   */
+  ownedPermissions?: BaselinePermission[];
 }
 
 /** The `nextly_meta` handle this module reads and writes through. */
@@ -136,9 +144,17 @@ function decodeRecord(raw: unknown): RegistryRecord | undefined {
     }
   }
   if (typeof value !== "object" || value === null) return undefined;
-  const { point, baseline } = value as Record<string, unknown>;
+  const { point, baseline, ownedPermissions } = value as Record<
+    string,
+    unknown
+  >;
   if (point !== null && typeof point !== "string") return undefined;
-  if (baseline === undefined) return { point };
+  if (baseline === undefined) {
+    if (ownedPermissions === undefined) return { point };
+    return isOwnedPermissions(ownedPermissions)
+      ? { point, ownedPermissions }
+      : undefined;
+  }
   if (typeof baseline !== "object" || baseline === null) return undefined;
   const b = baseline as Record<string, unknown>;
   if (
@@ -227,6 +243,47 @@ function rowsBySlug(
   return bySlug;
 }
 
+/** A permission row as the baseline reads it, owned or not. */
+type LivePermission = Omit<BaselinePermission, "owner"> & {
+  owner: string | null;
+};
+
+/** The permissions not orphaned, as `db` holds them, sorted by slug. */
+async function livePermissions(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<LivePermission[]> {
+  const { permissions } = loadedDialect(dialect).tables;
+  const live = (await (db as MetaDatabase)
+    .select({
+      slug: permissions.slug,
+      action: permissions.action,
+      resource: permissions.resource,
+      name: permissions.name,
+      description: permissions.description,
+      permissionGroup: permissions.permissionGroup,
+      owner: permissions.owner,
+    })
+    .from(permissions)
+    .where(isNull(permissions.orphanedAt))) as LivePermission[];
+  return live.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/** Those of `live` an owner declared. */
+const ownedOf = (live: readonly LivePermission[]): BaselinePermission[] =>
+  live.filter((row): row is BaselinePermission => row.owner !== null);
+
+/**
+ * Each owned permission not orphaned, as `db` holds them: what a record with
+ * no baseline keeps (`RegistryRecord.ownedPermissions`).
+ */
+export async function takeOwnedPermissions(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<BaselinePermission[]> {
+  return ownedOf(await livePermissions(db, dialect));
+}
+
 /**
  * The registry baseline as the database stands: every registry row through
  * its registry service, and the permissions not orphaned. Read through
@@ -252,31 +309,12 @@ export async function takeRegistryBaseline(args: {
     adapter,
     logger
   ).getAllComponents();
-  const { permissions } = loadedDialect(args.dialect).tables;
-  const live = (await (args.db as MetaDatabase)
-    .select({
-      slug: permissions.slug,
-      action: permissions.action,
-      resource: permissions.resource,
-      name: permissions.name,
-      description: permissions.description,
-      permissionGroup: permissions.permissionGroup,
-      owner: permissions.owner,
-    })
-    .from(permissions)
-    .where(isNull(permissions.orphanedAt))) as (Omit<
-    BaselinePermission,
-    "owner"
-  > & { owner: string | null })[];
-  const bySlug = (a: { slug: string }, b: { slug: string }) =>
-    a.slug.localeCompare(b.slug);
+  const live = await livePermissions(args.db, args.dialect);
   return {
     collections: rowsBySlug(collections),
     singles: rowsBySlug(singles),
     fieldGroups: rowsBySlug(fieldGroups),
     permissions: live.map(row => row.slug).sort(),
-    ownedPermissions: live
-      .filter((row): row is BaselinePermission => row.owner !== null)
-      .sort(bySlug),
+    ownedPermissions: ownedOf(live),
   };
 }

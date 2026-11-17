@@ -175,6 +175,7 @@ import {
 import {
   readRegistryRecord,
   storeRegistryRecord,
+  takeOwnedPermissions,
   takeRegistryBaseline,
   type RegistryRecord,
 } from "../../domains/schema/migrate/registry-record";
@@ -2739,7 +2740,12 @@ export async function migrateCore(
       await new SchemaEventsRepository(db, deps.dialect).listFileApplies()
     );
     const record: RegistryRecord = pointCarriesMetadata(standings, point)
-      ? { point }
+      ? // No rows to keep, and the owned permissions all the same: that
+        // point's snapshot may predate recording them.
+        {
+          point,
+          ownedPermissions: await takeOwnedPermissions(db, deps.dialect),
+        }
       : {
           point,
           baseline: await takeRegistryBaseline({
@@ -3276,6 +3282,9 @@ async function missingFromPluginStreams(
 ): Promise<MissingFromDatabase[]> {
   const sets = deps.pluginMigrationSets ?? [];
   if (sets.length === 0) return [];
+  // A module rewritten since it ran is refused as a changed history before
+  // its snapshot is read: what it now says it made is not what ran.
+  await assertPluginHistoriesHold(deps);
   const applied = await (
     deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
   )();

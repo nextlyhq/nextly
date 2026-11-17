@@ -33,9 +33,11 @@ import {
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 
 import {
+  orderedMigrations,
   qualifiedFilename,
   type PluginMigration,
 } from "./plugin/plugin-migration";
+import { recordedContributions } from "./plugin/recorded-contributions";
 
 import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
@@ -96,12 +98,10 @@ export function appOwnedTables(
 }
 
 /**
- * One plugin's applied modules as applied snapshots, in the order the plugin
- * lists them: each module's own tables whole, and of the tables it
- * contributed to, only the columns it recorded as its own (`contributions`).
- * A module that records none (generated before they were recorded) gives its
- * own tables alone, since its part of another owner's table cannot be told
- * from the owner's.
+ * One plugin's applied modules as applied snapshots, in run order: each
+ * module's own tables whole, and of the tables it contributed to, only the
+ * plugin's own columns as its applied modules leave them
+ * (`recordedContributions`).
  */
 export function appliedPluginSnapshots(args: {
   pluginName: string;
@@ -110,10 +110,15 @@ export function appliedPluginSnapshots(args: {
   isApplied: (ledgerKey: string) => boolean;
   dialect: SupportedDialect;
 }): AppliedSnapshot[] {
-  return args.migrations.flatMap(migration => {
+  const appliedSoFar: PluginMigration[] = [];
+  return orderedMigrations(args.migrations).flatMap(migration => {
     const key = qualifiedFilename(args.pluginName, migration.name);
     if (!args.isApplied(key)) return [];
-    const contributions = migration.contributions?.[args.dialect] ?? {};
+    appliedSoFar.push(migration);
+    // The plugin's elements once this module has run, by the one reading of
+    // them the generator and the runner share: stated by a module that
+    // records them, replayed from its two sides by one that does not.
+    const contributions = recordedContributions(appliedSoFar, args.dialect);
     return [
       {
         migration: key,
