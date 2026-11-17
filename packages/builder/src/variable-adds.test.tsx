@@ -17,7 +17,7 @@ import {
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokensPanel } from "./tokens-panel";
 import type { VariableGroup } from "./tokens-studio";
@@ -63,16 +63,14 @@ function Host({
   tokens = SITE,
   groups,
   initialSearch = "",
-  onSearch,
 }: {
   tokens?: SiteTokenSet;
   groups?: readonly VariableGroup[];
   initialSearch?: string;
-  onSearch?: (query: string) => void;
 }): React.JSX.Element {
   const [set, setSet] = React.useState(tokens);
   const latest = React.useRef(set);
-  const [search, setSearch] = React.useState(initialSearch);
+  const [search] = React.useState(initialSearch);
   return (
     <TokensPanel
       tokens={set}
@@ -82,10 +80,6 @@ function Host({
         setSet(next);
       }}
       search={search}
-      onSearch={query => {
-        setSearch(query);
-        onSearch?.(query);
-      }}
       {...(groups === undefined ? {} : { groups })}
     />
   );
@@ -115,7 +109,13 @@ describe("the add rows", () => {
     ]);
     expect(addRows("fonts")).toEqual(["Add font", "Add font weight"]);
     expect(addRows("other")).toEqual(["Add value"]);
-    for (const id of ["colours", "type", "spacing", "fonts", "other"] as const) {
+    for (const id of [
+      "colours",
+      "type",
+      "spacing",
+      "fonts",
+      "other",
+    ] as const) {
       const head = group(id).querySelector(".nx-vars__group-head");
       expect(head?.querySelector("button[aria-label^='Add']")).toBeNull();
       // After the last row, not before it.
@@ -188,16 +188,15 @@ describe("pressing an add row", () => {
   });
 
   it("keeps the search, and shows the new row marked New while it does not match", async () => {
-    const onSearch = vi.fn();
-    render(<Host initialSearch="brand" onSearch={onSearch} />);
+    render(<Host initialSearch="brand" />);
     fireEvent.click(
       within(group("colours")).getByRole("button", { name: "Add colour" })
     );
     await screen.findByRole("dialog", { name: "Edit New colour" });
-    expect(onSearch).not.toHaveBeenCalled();
     const rows = [...group("colours").querySelectorAll("li")];
-    expect(rows.map(row => row.querySelector(".nx-vars__name")?.textContent))
-      .toEqual(["Brand", "New colour"]);
+    expect(
+      rows.map(row => row.querySelector(".nx-vars__name")?.textContent)
+    ).toEqual(["Brand", "New colour"]);
     const added = rows[1];
     expect(added?.querySelector(".nx-vars__new")?.textContent).toBe("New");
     expect(rows[0]?.querySelector(".nx-vars__new")).toBeNull();

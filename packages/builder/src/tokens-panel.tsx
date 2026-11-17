@@ -173,11 +173,6 @@ export interface TokensPanelProps {
    * search box of its own.
    */
   search?: string;
-  /**
-   * The way to change the host's search: emptied when a variable is added,
-   * so its row and editor are drawn.
-   */
-  onSearch?: (query: string) => void;
   /** The host's search field, where focus goes once a variable is removed. */
   searchRef?: React.RefObject<HTMLInputElement | null>;
   /** Which groups are folded, and the way to fold one. Absent: none fold. */
@@ -314,8 +309,7 @@ function VariablesView({
 }): React.JSX.Element {
   const { mode } = header;
   const { query, needle, searching, setQuery, own } = useViewSearch(
-    hosted.search,
-    hosted.onSearch
+    hosted.search
   );
   const { root, openKey, fresh, toggle, add, duplicate, forget, commitFrom } =
     useOpenVariable({ tokens, onChange, currentTokens, onSettle });
