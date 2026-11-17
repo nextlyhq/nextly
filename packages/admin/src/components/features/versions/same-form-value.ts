@@ -78,12 +78,21 @@ function sameJsonValue(a: unknown, b: unknown): boolean {
  * A relationship's value with each document it names read as its id: a
  * populated document (`{ id, ... }`) as its id, a reference to one of several
  * collections (`{ relationTo, value }`) with its value read the same way.
+ *
+ * A populated row is told apart first: the document it names may have fields
+ * called `relationTo` and `value` of its own, which shape it like such a
+ * reference. A row carries an id and a reference does not, so only a value
+ * without one is read as a reference.
  */
 function referencesOf(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(referencesOf);
   if (value === null || typeof value !== "object") return value;
   const record = value as Record<string, unknown>;
-  if (typeof record.relationTo === "string" && "value" in record) {
+  if (
+    !("id" in record) &&
+    typeof record.relationTo === "string" &&
+    "value" in record
+  ) {
     return { relationTo: record.relationTo, value: referencesOf(record.value) };
   }
   return "id" in record ? record.id : value;
