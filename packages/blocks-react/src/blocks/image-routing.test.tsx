@@ -248,3 +248,43 @@ describe("a wrapped image's corners and proportion", () => {
     ]);
   });
 });
+
+describe("a captioned image's text size", () => {
+  it("is written on its caption, not on the figure the caption sits in", async () => {
+    const document = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "c1",
+          type: "core/image",
+          version: 1,
+          props: {
+            src: "https://example.test/team.png",
+            alt: "The team",
+            caption: "Our team",
+          },
+          styles: { base: { base: { fontSize: "20px" } } },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const html = await renderToHtml(
+      <PageRenderer
+        document={document}
+        blocks={resolver}
+        styleContext={{ breakpoints: BREAKPOINTS, namedClasses: [] }}
+      />
+    );
+    const rules = rulesIn(new DOMParser().parseFromString(html, "text/html"));
+    const sized = rules.filter(rule => rule.body.includes("font-size: 20px"));
+    // On the caption inside the figure: on the figure itself, the caption's
+    // own 0.875em would scale it to 17.5px. Its other rule reaches the root
+    // only while it is no figure, an Image without a caption.
+    expect(sized.map(rule => rule.selector)).toEqual([
+      expect.stringMatching(/:not\(\.nx-bp-core--image--frame\)$/),
+      expect.stringMatching(
+        /\.nx-bp-core--image--frame > \.nx-bp-core--image--caption$/
+      ),
+    ]);
+  });
+});
