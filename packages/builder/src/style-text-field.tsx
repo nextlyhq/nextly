@@ -20,6 +20,7 @@ import * as React from "react";
 
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
+import { useFieldDescription } from "./css-hint";
 import { isElement } from "./dom-kind";
 import { useUnsetHint } from "./inherited-value";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
@@ -367,14 +368,14 @@ export function TextField({
   /** The number field's part in the edit; see {@link FieldEditing}. */
   editing?: FieldEditing | undefined;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   // Typed since focus: the text is then shown as typed, since a unit on its
   // way in ("2c" for "2ch") would read as a unit to leave out and be cut.
   const [typing, setTyping] = useTyping(editing);
   // A side of the spacing box says "–" while unset: a hint would not fit.
   const compact = React.useContext(CompactSides);
-  const hint = useUnsetHint(
-    compact ? "–" : (fallbackHint ?? placeholderFor(control))
-  );
+  const hint = useUnsetHint(unsetWords(compact, fallbackHint, control));
   const commit = useDraftCommit({
     draft,
     stored,
@@ -394,7 +395,7 @@ export function TextField({
       title={sideTitle(compact, draft)}
       // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
-      aria-describedby={fieldDescribedBy(describedBy, compact, id)}
+      aria-describedby={fieldDescribedBy(described, compact, id)}
       aria-invalid={invalid ? true : undefined}
       // Committed on blur and on Enter, matching the content tab: an op per
       // keystroke would make one undo remove one character.
@@ -642,4 +643,16 @@ export function placeholderFor(control: StyleControl): string {
   if (leaf.kind === "dimension") return dimensionHint(leaf);
   if (leaf.kind === "number") return numberHint(leaf);
   return FIXED_PLACEHOLDER[leaf.kind] ?? "Not set";
+}
+
+/**
+ * What a field says while nothing is set: "–" on a side of the spacing box,
+ * where a hint would not fit, else its own hint or the control's.
+ */
+function unsetWords(
+  compact: boolean,
+  fallbackHint: string | undefined,
+  control: StyleControl
+): string {
+  return compact ? "–" : (fallbackHint ?? placeholderFor(control));
 }
