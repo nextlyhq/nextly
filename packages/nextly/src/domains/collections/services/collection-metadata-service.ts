@@ -618,12 +618,16 @@ export class CollectionMetadataService extends BaseService {
    * tables its many-to-many fields make; field-group rows naming its table as their parent count as
    * its content, so a leftover whose content lives there is refused rather than cleared. Dropped
    * without CASCADE: anything else depending on these tables has already refused the create.
+   *
+   * A table a registered entity stores in is never a leftover, however empty: the create is
+   * refused first if its family overlaps one (`assertTableFamilyUnclaimed`).
    */
   private async clearLeftoverCollection(
     slug: string,
     tableName: string,
     fields: FieldDefinition[]
   ): Promise<void> {
+    await this.assertTableFamilyUnclaimed(slug, tableName);
     const adapter = this.adapter;
     const [
       { clearLeftoverStorage },
@@ -650,6 +654,59 @@ export class CollectionMetadataService extends BaseService {
         await adapter.dropTable(tableName, { ifExists: true });
       },
     });
+  }
+
+  /**
+   * Refuses the create when its table family (its main table and the `_locales` translations table
+   * beside it) overlaps one a registered collection, Single or field group stores in. Compared as
+   * families, as a Single's create compares them (`singleTableFamiliesCollide`): a collection
+   * registered before the `-locales` address was reserved, or whose row keeps a table name of its
+   * own, can store in `dc_<slug>_locales`, which this create would otherwise take for its own
+   * leftover translations table and drop.
+   */
+  private async assertTableFamilyUnclaimed(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    const [
+      { singleTableFamiliesCollide },
+      { CollectionRegistryService },
+      { SingleRegistryService },
+      { FieldGroupRegistryService },
+    ] = await Promise.all([
+      import("../../singles/services/resolve-single-table-name"),
+      import("./collection-registry-service"),
+      import("../../singles/services/single-registry-service"),
+      import("../../field-groups/services/field-group-registry-service"),
+    ]);
+    const [collections, singles, fieldGroups] = await Promise.all([
+      new CollectionRegistryService(
+        this.adapter,
+        this.logger
+      ).getAllCollections(),
+      new SingleRegistryService(this.adapter, this.logger).getAllSingles(),
+      new FieldGroupRegistryService(
+        this.adapter,
+        this.logger
+      ).getAllComponents(),
+    ]);
+    const owner = [...collections, ...singles, ...fieldGroups].find(
+      entity =>
+        entity.slug !== slug &&
+        singleTableFamiliesCollide(entity.tableName, tableName)
+    );
+    if (owner) {
+      throw NextlyError.duplicate({
+        logContext: {
+          reason:
+            "a registered entity stores in this collection's table family",
+          slug,
+          tableName,
+          ownedBy: owner.slug,
+          ownerTable: owner.tableName,
+        },
+      });
+    }
   }
 
   /**

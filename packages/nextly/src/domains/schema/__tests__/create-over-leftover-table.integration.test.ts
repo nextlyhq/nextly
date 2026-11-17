@@ -352,23 +352,46 @@ for (const dialect of getConfiguredTestDialects()) {
       });
       expect(await liveColumns("dc_lcloc_locales")).toContain("stale");
 
-      await createCollection(
-        "lcloc",
-        [
-          { name: "title", type: "text", localized: true },
-          { name: "score", type: "number" },
-        ],
-        true
+      const TRANSLATED = [
+        { name: "title", type: "text", localized: true },
+        { name: "score", type: "number" },
+      ];
+      await createCollection("lcloc", TRANSLATED, true);
+      // The same collection created where nothing was left over: what the create itself makes.
+      await createCollection("lclocfresh", TRANSLATED, true);
+
+      // The whole family ends as a create over no leftover leaves it: the main table and the
+      // translations table each as the fresh create's, so neither a stale column nor a table the
+      // create would have made but did not can pass.
+      expect(await liveColumns("dc_lcloc")).toEqual(
+        await liveColumns("dc_lclocfresh")
+      );
+      expect(await liveColumns("dc_lcloc_locales")).toEqual(
+        await liveColumns("dc_lclocfresh_locales")
+      );
+      expect(await collectionStatus("lcloc")).toBe("applied");
+    });
+
+    // A collection registered before the `-locales` address was reserved, or whose row keeps a
+    // table name of its own, can store in `dc_<slug>_locales`: empty, it is still that
+    // collection's table, never this create's leftover translations table.
+    it("refuses a collection create whose translations table another collection stores in, dropping nothing", async () => {
+      await createCollection("lcowner");
+      const q = dialect === "mysql" ? "`" : '"';
+      await app().adapter.executeQuery(
+        `ALTER TABLE ${q}dc_lcowner${q} RENAME TO ${q}dc_lcown_locales${q}`
+      );
+      await app().adapter.executeQuery(
+        `UPDATE dynamic_collections SET table_name = 'dc_lcown_locales' WHERE slug = 'lcowner'`
       );
 
-      // The whole family was cleared: the main table holds the request's columns, and the
-      // leftover translations table, with its stale column, is gone. A translated collection's
-      // create makes no translations table of its own here, so none stands in its place.
-      const main = await liveColumns("dc_lcloc");
-      expect(main).toContain("score");
-      expect(main).not.toContain("stale");
-      expect(await liveColumns("dc_lcloc_locales")).not.toContain("stale");
-      expect(await collectionStatus("lcloc")).toBe("applied");
+      const refused = await refusalOf(createCollection("lcown"));
+
+      expect(refused).toMatchObject({ code: "DUPLICATE" });
+      expect(await liveColumns("dc_lcown_locales")).toEqual(
+        expect.arrayContaining(["title", "score"])
+      );
+      expect(await collectionStatus("lcown")).toBeNull();
     });
 
     it("refuses a translated collection's create over a leftover translations table holding rows", async () => {

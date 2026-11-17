@@ -72,9 +72,12 @@ function service(): CollectionMetadataService {
   );
   // What follows the row is not judged here.
   const internals = created as unknown as {
+    assertTableFamilyUnclaimed: () => Promise<void>;
     registerRuntimeSchema: () => Promise<void>;
     seedPermissionsForCollection: () => Promise<void>;
   };
+  // No registered entity stores in the new table's family: the ground is clear.
+  internals.assertTableFamilyUnclaimed = vi.fn(async () => undefined);
   internals.registerRuntimeSchema = vi.fn(async () => undefined);
   internals.seedPermissionsForCollection = vi.fn(async () => undefined);
   return created;
