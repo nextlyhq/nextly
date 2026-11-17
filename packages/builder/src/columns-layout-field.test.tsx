@@ -16,7 +16,10 @@ import {
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { ColumnsLayoutControl } from "./columns-layout-field";
+import {
+  ColumnsLayoutControl,
+  columnsContentSection,
+} from "./columns-layout-field";
 import type { EditorState } from "./editor-state";
 
 beforeAll(() => {
@@ -284,5 +287,54 @@ describe("where a Columns row stacks", () => {
     expect(JSON.stringify(editor.apply.mock.calls[0]?.[0])).toContain(
       '"sm":{"display":"flex","flexDirection":"column"}'
     );
+  });
+});
+
+describe("a stack reaching a Columns row from a shared style", () => {
+  /** A trace entry from the shared style the row wears, at Tablet. */
+  const fromStyle = (over: Record<string, unknown>) => ({
+    origin: { kind: "class", id: "cls-1", slug: "stacks" },
+    state: "base",
+    breakpoint: "md",
+    ...over,
+  });
+
+  it("is read from the base state, the state its choices write, not a state Style edits", () => {
+    register();
+    const row: BlockNode = {
+      ...column("a"),
+      id: "row",
+      type: "core/columns",
+      classes: ["cls-1"],
+      slots: { children: [column("a"), column("b")] },
+    } as BlockNode;
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [row],
+    } as unknown as BlockDocument;
+    const editor = {
+      document,
+      selectedId: "row",
+      applyAll: vi.fn(() => document),
+      apply: vi.fn(() => document),
+    } as unknown as EditorState;
+    // The style stacks at Tablet in base, and draws a grid on hover there.
+    const entries = [
+      fromStyle({ property: "display", value: "flex" }),
+      fromStyle({ property: "flex-direction", value: "column" }),
+      fromStyle({ property: "display", value: "grid", state: "hover" }),
+    ];
+    const section = columnsContentSection({
+      editor,
+      nodeId: "row",
+      blockName: "core/columns",
+      label: "Columns",
+      breakpoints: BREAKPOINTS,
+      cascade: { entries, nodes: document.nodes } as never,
+      renderedTag: "div",
+    });
+    render(<>{section?.body}</>);
+    expect(checked("Tablet and mobile")).toBe("true");
   });
 });
