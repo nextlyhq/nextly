@@ -23,10 +23,11 @@ import * as React from "react";
 
 import { offeredTiers } from "./canvas/canvas-width";
 import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
+import { layoutWritesText } from "./code-hints";
 import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import {
-  ARRANGE_WRITES,
+  LAYOUT_CSS_NAMES,
   LAYOUT_PROPERTIES,
   planAlign,
   planArrange,
@@ -39,7 +40,6 @@ import {
   planWrap,
   readArrange,
   readSpace,
-  SPREAD_KEYWORDS,
   unusedSettings,
   type AlignPoint,
   type AlignX,
@@ -124,7 +124,7 @@ function appliedInForce(applied: CascadeAt): (device: string) => LayoutValues {
   return device => {
     const values: Partial<Record<LayoutProperty, string>> = {};
     for (const property of LAYOUT_PROPERTIES) {
-      const answer = applied(device, CSS_NAMES[property]);
+      const answer = applied(device, LAYOUT_CSS_NAMES[property] ?? property);
       if (answer !== undefined) values[property] = answer.value;
     }
     return values;
@@ -151,21 +151,6 @@ export function layoutTiers(
       : ownInForce(order, own);
   return { order, own, inForce };
 }
-
-/** Each layout property's CSS name, for the cascade's answer. */
-const CSS_NAMES: Readonly<Record<LayoutProperty, string>> = {
-  display: "display",
-  flexDirection: "flex-direction",
-  flexWrap: "flex-wrap",
-  justifyContent: "justify-content",
-  alignItems: "align-items",
-  justifyItems: "justify-items",
-  gap: "gap",
-  rowGap: "row-gap",
-  columnGap: "column-gap",
-  gridTemplateColumns: "grid-template-columns",
-  gridTemplateRows: "grid-template-rows",
-};
 
 /** The properties Arrange draws in plain words, out of the raw rows. */
 export const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
@@ -262,6 +247,18 @@ function combined(changes: readonly SharedStyleChange[]): SharedStyleChange {
 }
 
 const MODES = ["stack", "row", "grid"] as const;
+
+/** What each mode writes at the edited device, from the writes it plans. */
+function modeWrites(
+  tiers: LayoutTiers,
+  editing: string
+): Record<(typeof MODES)[number], string> {
+  return {
+    stack: layoutWritesText(planArrange(tiers, editing, "stack")),
+    row: layoutWritesText(planArrange(tiers, editing, "row")),
+    grid: layoutWritesText(planArrange(tiers, editing, "grid")),
+  };
+}
 const MODE_LABELS = { stack: "Stack", row: "Row", grid: "Grid" } as const;
 
 /** What a mode writes, small, as a developer reads it. */
@@ -344,7 +341,7 @@ export function ArrangeFields({
           on={arrange.mode === "custom" ? undefined : arrange.mode}
           labels={MODE_LABELS}
           labelId={labelId}
-          writes={ARRANGE_WRITES}
+          writes={modeWrites(tiers, editing)}
           onChoose={mode => apply(planArrange(tiers, editing, mode))}
         />
       </div>
@@ -454,6 +451,14 @@ function ModeRows({
       {align}
       <SpreadRow
         spread={arrange.spread}
+        writes={
+          Object.fromEntries(
+            SPREADS.map(each => [
+              each,
+              spreadWritesText(planSpread(tiers, editing, each)),
+            ])
+          ) as Record<Spread, string>
+        }
         onChoose={spread => apply(planSpread(tiers, editing, spread))}
       />
       {space}
@@ -572,6 +577,13 @@ function AlignGrid({
 }
 
 const SPREADS = ["packed", "between", "around", "even"] as const;
+
+/** Packed writes no spread: the main axis is left to Align. */
+function spreadWritesText(writes: readonly LayoutWrite[]): string {
+  return writes.some(write => write.value !== null)
+    ? layoutWritesText(writes)
+    : "justify-content (from Align)";
+}
 const SPREAD_LABELS = {
   packed: "Packed",
   between: "Space between",
@@ -579,23 +591,17 @@ const SPREAD_LABELS = {
   even: "Even",
 } as const;
 
-/** A Row's Spread along its main axis. */
+/** A Row's Spread along its main axis, each choice hinted by what it writes. */
 function SpreadRow({
   spread,
+  writes,
   onChoose,
 }: {
   spread: Spread;
+  writes: Readonly<Record<Spread, string>>;
   onChoose: (spread: Spread) => void;
 }): React.JSX.Element {
   const labelId = React.useId();
-  const writes = Object.fromEntries(
-    SPREADS.map(each => [
-      each,
-      SPREAD_KEYWORDS[each] === null
-        ? "justify-content (from Align)"
-        : `justify-content: ${SPREAD_KEYWORDS[each] ?? ""}`,
-    ])
-  ) as Record<Spread, string>;
   return (
     <div className="nx-inspector__field">
       <span className="nx-inspector__field-name" id={labelId}>

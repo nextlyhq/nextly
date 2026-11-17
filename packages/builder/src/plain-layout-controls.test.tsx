@@ -305,9 +305,10 @@ describe("Grid", () => {
     expect(stored().gridTemplateColumns).toBe(
       "repeat(auto-fill, minmax(12rem, 1fr))"
     );
-    expect(within(arrange()).getByLabelText("Minimum width")).toHaveValue(
-      "12rem"
-    );
+    expect(
+      (within(arrange()).getByLabelText("Minimum width") as HTMLInputElement)
+        .value
+    ).toBe("12rem");
     fireEvent.click(
       within(arrange()).getByRole("button", {
         name: "Set rows and columns apart",
@@ -342,7 +343,7 @@ describe("a combination with no plain words", () => {
   it("reads as Custom with its raw rows, and Use plain controls rewrites it", () => {
     mount({ base: { base: { display: "inline-flex" } } });
     for (const radio of within(group("Arrange")).getAllByRole("radio")) {
-      expect(radio).toHaveAttribute("aria-checked", "false");
+      expect(radio.getAttribute("aria-checked")).toBe("false");
     }
     expect(arrange().textContent).toContain("Arrange: Custom");
     const section = document.querySelector<HTMLElement>(

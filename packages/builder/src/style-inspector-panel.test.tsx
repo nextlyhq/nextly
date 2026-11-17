@@ -196,6 +196,17 @@ function fieldsOf(property: string) {
   );
 }
 
+/**
+ * A container's layout drawn as its raw rows. Arrange draws a container's
+ * Display, Direction and Justify in plain words, and leaves them to the raw
+ * rows only while it reads "Arrange: Custom": a baseline alignment has no
+ * 3×3 point, and a flow-root display no plain choice.
+ */
+const RAW_LAYOUT = { alignItems: "baseline" } as const;
+const CUSTOM_DISPLAY = {
+  base: { [BASE_BREAKPOINT]: { display: "flow-root" } },
+} as NodeStyles;
+
 describe("the Style tab beside Content", () => {
   it("offers both tabs and shows Content first", () => {
     register({ effects: true });
@@ -1748,7 +1759,11 @@ describe("controls", () => {
     // A column's main axis runs down the page, so "start" points up, not left.
     const styles = {
       base: {
-        [BASE_BREAKPOINT]: { display: "flex", flexDirection: "column" },
+        [BASE_BREAKPOINT]: {
+          display: "flex",
+          flexDirection: "column",
+          ...RAW_LAYOUT,
+        },
       },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
@@ -1770,7 +1785,13 @@ describe("controls", () => {
     // A label's `for` would CLICK a radio button, choosing or clearing a value;
     // this label only moves focus to the group's tab stop.
     const styles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex", justifyContent: "end" } },
+      base: {
+        [BASE_BREAKPOINT]: {
+          display: "flex",
+          justifyContent: "end",
+          ...RAW_LAYOUT,
+        },
+      },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
@@ -1786,7 +1807,7 @@ describe("controls", () => {
     // and a Reset line under it besides, and none at all where the panel was
     // mounted without a cascade to say where values come from.
     const styles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      base: { [BASE_BREAKPOINT]: { display: "flex", ...RAW_LAYOUT } },
     } as NodeStyles;
     const editor = mount({ layout: true }, styles);
 
@@ -1799,7 +1820,7 @@ describe("controls", () => {
     const reset = within(field).getByRole("button", { name: /^Reset Display/ });
     expect(reset.textContent).toBe("");
     fireEvent.click(reset);
-    // The only value goes, and with it the node's styles.
+    // The value goes; the alignment that kept the layout raw stays.
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).not.toContain(
       "flex"
@@ -3319,7 +3340,7 @@ describe("where a control's value came from", () => {
       ],
     } as never);
     const cardStyles = {
-      base: { [BASE_BREAKPOINT]: { display: "flex" } },
+      base: { [BASE_BREAKPOINT]: { display: "flex", ...RAW_LAYOUT } },
     } as NodeStyles;
     const target = {
       kind: "shared" as const,
@@ -3615,9 +3636,13 @@ describe("where a control's value came from", () => {
   });
 
   it("marks an inherited Display's icon, without choosing it", () => {
-    mountCarded([fromCard({ property: "display", value: "flex" })], {
-      layout: true,
-    });
+    mountCarded(
+      [
+        fromCard({ property: "display", value: "flex" }),
+        fromCard({ property: "align-items", value: "baseline" }),
+      ],
+      { layout: true }
+    );
     const flex = screen.getByRole("radio", { name: "Flex, inherited" });
     expect(flex.getAttribute("aria-checked")).toBe("false");
     expect(sourceIn("display")).toBe("From .card");
@@ -4702,7 +4727,9 @@ describe("the action a control's breakpoint provenance earns", () => {
      */
     register({ layout: true });
     const editor = editorFor(
-      documentOf({ base: { tablet: { display: "flex" } } } as NodeStyles)
+      documentOf({
+        base: { tablet: { display: "flex", ...RAW_LAYOUT } },
+      } as NodeStyles)
     );
     render(
       <StyleInspectorPanel
@@ -4718,6 +4745,13 @@ describe("the action a control's breakpoint provenance earns", () => {
                 origin: { kind: "node", id: "a" },
                 property: "display",
                 value: "flex",
+                state: "base",
+                breakpoint: "tablet",
+              },
+              {
+                origin: { kind: "node", id: "a" },
+                property: "align-items",
+                value: "baseline",
                 state: "base",
                 breakpoint: "tablet",
               },
@@ -6007,7 +6041,7 @@ describe("a font size's unit menu", () => {
 
 describe("the Baseline gate on the panel", () => {
   it("offers no control for a withheld keyword", () => {
-    mount({ layout: true });
+    mount({ layout: true }, CUSTOM_DISPLAY);
 
     fireEvent.click(screen.getByLabelText("More Display values"));
 
@@ -6017,7 +6051,7 @@ describe("the Baseline gate on the panel", () => {
 
   it("names a keyword in words, with its CSS spelling in the tooltip", () => {
     // "inline-flex" read as code; the words are what an author picks from.
-    mount({ layout: true });
+    mount({ layout: true }, CUSTOM_DISPLAY);
     fireEvent.click(screen.getByLabelText("More Display values"));
     const option = screen.getByRole("option", { name: "Inline flex" });
     expect(option.getAttribute("title")).toBe("inline-flex");

@@ -32,6 +32,21 @@ export const LAYOUT_PROPERTIES = [
   "gridTemplateRows",
 ] as const;
 
+/** Each layout property's CSS name, as a declaration spells it. */
+export const LAYOUT_CSS_NAMES: Readonly<Record<string, string>> = {
+  display: "display",
+  flexDirection: "flex-direction",
+  flexWrap: "flex-wrap",
+  justifyContent: "justify-content",
+  alignItems: "align-items",
+  justifyItems: "justify-items",
+  gap: "gap",
+  rowGap: "row-gap",
+  columnGap: "column-gap",
+  gridTemplateColumns: "grid-template-columns",
+  gridTemplateRows: "grid-template-rows",
+};
+
 /** One of {@link LAYOUT_PROPERTIES}. */
 export type LayoutProperty = (typeof LAYOUT_PROPERTIES)[number];
 
@@ -297,15 +312,6 @@ export const ARRANGE_LABELS: Readonly<Record<PlainArrange["mode"], string>> = {
   row: "Row",
   grid: "Grid",
   custom: "Custom",
-};
-
-/** What a plain choice writes, as declarations, for its tooltip. */
-export const ARRANGE_WRITES: Readonly<
-  Record<"stack" | "row" | "grid", string>
-> = {
-  stack: "display: block",
-  row: "display: flex; flex-direction: row",
-  grid: "display: grid",
 };
 
 /** The template a Grid's columns write. */
