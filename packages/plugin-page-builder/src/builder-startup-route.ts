@@ -51,21 +51,34 @@ import {
   type BuilderStartupResponse,
 } from "./builder-startup-contract";
 
+/**
+ * What keeps a route from being answered here, each with why: a route the
+ * dispatcher would treat in some way this route could not repeat exactly.
+ */
+const UNBATCHABLE: ReadonlyArray<
+  readonly [(route: PluginRoute) => boolean, string]
+> = [
+  [route => route.method !== "GET", "it is not a GET"],
+  [route => route.path.includes(":"), "its path has parameters"],
+  [route => route.public === true, "it is public"],
+  [route => route.principal !== undefined, "it serves a principal"],
+  [route => (route.middleware ?? []).length > 0, "it has middleware"],
+  [route => route.rateLimit !== undefined, "it has its own rate limit"],
+  [route => route.formatTimestamps === true, "it formats timestamps"],
+  [route => route.mount === "root", "it is mounted at the root"],
+  [
+    route => route.requiredPermission !== undefined,
+    "the dispatcher judges its permission before its handler runs",
+  ],
+  [
+    route => route.checksAccess !== true && route.siteWide !== false,
+    "it declares no access",
+  ],
+];
+
 /** Why a route cannot be answered here, or `undefined` when it can. */
 function unbatchable(route: PluginRoute): string | undefined {
-  if (route.method !== "GET") return "it is not a GET";
-  if (route.path.includes(":")) return "its path has parameters";
-  if (route.public === true) return "it is public";
-  if (route.principal !== undefined) return "it serves a principal";
-  if ((route.middleware ?? []).length > 0) return "it has middleware";
-  if (route.rateLimit !== undefined) return "it has its own rate limit";
-  if (route.formatTimestamps === true) return "it formats timestamps";
-  if (route.mount === "root") return "it is mounted at the root";
-  if (route.requiredPermission !== undefined) {
-    return "the dispatcher judges its permission before its handler runs";
-  }
-  const judgesCaller = route.checksAccess === true || route.siteWide === false;
-  return judgesCaller ? undefined : "it declares no access";
+  return UNBATCHABLE.find(([refuses]) => refuses(route))?.[1];
 }
 
 /** Where a read is asked, as a URL of its own. */

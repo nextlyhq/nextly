@@ -31,7 +31,7 @@ import { holdStartedReads, startBuilderReads } from "../startup-reads";
  * language being edited, and, on a collection's entry, its pages collection.
  * The component library and the Layout choices are read on their own.
  */
-export function builderOpeningReads(
+function builderOpeningReads(
   locale: string | undefined,
   onCollection: boolean
 ): string[] {
