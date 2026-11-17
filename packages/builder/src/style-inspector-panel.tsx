@@ -77,6 +77,7 @@ import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { layerLabel } from "./panels/layers/layers";
+import { ParentArrangementContext } from "./plain-parent-controls";
 import type { SideOrientation } from "./side-orientation";
 import {
   BLOCK_TARGET,
@@ -96,8 +97,6 @@ import {
   targetCascade,
   targetStyles,
 } from "./style-field-target";
-import { ParentArrangementContext } from "./plain-parent-controls";
-import { useReportStyle } from "./settings-filter";
 import { inspectStyle, type StyleInspection } from "./style-inspector";
 import {
   appliedAtReader,
@@ -488,15 +487,6 @@ function StyleInspectorBody({
     styles: targetStyles(target),
   });
 
-  // What the panel's filter keeps in Style: what these controls draw.
-  useReportStyle(
-    inspection?.nodeId,
-    inspection?.sections,
-    target.kind === "shared",
-    editedStyles(target, editor),
-    inspection?.parent
-  );
-
   const chooseForm = (property: string, path: readonly string[], arm: number) =>
     setChosenForms(current => ({ ...current, [formKey(property, path)]: arm }));
 
@@ -632,6 +622,11 @@ function StyleInspectorBody({
                     readOnlyReason={readOnlyReason}
                     surroundings={surroundings}
                     fit={inspected.objectFit}
+                    report={{
+                      shared: target.kind === "shared",
+                      styles: editedStyles(target, editor),
+                      parent: inspected.parent,
+                    }}
                   />
                 </div>
               </CanvasTokenModeProvider>

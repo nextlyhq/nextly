@@ -205,6 +205,21 @@ function ruleDestination(
   return { view: view.path, field: main.path };
 }
 
+/**
+ * The document view a collection's entries open in by the rule above, before
+ * the fallbacks for one reader or one language, or `undefined` where they open
+ * as the form. The same reading every link uses, so a view that asks whether
+ * it is where its document opens gets the answer a list row acts on.
+ */
+export function collectionOpeningView(
+  slug: string,
+  collection: OpenableCollection,
+  views: readonly RegisteredDocumentView[]
+): RegisteredDocumentView | undefined {
+  const { view } = ruleDestination(slug, collection, views);
+  return view === undefined ? undefined : viewAt(views, slug, view);
+}
+
 /** A language other than the site's default, which only the form edits. */
 function otherLanguage(request: OpenRequest): boolean {
   return (
@@ -444,8 +459,6 @@ export function createDialogOf(
 ): string | undefined {
   const viewable = viewableCollection(document, collection, request);
   if (viewable === undefined) return undefined;
-  const opened = ruleDestination(document.slug, viewable, views).view;
-  return opened === undefined
-    ? undefined
-    : viewAt(views, document.slug, opened)?.createDialog;
+  // The view the entries open in, read as every other reading of it is.
+  return collectionOpeningView(document.slug, viewable, views)?.createDialog;
 }

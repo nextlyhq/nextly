@@ -328,14 +328,18 @@ test.describe("where a clicked block lands", () => {
     const id = await createPage(page.request, false, true);
     await openBuilder(page, id);
     // Pressed from the keyboard: the "+" is a button an author can tab to,
-    // and Enter runs the press a click does, wherever the pointer is.
-    const gap = page.getByRole("button", { name: "Add a section after Hero" });
+    // and Enter runs the press a click does, wherever the pointer is. It
+    // opens the in-place picker aimed at the gap, where Enter adds the
+    // highlighted Heading.
+    const gap = page.getByRole("button", {
+      name: "Add a block between Hero and Pricing",
+    });
     await gap.focus();
     await page.keyboard.press("Enter");
-    await expect(placementLine(page)).toHaveText(
-      "Adding between Hero and Pricing"
-    );
-    await tile(page, "Heading").click();
+    await expect(
+      page.getByRole("dialog", { name: "Add a block" })
+    ).toHaveAccessibleDescription("Adding between Hero and Pricing");
+    await page.keyboard.press("Enter");
     await announced(page, "Heading added between Hero and Pricing");
     await saveDraft(page);
 
