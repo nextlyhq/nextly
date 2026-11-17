@@ -87,7 +87,10 @@ import {
   populateCompanionFields,
   selectRowsWithCompanion,
 } from "../../i18n/companion-join";
-import { publishedInLanguageCondition } from "../../i18n/read-in-language";
+import {
+  idsPublishedInLanguageOf,
+  publishedInLanguageCondition,
+} from "../../i18n/read-in-language";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
@@ -2088,7 +2091,8 @@ export class CollectionRelationshipService extends BaseService {
           lifecycleRows,
           statusFilter,
           access,
-          decisions.reveal
+          decisions.reveal,
+          translations
         )
       : null;
     const rows = lifecycleRows.filter(
@@ -2121,6 +2125,11 @@ export class CollectionRelationshipService extends BaseService {
    * a due release's reveals included. Null where that rule keeps nothing out:
    * a read with no language, a system entity, a target that publishes no
    * language on its own, or one whose translations table is not there yet.
+   *
+   * Judged on `translations`, the rows' translations read in the statement
+   * that read the rows, where there are some: one state of the translations
+   * table answers both which rows there are and where each is published.
+   * Asked of the table otherwise.
    */
   private async idsPublishedInReadLanguage(
     targetCollection: string,
@@ -2128,7 +2137,8 @@ export class CollectionRelationshipService extends BaseService {
     rows: Record<string, unknown>[],
     statusFilter: StatusFilter,
     access: RelatedRowAccess,
-    revealed: readonly string[]
+    revealed: readonly string[],
+    translations: TargetTranslations | null
   ): Promise<ReadonlySet<unknown> | null> {
     const localeChain = targetLocaleChain(access);
     if (!localeChain || rows.length === 0 || isSystemEntity(targetCollection)) {
@@ -2144,6 +2154,16 @@ export class CollectionRelationshipService extends BaseService {
         "ready"
     ) {
       return null;
+    }
+    if (translations) {
+      return idsPublishedInLanguageOf({
+        companion,
+        statusFilter,
+        revealed,
+        localeChain: translations.localeChain,
+        ids: rows.map(row => row.id),
+        companionRows: translations.rows,
+      });
     }
     const condition = publishedInLanguageCondition({
       companion,

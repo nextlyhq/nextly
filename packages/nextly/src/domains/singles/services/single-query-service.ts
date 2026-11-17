@@ -914,19 +914,23 @@ export class SingleQueryService extends BaseService {
     options: GetSingleOptions;
     /** As handed to the live assembly this overlay replaces. */
     enforceRelatedFieldAccess: boolean;
-  }): Promise<SingleDocument> {
+  }): Promise<{
+    doc: SingleDocument;
+    /** The change shown in place of the read's language, by top-level field, when one is. */
+    pending?: { locale: string; values: Record<string, unknown> };
+  }> {
     const { slug, singleMeta, doc, options, enforceRelatedFieldAccess } =
       params;
 
     const entryId = (doc as { id?: string }).id;
-    if (entryId === undefined) return doc;
+    if (entryId === undefined) return { doc };
 
     const view = await this.resolveWorkingDraftView({
       slug,
       singleMeta,
       options,
     });
-    if (view === null) return doc;
+    if (view === null) return { doc };
 
     const draftRef = { scopeKind: "single" as const, scopeSlug: slug, entryId };
     const draftRepo = new VersionsRepository(this.adapter);
@@ -951,7 +955,7 @@ export class SingleQueryService extends BaseService {
         ? { snapshot: combinedDraft({}, parts) }
         : undefined
       : await draftRepo.findWorkingDraft(draftRef, view.draftLocale);
-    if (!workingDraft) return withSharedSignal(doc);
+    if (!workingDraft) return { doc: withSharedSignal(doc) };
     // Shown on publish alone only where the field rules let this caller put
     // it live, so no pending value they could never publish reaches them.
     if (
@@ -967,7 +971,7 @@ export class SingleQueryService extends BaseService {
           authenticatedScope: options.authenticatedScope,
         })))
     ) {
-      return withSharedSignal(doc);
+      return { doc: withSharedSignal(doc) };
     }
 
     const shaped = shapeDraftSnapshot({
@@ -1023,17 +1027,115 @@ export class SingleQueryService extends BaseService {
     // pending change reports nothing — which is what makes it per-language.
     // A draft kept by part holds only what it changes, so its values are
     // laid over the live document rather than replacing it.
+    // What the change shows, by top-level field: all of it, or what a draft
+    // kept by part holds.
+    let shown: Record<string, unknown> = overlaid;
     if (parts) {
       const changed = workingDraft.snapshot as Record<string, unknown>;
-      overlaid = {
-        ...doc,
-        ...Object.fromEntries(
-          Object.entries(overlaid).filter(([key]) => key in changed)
-        ),
-      };
+      shown = Object.fromEntries(
+        Object.entries(overlaid).filter(([key]) => key in changed)
+      );
+      overlaid = { ...doc, ...shown };
     }
     (overlaid as Record<string, unknown>)._isWorkingDraft = true;
-    return withSharedSignal(overlaid);
+    return {
+      doc: withSharedSignal(overlaid),
+      ...(typeof view.draftLocale === "string"
+        ? { pending: { locale: view.draftLocale, values: shown } }
+        : {}),
+    };
+  }
+
+  /**
+   * Who a field group's related rows are read for, in the language `chain` reads: the caller,
+   * travelling down so a related row's own rules are judged. One builder for the read's own
+   * language and for each language read beside it.
+   */
+  private componentReadAccess(
+    options: GetSingleOptions,
+    enforceRelatedFieldAccess: boolean,
+    chain: string[] | null
+  ) {
+    return {
+      enforceFieldAccess: enforceRelatedFieldAccess,
+      // Beside the flag, never folded into `user`: a preview judges a related
+      // row's fields as the sharer while every hook goes on seeing the
+      // anonymous visitor who is actually asking.
+      fieldAccessUser: options.fieldAccessUser,
+      enforceCollectionAccess: true,
+      user: options.user as Record<string, unknown> | undefined,
+      overrideAccess: options.overrideAccess,
+      // Narrows that bypass per RELATED collection. Absent means unchanged;
+      // dropping it here would silently restore the full bypass.
+      trusted: assumedBound(options.trusted),
+      // The rows of one population share a policy cache.
+      targetPolicies: new Map(),
+      targetCompanions: new Map(),
+      targetVerdicts: new Map(),
+      targetRuleMatches: new Map(),
+      authenticatedScope: options.authenticatedScope,
+      locale: chain?.[0],
+      localeChain: chain ?? undefined,
+      status: expansionStatusScope({
+        status: options.status,
+        overrideAccess: options.overrideAccess,
+        bounded: narrows(options.trusted),
+      }),
+    };
+  }
+
+  /**
+   * `translations: "all"`: the Single's field groups in every language it is published in beside
+   * the document the read returns, as its own translated fields are, before its gate and field
+   * rules judge each language. Put there once a pending change is laid over the document, so the
+   * change's language holds what the change does (`pending`).
+   */
+  private async populateFieldGroupsBeside(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    doc: SingleDocument;
+    options: GetSingleOptions;
+    enforceRelatedFieldAccess: boolean;
+    /** The languages the Single is not published in, on a public read. */
+    componentSkipLanguages?: ReadonlySet<string>;
+    /** The languages its read gate refuses. */
+    refusedLanguages?: ReadonlySet<string>;
+    pending?: { locale: string; values: Record<string, unknown> };
+  }): Promise<void> {
+    const { options } = params;
+    if (!this.fieldGroupDataService || options.translations !== "all") return;
+    // The languages not read beside it: those it is not published in, and those its gate
+    // refuses.
+    const skipLanguages = new Set([
+      ...(params.componentSkipLanguages ?? []),
+      ...(params.refusedLanguages ?? []),
+    ]);
+    try {
+      await this.fieldGroupDataService.populateComponentDataBesideEntries({
+        entries: [params.doc],
+        parentTable: params.singleMeta.tableName,
+        fields: params.singleMeta.fields,
+        depth: options.depth,
+        skipLanguagesOf: () => skipLanguages,
+        accessIn: locale =>
+          this.componentReadAccess(options, params.enforceRelatedFieldAccess, [
+            locale,
+          ]),
+        pending: params.pending,
+      });
+    } catch (error) {
+      // As the document's own field groups: a bare Error's own message names component tables
+      // and columns the caller has no business seeing.
+      throw NextlyError.is(error)
+        ? error
+        : NextlyError.internal({
+            cause: error instanceof Error ? error : undefined,
+            logContext: {
+              single: params.slug,
+              reason: "component-population-failed",
+            },
+          });
+    }
   }
 
   private async assembleStoredDocument(params: {
@@ -1058,11 +1160,6 @@ export class SingleQueryService extends BaseService {
      * translations fall back past as its own translated fields do. Absent where nothing is skipped.
      */
     componentSkipLanguages?: ReadonlySet<string>;
-    /**
-     * The languages the Single's read gate refuses (`languagesTheGateRefuses`), decided before
-     * this assembly: no field group is read in them beside the document.
-     */
-    refusedLanguages?: ReadonlySet<string>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -1133,32 +1230,8 @@ export class SingleQueryService extends BaseService {
       // caller travels down to reach the related row's own rules, judged in
       // the language `chain` reads. One builder for the read's own language
       // and for each language read beside it.
-      const componentAccess = (chain: string[] | null) => ({
-        enforceFieldAccess: enforceRelatedFieldAccess,
-        // Beside the flag, never folded into `user`: a preview judges a related
-        // row's fields as the sharer while every hook goes on seeing the
-        // anonymous visitor who is actually asking.
-        fieldAccessUser: options.fieldAccessUser,
-        enforceCollectionAccess: true,
-        user: options.user as Record<string, unknown> | undefined,
-        overrideAccess: options.overrideAccess,
-        // Narrows that bypass per RELATED collection. Absent means unchanged;
-        // dropping it here would silently restore the full bypass.
-        trusted: assumedBound(options.trusted),
-        // The rows of one population share a policy cache.
-        targetPolicies: new Map(),
-        targetCompanions: new Map(),
-        targetVerdicts: new Map(),
-        targetRuleMatches: new Map(),
-        authenticatedScope: options.authenticatedScope,
-        locale: chain?.[0],
-        localeChain: chain ?? undefined,
-        status: expansionStatusScope({
-          status: options.status,
-          overrideAccess: options.overrideAccess,
-          bounded: narrows(options.trusted),
-        }),
-      });
+      const componentAccess = (chain: string[] | null) =>
+        this.componentReadAccess(options, enforceRelatedFieldAccess, chain);
       try {
         doc = (await this.fieldGroupDataService.populateComponentData({
           entry: doc,
@@ -1174,25 +1247,6 @@ export class SingleQueryService extends BaseService {
           skipLanguages: params.componentSkipLanguages,
           access: componentAccess(readChain),
         })) as SingleDocument;
-        // `translations: "all"`: the Single's field groups in every language it is published in
-        // beside it, as its own translated fields are, before its gate and field rules judge each
-        // language.
-        if (options.translations === "all") {
-          // The languages not read beside it: those it is not published in, and those its gate
-          // refuses.
-          const skipLanguages = new Set([
-            ...(params.componentSkipLanguages ?? []),
-            ...(params.refusedLanguages ?? []),
-          ]);
-          await this.fieldGroupDataService.populateComponentDataBesideEntries({
-            entries: [doc],
-            parentTable: singleMeta.tableName,
-            fields: singleMeta.fields,
-            depth: options.depth,
-            skipLanguagesOf: () => skipLanguages,
-            accessIn: locale => componentAccess([locale]),
-          });
-        }
       } catch (error) {
         // The result builder puts a bare Error's own message on the wire —
         // component table and column names the caller has no business seeing.
@@ -1626,6 +1680,16 @@ export class SingleQueryService extends BaseService {
         slug,
         options
       );
+      // The languages a public reader's field groups fall back past, asked of the fields the
+      // assembly populates field groups from (`readMeta`'s, narrowed by `select`).
+      const componentSkipLanguages = await this.componentSkipLanguages(
+        slug,
+        singleMeta,
+        readMeta.fields,
+        doc,
+        statusFilter,
+        revealed
+      );
       doc = await this.assembleStoredDocument({
         slug,
         singleMeta: readMeta,
@@ -1636,17 +1700,7 @@ export class SingleQueryService extends BaseService {
         translations,
         // Read as a due release will publish them, as the read admitted it.
         revealed: new Set<unknown>(revealed),
-        // The languages a public reader's field groups fall back past, asked of the fields the
-        // assembly populates field groups from (`readMeta`'s, narrowed by `select`).
-        componentSkipLanguages: await this.componentSkipLanguages(
-          slug,
-          singleMeta,
-          readMeta.fields,
-          doc,
-          statusFilter,
-          revealed
-        ),
-        refusedLanguages,
+        componentSkipLanguages,
       });
 
       // On a trusted draft-view read, surface this Single's pending change in
@@ -1659,12 +1713,24 @@ export class SingleQueryService extends BaseService {
       // The decision comes from the same rule the WRITE uses. A read that
       // decided this for itself is how a held edit becomes invisible: the write
       // reports success and the read returns the old content.
-      doc = await this.overlayWorkingDraft({
+      const overlay = await this.overlayWorkingDraft({
         slug,
         singleMeta,
         doc,
         options,
         enforceRelatedFieldAccess: true,
+      });
+      doc = overlay.doc;
+      // Its field groups in every language beside the document the read returns.
+      await this.populateFieldGroupsBeside({
+        slug,
+        singleMeta: readMeta,
+        doc,
+        options,
+        enforceRelatedFieldAccess: true,
+        componentSkipLanguages,
+        refusedLanguages,
+        pending: overlay.pending,
       });
 
       // attach the per-locale `_translations` overview for the admin's language pills
@@ -1676,7 +1742,9 @@ export class SingleQueryService extends BaseService {
           slug,
           singleMeta,
           doc,
-          statusFilter
+          statusFilter,
+          // As the read admitted it: a due release's languages are published.
+          new Set<unknown>(revealed)
         );
       }
 
@@ -2244,10 +2312,18 @@ export class SingleQueryService extends BaseService {
     slug: string,
     singleMeta: DynamicSingleRecord,
     doc: Record<string, unknown>,
-    statusFilter: StatusFilter | null | undefined
+    statusFilter: StatusFilter | null | undefined,
+    /** The Single ids a due release reveals to this read (`TranslationStatusArgs.revealed`). */
+    revealed: ReadonlySet<unknown>
   ): Promise<void> {
     try {
-      await this.populateTranslationMeta(slug, singleMeta, doc, statusFilter);
+      await this.populateTranslationMeta(
+        slug,
+        singleMeta,
+        doc,
+        statusFilter,
+        revealed
+      );
     } catch (error) {
       // Same reasoning as the overlay above: a failed overview read reaches here, and is
       // normalized rather than handed to the wire as the driver wrote it.
@@ -2268,7 +2344,9 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord,
     doc: Record<string, unknown>,
     /** The read's lifecycle bound; a public read is told of published languages only. */
-    statusFilter: StatusFilter | null | undefined
+    statusFilter: StatusFilter | null | undefined,
+    /** The Single ids a due release reveals to this read. */
+    revealed: ReadonlySet<unknown>
   ): Promise<void> {
     // Gate on THIS single's flag, not just app-level localization — a non-localized single has
     // no companion, so there is no per-locale translation status to attach.
@@ -2353,6 +2431,7 @@ export class SingleQueryService extends BaseService {
       // collection: a published read drops draft translations.
       statusValues:
         companion.hasStatus && statusFilter ? statusFilter.values : undefined,
+      revealed,
     });
   }
 
