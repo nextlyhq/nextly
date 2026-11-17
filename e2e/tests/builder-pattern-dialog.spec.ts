@@ -32,6 +32,11 @@ test.describe.configure({ lock: [LOCK.homepage] });
  * `PageBuilderCard`.
  */
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 
@@ -73,7 +78,10 @@ async function openBuilder(page: Page): Promise<void> {
     true
   );
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   await expect(
     canvasFrame(page).locator('[data-nx-node="pattern-source"]').first()
   ).toBeVisible({ timeout: 30_000 });

@@ -685,9 +685,7 @@ describe("leaving a page whose collection opens in the builder", () => {
     // about the unsaved edit; the form is never opened on the way.
     expect(navigateTo).toHaveBeenCalledWith("/admin/collections/pages");
     expect(exit).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("button", { name: "Leave editor" })
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Leave editor" })).toBeNull();
   });
 
   it("opens the form from the ⋯ menu, carrying the unsaved edit into it", async () => {
@@ -714,6 +712,14 @@ describe("leaving a page whose collection opens as a form", () => {
     render(<Host />);
     expect(screen.queryByRole("button", { name: "Back to Posts" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
+
+    // The menu's way to the form is offered here too, and goes there.
+    cleanup();
+    exit.mockClear();
+    render(<Host />);
+    await openAsForm();
     expect(exit).toHaveBeenCalledTimes(1);
     expect(navigateTo).not.toHaveBeenCalled();
   });

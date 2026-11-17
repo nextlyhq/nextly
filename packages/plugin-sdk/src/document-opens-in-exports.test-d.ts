@@ -11,7 +11,9 @@ import {
   type DocumentOpensIn,
 } from "@nextlyhq/plugin-sdk/admin";
 
-expectTypeOf(useDocumentOpensIn).returns.toEqualTypeOf<DocumentOpensIn | null>();
+expectTypeOf(
+  useDocumentOpensIn
+).returns.toEqualTypeOf<DocumentOpensIn | null>();
 expectTypeOf<DocumentOpensIn["opensIn"]>().toEqualTypeOf<string>();
 expectTypeOf<DocumentOpensIn["list"]>().toEqualTypeOf<{
   label: string;
@@ -19,4 +21,6 @@ expectTypeOf<DocumentOpensIn["list"]>().toEqualTypeOf<{
 }>();
 // The literal id, so a view comparing an action's id against it compares the
 // value core gives the action.
-expectTypeOf(PIN_TO_DASHBOARD_ACTION).toEqualTypeOf<"pin-to-dashboard">();
+expectTypeOf<
+  typeof PIN_TO_DASHBOARD_ACTION
+>().toEqualTypeOf<"pin-to-dashboard">();

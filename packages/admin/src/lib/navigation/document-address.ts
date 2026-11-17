@@ -459,8 +459,6 @@ export function createDialogOf(
 ): string | undefined {
   const viewable = viewableCollection(document, collection, request);
   if (viewable === undefined) return undefined;
-  const opened = ruleDestination(document.slug, viewable, views).view;
-  return opened === undefined
-    ? undefined
-    : viewAt(views, document.slug, opened)?.createDialog;
+  // The view the entries open in, read as every other reading of it is.
+  return collectionOpeningView(document.slug, viewable, views)?.createDialog;
 }

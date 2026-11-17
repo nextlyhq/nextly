@@ -94,7 +94,9 @@ test("a post's row menu and its form's bar both open it in the builder", async (
   await expect(page).toHaveURL(builder);
 
   await gotoAdmin(page, `/collections/posts/${id}`);
-  const inBar = page.getByRole("link", { name: OPEN_IN_BUILDER });
+  const inBar = page
+    .getByTestId("document-bar")
+    .getByRole("link", { name: OPEN_IN_BUILDER });
   await expect(inBar).toHaveAttribute("href", builder);
   await inBar.click();
   await expect(page).toHaveURL(builder);

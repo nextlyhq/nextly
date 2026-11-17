@@ -26,6 +26,11 @@ import { canvasFrame } from "./support/canvas-frame";
 test.describe.configure({ lock: [LOCK.dashboard, LOCK.schema] });
 
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 test("opens for a collection the Schema Builder made after boot", async ({
   page,
@@ -50,7 +55,10 @@ test("opens for a collection the Schema Builder made after boot", async ({
     });
 
     await gotoAdmin(page, `/collections/${slug}/${id}`);
-    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await page
+      .locator(PAGE_BUILDER_CARD)
+      .getByRole("link", { name: OPEN_BUILDER_ACTION })
+      .click();
 
     await expect(page).toHaveURL(
       new RegExp(`/admin/collections/${slug}/${id}/builder\\?field=layout$`)

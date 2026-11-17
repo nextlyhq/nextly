@@ -71,8 +71,7 @@ async function savePage(
 const builderAt = (id: string) =>
   new RegExp(`/admin/collections/pages/${id}/builder\\?field=content$`);
 /** The form's address for a page. */
-const formAt = (id: string) =>
-  new RegExp(`/admin/collections/pages/${id}$`);
+const formAt = (id: string) => new RegExp(`/admin/collections/pages/${id}$`);
 
 /** The link a list row draws for `title`. */
 const rowLink = (page: Page, title: string) =>
@@ -233,7 +232,9 @@ test.describe("the builder's ⋯ menu", () => {
     await expect(bar.getByText("Unsaved changes")).toBeVisible();
 
     // And back to the builder by the bar's way in: the edit is still there.
-    await bar.getByRole("link", { name: "Open in builder", exact: true }).click();
+    await bar
+      .getByRole("link", { name: "Open in builder", exact: true })
+      .click();
     await expect(page).toHaveURL(builderAt(id));
     await expect(leaveQuestion(page)).toHaveCount(0);
     await expect(await block(page, FIRST)).toBeVisible();
@@ -245,37 +246,44 @@ test.describe("the builder's ⋯ menu", () => {
   }) => {
     const title = `Pinned from the builder ${RUN}`;
     const id = await savePage(page.request, title);
-    await gotoAdmin(page, `${LIST}/${id}/builder?field=content`);
-    await builderOpen(page);
+    try {
+      await gotoAdmin(page, `${LIST}/${id}/builder?field=content`);
+      await builderOpen(page);
 
-    await moreMenu(page);
-    await page.getByRole("menuitem", { name: "Pin to dashboard" }).click();
-    const toast = page
-      .locator("[data-sonner-toast]")
-      .filter({ hasText: "Pinned to your dashboard." });
-    await expect(toast).toBeVisible();
-    await expect(toast.getByRole("button", { name: "Undo" })).toBeVisible();
+      await moreMenu(page);
+      await page.getByRole("menuitem", { name: "Pin to dashboard" }).click();
+      const toast = page
+        .locator("[data-sonner-toast]")
+        .filter({ hasText: "Pinned to your dashboard." });
+      await expect(toast).toBeVisible();
+      await expect(toast.getByRole("button", { name: "Undo" })).toBeVisible();
 
-    // The menu now offers the other verb, as the entry page's does.
-    await moreMenu(page);
-    await expect(
-      page.getByRole("menuitem", { name: "Unpin from dashboard" })
-    ).toBeVisible();
-    await page.keyboard.press("Escape");
+      // The menu now offers the other verb, as the entry page's does.
+      await moreMenu(page);
+      await expect(
+        page.getByRole("menuitem", { name: "Unpin from dashboard" })
+      ).toBeVisible();
+      await page.keyboard.press("Escape");
 
-    await gotoAdmin(page, "");
-    const pinned = page
-      .getByTestId("widget-cell-core/continue")
-      .getByRole("group", { name: "Pinned" });
-    await expect(
-      pinned.getByTestId("entity-row").filter({ hasText: title })
-    ).toHaveCount(1);
-
-    // Unpinned again, so the file's account keeps no pin of this test's.
-    const removed = await page.request.delete("/admin/api/dashboard/pins", {
-      data: { targetType: "collection", targetSlug: "pages", entryId: id },
-    });
-    expect(removed.ok(), await removed.text()).toBe(true);
+      await gotoAdmin(page, "");
+      const pinned = page
+        .getByTestId("widget-cell-core/continue")
+        .getByRole("group", { name: "Pinned" });
+      await expect(
+        pinned.getByTestId("entity-row").filter({ hasText: title })
+      ).toHaveCount(1);
+    } finally {
+      // Unpinned again whatever happened above, so the file's account keeps
+      // no pin of this test's on the dashboard the next spec reads.
+      const removed = await page.request.delete("/admin/api/dashboard/pins", {
+        data: { targetType: "collection", targetSlug: "pages", entryId: id },
+      });
+      // Not found is fine: a test that failed before pinning left none.
+      expect(
+        removed.ok() || removed.status() === 404,
+        await removed.text()
+      ).toBe(true);
+    }
   });
 });
 
@@ -338,14 +346,14 @@ test.describe("the back arrow", () => {
       .getByRole("link", { name: "Open in builder", exact: true })
       .click();
     await builderOpen(page);
-    await expect(
-      page.getByRole("button", { name: /^Back to / })
-    ).toHaveCount(0);
-
-    await page.getByRole("button", { name: "Exit editor", exact: true }).click();
-    await expect(page).toHaveURL(
-      new RegExp(`/admin/collections/posts/${id}$`)
+    await expect(page.getByRole("button", { name: /^Back to / })).toHaveCount(
+      0
     );
+
+    await page
+      .getByRole("button", { name: "Exit editor", exact: true })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/admin/collections/posts/${id}$`));
   });
 });
 

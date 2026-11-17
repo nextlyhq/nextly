@@ -91,16 +91,16 @@ export function ShellTopBar({
             /*
              * The NAME stays the exit's words ("Exit editor", or where the
              * host's exit goes) while the label becomes a glyph.
-             * This is the only route back to the document — `ChromeSuppression`
+             * This is the only way out of the editor — `ChromeSuppression`
              * withholds the navigation rail from a surface that cannot be left,
              * on the grounds that an author with unsaved work and no way out is
              * the worst state the editor can reach — so it keeps a real
              * accessible name and a tooltip rather than relying on the arrow
              * being self-evident.
              *
-             * An arrow rather than a cross: this returns to the document that
-             * opened the editor, and a cross reads as discarding rather than
-             * as going back.
+             * An arrow rather than a cross: this goes back, to the document
+             * that opened the editor or the list the host names, and a cross
+             * reads as discarding rather than as going back.
              */
             aria-label={exitLabel}
             title={exitLabel}

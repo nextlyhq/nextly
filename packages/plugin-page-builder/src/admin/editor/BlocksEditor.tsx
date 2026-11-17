@@ -626,6 +626,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas: canvas.canvasElement,
     requestPanel: panels.requestPanel,
   });
+  // The editor's one way out, for the exit arrow and the palette alike: the
+  // list on an entry whose collection opens in the builder, else the form.
+  const leave = back?.go ?? done;
   const {
     notices,
     componentLibrary,
@@ -651,7 +654,7 @@ function EditorBody<TFieldValues extends FieldValues>({
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
         <BuilderShell
           notices={notices}
-          onExit={shellExit(componentView, back?.go ?? done)}
+          onExit={shellExit(componentView, leave)}
           exitLabel={back?.label}
           // The signed-in author's own preferences, not the browser's.
           store={mount.preferenceStore}
@@ -774,14 +777,15 @@ function EditorBody<TFieldValues extends FieldValues>({
             exactly what the keystrokes and the toolbar run.
 
             `onExit` is the SAME handler the shell's exit button gets, so
-            leaving through the palette commits the document exactly as leaving
-            through the button does. Passing a different one — or omitting it
+            leaving through the palette goes where the button goes (the form,
+            or the list on an entry that opens in the builder) and commits or
+            asks exactly as leaving through the button does. Passing a different one — or omitting it
             while the button exists — would give the editor two ways out that
             behave differently.
           */}
             <EditorSearch
               editor={editor}
-              onExit={done}
+              onExit={leave}
               canvas={canvas.canvasElement}
               // The Add panel's own sources, so search offers what it offers.
               insert={searchInsertSources(panels)}
