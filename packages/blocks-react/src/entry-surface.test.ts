@@ -27,6 +27,7 @@ import * as blocksEntry from "./blocks/index";
 import * as listReadModule from "./blocks/list-read";
 import * as blockPropsModule from "./blocks/props";
 import * as typographyDefaultsModule from "./blocks/typography-defaults";
+import * as formFieldsModule from "./blocks/form-fields";
 import * as containerRootModule from "./blocks/container-root";
 import * as componentSourceModule from "./component-source";
 import * as contextModule from "./context";
@@ -99,6 +100,20 @@ const SOURCE_MODULES: ReadonlyArray<{
   /** Values that exist for this package's own use, and why. */
   internal: readonly string[];
 }> = [
+  {
+    name: "blocks/form-fields",
+    module: formFieldsModule,
+    // The entry publishes the fields with their defaults applied, for the
+    // editor. The rest are the Form block's own, published from its entry.
+    internal: [
+      "FORM_CHOICE_TYPES",
+      "MAX_FIELDS",
+      "FORM_FIELD_TYPES",
+      "formFieldDrawings",
+      "receiverKeepsName",
+      "sentNameOf",
+    ],
+  },
   {
     name: "blocks/typography-defaults",
     module: typographyDefaultsModule,
@@ -569,6 +584,8 @@ describe("the root entry", () => {
       // canvas's sheet draws by the names the renderer writes.
       "ENTRY_CONTENT_DRAWN_ATTRIBUTE",
       "ENTRY_CONTENT_NOTE_ATTRIBUTE",
+      // The most fields a simple form draws, for the editor to add no more.
+      "FORM_MAX_FIELDS",
       "INSTANCE_ATTRIBUTE",
       // The action a collection list's note offers on the editor's canvas,
       // public so the canvas acts on the name the renderer writes.
@@ -599,6 +616,9 @@ describe("the root entry", () => {
       "SITE_BLOCKS_SERVICE",
       // Whether site-bound blocks or queries started in this module copy.
       "SITE_COPY",
+      // Where the page builder offers what a page's forms need, which a
+      // route reads to fill `ctx.forms`.
+      "SITE_FORMS_SERVICE",
       "SITE_NAMED_QUERIES_SERVICE",
       // Where the page builder offers the site's page data limit, which a
       // route given no `maxQueries` renders under.
@@ -636,6 +656,9 @@ describe("the root entry", () => {
       // The image and embed blocks' one filter on an address, public so a
       // caller judging what a page draws asks what they ask.
       "fetchableUrl",
+      // Added deliberately: a simple form's fields with their sent names, for
+      // the editor to show the name each answer goes under.
+      "formFields",
       // The render-safe attribute rule. Public because the editor offering that
       // field asks it rather than keeping a copy that would drift.
       "isAllowedAttribute",
@@ -661,6 +684,8 @@ describe("the root entry", () => {
       "noPublicFields",
       // The one reading of the site's blocks an instance offers.
       "offeredSiteBlocks",
+      // The one reading of the site's forms service an instance offers.
+      "offeredSiteForms",
       "pageBindingRun",
       "pageStyleTrace",
       "prepareDocumentAsDrawn",
@@ -805,10 +830,18 @@ describe("the blocks entry", () => {
       "CORE_CATEGORIES",
       "CORE_PALETTE_ORDER",
       "FORM_FIELD_TYPES",
+      // Added deliberately: what a file field says and the receiver answers
+      // a post to a form with one, worded once.
+      "FORM_FILE_NEEDS_SCRIPT",
       // Added deliberately: the spam trap's name, which the page builder's
       // receiver reads, so the form and its receiver name it once.
       "FORM_HONEYPOT_FIELD",
-      "FORM_METHODS",
+      // Added deliberately: the hidden fields a form posts beside its answers,
+      // which the receiver reads, named once.
+      "FORM_POST_FIELDS",
+      // Added deliberately: the message a sent form shows when its author
+      // wrote none, which the editor shows as the message field's hint.
+      "FORM_SENT_MESSAGE",
       "HEADING_LEVELS",
       "IMAGE_LOADING",
       "LIST_KINDS",
@@ -831,6 +864,9 @@ describe("the blocks entry", () => {
       // the entry's own blocks content.
       "entryContent",
       "form",
+      // Added deliberately: the form's fields as the one description its
+      // controls are drawn from and the receiver checks a post against.
+      "formFieldDrawings",
       // Added deliberately: the form's fields with their defaults applied,
       // which the receiver checks a post against as the form draws them.
       "formFields",
@@ -858,6 +894,9 @@ describe("the blocks entry", () => {
       "renderContainer",
       "richText",
       "section",
+      // Added deliberately: the name a field is sent under, made from its
+      // label, which the editor shows before the author writes one.
+      "sentNameOf",
       "spacer",
       "tableOfContents",
     ]);

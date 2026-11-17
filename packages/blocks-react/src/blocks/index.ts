@@ -76,13 +76,17 @@ export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
+  FORM_FILE_NEEDS_SCRIPT,
   FORM_HONEYPOT_FIELD,
-  FORM_METHODS,
+  FORM_POST_FIELDS,
+  FORM_SENT_MESSAGE,
+  formFieldDrawings,
   formFields,
+  sentNameOf,
+  type FormAfterSending,
   type FormField,
   type FormFieldSpec,
   type FormFieldType,
-  type FormMethod,
   type FormProps,
 } from "./form";
 // `GALLERY_BLOCK` / `GALLERY_ITEM_BLOCK` are deliberately NOT re-exported, for

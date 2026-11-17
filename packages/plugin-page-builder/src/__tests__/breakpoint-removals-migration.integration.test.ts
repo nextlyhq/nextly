@@ -25,8 +25,12 @@
  * PostgreSQL and MySQL the options table then holds the graph lock's row,
  * once, and the one a start of the earlier release put there is kept as it
  * was; SQLite keeps none. The index's table is there after every upgrade,
- * its module's down step (`nextly migrate:down --plugin`) drops it and only
- * it, and migrating again puts it back.
+ * and an upgrade from a release with the bindings report forgets the index's
+ * filled mark and the report's current check. The down steps of the index's
+ * reset and its table (`nextly migrate:down --plugin`) drop the table and
+ * only it, and migrating again puts it back. A database whose schema sync
+ * made every table takes `nextly plugins install --all`, which records the
+ * schema modules and still runs the reset, once.
  *
  * The database is one of the test's own on Postgres and MySQL (created beside
  * the integration database and dropped after), and a scratch file on SQLite,
@@ -317,6 +321,23 @@ describe.each(getConfiguredTestDialects())(
             name: "upgrade-probe",
             value: "kept",
           });
+          // Where the release had the bindings report's tables: an index
+          // mark set and a report check current, which the upgrade's reset
+          // must forget, since the index's table it creates starts empty.
+          const hadReport =
+            shipped > shippedBefore("_create_binding_report_tables");
+          if (hadReport) {
+            await rowsOn(dialect, adapter).insert(OPTIONS_TABLE, {
+              id: "filled-mark",
+              name: "binding-uses-filled",
+              value: "2",
+            });
+            await rowsOn(dialect, adapter).insert(RUNS_TABLE, {
+              id: "full-run",
+              name: "full",
+              checked: "fingerprint-before",
+            });
+          }
           // CONTROL: migrating a release before the lock's module put no
           // lock row in place; one with it put one, where the dialect takes
           // a row lock.
@@ -432,6 +453,16 @@ describe.each(getConfiguredTestDialects())(
           expect(await rows.column(OPTIONS_TABLE, "kept-option", "value")).toBe(
             "kept"
           );
+          // The index's mark and the report's current check forgotten, so
+          // the next jobs pass fills the new table.
+          if (hadReport) {
+            expect(
+              await rows.column(OPTIONS_TABLE, "filled-mark", "value")
+            ).toBe("0");
+            expect(await rows.column(RUNS_TABLE, "full-run", "checked")).toBe(
+              null
+            );
+          }
           // The graph lock's row, once, where the dialect takes a row lock:
           // the one a start put there kept as it was, or else a new one.
           const lockRows = await rows.named(OPTIONS_TABLE, GRAPH_LOCK_ROW);
@@ -500,13 +531,14 @@ describe.each(getConfiguredTestDialects())(
         await opened.close();
         opened = undefined;
 
+        // Two steps: the reset's own data module, then the table's module.
         await site.nextly(
           undefined,
           "migrate:down",
           "--plugin",
           PAGE_BUILDER_PLUGIN_NAME,
           "--step",
-          "1",
+          "2",
           "--accept-data-loss"
         );
         opened = await openAdapter(database);
@@ -530,17 +562,20 @@ describe.each(getConfiguredTestDialects())(
             ? "UPDATE `page_builder__site_options` SET `value` = '1' WHERE `id` = 'filled-mark'"
             : `UPDATE "page_builder__site_options" SET "value" = '1' WHERE "id" = 'filled-mark'`
         );
-        const last = migrations[migrations.length - 1]?.name ?? "";
-        expect(last).toMatch(/_create_binding_uses_table$/);
+        const rolledBack = migrations.slice(-2).map(module => module.name);
+        expect(rolledBack[0]).toMatch(/_create_binding_uses_table$/);
+        expect(rolledBack[1]).toMatch(/_reset_binding_uses_fill$/);
         const down = await ledger(site.nextly);
-        expect(
-          down.find(entry => entry.filename === ledgerName(last))?.status
-        ).not.toBe("applied");
+        for (const name of rolledBack) {
+          expect(
+            down.find(entry => entry.filename === ledgerName(name))?.status
+          ).not.toBe("applied");
+        }
         await opened.close();
         opened = undefined;
 
         const again = await site.nextly(undefined, "migrate");
-        expect(again.stdout).toContain("Plugin migrations: 1 applied");
+        expect(again.stdout).toContain("Plugin migrations: 2 applied");
         opened = await openAdapter(database);
         expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
         // Made again, empty: not filled until a check fills it.
@@ -551,6 +586,82 @@ describe.each(getConfiguredTestDialects())(
             "value"
           )
         ).toBe("0");
+      } finally {
+        await opened?.close();
+        site.close();
+        await database.drop();
+        rmSync(folder, { recursive: true, force: true });
+      }
+    }, 300_000);
+
+    // A database whose schema sync made every table, the plugin's own
+    // included, as a development site's start and the browser suites' seed
+    // make it, then `nextly plugins install --all`. The install must take
+    // it: each schema module recorded as applied, and the index's reset, a
+    // data module, run all the same. A module doing both, which this
+    // plugin's table module once was, is refused there, since it can be
+    // neither recorded nor run.
+    it("installs over a database whose schema sync made the index's table, and still resets the index", async () => {
+      const folder = mkdtempSync(join(tmpdir(), "pb-sync-db-"));
+      const database = await scratchDatabase(dialect, folder);
+      const site = project(database);
+      let opened: Awaited<ReturnType<typeof openAdapter>> | undefined;
+      try {
+        await site.nextly(undefined, "db:sync");
+        opened = await openAdapter(database);
+        // CONTROL: sync made the index's table, and recorded no module.
+        expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
+        const synced = await ledger(site.nextly);
+        expect(synced.some(entry => entry.status === "applied")).toBe(false);
+        // An index mark set and a report check current, as a start filling
+        // the index leaves them.
+        const seeded = rowsOn(dialect, opened.adapter);
+        await seeded.insert(OPTIONS_TABLE, {
+          id: "filled-mark",
+          name: "binding-uses-filled",
+          value: "2",
+        });
+        await seeded.insert(RUNS_TABLE, {
+          id: "full-run",
+          name: "full",
+          checked: "fingerprint-before",
+        });
+        await opened.close();
+        opened = undefined;
+
+        await site.nextly(undefined, "plugins", "install", "--all");
+        const installed = await ledger(site.nextly);
+        expect(installed.map(entry => entry.filename)).toEqual(
+          migrations.map(module => ledgerName(module.name))
+        );
+        expect(installed.every(entry => entry.status === "applied")).toBe(true);
+        opened = await openAdapter(database);
+        const rows = rowsOn(dialect, opened.adapter);
+        expect(await rows.column(OPTIONS_TABLE, "filled-mark", "value")).toBe(
+          "0"
+        );
+        expect(await rows.column(RUNS_TABLE, "full-run", "checked")).toBe(null);
+        // Filled again, as the next jobs pass would.
+        await opened.adapter.executeQuery(
+          dialect === "mysql"
+            ? "UPDATE `page_builder__site_options` SET `value` = '2' WHERE `id` = 'filled-mark'"
+            : `UPDATE "page_builder__site_options" SET "value" = '2' WHERE "id" = 'filled-mark'`
+        );
+        await opened.close();
+        opened = undefined;
+
+        // Installing again runs nothing, the reset included: the mark the
+        // jobs pass set stays.
+        await site.nextly(undefined, "plugins", "install", "--all");
+        expect(await ledger(site.nextly)).toEqual(installed);
+        opened = await openAdapter(database);
+        expect(
+          await rowsOn(dialect, opened.adapter).column(
+            OPTIONS_TABLE,
+            "filled-mark",
+            "value"
+          )
+        ).toBe("2");
       } finally {
         await opened?.close();
         site.close();
