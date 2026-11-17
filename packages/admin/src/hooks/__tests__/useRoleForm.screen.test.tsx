@@ -186,3 +186,60 @@ describe("useRoleForm's name and Cancel", () => {
     expect(roleApi.updateRole).not.toHaveBeenCalled();
   });
 });
+
+describe("useRoleForm's stored name", () => {
+  beforeEach(() => {
+    vi.mocked(protectedApi.get).mockResolvedValue({ items: [] } as never);
+  });
+
+  /** A role saved before names were trimmed, still padded as stored. */
+  const renderPaddedRole = async () => {
+    vi.mocked(roleApi.getRoleDetails).mockResolvedValue({
+      role: {
+        id: "role-1",
+        roleName: "  Editor  ",
+        slug: "editor",
+        description: "",
+        type: "Custom",
+        permissions: [],
+      },
+      childRoleIds: [],
+      childRolePermissionsMap: {},
+    } as never);
+
+    const rendered = render("role-1");
+    await waitFor(() =>
+      expect(rendered.result.current.role?.name).toBe("  Editor  ")
+    );
+    return rendered;
+  };
+
+  it("saves an untouched padded name as stored, renaming nothing", async () => {
+    const { result } = await renderPaddedRole();
+
+    // A description-only save: the name field still holds what was loaded.
+    result.current.form.setValue("description", "Tweaked");
+    await act(async () => {
+      await result.current.onSubmit({ preventDefault: () => {} } as never);
+    });
+
+    expect(roleApi.updateRole).toHaveBeenCalledWith(
+      "role-1",
+      expect.objectContaining({ roleName: "  Editor  " })
+    );
+  });
+
+  it("trims a name the form changed, as a new role's name is trimmed", async () => {
+    const { result } = await renderPaddedRole();
+
+    result.current.form.setValue("name", "  Night Editor  ");
+    await act(async () => {
+      await result.current.onSubmit({ preventDefault: () => {} } as never);
+    });
+
+    expect(roleApi.updateRole).toHaveBeenCalledWith(
+      "role-1",
+      expect.objectContaining({ roleName: "Night Editor" })
+    );
+  });
+});
