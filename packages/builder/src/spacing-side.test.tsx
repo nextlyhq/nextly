@@ -207,6 +207,7 @@ describe("a spacing-box side", () => {
     const number = screen.getByLabelText(
       "Value for Padding top"
     ) as HTMLInputElement;
+    number.focus();
     fireEvent.change(number, { target: { value: "red" } });
     fireEvent.keyDown(number, { key: "Enter" });
     // Nothing written, the popover still open on the draft, and the refusal
@@ -337,6 +338,8 @@ describe("a spacing-box side", () => {
     fireEvent.click(screen.getByRole("radio", { name: "None 0" }));
     expect(written(editor, 0)).toContain('"blockStart":"0"');
     const number = screen.getByLabelText("Value for Padding top");
+    // Typed in, as an author types: focus is in the number when Enter goes.
+    number.focus();
     fireEvent.change(number, { target: { value: "24" } });
     fireEvent.keyDown(number, { key: "Enter" });
     expect(written(editor, 1)).toContain('"blockStart":"24px"');

@@ -178,8 +178,26 @@ export function SpacingSidePopover(
     outcome.current = result;
     return result;
   };
-  const write = (value: StyleValue): CommitOutcome =>
-    record(props.onCommitSides(props.pathsFor(applyTo), value));
+  /*
+   * The write just made, until the side draws it. Closing moves focus off a
+   * number committed by Enter, and its blur commits it again in the same key
+   * press, before the editor has drawn the first: built from the page as it
+   * was, that second write is refused. A write the same as the one not yet
+   * drawn is therefore not made again. Cleared as the stored value changes,
+   * so the same value after an undo writes as it should.
+   */
+  const lastWritten = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    lastWritten.current = null;
+  }, [stored]);
+  const write = (value: StyleValue): CommitOutcome => {
+    const paths = props.pathsFor(applyTo);
+    const key = JSON.stringify([paths, value]);
+    if (key === lastWritten.current) return record("unchanged");
+    const result = props.onCommitSides(paths, value);
+    if (result === "applied") lastWritten.current = key;
+    return record(result);
+  };
   /*
    * Every way of closing moves focus itself, before the popover goes, so
    * nothing is left to put it back afterwards. A number still being typed is
