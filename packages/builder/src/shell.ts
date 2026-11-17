@@ -647,6 +647,10 @@ export {
 // and the way a host hands the tab its search.
 export { stylesTabMatches } from "./styles-tab-matches";
 export { SharedStylesHostSearch } from "./shared-styles-panel";
+// The site's fonts, for every Font control the host draws: the block panel's
+// and a font variable's in Design.
+export { FontChoicesContext } from "./font-family-field";
+export type { FontChoices } from "./font-family-field";
 export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.

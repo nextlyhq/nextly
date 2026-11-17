@@ -20,9 +20,20 @@ import {
   type SiteToken,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
-import { Button, Input } from "@nextlyhq/ui";
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@nextlyhq/ui";
 import * as React from "react";
 
+import { FontChoicesContext, FontFamilyField } from "./font-family-field";
+import { NAMED_WEIGHTS, weightName, weightsDrawn } from "./font-library";
 import { InheritedValue } from "./inherited-value";
 import { styleControlsFor, type StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
@@ -381,7 +392,10 @@ export function LineHeightInput({
         {...(placeholder === undefined ? {} : { placeholder })}
       />
       {times ? (
-        <span className="nx-vars-editor__times-mark" title="Times the text size">
+        <span
+          className="nx-vars-editor__times-mark"
+          title="Times the text size"
+        >
           ×
         </span>
       ) : null}
@@ -448,7 +462,159 @@ export function valueFieldFor(
   // A line height before a size: one stored as a length is still a line
   // height, and a number typed over it means a multiple, never a length.
   if (typeScaleProperty(token) === "line-height") return LineHeightValue;
-  return token.kind === "dimension" ? SizeValue : TextValue;
+  return KIND_FIELDS[token.kind] ?? TextValue;
+}
+
+/** The field each kind with one of its own is edited with. */
+const KIND_FIELDS: Partial<
+  Record<SiteToken["kind"], (props: ValueFieldProps) => React.JSX.Element>
+> = {
+  dimension: SizeValue,
+  fontFamily: FontValue,
+  fontWeight: WeightValue,
+};
+
+/**
+ * A font variable: chosen from the families the site has files for and the
+ * system's, never typed, ending with the way to the site's fonts. The block
+ * panel's own Font control, without its font variables, since a variable
+ * holds a family of its own. Read-only, the stored family as text.
+ */
+function FontValue({
+  label,
+  value,
+  readOnly,
+  refusedBy,
+  onCommit,
+}: ValueFieldProps): React.JSX.Element {
+  const fonts = React.useContext(FontChoicesContext);
+  const id = React.useId();
+  if (readOnly) {
+    return (
+      <TextValue
+        label={label}
+        value={value}
+        readOnly
+        refusedBy={refusedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  const manage = fonts?.onManageFonts;
+  return (
+    <div className="nx-vars-editor__field">
+      <span className="nx-vars-editor__label" id={`${id}-label`}>
+        {label}
+      </span>
+      <FontFamilyField
+        id={id}
+        labelledBy={`${id}-label`}
+        stored={value === "" ? undefined : value}
+        tokens={undefined}
+        faces={fonts?.faces}
+        fromCode={fonts?.fromCode ?? []}
+        onCommit={next => {
+          if (typeof next === "string" && next !== value) onCommit(next);
+        }}
+        {...(manage === undefined ? {} : { onManageFonts: manage })}
+      />
+    </div>
+  );
+}
+
+/**
+ * The named weights in the order a weight menu lists them: those some face on
+ * the site draws, then the rest, each list lightest first. All of them, in
+ * order, while the site's fonts are not known.
+ */
+function weightOrder(drawn: ReadonlySet<number> | undefined): {
+  ours: readonly number[];
+  others: readonly number[];
+} {
+  if (drawn === undefined) return { ours: NAMED_WEIGHTS, others: [] };
+  return {
+    ours: NAMED_WEIGHTS.filter(weight => drawn.has(weight)),
+    others: NAMED_WEIGHTS.filter(weight => !drawn.has(weight)),
+  };
+}
+
+/** A stored weight in words: `Bold 700`, or the value itself when unnamed. */
+function shownWeight(value: string): string {
+  const weight = Number(value);
+  return NAMED_WEIGHTS.includes(weight) ? weightName(weight) : value;
+}
+
+/**
+ * A weight variable, by name: "Thin 100" to "Black 900", the weights the
+ * site's fonts have first and the others marked, since text set at one of
+ * them is drawn by the browser from the nearest weight it has. A stored
+ * weight with no name (`450`) still shows, and stays chosen.
+ */
+function WeightValue({
+  label,
+  value,
+  readOnly,
+  refusedBy,
+  onCommit,
+}: ValueFieldProps): React.JSX.Element {
+  const fonts = React.useContext(FontChoicesContext);
+  const id = React.useId();
+  if (readOnly) {
+    return (
+      <TextValue
+        label={label}
+        value={value}
+        readOnly
+        refusedBy={refusedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  const drawn =
+    fonts?.faces === undefined
+      ? undefined
+      : weightsDrawn([...fonts.faces, ...fonts.fromCode]);
+  const { ours, others } = weightOrder(drawn);
+  const unnamed = value !== "" && !NAMED_WEIGHTS.includes(Number(value));
+  return (
+    <div className="nx-vars-editor__field">
+      <label className="nx-vars-editor__label" htmlFor={id}>
+        {label}
+      </label>
+      <Select
+        value={value}
+        onValueChange={next => {
+          if (next !== value) onCommit(next);
+        }}
+      >
+        <SelectTrigger
+          id={id}
+          className="nx-vars-editor__weight"
+          aria-describedby={refusedBy}
+          aria-invalid={refusedBy === undefined ? undefined : true}
+        >
+          <SelectValue>{shownWeight(value)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {unnamed ? <SelectItem value={value}>{value}</SelectItem> : null}
+          {ours.map(weight => (
+            <SelectItem key={weight} value={String(weight)}>
+              {weightName(weight)}
+            </SelectItem>
+          ))}
+          {ours.length > 0 && others.length > 0 ? <SelectSeparator /> : null}
+          {others.map(weight => (
+            <SelectItem key={weight} value={String(weight)}>
+              {weightName(weight)}
+              <span className="nx-vars-editor__weight-note">
+                No font on this site has this weight
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
 
 /** A line height under its own label, with its hint, outside a type pair. */

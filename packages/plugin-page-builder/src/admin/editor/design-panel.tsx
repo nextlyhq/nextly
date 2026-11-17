@@ -19,9 +19,11 @@
 import type { PanelView, PreferenceStore } from "@nextlyhq/builder";
 import {
   EDITOR_WORDS,
+  FontChoicesContext,
   GroupToggle,
   stylesTabMatches,
   type DesignTab,
+  type FontChoices,
   type GroupFolds,
 } from "@nextlyhq/builder/shell";
 import { Input, Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
@@ -379,6 +381,32 @@ export function DesignGroup({
       </div>
       {folded ? null : children}
     </section>
+  );
+}
+
+/**
+ * The site's fonts for Design's Font and Weight controls, given as the block
+ * panel is given them: the faces the canvas loads, those the site's code
+ * supplies, and the way to the site's fonts, which in Design is its Type tab.
+ */
+export function DesignFonts({
+  faces,
+  fromCode,
+  onManageFonts,
+  children,
+}: FontChoices & { children: React.ReactNode }): React.JSX.Element {
+  const fonts = React.useMemo<FontChoices>(
+    () => ({
+      faces,
+      fromCode,
+      ...(onManageFonts === undefined ? {} : { onManageFonts }),
+    }),
+    [faces, fromCode, onManageFonts]
+  );
+  return (
+    <FontChoicesContext.Provider value={fonts}>
+      {children}
+    </FontChoicesContext.Provider>
   );
 }
 

@@ -440,6 +440,27 @@ const WEIGHT_NAMES: Readonly<Record<number, string>> = {
   900: "Black",
 };
 
+/** The weights a font is named at, lightest first: 100 to 900. */
+export const NAMED_WEIGHTS: readonly number[] = Object.keys(WEIGHT_NAMES)
+  .map(Number)
+  .sort((a, b) => a - b);
+
+/**
+ * The named weights some face draws: each face's own weight, and every named
+ * weight inside a variable face's range.
+ */
+export function weightsDrawn(faces: readonly FontFaceDef[]): Set<number> {
+  const drawn = new Set<number>();
+  for (const face of faces) {
+    const [low, high = low] = weightNumbers(face.weight);
+    if (low === undefined) continue;
+    for (const weight of NAMED_WEIGHTS) {
+      if (weight >= low && weight <= high) drawn.add(weight);
+    }
+  }
+  return drawn;
+}
+
 /** A weight in words with its number: `Bold 700`. */
 export function weightName(weight: number): string {
   const name = WEIGHT_NAMES[weight];

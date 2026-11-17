@@ -6229,9 +6229,7 @@ describe("the Font control", () => {
     fireEvent.click(
       fieldsOf("fontFamily").getByRole("button", { name: /^Font, / })
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add or manage fonts…" })
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage fonts…" }));
     expect(onManageFonts).toHaveBeenCalledTimes(1);
   });
 });
