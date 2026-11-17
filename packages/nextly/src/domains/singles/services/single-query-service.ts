@@ -1111,7 +1111,6 @@ export class SingleQueryService extends BaseService {
       options.locale,
       options.fallbackLocale
     );
-    const readLocale = readChain?.[0];
     doc = await this.expandRelationshipFields(
       doc,
       rowFields,
@@ -1123,6 +1122,37 @@ export class SingleQueryService extends BaseService {
     );
 
     if (this.fieldGroupDataService) {
+      // A component's relationship fields copy whole rows out of the target
+      // collection, which a Single's field list never describes — so the
+      // caller travels down to reach the related row's own rules, judged in
+      // the language `chain` reads. One builder for the read's own language
+      // and for each language read beside it.
+      const componentAccess = (chain: string[] | null) => ({
+        enforceFieldAccess: enforceRelatedFieldAccess,
+        // Beside the flag, never folded into `user`: a preview judges a related
+        // row's fields as the sharer while every hook goes on seeing the
+        // anonymous visitor who is actually asking.
+        fieldAccessUser: options.fieldAccessUser,
+        enforceCollectionAccess: true,
+        user: options.user as Record<string, unknown> | undefined,
+        overrideAccess: options.overrideAccess,
+        // Narrows that bypass per RELATED collection. Absent means unchanged;
+        // dropping it here would silently restore the full bypass.
+        trusted: assumedBound(options.trusted),
+        // The rows of one population share a policy cache.
+        targetPolicies: new Map(),
+        targetCompanions: new Map(),
+        targetVerdicts: new Map(),
+        targetRuleMatches: new Map(),
+        authenticatedScope: options.authenticatedScope,
+        locale: chain?.[0],
+        localeChain: chain ?? undefined,
+        status: expansionStatusScope({
+          status: options.status,
+          overrideAccess: options.overrideAccess,
+          bounded: narrows(options.trusted),
+        }),
+      });
       try {
         doc = (await this.fieldGroupDataService.populateComponentData({
           entry: doc,
@@ -1136,36 +1166,22 @@ export class SingleQueryService extends BaseService {
           locale: options.locale,
           fallbackLocale: options.fallbackLocale,
           skipLanguages: params.componentSkipLanguages,
-          // A component's relationship fields copy whole rows out of the target
-          // collection, which a Single's field list never describes — so the
-          // caller travels down to reach the related row's own rules.
-          access: {
-            enforceFieldAccess: enforceRelatedFieldAccess,
-            // Beside the flag, never folded into `user`: a preview judges a related
-            // row's fields as the sharer while every hook goes on seeing the
-            // anonymous visitor who is actually asking.
-            fieldAccessUser: options.fieldAccessUser,
-            enforceCollectionAccess: true,
-            user: options.user as Record<string, unknown> | undefined,
-            overrideAccess: options.overrideAccess,
-            // Narrows that bypass per RELATED collection. Absent means unchanged;
-            // dropping it here would silently restore the full bypass.
-            trusted: assumedBound(options.trusted),
-            // The rows of one population share a policy cache.
-            targetPolicies: new Map(),
-            targetCompanions: new Map(),
-            targetVerdicts: new Map(),
-            targetRuleMatches: new Map(),
-            authenticatedScope: options.authenticatedScope,
-            locale: readLocale,
-            localeChain: readChain ?? undefined,
-            status: expansionStatusScope({
-              status: options.status,
-              overrideAccess: options.overrideAccess,
-              bounded: narrows(options.trusted),
-            }),
-          },
+          access: componentAccess(readChain),
         })) as SingleDocument;
+        // `translations: "all"`: the Single's field groups in every language it is published in
+        // beside it, as its own translated fields are, before its gate and field rules judge each
+        // language.
+        if (options.translations === "all") {
+          const skipLanguages = params.componentSkipLanguages;
+          await this.fieldGroupDataService.populateComponentDataBesideEntries({
+            entries: [doc],
+            parentTable: singleMeta.tableName,
+            fields: singleMeta.fields,
+            depth: options.depth,
+            skipLanguagesOf: skipLanguages && (() => skipLanguages),
+            accessIn: locale => componentAccess([locale]),
+          });
+        }
       } catch (error) {
         // The result builder puts a bare Error's own message on the wire —
         // component table and column names the caller has no business seeing.

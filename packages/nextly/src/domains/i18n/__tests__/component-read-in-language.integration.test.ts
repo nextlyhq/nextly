@@ -259,6 +259,69 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(listed.items)).not.toMatch(/borrador|Entwurf/);
     }, 90_000);
 
+    // A read of every language carries each language's component values
+    // beside the document, as it carries the document's own, and on a public
+    // read only the languages the document is published in.
+    it("carries every published language's component values beside a read of every language", async () => {
+      const t = await boot(dialect);
+      const id = String(
+        (
+          await t.nextly.create({
+            collection: PAGES,
+            locale: "en",
+            data: {
+              title: "Page",
+              seo: { metaTitle: "SEO in English" },
+              status: "published",
+            },
+          })
+        ).item.id
+      );
+      await t.nextly.update({
+        collection: PAGES,
+        id,
+        locale: "fr",
+        data: {
+          title: "Page en français",
+          seo: { metaTitle: "SEO en français" },
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      await t.nextly.update({
+        collection: PAGES,
+        id,
+        locale: "es",
+        data: {
+          title: "Borrador",
+          seo: { metaTitle: "SEO borrador" },
+          status: "draft",
+          _overwrite: true,
+        },
+      });
+
+      const trusted = await t.nextly.findByID({
+        collection: PAGES,
+        id,
+        locale: "all",
+        status: "all",
+      });
+      expect(JSON.stringify(trusted)).toContain("SEO borrador");
+
+      const read = await t.nextly.findByID({
+        collection: PAGES,
+        id,
+        locale: "all",
+        status: "published",
+      });
+      const beside = JSON.stringify(
+        (read as Record<string, unknown>)._allLocales
+      );
+      expect(beside).toContain("SEO in English");
+      expect(beside).toContain("SEO en français");
+      expect(JSON.stringify(read)).not.toContain("borrador");
+    }, 90_000);
+
     it("falls back past a Single's draft language in a component", async () => {
       const t = await boot(dialect);
       const singles = singlesOf(t);
@@ -304,6 +367,65 @@ describe.each(getConfiguredTestDialects())(
       expect(read.data?.title, JSON.stringify(read)).toBe("Accueil");
       expect(JSON.stringify(read.data)).not.toContain("borrador");
       expect(JSON.stringify(read.data?.seo)).toContain("SEO in English");
+    }, 90_000);
+
+    // As for an entry: a Single read of every language carries each
+    // language's component values beside it, and on a public read only the
+    // languages it is published in.
+    it("carries every published language's component values beside a Single's read of every language", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      for (const [locale, data] of [
+        [
+          "en",
+          {
+            title: "Home",
+            seo: { metaTitle: "SEO in English" },
+            status: "published",
+          },
+        ],
+        [
+          "fr",
+          {
+            title: "Accueil",
+            seo: { metaTitle: "SEO en français" },
+            status: "published",
+          },
+        ],
+        [
+          "es",
+          {
+            title: "Borrador",
+            seo: { metaTitle: "SEO borrador" },
+            status: "draft",
+          },
+        ],
+      ] as const) {
+        const saved = await singles.update(
+          HOME,
+          { ...data, _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+
+      const trusted = await singles.get(HOME, {
+        translations: "all",
+        status: "all",
+        overrideAccess: true,
+      });
+      expect(JSON.stringify(trusted.data?._allLocales)).toContain(
+        "SEO borrador"
+      );
+
+      const read = await singles.get(HOME, {
+        translations: "all",
+        status: "published",
+      });
+      const beside = JSON.stringify(read.data?._allLocales);
+      expect(beside).toContain("SEO in English");
+      expect(beside).toContain("SEO en français");
+      expect(JSON.stringify(read.data)).not.toContain("borrador");
     }, 90_000);
   }
 );

@@ -3549,6 +3549,43 @@ export class CollectionQueryService extends BaseService {
     };
   }
 
+  /**
+   * A read of every language (`translations: "all"`): each row's field groups in every language
+   * beside it (`_allLocales`), as its own translated fields are there, a language its document is
+   * not published in left out as theirs is (`skipByEntry`). The list and a read by id both put
+   * them there through this, before their rows are judged language by language. Each language's
+   * related rows are judged in that language, with caches of its own.
+   */
+  private async populateComponentsBesideRows(
+    rows: Record<string, unknown>[],
+    read: {
+      translations: "all" | undefined;
+      parentTable: string;
+      fields: FieldConfig[];
+      depth?: number;
+      select?: Record<string, boolean>;
+      skipByEntry: Map<string, ReadonlySet<string>> | undefined;
+      caller: Parameters<CollectionQueryService["buildComponentReadAccess"]>[0];
+    }
+  ): Promise<void> {
+    if (!this.fieldGroupDataService || read.translations !== "all") return;
+    const { skipByEntry } = read;
+    await this.fieldGroupDataService.populateComponentDataBesideEntries({
+      entries: rows,
+      parentTable: read.parentTable,
+      fields: read.fields,
+      depth: read.depth,
+      select: read.select,
+      skipLanguagesOf: skipByEntry && (id => skipByEntry.get(id)),
+      accessIn: locale =>
+        this.buildComponentReadAccess(
+          read.caller,
+          [locale],
+          readExpansionCaches()
+        ),
+    });
+  }
+
   // ============================================================
   // PUBLIC METHODS
   // ============================================================
@@ -4348,19 +4385,6 @@ export class CollectionQueryService extends BaseService {
             revealed
           )
       );
-      // Each language beside a row only where the read rule admits it in
-      // that language.
-      await this.withholdLanguagesTheReadRuleRefuses({
-        collectionName: params.collectionName,
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-        rows: entries,
-        schema,
-        companion,
-        statusFilterValues: statusFilter?.values ?? null,
-      });
       // A per-locale translation-status map for the admin overview (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
@@ -4478,7 +4502,32 @@ export class CollectionQueryService extends BaseService {
           skipLanguagesOf: skipByEntry && (id => skipByEntry.get(id)),
           access: this.buildComponentReadAccess(params, localeChain, caches),
         });
+        // A read of every language: each entry's field groups in every language it is published
+        // in beside it, as its own translated fields are.
+        await this.populateComponentsBesideRows(expandedEntries, {
+          translations: params.translations,
+          parentTable: collectionTableName(collection, params.collectionName),
+          fields: fields as FieldConfig[],
+          depth: params.depth,
+          select: params.select,
+          skipByEntry,
+          caller: params,
+        });
       }
+      // Each language beside a row only where the read rule admits it in
+      // that language. After the field groups are put beside the rows, so a
+      // language withheld is withheld from them too.
+      await this.withholdLanguagesTheReadRuleRefuses({
+        collectionName: params.collectionName,
+        user: accessUser,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        rows: expandedEntries,
+        schema,
+        companion,
+        statusFilterValues: statusFilter?.values ?? null,
+      });
 
       // ============================================================
       // GEO FILTERING: Apply geo operators in application layer
@@ -5838,19 +5887,6 @@ export class CollectionQueryService extends BaseService {
             new Set<unknown>(decisions.reveal)
           )
       );
-      // Each language beside the entry only where the read rule admits it in
-      // that language.
-      await this.withholdLanguagesTheReadRuleRefuses({
-        collectionName: params.collectionName,
-        user: params.overrideAccess ? undefined : params.user,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-        rows: [entry],
-        schema,
-        companion,
-        statusFilterValues: statusFilter?.values ?? null,
-      });
       // A per-locale translation-status map for the admin per-language pills (opt-in).
       if (params.translationStatus) {
         await this.overlayLocalized(
@@ -5908,6 +5944,17 @@ export class CollectionQueryService extends BaseService {
       // Pass depth for relationship expansion within component data
       // Pass select to skip component fields excluded from selection (performance optimization)
       if (this.fieldGroupDataService) {
+        // On a public read, the languages the entry is not published in, which its field groups'
+        // translations fall back past as its own translated fields do, and which a read of every
+        // language leaves out beside it.
+        const skipByEntry = await this.componentSkipLanguages(
+          companion,
+          statusFilter,
+          [entryId],
+          decisions.reveal,
+          // The fields and selection this population reads with.
+          { fields: fields as FieldConfig[], select: params.select }
+        );
         expandedEntry = await this.fieldGroupDataService.populateComponentData({
           entry: expandedEntry,
           // The physical table, as the write recorded it in `_parent_table`.
@@ -5921,23 +5968,37 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
-          // On a public read, the languages the entry is not published in, which its field
-          // groups' translations fall back past as its own translated fields do.
-          skipLanguages: (
-            await this.componentSkipLanguages(
-              companion,
-              statusFilter,
-              [entryId],
-              decisions.reveal,
-              // The fields and selection this population reads with.
-              { fields: fields as FieldConfig[], select: params.select }
-            )
-          )?.get(String(entryId)),
+          skipLanguages: skipByEntry?.get(String(entryId)),
           // As on the list path: a related row reached through a component
           // is judged by its own collection's field rules.
           access: this.buildComponentReadAccess(params, localeChain, caches),
         });
+        // A read of every language: the entry's field groups in every language it is published
+        // in beside it, as its own translated fields are.
+        await this.populateComponentsBesideRows([expandedEntry], {
+          translations: params.translations,
+          parentTable: collectionTableName(collection, params.collectionName),
+          fields: fields as FieldConfig[],
+          depth: params.depth,
+          select: params.select,
+          skipByEntry,
+          caller: params,
+        });
       }
+      // Each language beside the entry only where the read rule admits it in
+      // that language. After the field groups are put beside it, so a
+      // language withheld is withheld from them too.
+      await this.withholdLanguagesTheReadRuleRefuses({
+        collectionName: params.collectionName,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        rows: [expandedEntry],
+        schema,
+        companion,
+        statusFilterValues: statusFilter?.values ?? null,
+      });
 
       // On a trusted draft-view read, surface the working draft
       // (pending edits to a published document) in place of the live row, when
