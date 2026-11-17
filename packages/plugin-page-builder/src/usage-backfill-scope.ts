@@ -185,8 +185,13 @@ export const GONE_SCOPES_SWEPT_KEY = "gone-scopes-swept";
  * install, and the backfill walks Singles. Progress recorded under 1 is
  * discarded, so a site upgrading reads as not whole until every scope has been
  * walked again into the index tables.
+ *
+ * At 3: a document's variable rows include each custom property its CSS text
+ * reads through `var()` (a shadow's colour), under its own key. Progress
+ * recorded under 2 is discarded likewise, so a page walked before then is
+ * walked again and its shadow's colour counts.
  */
-const DERIVATION_REVISION = 2;
+const DERIVATION_REVISION = 3;
 
 export function backfillGeneration(derivation: {
   limits: DocumentLimits;
