@@ -57,7 +57,10 @@ describeEachDialect(
         { slug: "sdf_home", label: "Home", fields: [BODY] }
       );
       // The row the Single holds, with a value the saves below must keep.
-      await t.singles.update("sdf_home", { body: "kept", _overwrite: true });
+      await t.nextly.updateSingle({
+        slug: "sdf_home",
+        data: { body: "kept", _overwrite: true },
+      });
     });
 
     afterEach(async () => {
