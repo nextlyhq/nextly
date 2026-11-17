@@ -170,13 +170,35 @@ function layerIssue(layer: readonly ShadowPart[]): string | undefined {
   if (layer.filter(part => part.kind === "inset").length > 1) {
     return 'says "inset" twice in one layer';
   }
-  // Past here only what parts that might be either leave certain.
+  // Past here only what parts that might be either leave certain: a blur
+  // written as the third of the sizes that open the layer is one whatever a
+  // variable after it stands for.
   if (
     layer.some(part => part.kind === "reference" || part.kind === "function")
   ) {
-    return undefined;
+    return negativeBlur(leadingSizes(layer)) ? NEGATIVE_BLUR : undefined;
   }
   return countIssue(layer);
+}
+
+/** What a layer whose blur is below zero is told. */
+const NEGATIVE_BLUR = "has a negative blur, which CSS can't draw";
+
+/** The plain sizes a layer opens with, after an `inset` before them. */
+function leadingSizes(layer: readonly ShadowPart[]): readonly ShadowPart[] {
+  const start = layer[0]?.kind === "inset" ? 1 : 0;
+  const sizes: ShadowPart[] = [];
+  for (const part of layer.slice(start)) {
+    if (part.kind !== "length") break;
+    sizes.push(part);
+  }
+  return sizes;
+}
+
+/** Whether the third of a layer's sizes, its blur, is below zero. */
+function negativeBlur(sizes: readonly ShadowPart[]): boolean {
+  const blur = sizes[2]?.amount;
+  return blur !== undefined && blur < 0;
 }
 
 /** Too few or too many sizes, two colours, or a negative blur. */
@@ -187,8 +209,5 @@ function countIssue(layer: readonly ShadowPart[]): string | undefined {
   if (layer.filter(part => part.kind === "colour").length > 1) {
     return "has a layer with two colours";
   }
-  const blur = sizes[2]?.amount;
-  return blur !== undefined && blur < 0
-    ? "has a negative blur, which CSS can't draw"
-    : undefined;
+  return negativeBlur(sizes) ? NEGATIVE_BLUR : undefined;
 }

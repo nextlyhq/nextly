@@ -71,6 +71,8 @@ describe("a shadow variable's value", () => {
     // A size through a function this does not compute still passes.
     "calc(1px + 2px) 2px 4px #000",
     "var(--shadow-a), 0 1px 2px #000",
+    // Its third size may be anywhere once a variable comes first.
+    "var(--x) -2px 4px #000",
     "inherit",
   ])("stays quiet about %s", value => {
     expect(checkTokenKind("shadow", value)).toBeUndefined();
@@ -86,6 +88,9 @@ describe("a shadow variable's value", () => {
     ["0 2px -4px #000", "a negative blur"],
     ["0 2px 4px #000,", "an empty layer"],
     ["inset inset 0 2px", '"inset" twice'],
+    // A blur written as a number before a variable is still certain.
+    ["0 4px -12px var(--site-color-text)", "a negative blur"],
+    ["inset 0 4px -1px var(--site-color-text)", "a negative blur"],
     ["0 2px 20deg #000", '"20deg", which is not a size or a colour'],
   ])("says what is wrong with %s", (value, said) => {
     expect(checkTokenKind("shadow", value)).toContain(said);
