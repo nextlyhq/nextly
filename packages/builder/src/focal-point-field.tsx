@@ -159,11 +159,12 @@ export function FocalPointField({
       ?.focus();
   };
 
-  // The readout: the point set here by name, an exact one as written, what
-  // reaches it from elsewhere, or the default when nothing does.
+  // The readout: the point set here by name, an exact one as Custom with the
+  // value written, what reaches it from elsewhere, or the default when
+  // nothing does.
   const readout =
     chosen?.label ??
-    text ??
+    (text === undefined ? undefined : `Custom: ${text}`) ??
     inheritedPoint?.label ??
     inherited ??
     "Center by default";
@@ -285,6 +286,6 @@ function FocalCss({
 }
 
 /** `true` while a refusal describes the field, which is what invalidates it. */
-function refusedBy(describedBy: string | undefined): true | undefined {
+export function refusedBy(describedBy: string | undefined): true | undefined {
   return describedBy === undefined ? undefined : true;
 }

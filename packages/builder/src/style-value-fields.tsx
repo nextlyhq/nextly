@@ -29,10 +29,12 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import { BackgroundImageField } from "./background-image-control";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
 import { DecorationField, drawsDecoration } from "./decoration-field";
+import { BackgroundPositionField } from "./background-fields";
 import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
@@ -445,6 +447,19 @@ const OWN_FIELDS: Readonly<
   "object-position": {
     draws: stored => stored === undefined || typeof stored === "string",
     Field: FocalPointField,
+    buttons: true,
+  },
+  // The background's image: the Media library, an upload or a link, rather
+  // than an address typed as CSS.
+  "background-image": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundImageField,
+    buttons: false,
+  },
+  // Where the background image sits, as the object position does.
+  "background-position": {
+    draws: stored => stored === undefined || typeof stored === "string",
+    Field: BackgroundPositionField,
     buttons: true,
   },
 };

@@ -2071,7 +2071,7 @@ describe("the site's host-fetch policy", () => {
 
   it("refuses a URL naming a host the site does not load from", () => {
     const editor = mount({ background: { image: true } }, undefined, REFUSE);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2092,7 +2092,7 @@ describe("the site's host-fetch policy", () => {
     // from "the panel refuses every URL". Both halves produce a refused write
     // in the test above; only this one distinguishes them.
     const editor = mount({ background: { image: true } }, undefined, ALLOW);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2106,7 +2106,7 @@ describe("the site's host-fetch policy", () => {
     // scheme allowlist is the only limit. Passing an empty policy here rather
     // than a refusing one is what makes that distinct from a lockdown.
     const editor = mount({ background: { image: true } });
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2123,7 +2123,7 @@ describe("the site's host-fetch policy", () => {
     render(<InspectorPanel editor={editor} policy={REFUSE} />);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -4242,7 +4242,9 @@ describe("where a control's value came from", () => {
      * value, so the absent dot is the ambiguity being respected rather than the
      * panel having failed to render the field at all.
      */
-    expect(fieldsOf("background").getByLabelText("Url")).toBeTruthy();
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
     expect(dotIn("background")).toBeNull();
   });
 
