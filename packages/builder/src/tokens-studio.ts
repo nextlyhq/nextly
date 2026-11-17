@@ -57,6 +57,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  DEFAULT_FLUID_RANGE,
   fluidValue,
   type FluidRangeWidths,
   type FluidSizes,
@@ -469,6 +470,36 @@ export function setTokenValue(
 function withoutFluid(token: SiteToken): SiteToken {
   const { fluid: _made, ...rest } = token;
   return rest;
+}
+
+/** The site's fluid range: its own, else 360px to 1280px. */
+export function fluidRangeOf(tokens: SiteTokenSet): FluidRangeWidths {
+  return tokens.fluidRange ?? DEFAULT_FLUID_RANGE;
+}
+
+/**
+ * The set with a new fluid range, and every size made with "Fluid…" made
+ * again across it from its own two sizes, so each still reads the same at
+ * the smallest and the largest screen. A fluid value written by hand, the
+ * built-in spacing among them, has no sizes and is left as it is. One set,
+ * so the range and the sizes it remakes are saved and undone together.
+ */
+export function setFluidRange(
+  tokens: SiteTokenSet,
+  range: FluidRangeWidths
+): SiteTokenSet {
+  return {
+    ...tokens,
+    fluidRange: { min: range.min, max: range.max },
+    tokens: tokens.tokens.map(token =>
+      token.fluid === undefined
+        ? token
+        : {
+            ...token,
+            values: { ...token.values, light: fluidValue(token.fluid, range) },
+          }
+    ),
+  };
 }
 
 /**

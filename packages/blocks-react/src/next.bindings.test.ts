@@ -1458,11 +1458,16 @@ describe("a page's site settings, in a process serving several sites", () => {
 
   /** The site settings reads made, by their cache keys. */
   function siteReadKeys(): string[][] {
-    return runtime.reads
-      .filter(read =>
-        nextlySiteSettingsTags().every(tag => read.tags.includes(tag))
-      )
-      .map(read => read.keyParts);
+    return (
+      runtime.reads
+        .filter(read =>
+          nextlySiteSettingsTags().every(tag => read.tags.includes(tag))
+        )
+        // The current year is tagged with the settings too, since it is
+        // worked out in their time zone, but it reads no site's settings.
+        .filter(read => read.keyParts[0] !== "nextly-site-current-year")
+        .map(read => read.keyParts)
+    );
   }
 
   beforeEach(() => {

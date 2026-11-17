@@ -4,7 +4,7 @@
  * which opens the form, and a person reaches it with the keyboard alone. On
  * Posts, which open as a form and have a blocks field, the row's menu and the
  * form's document bar both offer the builder, in the words its view declares
- * (`openLabel`), or "Open in" its label where it declares none.
+ * (`openLabel`): "Open in builder".
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -15,8 +15,8 @@ import { test } from "./support/test";
 const BUILDER_FIRST = "builder-first-pages";
 const RUN = Date.now().toString(36);
 
-/** The builder's words as the view declares them, or as the admin words its label. */
-const OPEN_IN_BUILDER = /^Open in (Page )?[Bb]uilder$/;
+/** The builder's words, exactly as its view declares them. */
+const OPEN_IN_BUILDER = /^Open in builder$/;
 
 const table = (page: Page) =>
   page.getByRole("table", { name: "Entries table" });
@@ -94,7 +94,9 @@ test("a post's row menu and its form's bar both open it in the builder", async (
   await expect(page).toHaveURL(builder);
 
   await gotoAdmin(page, `/collections/posts/${id}`);
-  const inBar = page.getByRole("link", { name: OPEN_IN_BUILDER });
+  const inBar = page
+    .getByTestId("document-bar")
+    .getByRole("link", { name: OPEN_IN_BUILDER });
   await expect(inBar).toHaveAttribute("href", builder);
   await inBar.click();
   await expect(page).toHaveURL(builder);

@@ -38,6 +38,11 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
+import {
+  type SharedPartOf,
+  withWriteParts,
+  writeMovesSharedPart,
+} from "../../../hooks/hook-language";
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import {
   inTransactionHandlersFor,
@@ -50,6 +55,7 @@ import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
   stripImmutableSystemFields,
+  withoutContributedColumns,
   writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -199,6 +205,7 @@ import {
   companionFoundMissing,
   companionNotReadyMessage,
   resolveCompanionReadiness,
+  resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { stopReleasesHolding } from "../../releases/early-stop";
@@ -759,6 +766,53 @@ export class SingleMutationService extends BaseService {
       if (value !== undefined) translated[field.name] = value;
     }
     return { ...args.stored, ...translated };
+  }
+
+  /**
+   * The translated values `writeLocale` holds for the Single `id`, each
+   * translatable field by its name, one the language has no value for as
+   * `undefined`: laid over the Single's row they make the document a hook is
+   * handed, in the language its write is for. Empty where the Single keeps no
+   * translations.
+   *
+   * Given the write's transaction `tx`, read on it: the values that write
+   * left, and none a later write commits before its after-hooks run. The
+   * readiness verdict is then the one remembered, never resolved, since
+   * resolving would query and a query against a missing table aborts a
+   * PostgreSQL transaction; the read of the same Single before the write
+   * resolved it. Without `tx`, read on the pool.
+   */
+  private async translationIn(
+    id: unknown,
+    companion: CompanionSchema | null,
+    writeLocale: string | undefined,
+    tx?: { getDrizzle<T = unknown>(): T }
+  ): Promise<Record<string, unknown>> {
+    if (!companion || writeLocale === undefined) return {};
+    const row: Record<string, unknown> = { id };
+    await populateCompanionFields({
+      db: (tx ?? this.adapter).getDrizzle<
+        Parameters<typeof populateCompanionFields>[0]["db"]
+      >(),
+      companionTable: companion.table,
+      readiness:
+        tx === undefined
+          ? await resolveCompanionSchemaReadiness(this.adapter, companion)
+          : cachedCompanionReadiness(
+              this.adapter,
+              companion.companionTableName
+            ),
+      localizedFields: companion.localizedFields,
+      rows: [row],
+      localeChain: [writeLocale],
+    });
+    // A field the read filled is set on `row`, its value `undefined` where the
+    // language holds none; nothing is set where there was nothing to read.
+    const values: Record<string, unknown> = {};
+    for (const field of companion.localizedFields) {
+      if (field.name in row) values[field.name] = row[field.name];
+    }
+    return values;
   }
 
   private translationsOf(
@@ -2325,7 +2379,41 @@ export class SingleMutationService extends BaseService {
     }
   }
 
+  /**
+   * Updates the Single, its hooks told whether the update moves the shared
+   * part (`writeMovesSharedPart`, from the Single's own fields), as they are
+   * told its languages.
+   */
   async update(
+    slug: string,
+    data: Record<string, unknown>,
+    rawOptions: UpdateSingleOptions = {}
+  ): Promise<SingleResult> {
+    const meta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger
+    );
+    const shared =
+      meta === null ||
+      meta === undefined ||
+      writeMovesSharedPart(
+        {
+          fields: (meta.fields ?? []) as unknown as SharedPartOf["fields"],
+          localized: meta.localized === true,
+          publishesPerLanguage: publishesPerLanguage(meta),
+          defaultLocale: this.localization?.defaultLocale,
+        },
+        data,
+        rawOptions.locale
+      );
+    return withWriteParts({ shared }, () =>
+      this.updateInParts(slug, data, rawOptions)
+    );
+  }
+
+  private async updateInParts(
     slug: string,
     data: Record<string, unknown>,
     // Named `rawOptions` because the body must not read it: the wildcard locale
@@ -2395,37 +2483,6 @@ export class SingleMutationService extends BaseService {
       locale: options.locale,
     });
 
-    // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
-    // `updateEntry` for why Strapi withholds `"*"` from its update method and
-    // why Nextly, having one door for both, has to enforce the split here.
-    if (sweepAllLocales) {
-      const named = Object.keys(data);
-      const statusOnly = named.length === 1 && named[0] === "status";
-      // The VALUE, not merely the key — see the collection guard for why a
-      // coerced non-string splits the write instead of refusing it.
-      if (statusOnly && !isLifecycleStatus(data.status)) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
-            `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
-            `${JSON.stringify(data.status)}.`,
-        };
-      }
-      if (!statusOnly) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `locale '${EVERY_LOCALE}' moves the publication status of every ` +
-            `language and writes nothing else, so it accepts a 'status' patch ` +
-            `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
-            `To write field values, name the language they belong to.`,
-        };
-      }
-    }
-
     // Set true once the update transaction commits with a real write (which
     // always appends the outbox event); lets the catch and the `!updated`
     // return report a committed-but-post-hook-failed write as `eventRecorded`
@@ -2480,6 +2537,41 @@ export class SingleMutationService extends BaseService {
         };
       }
 
+      // 1.04. The wildcard moves a LIFECYCLE and nothing else — see the same guard on
+      // `updateEntry` for why Strapi withholds `"*"` from its update method and
+      // why Nextly, having one door for both, has to enforce the split here.
+      if (sweepAllLocales) {
+        // Judged on what the write stores: a column a schema hook contributed is never written,
+        // so it makes the patch no field write.
+        const named = Object.keys(
+          withoutContributedColumns(data, singleMeta.tableName)
+        );
+        const statusOnly = named.length === 1 && named[0] === "status";
+        // The VALUE, not merely the key — see the collection guard for why a
+        // coerced non-string splits the write instead of refusing it.
+        if (statusOnly && !isLifecycleStatus(data.status)) {
+          return {
+            success: false,
+            statusCode: 400,
+            message:
+              `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
+              `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
+              `${JSON.stringify(data.status)}.`,
+          };
+        }
+        if (!statusOnly) {
+          return {
+            success: false,
+            statusCode: 400,
+            message:
+              `locale '${EVERY_LOCALE}' moves the publication status of every ` +
+              `language and writes nothing else, so it accepts a 'status' patch ` +
+              `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
+              `To write field values, name the language they belong to.`,
+          };
+        }
+      }
+
       // 1.05. The wildcard moves a LIFECYCLE, so a Single that has none has
       // nothing for it to move. Mirrors the collection path, and for the same
       // reason: a Single carrying an ordinary user field named `status` has the
@@ -2532,6 +2624,7 @@ export class SingleMutationService extends BaseService {
       const gate = await writeGateFor(
         data,
         "single",
+        singleMeta.tableName,
         () => (singleMeta as { status?: boolean }).status === true
       );
       // Handed on as the status alone: the system columns a status-only body
@@ -2586,7 +2679,12 @@ export class SingleMutationService extends BaseService {
       // its name, on the Single's row or a language's: refused here, with access judged and
       // before any hook, rather than written or left to fail in the database. The keys a read
       // adds are taken off, so a document sent back as it was read still saves.
-      data = writableBodyOf(data, "single", singleMeta.fields);
+      data = writableBodyOf(
+        data,
+        "single",
+        singleMeta.fields,
+        singleMeta.tableName
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
@@ -2791,10 +2889,16 @@ export class SingleMutationService extends BaseService {
 
       // What every before-phase of this update is told: the same phases, run
       // by the same functions, as a publish of every language runs.
+      // The Single as its hooks are handed it: in the language this write is
+      // for, its translated values included, rather than its own row alone.
+      const hookOriginal = {
+        ...existingDeserialized,
+        ...(await this.translationIn(existingDoc.id, companion, writeLocale)),
+      };
       const beforeCall: SingleBeforeHookCall = {
         slug,
         id: existingDoc.id,
-        originalData: existingDeserialized,
+        originalData: hookOriginal,
         user: options.user,
         context: sharedContext,
         req: requestFacts,
@@ -3376,6 +3480,13 @@ export class SingleMutationService extends BaseService {
           )
         : false;
       let updatedRows: SingleDocument[];
+      // The translated values in the language written as this save left
+      // them, read at the end of its transaction, on it, by the attempt that
+      // commits: what the after-hooks are handed over the saved Single. Read
+      // after the commit instead, a failed read would fail a save already
+      // durable, and a later save committed in between would be handed to
+      // this one's hooks as its own.
+      let writtenTranslation: Record<string, unknown> = {};
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
       // connection while the transaction holds one, which on a small pool means
@@ -5877,21 +5988,27 @@ export class SingleMutationService extends BaseService {
                 // would be worse than none, because a consumer cannot tell it
                 // is wrong.
                 const localeDoc = { ...dataDoc, ...localeValues };
-                await recordMutationEvent(tx, {
-                  type: nowPublished
-                    ? "single.published"
-                    : "single.unpublished",
-                  resource: {
-                    kind: "single",
-                    slug,
-                    id: existingDoc.id,
-                    locale,
-                  },
-                  data: localeDoc,
-                  previous: { ...localeDoc, status: prior },
-                  fields: webhookFields,
-                  actor,
-                });
+                // Read before the callback below, where the document's
+                // narrowing to non-null does not reach.
+                const documentId = existingDoc.id;
+                // A swept language's event names it alone.
+                await withRuleLanguage({ locale, locales: [locale] }, () =>
+                  recordMutationEvent(tx, {
+                    type: nowPublished
+                      ? "single.published"
+                      : "single.unpublished",
+                    resource: {
+                      kind: "single",
+                      slug,
+                      id: documentId,
+                      locale,
+                    },
+                    data: localeDoc,
+                    previous: { ...localeDoc, status: prior },
+                    fields: webhookFields,
+                    actor,
+                  })
+                );
               }
             }
           }
@@ -5999,6 +6116,20 @@ export class SingleMutationService extends BaseService {
             user: options.user,
             context: sharedContext,
           });
+          // After the in-transaction phase, whose writes go through this `tx`
+          // too, so the after-hooks see what the transaction commits; read
+          // only where there are after-hooks to hand it to.
+          writtenTranslation = this.hookRegistry.hasHooks(
+            "afterUpdate",
+            hookCollection
+          )
+            ? await this.translationIn(
+                existingDoc.id,
+                companion,
+                writeLocale,
+                tx
+              )
+            : {};
 
           // What the gate's verdict started is finished on this transaction, now the save is
           // written and before it commits; a gate that finds what it judged has changed throws,
@@ -6165,8 +6296,10 @@ export class SingleMutationService extends BaseService {
             this.hookRegistry,
             {
               slug,
-              data: committed,
-              originalData: existingDeserialized,
+              // As this save left it in the language written, its
+              // translated values read in the save's transaction.
+              data: { ...committed, ...writtenTranslation },
+              originalData: hookOriginal,
               user: options.user ?? undefined,
               context: sharedContext,
               req: requestFacts,
