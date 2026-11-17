@@ -372,7 +372,7 @@ test.describe("choosing a Columns layout when the row is added", () => {
         type: "core/box",
         version: 1,
         props: { as: "div" },
-        styles: { base: { base: { height: "240px", overflowY: "auto" } } },
+        styles: { base: { base: { height: "240px", overflow: "auto" } } },
         slots: {
           children: [
             spacer("00000000-0000-4000-8000-00000000f202"),
