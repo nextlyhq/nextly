@@ -68,6 +68,7 @@ import {
   carriesFiles,
   chosenFile,
   emptyImageBoxes,
+  failureWords,
   IMAGE_STATE_WORDS as WORDS,
   imageNodeOf,
   linkAddress,
@@ -531,17 +532,6 @@ function busyPlates(
     plates.push({ key: `${nodeId}:filled`, nodeId, reason: "filled", rect });
   }
   return plates;
-}
-
-/** Why an upload did not finish, in the library's own words when it gave any. */
-function failureWords(error: unknown): string {
-  const reason =
-    error instanceof Error && error.message.trim() !== ""
-      ? error.message.trim()
-      : undefined;
-  return reason === undefined
-    ? `${WORDS.uploadFailed}.`
-    : `${WORDS.uploadFailed}: ${reason}`;
 }
 
 interface ImagePlateProps {

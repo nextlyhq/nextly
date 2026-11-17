@@ -32,6 +32,7 @@ import {
   isDefaultLook,
   isLook,
   isUsableNamedClass,
+  MAX_TOKEN_NAME_LENGTH,
   ownLooksRead,
   namedClassesRead,
   newStyleIssueBudget,
@@ -134,17 +135,22 @@ const optionalRecord = (
  * values is asked. The type guard is what lets the whitelist below read each
  * field without a cast.
  */
-function isStoredTokenShape(entry: unknown): entry is {
+/** A stored token's shape, before any rule about its values is asked. */
+interface StoredTokenShape {
   id?: string;
   name: string;
   label?: string;
+  /** Judged by the label rule, which refuses one that is no name. */
+  group?: unknown;
   kind: string;
   values: { light: string; dark?: string };
   description?: string;
   extensions?: Readonly<Record<string, unknown>>;
   unreadExtension?: Readonly<Record<string, unknown>>;
   fluid?: { small: number; large: number };
-} {
+}
+
+function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
   return (
     isPlainRecord(entry) &&
     typeof entry.name === "string" &&
@@ -166,6 +172,28 @@ function isStoredTokenShape(entry: unknown): entry is {
     optionalRecord(entry.extensions) &&
     optionalRecord(entry.unreadExtension) &&
     (entry.fluid === undefined || isFluidSizes(entry.fluid))
+  );
+}
+
+/** The most colours an order may list: far beyond any palette. */
+const MAX_COLOUR_ORDER = 1000;
+
+/**
+ * The site's colour order as stored: identities, each once, none longer
+ * than a code name can be. A colour the order does not name is listed after
+ * the ones it does, so an order naming a colour since removed is harmless.
+ */
+function isColourOrder(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_COLOUR_ORDER &&
+    value.every(
+      identity =>
+        typeof identity === "string" &&
+        identity !== "" &&
+        identity.length <= MAX_TOKEN_NAME_LENGTH
+    ) &&
+    new Set(value).size === value.length
   );
 }
 
@@ -203,6 +231,150 @@ function isFluidSizes(
 }
 
 /**
+ * One stored token, read and checked: the token as it is kept, or why it is
+ * refused. Display text (a label, a colour's group) is judged here too.
+ */
+function readStoredToken(
+  entry: unknown,
+  index: number
+): { readonly token: SiteToken } | { readonly issue: string } {
+  if (!isStoredTokenShape(entry)) {
+    return {
+      issue: `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, extensions must be an object, and a fluid size's two sizes must be positive numbers of px.`,
+    };
+  }
+  const textIssue = displayTextIssue(entry, index);
+  return textIssue === undefined
+    ? { token: storedTokenOf(entry) }
+    : { issue: textIssue };
+}
+
+/**
+ * Why a token's display text cannot be used: its label, or a colour's group,
+ * each judged by the engine's one rule for a label. Refused rather than
+ * dropped, because the author is present to fix it and a save that quietly
+ * lost the name they typed would report success.
+ */
+function displayTextIssue(
+  entry: StoredTokenShape,
+  index: number
+): string | undefined {
+  const labelIssue = tokenLabelIssue(entry.label);
+  if (labelIssue !== undefined) {
+    return `tokens[${index}] has a label that cannot be used. ${labelIssue}`;
+  }
+  const groupIssue = tokenLabelIssue(entry.group);
+  return groupIssue === undefined
+    ? undefined
+    : `tokens[${index}] has a group that cannot be used. ${groupIssue.replace(/^A label/, "A group name")}`;
+}
+
+/**
+ * The fields a stored token keeps where they are present. This is a
+ * WHITELIST: a field it omits is dropped by a save that reports success.
+ * The id above all, which is what a rename leaves alone, so a write that
+ * lost it would turn every rename into a silent break of every reference;
+ * the extensions, so data an import carried survives the next write; and a
+ * colour's display group. The guard has already refused any of these that
+ * is not of its type, and the label rule any group that is no name.
+ */
+const KEPT_WHEN_PRESENT = [
+  "id",
+  "label",
+  "group",
+  "description",
+  "extensions",
+  "unreadExtension",
+] as const;
+
+/** A checked entry as the token it is kept as. */
+function storedTokenOf(entry: StoredTokenShape): SiteToken {
+  const kept: Partial<SiteToken> = {};
+  for (const key of KEPT_WHEN_PRESENT) {
+    const value: unknown = entry[key];
+    if (value !== undefined) Object.assign(kept, { [key]: value });
+  }
+  return {
+    ...kept,
+    name: entry.name,
+    kind: entry.kind as TokenKind,
+    values: {
+      light: entry.values.light,
+      ...(entry.values.dark === undefined ? {} : { dark: entry.values.dark }),
+    },
+    // The sizes a fluid size was made from: left out, a save would lose them
+    // and the size would stop following the site's fluid range.
+    ...(entry.fluid === undefined
+      ? {}
+      : { fluid: { small: entry.fluid.small, large: entry.fluid.large } }),
+  };
+}
+
+/** One site-wide setting as stored: what is kept of it, and any refusal. */
+interface SettingRead {
+  readonly kept: Partial<SiteTokenSet>;
+  readonly issue?: string;
+}
+
+/** A setting that is absent keeps nothing and is not refused. */
+const NOTHING: SettingRead = { kept: {} };
+
+/** Each site-wide setting's reader, in the order they are reported. */
+const SETTING_READERS: readonly ((
+  raw: Record<string, unknown>
+) => SettingRead)[] = [
+  ({ prefix }) => {
+    if (prefix === undefined) return NOTHING;
+    return typeof prefix === "string"
+      ? { kept: { prefix } }
+      : { kept: {}, issue: "The token prefix must be a string when set." };
+  },
+  ({ darkMode }) => {
+    if (darkMode === undefined) return NOTHING;
+    return darkMode === "attribute" || darkMode === "media"
+      ? { kept: { darkMode } }
+      : {
+          kept: {},
+          issue: 'darkMode must be "attribute" or "media" when set.',
+        };
+  },
+  ({ fluidRange }) => {
+    if (fluidRange === undefined) return NOTHING;
+    return isFluidRange(fluidRange)
+      ? { kept: { fluidRange: { min: fluidRange.min, max: fluidRange.max } } }
+      : {
+          kept: {},
+          issue:
+            "The fluid range must be two positive widths in px, the smallest screen first.",
+        };
+  },
+  ({ order }) => {
+    if (order === undefined) return NOTHING;
+    return isColourOrder(order)
+      ? { kept: { order: [...order] } }
+      : {
+          kept: {},
+          issue:
+            "The colour order must be a list of different code names, each used once.",
+        };
+  },
+];
+
+/** The token set's site-wide settings, as stored, and why any is refused. */
+function storedSettingsOf(raw: Record<string, unknown>): {
+  readonly value: Omit<SiteTokenSet, "tokens">;
+  readonly issues: readonly string[];
+} {
+  const value: Partial<SiteTokenSet> = {};
+  const issues: string[] = [];
+  for (const read of SETTING_READERS.map(reader => reader(raw))) {
+    Object.assign(value, read.kept);
+    if (read.issue !== undefined) issues.push(read.issue);
+  }
+  return { value, issues };
+}
+
+/**
  * The stored token set, checked with the engine's own rules.
  *
  * Shape first, because `emitTokenBlocks` walks entries it assumes are
@@ -227,84 +399,14 @@ export function checkStoredTokens(
   const issues: string[] = [];
   const tokens: SiteToken[] = [];
   raw.tokens.forEach((entry: unknown, index) => {
-    if (!isStoredTokenShape(entry)) {
-      issues.push(
-        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, extensions must be an object, and a fluid size's two sizes must be positive numbers of px.`
-      );
-      return;
-    }
-    // A label is display text, judged by the engine's one rule for it. Refused
-    // rather than dropped, because the author is present to fix it and a save
-    // that quietly lost the name they typed would report success.
-    const labelIssue = tokenLabelIssue(entry.label);
-    if (labelIssue !== undefined) {
-      issues.push(
-        `tokens[${index}] has a label that cannot be used. ${labelIssue}`
-      );
-      return;
-    }
-    tokens.push({
-      // Carried, not rebuilt. The id is the whole point of the field: it is
-      // what a rename leaves alone, so a write that does not preserve it turns
-      // every rename into a silent break of every reference.
-      ...(entry.id === undefined ? {} : { id: entry.id }),
-      name: entry.name,
-      ...(entry.label === undefined ? {} : { label: entry.label }),
-      kind: entry.kind as TokenKind,
-      values: {
-        light: entry.values.light,
-        ...(entry.values.dark === undefined ? {} : { dark: entry.values.dark }),
-      },
-      ...(entry.description === undefined
-        ? {}
-        : { description: entry.description }),
-      // Both named here because this object is a WHITELIST: a token field the
-      // list omits is dropped by a save that reports success, which for either
-      // of these would mean data survives an import and is lost the moment the
-      // site is written. The guard above has already refused anything that is
-      // neither a record nor absent, so a present value here is a record.
-      ...(entry.extensions === undefined
-        ? {}
-        : { extensions: entry.extensions }),
-      ...(entry.unreadExtension === undefined
-        ? {}
-        : { unreadExtension: entry.unreadExtension }),
-      // The sizes a fluid size was made from, named here for the same
-      // reason: left out, a save would lose them and the size would stop
-      // following the site's fluid range.
-      ...(entry.fluid === undefined
-        ? {}
-        : { fluid: { small: entry.fluid.small, large: entry.fluid.large } }),
-    });
+    const read = readStoredToken(entry, index);
+    if ("issue" in read) issues.push(read.issue);
+    else tokens.push(read.token);
   });
 
-  if (!optionalString(raw.prefix)) {
-    issues.push("The token prefix must be a string when set.");
-  }
-  const darkMode = raw.darkMode;
-  if (
-    darkMode !== undefined &&
-    darkMode !== "attribute" &&
-    darkMode !== "media"
-  ) {
-    issues.push('darkMode must be "attribute" or "media" when set.');
-  }
-  const fluidRange = raw.fluidRange;
-  const rangeUsable = fluidRange === undefined || isFluidRange(fluidRange);
-  if (!rangeUsable) {
-    issues.push(
-      "The fluid range must be two positive widths in px, the smallest screen first."
-    );
-  }
-
-  const set: SiteTokenSet = {
-    tokens,
-    ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
-    ...(darkMode === "attribute" || darkMode === "media" ? { darkMode } : {}),
-    ...(isFluidRange(fluidRange)
-      ? { fluidRange: { min: fluidRange.min, max: fluidRange.max } }
-      : {}),
-  };
+  const settings = storedSettingsOf(raw);
+  issues.push(...settings.issues);
+  const set: SiteTokenSet = { tokens, ...settings.value };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
 }

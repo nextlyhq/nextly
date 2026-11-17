@@ -46,6 +46,7 @@ import {
   LINE_HEIGHT_MIXED,
   DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
+import { colourOrder } from "./colour-groups";
 import { fluidValue } from "./fluid-size";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
@@ -865,6 +866,129 @@ describe("duplicating a variable", () => {
     const twice = duplicateVariable(once.tokens, 0, "Brand");
     expect(twice.tokens.tokens[twice.at]?.label).toBe("Brand copy 2");
     expect(labelClashes(twice.tokens)).toEqual([]);
+  });
+
+  it("lists a copied colour right after the one it copies, where the site keeps an order", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+        {
+          name: "color.text",
+          kind: "color",
+          group: "Text",
+          values: { light: "#333333" },
+        },
+      ],
+      order: ["color.accent", "color.brand", "color.text"],
+    };
+    // Accent is listed first in Brand, so the copy's place is beside it,
+    // not at the group's end.
+    const made = duplicateVariable(set, 1, "Accent");
+    const copy = made.tokens.tokens[made.at]?.name;
+    expect(copy).toBeDefined();
+    expect(colourOrder(made.tokens)).toEqual([
+      "color.accent",
+      copy,
+      "color.brand",
+      "color.text",
+    ]);
+  });
+
+  it("keeps a copied colour's place when its name, and so its code name, changes", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      order: ["color.accent", "color.brand"],
+    };
+    const made = duplicateVariable(set, 1, "Accent");
+    const named = labelNewVariable(made.tokens, made.at, "Highlight");
+    expect(named.tokens[made.at]?.name).toBe("color.highlight");
+    expect(named.order).toEqual([
+      "color.accent",
+      "color.highlight",
+      "color.brand",
+    ]);
+  });
+
+  describe("a colour order naming a colour the site no longer has", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      // A copy made and removed before: its name is free again.
+      order: [
+        "color.accent",
+        "color.accent-copy",
+        "color.highlight",
+        "color.brand",
+      ],
+    };
+    const once = (order: readonly string[] | undefined) =>
+      new Set(order).size === order?.length;
+
+    it("lists a new copy under that name once", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(made.tokens.tokens[made.at]?.name).toBe("color.accent-copy");
+      expect(once(made.tokens.order)).toBe(true);
+      expect(colourOrder(made.tokens)).toEqual([
+        "color.accent",
+        "color.accent-copy",
+        "color.brand",
+      ]);
+    });
+
+    it("lists a copy once when it is named as the colour removed was", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      const named = labelNewVariable(made.tokens, made.at, "Highlight");
+      expect(named.tokens[made.at]?.name).toBe("color.highlight");
+      expect(once(named.order)).toBe(true);
+      expect(colourOrder(named)).toEqual([
+        "color.accent",
+        "color.highlight",
+        "color.brand",
+      ]);
+    });
+
+    it("lets a removed colour go from the order", () => {
+      const made = duplicateVariable(set, 1, "Accent");
+      expect(removeToken(made.tokens, made.at).order).not.toContain(
+        "color.accent-copy"
+      );
+    });
   });
 
   it("keeps a copy of a long name within the label limit", () => {

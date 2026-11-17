@@ -71,12 +71,12 @@
 }
 
 /*
- * A field with no unit but a ◇ draws as the same one box, the ◇ inside its
- * end where a unit's field has its suffix, so every field reads alike. Not a
- * side of a box, whose ◇ sits inside the side itself.
+ * A field with no unit menu but a variables menu draws as the same one box,
+ * the chevron inside its end where a unit's field has its suffix, so every
+ * field reads alike.
  */
 .nx-inspector__field:not([data-side])
-  > .nx-style-inspector__numeric:has(> input + .nx-variable-choice) {
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-menu) {
   gap: 0;
   border: 1px solid var(--nx-input);
   border-radius: var(--radius-md);
@@ -84,22 +84,20 @@
 }
 
 .nx-inspector__field:not([data-side])
-  > .nx-style-inspector__numeric:has(> input + .nx-variable-choice):has(
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-menu):has(
     [aria-invalid="true"]
   ) {
   border-color: var(--nx-destructive);
 }
 
 .nx-inspector__field:not([data-side])
-  > .nx-style-inspector__numeric:has(
-    > input + .nx-variable-choice
-  ):focus-within {
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-menu):focus-within {
   outline: 2px solid var(--nx-ring);
   outline-offset: -1px;
 }
 
 .nx-inspector__field:not([data-side])
-  > .nx-style-inspector__numeric:has(> input + .nx-variable-choice)
+  > .nx-style-inspector__numeric:has(> input + .nx-variable-menu)
   > input {
   border: 0;
   box-shadow: none;
@@ -1012,10 +1010,11 @@
 }
 
 /*
- * The ◇ beside a field whose property takes a site variable, which opens the
- * list of them. At least 24px square, WCAG 2.2's minimum target.
+ * A field's own way to its variables where it has no unit menu to list them
+ * in (a line height, a shadow, a width): a chevron at its end, always shown,
+ * as a menu's is. At least 24px square, WCAG 2.2's minimum target.
  */
-.nx-variable-choice {
+.nx-variable-menu {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -1028,51 +1027,91 @@
   cursor: pointer;
 }
 
-.nx-variable-choice:hover,
-.nx-variable-choice[data-state="open"] {
+.nx-variable-menu:hover,
+.nx-variable-menu[data-state="open"] {
   color: var(--nx-foreground);
   background: var(--nx-muted);
 }
 
-.nx-variable-choice:focus-visible {
+.nx-variable-menu:focus-visible {
   outline: 2px solid var(--nx-accent);
   outline-offset: 1px;
 }
 
 /*
- * Shown while the field is pointed at or holds focus, and always while it
- * holds a variable, holds nothing at all, or its list is open: on an empty
- * field the ◇ is what says a variable may be chosen. Faded rather than removed, so the ◇
- * stays in the tab order and shows itself when Tab reaches it.
+ * The site's variables at the top of a field's select, under "Your spacing"
+ * and "Your sizes": a quiet heading, and each variable's value after its name
+ * in the muted figures the list uses.
  */
-.nx-style-inspector__numeric .nx-variable-choice,
-.nx-style-inspector__select .nx-variable-choice {
-  opacity: 0;
-  /* Hidden is out of hit testing too: invisible, it would still take a click
-     meant for what it sits over. Focus still reaches it, and reveals it. */
-  pointer-events: none;
+.nx-variable-choice__heading {
+  padding-block: 0.25rem 0.125rem;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
 }
 
-.nx-style-inspector__numeric:hover .nx-variable-choice,
-.nx-style-inspector__numeric:focus-within .nx-variable-choice,
-.nx-style-inspector__select:hover .nx-variable-choice,
-.nx-style-inspector__select:focus-within .nx-variable-choice,
-.nx-variable-choice[data-bound],
-.nx-variable-choice[data-empty],
-.nx-variable-choice[data-state="open"] {
-  opacity: 1;
-  pointer-events: auto;
+.nx-variable-choice__item .nx-variable-choice__value {
+  flex: none;
+  margin-inline-start: 0.5rem;
 }
 
 /*
- * The same list opened from a unit menu's "Use a variable…", sized as the
- * popover is; two parts, to outrank the menu's own width and padding.
+ * A value that comes from one of the site's variables, in green wherever it
+ * shows: a held variable's chip, a colour's trigger naming its variable, and
+ * the Font control holding a font variable. The same green as a shared
+ * style's, defined for light and dark, so "this follows something" reads one
+ * way across the panel.
  */
-[role="menu"].nx-variable-choice__menu {
+.nx-style-inspector__token.nx-variable-chip,
+.nx-style-inspector__colour-pick[data-bound],
+.nx-font-pick[data-bound] > .nx-font-pick__trigger {
+  border-color: var(--nx-builder-target-shared);
+  background: var(--nx-builder-target-shared-ground);
+  color: var(--nx-builder-target-shared);
+}
+
+.nx-variable-chip .nx-variable-chip__value {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* The font control and its Unlink on one line, the control taking the room. */
+.nx-font-pick[data-bound] {
   display: flex;
-  flex-direction: column;
-  width: 18rem;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/*
+ * Unlink, after a value from a variable: an icon, its word in its tooltip,
+ * quiet until pointed at. At least 24px square, WCAG 2.2's minimum target.
+ */
+.nx-variable-unlink {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 1.5rem;
+  min-inline-size: 1.5rem;
   padding: 0;
+  border-radius: var(--radius-sm);
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-variable-unlink:hover {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+.nx-variable-unlink:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+/* On the green chip, in the chip's green. */
+.nx-variable-chip .nx-variable-unlink {
+  color: inherit;
 }
 
 /*
@@ -1144,20 +1183,31 @@
   contain: inline-size;
 }
 
-/* A held variable's name as the way to choose another, in a narrow side. */
+/*
+ * A held variable's name as the way to choose another: the chip's value
+ * menu, its chevron after the name, in the chip's green.
+ */
 .nx-style-inspector__token .nx-variable-chip__choose {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
   max-inline-size: 100%;
   min-inline-size: 0;
   padding-inline: 0.125rem;
   overflow: hidden;
   font-size: inherit;
-  color: var(--nx-foreground);
+  font-weight: 500;
+  color: inherit;
   text-align: start;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.nx-style-inspector__token .nx-variable-chip__choose > svg {
+  flex: none;
+}
+
 .nx-style-inspector__token .nx-variable-chip__choose:hover {
+  color: inherit;
   text-decoration: underline;
 }
 

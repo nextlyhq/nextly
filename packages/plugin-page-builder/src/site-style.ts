@@ -263,6 +263,11 @@ export function tokenOverrideOf(
       ? {}
       : { darkMode: edited.darkMode }),
     ...storedFluidRange(defaults, edited, tokens),
+    // The colour order, once the site has one of its own.
+    ...(edited.order === undefined ||
+    sameJsonValue(edited.order, defaults?.order)
+      ? {}
+      : { order: edited.order }),
   };
 }
 
@@ -414,7 +419,28 @@ function mergeByKey<T>(
   return [...byKey.values()];
 }
 
-/** Token sets merged by token identity; `prefix`/`darkMode` from the override. */
+/** The set's site-wide settings, each the stored tier's over the code's. */
+const SITE_WIDE_SETTINGS = [
+  "prefix",
+  "darkMode",
+  "fluidRange",
+  "order",
+] as const satisfies readonly (keyof SiteTokenSet)[];
+
+/** Each site-wide setting the stored tier or the code sets, the stored first. */
+function siteWideSettings(
+  defaults: SiteTokenSet | undefined,
+  stored: SiteTokenSet | undefined
+): Pick<SiteTokenSet, (typeof SITE_WIDE_SETTINGS)[number]> {
+  const settings: Partial<SiteTokenSet> = {};
+  for (const key of SITE_WIDE_SETTINGS) {
+    const value = stored?.[key] ?? defaults?.[key];
+    if (value !== undefined) Object.assign(settings, { [key]: value });
+  }
+  return settings;
+}
+
+/** Token sets merged by token identity; the site-wide settings from the override. */
 function mergeTokens(
   defaults: SiteTokenSet | undefined,
   stored: SiteTokenSet | undefined
@@ -436,14 +462,9 @@ function mergeTokens(
     stored?.tokens,
     tokenIdentity
   );
-  const prefix = stored?.prefix ?? defaults?.prefix;
-  const darkMode = stored?.darkMode ?? defaults?.darkMode;
-  const fluidRange = stored?.fluidRange ?? defaults?.fluidRange;
   return {
     tokens: tokens === undefined ? [] : [...tokens],
-    ...(prefix === undefined ? {} : { prefix }),
-    ...(darkMode === undefined ? {} : { darkMode }),
-    ...(fluidRange === undefined ? {} : { fluidRange }),
+    ...siteWideSettings(defaults, stored),
   };
 }
 
