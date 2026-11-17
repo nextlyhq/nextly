@@ -188,6 +188,41 @@ export interface ListEntriesCount {
 }
 
 /**
+ * One form a provider lists for an author to pick in a Form block.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export interface PickableForm {
+  /** The provider's own reference to it, which the block stores. */
+  readonly ref: string;
+  readonly title: string;
+  readonly state: "draft" | "published" | "closed";
+  /** Where the author edits it in the admin, as the provider gives it. */
+  readonly editHref?: string;
+}
+
+/**
+ * A source of forms other than the block's own fields (the forms plugin),
+ * with the forms the author may pick from it.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export interface FormSource {
+  /** The provider's id, which the block stores beside a form's reference. */
+  readonly id: string;
+  /** What authors read: "Forms" in "Fields … come from Forms." */
+  readonly label: string;
+  readonly forms: readonly PickableForm[];
+}
+
+/**
+ * A picked form's state as its author sees it on the canvas.
+ *
+ * @experimental Settles with the form provider contract.
+ */
+export type PickedFormState = "published" | "draft" | "closed" | "missing";
+
+/**
  * What the host lends the Content tab: the parts of the admin this package
  * cannot reach itself. Each is optional, and a control whose service is absent
  * says so rather than offering a button that does nothing.
@@ -290,6 +325,26 @@ export interface ContentServices extends BindingServices {
    *
    * @experimental Settles with the form provider contract.
    */
+  /**
+   * The site's form sources other than the block's own fields, each with
+   * the forms the signed-in author may pick, for a Form block's "Form: <pick
+   * a form>". An empty list is a site with no such source, where the panel
+   * says what installing one adds. Absent, the panel offers neither.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly listForms?: () => Promise<readonly FormSource[]>;
+  /**
+   * A picked form's state, read with the signed-in author's own access, for
+   * what the canvas says over it: a draft, closed, or deleted. Rejects where
+   * it could not be read, and the canvas then says nothing.
+   *
+   * @experimental Settles with the form provider contract.
+   */
+  readonly pickedFormState?: (form: {
+    readonly provider: string;
+    readonly ref: string;
+  }) => Promise<PickedFormState>;
   readonly describeForm?: (form: {
     readonly provider: string;
     readonly ref: string;
