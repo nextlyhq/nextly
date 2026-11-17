@@ -5,6 +5,8 @@
  * an empty one is replaced, so the table that ends up there holds exactly the requested columns;
  * one holding rows is refused, naming the table and how many rows it holds, and left as it was.
  * Two creates of one name at once leave one of them standing and refuse the other, naming it.
+ * A collection's leftover takes in its translations table and its junction tables too, and rows
+ * in the shared field-group tables naming it.
  *
  * Each leftover table is made by the creating SQL a Builder create renders, for other fields than
  * the create asks for, so it is the wreckage an interrupted earlier attempt would leave.
@@ -21,9 +23,17 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionService } from "../../collections/services/collection-service";
+import {
+  builderKeyTables,
+  type CollectionTables,
+} from "../../dynamic-collections/services/collection-tables";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
+import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
+import { junctionTablesOf } from "../services/field-column-descriptor";
 import { applyMigrationStatements } from "../services/apply-migration-statements";
 
 let t: TestNextly | undefined;
@@ -144,6 +154,79 @@ for (const dialect of getConfiguredTestDialects()) {
       );
     }
 
+    /**
+     * The tables a collection create for `fields` leaves behind: its main table, with any junction
+     * its fields make, and, `localized`, its translations table for the translatable ones.
+     */
+    async function leftoverCollectionTables(
+      table: string,
+      fields: readonly Record<string, unknown>[] = STALE,
+      options: { localized?: boolean; targetTables?: CollectionTables } = {}
+    ): Promise<void> {
+      await applyMigrationStatements(
+        app().adapter,
+        new DynamicCollectionSchemaService(
+          undefined,
+          dialect
+        ).generateMigrationSQL(table, fields as never, {
+          hasStatus: false,
+          localized: options.localized === true,
+          ...(options.targetTables
+            ? { targetTables: options.targetTables }
+            : {}),
+        })
+      );
+      if (!options.localized) return;
+      const spec = deriveCompanionSpec({
+        slug: table,
+        fields: fields as never,
+        dialect,
+        defaultLocale: "en",
+        collectionLocalized: true,
+        builtBy: "collection",
+      });
+      if (spec) {
+        await applyMigrationStatements(
+          app().adapter,
+          buildCompanionCreateOnlySql(spec)
+        );
+      }
+    }
+
+    /** The app booted again with two languages, as a translated collection needs. */
+    async function translatedApp(): Promise<void> {
+      await app().destroy();
+      t = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+    }
+
+    const createCollection = (
+      slug: string,
+      fields: readonly Record<string, unknown>[] = REQUESTED,
+      localized = false
+    ) =>
+      app()
+        .getService("collectionService")
+        .createCollection(
+          {
+            name: slug,
+            label: slug,
+            localized,
+            fields,
+          } as unknown as Parameters<CollectionService["createCollection"]>[0],
+          {}
+        );
+
+    /** How the registry records the collection's create, or null with no row. */
+    async function collectionStatus(slug: string): Promise<string | null> {
+      const [row] = await app().adapter.executeQuery<{ status: unknown }>(
+        `SELECT migration_status AS status FROM dynamic_collections WHERE slug = '${slug}'`
+      );
+      return row ? String(row.status) : null;
+    }
+
     const createFieldGroup = (slug: string) =>
       dispatchComponents(
         "createComponent",
@@ -230,6 +313,170 @@ for (const dialect of getConfiguredTestDialects()) {
       });
       expect(await rowCount("comp_lsfgchip")).toBe(1);
       expect(await liveColumns("single_lsfg")).toContain("stale");
+    });
+
+    it("replaces an empty leftover collection table with the requested columns, recorded applied", async () => {
+      await leftoverCollectionTables("dc_lcempty");
+
+      await createCollection("lcempty");
+
+      const columns = await liveColumns("dc_lcempty");
+      expect(columns).toEqual(expect.arrayContaining(["title", "score"]));
+      expect(columns).not.toContain("stale");
+      expect(await collectionStatus("lcempty")).toBe("applied");
+    });
+
+    it("refuses a collection create over a leftover holding rows, naming it and its row count", async () => {
+      await leftoverCollectionTables("dc_lcheld");
+      // One row: a collection's table keeps `slug` unique.
+      await holdRows("dc_lcheld", 1);
+
+      const refused = await refusalOf(createCollection("lcheld"));
+
+      expect(refused).toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining('"dc_lcheld" (1 row)'),
+      });
+      expect(await rowCount("dc_lcheld")).toBe(1);
+      expect(await liveColumns("dc_lcheld")).toContain("stale");
+      expect(await collectionStatus("lcheld")).toBeNull();
+    });
+
+    it("replaces a translated collection's empty leftover tables, its translations table with them", async () => {
+      await translatedApp();
+      const STALE_TRANSLATED = [
+        { name: "stale", type: "text", localized: true },
+      ];
+      await leftoverCollectionTables("dc_lcloc", STALE_TRANSLATED, {
+        localized: true,
+      });
+      expect(await liveColumns("dc_lcloc_locales")).toContain("stale");
+
+      await createCollection(
+        "lcloc",
+        [
+          { name: "title", type: "text", localized: true },
+          { name: "score", type: "number" },
+        ],
+        true
+      );
+
+      // The whole family was cleared: the main table holds the request's columns, and the
+      // leftover translations table, with its stale column, is gone. A translated collection's
+      // create makes no translations table of its own here, so none stands in its place.
+      const main = await liveColumns("dc_lcloc");
+      expect(main).toContain("score");
+      expect(main).not.toContain("stale");
+      expect(await liveColumns("dc_lcloc_locales")).not.toContain("stale");
+      expect(await collectionStatus("lcloc")).toBe("applied");
+    });
+
+    it("refuses a translated collection's create over a leftover translations table holding rows", async () => {
+      await translatedApp();
+      const STALE_TRANSLATED = [
+        { name: "stale", type: "text", localized: true },
+      ];
+      await leftoverCollectionTables("dc_lclocheld", STALE_TRANSLATED, {
+        localized: true,
+      });
+      await holdRows("dc_lclocheld", 1);
+      await holdRows("dc_lclocheld_locales", 1, {
+        _parent: "leftover-0",
+        _locale: "en",
+      });
+
+      const refused = await refusalOf(
+        createCollection(
+          "lclocheld",
+          [{ name: "title", type: "text", localized: true }],
+          true
+        )
+      );
+
+      expect(refused).toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(
+          '"dc_lclocheld_locales" (1 row)'
+        ),
+      });
+      expect(await rowCount("dc_lclocheld_locales")).toBe(1);
+    });
+
+    it("refuses a collection create over an empty leftover whose field-group rows name it, deleting nothing", async () => {
+      await leftoverCollectionTables("dc_lcfg");
+      await createFieldGroup("lcfgchip");
+      await holdRows("comp_lcfgchip", 1, { _parent_table: "dc_lcfg" });
+
+      const refused = await refusalOf(createCollection("lcfg"));
+
+      expect(refused).toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining('"comp_lcfgchip" (1 row)'),
+      });
+      expect(await rowCount("comp_lcfgchip")).toBe(1);
+      expect(await liveColumns("dc_lcfg")).toContain("stale");
+    });
+
+    // An index of the leftover's own under a name the create's index takes is the leftover's, and
+    // goes with it: the create is not refused as though the name were held elsewhere.
+    it("replaces an empty leftover holding an index under a name the create's index takes", async () => {
+      await leftoverCollectionTables("dc_lcidx", [
+        { name: "code", type: "text", unique: true },
+      ]);
+
+      await createCollection("lcidx", [
+        { name: "code", type: "text", index: true },
+      ]);
+
+      expect(await collectionStatus("lcidx")).toBe("applied");
+      expect(await liveColumns("dc_lcidx")).toContain("code");
+    });
+
+    // A many-to-many keeps its links in a junction table the create makes beside its main table;
+    // one left standing by an earlier attempt is part of the leftover.
+    it("refuses a collection create whose leftover junction holds links, naming it", async () => {
+      await createCollection("lctarget");
+      const targetTables = builderKeyTables([["lctarget", "dc_lctarget"]]);
+      const LINKED = [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: "lctarget" },
+        },
+      ];
+      await leftoverCollectionTables("dc_lcjunc", LINKED, { targetTables });
+      // By the name the create gives it, as the production rule names it.
+      const [junction] = junctionTablesOf("dc_lcjunc", LINKED as never);
+      expect(
+        junction !== undefined && (await app().adapter.tableExists(junction)),
+        `the leftover's junction table ${junction} stands`
+      ).toBe(true);
+      // A link names a row at each end, so both ends hold one; the refusal names the junction
+      // among the leftover's tables holding rows.
+      await holdRows("dc_lcjunc", 1);
+      await holdRows("dc_lctarget", 1);
+      const keys = (
+        (
+          await introspectLiveColumns(app().adapter.getDrizzle(), dialect, [
+            junction as string,
+          ])
+        ).tables[0]?.columns ?? []
+      )
+        .map(column => column.name)
+        .filter(name => name !== "id" && name.endsWith("_id"));
+      await holdRows(
+        junction as string,
+        1,
+        Object.fromEntries(keys.map(key => [key, "leftover-0"]))
+      );
+
+      const refused = await refusalOf(createCollection("lcjunc", LINKED));
+
+      expect(refused).toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(`"${junction}" (1 row)`),
+      });
+      expect(await rowCount(junction as string)).toBe(1);
     });
 
     it("lets one of two field-group creates of one name at once stand, and refuses the other", async () => {

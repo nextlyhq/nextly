@@ -611,6 +611,78 @@ export class CollectionMetadataService extends BaseService {
     }
   }
 
+  /**
+   * The one rule every kind's create follows (`clearLeftoverStorage`): every table of the family
+   * probed first, a family holding rows refused naming each table and its row count, an empty one
+   * dropped. A collection's family is its main table, its translations table and the junction
+   * tables its many-to-many fields make; field-group rows naming its table as their parent count as
+   * its content, so a leftover whose content lives there is refused rather than cleared. Dropped
+   * without CASCADE: anything else depending on these tables has already refused the create.
+   */
+  private async clearLeftoverCollection(
+    slug: string,
+    tableName: string,
+    fields: FieldDefinition[]
+  ): Promise<void> {
+    const adapter = this.adapter;
+    const [
+      { clearLeftoverStorage },
+      { junctionTablesOf },
+      { countEntityComponentRows },
+    ] = await Promise.all([
+      import("../../schema/services/leftover-storage"),
+      import("../../schema/services/field-column-descriptor"),
+      import("../../field-groups/services/teardown-entity-field-group-data"),
+    ]);
+    await clearLeftoverStorage({
+      adapter,
+      kind: "collection",
+      slug,
+      tableName,
+      makesJunctionTables: true,
+      plannedJunctions: junctionTablesOf(tableName, fields),
+      ownedElsewhere: () =>
+        countEntityComponentRows({ adapter, parentTable: tableName }),
+      logger: this.logger,
+      // The translations table references the main one, so it goes first.
+      dropFamily: async () => {
+        await adapter.dropTable(`${tableName}_locales`, { ifExists: true });
+        await adapter.dropTable(tableName, { ifExists: true });
+      },
+    });
+  }
+
+  /**
+   * What the create left out of its table, as one line, or null when the table holds every
+   * requested column as the type asked for (`columnsTheCreateLeftOut`). The request is the desired
+   * table a push compares the live one with, built as the creating SQL renders a collection's
+   * columns: its translatable fields kept on the translations table, not this one.
+   */
+  private async columnsLeftOut(
+    tableName: string,
+    fields: FieldDefinition[],
+    data: { status?: boolean; localized?: boolean }
+  ): Promise<string | null> {
+    const [
+      { buildDesiredTableFromFields },
+      { columnsTheCreateLeftOut, describeColumnsLeftOut },
+    ] = await Promise.all([
+      import("../../schema/pipeline/diff/build-from-fields"),
+      import("../../schema/services/created-table-shape"),
+    ]);
+    const dialect = this.adapter.getCapabilities().dialect;
+    const leftOut = await columnsTheCreateLeftOut(
+      this.adapter.getDrizzle(),
+      dialect,
+      buildDesiredTableFromFields(tableName, fields, dialect, {
+        builtBy: "collection",
+        hasStatus: data.status === true,
+        localized: storesPerLanguage(data),
+      })
+    );
+    return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);
+  }
+
   private async createCollectionExcluded(
     data: Parameters<CollectionMetadataService["createCollection"]>[0]
   ): Promise<MetadataServiceResult> {
@@ -626,6 +698,26 @@ export class CollectionMetadataService extends BaseService {
       // recorded, so a change the database refuses leaves no file, no registry row and nothing
       // reported as applied.
       if (this.isDevelopment()) {
+        // A table already standing where this create builds is never adopted: empty, it is
+        // dropped so the create renders every column from this request; holding rows, the create
+        // is refused before any statement runs (`clearLeftoverStorage`). First, so an index the
+        // leftover holds goes with it rather than reading as a name held elsewhere.
+        try {
+          await this.clearLeftoverCollection(
+            artifacts.metadata.slug,
+            artifacts.tableName,
+            artifacts.metadata.fields
+          );
+        } catch (refusal: unknown) {
+          return errorToMetadataResult(
+            refusal,
+            {
+              statusCode: 400,
+              defaultMessage: "The collection's table could not be created",
+            },
+            this.dialect
+          );
+        }
         // An index name the new table takes may already be held elsewhere, where the create's
         // IF NOT EXISTS would skip it: refused before the table is created, naming the holder.
         try {
@@ -655,11 +747,14 @@ export class CollectionMetadataService extends BaseService {
 
       if (this.isDevelopment()) {
         try {
-          // Verify table was actually created before marking as applied
-          const tableExists = await this.adapter.tableExists(
-            artifacts.tableName
+          // Applied only when the table holds every requested column as the type asked for: a
+          // table standing under the name says nothing about its columns.
+          const leftOut = await this.columnsLeftOut(
+            artifacts.tableName,
+            artifacts.metadata.fields,
+            data
           );
-          if (tableExists) {
+          if (leftOut === null) {
             artifacts.metadata.migrationStatus = "applied";
             // The fields as the registry stores them, not as the request spelled them: the
             // table's columns were named from the stored names, and a restart rebuilds these
@@ -680,7 +775,7 @@ export class CollectionMetadataService extends BaseService {
           } else {
             artifacts.metadata.migrationStatus = "failed";
             this.logger.error(
-              `Table "${artifacts.tableName}" was not created after migration`
+              `Table "${artifacts.tableName}" was not created as requested: ${leftOut}`
             );
           }
         } catch (migrationError: unknown) {
