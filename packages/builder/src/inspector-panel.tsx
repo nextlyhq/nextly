@@ -36,7 +36,9 @@ import {
   BASE_BREAKPOINT,
   findNode,
   type BlockDocument,
+  STYLE_STATES,
   type BreakpointId,
+  type BreakpointSet,
   type ComponentLookup,
   type StyleState,
 } from "@nextlyhq/blocks-engine";
@@ -104,6 +106,7 @@ import {
   styleEntries,
 } from "./settings-entries";
 import {
+  ChangedElsewhere,
   FilterNote,
   SettingsFilterProvider,
   SettingsMatchProvider,
@@ -114,7 +117,14 @@ import {
   useFindShortcut,
   type SettingsMatch,
 } from "./settings-filter";
-import { filtering, type SettingsFilter } from "./settings-index";
+import {
+  changedElsewhere,
+  filtering,
+  type SettingsFilter,
+  type StoredStyles,
+} from "./settings-index";
+import { stateLabel } from "./state-switcher";
+import { breakpointLabel } from "./style-provenance-indicators";
 import { inspectStyle } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
@@ -676,6 +686,13 @@ function SelectionInspector({
 
           <TabsContent value="style">
             <FilterNote tab="style" onChoose={choose} />
+            <StyleChangedElsewhere
+              node={styleNode}
+              state={styleState}
+              breakpoint={breakpoint}
+              breakpoints={styleOnly.breakpoints}
+              onJumpToBreakpoint={styleOnly.onJumpToBreakpoint}
+            />
             <StyleTab
               {...styleOnly}
               editor={editor}
@@ -716,6 +733,62 @@ function SelectionInspector({
       </SettingsMatchProvider>
     </div>
   );
+}
+
+/**
+ * Where else the selected block holds styles, under Style while Only changed
+ * is on: by device at the edited state, by state at the edited device.
+ */
+function StyleChangedElsewhere({
+  node,
+  state,
+  breakpoint,
+  breakpoints,
+  onJumpToBreakpoint,
+}: {
+  node: { readonly styles?: unknown } | null;
+  state: StyleStateBinding | undefined;
+  breakpoint: BreakpointId | undefined;
+  breakpoints: BreakpointSet | undefined;
+  onJumpToBreakpoint: ((breakpoint: BreakpointId) => void) | undefined;
+}): React.JSX.Element | null {
+  const { onlyChanged } = useFilterState();
+  if (!onlyChanged || node === null) return null;
+  const devices = [
+    BASE_BREAKPOINT,
+    ...(breakpoints?.viewport ?? [])
+      .map(each => each.id)
+      .filter(id => id !== BASE_BREAKPOINT),
+  ];
+  const counts = changedElsewhere(
+    node.styles as StoredStyles | undefined,
+    {
+      state: state?.state ?? "base",
+      device: breakpoint ?? BASE_BREAKPOINT,
+    },
+    {
+      devices: devices.map(id => ({
+        id,
+        label: breakpointLabel(breakpoints, id),
+      })),
+      states: STYLE_STATES.map(id => ({ id, label: stateLabel(id) })),
+    }
+  );
+  return (
+    <ChangedElsewhere
+      devices={counts.devices}
+      states={counts.states}
+      onDevice={onJumpToBreakpoint}
+      onState={showState(state?.onChange)}
+    />
+  );
+}
+
+/** A link's way to show a state, where the host lets the panel change it. */
+function showState(
+  onChange: ((state: StyleState) => void) | undefined
+): ((id: string) => void) | undefined {
+  return onChange === undefined ? undefined : id => onChange(id as StyleState);
 }
 
 /**

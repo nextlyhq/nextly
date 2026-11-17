@@ -29,6 +29,7 @@ import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
 import {
+  SettingSlot,
   sectionShown,
   useSettingsMatch,
   type SettingsMatch,
@@ -205,6 +206,12 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
     );
   }, sameClosedSection);
 
+/** The block's settings Content width draws, which the filter keeps it by. */
+const CONTENT_WIDTH_IDS: readonly string[] = ["contained", "contentWidth"];
+
+/** What a block's Size shortcuts write, which the filter keeps them by. */
+const SHORTCUT_IDS: readonly string[] = ["minHeight", "width", "padding"];
+
 /**
  * A section's properties drawn at once, and those behind "+ More". While the
  * panel is filtered, every property it keeps is drawn at once, "+ More"'s
@@ -330,15 +337,19 @@ function SectionFields({
     <fieldset className="nx-inspector__fields" disabled={readOnly}>
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
-          <ContentWidthFields surroundings={surroundings} />
+          <SettingSlot tab="style" ids={CONTENT_WIDTH_IDS}>
+            <ContentWidthFields surroundings={surroundings} />
+          </SettingSlot>
         ) : null}
         {sectionKey === "size" ? (
-          <BlockShortcutsFields
-            surroundings={surroundings}
-            minHeightDrawn={(rings?.rest ?? shown).some(
-              property => property.property === "minHeight"
-            )}
-          />
+          <SettingSlot tab="style" ids={SHORTCUT_IDS}>
+            <BlockShortcutsFields
+              surroundings={surroundings}
+              minHeightDrawn={(rings?.rest ?? shown).some(
+                property => property.property === "minHeight"
+              )}
+            />
+          </SettingSlot>
         ) : null}
         {rings === undefined ? null : (
           <SpacingBox

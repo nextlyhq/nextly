@@ -131,7 +131,7 @@ export function advancedEntries(
       id: "cssClasses",
       label: "CSS classes",
       css: [BUILT_IN_WRITES.cssClasses],
-      set: (attributes?.class ?? "") !== "",
+      set: typeof node?.cssClasses === "string" && node.cssClasses !== "",
     },
     {
       id: "attributes",

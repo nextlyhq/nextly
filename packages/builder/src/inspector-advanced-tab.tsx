@@ -25,6 +25,8 @@ import {
 import type { BlockResolver } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
+import { SettingSlot } from "./settings-filter";
+
 import { AdvancedPanel } from "./advanced-panel";
 import {
   VisibilityExposeControl,
@@ -131,35 +133,41 @@ function DrawnAdvancedTab({
         />
       )}
       {/* Which devices the block shows on. */}
-      <VisibleOn
-        editor={editor}
-        nodeId={block.nodeId}
-        breakpoints={breakpoints}
-        editing={breakpoint ?? BASE_BREAKPOINT}
-        status={breakpointsStatus}
-        heldBy={designLocked}
-        reasonId={reasonId}
-      />
+      <SettingSlot ids={["visibleOn"]}>
+        <VisibleOn
+          editor={editor}
+          nodeId={block.nodeId}
+          breakpoints={breakpoints}
+          editing={breakpoint ?? BASE_BREAKPOINT}
+          status={breakpointsStatus}
+          heldBy={designLocked}
+          reasonId={reasonId}
+        />
+      </SettingSlot>
       {/* Whether the block shows at all, by the entry or list item it is
           drawn with. Keyed by the block, so a row added and not yet
           finished stays with the block it was added to rather than moving
           to the next one. */}
-      <ShowWhen
-        key={block.nodeId}
-        editor={editor}
-        nodeId={block.nodeId}
-        services={services}
-        heldBy={designLocked}
-        reasonId={reasonId}
-      />
+      <SettingSlot ids={["showWhen"]}>
+        <ShowWhen
+          key={block.nodeId}
+          editor={editor}
+          nodeId={block.nodeId}
+          services={services}
+          heldBy={designLocked}
+          reasonId={reasonId}
+        />
+      </SettingSlot>
       {/* Whether search engines may quote the block's text. Drawn only on a
           container. */}
-      <NeverQuote
-        editor={editor}
-        nodeId={block.nodeId}
-        heldBy={designLocked}
-        reasonId={reasonId}
-      />
+      <SettingSlot ids={["neverQuote"]}>
+        <NeverQuote
+          editor={editor}
+          nodeId={block.nodeId}
+          heldBy={designLocked}
+          reasonId={reasonId}
+        />
+      </SettingSlot>
       {/* The block's own settings it places in Visibility. */}
       {visibilityRows.length === 0 ? null : fieldsFor(visibilityRows)}
     </>
@@ -225,7 +233,9 @@ function DrawnAdvancedTab({
  * HTML settings join the builder's sections of those names, so each is one
  * section, folded as one; any other section it declares is its own.
  */
-export function advancedRowsBySection(own: BlockInspection["sections"]["advanced"]): {
+export function advancedRowsBySection(
+  own: BlockInspection["sections"]["advanced"]
+): {
   htmlRows: readonly EditableProp[];
   visibilityRows: readonly EditableProp[];
   others: BlockInspection["sections"]["advanced"];

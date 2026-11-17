@@ -352,3 +352,63 @@ export function TabCount({
     </span>
   );
 }
+
+/** A device or state the edited target holds values at, with how many. */
+interface ElsewhereLink {
+  readonly id: string;
+  readonly label: string;
+  readonly count: number;
+}
+
+/**
+ * "Also changed on Tablet (2) · Hover (1)": while Only changed is on in
+ * Style, where else the edited target holds values, each a link that shows
+ * that device or state.
+ */
+export function ChangedElsewhere({
+  devices,
+  states,
+  onDevice,
+  onState,
+}: {
+  devices: readonly ElsewhereLink[];
+  states: readonly ElsewhereLink[];
+  onDevice: ((id: string) => void) | undefined;
+  onState: ((id: string) => void) | undefined;
+}): React.JSX.Element | null {
+  const { onlyChanged } = useFilterState();
+  if (!onlyChanged || devices.length + states.length === 0) return null;
+  const link = (
+    each: ElsewhereLink,
+    go: ((id: string) => void) | undefined
+  ) => {
+    const words = `${each.label} (${String(each.count)})`;
+    return go === undefined ? (
+      <span key={each.id}>{words}</span>
+    ) : (
+      <button
+        key={each.id}
+        type="button"
+        className="nx-settings-note__link"
+        onClick={() => go(each.id)}
+      >
+        {words}
+      </button>
+    );
+  };
+  const links = [
+    ...devices.map(each => link(each, onDevice)),
+    ...states.map(each => link(each, onState)),
+  ];
+  return (
+    <p className="nx-settings-note">
+      Also changed on{" "}
+      {links.map((each, index) => (
+        <React.Fragment key={index}>
+          {index === 0 ? null : " · "}
+          {each}
+        </React.Fragment>
+      ))}
+    </p>
+  );
+}
