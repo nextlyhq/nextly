@@ -16,9 +16,9 @@ import * as React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ShowWhen } from "./condition-controls";
-import type { ContentServices, LoopCollection } from "./content-controls";
-import { useEditorState, type EditorState } from "./editor-state";
-import type { CustomSource } from "./named-query-model";
+import type { ContentServices, LoopCollection } from "../content-controls";
+import { useEditorState, type EditorState } from "../editor-state";
+import type { CustomSource } from "../named-query-model";
 
 afterEach(cleanup);
 
