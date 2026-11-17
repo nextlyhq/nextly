@@ -74,6 +74,8 @@ export interface PagesPanelMount {
   renderPagesPanel: (state: { unsavedWork: boolean }) => React.ReactNode;
   /** Sent to the shell, which opens Settings once per new count. */
   settingsRequest: { readonly count: number } | undefined;
+  /** Asks the shell to open Settings, as a row's "Settings" does. */
+  openSettings: () => void;
   /** The page being edited, or null before it has been saved. */
   currentPage: PageReference | null;
 }
@@ -104,6 +106,7 @@ export function usePagesPanel(
   return {
     currentPage,
     settingsRequest,
+    openSettings,
     renderPagesPanel: ({ unsavedWork }) => (
       <PagesPanel
         current={currentPage}

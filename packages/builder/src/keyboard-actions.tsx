@@ -43,8 +43,16 @@ import {
   modalIsOpen,
   pressOrigin,
   returnFocusToCanvas,
-} from "./canvas-escape";
-import { useCanvasFrame } from "./canvas-frame-context";
+} from "./canvas/canvas-escape";
+import { useCanvasFrame } from "./canvas/canvas-frame-context";
+import {
+  patternSaveRefusal,
+  SAVE_PATTERN_GRANT_REFUSAL,
+  toolbarActions,
+  turnIntoChoice,
+  type MoveJudge,
+  type MovePosition,
+} from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
@@ -64,7 +72,6 @@ import {
   UNDO_KEYS_SPOKEN,
 } from "./keyboard-announcements";
 import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
-import { pathTo } from "./layers";
 import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import {
@@ -72,6 +79,7 @@ import {
   refusalAnnouncement,
   unmovedAnnouncement,
 } from "./move-refusal";
+import { pathTo } from "./panels/layers/layers";
 import { offerSignal, useSelectionOffer } from "./selection-offer";
 import {
   isRefusal,
@@ -80,14 +88,6 @@ import {
   selectionMove,
 } from "./selection-ops";
 import { blockActionRunners } from "./shell/builder-commands";
-import {
-  patternSaveRefusal,
-  SAVE_PATTERN_GRANT_REFUSAL,
-  toolbarActions,
-  turnIntoChoice,
-  type MoveJudge,
-  type MovePosition,
-} from "./toolbar-actions";
 
 // The keys and what is announced, the contexts the toolbar and menus read,
 // and what the hook takes and returns live in modules of their own beside

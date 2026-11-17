@@ -86,6 +86,18 @@ fieldset.nx-inspector__fields {
   color: var(--nx-destructive);
 }
 
+/* The class names a block's CSS classes field did not add, one per line. */
+.nx-css-classes__refused {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* "+ Add attribute": an edged button sized to its words, not a full row. */
+.nx-attributes__add {
+  gap: 0.375rem;
+}
+
 .nx-inspector__hint {
   margin: 0.25rem 0 0;
   font-size: var(--text-xs);

@@ -23,6 +23,7 @@ import {
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { isInput } from "./dom-kind";
 import { InheritedValue } from "./inherited-value";
 import { styleControlsFor, type StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
@@ -320,7 +321,9 @@ function SizeField({
   // Putting back what the field stored is how an author answers a refusal.
   const restore = (event: React.SyntheticEvent): void => {
     const field = event.target;
-    if (refusedBy === undefined || !(field instanceof HTMLInputElement)) return;
+    // Asked by node kind, never `instanceof`: the canvas is a frame, and a
+    // constructor from this window answers false for an element from another.
+    if (refusedBy === undefined || !isInput(field)) return;
     if (restoresStored(field.value, value)) onCommit(value);
   };
   return (
@@ -381,7 +384,10 @@ export function LineHeightInput({
         {...(placeholder === undefined ? {} : { placeholder })}
       />
       {times ? (
-        <span className="nx-vars-editor__times-mark" title="Times the text size">
+        <span
+          className="nx-vars-editor__times-mark"
+          title="Times the text size"
+        >
           ×
         </span>
       ) : null}

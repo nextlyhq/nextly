@@ -6,15 +6,25 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import userEvent from "@testing-library/user-event";
+
 import { act, render, screen, within } from "@admin/__tests__/utils";
 
-const { barProps, paneProps, released, siteLocales } = vi.hoisted(() => ({
-  barProps: vi.fn(),
-  paneProps: vi.fn(),
-  released: vi.fn(),
-  // The site's languages; none unless a case configures them.
-  siteLocales: { list: [] as { code: string; label: string }[] },
-}));
+const { barProps, paneProps, released, siteLocales, details, readHistory } =
+  vi.hoisted(() => ({
+    barProps: vi.fn(),
+    paneProps: vi.fn(),
+    released: vi.fn(),
+    // The site's languages; none unless a case configures them.
+    siteLocales: { list: [] as { code: string; label: string }[] },
+    // What the Single's `?details=1` read answers, and what it was asked.
+    details: {
+      asked: vi.fn(),
+      answer: undefined as Record<string, unknown> | undefined,
+    },
+    // Whether the person may read the Single's history.
+    readHistory: { allowed: true },
+  }));
 
 vi.mock("@admin/components/features/entries/EntryForm/DocumentBar", () => ({
   DocumentBar: (props: Record<string, unknown>) => {
@@ -58,13 +68,30 @@ vi.mock("@admin/hooks/queries/useReleasesContaining", () => ({
   },
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+vi.mock("@admin/hooks/useCanRequest", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useCanRequest")>()),
+  useCanRequest: (_slug: string, request: string) =>
+    request === "readHistory" ? readHistory.allowed : true,
+}));
+vi.mock(
+  "@admin/components/features/entries/EntryForm/entry-details-read",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("@admin/components/features/entries/EntryForm/entry-details-read")
+    >()),
+    useEntryDetails: (input: unknown) => {
+      details.asked(input);
+      return details.answer;
+    },
+  })
+);
 
 import { SingleForm } from "../SingleForm";
 
 // A Single with a publish lifecycle on a localized site: a preview is offered.
 const schema = {
   slug: "landing-page",
-  label: { singular: "Landing Page" },
+  label: "Landing Page",
   localized: true,
   status: true,
   fields: [{ name: "title", type: "text", label: "Title" }],
@@ -98,7 +125,10 @@ const dockedPanel = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  window.history.replaceState(null, "", "/");
   siteLocales.list = [];
+  details.answer = undefined;
+  readHistory.allowed = true;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -168,12 +198,18 @@ describe("the Single editor's document panel", () => {
     ).toHaveLength(0);
   });
 
-  it("reads Status, Publishing and Details beside the fields, addressing the Single's releases by its slug", () => {
+  it("reads what it is, Status, Publishing, Last changed and For developers beside the fields, addressing the Single's releases by its slug", () => {
     renderEditor();
     const sections = within(dockedPanel()!)
       .getAllByRole("region")
       .map(section => section.getAttribute("data-panel-section"));
-    expect(sections).toEqual(["Status", "Publishing", "Details"]);
+    expect(sections).toEqual([
+      "What this is",
+      "Status",
+      "Publishing",
+      "Last changed",
+      "For developers",
+    ]);
     expect(screen.getByRole("region", { name: "Status" })).toHaveTextContent(
       "is a draft, not published yet."
     );
@@ -273,5 +309,134 @@ describe("the Single editor's document panel", () => {
     expect(lastBar().panelMode).toBe("sheet");
     run("onToggleRail");
     expect(screen.getByRole("dialog", { name: "Document" })).toBeVisible();
+  });
+});
+
+describe("what the Single's panel says about the Single", () => {
+  const docked = () => within(dockedPanel()!);
+  const versioned = {
+    ...(schema as object),
+    versions: { enabled: true },
+  } as never;
+
+  it("says there's only ever one of it, where its code gives no description", () => {
+    renderEditor();
+    expect(
+      docked().getByRole("region", { name: "What this is" })
+    ).toHaveTextContent(
+      "One entry the site uses in one place. There's only ever one Landing Page."
+    );
+  });
+
+  it("says its own description where its code gives one", () => {
+    render(
+      <SingleForm
+        schema={
+          {
+            ...(schema as object),
+            admin: { description: "The first page visitors see." },
+          } as never
+        }
+        document={document}
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(
+      docked().getByRole("region", { name: "What this is" })
+    ).toHaveTextContent("The first page visitors see.");
+  });
+
+  it("prefers the Single's own description to the one under admin", () => {
+    render(
+      <SingleForm
+        schema={
+          {
+            ...(schema as object),
+            description: "Where visitors reach the team.",
+            admin: { description: "The first page visitors see." },
+          } as never
+        }
+        document={document}
+        onSubmit={vi.fn()}
+      />
+    );
+    const about = docked().getByRole("region", { name: "What this is" });
+    expect(about).toHaveTextContent("Where visitors reach the team.");
+    expect(about).not.toHaveTextContent("The first page visitors see.");
+  });
+
+  it("reads who changed it from the Single's own details, in the language being edited", () => {
+    details.answer = {
+      createdBy: null,
+      updatedBy: { kind: "person", name: "Ana Lopez" },
+      updatedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+      address: null,
+    };
+    siteLocales.list = [
+      { code: "en", label: "English" },
+      { code: "de", label: "German" },
+    ];
+    render(
+      <SingleForm
+        schema={schema}
+        document={document}
+        locale="de"
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(details.asked).toHaveBeenCalledWith({
+      scope: "single",
+      collectionSlug: "landing-page",
+      entryId: "s1",
+      locale: "de",
+    });
+    expect(
+      docked().getByRole("region", { name: "Last changed" })
+    ).toHaveTextContent("2 hours ago by Ana Lopez");
+  });
+
+  it("gives the API address View API response reads, under For developers", () => {
+    renderEditor();
+    expect(
+      docked().getByRole("region", { name: "For developers" })
+    ).toHaveTextContent("/admin/api/singles/landing-page");
+  });
+
+  it("opens the Single's history from History", async () => {
+    render(
+      <SingleForm schema={versioned} document={document} onSubmit={vi.fn()} />
+    );
+    const lastChanged = docked().getByRole("region", { name: "Last changed" });
+    await userEvent.click(
+      within(lastChanged).getByRole("button", { name: "History" })
+    );
+    expect(new URLSearchParams(window.location.search).get("history")).toBe(
+      "1"
+    );
+  });
+
+  it("leaves History out where the Single keeps no history", () => {
+    render(
+      <SingleForm
+        schema={{ ...(schema as object), versions: null } as never}
+        document={document}
+        onSubmit={vi.fn()}
+      />
+    );
+    const lastChanged = docked().getByRole("region", { name: "Last changed" });
+    expect(
+      within(lastChanged).queryByRole("button", { name: "History" })
+    ).toBeNull();
+  });
+
+  it("leaves History out for a person who may not read the Single's history", () => {
+    readHistory.allowed = false;
+    render(
+      <SingleForm schema={versioned} document={document} onSubmit={vi.fn()} />
+    );
+    const lastChanged = docked().getByRole("region", { name: "Last changed" });
+    expect(
+      within(lastChanged).queryByRole("button", { name: "History" })
+    ).toBeNull();
   });
 });

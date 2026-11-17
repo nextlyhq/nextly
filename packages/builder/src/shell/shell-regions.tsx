@@ -14,8 +14,8 @@ import {
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
-import type { CanvasZoom } from "../canvas-zoom";
-import { useZoomShortcuts } from "../canvas-zoom-control";
+import type { CanvasZoom } from "../canvas/canvas-zoom";
+import { useZoomShortcuts } from "../canvas/canvas-zoom-control";
 import {
   BUILDER_CHROME_CLASS,
   MIN_CANVAS_PANEL_WIDTH,

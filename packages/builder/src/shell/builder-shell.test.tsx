@@ -30,9 +30,9 @@ import { useShortcuts } from "@nextlyhq/ui";
 
 import { useNoticeQueue, useNoticeSink } from "./builder-notices";
 import { BuilderShell, type SettingsDialogState } from "./builder-shell";
-import { CanvasFrameProvider } from "../canvas-frame-context";
+import { CanvasFrameProvider } from "../canvas/canvas-frame-context";
 import { CommandPalette } from "./command-palette";
-import { EMPTY_CONTAINER_SELECTOR } from "../empty-slot";
+import { EMPTY_CONTAINER_SELECTOR } from "../canvas/empty-slot";
 import {
   DEFAULT_PREFERENCES,
   fitsFullShell,

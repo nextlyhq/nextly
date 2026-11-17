@@ -133,20 +133,19 @@ export function panelKeyShortcuts(
   isAvailable: (panel: LeftPanel) => boolean,
   layer: string = PANEL_KEYS_LAYER
 ): (ActiveShortcut & { panel: LeftPanel })[] {
-  return LEFT_PANELS.filter(isAvailable)
-    .flatMap(panel => {
-      const { label, key } = PANEL_CHROME[panel];
-      return key === undefined
-        ? []
-        : [
-            {
-              panel,
-              keys: key,
-              description: `Open or close ${label}`,
-              layer,
-            },
-          ];
-    });
+  return LEFT_PANELS.filter(isAvailable).flatMap(panel => {
+    const { label, key } = PANEL_CHROME[panel];
+    return key === undefined
+      ? []
+      : [
+          {
+            panel,
+            keys: key,
+            description: `Open or close ${label}`,
+            layer,
+          },
+        ];
+  });
 }
 
 /**

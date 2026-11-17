@@ -6,7 +6,7 @@
  */
 import * as React from "react";
 
-import type { CanvasZoom } from "../canvas-zoom";
+import type { CanvasZoom } from "../canvas/canvas-zoom";
 import type { LeftPanel, PreferenceStore } from "../shell-state";
 
 import type { NoticeQueue } from "./builder-notices";

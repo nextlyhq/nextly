@@ -24,7 +24,7 @@ import {
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
-import { toggleOnDeviceOp } from "./layer-row-actions";
+import { toggleOnDeviceOp } from "./panels/layers/layer-row-actions";
 import { deviceOptions, tierIcon } from "./shell/breakpoint-switcher";
 
 /** Whether the site's breakpoints are its own set yet, as the editor reads it. */

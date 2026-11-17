@@ -105,11 +105,11 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],
   // The Add panel's group of layout blocks (Section, Columns, Grid).
-  "inserter-palette.ts": ["Layout"],
+  "panels/add/inserter-palette.ts": ["Layout"],
   // The Style tab's Layout section.
   "inspector-sections.ts": ["Layout"],
   // A header or footer the site's own code draws around the canvas.
-  "site-chrome-cues.tsx": [
+  "canvas/site-chrome-cues.tsx": [
     "Part of your site’s layout",
     "Part of your site’s layout. It comes from your site’s code and can’t be edited here.",
   ],
@@ -137,8 +137,8 @@ describe("the editor's words", () => {
       expect.arrayContaining([
         "editor-words.ts",
         "shell/builder-commands.ts",
-        "toolbar-actions.ts",
-        "insert-panel.tsx",
+        "canvas/toolbar-actions.ts",
+        "panels/add/insert-panel.tsx",
       ])
     );
   });
