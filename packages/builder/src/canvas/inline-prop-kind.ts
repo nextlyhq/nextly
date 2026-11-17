@@ -18,7 +18,11 @@
  * @module inline-prop-kind
  */
 
-import { RICH_TEXT_PROP_TYPE, type PropSchema } from "@nextlyhq/blocks-engine";
+import {
+  isOneParagraphProp,
+  RICH_TEXT_PROP_TYPE,
+  type PropSchema,
+} from "@nextlyhq/blocks-engine";
 
 /**
  * How a value may be edited on the canvas, or `null` when it may not be.
@@ -26,8 +30,19 @@ import { RICH_TEXT_PROP_TYPE, type PropSchema } from "@nextlyhq/blocks-engine";
  * `"plain"` is the default for anything that opted in without saying otherwise,
  * because that is what every prop type other than rich text is: a scalar an
  * element can hold as its text.
+ *
+ * `"line"` is a value restricted to one paragraph of words with bold, italic,
+ * links and line breaks (`oneParagraph`, as `core/text` declares it): edited
+ * by the same rich-text editor as a passage, held to that restriction, and
+ * still TEXT to everything else — a component exposes it as text, so a
+ * placement edits its exposed copy as a line of text.
  */
-export type InlinePropKind = "plain" | "rich";
+export type InlinePropKind = "plain" | "rich" | "line";
+
+/** Whether a kind is edited by the shared rich-text editor. */
+export function editedAsRichText(kind: InlinePropKind | null): boolean {
+  return kind === "rich" || kind === "line";
+}
 
 /**
  * The kind of in-place editing this schema opted into, or `null` for none.
@@ -44,5 +59,6 @@ export function inlinePropKind(
   schema: PropSchema | undefined
 ): InlinePropKind | null {
   if (schema?.inline !== true) return null;
-  return schema.type === RICH_TEXT_PROP_TYPE ? "rich" : "plain";
+  if (schema.type === RICH_TEXT_PROP_TYPE) return "rich";
+  return isOneParagraphProp(schema) ? "line" : "plain";
 }

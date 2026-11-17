@@ -5400,24 +5400,6 @@ describe("a per-side property is drawn as a box", () => {
     );
   });
 
-  it("commits a side typed with its unit, and keeps each side compact", () => {
-    // No unit menu in the box: a side takes "12px" or "2rem" as typed, and a
-    // short dash says it is unset rather than a hint that cannot fit.
-    const { editor, box } = mountSpacingBox(LTR);
-    const field = within(box as HTMLElement).getByLabelText(
-      "Padding top"
-    ) as HTMLInputElement;
-
-    expect(box?.querySelector(".nx-style-inspector__unit")).toBeNull();
-    expect(field.placeholder).toBe("–");
-
-    fireEvent.change(field, { target: { value: "12px" } });
-    fireEvent.blur(field);
-
-    const ops = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
-    expect(ops).toContain("padding");
-    expect(ops).toContain('"blockStart":"12px"');
-  });
 
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
@@ -5543,39 +5525,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it("does not reset a side from the variables list it opened", () => {
-    /*
-     * The list is drawn in a layer at the end of the page, but React carries
-     * a key press from it back through the side that opened it. Alt+Backspace
-     * there (delete a word, in the list's search) is not the side's reset.
-     */
-    const styles = {
-      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
-    } as unknown as NodeStyles;
-    register({ spacing: true });
-    const editor = editorFor(documentOf(styles));
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        sideOrientation={LTR}
-        tokens={{
-          tokens: [
-            { name: "space.sm", kind: "dimension", values: { light: "8px" } },
-          ],
-        }}
-      />
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Margin top" })
-    );
-    const list = screen.getByRole("listbox", { name: "Variables" });
-    // The control: the list really is outside the side's field.
-    expect(list.closest(".nx-spacing-box")).toBeNull();
-
-    fireEvent.keyDown(list, { key: "Backspace", altKey: true });
-
-    expect(editor.applyAll).not.toHaveBeenCalled();
-  });
 
   it("goes round the box mirrored on a right-to-left element", () => {
     // The order is the sides' logical one: top, inline end, bottom, inline
@@ -5585,10 +5534,10 @@ describe("a per-side property is drawn as a box", () => {
       direction: "rtl",
     });
     const names = Array.from(
-      box?.querySelectorAll<HTMLInputElement>(
-        "[data-ring='margin'] > [data-side] input"
+      box?.querySelectorAll<HTMLButtonElement>(
+        "[data-ring='margin'] > [data-side] .nx-spacing-side"
       ) ?? [],
-      input => input.labels?.[0]?.textContent?.trim() ?? ""
+      side => side.labels?.[0]?.textContent?.trim() ?? ""
     );
 
     expect(names).toEqual([
@@ -5690,23 +5639,6 @@ describe("a per-side property is drawn as a box", () => {
     ).toBeDefined();
   });
 
-  it("names a side's whole value in its tooltip, for a value its cell cannot show", () => {
-    // A value wider than its cell was cut short with no way to read it.
-    register({ spacing: true });
-    const styles = {
-      base: { [BASE_BREAKPOINT]: { padding: { inlineStart: "12.375rem" } } },
-    } as NodeStyles;
-    render(
-      <StyleInspectorPanel
-        editor={editorFor(documentOf(styles))}
-        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
-      />
-    );
-    const side = document.querySelector(
-      '[data-property="padding"] [data-side="inlineStart"] input'
-    ) as HTMLInputElement;
-    expect(side.getAttribute("title")).toBe("12.375rem");
-  });
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*

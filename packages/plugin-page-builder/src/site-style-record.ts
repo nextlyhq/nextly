@@ -170,11 +170,30 @@ function isStoredTokenShape(entry: unknown): entry is {
 }
 
 /**
+ * The site's fluid range as stored: two positive, finite widths in px, the
+ * smallest screen below the largest, or a fluid size would grow across no
+ * width at all.
+ */
+function isFluidRange(value: unknown): value is { min: number; max: number } {
+  return (
+    isPlainRecord(value) &&
+    typeof value.min === "number" &&
+    typeof value.max === "number" &&
+    Number.isFinite(value.min) &&
+    Number.isFinite(value.max) &&
+    value.min > 0 &&
+    value.min < value.max
+  );
+}
+
+/**
  * A fluid size's two sizes as stored: two positive, finite numbers of px.
  * Anything else would make the size again from nonsense when the site's
  * fluid range changes.
  */
-function isFluidSizes(value: unknown): value is { small: number; large: number } {
+function isFluidSizes(
+  value: unknown
+): value is { small: number; large: number } {
   return (
     isPlainRecord(value) &&
     [value.small, value.large].every(
@@ -270,11 +289,21 @@ export function checkStoredTokens(
   ) {
     issues.push('darkMode must be "attribute" or "media" when set.');
   }
+  const fluidRange = raw.fluidRange;
+  const rangeUsable = fluidRange === undefined || isFluidRange(fluidRange);
+  if (!rangeUsable) {
+    issues.push(
+      "The fluid range must be two positive widths in px, the smallest screen first."
+    );
+  }
 
   const set: SiteTokenSet = {
     tokens,
     ...(typeof raw.prefix === "string" ? { prefix: raw.prefix } : {}),
     ...(darkMode === "attribute" || darkMode === "media" ? { darkMode } : {}),
+    ...(isFluidRange(fluidRange)
+      ? { fluidRange: { min: fluidRange.min, max: fluidRange.max } }
+      : {}),
   };
   issues.push(...tokenEmissionIssues(set, policy));
   return { value: set, issues };
@@ -886,7 +915,8 @@ export function checkStoredClasses(
     }
     // Judged as it merges: an override of a built-in that leaves out its
     // name fields takes the code's, so its own-style mark is the code's too.
-    const named = withBuiltInNames(policy.defaults?.classes, [entry])?.[0] ?? entry;
+    const named =
+      withBuiltInNames(policy.defaults?.classes, [entry])?.[0] ?? entry;
     // A block's own look is never written as a class and claims no slug, as
     // the engine's claim rules have it, so a style may share its name.
     const claimsSlug = !isDefaultLook(named);

@@ -24,12 +24,12 @@ import type { ComponentFieldsHost } from "./component-fields";
 import type { ComponentVariantsHost } from "./component-variants";
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
+import type { BreakpointsStatus } from "./hide-on";
 import type { LookEditing } from "./look-inspector";
 import type { SavedComponent } from "./panels/add/inserter";
 import type { StyleInspectorPanelProps } from "./style-inspector-panel";
 import type { SharedStylesHost, StyleTargetBarProps } from "./style-target";
 import type { StylePolicy } from "./style-values";
-import type { BreakpointsStatus } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -163,7 +163,7 @@ export interface InspectorPanelProps {
   /**
    * Whether `breakpoints` is the site's own set yet: `loading` while the
    * config's defaults stand in for the stored set being read, `unavailable`
-   * when that read failed. "Visible on" writes only once it is `ready`: a
+   * when that read failed. "Hide on" writes only once it is `ready`: a
    * hide resolved against the wrong set is stored wrong. Defaults to
    * `ready`, for a host whose breakpoints are known up front.
    */

@@ -184,6 +184,31 @@ export interface SingleAdminOptions {
    * @example 'Configure site settings like name, logo, and SEO defaults.'
    */
   description?: string;
+
+  /**
+   * @experimental Where the admin opens this Single: `"form"`, or the path of
+   * a document view offered on one of its top-level field types. Every admin
+   * link meant to open it follows this: the sidebar, the Content screen, a
+   * dashboard card's row. The form keeps its own address whatever this says,
+   * and the admin opens the form instead for a reader who may not update the
+   * Single, and for the Single opened in a language other than the default.
+   *
+   * Without it, the Single opens as a collection of the same shape would: in
+   * a view that asks to open first for its main field (the first top-level
+   * field that is not hidden, not `title` and not `slug`), so a Single whose
+   * main field is a page layout opens in the Page Builder, and in the form
+   * otherwise. `"form"` keeps it in the form.
+   *
+   * A path no view offered on a field type answers, or one whose field type
+   * is not among the Single's top-level fields, stops the boot. A view a
+   * plugin declares on a collection's slug is never a Single's.
+   *
+   * @example
+   * ```typescript
+   * admin: { opensIn: "form" }
+   * ```
+   */
+  opensIn?: string;
 }
 
 // ============================================================

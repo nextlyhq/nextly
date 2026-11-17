@@ -119,11 +119,17 @@ export { insertKeepingLocks, type Placed } from "../locked-insert";
 export {
   codeTokenClass,
   hasFormat,
+  isOneParagraphProp,
   isRichTextNode,
   isRichTextValue,
+  ONE_PARAGRAPH_OPTION,
+  oneParagraphLines,
+  oneParagraphWords,
   RICH_TEXT_PROP_TYPE,
   richTextToPlainText,
   TEXT_FORMAT,
+  toOneParagraph,
+  type OneParagraph,
   type RichTextNode,
   type RichTextValue,
 } from "../rich-text";

@@ -270,6 +270,7 @@ function withoutItem(ctx: PageContext): PageContext {
     itemSource: _outerSource,
     itemQuery: _outerQuery,
     itemFollowed: _outerRows,
+    itemPosition: _outerPosition,
     ...rest
   } = ctx;
   return rest;
@@ -585,7 +586,15 @@ function drawList(
                 anything inside the template reads its own values rather than
                 the first entry's. Its source goes with it, so an item
                 binding is checked against that source's fields. */}
-            {renderSlot("children", itemContext(item))}
+            {renderSlot("children", {
+              ...itemContext(item),
+              // Its place among the entries, after the places of the
+              // entries around it: what tells its blocks' copies apart.
+              itemPosition:
+                ctx.itemPosition === undefined
+                  ? String(index)
+                  : `${ctx.itemPosition}-${index}`,
+            })}
           </div>
         ));
   // The note, when an author is looking, goes above what visitors see.

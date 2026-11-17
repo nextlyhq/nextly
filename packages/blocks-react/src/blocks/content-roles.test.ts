@@ -39,7 +39,7 @@ const CONTENT: Record<string, readonly string[]> = {
   "core/list": ["items"],
   "core/embed": ["src", "title"],
   "core/accordion-item": ["title"],
-  "core/form": ["submitText"],
+  "core/form": ["entryCollection", "entryId", "href", "message", "submitText"],
 };
 
 function contentPropsOf(block: (typeof coreBlocks)[number]): string[] {

@@ -109,6 +109,7 @@ import { toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
   stripImmutableSystemFields,
+  withoutContributedColumns,
   writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -16382,7 +16383,14 @@ export class CollectionMutationService extends BaseService {
     // Refused rather than narrowed to the status: silently ignoring the other
     // fields would report success for a write that did not happen.
     if (sweepAllLocales) {
-      const named = Object.keys(body);
+      // Judged on what the write stores: a column a schema hook contributed is never written, so
+      // it makes the patch no field write.
+      const named = Object.keys(
+        withoutContributedColumns(
+          body,
+          await this.collectionTableNameOf(rawParams.collectionName)
+        )
+      );
       const statusOnly = named.length === 1 && named[0] === "status";
       // The VALUE has to be one the lifecycle can hold, not merely the right
       // key. A caller sending `{ status: false }` otherwise passes this guard,
@@ -16540,6 +16548,7 @@ export class CollectionMutationService extends BaseService {
       const gate = await writeGateFor(
         body,
         "collection",
+        await this.collectionTableNameOf(params.collectionName),
         async () =>
           (
             (await this.collectionService.getCollection(
@@ -16679,7 +16688,7 @@ export class CollectionMutationService extends BaseService {
       // its name: refused here, with access judged and before any hook, rather than left to fail
       // in the database. The keys a read adds are taken off, so a document sent back as it was
       // read still saves.
-      body = writableBodyOf(body, "collection", fields);
+      body = writableBodyOf(body, "collection", fields, tableName);
       // A save that names a status changes what readers see, so the publish gate is asked of it
       // as a publish of chosen parts is: its early answer here, before any hook runs, and its
       // verdict under the row lock below.
@@ -24687,6 +24696,21 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The table a collection's entries are stored in, as its record names it: what a write's gate
+   * reads the contributed columns of. Read on `executor` where the caller holds a transaction, so
+   * the read sees its writes and never waits on the connection it holds.
+   */
+  async collectionTableNameOf(
+    collectionName: string,
+    executor?: unknown
+  ): Promise<string> {
+    return collectionTableName(
+      await this.collectionService.getCollection(collectionName, executor),
+      collectionName
+    );
+  }
+
+  /**
    * A row's own gate and its answer: a write that changes only the status of
    * an entry with a lifecycle asks the publish or unpublish its status names,
    * any other update. Asked on `executor` where the caller owns a
@@ -24713,7 +24737,12 @@ export class CollectionMutationService extends BaseService {
     >[0]["executor"],
     appliesFilter = false
   ): Promise<RowVerdict> {
-    const gate = await writeGateFor(body, "collection", hasLifecycle);
+    const gate = await writeGateFor(
+      body,
+      "collection",
+      await this.collectionTableNameOf(params.collectionName, executor),
+      hasLifecycle
+    );
     const gateParams = {
       collectionName: params.collectionName,
       operation: gate,

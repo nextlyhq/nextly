@@ -719,7 +719,7 @@ export function siteStyleSingle(
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
+            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large } }], prefix?, darkMode?, fluidRange?: { min, max } }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent).',
         },
       }),
       json({

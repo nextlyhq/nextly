@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_PLAYING_ATTRIBUTE } from "./appear-replay";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 
 /** The rule in the sheet for `selector`, its declarations as one string. */
@@ -42,5 +43,40 @@ describe("the canvas frame's sheet", () => {
     const rule = ruleFor(`${PLAYING} :not([${APPEAR_PLAYING_ATTRIBUTE}])`);
     expect(rule).toContain(`${APPEAR_SCROLL_GATE}: none;`);
     expect(rule).toContain(`${APPEAR_LOAD_GATE}: none;`);
+  });
+});
+
+/*
+ * A block hidden on the device shown is drawn striped over, edged, and tagged
+ * with its own mark's words, in light and dark values from the page's scheme.
+ * The browser test sees the stripe at each device; this pins the rules.
+ */
+describe("a block hidden on the device shown", () => {
+  const HIDDEN = `.${CANVAS_ROOT_CLASS} [${DEVICE_HIDDEN_ATTRIBUTE}]`;
+
+  it("is edged, the edge mixed from the page's own scheme", () => {
+    const rule = ruleFor(HIDDEN) ?? "";
+    // Canvas and CanvasText are the scheme's own light or dark ground and
+    // text, so the edge has a light and a dark value with no admin token.
+    const edge = /--nx-canvas-hidden-edge: ([^;]+);/.exec(rule)?.[1];
+    expect(edge).toMatch(/^color-mix\(/);
+    expect(edge).toMatch(/\bCanvas\b/);
+    expect(rule).toContain("outline: 1px dashed var(--nx-canvas-hidden-edge)");
+  });
+
+  it("draws nothing inside the block, and moves nothing it holds", () => {
+    // The stripes and the tag are the editor's marks over the canvas. An
+    // overlay inside the block would need the block to hold it (a position,
+    // a transform, will-change), which moves what its fixed or absolutely
+    // placed blocks are laid out against.
+    const rule = ruleFor(HIDDEN) ?? "";
+    // CONTROL: the rule read is the hidden block's own.
+    expect(rule).toContain("outline:");
+    expect(rule).not.toMatch(
+      /(^|[\s;{])(position|will-change|transform|contain|filter):/
+    );
+    expect(CANVAS_FRAME_SHEET).not.toContain(`${HIDDEN}::after`);
+    expect(CANVAS_FRAME_SHEET).not.toContain(`${HIDDEN}::before`);
+    expect(ruleFor(`:where(${HIDDEN})`)).toBeUndefined();
   });
 });

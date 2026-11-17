@@ -155,48 +155,46 @@ describe("core/image, once it can style its caption", () => {
 });
 
 describe("core/form, once it can space a control apart from its label", () => {
-  it("marks each control, whichever element the field type renders", () => {
-    // A field is an `<input>` or a `<textarea>` depending on its type, and both
-    // are the same part: the thing a label names. Marking only one would leave
-    // every textarea field ungrouped, which no assertion on the stylesheet
-    // could see.
+  it("marks each control, whichever element the field type renders", async () => {
+    // A field is an `<input>`, a `<textarea>` or a `<select>` depending on
+    // its type, and all are the same part: the thing a label names. Marking
+    // only one would leave the others ungrouped, which no assertion on the
+    // stylesheet could see.
     const markup = renderToStaticMarkup(
-      form.render({
+      (await form.render({
         props: {
           fields: [
             { name: "a", label: "A", type: "text" },
             { name: "b", label: "B", type: "textarea" },
+            { name: "c", label: "C", type: "select", options: ["x"] },
           ],
         },
-        node: { id: "n1", type: "core/form", version: 1, props: {} },
+        node: { id: "n1", type: "core/form", version: 2, props: {} },
         className: "nx-n1",
         partClass: (name: string) => blockPartClassName("core/form", name),
-        ctx: undefined,
+        ctx: {},
         renderSlot: () => null,
-      } as never) as never
+      } as never)) as never
     );
     const marker = blockPartClassName("core/form", "control");
     expect(markup).toContain(`<input`);
     expect(markup).toContain(`<textarea`);
-    expect(markup.split(marker).length - 1).toBe(2);
+    expect(markup).toContain(`<select`);
+    expect(markup.split(marker).length - 1).toBe(3);
   });
 
-  it("separates FIELDS with the control, not the grid gap", () => {
+  it("spaces fields apart by the grid, and a field's parts closer by its own", () => {
     // The measured defect: one even gap spaced a label as far from its own
-    // input as from the next question, so nothing grouped. The gap is now the
-    // label-to-control distance and the control states the field separation —
-    // which is why the gap shrinks and a margin appears, rather than either
-    // alone.
+    // input as from the next question, so nothing grouped. The form's gap
+    // falls between fields; each field's own, smaller gap holds its label,
+    // control and help together.
     const css = sheetFor("core/form");
-    expect(css).toContain("gap: 0.25rem");
-    expect(css).toContain(blockPartClassName("core/form", "control"));
-    expect(css).toContain("margin-block-end: 0.75rem");
+    expect(css).toContain("gap: 1rem");
+    expect(css).toContain(blockPartClassName("core/form", "field"));
+    expect(css).toContain("gap: 0.375rem");
   });
 
-  it("puts that distance BELOW the control, so the form has no leading gap", () => {
-    // Above each label separates fields equally well and also pushes the FIRST
-    // label down, which reads as padding nobody asked for. Asserted because the
-    // two placements are indistinguishable from the field spacing alone.
+  it("puts no margin above a field, so the form has no leading gap", () => {
     const css = sheetFor("core/form");
     expect(css).not.toContain("margin-block-start: 0.75rem");
   });

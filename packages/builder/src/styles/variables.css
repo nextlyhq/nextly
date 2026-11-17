@@ -441,6 +441,10 @@
 [data-slot="popover-content"].nx-vars-editor {
   width: 240px;
   padding: 0.75rem;
+  /* Inside the window, scrolling within: a shadow of several layers is
+     taller than a laptop window. */
+  max-height: var(--radix-popover-content-available-height, 100vh);
+  overflow-y: auto;
 }
 
 .nx-vars-editor__body,
@@ -494,6 +498,24 @@
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 0.375rem 0.5rem;
+}
+
+/* The site's fluid range: two widths, in the Type tab and from "Fluid…". */
+.nx-fluid__range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.nx-fluid__range > .nx-fluid__said {
+  grid-column: 1 / -1;
+}
+
+.nx-fluid__range-link {
+  align-self: flex-start;
+  font-size: var(--text-xs);
 }
 
 .nx-fluid__said {

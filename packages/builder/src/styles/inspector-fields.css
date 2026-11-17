@@ -1195,6 +1195,24 @@
 }
 
 /*
+ * Where the block is hidden, at the top of every tab: amber words on an
+ * amber-tinted plate, held 4.5:1 in both themes by the warning pair, with
+ * "Change" in the same ink.
+ */
+.nx-hidden-status {
+  margin: 0.5rem 0;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-warning-ground);
+  color: var(--nx-builder-warning-text);
+}
+
+.nx-hidden-status > .nx-settings-note__link {
+  color: inherit;
+  font-weight: 600;
+}
+
+/*
  * A tab's match count, set over the label's end so it arriving or going
  * moves no tab and no control.
  */

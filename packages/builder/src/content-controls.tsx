@@ -29,6 +29,7 @@
  */
 
 import {
+  isOneParagraphProp,
   ITEM_SCHEMA_MAX_DEPTH,
   optionLabel,
   type PropSchema,
@@ -791,10 +792,23 @@ function IconControl({
   );
 }
 
+/**
+ * A `textarea` prop: typed words, or, for a value restricted to one paragraph
+ * with bold, italic and links (`oneParagraph`, a Text's), the rich-text
+ * field held to that.
+ */
+function TextareaControl(props: ContentControlProps): React.JSX.Element {
+  return isOneParagraphProp(props.prop.schema) ? (
+    <RichTextControl {...props} />
+  ) : (
+    <TextishControl {...props} />
+  );
+}
+
 /** Each type's control. Total over the list, so neither can gain a member alone. */
 const CONTROLS: Readonly<Record<ContentControlType, ContentControl>> = {
   text: TextControl,
-  textarea: TextishControl,
+  textarea: TextareaControl,
   url: TextishControl,
   number: TextishControl,
   checkbox: CheckboxControl,
