@@ -171,6 +171,29 @@ describe("a picture of documents", () => {
     expect(texts(container)).toEqual(["Header"]);
   });
 
+  it("scales a document seen before to its box, drawn in the same render as the box", () => {
+    // The box is 128px wide: a tenth of the 1280px the document is laid out at.
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains("nx-picture") ? 128 : 0;
+      });
+    const session = createMiniatureSession();
+    session.seen.add(HEADER);
+    const { container } = render(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={RENDER}
+        session={session}
+      />
+    );
+    const scaled = container.querySelector<HTMLElement>(
+      '[data-slot="picture-scaled"]'
+    );
+    expect(scaled?.style.transform).toBe("scale(0.1)");
+    width.mockRestore();
+  });
+
   it("shows the empty-frame icon with nothing to draw", () => {
     const { container } = render(
       <DocumentMiniature

@@ -352,6 +352,18 @@ export function DocumentMiniature({
   renderWidth = MINIATURE_RENDER_WIDTH,
 }: DocumentMiniatureProps): React.JSX.Element {
   const frame = React.useRef<HTMLSpanElement>(null);
+  /*
+   * The box as state as well as a ref: a picture drawn at once (seen before
+   * in the session) mounts its drawing in the same render as the box, and a
+   * child's layout effect runs before the parent's ref is set, so the drawing
+   * measures the box only once this says it exists.
+   */
+  const [box, setBox] = React.useState<HTMLSpanElement | null>(null);
+  const boxRef = React.useMemo(() => ({ current: box }), [box]);
+  const attach = React.useCallback((node: HTMLSpanElement | null) => {
+    frame.current = node;
+    setBox(node);
+  }, []);
   const drawnDocuments = useSameDocuments(documents);
   const { broken, broke } = useBrokenDrawing(drawnDocuments, render);
   const state = stateOf(drawnDocuments, failed || broken);
@@ -362,7 +374,7 @@ export function DocumentMiniature({
 
   return (
     <span
-      ref={frame}
+      ref={attach}
       className="nx-picture"
       data-state={state}
       data-drawn={drawn ? "true" : undefined}
@@ -373,9 +385,9 @@ export function DocumentMiniature({
     >
       {state === "empty" ? <EmptyFrameIcon /> : null}
       {state === "failed" ? <BlockIconMark icon={icon} size={20} /> : null}
-      {drawn ? (
+      {drawn && box !== null ? (
         <DrawnPicture
-          frame={frame}
+          frame={boxRef}
           documents={drawnDocuments}
           render={render}
           mode={mode}
