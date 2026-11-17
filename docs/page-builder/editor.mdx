@@ -716,6 +716,24 @@ pageBuilder({
 });
 ```
 
+## Text colour and type in a container
+
+Section, Box, Columns, Column, Card, Accordion, an accordion's Question, Gallery and
+Collection list have **Style → Text**: a text colour and typography set once on the
+container, which every block inside takes unless it sets its own. A dark Section with
+white text makes its headings, text, lists and links white.
+
+- **Headings** take the container's colour and font. Each keeps the size and line
+  height its row in Site text gives it.
+- **Links** take the container's colour while the **Links** row in Site text sets no
+  colour. Once it sets one, that colour wins in every container.
+- **A block's own value wins**, and so does a heading colour from a block style (the
+  ★ default included) or a shared style.
+- **A link outside any coloured container** keeps the browser's link colour.
+
+A stylesheet of your own that colours `a` beats a container's colour on its links, as
+it beats Site text.
+
 ## Spacing
 
 Blocks have no outer margin of their own. The space between two blocks is the gap of
@@ -805,6 +823,10 @@ layout:
 A block hidden on a device still counts as a block above the next one. When every
 block above it is hidden, the first block shown in a normal-flow container keeps the
 gap above it; give that block a top margin of 0 on that device to remove it.
+
+A new Section's padding comes from the site: its sides read `space.section-y` and
+`space.gutter`, and **Style → Spacing** says so under the box, "Site default: Section
+spacing", with each side named by its variable. A new Box has no padding.
 
 ### Setting margin and padding
 

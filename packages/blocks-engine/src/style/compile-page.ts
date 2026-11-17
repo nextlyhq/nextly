@@ -56,6 +56,14 @@ import {
   type StyleCompileContext,
 } from "./compile-page-context";
 import {
+  classLinksNarrowing,
+  type ContainerReading,
+  linksFollowContainers,
+  nodeLinksNarrowing,
+  readContainers,
+  typeLinksNarrowing,
+} from "./compile-page-links";
+import {
   documentNodes,
   FLOW_CHILDREN,
   layoutModeRules,
@@ -217,6 +225,17 @@ export function compilePageCss(
     seenIds.add(id);
   }
 
+  // The containers whose links take their text colour, read once: none while
+  // the site's Links row sets a colour.
+  const containers = readContainers(
+    nodes.map(({ node }) => ({
+      node,
+      className: duplicateIds.has(node.id) ? undefined : classes.get(node.id),
+    })),
+    linksFollowContainers(ctx.siteText),
+    MAX_CLASSES_PER_NODE
+  );
+
   const rules: CssRule[] = [];
   // A null-prototype record, because a node id is author data and `__proto__` is a legal one.
   // Assigning it on an ordinary object runs the inherited setter instead of creating an own
@@ -361,6 +380,7 @@ export function compilePageCss(
             trace,
             mayFetchUrl,
             weightlessAnchor: defaultsAnchor,
+            linksNarrowing: typeLinksNarrowing(containers, type),
           }
         )
       );
@@ -667,6 +687,7 @@ export function compilePageCss(
       mayFetchUrl,
       routing,
       wearers: starredWearers(nodes, classes, duplicateIds),
+      containers,
       flowGaps,
       defaultsAnchor,
       stateSelectors: stateSelectorsOfCompile,
@@ -704,6 +725,11 @@ export function compilePageCss(
           trace,
           mayFetchUrl,
           routing,
+          linksNarrowing: classLinksNarrowing(
+            containers,
+            cls.id,
+            isLook(cls) ? cls.blockType : undefined
+          ),
         }
       )
     );
@@ -767,6 +793,7 @@ export function compilePageCss(
           mayFetchUrl,
           previewStates,
           routing,
+          linksNarrowing: nodeLinksNarrowing(containers, node.id),
         }
       ),
       // The container's own content width, which the site sheet's rule reads.
@@ -1042,6 +1069,8 @@ interface StarredLookCompile {
   readonly routing: ReturnType<typeof partRouting>;
   /** Each block's own class, type and the classes it lists, in document order. */
   readonly wearers: readonly StarredWearer[];
+  /** The document's containers, for the links inside the ones a ★ look colours. */
+  readonly containers: ContainerReading;
   /** The flow margins each container type in the document writes, by type. */
   readonly flowGaps: ReadonlyMap<string, readonly Declaration[]>;
   readonly defaultsAnchor: string;
@@ -1141,6 +1170,7 @@ function starredLookRules(
           trace: about.trace,
           mayFetchUrl: about.mayFetchUrl,
           routing: about.routing,
+          linksNarrowing: typeLinksNarrowing(about.containers, type),
         }
       ),
       ...starredLayoutRules(look, type, selector, about)
