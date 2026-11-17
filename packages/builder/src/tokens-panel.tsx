@@ -537,7 +537,12 @@ function VariableGroups({
     return <p className="nx-vars__note">No variables match this search.</p>;
   }
   return (
-    <ColourGroupHostContext.Provider value={colours}>
+    <ColourGroupHostContext.Provider
+      value={{
+        ...colours,
+        onMoved: (row, next) => movedInto(row, next, folds, rows.focus),
+      }}
+    >
       {shown
         .flatMap(group =>
           sectionsOf(group, rows.tokens, searching, colours.pending)
@@ -575,17 +580,6 @@ function VariableGroups({
                   usage={rows.usage}
                   reach={rowReach(entry, rows.usage)}
                   onRemoved={() => rows.onRemoved(entry.row.key)}
-                  onMoved={next => {
-                    // Moved into another group, the row is drawn there anew:
-                    // that group is opened and the row keeps the focus.
-                    const into = colourGroups(next).find(candidate =>
-                      candidate.identities.includes(entry.row.identity)
-                    );
-                    if (into !== undefined) {
-                      openFold(folds, colourGroupFoldKey(into.name));
-                    }
-                    rows.focus(entry.row.key);
-                  }}
                 />
               )}
             </Group>
@@ -593,6 +587,23 @@ function VariableGroups({
         ))}
     </ColourGroupHostContext.Provider>
   );
+}
+
+/**
+ * After a colour row moved: moved into another group it is drawn there anew,
+ * so that group is opened and the row keeps the focus.
+ */
+function movedInto(
+  row: { readonly key: string; readonly identity: string },
+  next: SiteTokenSet,
+  folds: GroupFolds | undefined,
+  focus: (key: string) => void
+): void {
+  const into = colourGroups(next).find(group =>
+    group.identities.includes(row.identity)
+  );
+  if (into !== undefined) openFold(folds, colourGroupFoldKey(into.name));
+  focus(row.key);
 }
 
 /** What the Colours tab's group changes commit under: no row's editor. */

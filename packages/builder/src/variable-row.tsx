@@ -30,8 +30,7 @@ import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
-import { useColourRowDrag } from "./colour-group-ui";
-import { moveColour } from "./colour-groups";
+import { useColourRowDrag, useColourRowMove } from "./colour-group-ui";
 import { markOf } from "./design-group-toggle";
 import { fluidRange, pxAtWidth } from "./fluid-size";
 import { useInPlaceField } from "./in-place-field";
@@ -63,8 +62,6 @@ export interface VariableRowProps {
   onRemoved: () => void;
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
-  /** A colour moved by Alt+Up or Alt+Down, with the set the move made. */
-  onMoved?: ((next: SiteTokenSet) => void) | undefined;
   /**
    * Just added or copied and never saved, while its editor is open: its
    * editor's code name follows its name as it is typed. `marked` while a
@@ -94,7 +91,6 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
-  onMoved,
   fresh,
   usage,
   reach,
@@ -104,17 +100,16 @@ export function VariableRow({
   const [renaming, setRenaming] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const button = React.useRef<HTMLButtonElement>(null);
-  const opened = (next: boolean): void => {
-    if (!next) setRemoving(false);
-    onOpenChange(next);
-  };
+  const opened = closingEndsRemove(setRemoving, onOpenChange);
   const handOff = useHandOff(opened);
   const shown = shownName(entry);
   const changing = !readOnly && token !== undefined;
+  // A colour row moves with Alt+Up and Alt+Down.
+  const move = useColourRowMove(entry.row, tokens, onChange);
   const onKeyDown = rowKeys(changing, {
     rename: setRenaming,
     menu: setMenuOpen,
-    move: colourMoveOf(entry, tokens, onChange, onMoved),
+    move,
   });
   // A colour row can be dragged to another place in the colour order.
   const drag = useColourRowDrag(entry.row);
@@ -124,29 +119,21 @@ export function VariableRow({
         {/* The editor opens beside the whole row, the ⋯ with it. */}
         <PopoverAnchor asChild>
           <div className="nx-vars__line">
-            {renaming && token !== undefined ? (
-              <RenameField
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                onChange={onChange}
-                onDone={() => setRenaming(false)}
-                row={button}
-              />
-            ) : (
-              <RowTrigger
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                mode={mode}
-                reach={reach}
-                marked={fresh?.marked === true}
-                open={open}
-                quiet={open || menuOpen}
-                button={button}
-                onKeyDown={onKeyDown}
-              />
-            )}
+            <RowNameOrField
+              renaming={renaming}
+              onRenamed={() => setRenaming(false)}
+              entry={entry}
+              token={token}
+              tokens={tokens}
+              mode={mode}
+              reach={reach}
+              marked={fresh?.marked === true}
+              open={open}
+              quiet={open || menuOpen}
+              button={button}
+              onChange={onChange}
+              onKeyDown={onKeyDown}
+            />
             <RowActions
               changing={changing}
               entry={entry}
@@ -334,25 +321,6 @@ function rowKeys(
     event.preventDefault();
     if (menu) on.menu(true);
     else on.rename(true);
-  };
-}
-
-/**
- * A colour's move one place up or down the site's colour order; nothing for
- * any other kind, which is not ordered.
- */
-function colourMoveOf(
-  entry: VariableEntry,
-  tokens: SiteTokenSet,
-  onChange: (tokens: SiteTokenSet) => void,
-  onMoved: ((next: SiteTokenSet) => void) | undefined
-): ((by: -1 | 1) => void) | undefined {
-  if (entry.row.kind !== "color") return undefined;
-  return by => {
-    const next = moveColour(tokens, entry.row.identity, by);
-    onChange(next);
-    // The host then keeps the moved row open and focused where it is drawn.
-    onMoved?.(next);
   };
 }
 
@@ -555,6 +523,45 @@ function ColourSwatch({
       }}
     />
   );
+}
+
+/**
+ * The row's button, or while it is renamed in place, the name field that
+ * takes its place.
+ */
+function RowNameOrField({
+  renaming,
+  onRenamed,
+  onChange,
+  ...row
+}: React.ComponentProps<typeof RowTrigger> & {
+  renaming: boolean;
+  onRenamed: () => void;
+  onChange: (tokens: SiteTokenSet) => void;
+}): React.JSX.Element {
+  const { entry, token, tokens, button } = row;
+  if (!renaming || token === undefined) return <RowTrigger {...row} />;
+  return (
+    <RenameField
+      entry={entry}
+      token={token}
+      tokens={tokens}
+      onChange={onChange}
+      onDone={onRenamed}
+      row={button}
+    />
+  );
+}
+
+/** The editor's open change, a close leaving the remove step behind. */
+function closingEndsRemove(
+  setRemoving: (removing: boolean) => void,
+  onOpenChange: (open: boolean) => void
+): (open: boolean) => void {
+  return open => {
+    if (!open) setRemoving(false);
+    onOpenChange(open);
+  };
 }
 
 /**

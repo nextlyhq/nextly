@@ -28,6 +28,7 @@ import * as React from "react";
 
 import {
   colourGroups,
+  moveColour,
   placeColour,
   removeColourGroup,
   renameColourGroup,
@@ -50,6 +51,14 @@ export interface ColourGroupHost {
   /** The colour being dragged, by identity. */
   readonly dragging: string | null;
   readonly setDragging: (identity: string | null) => void;
+  /**
+   * After a colour row moved by Alt+Up or Alt+Down, with the set the move
+   * made: the panel keeps the row shown and focused where it is drawn now.
+   */
+  readonly onMoved?: (
+    row: { readonly key: string; readonly identity: string },
+    next: SiteTokenSet
+  ) => void;
 }
 
 export const ColourGroupHostContext: React.Context<
@@ -127,6 +136,29 @@ function drop(
 function groupOf(tokens: SiteTokenSet, identity: string): string | undefined {
   return colourGroups(tokens).find(group => group.identities.includes(identity))
     ?.name;
+}
+
+/**
+ * A colour row's move one place up or down the site's colour order, by
+ * Alt+Up and Alt+Down; nothing for any other kind, which is not ordered.
+ * The panel is told after, so the row keeps the focus where it is drawn.
+ */
+export function useColourRowMove(
+  row: {
+    readonly key: string;
+    readonly identity: string;
+    readonly kind: string;
+  },
+  tokens: SiteTokenSet,
+  onChange: (tokens: SiteTokenSet) => void
+): ((by: -1 | 1) => void) | undefined {
+  const host = React.useContext(ColourGroupHostContext);
+  if (row.kind !== "color") return undefined;
+  return by => {
+    const next = moveColour(tokens, row.identity, by);
+    onChange(next);
+    host?.onMoved?.(row, next);
+  };
 }
 
 /**
