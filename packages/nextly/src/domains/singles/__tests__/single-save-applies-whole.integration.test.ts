@@ -184,6 +184,35 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     expect(row?.heading).toBe("Long enough");
   });
 
+  it("refuses a type the value the Single holds cannot be read as, naming the field, and changes nothing", async () => {
+    // "abc" is no number: the database would refuse the cast (PostgreSQL) or keep a text in a
+    // number column (SQLite). The save is refused first, by field and code, with the value kept.
+    await heroWith([{ name: "heading", type: "text" }], { heading: "abc" });
+    const fieldsBefore = await registeredFields();
+
+    const refused = await refusal(save([{ name: "heading", type: "number" }]));
+
+    expect(refused).toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TYPE_CHANGE_LOSES_VALUES",
+            message: expect.stringContaining(
+              "Single 'hero': field 'heading' cannot change from text to number"
+            ) as unknown,
+          }),
+        ],
+      },
+    });
+    expect(JSON.stringify(refused)).not.toContain("abc");
+    expect(await registeredFields()).toEqual(fieldsBefore);
+    const [row] = await query<{ heading: string }>(
+      `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
+    );
+    expect(row?.heading).toBe("abc");
+  });
+
   it("saves a length the value the Single holds still fits", async () => {
     await boundedHero("Hi");
 

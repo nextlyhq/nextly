@@ -92,6 +92,7 @@ import type {
 import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
+import { builtByFor } from "../../schema/pipeline/registered-collections";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -103,6 +104,12 @@ import {
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
+import {
+  entityLabel,
+  fieldTypeChangeRefusals,
+  perLanguageBefore,
+  typeChangeError,
+} from "../../schema/value-conversion/type-change/field-type-changes";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -1467,6 +1474,7 @@ export class SingleMetadataService {
         fields,
         wasLocalized,
         isLocalized,
+        migrationStatus: existing.migrationStatus,
       },
       liveFacts.liveColumnTypes,
       schemaService
@@ -1550,8 +1558,9 @@ export class SingleMetadataService {
 
   /**
    * Refuses the save, before any statement runs, when the value the Single holds cannot take the
-   * change: a field made unique over a repeated value, or a text field narrowed below the value it
-   * holds. A Single's table is built by the collection's generator, so the collection save's rule
+   * change: a field whose type changes to one its value cannot be read as, or would be cut or
+   * rounded by (`fieldTypeChangeRefusals`), a field made unique over a repeated value, or a text
+   * field narrowed below the value it holds. A Single's table is built by the collection's generator, so the collection save's rule
    * (`refusalsForCollectionSave`) is the one asked. Asked here rather than left to the database,
    * because MySQL would have committed every statement before the refused one, and PostgreSQL's
    * cast would cut a longer value to fit rather than refuse it.
@@ -1567,6 +1576,8 @@ export class SingleMetadataService {
       fields: FieldDefinition[];
       wasLocalized: boolean;
       isLocalized: boolean;
+      /** The registry row's status: a type change while it awaits its migration is refused. */
+      migrationStatus: string | null | undefined;
     },
     liveColumnTypes: ReadonlyMap<string, string>,
     schemaService: Pick<
@@ -1580,6 +1591,32 @@ export class SingleMetadataService {
       "../../dynamic-collections/services/save-preconditions"
     );
     const dialect = adapter.getCapabilities().dialect;
+    // Each field whose type the save changes, judged over the value it holds (in each language,
+    // for a translated one), as every road that changes a field's type judges it.
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    const typeChanges = await fieldTypeChangeRefusals(
+      adapter.getDrizzle(),
+      dialect,
+      {
+        label: entityLabel("single", slug),
+        table: tableName,
+        ...perLanguageBefore(
+          { localized: change.wasLocalized },
+          tableName,
+          change.previousFields
+        ),
+        previous: change.previousFields,
+        next: change.fields,
+        ...(rename !== null
+          ? { renamed: new Map([[rename.from.name, rename.to.name]]) }
+          : {}),
+        migrationStatus: change.migrationStatus ?? null,
+        builtBy: builtByFor("single", true),
+      }
+    );
     const where = await this.whereTheValuesAre(change);
     const onMain = await refusalsForCollectionSave({
       adapter,
@@ -1618,12 +1655,16 @@ export class SingleMetadataService {
         })
       : [];
     const refusals = [...onMain, ...onCompanion];
-    if (refusals.length === 0) return;
+    if (refusals.length === 0 && typeChanges.length === 0) return;
+    const errors = [
+      ...typeChanges.map(typeChangeError),
+      ...refusals.map(r => r.error),
+    ];
     throw NextlyError.validation({
-      errors: refusals.map(r => r.error),
+      errors,
       logContext: {
         single: slug,
-        fields: refusals.map(r => r.error.path),
+        fields: errors.map(e => e.path),
         // What is in the way, for the log only, and never the value itself.
         details: refusals.flatMap(r => (r.logContext ? [r.logContext] : [])),
       },
