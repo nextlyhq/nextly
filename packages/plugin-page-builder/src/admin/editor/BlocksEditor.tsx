@@ -9,8 +9,9 @@
  * what fills the shell's slots from them: the top bar (`editor-top-bar`), the
  * inspector (`editor-inspector`, with its services in `editor-services`), the
  * canvas region (`editor-canvas-region`), Settings (`editor-settings`) and the
- * conditions strip and switch (`editor-conditions`), all reading one view
- * (`editor-view`). This module puts them into the shell.
+ * strip above the canvas and "Preview as visitor" (`editor-conditions`),
+ * all reading one view (`editor-view`). This module puts them into the
+ * shell.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/BlocksEditor
  */
@@ -25,6 +26,7 @@ import {
   useConditionsUnchecked,
   CanvasFrameProvider,
   OnboardingChecklist,
+  RecentColoursStore,
   SelectionBreadcrumb,
   VisitorUnreadableProvider,
 } from "@nextlyhq/builder/shell";
@@ -49,6 +51,7 @@ import { valueAtPath } from "../snapshot-merge";
 import type { OpenAt } from "./builder-address";
 import { useCanvasEntryIdentity } from "./canvas-entry";
 import { listEntryCollectionOf } from "./canvas-page-context";
+import { useDropKeptReadsOnSave } from "./canvas-source-check";
 import { useConditionedPage } from "./conditioned-page";
 import { editorCanvasRegion } from "./editor-canvas-region";
 import {
@@ -71,6 +74,8 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
+import { usePageDataCount } from "./page-read-meter";
+import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
 import {
@@ -227,7 +232,9 @@ function useDrawnCanvasRender(
   document: BlockDocument,
   regions: Parameters<typeof useBoundCanvasRender>[1]["regions"],
   locale: string | undefined,
-  component: boolean
+  component: boolean,
+  /** The site's page data limit, which the bindings are read under. */
+  pageDataLimit: number | undefined
 ): ReturnType<typeof useBoundCanvasRender> {
   // Under the canvas's limits, the entry left the room its components need.
   const drawn = useDrawnTemplate(document, {
@@ -238,13 +245,15 @@ function useDrawnCanvasRender(
     render,
     { document: drawn, stored: document, regions },
     locale,
-    component
+    component,
+    pageDataLimit
   );
 }
 
 /**
  * What the editor's search adds from: the Add panel's own sources, and the
- * container whose "+" opened Add, so a search row adds where the panel would.
+ * place a "+" that opened Add chose, so a search row adds where the panel
+ * would.
  */
 function searchInsertSources(
   panels: EditorPanels
@@ -255,6 +264,7 @@ function searchInsertSources(
     ...(panels.insertInside === undefined
       ? {}
       : { inside: panels.insertInside }),
+    ...(panels.insertAfter === undefined ? {} : { after: panels.insertAfter }),
   };
 }
 
@@ -358,6 +368,9 @@ function EditorBody<TFieldValues extends FieldValues>({
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
   const savePoint = useSavePoint(editor);
+  // A store made here drops what the canvas kept at once: the page's own
+  // entry is among what it reads.
+  useDropKeptReadsOnSave();
   const documentDirty = useDocumentDirty(
     control,
     hasUnsavedWork(editor, inline, savePoint.savedAt)
@@ -365,7 +378,7 @@ function EditorBody<TFieldValues extends FieldValues>({
 
   const style = useSiteStyleInputs(mount.clientConfig);
   // Whether the canvas's lists read as a visitor: held above the canvas's
-  // inputs, which read them, and set by the conditions switch below.
+  // inputs, which read them, and set by "Preview as visitor" below.
   const listsAsVisitor = useListsAsVisitor();
   const canvas = useCanvasInputs(mount, style, listsAsVisitor.lists);
   const panels = useEditorPanels(mount, name, {
@@ -417,7 +430,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentView.preview.document,
     panels.canvasRegions,
     mount.locale,
-    mount.initialDocument.kind === "component"
+    mount.initialDocument.kind === "component",
+    canvas.pageDataLimit
   );
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
@@ -485,11 +499,13 @@ function EditorBody<TFieldValues extends FieldValues>({
     // in the tree the canvas composes.
     canvas.canvasRender.definitions
   );
-  // The switch that applies the conditions for the entry a template is
-  // previewed with: the author's own, for this session, never saved.
+  // "Preview as visitor", which applies the conditions for the entry a
+  // template is previewed with, or for the page: the author's own, for this
+  // session, never saved.
   const conditions = useAppliedConditionsSwitch(
     conditioned,
     templatePreview,
+    mount.initialDocument.kind,
     pageConditionsSourceOf(
       templatePreview,
       mount.initialDocument.kind,
@@ -578,6 +594,17 @@ function EditorBody<TFieldValues extends FieldValues>({
     composedDocument: conditions.composed,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
+  // The page's data, counted once for the top bar's meter and Page
+  // settings' line.
+  const pageData = usePageDataCount({
+    counts: mount.initialDocument.kind === "page",
+    editor,
+    drawnWith: view.canvasRender,
+    regions: view.canvasRegions,
+    componentTitle: view.componentLibrary.titleOf,
+    // The limit the canvas draws under, read once for both.
+    cap: view.pageDataLimit,
+  });
   useOpenAtSection({
     sectionId: openAt?.sectionId,
     blockId: openAt?.blockId,
@@ -604,7 +631,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     // Fills the view's area, under the admin's lock and recovery notices for
     // this document, rather than covering the window over them. A component's
     // own view carries its banner above the editor.
-    <EditorFrame banner={componentView.banner}>
+    <EditorFrame banner={componentView.banner} userId={mount.userId}>
       {/* The bound props a visitor will not see, for the inspector's note
           under each; the canvas's badges are handed the same answer. */}
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
@@ -636,20 +663,20 @@ function EditorBody<TFieldValues extends FieldValues>({
             field: place.address,
             location: place.location,
             canvas: canvas.canvasElement,
+            // "Preview as visitor", in Preview's menu.
+            visitor: conditions.visitor,
+            pageData,
           })}
-          // Pinned above a template's canvas: the entry it is drawn with.
-          canvasStrip={editorStrip(
-            templatePreview,
-            conditions,
-            mount.initialDocument.kind,
-            page.title
-          )}
+          // Pinned above the canvas: a template's entry it is drawn with, and
+          // the visitor's view while it is on.
+          canvasStrip={editorStrip(templatePreview, conditions)}
           openSettingsRequest={view.pages.settingsRequest}
           renderSettings={editorSettings(view, page, settingsPlace)}
           // The shell owns the region; this fills it. Rendered unconditionally
-          // rather than only when something is selected, because the panel states
-          // "select a block to edit it" — a region that appears and disappears
-          // with the selection makes the canvas resize on every click.
+          // rather than only when something is selected, because with nothing
+          // selected the panel shows the document's own settings: a region
+          // that appears and disappears with the selection makes the canvas
+          // resize on every click.
           // The policy travels with the panel because the Style tab judges a
           // written value at the keystroke and has to reach the same verdict the
           // published compiler will.
@@ -661,7 +688,11 @@ function EditorBody<TFieldValues extends FieldValues>({
           // already holds and cannot enumerate one. This is the MERGED set the
           // canvas compiles with, so the picker offers exactly the tokens the
           // page will resolve.
-          inspector={editorInspector(view, cardVerbs, sharedStyle.host)}
+          inspector={editorInspector(view, cardVerbs, sharedStyle.host, {
+            control,
+            page,
+            pageData,
+          })}
           // Switched on the panel id rather than rendering the inserter for
           // whatever the rail reports open. The shell asks for the panel it
           // opened, and a renderer ignoring that argument would draw the inserter
@@ -791,21 +822,32 @@ function shellExit(
 /**
  * The editor's area: the whole of it for a page, and under the banner for a
  * component's own view, so the banner takes its height and the shell the rest.
+ * The author's Recent colours are provided here, around the whole editor, so
+ * the Design panel's colour pickers and the inspector's read one list.
  */
 function EditorFrame({
   banner,
+  userId,
   children,
 }: {
   banner: React.ReactNode;
+  /** The signed-in author, whose Recent colours these are. */
+  userId: string | null;
   children: React.ReactNode;
 }): React.JSX.Element {
+  const recentColours = useMemo(() => recentColoursStore(userId), [userId]);
+  const body = (
+    <RecentColoursStore.Provider value={recentColours}>
+      {children}
+    </RecentColoursStore.Provider>
+  );
   if (banner === null) {
-    return <div className="h-full bg-background">{children}</div>;
+    return <div className="h-full bg-background">{body}</div>;
   }
   return (
     <div className="flex h-full flex-col bg-background">
       {banner}
-      <div className="min-h-0 flex-1">{children}</div>
+      <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }

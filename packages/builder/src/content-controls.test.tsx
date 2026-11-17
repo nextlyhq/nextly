@@ -197,7 +197,12 @@ describe("what an author reads", () => {
                 article: "Article",
                 aside: "Aside",
               },
-              showOptionValue: true,
+              code: {
+                div: "div",
+                section: "section",
+                article: "article",
+                aside: "aside",
+              },
             },
           },
           render: () => null,
@@ -243,6 +248,21 @@ describe("what an author reads", () => {
     ).toBe("div");
   });
 
+  it("names an option's code once, where its words already say it in other capitals", () => {
+    // "Section section": a case-sensitive check printed the words and the tag.
+    registerWorded();
+    const document = documentOf();
+    (document.nodes[0] as BlockNode).props = { tag: "section" };
+    const { getByRole } = render(
+      <InspectorPanel editor={editorFor(document)} />
+    );
+    const closed = getByRole("combobox", { name: "HTML tag" });
+    expect(closed.textContent).toBe("Section");
+    fireEvent.click(closed);
+    const option = getByRole("option", { name: /^Section/ });
+    expect(option.textContent).toBe("Section");
+  });
+
   it("puts an on/off prop's label in the label column and its switch in the control column", () => {
     // The switch drawn before its label broke the column every other row
     // keeps: label on the left, control on the right.
@@ -280,6 +300,13 @@ describe("a few short options in a row", () => {
               label: "Element type",
               options: ["div", "section", "article"],
               display: "menu",
+            },
+            fit: {
+              type: "select",
+              label: "Fit",
+              options: ["auto", "cover"],
+              optionLabels: { auto: "Auto", cover: "Cover" },
+              code: { auto: "auto", cover: "cover" },
             },
             loading: {
               type: "select",
@@ -336,6 +363,14 @@ describe("a few short options in a row", () => {
     const { view } = mountWith({ as: "div" });
     expect(view.queryByRole("radiogroup", { name: "Element type" })).toBeNull();
     expect(view.getByRole("combobox", { name: "Element type" })).toBeDefined();
+  });
+
+  it("keeps a menu where the options declare their code, which it shows", () => {
+    // Short enough for a row of buttons, but a row has nowhere to show what
+    // each choice writes.
+    const { view } = mountWith({ fit: "auto" });
+    expect(view.queryByRole("radiogroup", { name: "Fit" })).toBeNull();
+    expect(view.getByRole("combobox", { name: "Fit" })).toBeDefined();
   });
 
   it("keeps a menu while the stored value is none of the options", () => {

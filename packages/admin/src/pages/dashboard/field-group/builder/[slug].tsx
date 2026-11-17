@@ -198,16 +198,17 @@ export default function FieldGroupBuilderEditPage({
 
   // A change of the settings is a step; an unsaved field group's address
   // moves it at once, outside the history.
-  const { onSettingsChange, unsavedAddress } = useBuilderSettingsChange({
-    kind: "field-group",
-    unsaved,
-    settings,
-    setSettings,
-    moveAddress,
-    busy: confirmation.isBusy,
-    editRoute: address =>
-      buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: address }),
-  });
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "field-group",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: address }),
+    });
   // How many places use the field group, from the same query its used-by
   // list reads; an unsaved one is used nowhere yet, and asked nothing.
   const usedBy = useFieldGroupUsedBy(unsaved ? undefined : slug);
@@ -512,6 +513,8 @@ export default function FieldGroupBuilderEditPage({
         </>
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving field group changes…"
     >
       <ReconcileFieldGroupDialog

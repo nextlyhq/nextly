@@ -3,7 +3,6 @@
  * who or what did it, and when.
  *
  * @module domains/content-events
- * @experimental
  */
 
 export { contentEventActor, type ContentEventActor } from "./actor";

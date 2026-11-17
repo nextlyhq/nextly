@@ -4,9 +4,9 @@
  * How much work the editor does for one author action, counted rather than
  * timed, so the count cannot flake on a slow machine. Each budget is none:
  *
- * - the Layout's header and footer drawn again, per selection, hover and
- *   insert;
- * - the site's stylesheet compiled again, per selection and hover;
+ * - the Layout's header and footer drawn again, per selection, hover,
+ *   the pointer on them, and insert;
+ * - the site's stylesheet compiled again, per selection, hover and insert;
  * - the page drawn again, per selection and hover;
  * - the whole document walked by the engine's safety measurement, per
  *   selection;
@@ -33,9 +33,10 @@ import {
   registerBlocks,
   type BlockDocument,
   type BlockNode,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, useState } from "react";
 import {
   afterAll,
   afterEach,
@@ -86,11 +87,12 @@ vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
   };
 });
 
-import { Canvas } from "./canvas";
-import { type CanvasRegion } from "./canvas-regions";
+import { Canvas } from "./canvas/canvas";
+import { type CanvasRegion } from "./canvas/canvas-regions";
 import { useEditorState, type EditorState } from "./editor-state";
-import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
-import { InsertPanel } from "./insert-panel";
+import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
+import { InsertPanel } from "./panels/add/insert-panel";
+import { InspectorPanel } from "./inspector-panel";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { ShortcutProvider } from "@nextlyhq/ui";
 
@@ -219,7 +221,12 @@ function hoverTwoBlocks(): void {
 }
 
 /** The editor and its canvas, wired as the page builder wires them. */
-function CanvasHost(): React.JSX.Element {
+function CanvasHost({
+  sheet = SHEET,
+}: {
+  /** The site sheet; a new one is compiled once, then kept. */
+  sheet?: typeof SHEET;
+}): React.JSX.Element {
   const state = useEditorState({ initialDocument: PAGE });
   editorRef = state;
   return (
@@ -227,7 +234,7 @@ function CanvasHost(): React.JSX.Element {
       <HoverReader />
       <Canvas
         document={state.document}
-        siteStyles={SHEET as never}
+        siteStyles={sheet as never}
         regions={REGIONS}
         render={RENDER as never}
         selectedId={state.selectedId}
@@ -260,20 +267,24 @@ describe("the work one selection, hover or insert costs on the canvas", () => {
   it("the counters see the canvas's work: drawing it draws the page, both regions and the sheet", () => {
     cleanup();
     resetCounts();
-    render(<CanvasHost />);
+    // A site sheet not drawn before, since a drawn one is kept.
+    render(<CanvasHost sheet={{ ...SHEET }} />);
     expect(counted.pageDraws).toBeGreaterThan(0);
     expect(counted.regionDraws).toBeGreaterThanOrEqual(2);
     expect(counted.sheetCompiles).toBeGreaterThan(0);
   });
 
-  it("a selection draws the header and footer again: budget none (known miss)", () => {
+  it("a selection draws the header and footer again: budget none", () => {
     act(() => editor().select("block-7"));
-    expectKnownMiss(counted.regionDraws);
+    // The control: the selection reached the editor the canvas draws from.
+    expect(editor().selectedId).toBe("block-7");
+    expectWithinBudget(counted.regionDraws);
   });
 
-  it("a selection compiles the site's stylesheet: budget none (known miss)", () => {
+  it("a selection compiles the site's stylesheet: budget none", () => {
     act(() => editor().select("block-7"));
-    expectKnownMiss(counted.sheetCompiles);
+    expect(editor().selectedId).toBe("block-7");
+    expectWithinBudget(counted.sheetCompiles);
   });
 
   it("a selection draws the page again: budget none, with the canvas's inputs held steady", () => {
@@ -298,7 +309,31 @@ describe("the work one selection, hover or insert costs on the canvas", () => {
     expectWithinBudget(counted.pageDraws);
   });
 
-  it("an insert draws the header and footer again: budget none (known miss)", () => {
+  it("the pointer resting on and leaving the header and footer draws them again: budget none", () => {
+    for (const area of ["header", "footer"]) {
+      const region = document.querySelector(`[data-nx-region="${area}"]`);
+      if (region === null) throw new Error(`no ${area} drawn`);
+      fireEvent.mouseEnter(region);
+      fireEvent.pointerMove(region);
+      fireEvent.mouseLeave(region);
+    }
+    expectWithinBudget(counted.regionDraws);
+    expectWithinBudget(counted.sheetCompiles);
+  });
+
+  it("an insert compiles the site's stylesheet: budget none", () => {
+    act(() => {
+      editor().apply({
+        kind: "insert",
+        node: text("inserted", "Inserted"),
+        at: { index: 3 },
+      });
+    });
+    expect(document.querySelector('[data-nx-node="inserted"]')).not.toBeNull();
+    expectWithinBudget(counted.sheetCompiles);
+  });
+
+  it("an insert draws the header and footer again: budget none", () => {
     act(() => {
       editor().apply({
         kind: "insert",
@@ -308,7 +343,67 @@ describe("the work one selection, hover or insert costs on the canvas", () => {
     });
     // The control: the insert reached the canvas.
     expect(document.querySelector('[data-nx-node="inserted"]')).not.toBeNull();
-    expectKnownMiss(counted.regionDraws);
+    expectWithinBudget(counted.regionDraws);
+  });
+});
+
+/**
+ * The editor, its canvas and its settings panel, wired as the page builder
+ * wires them: the panel's interaction state held by the editor, which a
+ * change of tab sets. Each set re-renders the editor around the canvas.
+ */
+/** How many times the editor around the canvas rendered. */
+let hostRenders = 0;
+
+function InspectorHost(): React.JSX.Element {
+  hostRenders += 1;
+  const state = useEditorState({ initialDocument: PAGE });
+  editorRef = state;
+  // A new holder on every set, so each tab change re-renders this editor
+  // even when the state it carries is the same.
+  const [styleState, setStyleState] = useState<{ value: StyleState }>({
+    value: "base",
+  });
+  return (
+    <HoveredBlockProvider>
+      <InspectorPanel
+        editor={state}
+        styleState={{
+          state: styleState.value,
+          onChange: value => setStyleState({ value }),
+        }}
+      />
+      <Canvas
+        document={state.document}
+        siteStyles={SHEET as never}
+        regions={REGIONS}
+        render={RENDER as never}
+        forcedState={styleState.value}
+        selectedId={state.selectedId}
+        selectedIds={state.selection.ids}
+        onSelect={state.select}
+      />
+    </HoveredBlockProvider>
+  );
+}
+
+describe("the page drawn again while the editor around it re-renders", () => {
+  it("switching the settings panel's tab draws no block", () => {
+    const view = render(<InspectorHost />);
+    act(() => editor().select("block-3"));
+    resetCounts();
+    hostRenders = 0;
+    // Every tab the block has: it declares no settings, so no Content.
+    for (const name of ["Style", "Advanced", "Style", "Advanced"]) {
+      fireEvent.mouseDown(view.getByRole("tab", { name }));
+      // The control: the tab opened.
+      expect(
+        view.getByRole("tab", { name }).getAttribute("aria-selected")
+      ).toBe("true");
+    }
+    // The control: the editor around the canvas rendered again.
+    expect(hostRenders).toBeGreaterThan(0);
+    expectWithinBudget(counted.pageDraws);
   });
 });
 

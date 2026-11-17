@@ -30,7 +30,6 @@ import { listEntryCount, listPagesOf, listWillRead } from "./blocks/list-read";
 import {
   createQueryBudget,
   createStandaloneContext,
-  DEFAULT_MAX_QUERIES,
   isBindingIssue,
 } from "./context";
 import type {
@@ -41,6 +40,12 @@ import type {
   ReadClaim,
 } from "./context";
 import { resolveLucideIcon } from "./icons/lucide";
+import {
+  hasDefaultColumnGap,
+  imageSizingFor,
+  siteSizesBlocks,
+  type ImageCopies,
+} from "./image-slot";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
 import {
   listPageSlug,
@@ -68,7 +73,13 @@ import {
   routeReadSources,
   listBatchReads,
 } from "./next-read-sources";
-import { readerFor, dataFor } from "./next-readers";
+import {
+  readerFor,
+  dataFor,
+  routeMaxQueries,
+  siteBlocks,
+  siteBoundConfig,
+} from "./next-readers";
 import { metadataValuesOf, derivePageSeo } from "./next-seo";
 import {
   effectiveLimits,
@@ -84,7 +95,6 @@ import {
 } from "./page-read-stages";
 import { PageRenderer } from "./page-renderer";
 import { pageBindingRun } from "./prepare-document";
-import { registeredBlocks } from "./resolver";
 
 /**
  * Keys the CMS sets on the row it returns.
@@ -271,18 +281,78 @@ function siteStylesKey(
   ];
 }
 
-export function blocksRouteConfig(
+/**
+ * The image-copy lookups one render may make: `limit` of them, claimed one per
+ * lookup, refused after. Their own bound, beside the page's reads.
+ */
+function copyLookups(limit: number): { take(): boolean } {
+  let left = limit;
+  return {
+    take: () => {
+      if (left <= 0) return false;
+      left -= 1;
+      return true;
+    },
+  };
+}
+
+/**
+ * The site's copies of an image, kept on a public page per image and width
+ * bound until a write to that media item expires them, since asking for them
+ * reads the item. An author's preview asks each time. `undefined` where the
+ * site offers no copies.
+ */
+function cachedImageCopies(
   config: BlocksPageConfig,
+  isPublic: boolean,
+  window: number | false | undefined
+): ImageCopies | undefined {
+  const copies = config.imageCopies;
+  if (copies === undefined) return undefined;
+  // Their own allowance, not the page's: the page's reads are what the
+  // editor counts a published render against, and copies are not among
+  // them. One lookup per image the page draws, so no more than it has nodes,
+  // claimed by the lookups a kept answer does not cover: every one on a
+  // preview, and a public page's on a miss.
+  const budget = copyLookups(effectiveLimits(config).maxNodes);
+  if (!isPublic) return async (source, upTo) => copies(source, upTo, budget);
+  const media = config.mediaCollection ?? MEDIA_TAG_COLLECTION;
+  return async (source, upTo) => {
+    const named = "id" in source ? `id:${source.id}` : `url:${source.url}`;
+    return await cachedFind(
+      async () => [...(await copies(source, upTo, budget))],
+      {
+        tags: "id" in source ? nextlyTags(media, source.id) : nextlyTags(media),
+        // Under the route's cache scope, as its other kept reads are: two sites
+        // served from one process keep their own answers for the same id.
+        keyParts: [
+          "page-builder-image-copies",
+          config.cacheScope ?? "",
+          media,
+          named,
+          String(upTo),
+        ],
+        revalidate: await releaseBoundedRevalidate(window),
+      }
+    );
+  };
+}
+
+export function blocksRouteConfig(
+  given: BlocksPageConfig,
   isPublic: boolean,
   /**
    * How long the page's list reads may live: the route's own `revalidate`.
    * Its own argument because a Single's config withholds `revalidate` from
    * the page config it borrows, and its lists must not outlive it either.
    */
-  listWindow: number | false | undefined = config.revalidate,
+  listWindow: number | false | undefined = given.revalidate,
   /** A Single's page reads its entry as a Single, not from a collection. */
   entrySource: EntrySource = "collection"
 ): ContentRouteConfig<ReactElement> {
+  // Site-bound blocks and named queries, read through the started instance
+  // where their page builder did not start in this module copy.
+  const config = siteBoundConfig(given);
   const {
     field,
     blocks,
@@ -296,6 +366,7 @@ export function blocksRouteConfig(
     // on would hand `createContentRoute` options it does not define.
     mediaCollection: _mediaCollection,
     resolveMedia: _resolveMedia,
+    imageCopies: _imageCopies,
     resolveEntryPath: _resolveEntryPath,
     layouts: _layouts,
     timeZone: _timeZone,
@@ -317,7 +388,7 @@ export function blocksRouteConfig(
   // One resolver object for the route, handed to both the preparation and the
   // renderer: the renderer reuses a preparation only for the very resolver it
   // was made with.
-  const resolver = blocks ?? registeredBlocks();
+  const resolver = blocks ?? siteBlocks();
   warnOfUnknownTimeZone(config.timeZone);
   // A public route reads its images inside the cache, as it reads the rest of
   // the page, within the page's own window; an access-enforced one reads them
@@ -361,7 +432,7 @@ export function blocksRouteConfig(
     // invocations, so sharing one counter would let the page's reads
     // starve the preview image, or the reverse. Shared BETWEEN the two
     // reads this invocation makes, because they are one page's cost.
-    const budget = createQueryBudget(config.maxQueries ?? DEFAULT_MAX_QUERIES);
+    const budget = createQueryBudget(routeMaxQueries(config));
     // The same reads, in the same order, as the render: the
     // components the page inlines (without them every instance would
     // be a placeholder, and a page built from components would publish
@@ -469,9 +540,7 @@ export function blocksRouteConfig(
       // days by, then the list's own read. A page whose allowance runs out
       // before the list (`maxQueries: 0`, or spent on those reads) has no
       // later pages, since its list draws none.
-      const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES
-      );
+      const budget = createQueryBudget(routeMaxQueries(config));
       const terms = readTermsOf(config, resolver);
       const sources = routeReadSources({
         config,
@@ -569,10 +638,9 @@ export function blocksRouteConfig(
         () => drawnPage.number,
         config.cacheScope
       );
-      const budget = createQueryBudget(
-        config.maxQueries ?? DEFAULT_MAX_QUERIES,
-        { onRefused: () => overrun.refused(budget) }
-      );
+      const budget = createQueryBudget(routeMaxQueries(config), {
+        onRefused: () => overrun.refused(budget),
+      });
       const media = mediaResolver(
         inRequestLanguage(config, context),
         readerFor(config),
@@ -709,7 +777,26 @@ export function blocksRouteConfig(
       // regions spend the page's ONE budget and read in its locale), the
       // blocks, the caps, the host's posture and the page's bindings.
       const shared: SharedRendererProps = {
-        context: stagedContext(pageContext, staged, terms, listReads),
+        context: {
+          ...stagedContext(pageContext, staged, terms, listReads),
+          // Sized images: the site's copies, kept per image until a media
+          // write expires them, the slot each device draws at the top of the
+          // page, and the first top-level block, whose images load first.
+          // The first block as the page draws it: composed and gated, so
+          // a component's hero or a page whose first stored block is hidden
+          // still has its first drawn section found.
+          ...imageSizingFor(
+            cachedImageCopies(config, isPublic, listWindow),
+            siteBreakpoints,
+            (page.prepared?.presented ?? document).nodes,
+            // Columns divide an image's slot only under the gap the bound
+            // knows; a site with its own leaves their images the row's width.
+            hasDefaultColumnGap(siteStyles?.tokens),
+            // A block's own width bounds its images only where no class or
+            // block default of the site's can draw it wider.
+            siteSizesBlocks(siteStyles)
+          ),
+        },
         blocks: resolver,
         styleContext,
         blockFallback,

@@ -944,8 +944,8 @@ describe("the label the stamp is taken over", () => {
     // Both surfaces, because they can disagree — the label is what the stamp is
     // taken over, so a version reaching one and not the other would key
     // artifacts on a value the label never carried.
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v8");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v8:[0-9a-z]+$/);
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v10");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v10:[0-9a-z]+$/);
   });
 
   it("refuses every sheet stored before blocks lost their outer margins", () => {
@@ -958,7 +958,7 @@ describe("the label the stamp is taken over", () => {
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v3:${hashId(JSON.stringify(["v3", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
-    expect(now?.startsWith("v8:")).toBe(true);
+    expect(now?.startsWith("v10:")).toBe(true);
   });
 
   it("refuses every sheet stored before parts took properties from a wrapping root", () => {
@@ -1005,6 +1005,29 @@ describe("the label the stamp is taken over", () => {
     const now = sharedStyleInputsId(inputs());
     const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
     const before = `v7:${hashId(JSON.stringify(["v7", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a full row and a contents wrapper were flagged", () => {
+    // `v9` flags a flex item that fills its row, and hands a `display:
+    // contents` wrapper's flags to its children. A `v8` sheet has neither:
+    // recompiled, not served. Rebuilt from the label the old compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v8:${hashId(JSON.stringify(["v8", ...label.slice(1)]))}`;
+    expect(now).not.toBe(before);
+    expect(stampedUnderCurrentEncoding(before)).toBe(false);
+  });
+
+  it("refuses every sheet stored before a container could state its own width", () => {
+    // `v10` reads a container's own content width before the site's, and
+    // resets it to the site's on every element. A `v9` sheet reads the site's
+    // width alone: recompiled, not served. Rebuilt from the label the old
+    // compiler wrote.
+    const now = sharedStyleInputsId(inputs());
+    const label: unknown[] = JSON.parse(sharedStyleInputsLabel(inputs()));
+    const before = `v9:${hashId(JSON.stringify(["v9", ...label.slice(1)]))}`;
     expect(now).not.toBe(before);
     expect(stampedUnderCurrentEncoding(before)).toBe(false);
   });

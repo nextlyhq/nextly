@@ -8,7 +8,6 @@
  * path names what happened; how the event is assembled lives here.
  *
  * @module domains/content-events/write-event
- * @experimental
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -42,8 +41,6 @@ import {
 
 /**
  * One event a write path records.
- *
- * @experimental
  */
 export interface WriteEventInput {
   subject: ContentEventSubject;
@@ -85,8 +82,6 @@ export interface WriteEventInput {
 
 /**
  * What the writer needs besides the transaction.
- *
- * @experimental
  */
 export interface WriteEventDeps {
   /** The adapter the transaction belongs to: its dialect and locking. */
@@ -97,8 +92,6 @@ export interface WriteEventDeps {
 
 /**
  * One status move a write made: one language's, or the document's own.
- *
- * @experimental
  */
 export interface StatusMove {
   /** The language that moved; absent for the document's own status. */
@@ -134,8 +127,6 @@ async function actorName(
 
 /**
  * Record `input` on `tx`, the transaction of the write it records.
- *
- * @experimental
  */
 export async function recordWriteEvent(
   tx: TransactionContext,
@@ -227,8 +218,6 @@ export function partsMovesRecord(moves: readonly StatusMove[]): ChangedParts {
  * unpublished. Decided by the rule that decides the webhook events, so the
  * two never disagree on what was a publish, and written whatever the
  * document's webhook settings.
- *
- * @experimental
  */
 export async function recordTransitionEvents(
   tx: TransactionContext,
@@ -308,8 +297,6 @@ export async function recordOverwriteEvent(
  * Record a save in the document's history: a restore always, naming the
  * version it came from, and any other save only when it recorded a version,
  * so a save that changed nothing adds no event either.
- *
- * @experimental
  */
 export async function recordSaveEvent(
   tx: TransactionContext,

@@ -4,7 +4,10 @@
  * stopped, never writing over a save judged after it read the document, and
  * rows of documents no longer there dropped once it completes.
  */
-import type { BindingFieldShape } from "@nextlyhq/blocks-engine";
+import {
+  createBlockRegistry,
+  type BindingFieldShape,
+} from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import { documentKeyOf, type HostAddress } from "../host-rewrite/contract";
@@ -183,6 +186,8 @@ function deps(
     shapesOf: async ref => ("collection" in ref ? POSTS : undefined),
     limits: () => ({ maxNodes: 2000 }) as never,
     placeOf: () => "pages",
+    // The site's block registry: it holds none.
+    blocks: createBlockRegistry(),
   };
 }
 

@@ -520,34 +520,37 @@ export function useEntryPreview({
    * Three steps, each its own question: may this open at all, what context
    * does it open in, and what did the server say to do with it.
    */
-  const openPreview = useCallback(async (before?: () => Promise<boolean>) => {
-    const target = previewTarget(entry);
-    if (target === null) {
-      onUnavailable?.("unavailable");
-      return;
-    }
+  const openPreview = useCallback(
+    async (before?: () => Promise<boolean>) => {
+      const target = previewTarget(entry);
+      if (target === null) {
+        onUnavailable?.("unavailable");
+        return;
+      }
 
-    // Claimed before anything is awaited; see `claimTab`.
-    const claimed = claimTab(previewConfig?.openInNewTab !== false);
-    if (claimed === "blocked") {
-      onUnavailable?.("popupBlocked");
-      return;
-    }
+      // Claimed before anything is awaited; see `claimTab`.
+      const claimed = claimTab(previewConfig?.openInNewTab !== false);
+      if (claimed === "blocked") {
+        onUnavailable?.("popupBlocked");
+        return;
+      }
 
-    // After the claim, so a step that awaits a round trip (a save) does not
-    // cost the click its gesture and get the popup blocked.
-    if (!(await stepGoesOn(before, claimed.target))) return;
+      // After the claim, so a step that awaits a round trip (a save) does not
+      // cost the click its gesture and get the popup blocked.
+      if (!(await stepGoesOn(before, claimed.target))) return;
 
-    settle(
-      claimed.target,
-      await mintSelfPreview({
-        collection: collection.name,
-        entryId: target.entryId,
-        ...(locale === undefined ? {} : { locale }),
-      }),
-      onUnavailable
-    );
-  }, [collection.name, entry, locale, onUnavailable, previewConfig]);
+      settle(
+        claimed.target,
+        await mintSelfPreview({
+          collection: collection.name,
+          entryId: target.entryId,
+          ...(locale === undefined ? {} : { locale }),
+        }),
+        onUnavailable
+      );
+    },
+    [collection.name, entry, locale, onUnavailable, previewConfig]
+  );
 
   return {
     isPreviewAvailable,

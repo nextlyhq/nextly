@@ -28,11 +28,7 @@ process.env.NEXTLY_SECRET =
 import {
   DOCUMENT_FORMAT_VERSION,
   expandSlotDefaults,
-  hasBlock,
   makeNode,
-  registerBlocks,
-  registryBlockSource,
-  registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { definePlugin, type PluginDefinition } from "@nextlyhq/plugin-sdk";
@@ -68,6 +64,7 @@ import { blocks } from "../fields/blocksHelper";
 import { documentKeyOf, type RewriteReport } from "../host-rewrite/contract";
 import { documentHasWorkingDraft } from "../host-rewrite/site";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
+import { blockRegistry, blocksOf } from "../index";
 import { pageBuilder } from "../plugin";
 import { breakpointRemovalFragments } from "../schema/tables";
 import { BREAKPOINT_REMOVAL_UNDONE_AUDIT } from "../site-breakpoint-undo";
@@ -118,19 +115,21 @@ const doc = (kind: "page" | "component" | "pattern", nodes: Node[]) => ({
 });
 
 /**
- * A card whose body slot is locked contentOnly, registered once per process:
- * the registry refuses a name registered twice.
+ * A card whose body slot is locked contentOnly, registered into the site's
+ * registry as each site boots: the registry refuses a name registered twice.
  */
-function registerSealedCard(): void {
-  if (hasBlock("bp/sealed-card")) return;
-  const base = {
-    version: 1,
-    description: "A block.",
-    example: { props: {} },
-    render: () => null,
-  };
-  registerBlocks(
-    [
+const sealedCardBlocks = definePlugin({
+  name: "bp",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    const base = {
+      version: 1,
+      description: "A block.",
+      example: { props: {} },
+      render: () => null,
+    };
+    blockRegistry(ctx).register([
       {
         ...base,
         name: "bp/headline",
@@ -147,10 +146,12 @@ function registerSealedCard(): void {
           },
         },
       },
-    ] as never,
-    { source: "bp" }
-  );
-}
+    ] as never);
+  },
+});
+
+/** The page builder of the site booted last, whose blocks a card is made of. */
+let builder: ReturnType<typeof pageBuilder>;
 
 /** The sealed card as inserting it places it. */
 function sealedCard(): BlockNode {
@@ -160,8 +161,8 @@ function sealedCard(): BlockNode {
     {},
     expandSlotDefaults(
       "bp/sealed-card",
-      registryBlockSource(),
-      registryNestingSource()
+      blocksOf(builder).blockSource(),
+      blocksOf(builder).nestingSource()
     )
   );
 }
@@ -282,10 +283,11 @@ describe.each(getConfiguredTestDialects())(
       owner: string;
     }> {
       const plugin = pageBuilder(siteStyle === undefined ? {} : { siteStyle });
+      builder = plugin;
       const probe: Probe = {};
       current = await createTestNextly({
         dialect,
-        plugins: [plugin, probePlugin(probe)],
+        plugins: [plugin, probePlugin(probe), sealedCardBlocks],
         seedPublic: true,
         // Entries whose blocks sit inside a group, which the walk reads but
         // does not write.
@@ -299,8 +301,6 @@ describe.each(getConfiguredTestDialects())(
           } as never,
         ],
       });
-      // After the boot, which starts the block registry afresh.
-      registerSealedCard();
       const t = current;
       // The site's first user is its owner, granted everything. Made first, so
       // the person below holds only what the test gives them.

@@ -19,6 +19,7 @@ import {
   resetCopyTurnsForTests,
 } from "../copies/copy-turns";
 import {
+  copiesOfMedia,
   copyBytesOf,
   copyOfMedia,
   type CopyStorage,
@@ -266,6 +267,49 @@ describe("copyOfMedia", () => {
         processor: new ImageProcessor({ loader: async () => null }),
       })
     ).toBeNull();
+  });
+});
+
+describe("copiesOfMedia", () => {
+  it("names every copy up to the bound, narrowest first, as copyOfMedia does", async () => {
+    const { storage, written } = memoryStorage();
+    const deps = { storage, processor: new ImageProcessor() };
+    const copies = await copiesOfMedia(ITEM, 1000, deps);
+    expect(copies.map(copy => copy.width)).toEqual([
+      96, 160, 240, 320, 640, 960,
+    ]);
+    for (const copy of copies) {
+      expect(copy).toEqual(await copyOfMedia(ITEM, copy.width, deps));
+    }
+    // Never wider than the 2200px original, however wide the bound.
+    expect((await copiesOfMedia(ITEM, 9000, deps)).at(-1)?.width).toBe(1920);
+    expect(
+      (await copiesOfMedia({ ...ITEM, width: 600 }, 9000, deps)).at(-1)?.width
+    ).toBe(320);
+    // Addresses only: nothing is resized or stored.
+    expect(written).toEqual([]);
+  });
+
+  it("names none where no copy can be had", async () => {
+    const { storage } = memoryStorage();
+    const processor = new ImageProcessor();
+    expect(
+      await copiesOfMedia({ ...ITEM, mimeType: "image/svg+xml" }, 640, {
+        storage,
+        processor,
+      })
+    ).toEqual([]);
+    expect(
+      await copiesOfMedia(ITEM, 640, { storage: null, processor })
+    ).toEqual([]);
+    expect(
+      await copiesOfMedia(ITEM, 640, {
+        storage,
+        processor: new ImageProcessor({ loader: async () => null }),
+      })
+    ).toEqual([]);
+    // A bound below the narrowest copy names none.
+    expect(await copiesOfMedia(ITEM, 50, { storage, processor })).toEqual([]);
   });
 });
 

@@ -17,12 +17,10 @@ import { signIn } from "../support/production-sign-in";
  * visitor, because the claim is about what the product serves for content the
  * product accepted.
  *
- * What this route cannot show is the COUNT of revalidations a write causes:
- * it is per-request (its preview gate reads a cookie), so only the reads
- * inside it are cached, not the page. What it does show is that a region's
- * cached component read is refreshed by that component's publish, which is
- * the tag doing its work in a real build; which pages each write reaches, and
- * how many times, is measured over the tag sets in
+ * The route answers visitors from the cache, so what it shows is that the
+ * cached page is refreshed by that component's publish, which is the tag doing
+ * its work in a real build. Which pages each write reaches, and how many
+ * times, is measured over the tag sets in
  * `packages/blocks-react/src/next.layouts.test.ts`.
  *
  * @module tests/production/pages-in-their-layout

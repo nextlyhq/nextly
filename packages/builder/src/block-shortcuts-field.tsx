@@ -15,12 +15,14 @@ import * as React from "react";
 
 import {
   BUTTON_BLOCK,
+  FULL_SCREEN,
   fullWidthOf,
   heightOf,
   planFullWidth,
   planHeight,
   planSize,
   SECTION_BLOCK,
+  SIZES,
   sizeOf,
   sizesOffered,
   type HeightChoice,
@@ -28,14 +30,27 @@ import {
   type ShortcutAt,
   type SizeChoice,
 } from "./block-shortcuts";
+import {
+  FULL_WIDTH_WRITES,
+  heightShortcutWrites,
+  sizeShortcutWrites,
+} from "./code-hints";
+import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 import { SegmentChoices } from "./segment-choices";
 
+/** A Section's height, in the words of what it does: fit, or fill the screen. */
 const HEIGHT_LABELS: Readonly<Record<HeightChoice, string>> = {
-  auto: "Auto",
+  auto: "Fit content",
   screen: "Full screen",
 };
+
+/** What each Height choice writes. */
+const HEIGHT_WRITES = heightShortcutWrites(FULL_SCREEN);
+
+/** What each Size choice writes. */
+const SIZE_WRITES = sizeShortcutWrites(SIZES);
 
 const SIZE_LABELS: Readonly<Record<SizeChoice, string>> = {
   small: "Small",
@@ -56,12 +71,15 @@ function ChoiceRow<T extends string>({
   labels,
   hint,
   onChoose,
+  writes,
 }: {
   label: string;
   shownLabel?: boolean;
   options: readonly T[];
   on: T | undefined;
   labels: Readonly<Record<T, string>>;
+  /** What each choice writes, for its tooltip. */
+  writes?: Readonly<Record<T, string>> | undefined;
   /** What the choices do, or none where the field beneath already says. */
   hint?: string | undefined;
   onChoose: (choice: T) => void;
@@ -79,6 +97,7 @@ function ChoiceRow<T extends string>({
           labels={labels}
           labelId={labelId}
           onChoose={onChoose}
+          writes={writes}
         />
       </div>
       {hint === undefined ? null : <p className="nx-inspector__note">{hint}</p>}
@@ -101,9 +120,10 @@ interface ShortcutProps {
 /**
  * The Section whose presets held focus when a choice moved them, if any.
  * Choosing Full screen draws the Min height field and the presets move over
- * it, and Auto moves them back: two places in the panel, so the focused radio
- * is unmounted with the old row. The row drawn in the new place takes the
- * focus back, read once by whichever row draws next and cleared.
+ * it, and Fit content moves them back: two places in the panel, so the
+ * focused radio is unmounted with the old row. The row drawn in the new
+ * place takes the focus back, read once by whichever row draws next and
+ * cleared.
  */
 let focusMovesWith: string | undefined;
 
@@ -118,9 +138,10 @@ function takeMovedFocus(group: HTMLElement | null, nodeId: string): void {
 }
 
 /**
- * A Section's Min height presets, Auto and Full screen: on the Min height
- * row, as a row over its input where that field is drawn (`over`), else as
- * the row itself, named Min height, until a value draws the field.
+ * A Section's Height, Fit content and Full screen, which presets its min
+ * height: a row over the Min height input where that field is drawn
+ * (`over`), named for screen readers only, else a row of its own, named
+ * Height, until a value draws the field.
  */
 export function MinHeightPresets({
   editor,
@@ -144,11 +165,12 @@ export function MinHeightPresets({
   return (
     <div ref={row} className="nx-block-shortcuts" data-control="section-height">
       <ChoiceRow
-        label={over ? "Min height presets" : "Min height"}
+        label="Height"
         shownLabel={!over}
         options={["auto", "screen"] as const}
         on={heightOf(node, at, reaching)}
         labels={HEIGHT_LABELS}
+        writes={HEIGHT_WRITES}
         // Over the field, the value beneath says what Full screen wrote, and a
         // line between them would part the presets from the field they set.
         hint={
@@ -205,6 +227,7 @@ export function BlockShortcutsControl({
           options={["small", "medium", "large"] as const}
           on={size}
           labels={SIZE_LABELS}
+          writes={SIZE_WRITES}
           hint={
             size === undefined
               ? "Custom: the padding or text size below is set another way."
@@ -215,11 +238,13 @@ export function BlockShortcutsControl({
       ) : null}
       <div className="nx-inspector__field">
         <span className="nx-inspector__field-name">Full width</span>
-        <Switch
-          aria-label="Full width"
-          checked={fullWidthOf(node, at, reaching)}
-          onCheckedChange={on => apply(planFullWidth(node, on, at, reaching))}
-        />
+        <CssHint writes={FULL_WIDTH_WRITES}>
+          <Switch
+            aria-label="Full width"
+            checked={fullWidthOf(node, at, reaching)}
+            onCheckedChange={on => apply(planFullWidth(node, on, at, reaching))}
+          />
+        </CssHint>
       </div>
       <p className="nx-inspector__note">
         As wide as its container, here and below.

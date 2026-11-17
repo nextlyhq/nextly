@@ -155,6 +155,16 @@ export interface DocumentPreview {
    * why. It never runs when the browser blocks the tab.
    */
   open: (before?: () => Promise<boolean>) => void | Promise<void>;
+  /**
+   * Opens the preview beside the form, as the document bar's Preview press
+   * does, which folds the document panel. It only opens: pressed again while
+   * the pane is open, nothing changes.
+   *
+   * Absent where the editor offers no preview beside the form: a translation
+   * view, a document view that takes the window, an editor in a modal. A
+   * control offering the preview then opens it with `open`.
+   */
+  openBeside?: () => void;
 }
 
 /**
@@ -280,6 +290,13 @@ export interface EntryFormContextProviderProps {
    */
   openPreview?: (before?: () => Promise<boolean>) => void | Promise<void>;
 
+  /**
+   * The editor's opener for its preview beside the form. Pass it exactly
+   * where the editor offers that pane; `DocumentPreview.openBeside` says
+   * what it does.
+   */
+  openPreviewBeside?: () => void;
+
   /** The document's own fields, for a field's address inside a row. */
   fields?: readonly FieldConfig[];
 
@@ -331,6 +348,7 @@ export function EntryFormContextProvider({
   documentStatus,
   renderEntryFields,
   openPreview,
+  openPreviewBeside,
   fields,
   keepsRecoveryPoints,
   children,
@@ -363,7 +381,17 @@ export function EntryFormContextProvider({
        */
       ...(renderEntryFields === undefined ? {} : { renderEntryFields }),
       // Spread for the same reason: absent means the editor offers no preview.
-      ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
+      // A preview beside the form comes only with the preview itself.
+      ...(openPreview === undefined
+        ? {}
+        : {
+            preview: {
+              open: openPreview,
+              ...(openPreviewBeside === undefined
+                ? {}
+                : { openBeside: openPreviewBeside }),
+            },
+          }),
       // Spread for the same reason: absent means the surface did not say.
       ...(fields === undefined ? {} : { fields }),
       // Spread for the same reason: absent means the editor did not say.
@@ -378,6 +406,7 @@ export function EntryFormContextProvider({
       hasWorkingDraft,
       renderEntryFields,
       openPreview,
+      openPreviewBeside,
       fields,
       keepsRecoveryPoints,
     ]
