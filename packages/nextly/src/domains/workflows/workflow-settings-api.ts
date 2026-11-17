@@ -39,6 +39,7 @@ import { holderAnswer } from "./holders";
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
 import { registeredWorkflows, type RegisteredWorkflow } from "./registry";
 import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
+import { WORKFLOW_SETTINGS_ACTIVITY_COLLECTION } from "./settings-activity";
 import { primaryAction } from "./steps";
 import type { Workflow, WorkflowStepKind } from "./types";
 import {
@@ -79,14 +80,6 @@ export const WORKFLOW_DEFINITION_KEYS: readonly string[] = [
   "afterPublish",
   "onEdit",
 ];
-
-/**
- * The activity-log `collection` a workflow's settings changes are filed under, with the
- * workflow's slug as the entry.
- *
- * @experimental
- */
-export const WORKFLOW_SETTINGS_ACTIVITY_COLLECTION = "workflows";
 
 /** A registered workflow, as a reader of its settings is told it. @experimental */
 export interface WorkflowSummary {
@@ -296,7 +289,7 @@ async function permissionIdsOf(
 
 /** The role ids holding each of `permissionIds` directly, by permission id. */
 async function directHolders(
-  db: Pick<DrizzleAdapter, "select"> | TransactionContext,
+  db: Pick<TransactionContext, "select">,
   permissionIds: readonly string[]
 ): Promise<Map<string, Set<string>>> {
   const held = new Map<string, Set<string>>();
