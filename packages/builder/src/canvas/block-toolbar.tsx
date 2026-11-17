@@ -42,6 +42,11 @@
  * @module block-toolbar
  */
 
+import {
+  componentLayersLocks,
+  type BlockDocument,
+  type ComponentLayersLock,
+} from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   DropdownMenu,
@@ -82,6 +87,7 @@ import {
   useBlockActionsContext,
   useToolbarFocusSlot,
 } from "../keyboard-actions";
+import { lockSentence } from "../keyboard-announcements";
 import { lockBlockingEdit } from "../locking";
 import { layerLabel, pathTo } from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
@@ -251,6 +257,36 @@ type BarLock =
 /** What a pinned lock says where the area it sits in gives no reason. */
 const HELD_REASON = "The area it sits in fixes this.";
 
+/** What a component's Layers lock says where the store gives no sentence. */
+const COMPONENT_HELD_REASON = "Set by its component.";
+
+/**
+ * The blocks a placed component locks in Layers, per composed page. Kept by
+ * the composed document's identity, so selecting another block in the same
+ * page walks nothing again.
+ */
+const componentLocksByPage = new WeakMap<
+  BlockDocument,
+  ReadonlyMap<string, ComponentLayersLock>
+>();
+
+/**
+ * Whether a component the page places locks the block in Layers. Only the
+ * composed page shows it: the lock is in the component's own nodes, which a
+ * page reaches through its placement. A page that places none composes
+ * nothing, so this asks nothing there.
+ */
+function lockedByComponent(editor: EditorState, id: string): boolean {
+  const composed = editor.composed();
+  if (composed === undefined) return false;
+  let locks = componentLocksByPage.get(composed);
+  if (locks === undefined) {
+    locks = componentLayersLocks(composed.nodes);
+    componentLocksByPage.set(composed, locks);
+  }
+  return locks.has(id);
+}
+
 function barLockOf(
   editor: EditorState,
   selectedId: string | null,
@@ -258,16 +294,32 @@ function barLockOf(
 ): BarLock | undefined {
   if (selectedId === null || selectedIds.length > 1) return undefined;
   const holder = lockBlockingEdit(editor.document, selectedId);
-  if (holder === undefined) return undefined;
+  if (holder === undefined) {
+    // Not locked on the page, but a placed component may lock it: the bar
+    // says so, since no edit to it here would be kept.
+    if (!lockedByComponent(editor, selectedId)) return undefined;
+    return {
+      kind: "held",
+      reason:
+        lockSentence(editor, [lockOp(selectedId, true)]) ??
+        COMPONENT_HELD_REASON,
+    };
+  }
   if (holder.id !== selectedId) {
     return { kind: "around", id: holder.id, name: layerLabel(holder) };
   }
   // Asked only of a block locked itself, so a click on any other block reads
   // no slot locks.
   const status = lockStatusOf(editor.document, selectedId, lockViewOf(editor));
-  return layersLockChangeable(status)
+  if (!layersLockChangeable(status)) {
+    return { kind: "held", reason: status.slot?.reason ?? HELD_REASON };
+  }
+  // Unlock is offered only where the store keeps it: the store judges the
+  // same op the button applies, a placed component's own lock included.
+  const refused = lockSentence(editor, [lockOp(selectedId, false)]);
+  return refused === null
     ? { kind: "unlock", id: selectedId }
-    : { kind: "held", reason: status.slot?.reason ?? HELD_REASON };
+    : { kind: "held", reason: refused };
 }
 
 /**
