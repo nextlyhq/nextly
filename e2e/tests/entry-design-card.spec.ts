@@ -12,7 +12,12 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+
+// Posts have one template, which other files create, design, preview and
+// delete: hold it while this file publishes and reads it.
+test.describe.configure({ lock: [LOCK.postsTemplate] });
 
 const API = "/admin/api";
 const TEMPLATES = `${API}/collections/templates/entries`;
