@@ -239,6 +239,8 @@ export async function readLayoutChoices(
   // still offers Rename; which ones is the write's to judge.
   const canUpdateAnyLayout =
     (await ctx.caller?.can("update", layouts, { anyEntry: true })) === true;
+  const canDeleteAnyLayout =
+    (await ctx.caller?.can("delete", layouts, { anyEntry: true })) === true;
   const focused = items.filter(item => focus.includes(item.id));
   // Asked of each focused row as this author, whatever the collection-wide
   // answer: a rule may let them update this Layout and not others, and only
@@ -345,6 +347,7 @@ export async function readLayoutChoices(
       canUpdateLayouts,
       canCreateLayouts,
       canUpdateAnyLayout,
+      canDeleteAnyLayout,
       more:
         (listing as { meta?: { hasNext?: unknown } }).meta?.hasNext === true,
       // The rows the list read itself returned, which for a search are the

@@ -218,7 +218,7 @@ function PagesPanel({
           </>
         ) : null}
       </section>
-      <HeaderFooterGroup folds={folds} />
+      <HeaderFooterGroup folds={folds} currentPageId={current?.id ?? null} />
       <DeletePageDialog
         page={deleting}
         onCancel={() => setDeleting(null)}
