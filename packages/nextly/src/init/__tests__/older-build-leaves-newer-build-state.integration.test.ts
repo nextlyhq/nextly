@@ -19,7 +19,8 @@
  *   database is compared with a copy taken before the first: every table's
  *   columns and indexes, every row of every table (an entry the newer build
  *   added among them, with a value in the newer field), where each generated
- *   key stands, and on PostgreSQL and MySQL which object each table is.
+ *   key stands, and which object each table is (on SQLite, the schema
+ *   version, which moves on when a table is dropped and made again).
  * - The older build runs `nextly migrate`: it stops with exit code 3 naming
  *   the migration its folder lacks, and the database, the ledger included,
  *   still matches the copy.
@@ -150,6 +151,9 @@ const PLUGIN = definePlugin({
 
 /** The copy's entry for where the generated keys stand, beside the tables. */
 const GENERATED_KEYS = "(generated keys)";
+
+/** The copy's entry for SQLite's schema version, beside the tables. */
+const SCHEMA_VERSION = "(schema version)";
 
 /** The entry the newer build adds: a value in the older field and the newer. */
 const ENTRY = { title: "obl first title", summary: "obl first summary" };
@@ -429,24 +433,35 @@ describe.each(getConfiguredTestDialects())(
           const { t: _t, T: _T, ...rest } = row;
           of(text(row, "t")).indexes.push(line(rest));
         }
-        // SQLite keeps nothing that tells a table from one made again in its
-        // place, so there a table is known by its definition alone.
+        // Which object each table is: PostgreSQL's object id, InnoDB's
+        // table id, and on SQLite the page the table starts on. SQLite hands
+        // a freed page out again, so a table dropped and made again can start
+        // on the page it had; there the schema version below is what always
+        // tells.
         const identities =
           dialect === "postgresql"
             ? "SELECT c.relname::text AS t, c.oid::text AS o FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind = 'r'"
             : dialect === "mysql"
-              ? "SELECT table_name AS t, CAST(create_time AS CHAR) AS o FROM information_schema.tables WHERE table_schema = DATABASE()"
-              : undefined;
-        if (identities !== undefined) {
-          for (const row of await rowsOf(adapter, identities)) {
-            of(text(row, "t")).identity.push(text(row, "o"));
-          }
+              ? "SELECT SUBSTRING_INDEX(name, '/', -1) AS t, CAST(table_id AS CHAR) AS o FROM information_schema.innodb_tables WHERE SUBSTRING_INDEX(name, '/', 1) = DATABASE()"
+              : "SELECT name AS t, rootpage AS o FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
+        for (const row of await rowsOf(adapter, identities)) {
+          of(text(row, "t")).identity.push(text(row, "o"));
         }
         for (const [table, held] of Object.entries(out)) {
           const rows = await rowsOf(adapter, `SELECT * FROM ${q}${table}${q}`);
           held.rows = rows.map(line).sort();
           held.columns.sort();
           held.indexes.sort();
+        }
+        if (dialect === "sqlite") {
+          // Which SQLite moves on with every change to the schema, a table
+          // dropped and made again as it was included.
+          out[SCHEMA_VERSION] = {
+            identity: [],
+            columns: [],
+            indexes: [],
+            rows: (await rowsOf(adapter, "PRAGMA schema_version")).map(line),
+          };
         }
         out[GENERATED_KEYS] = {
           identity: [],
@@ -730,7 +745,7 @@ describe.each(getConfiguredTestDialects())(
         await adapter.executeQuery(scratch);
         const before = await copy();
         /** `held` without `left`, to compare everything else. */
-        const without = (held: Copy, left: string) => ({
+        const without = (held: Partial<Copy>, left: string) => ({
           ...held,
           [left]: undefined,
         });
@@ -778,29 +793,30 @@ describe.each(getConfiguredTestDialects())(
           );
         }
 
-        if (dialect !== "sqlite") {
-          // The table dropped and made again as it was: the same columns,
-          // indexes and rows, and another object. MySQL tells them apart by
-          // the second each was made in, so a second passes first.
-          if (dialect === "mysql") {
-            await adapter.executeQuery("SELECT SLEEP(1.1)");
-          }
-          const made = await copy();
-          await adapter.executeQuery(`DROP TABLE ${q}obl_identity${q}`);
-          await adapter.executeQuery(scratch);
-          const again = await copy();
+        // The table dropped and made again as it was, at once: the same
+        // columns, indexes and rows, and another object. PostgreSQL and
+        // MySQL give it another id; SQLite may start it on the page it had,
+        // and moves its schema version on.
+        const made = await copy();
+        await adapter.executeQuery(`DROP TABLE ${q}obl_identity${q}`);
+        await adapter.executeQuery(scratch);
+        const again = await copy();
+        if (dialect === "sqlite") {
+          expect(again[SCHEMA_VERSION]?.rows.length).toBe(1);
+          expect(again[SCHEMA_VERSION]).not.toEqual(made[SCHEMA_VERSION]);
+        } else {
+          expect(again["obl_identity"]?.identity.length).toBe(1);
           expect(again["obl_identity"]?.identity).not.toEqual(
             made["obl_identity"]?.identity
           );
-          expect(again["obl_identity"]?.identity.length).toBe(1);
-          expect({ ...again["obl_identity"], identity: [] }).toEqual({
-            ...made["obl_identity"],
-            identity: [],
-          });
-          expect(without(again, "obl_identity")).toEqual(
-            without(made, "obl_identity")
-          );
         }
+        expect({ ...again["obl_identity"], identity: [] }).toEqual({
+          ...made["obl_identity"],
+          identity: [],
+        });
+        expect(without(without(again, "obl_identity"), SCHEMA_VERSION)).toEqual(
+          without(without(made, "obl_identity"), SCHEMA_VERSION)
+        );
       } finally {
         await adapter.disconnect().catch(() => undefined);
       }
