@@ -36,7 +36,10 @@ import {
 import { restoreClasses } from "./breakpoint-removal/restore";
 import { stripClass } from "./breakpoint-removal/strip";
 import { documentVersionOf } from "./document-version";
-import type { StoredSiteStyle } from "./library-contract";
+import {
+  SHARED_STYLE_IN_USE_CODE,
+  type StoredSiteStyle,
+} from "./library-contract";
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import {
   checkStoredBreakpoints,
@@ -47,6 +50,7 @@ import {
   type SectionCheck,
   type SectionPolicy,
 } from "./site-style-record";
+import { siteTextReasons } from "./site-text-uses";
 import { readStoredJson, sameStoredValue } from "./stored-json";
 import {
   sharedStyleVariables,
@@ -424,6 +428,12 @@ function variableRemovalGuard(
       suppliedVariableIds(defaults)
     );
     if (dropped.length === 0) return;
+    // A Site text row the write leaves pointing at a dropped variable, from
+    // the section in hand: a value of this write, asked before any read.
+    refuseDroppedSiteTextUses(
+      dropped,
+      siteTokensOverCode(defaults, data.tokens)
+    );
     const inUse = check?.();
     if (inUse === undefined) return;
     // The shared styles as they will be once this write lands: the classes it
@@ -437,6 +447,27 @@ function variableRemovalGuard(
       siteTokensOverCode(defaults, data.tokens)
     );
   };
+}
+
+/**
+ * Refuse a write that drops a variable a Site text row still points at, the
+ * code's rows included, as the write leaves them, naming each row, as the
+ * remove route does.
+ */
+function refuseDroppedSiteTextUses(
+  dropped: readonly NamedVariable[],
+  merged: SiteTokenSet
+): void {
+  const reasons = siteTextReasons(dropped, merged);
+  if (reasons.length === 0) return;
+  throw NextlyError.validation({
+    errors: reasons.map(reason => ({
+      path: "tokens",
+      code: SHARED_STYLE_IN_USE_CODE,
+      message: reason.message,
+    })),
+    logContext: { variableIds: dropped.map(variable => variable.id) },
+  });
 }
 
 /**
@@ -740,7 +771,7 @@ export function siteStyleSingle(
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large }, group? }], prefix?, darkMode?, fluidRange?: { min, max }, order?: [identity] }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent). `group` is the named group a colour is listed under and `order` the identities of the colours in the order they are listed, both display-only.',
+            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large }, group? }], prefix?, darkMode?, fluidRange?: { min, max }, order?: [identity], siteText?: { body?, h1?…h6?, link?, button?, caption? } }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent). `group` is the named group a colour is listed under and `order` the identities of the colours in the order they are listed, both display-only. `siteText` sets the text of every page: each row holds `fontSize` and `lineHeight` (a variable reference such as { $token: "font-size.h2" } or a value), and the `link` row `color`, `hoverColor` and `underline` ("always", "hover" or "never") instead; a row left out keeps its built-in value.',
         },
       }),
       json({

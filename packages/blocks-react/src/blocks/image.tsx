@@ -822,7 +822,11 @@ const IMAGE_PARTS = {
       },
     },
   },
+  // The caption takes the block's text size itself, inside its figure: set
+  // on the figure, a size would reach the caption scaled by its own smaller
+  // default, so 20px would read 17.5px. The default stays its own.
   caption: {
+    takesFromRoot: { properties: ["fontSize"], whenRootIs: ["frame"] },
     baseStyles: {
       base: {
         base: {
@@ -843,8 +847,9 @@ const IMAGE_PARTS = {
 const WHEN_CLICKED_SECTION = "When clicked";
 
 /**
- * The shared link props, each placed in the When clicked section, where the
- * editor draws them under the choice that uses them.
+ * The shared link props, placed in the When clicked section, where the
+ * editor draws them under the choice that uses them; all but `rel`, which is
+ * in Advanced › HTML.
  */
 function whenClickedLinkProps(): {
   readonly [Name in keyof typeof LINK_PROPS]: (typeof LINK_PROPS)[Name] & {
@@ -859,7 +864,10 @@ function whenClickedLinkProps(): {
     },
     entryId: { ...LINK_PROPS.entryId, section: WHEN_CLICKED_SECTION },
     target: { ...LINK_PROPS.target, section: WHEN_CLICKED_SECTION },
-    rel: { ...LINK_PROPS.rel, section: WHEN_CLICKED_SECTION },
+    // How the page relates to where it links is an HTML detail: drawn in
+    // Advanced › HTML with the block's other HTML settings, not with the
+    // click's choice.
+    rel: { ...LINK_PROPS.rel, section: "HTML" },
   };
 }
 
@@ -906,19 +914,22 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
     decorative: { label: "Decorative, no alt text", type: "checkbox" },
+    // How the browser fetches the picture: an HTML detail, so in Advanced ›
+    // HTML. Drawn as one switch named by `eager`'s words: two states with a
+    // safe default are a yes-or-no question. The stored values stay as they
+    // are.
     loading: {
-      label: "Loading",
+      label: "Load right away",
       optionLabels: {
         lazy: "Load when near the screen",
-        eager: "Load immediately",
+        eager: "Load right away",
       },
-      // Drawn as one switch named by `eager`'s words: two states with a safe
-      // default are a yes-or-no question. The stored values stay as they are.
       display: "switch",
       switchOn: "eager",
-      hint: "Turn on for images at the top of the page.",
+      hint: "For images near the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
+      group: "advanced",
     },
     // What a click does, with the link it follows beside it in the same
     // section: the editor draws the link's settings only while Link is
@@ -977,6 +988,10 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // its choices: upload, the media library, or a link.
   example: { props: {} },
   supports: {
+    // Text and its colour style the caption: it inherits them, and takes
+    // the text size itself (see its part).
+    typography: true,
+    color: true,
     spacing: true,
     dimensions: true,
     border: true,

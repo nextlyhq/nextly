@@ -278,6 +278,17 @@ chips says where it's used and that changes there change all of them. While a st
 other than Normal is chosen, the settings below are tinted and say which look you're
 editing. This line and the tabs stay in view as you scroll the panel.
 
+A Spacer's **Size** section offers your spacing variables as **Presets** over its
+**Height**, smallest first, as a side of the spacing box does: pick one, and the space
+follows your scale as it changes.
+
+In Content, a link reads the same on every block that has one: **Link**, then **Open in
+a new tab** once a link is set. A Heading links to a page, an entry or an address, as a
+Button does. A List's **List as** picks Bullets or Numbers, and **Start at** shows only
+for Numbers. A custom list marker is a CSS detail: add it from **+ Add CSS property** in
+Style. In Style, a Button and every container have a **Shadow** under Effects, and a
+Heading and a List have a **Background**.
+
 In Advanced:
 
 - **Show when** reads "Always shown" until you add a condition. Inside a Collection
@@ -287,6 +298,9 @@ In Advanced:
   on `<section>` and `<div>` only, and the panel says so when the tag is another one.
 - **HTML tag** lists each tag once, with a plain name and what it means: "Section — a
   themed part of the page `<section>`".
+- **Link relationship** (`rel`, such as `nofollow`) on a block that links, and a
+  Button's **Button type** (Button, Send form or Clear form), offered while the button
+  links nowhere. An Embed's **Allow full screen** is here too.
 - **Anchor (ID)** lets a link jump to the block: `#your-id`.
 - **CSS classes** takes names separated by spaces, added to the block's element beside
   the classes Nextly generates. A name that starts with a digit, `.`, `#` or `nx-`, or
@@ -498,15 +512,19 @@ With an Image selected, its **Content** tab holds:
   library's again. Tick **Decorative, no alt text** for a picture that adds nothing to
   the page's words: screen readers skip it, and the page's `img` carries `alt=""`.
 - **When clicked**: **Nothing**, **Link** or **Enlarge**. Only **Link** shows the link's
-  settings: where it goes (an address, or a page or entry), opening in a new tab, and
-  its relationship. A link you set stays stored when you choose another option, so
+  settings: where it goes (an address, or a page or entry) and opening in a new tab;
+  its relationship is in **Advanced**, with the block's other HTML. A link you set stays stored when you choose another option, so
   choosing **Link** again brings it back. An Image saved before this setting existed
   reads as **Link** when it has a link, and **Nothing** otherwise. On the live page,
   **Enlarge** makes the picture a button that opens it full size over the page, with
   its caption. **Close**, <kbd>Escape</kbd> or a click outside the picture closes it,
   and it works with JavaScript turned off. The full-size file loads only when the
   picture is opened. On the canvas, a click on the picture still selects the block.
-- **Caption**: shown under the picture, as the figure's caption.
+- **Caption**: shown under the picture, as the figure's caption. Its font, size and
+  colour are set in **Style**, under **Text**.
+
+In **Advanced**, **Load right away** fetches the picture as the page opens rather than
+as it nears the screen: turn it on for an image near the top of the page.
 
 The shapes **Square**, **Rounded** and **Circle** are block styles, at the top of the
 **Style** tab. **Circle** crops the picture to a square first, so a wide picture is a
@@ -562,6 +580,23 @@ The page title in the top bar is a switcher too: it lists the pages you opened m
 recently, in this browser, and **All pages…** opens the Pages panel.
 
 Opening another page with work not yet saved asks first, as leaving the editor does.
+
+### Header & footer
+
+Below the pages, **Header & footer** lists the site's header & footer sets. Each set
+shows a small picture of its published header above its footer, its name, and how many
+pages show it: **Site default · 11 pages** for the default, **1 page**, **4 pages** or
+**Not used** for the others, with **Draft** or **Changes not published** where they
+apply. Choose a set to open its form in a new tab; **New header & footer** opens a new
+one. You see this group only if you may read header & footer sets.
+
+Each set's **⋯** menu offers **Open**, **Rename**, in place (<kbd>Enter</kbd> keeps the
+new name, <kbd>Escape</kbd> leaves it), and **Duplicate**, which makes a draft copy,
+"Copy of …". Rename needs the right to change header & footer sets, and Duplicate the
+right to make them; without it, the item isn't shown.
+
+Each group folds from its heading, and stays folded for you the next time you open the
+editor on this site.
 
 ## Fonts
 

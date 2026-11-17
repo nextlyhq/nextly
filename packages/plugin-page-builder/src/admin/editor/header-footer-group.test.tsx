@@ -1,0 +1,316 @@
+// @vitest-environment jsdom
+/**
+ * The Pages panel's "Header & footer" group, as an author meets it: a row
+ * per set with its picture, name and note, the site default marked, "+ New
+ * header & footer" last, folding, and hidden from an author who may not read
+ * sets.
+ */
+import { act, cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { LayoutChoicesResponse } from "../../layout-choices-contract";
+import type { LayoutPageCountsResponse } from "../../layout-counts-contract";
+
+interface RouteRead {
+  plugin: string;
+  path: string;
+}
+const routeReads: RouteRead[] = [];
+const refetch = vi.fn();
+let choices: { data?: unknown; error?: unknown } = {};
+let counts: { data?: unknown; error?: unknown } = {};
+
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  usePluginRoute: (read: RouteRead) => {
+    routeReads.push(read);
+    const answer = read.path.startsWith("/layouts/counts") ? counts : choices;
+    return {
+      data: answer.data,
+      error: answer.error ?? null,
+      pending: answer.data === undefined && answer.error === undefined,
+      fetching: false,
+      refetch,
+    };
+  },
+}));
+
+vi.mock("../header-footer-pictures", () => ({
+  useSetPictures: () => (picture: readonly { componentId: string }[]) => (
+    <span data-testid="set-picture">
+      {picture.map(region => region.componentId).join("+")}
+    </span>
+  ),
+}));
+
+const setWrites = vi.hoisted(() => ({
+  renameLayout: vi.fn(async (id: string, title: string) => ({ id, title })),
+  duplicateLayout: vi.fn(async (id: string) => ({
+    id: `${id}-copy`,
+    title: "Copy of Landing",
+  })),
+}));
+vi.mock("../layout-writes-client", () => setWrites);
+
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock("@nextlyhq/ui", async importOriginal => ({
+  ...(await importOriginal<typeof import("@nextlyhq/ui")>()),
+  toast: toasts,
+}));
+
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
+const { HeaderFooterGroup } = await import("./header-footer-group");
+
+const set = (
+  id: string,
+  title: string,
+  extra: Record<string, unknown> = {}
+) => ({
+  id,
+  title,
+  published: true,
+  draftChangesNotLive: false,
+  areasFilled: ["header"],
+  regions: [{ area: "header", componentId: `h-${id}` }],
+  ...extra,
+});
+
+function answer(items: ReturnType<typeof set>[], defaultLayout = "main") {
+  choices = {
+    data: {
+      items,
+      meta: {
+        defaultLayout,
+        defaultUnreadable: false,
+        layoutsCollection: "layouts",
+        canUpdateLayouts: rights.update,
+        canCreateLayouts: rights.create,
+        more: false,
+        matched: items.map(item => item.id),
+        regionComponents: {},
+        regionDefinitions: {},
+      },
+    } as unknown as LayoutChoicesResponse,
+  };
+}
+
+const folds = { folded: new Set<string>(), onFold: vi.fn() };
+/** What the author may do to sets. */
+const rights = { update: true, create: true };
+
+beforeEach(() => {
+  rights.update = true;
+  rights.create = true;
+  setWrites.renameLayout.mockClear();
+  setWrites.duplicateLayout.mockClear();
+  toasts.success.mockClear();
+  toasts.error.mockClear();
+  routeReads.length = 0;
+  refetch.mockClear();
+  folds.folded = new Set();
+  folds.onFold.mockClear();
+  answer([
+    set("main", "Main"),
+    set("landing", "Landing"),
+    set("promo", "Promo", { draftChangesNotLive: true }),
+    set("campaign", "Campaign", { published: false }),
+    set("big", "Big"),
+  ]);
+  counts = {
+    data: {
+      main: { pages: 11, floor: false },
+      landing: { pages: 1, floor: false },
+      promo: { pages: 4, floor: false },
+      campaign: { pages: 0, floor: false },
+      big: { pages: 200, floor: true },
+    } satisfies LayoutPageCountsResponse,
+  };
+});
+afterEach(cleanup);
+
+/** The group's set rows, in order, by what each says. */
+function rows(): HTMLElement[] {
+  return within(
+    screen.getByRole("list", { name: "Header & footer sets" })
+  ).getAllByRole("listitem");
+}
+
+describe("the Header & footer group", () => {
+  it("asks for every set's picture and changes in one read, and the counts", () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    const paths = routeReads.map(read => read.path);
+    expect(paths).toContain("/layouts/choices?pictures=1&drafts=1");
+    expect(paths).toContain("/layouts/counts");
+  });
+
+  it("notes each set: the default and its pages, the others' pages, a draft and changes not published", () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    const notes = rows().map(row => row.textContent);
+    expect(notes).toEqual([
+      expect.stringContaining("MainSite default · 11 pages"),
+      expect.stringContaining("Landing1 page"),
+      expect.stringContaining("Promo4 pages · Changes not published"),
+      expect.stringContaining("CampaignNot used · Draft"),
+      expect.stringContaining("BigAt least 200 pages"),
+      expect.stringContaining("New header & footer"),
+    ]);
+  });
+
+  it("draws each set's picture, from its regions", () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    expect(
+      screen.getAllByTestId("set-picture").map(picture => picture.textContent)
+    ).toEqual(["h-main", "h-landing", "h-promo", "h-campaign", "h-big"]);
+  });
+
+  it("opens a set's form, and a new set's, without leaving the builder", () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    const landing = screen.getByRole("link", { name: /^Landing/ });
+    expect(landing.getAttribute("href")).toBe(
+      "/admin/collections/layouts/landing"
+    );
+    expect(landing.getAttribute("target")).toBe("_blank");
+    const add = screen.getByRole("link", { name: /New header & footer/ });
+    expect(add.getAttribute("href")).toBe("/admin/collections/layouts/create");
+    expect(add.getAttribute("target")).toBe("_blank");
+  });
+
+  it("asks both reads again when the author comes back from a set's form", () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    refetch.mockClear();
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    // The sets and their counts.
+    expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("says when more sets exist than it lists, and where to see them all", () => {
+    const listed = [set("main", "Main")];
+    answer(listed);
+    (choices.data as { meta: { more: boolean } }).meta.more = true;
+    render(<HeaderFooterGroup folds={folds} />);
+    const all = screen.getByRole("link", {
+      name: /See every header & footer set/,
+    });
+    expect(all.getAttribute("href")).toBe("/admin/collections/layouts");
+    expect(all.textContent).toContain("Showing the first 1.");
+  });
+
+  it("is hidden from an author who may not read sets", () => {
+    choices = { error: Object.assign(new Error("No"), { status: 403 }) };
+    const { container } = render(<HeaderFooterGroup folds={folds} />);
+    expect(container.textContent).toBe("");
+  });
+
+  it("says when the sets could not be read, with a way to try again", () => {
+    choices = { error: Object.assign(new Error("Boom"), { status: 500 }) };
+    render(<HeaderFooterGroup folds={folds} />);
+    expect(
+      screen.getByText(/Couldn.t load the header & footer sets\./)
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("folds, and is drawn folded as the author left it", async () => {
+    const { rerender } = render(<HeaderFooterGroup folds={folds} />);
+    await act(async () => {
+      await userEvent.click(
+        screen.getByRole("button", { name: "Header & footer, 5" })
+      );
+    });
+    expect(folds.onFold).toHaveBeenCalledWith("header-footer", true);
+    folds.folded = new Set(["header-footer"]);
+    rerender(<HeaderFooterGroup folds={{ ...folds }} />);
+    expect(
+      screen
+        .getByRole("button", { name: "Header & footer, 5" })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
+    expect(
+      screen.queryByRole("list", { name: "Header & footer sets" })
+    ).toBeNull();
+  });
+});
+
+/** A set row's menu, opened. */
+async function openMenu(title: string) {
+  await userEvent.click(
+    screen.getByRole("button", { name: `More for ${title}` })
+  );
+}
+
+describe("a set's menu", () => {
+  it("offers Open, Rename and Duplicate to an author who may change and make sets", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    expect(
+      screen.getAllByRole("menuitem").map(entry => entry.textContent)
+    ).toEqual(["Open", "Rename", "Duplicate"]);
+  });
+
+  it("offers neither Rename without the right to change sets nor Duplicate without the right to make them", async () => {
+    rights.update = false;
+    rights.create = false;
+    answer([set("main", "Main"), set("landing", "Landing")]);
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    expect(
+      screen.getAllByRole("menuitem").map(entry => entry.textContent)
+    ).toEqual(["Open"]);
+  });
+
+  it("renames a set in place, then reads the sets again", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const field = await screen.findByRole("textbox", {
+      name: "Header & footer set name",
+    });
+    await userEvent.clear(field);
+    await userEvent.type(field, "Launch{Enter}");
+    expect(setWrites.renameLayout).toHaveBeenCalledWith("landing", "Launch");
+    await vi.waitFor(() => expect(refetch).toHaveBeenCalled());
+    // The list still reads the live name; the row shows the saved one.
+    expect(screen.getByRole("link", { name: /^Launch/ })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /^Landing/ })).toBeNull();
+  });
+
+  it("offers Rename to an author whose rule lets them update some sets", async () => {
+    rights.update = false;
+    answer([set("main", "Main"), set("landing", "Landing")]);
+    (
+      choices.data as { meta: { canUpdateAnyLayout?: boolean } }
+    ).meta.canUpdateAnyLayout = true;
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    expect(
+      screen.getAllByRole("menuitem").map(entry => entry.textContent)
+    ).toEqual(["Open", "Rename", "Duplicate"]);
+  });
+
+  it("copies a set, says so, then reads the sets again", async () => {
+    render(<HeaderFooterGroup folds={folds} />);
+    refetch.mockClear();
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(setWrites.duplicateLayout).toHaveBeenCalledWith("landing");
+    await vi.waitFor(() =>
+      expect(toasts.success).toHaveBeenCalledWith("Copy of Landing was made.")
+    );
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("says why a write was refused", async () => {
+    setWrites.duplicateLayout.mockRejectedValueOnce(new Error("Not allowed."));
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    await vi.waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith("Not allowed.")
+    );
+  });
+});

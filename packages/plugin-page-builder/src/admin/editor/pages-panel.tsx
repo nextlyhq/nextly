@@ -13,10 +13,12 @@
  * @module pages-panel
  */
 
+import { GroupToggle } from "@nextlyhq/builder/shell";
 import {
   apiErrorMessage,
   navigateTo,
   readPluginRoute,
+  useCurrentUserId,
   useDocumentIdentity,
   useDocumentStatus,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -56,9 +58,16 @@ import {
 } from "../pages-client";
 
 import { builderAddress } from "./builder-address";
+import { pagesFoldsStoreFor } from "./editor-preference-stores";
+import { useGroupFolds } from "./group-folds";
+import { HeaderFooterGroup } from "./header-footer-group";
+import { RenameField } from "./rename-field";
 
 /** How long typing must pause before the list is searched. */
 const SEARCH_DEBOUNCE_MS = 150;
+
+/** The Pages group's key in the panel's fold memory. */
+const PAGES_GROUP = "pages";
 
 /** What each state chip says. A plainly published page shows none. */
 const STATE_WORDS: Readonly<Record<NonNullable<PageItem["state"]>, string>> = {
@@ -151,51 +160,65 @@ function PagesPanel({
     onOpenSettings,
     report: setProblem,
   });
+  // The groups' folds, kept per author, as the Design panel's are.
+  const userId = useCurrentUserId();
+  const foldStore = React.useMemo(() => pagesFoldsStoreFor(userId), [userId]);
+  const folds = useGroupFolds(foldStore);
+  const pagesOpen = !folds.folded.has(PAGES_GROUP);
 
   return (
     // In the builder's panel text; the surface is the panel region's own.
-    <div
-      className="text-[color:var(--nx-builder-text)] flex h-full flex-col gap-3 p-3"
-      aria-label="Pages"
-    >
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Pages</h2>
-        <NewPageButton
-          // The page being edited's own collection, else the first one the
-          // unfiltered list showed: never whatever a search happens to rank
-          // first, which would move where a new page goes as the author types.
-          collection={current?.collection ?? list.firstCollection}
-          onCreate={act.create}
-        />
-      </div>
-      <label className="relative block">
-        <span className="sr-only">Search pages</span>
-        <Search
-          aria-hidden="true"
-          className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Search pages"
-          className="h-8 pl-7 text-sm"
-        />
-      </label>
-      {problem === null ? null : (
-        <p role="alert" className="text-sm text-destructive">
-          {problem}
-        </p>
-      )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <PageList
-          list={list}
-          query={query}
-          current={current}
-          unsavedWork={unsavedWork}
-          liveStatus={liveStatus}
-          actions={{ ...act, remove: setDeleting }}
-        />
-      </div>
+    // The panel scrolls as one, so every group stays reachable however long
+    // the one above it is.
+    <div className="text-[color:var(--nx-builder-text)] flex h-full flex-col gap-4 overflow-auto p-3">
+      <section aria-label="Pages" className="grid gap-3">
+        <div className="flex items-center justify-between">
+          <GroupToggle
+            heading="Pages"
+            count={list.items.length}
+            open={pagesOpen}
+            onToggle={() => folds.onFold(PAGES_GROUP, pagesOpen)}
+          />
+          <NewPageButton
+            // The page being edited's own collection, else the first one the
+            // unfiltered list showed: never whatever a search happens to rank
+            // first, which would move where a new page goes as the author types.
+            collection={current?.collection ?? list.firstCollection}
+            onCreate={act.create}
+          />
+        </div>
+        {pagesOpen ? (
+          <>
+            <label className="relative block">
+              <span className="sr-only">Search pages</span>
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="Search pages"
+                className="h-8 pl-7 text-sm"
+              />
+            </label>
+            {problem === null ? null : (
+              <p role="alert" className="text-sm text-destructive">
+                {problem}
+              </p>
+            )}
+            <PageList
+              list={list}
+              query={query}
+              current={current}
+              unsavedWork={unsavedWork}
+              liveStatus={liveStatus}
+              actions={{ ...act, remove: setDeleting }}
+            />
+          </>
+        ) : null}
+      </section>
+      <HeaderFooterGroup folds={folds} />
       <DeletePageDialog
         page={deleting}
         onCancel={() => setDeleting(null)}
@@ -743,35 +766,6 @@ function NotedItem({
         {note}
       </span>
     </>
-  );
-}
-
-/** The title, edited where it stands: Enter keeps it, Escape leaves it. */
-function RenameField({
-  title,
-  onDone,
-}: {
-  title: string;
-  onDone: (title: string | null) => void;
-}): React.JSX.Element {
-  const [value, setValue] = React.useState(title);
-  const finish = (keep: boolean) => {
-    const next = value.trim();
-    onDone(keep && next !== "" ? next : null);
-  };
-  return (
-    <Input
-      aria-label="Page title"
-      autoFocus
-      value={value}
-      onChange={event => setValue(event.target.value)}
-      onBlur={() => finish(true)}
-      onKeyDown={event => {
-        if (event.key === "Enter") finish(true);
-        if (event.key === "Escape") finish(false);
-      }}
-      className="h-7 min-w-0 flex-1 text-sm"
-    />
   );
 }
 

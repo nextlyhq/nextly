@@ -198,12 +198,13 @@ describe("a container's HTML tag", () => {
   });
 });
 
-describe("a button's Acts as", () => {
+describe("a button's Button type", () => {
   it("is offered only without a link, to a URL or to an entry", () => {
     const button = coreBlocks.find(block => block.name === "core/button");
     const type = (button?.props as Record<string, Record<string, unknown>>)
       .type;
-    expect(type?.label).toBe("Acts as");
+    expect(type?.label).toBe("Button type");
+    expect(type?.group).toBe("advanced");
     expect(type?.onlyWithout).toEqual(["href", ["entryCollection", "entryId"]]);
   });
 });

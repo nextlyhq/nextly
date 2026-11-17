@@ -141,13 +141,20 @@ export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
   baseStyles: LIST_BASE_STYLES,
   props: {
     kind: {
-      label: "Kind",
-      optionLabels: { unordered: "Bulleted", ordered: "Numbered" },
+      label: "List as",
+      optionLabels: { unordered: "Bullets", ordered: "Numbers" },
       type: "select",
       options: [...LIST_KINDS],
     },
     items: { label: "Items", role: "content", type: "array", of: "text" },
-    start: { label: "Start number", type: "number", min: 1 },
+    // Only a numbered list counts, so the number it starts at is offered only
+    // while the list is one; a stored start on a bulleted list is kept.
+    start: {
+      label: "Start at",
+      type: "number",
+      min: 1,
+      onlyWhen: { kind: ["ordered"] },
+    },
   },
   defaultProps: { kind: "unordered", items: [] },
   example: { props: { kind: "unordered", items: ["First", "Second"] } },
@@ -156,6 +163,7 @@ export const list: BlockDefinition<ListProps, PageContext> = defineBlock({
     list: true,
     typography: true,
     color: true,
+    background: true,
     spacing: true,
     dimensions: true,
     border: true,

@@ -201,6 +201,7 @@ const SOURCE_MODULES: ReadonlyArray<{
     // reads its own stored props: a block author's input is the render
     // arguments, not these.
     internal: [
+      "addressLinkFor",
       "boundImage",
       "boundText",
       "canLink",
@@ -210,6 +211,7 @@ const SOURCE_MODULES: ReadonlyArray<{
       "isTrustedOrigin",
       "LINK_PROPS",
       "linkFor",
+      "linksToEntry",
       "number",
       "oneOf",
       "readClaimOf",
@@ -631,7 +633,6 @@ describe("the root entry", () => {
       // route given no `maxQueries` renders under.
       "SITE_PAGE_DATA_LIMIT_SERVICE",
       "SLOTS_ATTRIBUTE",
-      "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       // Added deliberately: binding sources read on a server, carried to the
       // editor's canvas and read back there, by one pair of functions.
