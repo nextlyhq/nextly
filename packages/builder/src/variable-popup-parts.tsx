@@ -17,11 +17,15 @@ import * as React from "react";
 
 import { contrastLine } from "./variable-contrast";
 import {
+  combinedReach,
   variableRemoval,
   variableStatus,
-  type VariableReach,
 } from "./variable-usage";
-import { VariableUses, type VariableUsageHere } from "./variable-usage-view";
+import {
+  VariableUses,
+  type RemovedPart,
+  type VariableUsageHere,
+} from "./variable-usage-view";
 
 /** ☀ or ☾ beside "Light" or "Dark", for sight: the words name the field. */
 export function ModeIcon({ mode }: { mode: TokenMode }): React.JSX.Element {
@@ -98,15 +102,16 @@ export function CodeName({
  * words, then the places, listed as the reason Remove waits lists them.
  */
 export function UsageLine({
-  identity,
-  reach,
+  parts,
   usage,
 }: {
-  identity: string;
-  reach: VariableReach | undefined;
+  /** The variables behind the row: a type size and its line height are two. */
+  parts: readonly RemovedPart[];
   usage: VariableUsageHere;
 }): React.JSX.Element {
   const [listed, setListed] = React.useState(false);
+  // Counted together, as the row counts them.
+  const reach = combinedReach(parts.map(part => usage.reachOf(part.identity)));
   // Only something used has places to list.
   const used = variableRemoval(reach) === "in-use";
   return (
@@ -125,7 +130,7 @@ export function UsageLine({
           Show where
         </button>
       ) : null}
-      {listed ? <VariableUses identity={identity} usage={usage} /> : null}
+      {listed ? <VariableUses parts={parts} usage={usage} /> : null}
     </div>
   );
 }
@@ -157,13 +162,18 @@ export function ColourContrast({
   const pairs = PARTNERS.flatMap(partner => {
     if (partner.identity === own) return [];
     const other =
-      tokens.tokens.find(candidate => tokenIdentity(candidate) === partner.identity) ??
-      suppliedOf(partner.identity);
+      tokens.tokens.find(
+        candidate => tokenIdentity(candidate) === partner.identity
+      ) ?? suppliedOf(partner.identity);
     return other === undefined ? [] : [{ ...partner, other }];
   });
   if (pairs.length === 0) return null;
   return (
-    <div className="nx-vars-editor__contrast" role="group" aria-label="Contrast">
+    <div
+      className="nx-vars-editor__contrast"
+      role="group"
+      aria-label="Contrast"
+    >
       <span className="nx-vars-editor__label">Contrast</span>
       {pairs.map(pair => (
         <ContrastPair
@@ -194,12 +204,18 @@ function ContrastPair({
   const same =
     colour.values.dark === undefined && other.values.dark !== undefined;
   return (
-    <div className="nx-vars-editor__contrast-pair" role="group" aria-label={name}>
+    <div
+      className="nx-vars-editor__contrast-pair"
+      role="group"
+      aria-label={name}
+    >
       <span className="nx-vars-editor__contrast-name">{name}</span>
       {(["light", "dark"] as const).map(mode => {
         const mine = valueIn(colour, mode);
         const theirs = valueIn(other, mode);
-        const line = onTop ? contrastLine(mine, theirs) : contrastLine(theirs, mine);
+        const line = onTop
+          ? contrastLine(mine, theirs)
+          : contrastLine(theirs, mine);
         return (
           <span
             key={mode}
@@ -208,7 +224,9 @@ function ContrastPair({
             data-band={line?.band}
           >
             <ModeIcon mode={mode} />
-            <span className="nx-sr-only">{mode === "light" ? "Light: " : "Dark: "}</span>
+            <span className="nx-sr-only">
+              {mode === "light" ? "Light: " : "Dark: "}
+            </span>
             {line === undefined ? (
               "Can't be measured"
             ) : (
@@ -218,7 +236,10 @@ function ContrastPair({
               </>
             )}
             {mode === "dark" && same ? (
-              <span className="nx-vars-editor__same-dark"> · Same in dark mode</span>
+              <span className="nx-vars-editor__same-dark">
+                {" "}
+                · Same in dark mode
+              </span>
             ) : null}
           </span>
         );

@@ -3,7 +3,8 @@
  * decimals, and "Readable as text" from 4.5:1, "Large text only" from 3:1,
  * else "Low contrast".
  */
-import { describe, expect, it } from "vitest";
+import * as engine from "@nextlyhq/blocks-engine";
+import { describe, expect, it, vi } from "vitest";
 
 import { contrastLine } from "./variable-contrast";
 
@@ -39,5 +40,22 @@ describe("a colour's contrast, in words", () => {
   it("says nothing for a colour it cannot read", () => {
     expect(contrastLine("var(--x)", "#ffffff")).toBeUndefined();
     expect(contrastLine("#000000", "banana")).toBeUndefined();
+  });
+});
+
+describe("the band, from the engine's verdict", () => {
+  it("says what the engine's level means, not a second reading of the ratio", () => {
+    // A verdict that disagrees with its own ratio: only a band read from the
+    // level says "Large text only" here.
+    const spy = vi.spyOn(engine, "checkContrast").mockReturnValue({
+      ratio: 9,
+      level: "AA-large",
+      passesBodyText: false,
+    });
+    try {
+      expect(contrastLine("#000000", "#ffffff")?.band).toBe("Large text only");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

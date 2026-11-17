@@ -7,10 +7,25 @@
  *
  * @module variable-contrast
  */
-import { checkContrast } from "@nextlyhq/blocks-engine";
+import { checkContrast, type ContrastLevel } from "@nextlyhq/blocks-engine";
 
 /** What a ratio is good for, in words. */
-export type ContrastBand = "Readable as text" | "Large text only" | "Low contrast";
+export type ContrastBand =
+  | "Readable as text"
+  | "Large text only"
+  | "Low contrast";
+
+/**
+ * What each of the engine's levels means here, read from its verdict so the
+ * thresholds have one home: AAA and AA are body text, AA-large is large
+ * text, and below that is low.
+ */
+const BANDS: Readonly<Record<ContrastLevel, ContrastBand>> = {
+  AAA: "Readable as text",
+  AA: "Readable as text",
+  "AA-large": "Large text only",
+  fail: "Low contrast",
+};
 
 /** One pair's contrast, as the colour's editor says it. */
 export interface ContrastLine {
@@ -32,12 +47,7 @@ export function contrastLine(
   if (result === undefined) return undefined;
   return {
     ratio: `${shownRatio(result.ratio)}:1`,
-    band:
-      result.ratio >= 4.5
-        ? "Readable as text"
-        : result.ratio >= 3
-          ? "Large text only"
-          : "Low contrast",
+    band: BANDS[result.level],
   };
 }
 

@@ -192,23 +192,12 @@ function InUse({
   reach: VariableReach;
   usage: VariableUsageHere;
 }): React.JSX.Element {
-  // Only the parts something uses have places to list.
-  const used = parts.filter(
-    part => variableRemoval(usage.reachOf(part.identity)) === "in-use"
-  );
   return (
     <>
       <p className="nx-vars-refusal__text">
         {variableLossSentence(reach, loss)}
       </p>
-      {used.map(part => (
-        <PartUses
-          key={part.identity}
-          identity={part.identity}
-          heading={used.length > 1 ? part.name : undefined}
-          usage={usage}
-        />
-      ))}
+      <VariableUses parts={parts} usage={usage} />
       <p className="nx-vars-refusal__text">
         {`Change those blocks and styles to another variable, or clear the value there, then remove ${name}.`}
       </p>
@@ -217,17 +206,34 @@ function InUse({
 }
 
 /**
- * Where a variable is used, listed for its editor: the first few places,
- * then every one on "Show all", as the reason Remove waits lists them.
+ * Where a variable is used: a list for each of its parts in use (a type
+ * size and its line height are two), each named when there are two, the
+ * first few places and then every one on "Show all". The one listing for
+ * the variable's editor and for the reason Remove waits.
  */
 export function VariableUses({
-  identity,
+  parts,
   usage,
 }: {
-  identity: string;
+  parts: readonly RemovedPart[];
   usage: VariableUsageHere;
 }): React.JSX.Element {
-  return <PartUses identity={identity} heading={undefined} usage={usage} />;
+  // Only the parts something uses have places to list.
+  const used = parts.filter(
+    part => variableRemoval(usage.reachOf(part.identity)) === "in-use"
+  );
+  return (
+    <>
+      {used.map(part => (
+        <PartUses
+          key={part.identity}
+          identity={part.identity}
+          heading={used.length > 1 ? part.name : undefined}
+          usage={usage}
+        />
+      ))}
+    </>
+  );
 }
 
 /**

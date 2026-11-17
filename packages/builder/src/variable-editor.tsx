@@ -53,7 +53,7 @@ import {
   type RemovalPlan,
 } from "./variable-removal";
 import { swatchStyle } from "./variable-swatch";
-import { combinedReach, type VariableRemoval } from "./variable-usage";
+import type { VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
 import {
   LineHeightHint,
@@ -243,18 +243,13 @@ function EditorDetails({
   suppliedOf: (identity: string) => SiteToken | undefined;
   usage: VariableUsageHere | undefined;
 }): React.JSX.Element {
-  const { row, lineHeight } = entry;
-  // A type size is used through its line height too, so both are counted.
-  const identities =
-    lineHeight === undefined
-      ? [row.identity]
-      : [row.identity, lineHeight.identity];
   return (
     <>
-      {usage === undefined ? null : (
+      {usage === undefined || token === undefined ? null : (
+        // The parts Remove acts on, so a type size's line height is counted
+        // and listed under its own name, as it is there.
         <UsageLine
-          identity={row.identity}
-          reach={combinedReach(identities.map(usage.reachOf))}
+          parts={partsOf(entry, token, tokens, suppliedOf)}
           usage={usage}
         />
       )}
