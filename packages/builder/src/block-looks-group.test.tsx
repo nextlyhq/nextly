@@ -418,6 +418,17 @@ describe("the keys on a block style's row", () => {
     expect(within(section).queryByRole("textbox")).toBeNull();
   });
 
+  it("closes a menu opened from the row back onto the row, on Escape", async () => {
+    const { section } = draw(LIBRARY, { actions: actionsOf() });
+    const row = rowOf(section, "Ghost");
+    row.focus();
+    fireEvent.keyDown(row, { key: "F10", shiftKey: true });
+    const menu = await screen.findByRole("menu");
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(row));
+  });
+
   it("opens the ⋯ menu with Shift+F10 and with the menu key", async () => {
     const { section } = draw(LIBRARY, { actions: actionsOf() });
     fireEvent.keyDown(rowOf(section, "Ghost"), { key: "F10", shiftKey: true });

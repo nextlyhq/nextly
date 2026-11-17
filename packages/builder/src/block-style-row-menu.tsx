@@ -94,9 +94,10 @@ export interface BlockStyleMenuActions {
 
 /**
  * The row's ⋯ button and its menu. The menu key and Shift+F10 on the row
- * open it too, through `open`. An item that hands focus elsewhere (the name
- * field, the style editor) says so, so closing the menu does not take focus
- * back to the ⋯.
+ * open it too, through `open`, and closing it then hands focus back to the
+ * row (`returnTo`) rather than the ⋯. An item that hands focus elsewhere
+ * (the name field, the style editor) says so, so closing the menu takes
+ * focus nowhere.
  */
 export function BlockStyleMenu({
   name,
@@ -104,12 +105,18 @@ export function BlockStyleMenu({
   actions,
   open,
   onOpenChange,
+  returnTo,
 }: {
   readonly name: string;
   readonly offers: BlockStyleOffers;
   readonly actions: BlockStyleMenuActions;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /**
+   * Where focus goes as the menu closes, while set: the row it was opened
+   * from. Cleared as it is used, so a later pointer open returns to the ⋯.
+   */
+  readonly returnTo?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
   const handingOff = React.useRef(false);
   const handOff = (then: () => void) => () => {
@@ -134,9 +141,16 @@ export function BlockStyleMenu({
         collisionPadding={8}
         className="nx-vars__menu"
         onCloseAutoFocus={event => {
-          if (!handingOff.current) return;
-          handingOff.current = false;
+          if (handingOff.current) {
+            handingOff.current = false;
+            event.preventDefault();
+            return;
+          }
+          const back = returnTo?.current;
+          if (back === null || back === undefined) return;
+          returnTo.current = null;
           event.preventDefault();
+          back.focus();
         }}
       >
         {offers.edit ? (

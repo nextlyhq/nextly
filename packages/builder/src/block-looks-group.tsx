@@ -352,6 +352,9 @@ function StyleRow({
   readonly specimen: React.ReactNode;
 }): React.JSX.Element {
   const [menuOpen, setMenuOpen] = React.useState(false);
+  // Set while the menu was opened from the row by its keys, so closing it
+  // returns there; a ref, since the close reads it after the last render.
+  const returnTo = React.useRef<HTMLElement | null>(null);
   const [renaming, setRenaming] = React.useState(false);
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const rowRef = React.useRef<HTMLButtonElement>(null);
@@ -414,7 +417,10 @@ function StyleRow({
         title={sentence === "" ? undefined : sentence}
         data-block-look={row.id}
         onClick={() => panel.onEdit?.({ id: row.id, blockType: row.blockType })}
-        onKeyDown={rowKeys(offers, startRename, () => setMenuOpen(true))}
+        onKeyDown={rowKeys(offers, startRename, () => {
+          returnTo.current = rowRef.current;
+          setMenuOpen(true);
+        })}
       >
         <span className="nx-block-looks__specimen">{specimen}</span>
         <span className="nx-vars__name" title={row.name}>
@@ -429,6 +435,7 @@ function StyleRow({
           actions={menuActionsOf(row, panel, run, startRename)}
           open={menuOpen}
           onOpenChange={setMenuOpen}
+          returnTo={returnTo}
         />
       ) : null}
       {refusal === null ? null : (
