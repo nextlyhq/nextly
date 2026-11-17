@@ -30,6 +30,7 @@ import {
   sharedStyleWrite,
   NO_DESIGN_RIGHT,
 } from "./shared-style-target";
+import type { StyleAddress } from "./style-values";
 
 const BREAKPOINTS: BreakpointSet = {
   viewport: [
@@ -834,7 +835,7 @@ describe("Move to", () => {
   it("sets several addresses as one change, and puts all of them back as one", () => {
     // The sides of a padding set together in a shared style: one change for
     // the host to store, so one undo takes the whole gesture back.
-    const side = (name: string) => ({
+    const side = (name: string): StyleAddress => ({
       state: "base",
       breakpoint: "base",
       property: "padding",
@@ -861,15 +862,15 @@ describe("Move to", () => {
   });
 
   it("refuses the whole change when one of its values is refused", () => {
+    const side = (name: string): StyleAddress => ({
+      state: "base",
+      breakpoint: "base",
+      property: "padding",
+      path: [name],
+    });
     const change = sharedStyleChanges([
-      {
-        address: { state: "base", breakpoint: "base", property: "padding", path: ["blockStart"] },
-        value: "8px",
-      },
-      {
-        address: { state: "base", breakpoint: "base", property: "padding", path: ["blockEnd"] },
-        value: "red",
-      },
+      { address: side("blockStart"), value: "8px" },
+      { address: side("blockEnd"), value: "red" },
     ]);
     expect(change({}).kind).toBe("refused");
   });
