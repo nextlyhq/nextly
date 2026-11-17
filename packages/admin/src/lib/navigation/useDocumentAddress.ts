@@ -2,8 +2,8 @@
  * The shared "open this document" rule (`documentAddress`), and the other ways
  * into a document derived from it (`rowWaysIn`, `viewsToOpenIn`), with what
  * they need read from the signed-in admin: each collection as the admin lists
- * it, whether the reader may update it, the site's default language and the
- * published document views.
+ * it and every Single, whether the reader may update it, the site's default
+ * language and the published document views.
  *
  * @module lib/navigation/useDocumentAddress
  */
@@ -11,6 +11,7 @@ import { useCallback, useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
+import { useEverySingle } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
@@ -31,8 +32,9 @@ export interface OpenOptions {
   /** The language to open it in. */
   locale?: string;
   /**
-   * The collection as the caller already holds it (a list holds its own
-   * schema); read from the admin's list of collections otherwise.
+   * The collection or Single as the caller already holds it (a list holds
+   * its own schema, the sidebar its Singles); read from the admin's lists of
+   * collections and Singles otherwise.
    */
   collection?: OpenableCollection;
 }
@@ -49,6 +51,19 @@ export type WaysInOf = (
   options?: OpenOptions
 ) => WayIn[];
 
+/**
+ * The document views the admin's metadata publishes, enabled plugins' only:
+ * read through a hook so whatever reads the rule is drawn again when they
+ * arrive. Every reading of the rule takes its views from here.
+ */
+export function usePublishedDocumentViews(): readonly RegisteredDocumentView[] {
+  const { plugins } = useBranding();
+  return useMemo(
+    () => (plugins ?? []).flatMap(plugin => plugin.documentViews ?? []),
+    [plugins]
+  );
+}
+
 /** One of the rule's readings of a document, from what the admin holds. */
 type RuleReading<T> = (
   document: OpenedDocument,
@@ -57,46 +72,61 @@ type RuleReading<T> = (
   views: readonly RegisteredDocumentView[]
 ) => T;
 
+/**
+ * Every collection the admin lists and every Single, each by its slug and
+ * kept apart, since a collection and a Single may share a slug.
+ */
+function useOpenableBySlug(): (
+  document: OpenedDocument
+) => OpenableCollection | undefined {
+  const { data: collections } = useEveryNavCollection();
+  const { data: singles } = useEverySingle();
+  const bySlug = useMemo(
+    () => ({
+      collection: new Map<string, OpenableCollection>(
+        (collections ?? []).map(collection => [collection.name, collection])
+      ),
+      single: new Map<string, OpenableCollection>(
+        (singles ?? []).map(single => [single.slug, single])
+      ),
+    }),
+    [collections, singles]
+  );
+  return useCallback(
+    document => bySlug[document.kind].get(document.slug),
+    [bySlug]
+  );
+}
+
 /** `reading` with what it needs read from the signed-in admin. */
 function useRuleReading<T>(
   reading: RuleReading<T>
 ): (document: OpenedDocument, options?: OpenOptions) => T {
-  const { data } = useEveryNavCollection();
+  const openableOf = useOpenableBySlug();
   const { canAccessCollection } = useCurrentUserPermissions();
   // The default language whenever the site names one, multilingual or not: on
   // a one-language site a saved row still names it, and it is the default.
   const { defaultLocale } = useLocalization();
-  // The views the admin's metadata publishes, enabled plugins' only: read
-  // here so a link is drawn again when they arrive.
-  const { plugins } = useBranding();
-  const views = useMemo(
-    () => (plugins ?? []).flatMap(plugin => plugin.documentViews ?? []),
-    [plugins]
-  );
-  const bySlug = useMemo(
-    () =>
-      new Map<string, OpenableCollection>(
-        (data ?? []).map(collection => [collection.name, collection])
-      ),
-    [data]
-  );
+  const views = usePublishedDocumentViews();
   return useCallback(
     (document, options = {}) =>
       reading(
         document,
-        options.collection ?? bySlug.get(document.slug),
+        options.collection ?? openableOf(document),
         {
           // A view edits the default language, whatever language the screen
-          // the link is on was asked in: `update` answers for that one.
-          canUpdate:
-            document.kind === "collection" &&
-            canAccessCollection(document.slug, "updateInDefaultLanguage"),
+          // the link is on was asked in: `update` answers for that one. The
+          // reader's access answers a collection and a Single alike, by slug.
+          canUpdate: canAccessCollection(
+            document.slug,
+            "updateInDefaultLanguage"
+          ),
           ...(options.locale === undefined ? {} : { locale: options.locale }),
           ...(defaultLocale ? { defaultLocale } : {}),
         },
         views
       ),
-    [reading, bySlug, canAccessCollection, defaultLocale, views]
+    [reading, openableOf, canAccessCollection, defaultLocale, views]
   );
 }
 

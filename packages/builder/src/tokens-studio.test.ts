@@ -36,6 +36,8 @@ import {
   clearDarkValue,
   removeToken,
   renameToken,
+  fluidRangeOf,
+  setFluidRange,
   setFluidSize,
   setTokenValue,
   tokenNameIssue,
@@ -927,5 +929,55 @@ describe("a fluid line height typed by hand", () => {
     const typed = writeTokenValue(made, 0, "light", "28px");
     if (!("tokens" in typed)) throw new Error("the write was refused");
     expect(typed.tokens.tokens[0]?.fluid).toBeUndefined();
+  });
+});
+
+describe("a change of the site's fluid range", () => {
+  const range = { min: 360, max: 1280 };
+  const made = setFluidSize(
+    {
+      tokens: [
+        {
+          name: "font-size.lead",
+          kind: "dimension",
+          values: { light: "18px" },
+        },
+        {
+          name: "space.stack",
+          kind: "dimension",
+          values: { light: "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)" },
+        },
+      ],
+    },
+    0,
+    { small: 16, large: 20 },
+    range
+  );
+
+  it("makes every size made with Fluid… again, keeping its two sizes", () => {
+    const wider = { min: 320, max: 1440 };
+    const next = setFluidRange(made, wider);
+    expect(next.fluidRange).toEqual(wider);
+    expect(next.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, wider)
+    );
+    expect(next.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("leaves a fluid value written by hand as it is", () => {
+    const next = setFluidRange(made, { min: 320, max: 1440 });
+    expect(next.tokens[1]?.values.light).toBe(
+      "clamp(1rem, 0.875rem + 0.5vw, 1.25rem)"
+    );
+  });
+
+  it("is 360px to 1280px until the site sets its own", () => {
+    expect(fluidRangeOf(made)).toEqual({ min: 360, max: 1280 });
+    expect(
+      fluidRangeOf({ ...made, fluidRange: { min: 320, max: 1440 } })
+    ).toEqual({
+      min: 320,
+      max: 1440,
+    });
   });
 });

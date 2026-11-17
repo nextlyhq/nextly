@@ -392,27 +392,26 @@ describe("what is typed on the Content tab, while Style shows another block", ()
 });
 
 describe("what a Style section shows for the next block", () => {
-  it("puts a property brought out from More back behind it for the next block", () => {
+  it("starts the next block's CSS properties without the rows added to the last", () => {
     render(<Host />);
     act(() => editor().select("first"));
     openTab("Style");
-    const typography = screen.getByRole("button", {
-      name: /^Text(has changes)?$/,
-    });
-    if (typography.getAttribute("aria-expanded") !== "true") {
-      fireEvent.click(typography);
-    }
-    revealFromMore("Font style");
-    // The control: brought out, it is no longer offered by More.
-    openMore();
-    expect(screen.queryByRole("menuitem", { name: "Font style" })).toBeNull();
-    fireEvent.keyDown(document.activeElement ?? document.body, {
-      key: "Escape",
-    });
+    openCssProperties();
+    addCssProperty("font-style");
+    // The control: added, it is a row and no longer offered.
+    expect(
+      document.querySelector('[data-css-property="fontStyle"]')
+    ).not.toBeNull();
+    openPicker();
+    expect(screen.queryByRole("option", { name: /^font-style / })).toBeNull();
     act(() => editor().select("second"));
-    // The second block starts from its own section: Font style behind More.
-    openMore();
-    expect(screen.getByRole("menuitem", { name: "Font style" })).toBeTruthy();
+    // The second block starts from its own rows: font-style is offered again.
+    expect(
+      document.querySelector('[data-css-property="fontStyle"]')
+    ).toBeNull();
+    openCssProperties();
+    openPicker();
+    expect(screen.getByRole("option", { name: /^font-style / })).toBeTruthy();
   });
 
   it("draws a closed section's heading again when its dot goes", () => {
@@ -449,18 +448,25 @@ describe("what a Style section shows for the next block", () => {
   });
 });
 
-/** Opens Typography's "+ More" menu. */
-function openMore(): void {
-  fireEvent.keyDown(
-    screen.getByRole("button", { name: "More text properties" }),
-    { key: "Enter" }
-  );
+/** Opens "CSS properties", where it is closed. */
+function openCssProperties(): void {
+  const section = screen.getByRole("button", { name: /^CSS properties/ });
+  if (section.getAttribute("aria-expanded") !== "true")
+    fireEvent.click(section);
 }
 
-/** Brings `label` out from Typography's "+ More". */
-function revealFromMore(label: string): void {
-  openMore();
-  fireEvent.click(screen.getByRole("menuitem", { name: label }));
+/** Opens "+ Add CSS property"'s list, where it is closed. */
+function openPicker(): void {
+  const add = screen.getByRole("button", { name: "+ Add CSS property" });
+  if (add.getAttribute("aria-expanded") !== "true") fireEvent.click(add);
+}
+
+/** Adds a property by its CSS name from "+ Add CSS property". */
+function addCssProperty(cssName: string): void {
+  openPicker();
+  fireEvent.click(
+    screen.getByRole("option", { name: new RegExp(`^${cssName} `) })
+  );
 }
 
 /** A page of a block with one attribute, then a block holding the id `hero`. */

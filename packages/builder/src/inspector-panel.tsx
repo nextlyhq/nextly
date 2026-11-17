@@ -36,6 +36,7 @@ import {
   BASE_BREAKPOINT,
   findNode,
   type BlockDocument,
+  type BlockNode,
   STYLE_STATES,
   type BreakpointId,
   type BreakpointSet,
@@ -67,6 +68,7 @@ import { ContentServicesContext } from "./content-controls";
 import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { HiddenStatus } from "./hide-on";
 import {
   inspectorTabsOf,
   inspectSelection,
@@ -88,11 +90,7 @@ import type {
   InspectorPanelProps,
   StyleStateBinding,
 } from "./inspector-panel-types";
-import {
-  editedStyleState,
-  openingTabFor,
-  shownTab,
-} from "./inspector-style-state";
+import { openingTabFor, shownTab } from "./inspector-style-state";
 import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
@@ -100,6 +98,7 @@ import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
+import type { PlainFlow } from "./plain-layout";
 import {
   advancedEntries,
   contentEntries,
@@ -126,9 +125,8 @@ import {
   type StoredStyles,
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
+import { inspectStyle } from "./style-inspector";
 import { breakpointLabel } from "./style-provenance-indicators";
-import type { PlainFlow } from "./plain-layout";
-import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -141,7 +139,6 @@ export type { ComponentLibrary } from "./inspector-panel-types";
 export type { StyleStateBinding } from "./inspector-panel-types";
 export type {
   BlockInspectorResolver,
-  DocumentSettingsView,
   InspectorPanelProps,
 } from "./inspector-panel-types";
 export { editedStyleState } from "./inspector-style-state";
@@ -322,7 +319,6 @@ export function InspectorPanel({
         onExit={panel.lookEditing.onExit}
         library={panel.classLibrary ?? []}
         canvasRoot={panel.canvasRoot}
-        state={editedStyleState(panel.styleState)}
         policy={panel.policy}
         breakpoint={panel.breakpoint}
         cascade={panel.cascade}
@@ -477,12 +473,15 @@ function ContentTabPanel({
   tabs,
   shown,
   onChoose,
+  status,
   ...content
 }: {
   tabs: readonly InspectorTab[];
   shown: string;
   /** Show another tab, from the filter's "2 in Advanced". */
   onChoose: (tab: string) => void;
+  /** Where the block is hidden, said at the top of the tab. */
+  status: React.ReactNode;
 } & Omit<
   React.ComponentProps<typeof ContentTab>,
   "onScreen"
@@ -490,9 +489,57 @@ function ContentTabPanel({
   if (!tabs.includes("content")) return null;
   return (
     <TabsContent value="content" forceMount hidden={shown !== "content"}>
+      {status}
       <FilterNote tab="content" onChoose={onChoose} />
       <ContentTab {...content} onScreen={shown === "content"} />
     </TabsContent>
+  );
+}
+
+/**
+ * The selected block's card: its icon, type, name and lock, and the verbs
+ * its menu offers.
+ */
+function SelectedBlockCard({
+  block,
+  editor,
+  verbs,
+  reasonId,
+}: {
+  block: BlockInspection;
+  editor: InspectorPanelProps["editor"];
+  verbs: InspectorPanelProps["verbs"];
+  reasonId: string;
+}): React.JSX.Element {
+  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
+  return (
+    <BlockCard
+      icon={block.icon}
+      type={block.label}
+      name={block.identity.name}
+      description={block.description}
+      lock={lock}
+      // Withheld while a Layers lock holds the block, its own or one around
+      // it: renaming is a change like any other, and the op layer refuses it.
+      onRename={
+        lock.layers || lock.inheritedFrom !== undefined
+          ? undefined
+          : name => editor.apply(renameOp(block.nodeId, name))
+      }
+      onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
+      // Held inside a `contentOnly` area, which pins the node's own lock
+      // with its design: the save would refuse the change. The one predicate
+      // the multi-selection card asks too, so a block's Lock is offered alike
+      // however it was selected; inside a block locked in Layers it stays
+      // offered, since a change to the lock alone is always allowed.
+      lockHeld={
+        layersLockChangeable(lock)
+          ? undefined
+          : "The area it sits in fixes this."
+      }
+      verbs={verbs}
+      reasonId={reasonId}
+    />
   );
 }
 
@@ -604,7 +651,6 @@ function SelectionInspector({
     );
   }
   const block = surface.block;
-  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
   const tabs = inspectorTabsOf(block);
   const match = blockMatch(editor.document, block, filter, {
     state: styleState?.state,
@@ -620,36 +666,23 @@ function SelectionInspector({
     },
   });
 
+  // Where the block is hidden, at the top of every tab; "Change" goes to
+  // Hide on from the tabs it is not on.
+  const hidden = {
+    editor,
+    nodeId: block.nodeId,
+    breakpoints: styleOnly.breakpoints,
+  };
+
   return (
     // The "/" shortcut is the panel's: from anywhere in it but a text field.
     <div className="nx-inspector" onKeyDown={find.onKeyDown}>
-      <BlockCard
+      <SelectedBlockCard
         // Keyed by node, so a rename half-typed for one block does not carry
         // to the next.
         key={`${block.nodeId}:card`}
-        icon={block.icon}
-        type={block.label}
-        name={block.identity.name}
-        description={block.description}
-        lock={lock}
-        // Withheld while a Layers lock holds the block, its own or one around
-        // it: renaming is a change like any other, and the op layer refuses it.
-        onRename={
-          lock.layers || lock.inheritedFrom !== undefined
-            ? undefined
-            : name => editor.apply(renameOp(block.nodeId, name))
-        }
-        onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
-        // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change. The one predicate
-        // the multi-selection card asks too, so a block's Lock is offered alike
-        // however it was selected; inside a block locked in Layers it stays
-        // offered, since a change to the lock alone is always allowed.
-        lockHeld={
-          layersLockChangeable(lock)
-            ? undefined
-            : "The area it sits in fixes this."
-        }
+        block={block}
+        editor={editor}
         verbs={verbs}
         reasonId={reasonId}
       />
@@ -687,6 +720,7 @@ function SelectionInspector({
               tabs={tabs}
               shown={shown}
               onChoose={choose}
+              status={<HiddenStatus {...hidden} onChoose={choose} />}
               block={block}
               editor={editor}
               onCommit={commit}
@@ -702,6 +736,7 @@ function SelectionInspector({
             />
 
             <TabsContent value="style">
+              <HiddenStatus {...hidden} onChoose={choose} />
               <FilterNote tab="style" onChoose={choose} />
               <StyleChangedElsewhere
                 styles={
@@ -737,6 +772,8 @@ function SelectionInspector({
               forceMount
               hidden={shown !== "advanced"}
             >
+              {/* No "Change" here: Hide on is on this tab. */}
+              <HiddenStatus {...hidden} />
               <FilterNote tab="advanced" onChoose={choose} />
               <AdvancedTab
                 block={block}
@@ -824,55 +861,81 @@ function blockMatch(
   document: BlockDocument,
   block: BlockInspection,
   filter: SettingsFilter,
-  at: {
-    state: StyleState | undefined;
-    breakpoint: BreakpointId | undefined;
-    breakpoints: BreakpointSet | undefined;
-    /** What the Style tab draws, while it is open, for its target. */
-    reported: ReportedStyle | undefined;
-    flow: PlainFlow;
-  }
+  at: MatchAt
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
-  // The Style tab's own sections while it is open: the target it edits may
-  // be a shared style. Closed, it edits the block, read here the same way.
-  const inspected =
-    at.reported === undefined
-      ? inspectStyle(document, block.nodeId, {
-          state: at.state ?? "base",
-          breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-        })
-      : undefined;
-  const styleSections = at.reported?.sections ?? inspected?.sections ?? [];
-  // What "Inside its parent" offers: none for a shared style, worn wherever.
-  const parent =
-    at.reported === undefined
-      ? inspected?.parent
-      : at.reported.shared
-        ? undefined
-        : at.reported.parent;
+  const { sections, parent } = styleOfBlock(document, block, at);
   const node = findNode(document.nodes, block.nodeId);
   return settingsMatch(
     [
       ...contentEntries(block, node, at.breakpoints),
       ...styleEntries(
-        styleSections,
+        sections,
         block,
-        // A shared style draws no block shortcuts: only the block's own do.
-        at.reported?.shared === true
-          ? undefined
-          : {
-              node,
-              at: {
-                state: at.state ?? "base",
-                breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-              },
-            },
+        shortcutsAt(node, at),
         parent,
-        at.flow
+        at.flow,
+        // Whether Arrange owns the space rows, as the open Style tab reads it.
+        at.reported?.arranges
       ),
       ...advancedEntries(block, node),
     ],
     filter
   );
+}
+
+/** Where the selected block is edited, for what the filter keeps of it. */
+interface MatchAt {
+  state: StyleState | undefined;
+  breakpoint: BreakpointId | undefined;
+  breakpoints: BreakpointSet | undefined;
+  /** What the Style tab draws, while it is open, for its target. */
+  reported: ReportedStyle | undefined;
+  flow: PlainFlow;
+}
+
+/**
+ * The Style tab's own sections while it is open: the target it edits may be
+ * a shared style. Closed, it edits the block, read here the same way. With
+ * them, what "Inside its parent" offers: none for a shared style, worn
+ * wherever.
+ */
+function styleOfBlock(
+  document: BlockDocument,
+  block: BlockInspection,
+  at: MatchAt
+): {
+  sections: ReportedStyle["sections"];
+  parent: ReportedStyle["parent"];
+} {
+  const { reported } = at;
+  if (reported !== undefined) {
+    return {
+      sections: reported.sections,
+      parent: reported.shared ? undefined : reported.parent,
+    };
+  }
+  const inspected = inspectStyle(document, block.nodeId, {
+    state: at.state ?? "base",
+    breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+  });
+  return { sections: inspected?.sections ?? [], parent: inspected?.parent };
+}
+
+/**
+ * The block's own shortcuts at the edited address, or none while a shared
+ * style is edited: only the block's own draw them.
+ */
+function shortcutsAt(
+  node: BlockNode | undefined,
+  at: MatchAt
+): Parameters<typeof styleEntries>[2] {
+  if (at.reported?.shared === true) return undefined;
+  return {
+    node,
+    at: {
+      state: at.state ?? "base",
+      breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+    },
+  };
 }

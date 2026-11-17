@@ -79,6 +79,7 @@ import {
   useMediaSummaryReader,
 } from "./media-summary-reader";
 import { usePageDataCount } from "./page-read-meter";
+import { useReadBack } from "./read-back";
 import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
@@ -144,6 +145,14 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   kinds: readonly DocumentKind[] | undefined;
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
+  /**
+   * Where the exit arrow goes instead of the form, and what it is called
+   * there: on an entry whose collection opens in the builder, its list
+   * ("Back to Pages"). Leaving the document asks first about unsaved work,
+   * as any leave does; "Open as form" stays `onClose`. Absent elsewhere,
+   * where the arrow is "Exit editor" and goes to the form.
+   */
+  back?: { label: string; go: () => void } | undefined;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
   /**
@@ -348,15 +357,21 @@ function EditorBody<TFieldValues extends FieldValues>({
   kinds,
   onCommit,
   onClose,
+  back,
   name,
   control,
   openAt,
   place,
 }: BlocksEditorProps<TFieldValues> & { place: FieldPlace }): JSX.Element {
+  // A save hands the document to the form, and the form takes the entry in
+  // again from the save's answer and the read after it, each a new object
+  // holding the same document. Kept as the object the editor already holds,
+  // so a read that matches what is shown plans and draws nothing again.
+  const readBack = useReadBack(onCommit);
   const mount = useEditorMount(
-    initialValue,
+    readBack.kept("opened", initialValue),
     kinds,
-    useStoredFieldValue(control, name, place.pathIn)
+    readBack.kept("stored", useStoredFieldValue(control, name, place.pathIn))
   );
   const { editor, inline } = mount;
 
@@ -404,7 +419,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     control,
     editor,
     inline,
-    onCommit,
+    onCommit: readBack.handOver,
     onClose,
     savePoint,
     // The count the removal dialog says now; the hold keeps it as it stood
@@ -617,6 +632,9 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas: canvas.canvasElement,
     requestPanel: panels.requestPanel,
   });
+  // The editor's one way out, for the exit arrow and the palette alike: the
+  // list on an entry whose collection opens in the builder, else the form.
+  const leave = back?.go ?? done;
   const {
     notices,
     componentLibrary,
@@ -642,7 +660,8 @@ function EditorBody<TFieldValues extends FieldValues>({
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
         <BuilderShell
           notices={notices}
-          onExit={shellExit(componentView, done)}
+          onExit={shellExit(componentView, leave)}
+          exitLabel={back?.label}
           // The signed-in author's own preferences, not the browser's.
           store={mount.preferenceStore}
           availablePanels={availablePanels}
@@ -671,6 +690,9 @@ function EditorBody<TFieldValues extends FieldValues>({
             // "Preview as visitor", in Preview's menu.
             visitor: conditions.visitor,
             pageData,
+            // The form, in the ⋯ menu: the same leave as the exit to the
+            // form, so it is offered exactly where that is.
+            openAsForm: shellExit(componentView, done),
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
@@ -761,14 +783,15 @@ function EditorBody<TFieldValues extends FieldValues>({
             exactly what the keystrokes and the toolbar run.
 
             `onExit` is the SAME handler the shell's exit button gets, so
-            leaving through the palette commits the document exactly as leaving
-            through the button does. Passing a different one — or omitting it
+            leaving through the palette goes where the button goes (the form,
+            or the list on an entry that opens in the builder) and commits or
+            asks exactly as leaving through the button does. Passing a different one — or omitting it
             while the button exists — would give the editor two ways out that
             behave differently.
           */}
             <EditorSearch
               editor={editor}
-              onExit={done}
+              onExit={leave}
               canvas={canvas.canvasElement}
               // The Add panel's own sources, so search offers what it offers.
               insert={searchInsertSources(panels)}
@@ -841,13 +864,14 @@ function addBlockHere(
 /**
  * The shell's exit arrow: withheld while the component banner offers its
  * Back, so the view has one way back rather than two arrows going to two
- * places. Leaving through search still commits, as the exit always did.
+ * places. Leaving through search still commits, as the exit always did. The
+ * ⋯ menu's "Open as form" follows the same rule.
  */
 function shellExit(
   view: Pick<ComponentView, "offersBack">,
-  done: () => void
+  leave: () => void
 ): (() => void) | undefined {
-  return view.offersBack ? undefined : done;
+  return view.offersBack ? undefined : leave;
 }
 
 /**

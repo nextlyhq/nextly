@@ -104,6 +104,71 @@ export interface InlineRichTextSession {
    * moment nobody chose.
    */
   hold(): void;
+  /**
+   * Turn a mark on or off over the selection, as its keyboard shortcut does.
+   * Only bold and italic: the marks a one-paragraph passage keeps, and the
+   * two a toolbar offers.
+   */
+  format(mark: InlineMark): void;
+  /**
+   * Make the selection a link to `url`, or take the link off it with `null`.
+   *
+   * Applied to the selection the author last made in the passage, so a field
+   * that took the focus to ask for the address does not lose what it applies
+   * to. `newTab` opens it in a new tab.
+   */
+  link(url: string | null, options?: { readonly newTab?: boolean }): void;
+  /** What the selection holds now, or `undefined` once superseded. */
+  selection(): InlineSelectionState | undefined;
+}
+
+/** A mark a toolbar turns on and off. */
+export type InlineMark = "bold" | "italic";
+
+/** What the selection in an attached passage holds. */
+export interface InlineSelectionState {
+  /** No words are selected: the caret sits between two characters. */
+  readonly collapsed: boolean;
+  readonly bold: boolean;
+  readonly italic: boolean;
+  /** The link the selection is in, if any. */
+  readonly link: { readonly url: string; readonly newTab: boolean } | null;
+}
+
+/**
+ * How a passage restricted to ONE paragraph is edited: words with bold,
+ * italic, links and line breaks, nothing more.
+ *
+ * The restriction itself is the caller's, handed in rather than restated
+ * here: this package does not depend on the engine that defines the stored
+ * format, and a second statement of "what a one-paragraph value may hold"
+ * would drift from the one the page is saved and drawn by.
+ */
+export interface InlineParagraphMode {
+  /**
+   * The restriction: the value as one paragraph, and whether it left
+   * anything out. Run after every change, so what the author sees is what
+   * will be stored; a paste of headings or lists becomes their words.
+   */
+  readonly restrict: (value: unknown) => {
+    readonly value: unknown;
+    readonly dropped: boolean;
+  };
+  /** Told when a change lost something the passage cannot hold. */
+  readonly onDropped?: () => void;
+  /**
+   * Told after every change of the words, with the restricted value, so a
+   * host can write it as it is typed.
+   */
+  readonly onChange?: (value: unknown) => void;
+  /** Told when the selection, or the marks under it, change. */
+  readonly onSelection?: (state: InlineSelectionState) => void;
+}
+
+/** How a passage is attached. */
+export interface InlineAttachOptions {
+  /** Restrict the passage to one paragraph; see {@link InlineParagraphMode}. */
+  readonly paragraph?: InlineParagraphMode;
 }
 
 /** Why the editor would not take a passage. */
@@ -150,7 +215,11 @@ export interface InlineRichTextEditor {
    * @param value - the stored passage, or anything unusable for an empty one
    * @returns the caller's hold on the editor, or why it was refused
    */
-  attach(element: HTMLElement, value: unknown): InlineRichTextAttachment;
+  attach(
+    element: HTMLElement,
+    value: unknown,
+    options?: InlineAttachOptions
+  ): InlineRichTextAttachment;
 }
 
 /**
@@ -220,6 +289,9 @@ function loadable(value: unknown): string | null {
     return null;
   }
 }
+
+/** What a registration the passage does not need returns, to stop nothing. */
+const noop = (): void => {};
 
 /** The build in flight or already finished, so concurrent callers share one. */
 let pending: Promise<InlineRichTextEditor> | null = null;
@@ -330,12 +402,13 @@ function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
 
 async function build(): Promise<InlineRichTextEditor> {
   const [
-    { createEditor, $isDecoratorNode, $isElementNode, $isTextNode, $getRoot },
+    lexical,
     { registerRichText },
     { registerList, registerCheckList },
     { registerTablePlugin, registerTableSelectionObserver },
     { registerCodeHighlighting },
     history,
+    links,
     kit,
   ] = await Promise.all([
     import("lexical"),
@@ -344,8 +417,16 @@ async function build(): Promise<InlineRichTextEditor> {
     import("@lexical/table"),
     import("@lexical/code-prism"),
     import("@lexical/history"),
+    import("@lexical/link"),
     import("@admin/components/features/entries/fields/special/rich-text-kit"),
   ]);
+  const {
+    createEditor,
+    $isDecoratorNode,
+    $isElementNode,
+    $isTextNode,
+    $getRoot,
+  } = lexical;
 
   const { nodes, theme } = kit.richTextEditorKit();
   /**
@@ -396,27 +477,39 @@ async function build(): Promise<InlineRichTextEditor> {
   const placeCaret = (offset: number): void => {
     editor.update(() => {
       let remaining = offset;
-      const stack: LexicalNode[] = [$getRoot()];
-      while (stack.length > 0) {
-        const node = stack.pop();
-        if (node === undefined) continue;
-        if ($isTextNode(node)) {
-          const size = node.getTextContentSize();
-          if (remaining <= size) {
-            node.select(remaining, remaining);
-            return;
-          }
-          remaining -= size;
-          continue;
+      for (const node of $textInOrder()) {
+        const size = node.getTextContentSize();
+        if (remaining <= size) {
+          node.select(remaining, remaining);
+          return;
         }
-        if (!$isElementNode(node)) continue;
-        const kids = node.getChildren();
-        for (let i = kids.length - 1; i >= 0; i--) {
-          const kid = kids[i];
-          if (kid !== undefined) stack.push(kid);
-        }
+        remaining -= size;
       }
     });
+  };
+
+  /**
+   * The passage's text nodes in reading order, inside a read or an update:
+   * what a character offset into the passage is counted across, both ways.
+   */
+  const $textInOrder = (): ReturnType<typeof lexical.$createTextNode>[] => {
+    const found: ReturnType<typeof lexical.$createTextNode>[] = [];
+    const stack: LexicalNode[] = [$getRoot()];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node === undefined) continue;
+      if ($isTextNode(node)) {
+        found.push(node);
+        continue;
+      }
+      if (!$isElementNode(node)) continue;
+      const kids = node.getChildren();
+      for (let i = kids.length - 1; i >= 0; i--) {
+        const kid = kids[i];
+        if (kid !== undefined) stack.push(kid);
+      }
+    }
+    return found;
   };
 
   let reportedError = false;
@@ -462,8 +555,159 @@ async function build(): Promise<InlineRichTextEditor> {
     held = false;
   };
 
+  /**
+   * Where the caret is, as a character offset into the passage's text: the
+   * counterpart of {@link placeCaret}, so a passage rewritten by its
+   * restriction keeps the caret where the author left it.
+   */
+  const caretOffset = (): number | undefined =>
+    editor.getEditorState().read(() => {
+      const selection = lexical.$getSelection();
+      if (!lexical.$isRangeSelection(selection)) return undefined;
+      const focus = selection.focus;
+      let offset = 0;
+      for (const node of $textInOrder()) {
+        if (node.getKey() === focus.key) return offset + focus.offset;
+        offset += node.getTextContentSize();
+      }
+      return offset;
+    });
+
+  /** What the selection holds, read in the editor's current state. */
+  const selectionState = (): InlineSelectionState =>
+    editor.getEditorState().read(() => {
+      const selection = lexical.$getSelection();
+      if (!lexical.$isRangeSelection(selection)) {
+        return { collapsed: true, bold: false, italic: false, link: null };
+      }
+      const anchor = selection.anchor.getNode();
+      let found: LexicalNode | null = anchor;
+      while (found !== null && !links.$isLinkNode(found))
+        found = found.getParent();
+      return {
+        collapsed: selection.isCollapsed(),
+        bold: selection.hasFormat("bold"),
+        italic: selection.hasFormat("italic"),
+        link: links.$isLinkNode(found)
+          ? { url: found.getURL(), newTab: found.getTarget() === "_blank" }
+          : null,
+      };
+    });
+
+  /**
+   * Replace the passage with `value`, restricted, keeping the caret where it
+   * was. As an update of its own, queued after whatever produced the change,
+   * rather than by swapping the editor's state from inside the listener that
+   * saw it: a swap there is overtaken by updates a paste is still applying,
+   * and the heading or list it brought stays on screen.
+   */
+  const replaceWith = (value: unknown): void => {
+    const caret = caretOffset();
+    const blocks = (value as { root?: { children?: unknown[] } }).root
+      ?.children;
+    editor.update(
+      () => {
+        const root = $getRoot();
+        root.clear();
+        for (const block of blocks ?? []) {
+          root.append(
+            lexical.$parseSerializedNode(
+              block as Parameters<typeof lexical.$parseSerializedNode>[0]
+            )
+          );
+        }
+      },
+      { tag: lexical.HISTORY_MERGE_TAG }
+    );
+    if (caret !== undefined) placeCaret(caret);
+  };
+
+  /**
+   * Registers what makes the editor hold ONE paragraph, and returns what
+   * takes it off again.
+   *
+   * Enter and Shift+Enter both insert a line break: a new paragraph is the
+   * one thing the passage cannot hold. Marks other than bold and italic are
+   * refused at the command, so their shortcuts do nothing. And every change
+   * is put through the caller's restriction: whatever a paste or a drop
+   * brought in that the passage cannot hold is replaced by its words at
+   * once, with the caret kept where it was, and the caller is told.
+   */
+  const restrictToParagraph = (mode: InlineParagraphMode): (() => void) => {
+    const high = lexical.COMMAND_PRIORITY_CRITICAL;
+    const lineBreak = (): boolean => {
+      editor.update(() => {
+        const selection = lexical.$getSelection();
+        if (lexical.$isRangeSelection(selection)) selection.insertLineBreak();
+      });
+      return true;
+    };
+    const stops = [
+      editor.registerCommand(
+        lexical.KEY_ENTER_COMMAND,
+        event => {
+          event?.preventDefault();
+          return lineBreak();
+        },
+        high
+      ),
+      editor.registerCommand(
+        lexical.INSERT_PARAGRAPH_COMMAND,
+        () => lineBreak(),
+        high
+      ),
+      editor.registerCommand(
+        lexical.FORMAT_TEXT_COMMAND,
+        format => format !== "bold" && format !== "italic",
+        high
+      ),
+      // Alignment and indentation belong to the block's own styles.
+      editor.registerCommand(lexical.FORMAT_ELEMENT_COMMAND, () => true, high),
+      editor.registerCommand(lexical.INDENT_CONTENT_COMMAND, () => true, high),
+      editor.registerCommand(lexical.OUTDENT_CONTENT_COMMAND, () => true, high),
+      editor.registerUpdateListener(
+        ({ editorState, dirtyElements, dirtyLeaves }) => {
+          if (dirtyElements.size === 0 && dirtyLeaves.size === 0) {
+            mode.onSelection?.(selectionState());
+            return;
+          }
+          const restricted = mode.restrict(
+            JSON.parse(JSON.stringify(editorState.toJSON())) as unknown
+          );
+          if (restricted.dropped) {
+            replaceWith(restricted.value);
+            mode.onDropped?.();
+            // The restricted state's own update reports the change.
+            return;
+          }
+          mode.onChange?.(restricted.value);
+          mode.onSelection?.(selectionState());
+        }
+      ),
+    ];
+    return () => {
+      for (const stop of stops) stop();
+    };
+  };
+
+  /**
+   * The range the author last selected in the live passage, kept so a link
+   * applied after the focus went to an address field applies to it.
+   */
+  let lastRange: ReturnType<typeof lexical.$createRangeSelection> | null = null;
+
+  /**
+   * Inside an update: the author's own selection when the passage still has
+   * one, and the range they last made when a toolbar or an address field took
+   * the focus and the passage's selection went with it.
+   */
+  const $restoreRange = (): void => {
+    if (lexical.$isRangeSelection(lexical.$getSelection())) return;
+    if (lastRange !== null) lexical.$setSelection(lastRange.clone());
+  };
+
   return {
-    attach(element, value) {
+    attach(element, value, options) {
       /*
        * A held attachment is never superseded.
        *
@@ -515,7 +759,26 @@ async function build(): Promise<InlineRichTextEditor> {
       const marks = markRoot(element);
       editor.setEditorState(parsed);
       editor.setRootElement(element);
+      lastRange = null;
       const stopRichText = registerRichText(editor);
+      /*
+       * A one-paragraph passage takes only what it can hold: no lists, no
+       * tables, no code, and the restriction run on every change.
+       */
+      const paragraph = options?.paragraph;
+      const stopParagraph =
+        paragraph === undefined ? null : restrictToParagraph(paragraph);
+      // What only a whole passage takes: a passage held to one paragraph has
+      // no lists, tables or code to register for.
+      const whenFull = (register: () => () => void): (() => void) =>
+        paragraph === undefined ? register() : noop;
+      const stopRange = editor.registerUpdateListener(({ editorState }) => {
+        editorState.read(() => {
+          const selection = lexical.$getSelection();
+          if (lexical.$isRangeSelection(selection) && !selection.isCollapsed())
+            lastRange = selection.clone();
+        });
+      });
       /*
        * Lists behave like lists, which the generic handler alone does not give.
        * Without it Enter on an empty list item asks `ListItemNode` to insert
@@ -524,7 +787,7 @@ async function build(): Promise<InlineRichTextEditor> {
        * reachable. The field editor mounts `ListPlugin` for the same reason;
        * this is that plugin's imperative half.
        */
-      const stopList = registerList(editor);
+      const stopList = whenFull(() => registerList(editor));
       /*
        * And checklists respond to being clicked. Toggling one lives in its own
        * behaviour, which the field editor mounts as `CheckListPlugin` — without
@@ -534,7 +797,7 @@ async function build(): Promise<InlineRichTextEditor> {
        * Registered rather than refused, unlike the decorator nodes: a checklist
        * IS drawable and editable by this editor, it simply needed its handler.
        */
-      const stopCheckList = registerCheckList(editor);
+      const stopCheckList = whenFull(() => registerCheckList(editor));
       /*
        * A table needs its own two registrations, and the SELECTION OBSERVER is
        * the one that matters here. It is what intercepts Tab and moves the
@@ -543,8 +806,10 @@ async function build(): Promise<InlineRichTextEditor> {
        * cells would find the passage closed and written instead of the caret
        * one cell along.
        */
-      const stopTable = registerTablePlugin(editor);
-      const stopTableSelection = registerTableSelectionObserver(editor);
+      const stopTable = whenFull(() => registerTablePlugin(editor));
+      const stopTableSelection = whenFull(() =>
+        registerTableSelectionObserver(editor)
+      );
       /*
        * And a code block retokenizes as it is edited. Its highlight classes are
        * stored ON the nodes, so without this the old classification stays
@@ -552,13 +817,18 @@ async function build(): Promise<InlineRichTextEditor> {
        * into an identifier is saved still marked as a keyword, and the
        * published page styles it that way.
        */
-      const stopCodeHighlighting = registerCodeHighlighting(editor);
+      const stopCodeHighlighting = whenFull(() =>
+        registerCodeHighlighting(editor)
+      );
       const stopHistory = history.registerHistory(
         editor,
         history.createEmptyHistoryState(),
         300
       );
       release = () => {
+        stopParagraph?.();
+        stopRange();
+        lastRange = null;
         stopRichText();
         stopList();
         stopCheckList();
@@ -601,6 +871,34 @@ async function build(): Promise<InlineRichTextEditor> {
           // Only the live owner may hold. A superseded session asking for this
           // would freeze the editor on behalf of an edit that is already gone.
           if (owns()) held = true;
+        },
+        format(mark) {
+          if (!owns()) return;
+          editor.update(() => {
+            $restoreRange();
+            const selection = lexical.$getSelection();
+            if (lexical.$isRangeSelection(selection))
+              selection.formatText(mark);
+          });
+        },
+        link(url, linkOptions) {
+          if (!owns()) return;
+          editor.update(() => {
+            $restoreRange();
+            links.$toggleLink(
+              url === null
+                ? null
+                : {
+                    url,
+                    ...(linkOptions?.newTab === true
+                      ? { target: "_blank", rel: "noopener noreferrer" }
+                      : { target: null, rel: null }),
+                  }
+            );
+          });
+        },
+        selection() {
+          return owns() ? selectionState() : undefined;
         },
       };
       return { status: "attached", session };

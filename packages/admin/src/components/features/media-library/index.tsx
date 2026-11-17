@@ -975,6 +975,10 @@ export function MediaLibrary({
                   <Pagination
                     currentPage={page}
                     totalPages={totalPages}
+                    // The result's total, so the summary counts the files
+                    // rather than repeating the page count.
+                    totalItems={total}
+                    itemLabel="files"
                     pageSize={pageSize}
                     pageSizeOptions={[12, 24, 48, 96]}
                     showPageSizeSelector
@@ -1018,6 +1022,9 @@ export function MediaLibrary({
                     ? {
                         currentPage: page,
                         totalPages,
+                        // Counted like the grid's pager above.
+                        totalItems: total,
+                        itemLabel: "files",
                         pageSize,
                         pageSizeOptions: [12, 24, 48, 96],
                         showPageSizeSelector: true,
@@ -1172,6 +1179,8 @@ export function MediaLibrary({
         queue={uploadQueue}
         placement="floating"
         returnFocusRef={headingRef}
+        // An uploaded image's row offers its alt text to whoever may edit it.
+        onSaveMedia={canEdit ? handleSaveMedia : undefined}
       />
 
       {/* Deletes, their Undo and replaced files, said once each. After the

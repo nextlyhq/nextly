@@ -38,6 +38,11 @@ import { openEditorWith, selection, structure } from "./editor-driver";
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 // The editor reads `mod` as Control in the Desktop Chrome device this suite
 // runs as, whatever the host; see `editor-acceptance.spec.ts`.
@@ -422,7 +427,10 @@ test.describe("the canvas keeps the site's colours whatever the admin's theme", 
         expect(stored.ok()).toBe(true);
         await page.setViewportSize({ width: 1440, height: 900 });
         await gotoAdmin(page, "/singles/homepage", theme);
-        await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+        await page
+          .locator(PAGE_BUILDER_CARD)
+          .getByRole("link", { name: OPEN_BUILDER_ACTION })
+          .click();
         const lead = canvasBlock(page, "lead");
         await expect(lead).toBeVisible({ timeout: 30_000 });
         // The admin really is in the theme asked for: its own text colour.

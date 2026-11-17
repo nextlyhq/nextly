@@ -23,6 +23,7 @@ import {
   resolveSiteTokens,
   tokenDisplayLabel,
   tokenIdentity,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
@@ -370,12 +371,16 @@ export function suppliedVariableIds(
 
 /**
  * Whether the variables are still used, refusing (by throwing) when any is:
- * the one check a removal makes, handed the site's shared styles as they
- * will be once the write lands. The plugin supplies it once installed.
+ * the one check a removal makes, handed the site's shared styles and its
+ * variables (every tier merged, {@link siteTokensOverCode}) as they will be
+ * once the write lands. The variables say which custom property each one is
+ * written under, so a `var()` naming it counts, and which of them name
+ * another in their own values. The plugin supplies it once installed.
  */
 export type VariablesInUseCheck = (
   removable: readonly NamedVariable[],
-  classes: readonly unknown[]
+  classes: readonly unknown[],
+  variables: SiteTokenSet
 ) => Promise<void>;
 
 /**
@@ -426,7 +431,11 @@ function variableRemovalGuard(
     const classes = Object.hasOwn(data, "classes")
       ? data.classes
       : hook.originalData?.classes;
-    await inUse(dropped, sharedStylesOverCode(defaults, classes));
+    await inUse(
+      dropped,
+      sharedStylesOverCode(defaults, classes),
+      siteTokensOverCode(defaults, data.tokens)
+    );
   };
 }
 
@@ -463,6 +472,23 @@ export function sharedStylesOverCode(
   );
 }
 
+/**
+ * The site's variables as the stylesheet resolves them: the engine's, the
+ * code's, then the stored tokens section `tokens` over them (as stored or as
+ * written; SQLite hands it back as text), with the site's prefix.
+ */
+export function siteTokensOverCode(
+  defaults: SiteStyleData | undefined,
+  tokens: unknown
+): SiteTokenSet {
+  return resolveSiteTokens(
+    resolveSiteStyle(
+      defaults,
+      readSiteStyleRecord({ tokens: readStoredJson(tokens) })
+    ).tokens
+  );
+}
+
 /** Every variable the stored shared styles name, the first entry per id. */
 function sharedStylesVariables(raw: unknown): Set<string> {
   const found = new Set<string>();
@@ -487,12 +513,7 @@ export function undefinedSharedStyleVariables(
   // Nothing named, nothing to resolve: an ordinary class save pays nothing.
   if (used.size === 0) return [];
   const defined = new Set(
-    resolveSiteTokens(
-      resolveSiteStyle(
-        defaults,
-        readSiteStyleRecord({ tokens: readStoredJson(sections.tokens) })
-      ).tokens
-    ).tokens.map(tokenIdentity)
+    siteTokensOverCode(defaults, sections.tokens).tokens.map(tokenIdentity)
   );
   return newUndefinedIds(used, defined, sharedStylesVariables(sections.held));
 }
@@ -719,7 +740,7 @@ export function siteStyleSingle(
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
+            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large } }], prefix?, darkMode?, fluidRange?: { min, max } }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent).',
         },
       }),
       json({

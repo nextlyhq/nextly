@@ -313,6 +313,34 @@ export {
 } from "@nextlyhq/admin/kit/document";
 
 /**
+ * Where the document being edited opens, and its list, for a document view
+ * that words its way out by them (@experimental).
+ *
+ * - `useDocumentOpensIn()` answers, for the collection entry or Single being
+ *   edited, `opensIn`: `"form"` or the path of the view a click on the
+ *   document opens, by the same rule every list row, sidebar link and
+ *   dashboard row follows; and `list`, where it is opened from: a collection's
+ *   list, its label as the list's own heading reads, or for a Single the
+ *   Content screen, labelled `"content"`, with its address. A view the
+ *   document opens in has no form to go back to, so its way out is that place
+ *   ("Back to Pages", "Back to content"); any other view's is the form. Null
+ *   outside a document's editor, on a new entry and while the collection or
+ *   Single is not known yet.
+ * - `PIN_TO_DASHBOARD_ACTION` is the id of the editor's own "Pin to
+ *   dashboard" / "Unpin from dashboard" among `useDocumentActions().actions`.
+ *   A view that replaces the header offers that action, its words and its
+ *   reason it can't run, and runs it with `run(id)`, so the pin, its toast and
+ *   its Undo are the editor's own.
+ *
+ * Experimental while the first view that uses them settles.
+ */
+export {
+  useDocumentOpensIn,
+  type DocumentOpensIn,
+  PIN_TO_DASHBOARD_ACTION,
+} from "@nextlyhq/admin/kit/document";
+
+/**
  * The editor header's own save state and leading action, for a document view
  * that replaces the header (@experimental).
  *

@@ -131,6 +131,24 @@ describe("what it says of each block", () => {
     });
   });
 
+  it("says which props hold one paragraph of editor content, as a Text's does", () => {
+    const [text] = listAcceptedBlocks(
+      ["core/text"],
+      reads(
+        block("core/text", {
+          props: {
+            text: { type: "textarea", label: "Text", oneParagraph: true },
+            note: { type: "textarea", label: "Note" },
+          },
+        })
+      )
+    );
+    expect(text?.props).toEqual([
+      { name: "text", label: "Text", type: "textarea", oneParagraph: true },
+      { name: "note", label: "Note", type: "textarea" },
+    ]);
+  });
+
   it("reads a label from the name when the block declares none, and no source when none was recorded", () => {
     const [banner] = listAcceptedBlocks(["coreevil/banner"], registry);
     expect(banner).toMatchObject({

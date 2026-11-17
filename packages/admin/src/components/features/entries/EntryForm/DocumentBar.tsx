@@ -551,23 +551,32 @@ function previewPropsFor(
 
 /**
  * The views the document, open here as its form, may be opened in, as the bar
- * offers them beside History: worded by each view, by the admin's one rule.
- * None while creating, which has no saved entry to open, or on a Single, which
- * opens as its form for now.
+ * offers them beside History: worded by each view, by the admin's one rule. A
+ * Single is offered them as a collection's entry is. None while creating,
+ * which has no saved entry to open.
  */
 function useBarViewsToOpenIn(props: DocumentBarProps): WayIn[] {
   const viewsToOpenIn = useViewsToOpenIn();
   const entryLocale = useEntryLocale();
   const id = props.entry?.id;
-  if (props.mode !== "edit" || props.scope === "single" || id == null) {
-    return [];
+  if (props.mode !== "edit") return [];
+  // A view edits the default language only, so the rule offers none in
+  // another one.
+  const options = entryLocale.isNonDefaultLocale
+    ? { locale: entryLocale.locale }
+    : {};
+  if (props.scope === "single") {
+    return viewsToOpenIn(
+      { kind: "single", slug: props.collectionSlug },
+      options
+    );
   }
-  return viewsToOpenIn(
-    { kind: "collection", slug: props.collectionSlug, id: String(id) },
-    // A view edits the default language only, so the rule offers none in
-    // another one.
-    entryLocale.isNonDefaultLocale ? { locale: entryLocale.locale } : {}
-  );
+  return id == null
+    ? []
+    : viewsToOpenIn(
+        { kind: "collection", slug: props.collectionSlug, id: String(id) },
+        options
+      );
 }
 
 /**

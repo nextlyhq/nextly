@@ -55,15 +55,20 @@ export interface InlineProps {
 export function inlinePropsOfKind(
   document: BlockDocument,
   nodeId: string,
-  kind: InlinePropKind
+  kind: InlinePropKind | readonly InlinePropKind[]
 ): InlineProps | null {
   const found = editableNode(document, nodeId);
   if (found === null) return null;
   const { props } = found;
+  const kinds: readonly InlinePropKind[] =
+    typeof kind === "string" ? [kind] : kind;
   return {
     node: found.node,
     entries: Object.keys(props)
-      .filter(name => inlinePropKind(props[name]) === kind)
+      .filter(name => {
+        const own = inlinePropKind(props[name]);
+        return own !== null && kinds.includes(own);
+      })
       .map(name => [name, props[name]] as const),
   };
 }

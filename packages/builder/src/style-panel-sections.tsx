@@ -3,40 +3,48 @@
 /**
  * The Style tab's sections: the accordion of sections a block offers, each
  * section's heading and fields, the background's overlay fields offered only
- * over an image, and the More properties list.
+ * over an image, and "CSS properties" last.
  *
  * @module style-panel-sections
  */
 import {
+  findNode,
   paintsBackgroundImage,
   type NodeStyles,
   type StyleValues,
   type StyleLeaf,
 } from "@nextlyhq/blocks-engine";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@nextlyhq/ui";
+import { Accordion, AccordionContent, AccordionItem } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { CssPropertiesSection, useAddedProperties } from "./add-css-property";
+import { SHORTCUT_IDS } from "./block-shortcuts-field";
 import { ContentWidthFields } from "./content-width-fields";
+import {
+  arrangeCssProperties,
+  CSS_PROPERTIES_SECTION,
+  offersArrange,
+} from "./css-properties";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
-import { SHORTCUT_IDS } from "./block-shortcuts-field";
+import { SectionHeading } from "./panel-section";
+import type { ParentArrangement } from "./plain-layout";
+import {
+  ArrangeFields,
+  arrangedAway,
+  SPACE_PROPERTIES,
+  useArrangeReading,
+  type ArrangeReading,
+} from "./plain-layout-controls";
+import { InsideParentFields, useDrawnChildRows } from "./plain-parent-controls";
+import { SectionHeld } from "./section-held";
 import {
   SettingSlot,
   sectionShown,
+  useReportStyle,
   useSettingsMatch,
-  type SettingsMatch,
 } from "./settings-filter";
-import { SectionHeading } from "./panel-section";
-import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
 import { SpacingBox } from "./spacing-box-fields";
 import {
@@ -49,14 +57,6 @@ import {
 } from "./style-field-surroundings";
 import { fieldStyles } from "./style-field-target";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
-import {
-  ArrangeFields,
-  arrangedAway,
-  SPACE_PROPERTIES,
-  useArrangeReading,
-  type ArrangeReading,
-} from "./plain-layout-controls";
-import { InsideParentFields, useDrawnChildRows } from "./plain-parent-controls";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
@@ -64,13 +64,15 @@ import type { StyleTarget } from "./style-target";
 /**
  * The panel's sections, each folding on its own and remembered as the author
  * left it (`panel-folds`), with the block's picture and fit for the focal
- * point drawn over it.
+ * point drawn over it, and "CSS properties" last: what each section's tier
+ * doesn't show unasked is added there (`css-properties`).
  */
 export function StyleSections({
   sections,
   readOnlyReason,
   surroundings,
   fit,
+  report,
 }: {
   sections: readonly StyleSection[];
   readOnlyReason: React.ComponentProps<
@@ -78,22 +80,66 @@ export function StyleSections({
   >["readOnlyReason"];
   surroundings: StyleFieldSurroundings;
   fit: string | undefined;
+  /** What the panel's filter is told beside the sections drawn here. */
+  report: {
+    readonly shared: boolean;
+    readonly styles: unknown;
+    readonly parent: ParentArrangement | undefined;
+  };
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
   const match = useSettingsMatch();
-  const { open, onOpenChange } = useTabFolds(
-    "style",
-    sections.map(section => ({
+  const target = React.useContext(StyleTargetContext);
+  const layout = sections.find(offersArrange);
+  // Read here as Layout reads it, so what Arrange draws stays out of CSS
+  // properties only while Arrange draws it.
+  const reading = useArrangeReading(surroundings, layout !== undefined);
+  // No reading is no Arrange (Columns draws its own layout), so nothing of
+  // Layout is Arrange's to keep.
+  const arranges = reading !== undefined && reading.arrange.mode !== "custom";
+  const arranged = arrangeCssProperties(sections, {
+    blockType:
+      target.kind === "block"
+        ? findNode(surroundings.editor.document.nodes, surroundings.nodeId)
+            ?.type
+        : undefined,
+    arranges,
+  });
+  // What the panel's filter keeps in Style: what these controls draw.
+  useReportStyle(
+    surroundings.nodeId,
+    sections,
+    report.shared,
+    report.styles,
+    report.parent,
+    arranges
+  );
+  const added = useAddedProperties(surroundings.nodeId);
+  // Drawn wherever the block has any Style section, so the tab always ends
+  // the same way.
+  const css = sections.length === 0 ? undefined : arranged.extras;
+  const { open, onOpenChange } = useTabFolds("style", [
+    ...arranged.sections.map(section => ({
       key: section.key,
       label: section.label,
       holdsValue: holdsValues(section),
-    }))
-  );
+    })),
+    ...(css === undefined
+      ? []
+      : [
+          {
+            ...CSS_PROPERTIES_SECTION,
+            // Kept open once the author works in it, so removing its last
+            // value doesn't close the section they are using.
+            holdsValue: added.used || css.some(each => each.row.set),
+          },
+        ]),
+  ]);
   return (
     <FocalFrame.Provider value={{ picture, position, fit }}>
       <Accordion type="multiple" value={open} onValueChange={onOpenChange}>
-        {sections.map(section => (
+        {arranged.sections.map(section => (
           <StyleSectionItem
             // Keyed by group alone, so a closed section whose heading reads
             // the same is kept as it is for the next block. What a field
@@ -106,6 +152,14 @@ export function StyleSections({
             {...surroundings}
           />
         ))}
+        {css === undefined ? null : (
+          <CssPropertiesSection
+            extras={css}
+            added={added}
+            readOnlyReason={readOnlyReason}
+            surroundings={surroundings}
+          />
+        )}
       </Accordion>
     </FocalFrame.Provider>
   );
@@ -144,7 +198,7 @@ type StyleSectionItemProps = {
   open: boolean;
   /** Whether the panel's filter keeps nothing in it, so it is not drawn. */
   hidden: boolean;
-  /** Why every control is read-only, which also withholds "+ More". */
+  /** Why every control is read-only. */
   readOnlyReason: string | undefined;
 } & StyleFieldSurroundings;
 
@@ -202,9 +256,8 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
         />
         <AccordionContent>
           <SectionBody
-            // Keyed by node: what a field holds, and what "+ More" brought
-            // out, stay with the block they were for, and the next block's
-            // fields start from its own values.
+            // Keyed by node: what a field holds stays with the block it was
+            // for, and the next block's fields start from its own values.
             key={surroundings.nodeId}
             section={section}
             readOnlyReason={readOnlyReason}
@@ -225,46 +278,19 @@ const CONTENT_WIDTH_IDS: readonly string[] = ["contained", "contentWidth"];
 const SHORTCUTS: readonly string[] = Object.values(SHORTCUT_IDS);
 
 /**
- * A section's properties drawn at once, and those behind "+ More". While the
- * panel is filtered, every property it keeps is drawn at once, "+ More"'s
- * included, and nothing else.
+ * A section's properties drawn: those that show unasked and apply, and those
+ * holding a value. While the panel is filtered the same rows stay mounted,
+ * hidden where the filter keeps nothing of them, so an unsaved or refused
+ * value outlives the search. The rest are added in "CSS properties".
  */
 function shownProperties(
-  properties: readonly InspectedStyleProperty[],
-  isRevealed: (property: string) => boolean,
-  match: SettingsMatch
-): {
-  shown: readonly InspectedStyleProperty[];
-  more: readonly InspectedStyleProperty[];
-} {
-  if (match.active) {
-    // Every row drawn before stays mounted, hidden where the filter keeps
-    // nothing of it, so an unsaved or refused value outlives the search; a
-    // kept one from "+ More" is drawn too.
-    const kept = match.kept.get("style");
-    return {
-      shown: properties.filter(
-        property =>
-          property.common ||
-          isRevealed(property.property) ||
-          kept?.has(property.property) === true
-      ),
-      more: [],
-    };
-  }
-  return {
-    shown: properties.filter(
-      property => property.common || isRevealed(property.property)
-    ),
-    more: properties.filter(
-      property => !property.common && !isRevealed(property.property)
-    ),
-  };
+  properties: readonly InspectedStyleProperty[]
+): readonly InspectedStyleProperty[] {
+  return properties.filter(property => property.common);
 }
 
 /**
- * An open section's fields: its common properties, any that hold a value,
- * and the rest behind "+ More".
+ * An open section's fields: its common properties and any that hold a value.
  */
 function SectionBody({
   section,
@@ -283,17 +309,6 @@ function SectionBody({
   breakpoints,
 }: Omit<StyleSectionItemProps, "open" | "hidden">): React.JSX.Element {
   const readOnly = readOnlyReason !== undefined;
-  /*
-   * What the author brought out from "+ More". Held here, in a body keyed by
-   * node inside its section, so it lasts while this block stays selected and
-   * starts empty for the next. Panel state, like the open section: what the
-   * author chose to look at, not anything the page stores — and a property
-   * holding a value shows whatever this says, so it can hide nothing set.
-   */
-  const [revealed, setRevealed] = React.useState<ReadonlySet<string>>(
-    () => new Set()
-  );
-  const isRevealed = (property: string) => revealed.has(property);
   const surroundings: StyleFieldSurroundings = {
     orientation,
     nodeId,
@@ -308,64 +323,35 @@ function SectionBody({
     onChooseForm,
     breakpoints,
   };
-  const { shown, more, arrange } = useSectionRows(
-    section,
-    surroundings,
-    isRevealed
-  );
+  const { shown, arrange } = useSectionRows(section, surroundings);
   return (
-    <>
-      <SectionFields
-        sectionKey={section.key}
-        shown={shown}
-        readOnly={readOnly}
-        surroundings={surroundings}
-        arrange={arrange}
-      />
-      {readOnly || more.length === 0 ? null : (
-        <MoreProperties
-          sectionLabel={section.label}
-          properties={more}
-          onReveal={property =>
-            setRevealed(current => new Set(current).add(property))
-          }
-        />
-      )}
-    </>
+    <SectionFields
+      sectionKey={section.key}
+      shown={shown}
+      readOnly={readOnly}
+      surroundings={surroundings}
+      arrange={arrange}
+    />
   );
 }
 
 /**
- * A section's rows drawn at once and behind "+ More", with Layout's Arrange:
- * the rows a section's plain controls draw leave (Arrange's, and Inside its
- * parent's Fill / Fit / Fixed), and the panel's filter keeps what it keeps.
+ * A section's rows drawn, with Layout's Arrange: the rows a section's plain
+ * controls draw leave (Arrange's, and Inside its parent's Fill / Fit /
+ * Fixed), and the panel's filter hides what it doesn't keep.
  */
 function useSectionRows(
   section: StyleSection,
-  surroundings: StyleFieldSurroundings,
-  isRevealed: (property: string) => boolean
+  surroundings: StyleFieldSurroundings
 ): {
   shown: readonly InspectedStyleProperty[];
-  more: readonly InspectedStyleProperty[];
   arrange: ArrangedSection["arrange"];
 } {
-  const reading = useArrangeReading(
-    surroundings,
-    section.key === "layout" &&
-      section.properties.some(
-        // Offered, not only kept: a block that no longer has layout keeps a
-        // stored Display clear-only, as a raw row.
-        property => property.property === "display" && property.offered
-      )
-  );
+  const reading = useArrangeReading(surroundings, offersArrange(section));
   const drawn = useDrawnChildRows(surroundings);
-  const match = useSettingsMatch();
   const arranged = arrangedSection(section.properties, reading);
   const listed = withoutDrawn(section.key, arranged.listed, drawn);
-  return {
-    ...shownProperties(listed, isRevealed, match),
-    arrange: arranged.arrange,
-  };
+  return { shown: shownProperties(listed), arrange: arranged.arrange };
 }
 
 /** "Inside its parent"'s rows, less those its Fill / Fit / Fixed draw. */
@@ -391,7 +377,7 @@ interface ArrangedSection {
 
 /**
  * A container's Layout says its arrangement in plain words. Arrange's rows
- * hold the properties it draws, so they leave the raw rows and More, except
+ * hold the properties it draws, so they leave the raw rows, except
  * while it reads Custom, when the raw rows are what hold it.
  */
 function arrangedSection(
@@ -416,7 +402,8 @@ function arrangedSection(
 
 /**
  * "Nothing set here yet" for a section showing no row: not under Arrange,
- * whose rows are what a container's Layout shows.
+ * whose rows are what a container's Layout shows. Its other properties are
+ * added in "CSS properties".
  */
 function NothingSetNote({
   shown,
@@ -426,11 +413,7 @@ function NothingSetNote({
   arrange: ArrangedSection["arrange"];
 }): React.JSX.Element | null {
   if (shown > 0 || arrange !== undefined) return null;
-  return (
-    <p className="nx-inspector__note">
-      Nothing set here yet. Add a property from More.
-    </p>
-  );
+  return <p className="nx-inspector__note">Nothing set here yet.</p>;
 }
 
 /**
@@ -669,48 +652,5 @@ function paintsImage(values: StyleValues | undefined): boolean {
   return (
     paintsBackgroundImage("gradient", values?.backgroundGradient) ||
     paintsBackgroundImage("url", backgroundAt(values)?.url)
-  );
-}
-
-/**
- * The section's "+ More": a menu of the properties it does not show yet.
- *
- * Choosing one shows its control; it stays shown for this block until the
- * panel is left, and for good once it holds a value.
- */
-function MoreProperties({
-  sectionLabel,
-  properties,
-  onReveal,
-}: {
-  sectionLabel: string;
-  properties: readonly InspectedStyleProperty[];
-  onReveal: (property: string) => void;
-}): React.JSX.Element {
-  return (
-    // Not modal: a modal menu marks the editor around it aria-hidden while
-    // its controls stay focusable (axe: aria-hidden-focus).
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="nx-style-inspector__more"
-          aria-label={`More ${sectionLabel.toLowerCase()} properties`}
-        >
-          + More
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {properties.map(property => (
-          <DropdownMenuItem
-            key={property.property}
-            onSelect={() => onReveal(property.property)}
-            title={property.summary}
-          >
-            {property.label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

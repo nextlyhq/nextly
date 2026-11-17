@@ -1,7 +1,8 @@
 /**
  * Detection of legacy bookkeeping tables (`nextly_migrations`,
- * `nextly_migration_journal`) so boot + CLI can require `nextly upgrade`
- * before continuing (spec §4.10).
+ * `nextly_migration_journal`), which `nextly migrate` moves into
+ * `nextly_schema_events` once a backup is confirmed, and which every other
+ * command that needs the history there refuses until it has.
  *
  * Takes the minimal `{ tableExists }` slice of the database adapter so it is
  * decoupled from the concrete `DrizzleAdapter` type and trivially testable.
@@ -12,7 +13,7 @@
 
 import { NextlyError } from "../../../errors";
 
-/** The legacy tables consolidated and dropped by `nextly upgrade`. */
+/** The legacy tables `nextly migrate` consolidates and drops. */
 export const LEGACY_BOOKKEEPING_TABLES = [
   "nextly_migrations",
   "nextly_migration_journal",
@@ -40,9 +41,10 @@ export async function detectLegacyBookkeeping(
 }
 
 /**
- * Boot/CLI gate. Throws `NEXTLY_LEGACY_BOOKKEEPING_DETECTED` if any legacy
- * bookkeeping table is present, pointing the operator at `nextly upgrade`.
- * The `upgrade` command itself must NOT call this (it is the remedy).
+ * The gate of the commands that do not move the records themselves. Throws
+ * `NEXTLY_LEGACY_BOOKKEEPING_DETECTED` if any legacy bookkeeping table is
+ * present, naming the command that moves them. `nextly migrate` does not
+ * call this: it is the remedy.
  */
 export async function assertNoLegacyBookkeeping(
   adapter: LegacyDetectionAdapter
@@ -53,8 +55,8 @@ export async function assertNoLegacyBookkeeping(
       code: "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
       publicMessage:
         `Legacy bookkeeping tables detected (${result.tables.join(", ")}). ` +
-        "Run `pnpm nextly upgrade` once to consolidate them into " +
-        "nextly_schema_events before continuing.",
+        "Back up the database, then run `nextly migrate --backup-confirmed` " +
+        "once to move them into nextly_schema_events before continuing.",
     });
   }
 }

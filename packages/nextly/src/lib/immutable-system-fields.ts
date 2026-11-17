@@ -110,11 +110,41 @@ export function statusGate(status: unknown): "publish" | "unpublish" {
 export async function writeGateFor(
   body: Record<string, unknown>,
   entity: WritableEntityKind,
+  /** The SQL table the body is written to, whose contributed columns it may name. */
+  tableName: string,
   hasLifecycle: () => boolean | Promise<boolean>
 ): Promise<"update" | "publish" | "unpublish"> {
-  return isStatusOnlyWrite(body, entity) && (await hasLifecycle())
-    ? statusGate(body.status)
+  // A contributed column is never written, so naming one makes the body no edit: the gate is
+  // asked of the body as the write will store it.
+  const stored = withoutContributedColumns(body, tableName);
+  return isStatusOnlyWrite(stored, entity) && (await hasLifecycle())
+    ? statusGate(stored.status)
     : "update";
+}
+
+/**
+ * Whether `key` names a column a schema hook contributed to `tableName`, in either spelling: a
+ * key every write accepts and none stores, matched by the predicate the row strip and the read
+ * responses use, so the write, its gate and its response cannot disagree about such a column.
+ */
+function contributedColumnOf(tableName: string): (key: string) => boolean {
+  return hiddenColumnMatcher(tableName);
+}
+
+/**
+ * `body` without the columns schema hooks contributed to `tableName`: what a write of it stores
+ * and what its gate is asked of. The one place a write leaves such a column behind before
+ * anything judges or stores the body.
+ */
+export function withoutContributedColumns(
+  body: Record<string, unknown>,
+  tableName: string
+): Record<string, unknown> {
+  const isContributed = contributedColumnOf(tableName);
+  if (!Object.keys(body).some(isContributed)) return body;
+  return Object.fromEntries(
+    Object.entries(body).filter(([key]) => !isContributed(key))
+  );
 }
 
 /**
@@ -337,9 +367,17 @@ function undeclaredWriteKeys(
 export function writableBodyOf(
   data: Record<string, unknown>,
   entity: WritableEntityKind,
-  fields: unknown
+  fields: unknown,
+  /** The SQL table the body is written to, whose schema-hook columns it may name. */
+  tableName: string
 ): Record<string, unknown> {
-  const keys = undeclaredWriteKeys(data, entity, fields);
+  // A column a schema hook contributed to the table is a known key, not an unknown one: a body
+  // that carries it is accepted and the column left unwritten, as the row strip leaves it
+  // (`stripImmutableSystemFields`, by the same predicate). Any other key is still refused.
+  const isContributed = contributedColumnOf(tableName);
+  const keys = undeclaredWriteKeys(data, entity, fields).filter(
+    key => !isContributed(key)
+  );
   if (keys.length > 0) {
     const kind = entity === "single" ? "Single" : "collection";
     throw NextlyError.validation({
@@ -350,8 +388,10 @@ export function writableBodyOf(
       })),
     });
   }
-  if (!Object.keys(data).some(key => NOT_STORED_KEYS.has(key))) return data;
+  const notStored = (key: string) =>
+    NOT_STORED_KEYS.has(key) || isContributed(key);
+  if (!Object.keys(data).some(notStored)) return data;
   return Object.fromEntries(
-    Object.entries(data).filter(([key]) => !NOT_STORED_KEYS.has(key))
+    Object.entries(data).filter(([key]) => !notStored(key))
   );
 }

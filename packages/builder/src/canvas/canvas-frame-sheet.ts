@@ -37,6 +37,7 @@ import {
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
@@ -211,17 +212,28 @@ ${ROOT} [contenteditable="true"] * {
 ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
 /* An empty container always has an area to aim at, since without one it has
-   no height and cannot be clicked. Drawn in the page's own text colour, faint,
-   so it reads on a light page and a dark section alike. Its height is held
-   apart, at no specificity, so a min height the block sets (a Section at Full
-   screen) wins over it, as it does on the page. */
+   no height and cannot be clicked. Its height is held apart, at no
+   specificity, so a min height the block sets (a Section at Full screen) wins
+   over it, as it does on the page.
+   It is marked by a dashed OUTLINE drawn just inside its edges, square and
+   unfilled: an outline takes no room and paints over no property the author
+   styles, so the block's own background, border and corners show exactly as
+   they are set, edge to edge. In the page's own text colour, so it reads on
+   a light page and a dark section alike. */
 :where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
-  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 0.25rem;
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
 }
+
+/* An empty page's body, held open in the editor for its start area: the
+   overlay sets the area's height on the root while the page holds no blocks,
+   in the page's own pixels, and it is added above the Layout's footer, or
+   below the header where there is no footer. Unset, it adds nothing, and a
+   published page never has it. */
+${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }
+${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }
 
 /* The cursor says what a press does: grab a block, place a caret in text being
    edited, and while dragging, whether the block can land. */
@@ -303,6 +315,21 @@ ${ROOT} .nx-condition-hidden > svg {
   background-color: ${siteToken("color.surface", "color-mix(in srgb, currentColor 6%, transparent)")};
   color: ${siteToken("color.muted", "color-mix(in srgb, currentColor 70%, transparent)")};
   line-height: 1.35;
+}
+
+/* A block the page hides on the device shown, drawn anyway so it can be found
+   and edited: edged here, in the page's own Canvas and CanvasText so the edge
+   holds 3:1 against the page's ground in the light or the dark scheme it is
+   drawn in. Its stripes and its tag ("Hidden on Mobile · still here in the
+   builder") are the editor's marks over the canvas (canvas-marks.tsx), never
+   a box of the page's own: an overlay inside the block would need the block
+   to hold it, which moves what its fixed or absolutely placed blocks are laid
+   out against. An outline moves nothing. Only the editor's canvas carries the
+   mark; the site sheet never does. */
+${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}] {
+  --nx-canvas-hidden-edge: color-mix(in srgb, CanvasText 55%, Canvas);
+  outline: 1px dashed var(--nx-canvas-hidden-edge);
+  outline-offset: -1px;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {

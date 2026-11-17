@@ -177,17 +177,19 @@ function mount(
 }
 
 /**
- * Bring a property out from its section's "+ More", as an author does.
- *
- * Opened from the keyboard because that is a route Radix's menu takes in
- * jsdom without pointer capture, and the item is chosen by its name.
+ * Add a property from "CSS properties"' "+ Add CSS property", as an author
+ * does: the section opened, the list opened, the property chosen by its CSS
+ * name.
  */
-function reveal(section: string, label: string): void {
-  fireEvent.keyDown(
-    screen.getByRole("button", { name: `More ${section} properties` }),
-    { key: "Enter" }
+function reveal(cssName: string): void {
+  const section = screen.getByRole("button", { name: /^CSS properties/ });
+  if (section.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(section);
+  }
+  fireEvent.click(screen.getByRole("button", { name: "+ Add CSS property" }));
+  fireEvent.click(
+    screen.getByRole("option", { name: new RegExp(`^${cssName} `) })
   );
-  fireEvent.click(screen.getByRole("menuitem", { name: label }));
 }
 
 /** The fields of one property, scoped so two properties sharing a side name do not collide. */
@@ -1262,13 +1264,13 @@ describe("sections", () => {
     ).toBeTruthy();
   });
 
-  it("shows a section's common properties and lists the rest under More", () => {
+  it("shows a section's common properties and adds the rest in CSS properties", () => {
     mount({ effects: true });
 
     expect(document.querySelector('[data-property="opacity"]')).not.toBeNull();
     expect(document.querySelector('[data-property="mixBlendMode"]')).toBeNull();
 
-    reveal("effects", "Mix blend mode");
+    reveal("mix-blend-mode");
 
     expect(
       document.querySelector('[data-property="mixBlendMode"]')
@@ -1334,9 +1336,9 @@ describe("controls", () => {
 
   it("draws a keyword leaf as a select over the catalog's own vocabulary", () => {
     mount({ effects: true });
-    reveal("effects", "Mix blend mode");
+    reveal("mix-blend-mode");
 
-    const trigger = screen.getByLabelText("Mix blend mode");
+    const trigger = screen.getByLabelText("mix-blend-mode");
     fireEvent.click(trigger);
 
     // `multiply` is the catalog's, not a list written here — a value absent
@@ -1562,7 +1564,7 @@ describe("controls", () => {
     // From the row's reset: a select cannot offer "unset" as an item.
     fireEvent.click(
       fieldsOf("mixBlendMode").getByRole("button", {
-        name: /^Reset Mix blend mode/,
+        name: /^Reset mix-blend-mode/,
       })
     );
 
@@ -1688,15 +1690,20 @@ describe("controls", () => {
   });
 
   it("draws a nested form's toggle just above its own control", () => {
-    // Position's z-index is the last of its controls: a toggle drawn above
-    // them all left the number field at the bottom with no visible name.
-    mount({ position: true });
+    // A z-index is a number or auto: a toggle drawn anywhere but just above
+    // its field left the number field with no visible name. Positioned, so a
+    // z-index has an effect and is offered.
+    mount(
+      { position: true },
+      { base: { [BASE_BREAKPOINT]: { position: { type: "relative" } } } }
+    );
+    reveal("z-index");
     const toggleRow = screen
       .getByRole("radiogroup", { name: "Z index" })
       .closest("[data-form-choice]");
     const next = toggleRow?.nextElementSibling;
     const label = next?.querySelector("label");
-    expect(label?.textContent).toContain("Z index");
+    expect(label?.textContent).toContain("z-index");
     expect(label?.hasAttribute("data-named-above")).toBe(true);
   });
 
@@ -1950,9 +1957,9 @@ describe("controls", () => {
     mount({ effects: true }, styles);
 
     expect(
-      screen.getByRole("button", { name: /^Reset Mix blend mode/ })
+      screen.getByRole("button", { name: /^Reset mix-blend-mode/ })
     ).toBeDefined();
-    expect(screen.getByRole("button", { name: /^Reset Filter/ })).toBeDefined();
+    expect(screen.getByRole("button", { name: /^Reset filter/ })).toBeDefined();
   });
 
   it("does not read NBSP-only text as an empty field, which would DELETE the value", () => {
@@ -5096,7 +5103,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
    */
   const allOptions = () =>
     within(
-      fieldsOf("fontStyle").getByRole("group", { name: "Font style" })
+      fieldsOf("fontStyle").getByRole("group", { name: "font-style" })
     ).getAllByRole("button") as HTMLButtonElement[];
 
   /**
@@ -5135,7 +5142,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
     );
     // Behind Typography's More until it holds a value.
-    if (stored === undefined) reveal("text", "Font style");
+    if (stored === undefined) reveal("font-style");
     return editor;
   };
 
@@ -5225,7 +5232,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
-    reveal("text", "Font style");
+    reveal("font-style");
 
     // The positive control, BEFORE the refusal. Without it an implementation
     // that marks every button invalid unconditionally passes — and that
@@ -5274,7 +5281,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         <StyleInspectorPanel editor={editor} />
       </form>
     );
-    reveal("text", "Font style");
+    reveal("font-style");
 
     fireEvent.click(optionButton("italic"));
 
@@ -5296,7 +5303,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
 
     // The field's own label: the form toggle's row says the name as well.
     fireEvent.click(
-      fieldsOf("fontStyle").getByText("Font style", { selector: "label *" })
+      fieldsOf("fontStyle").getByText("font-style", { selector: "label *" })
     );
 
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -5393,24 +5400,6 @@ describe("a per-side property is drawn as a box", () => {
     );
   });
 
-  it("commits a side typed with its unit, and keeps each side compact", () => {
-    // No unit menu in the box: a side takes "12px" or "2rem" as typed, and a
-    // short dash says it is unset rather than a hint that cannot fit.
-    const { editor, box } = mountSpacingBox(LTR);
-    const field = within(box as HTMLElement).getByLabelText(
-      "Padding top"
-    ) as HTMLInputElement;
-
-    expect(box?.querySelector(".nx-style-inspector__unit")).toBeNull();
-    expect(field.placeholder).toBe("–");
-
-    fireEvent.change(field, { target: { value: "12px" } });
-    fireEvent.blur(field);
-
-    const ops = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
-    expect(ops).toContain("padding");
-    expect(ops).toContain('"blockStart":"12px"');
-  });
 
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
@@ -5536,39 +5525,6 @@ describe("a per-side property is drawn as a box", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  it("does not reset a side from the variables list it opened", () => {
-    /*
-     * The list is drawn in a layer at the end of the page, but React carries
-     * a key press from it back through the side that opened it. Alt+Backspace
-     * there (delete a word, in the list's search) is not the side's reset.
-     */
-    const styles = {
-      base: { [BASE_BREAKPOINT]: { margin: { blockStart: "8px" } } },
-    } as unknown as NodeStyles;
-    register({ spacing: true });
-    const editor = editorFor(documentOf(styles));
-    render(
-      <StyleInspectorPanel
-        editor={editor}
-        sideOrientation={LTR}
-        tokens={{
-          tokens: [
-            { name: "space.sm", kind: "dimension", values: { light: "8px" } },
-          ],
-        }}
-      />
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Variables for Margin top" })
-    );
-    const list = screen.getByRole("listbox", { name: "Variables" });
-    // The control: the list really is outside the side's field.
-    expect(list.closest(".nx-spacing-box")).toBeNull();
-
-    fireEvent.keyDown(list, { key: "Backspace", altKey: true });
-
-    expect(editor.applyAll).not.toHaveBeenCalled();
-  });
 
   it("goes round the box mirrored on a right-to-left element", () => {
     // The order is the sides' logical one: top, inline end, bottom, inline
@@ -5578,10 +5534,10 @@ describe("a per-side property is drawn as a box", () => {
       direction: "rtl",
     });
     const names = Array.from(
-      box?.querySelectorAll<HTMLInputElement>(
-        "[data-ring='margin'] > [data-side] input"
+      box?.querySelectorAll<HTMLButtonElement>(
+        "[data-ring='margin'] > [data-side] .nx-spacing-side"
       ) ?? [],
-      input => input.labels?.[0]?.textContent?.trim() ?? ""
+      side => side.labels?.[0]?.textContent?.trim() ?? ""
     );
 
     expect(names).toEqual([
@@ -5683,23 +5639,6 @@ describe("a per-side property is drawn as a box", () => {
     ).toBeDefined();
   });
 
-  it("names a side's whole value in its tooltip, for a value its cell cannot show", () => {
-    // A value wider than its cell was cut short with no way to read it.
-    register({ spacing: true });
-    const styles = {
-      base: { [BASE_BREAKPOINT]: { padding: { inlineStart: "12.375rem" } } },
-    } as NodeStyles;
-    render(
-      <StyleInspectorPanel
-        editor={editorFor(documentOf(styles))}
-        sideOrientation={{ writingMode: "horizontal-tb", direction: "ltr" }}
-      />
-    );
-    const side = document.querySelector(
-      '[data-property="padding"] [data-side="inlineStart"] input'
-    ) as HTMLInputElement;
-    expect(side.getAttribute("title")).toBe("12.375rem");
-  });
 
   it("resolves the axes from the CANVAS, through the panel that owns it", () => {
     /*
@@ -6055,14 +5994,15 @@ describe("text decoration", () => {
 });
 
 describe("letter case", () => {
-  it("is named in plain words, its CSS name in the label's tooltip", async () => {
-    // "Text transform" says how CSS does it; "Letter case" says what it is.
+  it("is named by its CSS name in CSS properties, its plain words in the tooltip", async () => {
+    // Added in "CSS properties", where the CSS name is what a developer
+    // looks for; "Letter case" says what it is.
     mount(
       { typography: true },
       { base: { [BASE_BREAKPOINT]: { textTransform: "uppercase" } } }
     );
-    const group = screen.getByRole("radiogroup", { name: "Letter case" });
-    expect(await hintOf("Letter case")).toMatch(/^Text transform/);
+    const group = screen.getByRole("radiogroup", { name: "text-transform" });
+    expect(await hintOf("text-transform")).toMatch(/^Letter case/);
     expect(
       within(group).getByRole("radio", { name: "Uppercase" })
     ).toBeDefined();
@@ -6115,7 +6055,7 @@ describe("the Baseline gate on the panel", () => {
       },
     } as NodeStyles;
     mount({ layout: true }, styles);
-    fireEvent.click(screen.getByRole("combobox", { name: /^Grid auto flow/ }));
+    fireEvent.click(screen.getByRole("combobox", { name: /^grid-auto-flow/ }));
     const options = screen.getAllByRole("option", { name: "Row, fill gaps" });
     expect(options).toHaveLength(1);
     expect(options[0]?.getAttribute("title")).toBe("DENSE ROW");
@@ -6152,12 +6092,13 @@ describe("the Baseline gate on the panel", () => {
 });
 
 describe("a read-only design", () => {
-  // Effects alone, so its section is the open one and its More is drawn
-  // whenever it is allowed: the locked case then cannot pass by absence.
+  // Effects alone, so its section is the open one and "+ Add CSS property"
+  // is drawn whenever it is allowed: the locked case then cannot pass by
+  // absence.
   const opacityInput = () =>
     fieldsOf("opacity").getByLabelText("Opacity") as HTMLInputElement;
 
-  it("says why and disables every control, More included, while the block is locked", () => {
+  it("says why and disables every control, adding included, while the block is locked", () => {
     register({ effects: true });
     const document = documentOf();
     const locked = {
@@ -6170,21 +6111,20 @@ describe("a read-only design", () => {
       screen.getByText(/Locked: it can't be moved, deleted or edited/)
     ).toBeDefined();
     expect(opacityInput().matches(":disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /^CSS properties/ }));
     expect(
-      screen.queryByRole("button", { name: "More effects properties" })
+      screen.queryByRole("button", { name: "+ Add CSS property" })
     ).toBeNull();
   });
 
-  it("leaves the editor around the More menu in the accessibility tree", async () => {
-    // A modal menu marks everything outside it aria-hidden while those
+  it("leaves the editor around the property list in the accessibility tree", async () => {
+    // A modal list would mark everything outside it aria-hidden while those
     // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
     register({ effects: true });
     render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "More effects properties" }),
-      { key: "Enter" }
-    );
-    await screen.findByRole("menu");
+    fireEvent.click(screen.getByRole("button", { name: /^CSS properties/ }));
+    fireEvent.click(screen.getByRole("button", { name: "+ Add CSS property" }));
+    await screen.findByRole("listbox");
 
     expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
   });
@@ -6195,8 +6135,9 @@ describe("a read-only design", () => {
     render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
 
     expect(opacityInput().matches(":disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /^CSS properties/ }));
     expect(
-      screen.getByRole("button", { name: "More effects properties" })
+      screen.getByRole("button", { name: "+ Add CSS property" })
     ).toBeDefined();
   });
 

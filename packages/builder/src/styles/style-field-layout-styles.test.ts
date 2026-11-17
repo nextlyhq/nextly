@@ -206,25 +206,40 @@ describe("a segmented choice's selected state", () => {
   });
 });
 
-describe("Visible on", () => {
+describe("Hide on", () => {
   it("is separate toggles, a gap between them, each with its own edge", () => {
     // A joined strip reads as "pick one"; this is "pick any".
-    expect(ruleBody(CHROME, ".nx-visible-on")).toContain("gap: 0.375rem");
-    const button = ruleBody(CHROME, ".nx-visible-on > button");
-    expect(button).toContain("border-inline-start-width: 1px");
+    expect(ruleBody(CHROME, ".nx-hide-on")).toContain("gap: 0.375rem");
+    const button = ruleBody(CHROME, ".nx-hide-on__toggle");
+    expect(button).toContain("border: 1px solid var(--nx-border)");
     expect(button).toContain("border-radius: var(--radius-md)");
+  });
+
+  it("wraps its toggles onto another row rather than drop their names", () => {
+    expect(ruleBody(CHROME, ".nx-hide-on")).toContain(
+      "grid-template-columns: repeat(auto-fit, minmax(4.25rem, 1fr))"
+    );
+    expect(ruleBody(CHROME, ".nx-hide-on__name")).toContain(
+      "overflow-wrap: anywhere"
+    );
+  });
+
+  it("fills a device the block is hidden on, and strikes its icon through", () => {
+    const hidden = ruleBody(CHROME, '.nx-hide-on__toggle[aria-pressed="true"]');
+    expect(hidden).toContain("background: var(--nx-foreground)");
+    expect(hidden).toContain("color: var(--nx-background)");
+    expect(
+      ruleBody(CHROME, '.nx-hide-on__toggle[aria-pressed="true"]::after')
+    ).toContain("rotate(-45deg)");
   });
 
   it("marks the device being edited with a dot, not a line", () => {
     const marker = ruleBody(
       CHROME,
-      ".nx-visible-on > button[data-editing]::before"
+      ".nx-hide-on__toggle[data-editing]::before"
     );
     expect(marker).toContain("border-radius: 50%");
     expect(marker).toContain("background: var(--nx-ring)");
-    expect(
-      ruleBody(CHROME, ".nx-visible-on > button[data-editing]")
-    ).not.toContain("box-shadow");
   });
 });
 
@@ -232,7 +247,7 @@ describe("an inspector switch", () => {
   it("is a 24px target, with no other target needed out of its way", () => {
     // The shared switch is 18px tall. A target under 24px passes only when no
     // other target sits within 12px of its centre, and an on/off row ends
-    // directly above "Visible on", so the switch is sized to pass alone.
+    // directly above "Hide on", so the switch is sized to pass alone.
     const root = ruleBody(
       CHROME,
       ':is(.nx-inspector, .nx-style-inspector) [data-slot="switch"]'
