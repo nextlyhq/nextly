@@ -740,6 +740,46 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("saving every language as published", () => {
+      const savedInEveryLanguage = () =>
+        DOORS.find(
+          door => door.name === "REST save carrying a status in every language"
+        )!;
+
+      it("puts the approved parts live where a configured language holds nothing at all", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        // Saved in English only: Spanish has no translation, no draft and no version.
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await approve(POSTS, id, ["en", null]);
+
+        const answer = (await savedInEveryLanguage().publish(
+          id,
+          session
+        )) as Answer;
+
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await visitorRead(POSTS, id))?.title).toBe("Hello");
+      });
+
+      it("still refuses a language it moves that holds no approval, which is the control", async () => {
+        await boot(dialect);
+        const session = await publisher();
+        const id = await draftOf(POSTS, { title: "Hello", code: "C-1" });
+        await save(POSTS, id, { title: "Hola" }, "es");
+        await approve(POSTS, id, ["en", null]);
+
+        const answer = (await savedInEveryLanguage().publish(
+          id,
+          session
+        )) as Answer;
+
+        expect(answer.status).toBe(400);
+        expect(JSON.stringify(answer.json)).toContain("NOT_APPROVED");
+        expect(await visitorRead(POSTS, id)).toBeNull();
+      });
+    });
+
     describe("creating as published", () => {
       it("is refused through REST, where nothing could have been approved", async () => {
         await boot(dialect);
