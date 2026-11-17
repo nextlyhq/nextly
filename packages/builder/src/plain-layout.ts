@@ -1208,9 +1208,11 @@ function crossSize(
   size: string | undefined,
   self: string | undefined
 ): ChildSize {
+  // A self-alignment no choice writes (centred, at the end) is Custom, so
+  // its row stays drawn to say it, whatever the size.
+  if (!atStart(self) && !stretched(self)) return { choice: "custom" };
   if (!automatic(size)) return { choice: "fixed", size: size ?? "" };
-  if (atStart(self)) return { choice: "fit" };
-  return stretched(self) ? { choice: "fill" } : { choice: "custom" };
+  return atStart(self) ? { choice: "fit" } : { choice: "fill" };
 }
 
 /** A basis of nothing, as Fill writes it and as it may be spelled. */

@@ -718,3 +718,20 @@ describe("every label fits the Style tab's label column", () => {
     expect(gradient?.summary.startsWith("Background gradient: ")).toBe(true);
   });
 });
+
+describe("how a block's parent lays it out", () => {
+  it("is not offered to a block with no size of its own to set", () => {
+    // It keeps a stored order, clear-only, but has no Width to choose.
+    register({ typography: true });
+    const inspection = inspectStyle(
+      documentOf({ base: { [BASE_BREAKPOINT]: { order: 2 } } } as NodeStyles),
+      "a"
+    );
+    expect(inspection?.parent).toBeUndefined();
+  });
+
+  it("is offered to a block with a size", () => {
+    register({ dimensions: true });
+    expect(inspectStyle(documentOf(), "a")?.parent).toBe("flow");
+  });
+});

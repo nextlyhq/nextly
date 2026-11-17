@@ -828,3 +828,12 @@ describe("Inside its parent with lines running down the screen", () => {
     });
   });
 });
+
+describe("Inside its parent with a self-alignment no choice writes", () => {
+  it("reads a centred Fixed child as Custom, so its alignment row stays", () => {
+    const block = new Block({ width: "200px", justifySelf: "center" });
+    expect(readChildWidth(block.tiers(), "base", "grid")).toEqual({
+      choice: "custom",
+    });
+  });
+});

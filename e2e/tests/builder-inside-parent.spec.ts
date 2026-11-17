@@ -132,9 +132,13 @@ test.describe("a block inside its parent", () => {
         const row = await box(page, BOX);
         const first = await box(page, FIRST);
         const second = await box(page, SECOND);
+        // The Row's own gap between its blocks, as the browser lays it out.
+        const gap = await canvasBlock(page, BOX)
+          .first()
+          .evaluate(node => parseFloat(getComputedStyle(node).columnGap) || 0);
         // The first reaches the second, which still sits at the row's end.
         return (
-          Math.abs(first.x + first.width - second.x) < 2 &&
+          Math.abs(first.x + first.width + gap - second.x) < 2 &&
           Math.abs(second.x + second.width - (row.x + row.width - 24)) < 2
         );
       })

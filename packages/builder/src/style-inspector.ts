@@ -331,7 +331,11 @@ export function inspectStyle(
     }
   }
 
-  const parent = laidOutBy(document, node, at, options, context.position);
+  // Offered only to a block that has a size of its own to set: one that no
+  // longer offers it keeps what it stores as clear-only rows.
+  const parent = offered.has("width")
+    ? laidOutBy(document, node, at, options, context.position)
+    : undefined;
   return {
     nodeId: node.id,
     state,
