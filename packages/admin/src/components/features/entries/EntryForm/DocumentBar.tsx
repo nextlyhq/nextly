@@ -449,11 +449,7 @@ function DocumentBarActions({
   const viewsToOpenIn = useBarViewsToOpenIn(props);
   return (
     <>
-      {folded
-        ? null
-        : viewsToOpenIn.map(way => (
-            <OpenInViewButton key={way.address} way={way} />
-          ))}
+      <OpenInViewButtons ways={viewsToOpenIn} folded={folded} />
       {historyOffered && !folded ? (
         <HistoryButton open={historyOpen} onOpen={onOpenHistory} />
       ) : null}
@@ -469,16 +465,13 @@ function DocumentBarActions({
           documentActions={documentActions}
           pending={pending}
           folded={folded}
-          narrowItems={
-            folded
-              ? narrowItemsFor(
-                  viewsToOpenIn,
-                  historyOffered ? onOpenHistory : undefined,
-                  previewProps,
-                  panel
-                )
-              : []
-          }
+          narrowItems={narrowItemsFor({
+            folded,
+            viewsToOpenIn,
+            openHistory: historyOffered ? onOpenHistory : undefined,
+            previewProps,
+            panel,
+          })}
         />
       )}
       {panel && !folded ? (
@@ -578,6 +571,21 @@ function useBarViewsToOpenIn(props: DocumentBarProps): WayIn[] {
 }
 
 /**
+ * The ways into the document's views as buttons, on a bar wide enough for
+ * them; a folded bar lists them in the document's menu instead.
+ */
+function OpenInViewButtons({
+  ways,
+  folded,
+}: {
+  ways: readonly WayIn[];
+  folded: boolean;
+}) {
+  if (folded) return null;
+  return ways.map(way => <OpenInViewButton key={way.address} way={way} />);
+}
+
+/**
  * A way into one of the document's views, beside History: a link, so a
  * middle or modified click opens it in a new tab as a list row's does.
  */
@@ -596,15 +604,24 @@ function OpenInViewButton({ way }: { way: WayIn }) {
 
 /**
  * The bar's own controls as menu rows, for an editor too narrow to keep them
- * beside the document's verbs: the ways into the document's views, History
- * when it is offered, then the preview's choices, then the panel toggle.
+ * beside the document's verbs (`folded`; none otherwise): the ways into the
+ * document's views, History when it is offered, then the preview's choices,
+ * then the panel toggle.
  */
-function narrowItemsFor(
-  viewsToOpenIn: readonly WayIn[],
-  openHistory: (() => void) | undefined,
-  previewProps: PreviewActionsProps,
-  panel: { collapsed: boolean; toggle: () => void } | undefined
-): NarrowMenuItem[] {
+function narrowItemsFor({
+  folded,
+  viewsToOpenIn,
+  openHistory,
+  previewProps,
+  panel,
+}: {
+  folded: boolean;
+  viewsToOpenIn: readonly WayIn[];
+  openHistory: (() => void) | undefined;
+  previewProps: PreviewActionsProps;
+  panel: { collapsed: boolean; toggle: () => void } | undefined;
+}): NarrowMenuItem[] {
+  if (!folded) return [];
   return [
     ...viewsToOpenIn.map((way, index) => ({
       id: `open-in-view-${index}`,

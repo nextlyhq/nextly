@@ -140,11 +140,8 @@ function scopeOf(view: ContributedDocumentView): string {
     : `on every document with a "${view.fieldType}" field`;
 }
 
-/** Why one view is refused on its own, or `undefined` when it is not. */
-function unroutableReason(view: ContributedDocumentView): string | undefined {
-  if (typeof view.component !== "string" || view.component === "") {
-    return `${scopeOf(view)} at "${view.path}" names no component to draw`;
-  }
+/** Why a view's words (`label`, `openLabel`) are refused, or `undefined`. */
+function wordsReason(view: ContributedDocumentView): string | undefined {
   // Read through `unknown`: a JavaScript plugin or a setup transformer is not
   // held to the type. The label is published in the admin metadata, sent as
   // JSON, where anything but text fails the whole response, not this view.
@@ -161,6 +158,16 @@ function unroutableReason(view: ContributedDocumentView): string | undefined {
   ) {
     return `${scopeOf(view)} at "${view.path}" has an openLabel that is not text with words in it`;
   }
+  return undefined;
+}
+
+/** Why one view is refused on its own, or `undefined` when it is not. */
+function unroutableReason(view: ContributedDocumentView): string | undefined {
+  if (typeof view.component !== "string" || view.component === "") {
+    return `${scopeOf(view)} at "${view.path}" names no component to draw`;
+  }
+  const words = wordsReason(view);
+  if (words !== undefined) return words;
   if (typeof view.path !== "string" || !VIEW_PATH.test(view.path)) {
     return (
       `${scopeOf(view)} has the path ${JSON.stringify(view.path)}, which is ` +
