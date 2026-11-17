@@ -277,9 +277,11 @@ loads**. Like any style, it's set per device: a block can rise on desktop and st
 mobile with **None** there. Scrolled into view, the block moves in as it enters the window,
 following the scroll, and a delay holds it back for part of that. The published page
 animates with CSS alone and adds no script, and only the block's opacity and position move,
-so nothing around it shifts. The canvas always shows blocks where they end, and so does the
-published page for a visitor whose device asks for reduced motion, for a printed page, and,
-for **When scrolled into view**, in a browser that can't run scroll-driven animation. A page
+so nothing around it shifts. The published page shows blocks where they end for a visitor
+whose device asks for reduced motion, for a printed page, and, for **When scrolled into
+view**, in a browser that can't run scroll-driven animation. The canvas shows them where
+they end too, except that it plays a block's animation once when you change it, and again
+when you press **Play** beside the setting; under reduced motion it plays nothing. A page
 using a slide clips what sticks out past its sides.
 
 ## Search
@@ -482,6 +484,14 @@ section says so ("2 settings from Row aren't used · Clear"); **Clear** removes 
 step you can undo. A layout set in CSS with no plain equivalent, such as `inline-flex`,
 reads **Arrange: Custom** with the CSS rows that hold it; **Use plain controls** rewrites
 it to the nearest plain choice.
+
+Every block with a size says how it takes its place in its parent, under **Style → Inside
+its parent**: **Width: Fill**, **Fit** or **Fixed**, and **Height** the same when the
+parent arranges as a Row or a Grid. Fill takes the space it's given, Fit is as wide as its
+content, and Fixed is a width you set. Each choice writes what it means for the parent's
+arrangement at the device you're editing: in a Row, Fill takes the rest of the row. In a
+Row stacked on that device, a block is sized as in a Stack and Height isn't offered there.
+Values that match no choice read as **Custom**, with the CSS rows that hold them.
 
 Every container has **Content width** under **Style → Layout**: **Boxed** or **Full
 width**. A new Section starts Boxed, and every other container starts Full width.

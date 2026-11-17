@@ -17,6 +17,7 @@ import { Search, X } from "lucide-react";
 import * as React from "react";
 
 import { isElement } from "./dom-kind";
+import type { ParentArrangement } from "./plain-layout";
 import type { StyleSection } from "./style-inspector";
 import {
   filterEntries,
@@ -431,6 +432,8 @@ export interface ReportedStyle {
    * while one is edited, the block's otherwise. What "Also changed on" reads.
    */
   readonly styles: unknown;
+  /** How the block's parent arranges it, which "Inside its parent" offers by. */
+  readonly parent?: ParentArrangement | undefined;
 }
 
 /**
@@ -464,7 +467,8 @@ export function useReportStyle(
   nodeId: string | undefined,
   sections: readonly StyleSection[] | undefined,
   shared = false,
-  styles: unknown = undefined
+  styles: unknown = undefined,
+  parent: ParentArrangement | undefined = undefined
 ): void {
   const report = React.useContext(StyleReportContext);
   // Told only while the panel is filtered: unfiltered, nothing reads it, and
@@ -483,10 +487,16 @@ export function useReportStyle(
     const now = latest.current;
     report(
       on && now.sections !== undefined
-        ? { nodeId, sections: now.sections, shared, styles: now.styles }
+        ? {
+            nodeId,
+            sections: now.sections,
+            shared,
+            styles: now.styles,
+            parent,
+          }
         : undefined
     );
-  }, [report, nodeId, signature, on, shared]);
+  }, [report, nodeId, signature, on, shared, parent]);
   React.useEffect(() => () => report?.(undefined), [report]);
 }
 

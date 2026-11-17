@@ -30,6 +30,16 @@ export const LAYOUT_PROPERTIES = [
   "columnGap",
   "gridTemplateColumns",
   "gridTemplateRows",
+  // How the block sits in its parent: "Inside its parent".
+  "width",
+  "height",
+  "minWidth",
+  "minHeight",
+  "flexGrow",
+  "flexShrink",
+  "flexBasis",
+  "alignSelf",
+  "justifySelf",
 ] as const;
 
 /** Each layout property's CSS name, as a declaration spells it. */
@@ -45,6 +55,15 @@ export const LAYOUT_CSS_NAMES: Readonly<Record<string, string>> = {
   columnGap: "column-gap",
   gridTemplateColumns: "grid-template-columns",
   gridTemplateRows: "grid-template-rows",
+  width: "width",
+  height: "height",
+  minWidth: "min-width",
+  minHeight: "min-height",
+  flexGrow: "flex-grow",
+  flexShrink: "flex-shrink",
+  flexBasis: "flex-basis",
+  alignSelf: "align-self",
+  justifySelf: "justify-self",
 };
 
 /** One of {@link LAYOUT_PROPERTIES}. */
@@ -566,6 +585,15 @@ const RESET: Readonly<Record<LayoutProperty, string>> = {
   columnGap: "normal",
   gridTemplateColumns: "none",
   gridTemplateRows: "none",
+  width: "auto",
+  height: "auto",
+  minWidth: "auto",
+  minHeight: "auto",
+  flexGrow: "0",
+  flexShrink: "1",
+  flexBasis: "auto",
+  alignSelf: "auto",
+  justifySelf: "auto",
 };
 
 /** The writes choosing an Arrange mode makes at the edited device. */
@@ -934,4 +962,358 @@ export function planPlain(tiers: LayoutTiers, editing: string): LayoutWrite[] {
     settled(tiers, editing, "display", display ?? null),
     ...cleared.map(property => settled(tiers, editing, property, null)),
   ];
+}
+
+// --- Inside its parent: Fill, Fit or Fixed
+
+/** How a block's parent lays it out at the edited device. */
+export type ParentArrangement = "flow" | "column" | "row" | "grid";
+
+/** A child's size choice: fill what it's given, fit its content, or set. */
+export type ChildFit = "fill" | "fit" | "fixed";
+
+/** A child's size as read back: a choice (Fixed with its size), or Custom. */
+export type ChildSize =
+  | { readonly choice: "fill" | "fit" }
+  | { readonly choice: "fixed"; readonly size: string }
+  | { readonly choice: "custom" };
+
+/** One of a block's two sizes on screen. */
+export type ChildAxis = "width" | "height";
+
+/**
+ * What a size is to the parent's layout: a flex container's main or cross
+ * axis, a Grid's inline or block axis, or a width in flow. Lines running down
+ * the screen turn a Row's main axis into the height, a Grid's inline axis
+ * too, as Align's points turn with them.
+ */
+type AxisRole = "flow" | "main" | "cross" | "inline" | "block";
+
+/** The role each size plays in each arrangement, lines across or down. */
+const ROLES: Readonly<
+  Record<
+    ParentArrangement,
+    Readonly<
+      Record<"across" | "down", Readonly<Record<ChildAxis, AxisRole | null>>>
+    >
+  >
+> = {
+  flow: {
+    across: { width: "flow", height: null },
+    down: { width: "flow", height: null },
+  },
+  column: {
+    across: { width: "cross", height: null },
+    down: { width: "main", height: null },
+  },
+  row: {
+    across: { width: "main", height: "block" },
+    down: { width: "block", height: "main" },
+  },
+  grid: {
+    across: { width: "inline", height: "block" },
+    down: { width: "block", height: "inline" },
+  },
+};
+
+/**
+ * What a size is to the parent at the edited device; `null` where the
+ * parent offers no choice for it (a height under a Stack, set in Size).
+ */
+function roleOf(
+  parent: ParentArrangement,
+  axis: ChildAxis,
+  flow: PlainFlow = LTR
+): AxisRole | null {
+  return ROLES[parent][vertical(flow) ? "down" : "across"][axis];
+}
+
+/** Whether the parent offers a choice for a size at the edited device. */
+export function offersChildAxis(
+  parent: ParentArrangement,
+  axis: ChildAxis,
+  flow?: PlainFlow
+): boolean {
+  return roleOf(parent, axis, flow) !== null;
+}
+
+/** The size a Fixed choice writes, filled in when it is planned. */
+const SIZE = "\u0000size";
+
+/** What a choice writes, by property; `null` leaves it at its default. */
+type ChoiceWrites = Readonly<Partial<Record<LayoutProperty, string | null>>>;
+
+/** A size's own property, and its minimum. */
+const SIZE_OF: Readonly<
+  Record<
+    ChildAxis,
+    { readonly size: LayoutProperty; readonly min: LayoutProperty }
+  >
+> = {
+  width: { size: "width", min: "minWidth" },
+  height: { size: "height", min: "minHeight" },
+};
+
+/**
+ * What each choice writes, by the role a size plays. Each choice of a role
+ * says every property the others write, so switching from one to another
+ * leaves nothing of the last behind.
+ */
+function roleWrites(
+  role: AxisRole,
+  axis: ChildAxis
+): Readonly<Record<ChildFit, ChoiceWrites>> {
+  const { size, min } = SIZE_OF[axis];
+  switch (role) {
+    case "flow":
+      return {
+        fill: { [size]: null },
+        fit: { [size]: "fit-content" },
+        fixed: { [size]: SIZE },
+      };
+    case "main":
+      return {
+        fill: {
+          flexGrow: "1",
+          flexShrink: "1",
+          flexBasis: "0",
+          [min]: "0",
+          [size]: null,
+        },
+        fit: {
+          flexGrow: null,
+          flexShrink: null,
+          flexBasis: null,
+          [min]: null,
+          [size]: null,
+        },
+        fixed: {
+          [size]: SIZE,
+          flexShrink: "0",
+          flexGrow: null,
+          flexBasis: null,
+          [min]: null,
+        },
+      };
+    // A flex column's cross axis: an automatic size is what stretching sizes.
+    case "cross":
+      return {
+        fill: { [size]: null, alignSelf: "stretch" },
+        fit: { [size]: null, alignSelf: "flex-start" },
+        fixed: { [size]: SIZE, alignSelf: "flex-start" },
+      };
+    // Stretched itself, so the parent's own Align can't keep it to its
+    // content.
+    case "inline":
+      return {
+        fill: { justifySelf: "stretch", [size]: null },
+        fit: { justifySelf: "start", [size]: null },
+        fixed: { [size]: SIZE, justifySelf: null },
+      };
+    case "block":
+      return {
+        fill: { alignSelf: "stretch", [size]: null },
+        fit: { alignSelf: "start", [size]: null },
+        fixed: { [size]: SIZE, alignSelf: null },
+      };
+  }
+}
+
+/** The properties a size's choices write, beside its own size. */
+export function childAxisRows(
+  parent: ParentArrangement,
+  axis: ChildAxis,
+  flow?: PlainFlow
+): LayoutProperty[] {
+  const role = roleOf(parent, axis, flow);
+  if (role === null) return [];
+  const { size } = SIZE_OF[axis];
+  const written = new Set<LayoutProperty>();
+  for (const writes of Object.values(roleWrites(role, axis))) {
+    for (const property of Object.keys(writes) as LayoutProperty[]) {
+      if (property !== size) written.add(property);
+    }
+  }
+  return [...written];
+}
+
+/** A choice's writes at the edited device, its size filled in. */
+function childWrites(
+  tiers: LayoutTiers,
+  editing: string,
+  writes: ChoiceWrites,
+  size: string | undefined
+): LayoutWrite[] {
+  return (Object.keys(writes) as LayoutProperty[]).map(property => {
+    const value = writes[property] ?? null;
+    return settled(
+      tiers,
+      editing,
+      property,
+      value === SIZE ? (size ?? null) : value
+    );
+  });
+}
+
+/** Whether the block lays out inline: its display in force is inline-level. */
+function inlineLevel(tiers: LayoutTiers, editing: string): boolean {
+  return tiers.inForce(editing).display?.startsWith("inline") === true;
+}
+
+/**
+ * The writes a size's choice makes at the edited device, by the role it
+ * plays in the parent's arrangement there. Defaults are written only where a
+ * wider device's value would stay in force under the one chosen.
+ */
+export function planChildSize(
+  tiers: LayoutTiers,
+  editing: string,
+  parent: ParentArrangement,
+  axis: ChildAxis,
+  choice: ChildFit,
+  size?: string
+): LayoutWrite[] {
+  const role = roleOf(parent, axis, tiers.flow);
+  if (role === null) return [];
+  // In flow an inline-level block (a Button) is as wide as its content at
+  // an automatic width: Fill gives it the line's.
+  if (role === "flow" && choice === "fill" && inlineLevel(tiers, editing)) {
+    return childWrites(tiers, editing, { [SIZE_OF[axis].size]: "100%" }, size);
+  }
+  return childWrites(tiers, editing, roleWrites(role, axis)[choice], size);
+}
+
+/** Whether a length is the automatic one, which no choice sets. */
+function automatic(value: string | undefined): boolean {
+  return value === undefined || value === "auto";
+}
+
+/** Whether a self-alignment leaves the block stretched, as by default. */
+function stretched(value: string | undefined): boolean {
+  return (
+    value === undefined ||
+    value === "auto" ||
+    value === "normal" ||
+    value === "stretch"
+  );
+}
+
+/** Whether a self-alignment puts the block at its start. */
+function atStart(value: string | undefined): boolean {
+  return value === "start" || value === "flex-start" || value === "self-start";
+}
+
+/** A size across the parent's axis: set, at the start, or stretched. */
+function crossSize(
+  size: string | undefined,
+  self: string | undefined
+): ChildSize {
+  // A self-alignment no choice writes (centred, at the end) is Custom, so
+  // its row stays drawn to say it, whatever the size.
+  if (!atStart(self) && !stretched(self)) return { choice: "custom" };
+  if (!automatic(size)) return { choice: "fixed", size: size ?? "" };
+  return atStart(self) ? { choice: "fit" } : { choice: "fill" };
+}
+
+/** A basis of nothing, as Fill writes it and as it may be spelled. */
+const ZERO_BASES: ReadonlySet<string> = new Set(["0", "0%", "0px"]);
+
+/**
+ * A size along a flex container's main axis: grown from nothing, its
+ * content's, or set. Anything a choice doesn't write (a basis of its own, a
+ * grow of 2) is Custom, so its rows stay drawn to say it.
+ */
+function mainSize(size: string | undefined, values: LayoutValues): ChildSize {
+  const grow = values.flexGrow ?? "0";
+  const basis = values.flexBasis ?? "auto";
+  const natural = grow === "0" && basis === "auto";
+  if (grow === "1" && ZERO_BASES.has(basis) && automatic(size)) {
+    return { choice: "fill" };
+  }
+  if (!natural) return { choice: "custom" };
+  return automatic(size)
+    ? { choice: "fit" }
+    : { choice: "fixed", size: size ?? "" };
+}
+
+/**
+ * A flowing block's width: an automatic one fills the line for a block-level
+ * box and fits the content of an inline-level one; 100% fills either.
+ */
+function flowSize(size: string | undefined, inline: boolean): ChildSize {
+  if (size === "100%") return { choice: "fill" };
+  if (automatic(size)) return { choice: inline ? "fit" : "fill" };
+  return size === "fit-content"
+    ? { choice: "fit" }
+    : { choice: "fixed", size: size ?? "" };
+}
+
+/**
+ * The choice a size reads as at the edited device, by the role it plays in
+ * the parent's arrangement there. Under a Row stacked here, values a wider
+ * device's Row choice wrote on the main axis (grow, shrink, a minimum) act
+ * on the column's height and change nothing shown.
+ */
+export function readChildSize(
+  tiers: LayoutTiers,
+  editing: string,
+  parent: ParentArrangement,
+  axis: ChildAxis
+): ChildSize {
+  const role = roleOf(parent, axis, tiers.flow);
+  const values = tiers.inForce(editing);
+  const size = values[SIZE_OF[axis].size];
+  switch (role) {
+    case null:
+      return { choice: "custom" };
+    case "flow":
+      return flowSize(size, inlineLevel(tiers, editing));
+    case "main":
+      return mainSize(size, values);
+    case "cross":
+    case "block":
+      return crossSize(size, values.alignSelf);
+    case "inline":
+      return crossSize(size, values.justifySelf);
+  }
+}
+
+/** The writes a Width choice makes: {@link planChildSize} for the width. */
+export function planChildWidth(
+  tiers: LayoutTiers,
+  editing: string,
+  parent: ParentArrangement,
+  choice: ChildFit,
+  size?: string
+): LayoutWrite[] {
+  return planChildSize(tiers, editing, parent, "width", choice, size);
+}
+
+/** The writes a Height choice makes, under a Row or a Grid. */
+export function planChildHeight(
+  tiers: LayoutTiers,
+  editing: string,
+  choice: ChildFit,
+  size?: string,
+  parent: ParentArrangement = "row"
+): LayoutWrite[] {
+  return planChildSize(tiers, editing, parent, "height", choice, size);
+}
+
+/** The Width choice the block's values read as at the edited device. */
+export function readChildWidth(
+  tiers: LayoutTiers,
+  editing: string,
+  parent: ParentArrangement
+): ChildSize {
+  return readChildSize(tiers, editing, parent, "width");
+}
+
+/** The Height choice the block's values read as, under a Row or a Grid. */
+export function readChildHeight(
+  tiers: LayoutTiers,
+  editing: string,
+  parent: ParentArrangement = "row"
+): ChildSize {
+  return readChildSize(tiers, editing, parent, "height");
 }
