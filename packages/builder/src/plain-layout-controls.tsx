@@ -107,6 +107,9 @@ function ownAt(
       path: [],
     });
     if (typeof value === "string") values[property] = value;
+    // A variable or token set here is a value too: kept as written, so a
+    // control knows the property holds one.
+    else if (value !== undefined) values[property] = JSON.stringify(value);
   }
   return values;
 }

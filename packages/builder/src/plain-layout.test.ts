@@ -572,3 +572,31 @@ describe("plain controls for a Stack spreading its blocks", () => {
     expect(block.read()).toMatchObject({ mode: "stack", flex: true });
   });
 });
+
+describe("Stack on: Never with a narrower column of its own", () => {
+  it("takes back the narrower column too, its reverse kept as a row", () => {
+    const block = new Block({ display: "flex" });
+    block.apply(planStackOn(block.tiers(), "md"));
+    block.own.sm.flexDirection = "column-reverse";
+    block.apply(planStackOn(block.tiers(), null));
+    expect(block.own.md.flexDirection).toBeUndefined();
+    expect(block.own.sm.flexDirection).toBe("row-reverse");
+    expect(block.read("sm")).toMatchObject({ mode: "row", stackOn: undefined });
+  });
+});
+
+describe("a fitted minimum width with commas of its own", () => {
+  it("reads back as As many as fit", () => {
+    const block = new Block({ display: "grid" });
+    block.apply(
+      planColumns(block.tiers(), "base", {
+        kind: "fit",
+        min: "min(12rem, 100%)",
+      })
+    );
+    expect(block.read()).toMatchObject({
+      mode: "grid",
+      columns: { kind: "fit", min: "min(12rem, 100%)" },
+    });
+  });
+});

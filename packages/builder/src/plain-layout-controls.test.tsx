@@ -400,3 +400,17 @@ describe("a Grid's content spread", () => {
     ).not.toBeNull();
   });
 });
+
+describe("rows and columns set apart with a variable", () => {
+  it("stay drawn in a Row, as they do with a length", () => {
+    mount({
+      base: {
+        base: {
+          display: "flex",
+          rowGap: { $token: "space.large" },
+        },
+      },
+    } as never);
+    expect(rowNames()).toContain("Between rows");
+  });
+});

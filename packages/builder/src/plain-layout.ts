@@ -368,7 +368,9 @@ const SPREAD_KEYWORDS: Readonly<Record<Spread, string | null>> = {
 };
 
 const COUNT_TEMPLATE = /^repeat\((\d+),\s*minmax\(0,\s*1fr\)\)$/;
-const FIT_TEMPLATE = /^repeat\(auto-fill,\s*minmax\(([^,]+),\s*1fr\)\)$/;
+// The minimum may itself hold commas, as `min(12rem, 100%)` does: the last
+// `, 1fr))` closes the template.
+const FIT_TEMPLATE = /^repeat\(auto-fill,\s*minmax\((.+),\s*1fr\)\)$/;
 const ROWS_TEMPLATE = /^repeat\((\d+),\s*auto\)$/;
 
 /** A Grid's columns read from its template, or `"custom"` for another. */
@@ -592,6 +594,7 @@ export function planStackOn(
         : settled(tiers, current, "flexDirection", null)
     );
   }
+  if (device === null) writes.push(...narrowerColumns(tiers, current));
   if (device !== null) {
     const reversed =
       tiers.inForce(device).flexDirection === "row-reverse" ||
@@ -603,6 +606,30 @@ export function planStackOn(
     });
   }
   return writes;
+}
+
+/**
+ * Stack on: Never also takes back the columns written below the stack device
+ * (a Reverse order set at a narrower one), keeping a reversed one reversed as
+ * a row, so no device is left stacked.
+ */
+function narrowerColumns(
+  tiers: LayoutTiers,
+  from: string | undefined
+): LayoutWrite[] {
+  if (from === undefined) return [];
+  return tiers.order
+    .slice(tiers.order.indexOf(from) + 1)
+    .flatMap((device): LayoutWrite[] => {
+      const own = tiers.own(device).flexDirection;
+      if (own === "column") {
+        return [{ device, property: "flexDirection", value: null }];
+      }
+      if (own === "column-reverse") {
+        return [{ device, property: "flexDirection", value: "row-reverse" }];
+      }
+      return [];
+    });
 }
 
 /**
