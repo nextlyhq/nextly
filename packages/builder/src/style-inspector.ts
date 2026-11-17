@@ -337,15 +337,13 @@ export function inspectStyle(
     position: context.position,
     sized: offered.has("width"),
   });
-  const parent = parentLayout?.arrangement;
   return {
     nodeId: node.id,
     state,
     breakpoint,
     sections,
     ...(objectFit === undefined ? {} : { objectFit }),
-    ...(parent === undefined ? {} : { parent }),
-    ...(parentLayout === undefined ? {} : { parentLayout }),
+    ...parentFields(parentLayout),
   };
 }
 
@@ -414,6 +412,15 @@ function laidOutBy(
 ): ParentLayout | undefined {
   if (!block.sized || OUT_OF_FLOW.has(block.position ?? "")) return undefined;
   return parentLayoutOf(document, node, at, options);
+}
+
+/** How the parent lays the block out, as the inspection says it. */
+function parentFields(
+  layout: ParentLayout | undefined
+): Pick<StyleInspection, "parent" | "parentLayout"> {
+  return layout === undefined
+    ? {}
+    : { parent: layout.arrangement, parentLayout: layout };
 }
 
 /** The positions that take a block out of its parent's layout. */
