@@ -73,7 +73,7 @@ export interface Gap {
 const NEAR_GAP_PX = 8;
 
 /** The "+"'s side on screen, in the chrome's pixels: the 24px target floor. */
-export const GAP_CONTROL_PX = 24;
+const GAP_CONTROL_PX = 24;
 
 /**
  * How deep the blocks beside a gap are, across its line: their heights
@@ -258,7 +258,7 @@ function readingOrder(a: Gap, b: Gap): number {
  * How far a point is from a gap's line, or `undefined` where it is past the
  * line's ends: beside a row's gap, not above or below the row.
  */
-export function distanceTo(gap: Gap, x: number, y: number): number | undefined {
+function distanceTo(gap: Gap, x: number, y: number): number | undefined {
   const [across, along] =
     gap.line === "across" ? [y - gap.y, x - gap.x] : [x - gap.x, y - gap.y];
   if (Math.abs(along) > gap.length / 2) return undefined;
