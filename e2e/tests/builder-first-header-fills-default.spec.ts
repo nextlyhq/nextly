@@ -205,6 +205,6 @@ test("a second header published later changes nothing and says nothing", async (
   const second = await draftHeader(page.request, SECOND);
   await publishInBuilder(page, second);
   // Asked and answered: nothing was waiting, so nothing is said.
-  await expect(page.getByText(/now shows on every page\./)).toHaveCount(0);
+  await expect(page.getByText(/now shows on every page\./)).toBeHidden();
   expect(await defaultAreas(page.request)).toEqual(before);
 });
