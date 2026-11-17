@@ -51,7 +51,10 @@ function sameType(a: FieldTypeOnDialect, b: FieldTypeOnDialect): boolean {
 
 /**
  * The fields whose type a save changes, each paired with the field the database holds by its name,
- * or by the name a rename gives it.
+ * or by the name a rename gives it. Only a field with a column before and after the save: one whose
+ * values its column keeps and the new type then reads. A field that loses its column (a
+ * relationship turned many-to-many, kept in a junction table) or gains one is a drop or an add,
+ * which the save asks about as such.
  *
  * @param renamed the new name of each field the save renames, keyed by its old name
  */
@@ -73,6 +76,12 @@ export function fieldTypeChangesOf(args: {
   for (const to of args.next) {
     const from = byName.get(oldNameOf.get(to.name) ?? to.name);
     if (from === undefined) continue;
+    if (
+      getColumnDescriptor(from, args.dialect, args.builtBy) === null ||
+      getColumnDescriptor(to, args.dialect, args.builtBy) === null
+    ) {
+      continue;
+    }
     const fromType = fieldTypeOnDialect(from, args.dialect, args.builtBy);
     const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy);
     if (!sameType(fromType, toType)) {

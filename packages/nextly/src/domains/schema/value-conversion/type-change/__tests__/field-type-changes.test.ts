@@ -47,6 +47,30 @@ describe("the fields whose type a save changes", () => {
       ["old", "renamed"],
     ]);
   });
+
+  it("leaves a field that loses or gains its column to the save's drop or add", () => {
+    // A relationship turned many-to-many keeps its links in a junction table: its column is
+    // dropped, not converted. The reverse adds one. A text turned into a number keeps its column.
+    const owner = (relationType: string) =>
+      f("owner", "relationship", {
+        relationTo: "people",
+        options: { relationType },
+      });
+    const changes = fieldTypeChangesOf({
+      previous: [
+        owner("manyToOne"),
+        f("tags", "relationship", {
+          relationTo: "people",
+          options: { relationType: "manyToMany" },
+        }),
+        f("price", "text"),
+      ],
+      next: [owner("manyToMany"), f("tags", "text"), f("price", "number")],
+      dialect: "postgresql",
+      builtBy: "collection",
+    });
+    expect(changes.map(c => c.to.name)).toEqual(["price"]);
+  });
 });
 
 const judged = (
