@@ -2133,6 +2133,28 @@ describe("the site's host-fetch policy", () => {
   });
 });
 
+describe("the background image in the Inspector's Style tab", () => {
+  it("reaches the host's media library, as the Content tab's controls do", () => {
+    // Without the host's services the Style tab offers only a link, so a
+    // Choose button here is the services reaching the tab.
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    const MediaPicker = () => null;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ MediaPicker } as never}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(
+      fieldsOf("background").getByRole("button", {
+        name: "Choose Background image",
+      })
+    ).toBeTruthy();
+  });
+});
+
 describe("a value the panel shows and could not remove", () => {
   /*
    * One shape at several sites: the panel renders a value that IS emitted on
