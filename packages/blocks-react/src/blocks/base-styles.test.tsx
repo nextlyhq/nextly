@@ -371,6 +371,7 @@ describe("every default the core library declares", () => {
       "core/collection-loop#pages",
       "core/form#control",
       "core/form#submit",
+      "core/form#trap",
       "core/image#caption",
       "core/image#frame",
       "core/image#link",

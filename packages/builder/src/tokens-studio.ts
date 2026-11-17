@@ -527,8 +527,7 @@ export type TokenValueWrite =
   | { readonly issue: string };
 
 /** What the author is told when a light line height's new kind drops dark. */
-export const DARK_FOLLOWS_LIGHT =
-  "Dark now follows the light value; set a dark value again if you need one.";
+export const DARK_FOLLOWS_LIGHT = "Dark now follows the light value.";
 
 /**
  * The set with one variable's value changed for one mode, or why it cannot be.

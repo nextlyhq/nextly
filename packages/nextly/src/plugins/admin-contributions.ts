@@ -490,6 +490,14 @@ export interface PluginDocumentView {
   component: ComponentPath;
   /** What the admin calls the view where it offers a way in. */
   label?: string;
+  /**
+   * @experimental The words of the way into this view that the admin offers
+   * where a document opens elsewhere: in a list row's menu and in the
+   * document bar beside History, as in "Open in builder". Without it the
+   * admin words the way in from `label`; a view with neither is not offered
+   * there. Refused at boot when it is not text with words in it.
+   */
+  openLabel?: string;
 }
 
 /**

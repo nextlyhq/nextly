@@ -20,6 +20,8 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { SettingSlot } from "./settings-filter";
+
 import {
   COLUMNS_LAYOUTS,
   COLUMNS_ROW,
@@ -235,49 +237,55 @@ export function ColumnsLayoutControl({
   return (
     <HeldByLock reasonId={heldBy}>
       <div className="nx-columns-layout" data-control="columns-layout">
-        <div className="nx-inspector__field nx-columns-layout__layout">
-          <span className="nx-inspector__field-name" id={labelId}>
-            Layout
-          </span>
-          <WidthTiles
-            row={row}
-            current={current}
-            labelId={labelId}
-            hintId={hintId}
-            onPoint={setPointed}
-            editor={editor}
-            held={heldBy !== undefined}
-          />
-        </div>
-        <p id={hintId} className="nx-inspector__note" aria-live="polite">
-          {heldReason(row, pointed, ROW_OWN) ??
-            hintFor(current, (stored ?? inherited) !== undefined)}
-        </p>
+        <SettingSlot ids={["columnsLayout"]}>
+          <div className="nx-inspector__field nx-columns-layout__layout">
+            <span className="nx-inspector__field-name" id={labelId}>
+              Layout
+            </span>
+            <WidthTiles
+              row={row}
+              current={current}
+              labelId={labelId}
+              hintId={hintId}
+              onPoint={setPointed}
+              editor={editor}
+              held={heldBy !== undefined}
+            />
+          </div>
+          <p id={hintId} className="nx-inspector__note" aria-live="polite">
+            {heldReason(row, pointed, ROW_OWN) ??
+              hintFor(current, (stored ?? inherited) !== undefined)}
+          </p>
+        </SettingSlot>
         {options.length > 1 ? (
           <>
-            <div className="nx-inspector__field">
-              <span className="nx-inspector__field-name" id={stackId}>
-                Stack on
-              </span>
-              <SegmentChoices
-                options={options}
-                on={stack.on}
-                labels={STACK_LABELS}
-                labelId={stackId}
-                onChoose={on => restack(on, stack.reversed)}
-              />
-            </div>
-            <div className="nx-inspector__field">
-              <span className="nx-inspector__field-name">
-                Reverse when stacked
-              </span>
-              <Switch
-                aria-label="Reverse when stacked"
-                checked={stack.reversed}
-                disabled={stack.on === "never"}
-                onCheckedChange={reversed => restack(stack.on, reversed)}
-              />
-            </div>
+            <SettingSlot ids={["stackOn"]}>
+              <div className="nx-inspector__field">
+                <span className="nx-inspector__field-name" id={stackId}>
+                  Stack on
+                </span>
+                <SegmentChoices
+                  options={options}
+                  on={stack.on}
+                  labels={STACK_LABELS}
+                  labelId={stackId}
+                  onChoose={on => restack(on, stack.reversed)}
+                />
+              </div>
+            </SettingSlot>
+            <SettingSlot ids={["reverseStacked"]}>
+              <div className="nx-inspector__field">
+                <span className="nx-inspector__field-name">
+                  Reverse when stacked
+                </span>
+                <Switch
+                  aria-label="Reverse when stacked"
+                  checked={stack.reversed}
+                  disabled={stack.on === "never"}
+                  onCheckedChange={reversed => restack(stack.on, reversed)}
+                />
+              </div>
+            </SettingSlot>
           </>
         ) : null}
       </div>

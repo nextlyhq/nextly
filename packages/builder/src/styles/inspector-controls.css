@@ -415,6 +415,26 @@
   color: var(--nx-builder-text-muted);
 }
 
+/* A property's heading with an action at its end: Play, beside "Animation
+   when it appears". The button is a 24px target, as the switch below is. */
+.nx-style-inspector__property-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__play {
+  flex: none;
+  min-height: 1.5rem;
+  height: 1.5rem;
+  gap: 0.25rem;
+  padding-inline: 0.5rem;
+  margin-inline-start: auto;
+  font-size: var(--nx-builder-font-size);
+}
+
 /*
  * A switch in the inspector is a 24px target on its own. The shared switch is
  * 18px tall, which passes only while no other target sits within 12px of its
