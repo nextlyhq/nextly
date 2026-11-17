@@ -426,6 +426,11 @@ export interface ReportedStyle {
   readonly sections: readonly StyleSection[];
   /** Whether a shared style is the target, which draws no block shortcuts. */
   readonly shared: boolean;
+  /**
+   * The target's own styles at every state and device: a shared style's
+   * while one is edited, the block's otherwise. What "Also changed on" reads.
+   */
+  readonly styles: unknown;
 }
 
 /**
@@ -458,21 +463,28 @@ function sectionsSignature(sections: readonly StyleSection[]): string {
 export function useReportStyle(
   nodeId: string | undefined,
   sections: readonly StyleSection[] | undefined,
-  shared = false
+  shared = false,
+  styles: unknown = undefined
 ): void {
   const report = React.useContext(StyleReportContext);
   // Told only while the panel is filtered: unfiltered, nothing reads it, and
   // a report would draw the panel a second time for every selection.
   const on = filtering(useFilterState());
-  const latest = React.useRef(sections);
-  latest.current = sections;
+  const latest = React.useRef({ sections, styles });
+  latest.current = { sections, styles };
+  // The target's other states and devices count too: a value there changes
+  // "Also changed on" though no section shown here changes.
   const signature =
-    sections === undefined || !on ? "" : sectionsSignature(sections);
+    sections === undefined || !on
+      ? ""
+      : `${sectionsSignature(sections)}\u0000${JSON.stringify(styles ?? null)}`;
   React.useEffect(() => {
     if (report === undefined || nodeId === undefined) return;
     const now = latest.current;
     report(
-      on && now !== undefined ? { nodeId, sections: now, shared } : undefined
+      on && now.sections !== undefined
+        ? { nodeId, sections: now.sections, shared, styles: now.styles }
+        : undefined
     );
   }, [report, nodeId, signature, on, shared]);
   React.useEffect(() => () => report?.(undefined), [report]);
