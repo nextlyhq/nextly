@@ -24,7 +24,10 @@
  * ## What it records
  *
  * - **Long tasks** from every frame, merged (`long-session-report.mjs`), read
- *   out of the page as it goes so the page does not hold them all.
+ *   out of the page as it goes so the page does not hold them all. A task
+ *   of the check's own, run before the window and after it, must be
+ *   recorded and judged over the limit, or the run fails: an empty
+ *   recording passes only once the recording is shown to work.
  * - **Heap**, once a minute, after a forced garbage collection, with the DOM
  *   nodes and event listeners Chromium counts. The task that runs those
  *   collections is the check's own, and is left out of the long tasks.
@@ -133,6 +136,49 @@ function watchLock(page) {
       });
   });
   return answers;
+}
+
+/** How long the check's own long task runs, the recording's control. */
+const CONTROL_MS = 1200;
+
+/**
+ * Runs a task of `CONTROL_MS` on the main thread from the admin's frame, and
+ * fails unless the recording saw it and the judgement counts it over the
+ * limit. An observer that never registered, or stopped, records nothing, and
+ * nothing judges as a pass; this tells the two apart. Run outside the
+ * measured window, so its task is never the builder's. Returns the task as
+ * recorded.
+ */
+async function controlLongTask(page) {
+  const from = await pageNow(page);
+  // Scheduled by the page itself: a script run straight from the driver is
+  // the inspector's task, which the page's observer is not told of.
+  await page.evaluate(
+    ms =>
+      new Promise(resolve => {
+        setTimeout(() => {
+          const end = performance.now() + ms;
+          let spins = 0;
+          while (performance.now() < end) spins += 1;
+          resolve(spins);
+        }, 0);
+      }),
+    CONTROL_MS
+  );
+  // The observer reports after the task, not during it.
+  await sleep(1000);
+  const to = await pageNow(page);
+  const seen = mergeLongTasks(await drainLongTasks(page));
+  const verdict = judgeLongTasks(
+    seen,
+    { startedAt: from, endedAt: to },
+    { graceMs: 0 }
+  );
+  if (verdict.passed)
+    throw new Error(
+      `the long-task recording missed the check's own ${String(CONTROL_MS)} ms task (longest seen ${String(verdict.longestMs)} ms), so an empty recording would prove nothing`
+    );
+  return verdict.longestMs;
 }
 
 /** What the editor's lock notice says, or null when it shows none. */
@@ -266,6 +312,7 @@ async function session() {
 
     // Long tasks before this point are the opening and the first timing,
     // which the speed check measures; the session starts here.
+    const controlAtStart = await controlLongTask(page);
     await drainLongTasks(page);
     const startedAt = await pageNow(page);
     const lockFrom = Date.now();
@@ -289,6 +336,8 @@ async function session() {
     const last = await read(startedAt);
     const endedAt = await pageNow(page);
     const lockTo = Date.now();
+    // After the window: the recording still works at the end.
+    const controlAtEnd = await controlLongTask(page);
 
     const blocksAtEnd = await canvasOf(page)
       .locator(".nx-canvas [data-nx-node]")
@@ -307,6 +356,7 @@ async function session() {
       selectionAtStart,
       selectionAtEnd,
       lockAtEnd: last.lock,
+      controls: { start: controlAtStart, end: controlAtEnd },
       lock: judgeLock(lockAnswers, samples, {
         from: lockFrom,
         to: lockTo,
@@ -350,6 +400,8 @@ async function main() {
         })),
       },
       selectionMs: { start: s.selectionAtStart, end: s.selectionAtEnd },
+      // The check's own task, run before and after the window and recorded.
+      longTaskControlMs: s.controls,
       heap: {
         growthFromMinuteOnePercent: heapGrowth(s.samples),
         at: readingsAt(s.samples, [1, 10, 20, 30]),
