@@ -36,6 +36,7 @@ import {
 } from "@nextlyhq/ui";
 import { AlertCircle, TriangleAlert } from "lucide-react";
 import {
+  useContext,
   useEffect,
   useState,
   type ComponentProps,
@@ -56,6 +57,7 @@ import { lazyPart } from "../lazy-part";
 import { RemovalStatusRow, RemovalStepPanel } from "./breakpoint-removal-step";
 import { undoableHint } from "./breakpoint-undo-flow";
 import { UndoStatusRow, UndoStepPanel } from "./breakpoint-undo-step";
+import { ManageSetsContext } from "./manage-sets";
 import type { SiteCodeSection as SiteCodeSectionPart } from "./site-code-settings";
 import {
   useBreakpointRemoval,
@@ -126,6 +128,7 @@ export function SiteSettingsDialog({
   breakpoints,
 }: SiteSettingsDialogProps): JSX.Element {
   const leave = useLeaveGuard(onOpenChange, open);
+  const leaveToSets = useLeaveToSets(leave.request);
   // A permission that went away (a retry that answered "not yours") closes
   // the dialog rather than leaving it on screen blank.
   const allowed = mayOpenSiteSettings(site);
@@ -133,10 +136,12 @@ export function SiteSettingsDialog({
     if (open && !allowed) onOpenChange(false);
   }, [open, allowed, onOpenChange]);
   return (
-    <>
+    <ManageSetsContext.Provider value={leaveToSets}>
       <Dialog
         open={open}
-        onOpenChange={next => (next ? onOpenChange(true) : leave.request())}
+        onOpenChange={next =>
+          next ? onOpenChange(true) : leave.request({ kind: "close" })
+        }
       >
         <DialogContent
           className="flex h-[min(85vh,720px)] max-w-[680px] flex-col gap-0 p-0"
@@ -159,7 +164,7 @@ export function SiteSettingsDialog({
               onSavingBreakpoints={leave.setSaving}
               onEditingCode={leave.setEditingCode}
               onSavingCode={leave.setSavingCode}
-              onClose={leave.request}
+              onClose={() => leave.request({ kind: "close" })}
             />
           </div>
         </DialogContent>
@@ -187,8 +192,29 @@ export function SiteSettingsDialog({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </ManageSetsContext.Provider>
   );
+}
+
+/**
+ * Where leaving goes: closing, and then, where asked, somewhere else in the
+ * editor, such as the Pages panel's sets.
+ */
+interface Leave {
+  kind: "close";
+  then?: () => void;
+}
+
+/**
+ * The editor's way to its list of sets, taken only as the dialog may be
+ * left: a breakpoint or code draft asks first, and a save running keeps it.
+ * Null where the editor offers none.
+ */
+function useLeaveToSets(request: (leave: Leave) => void): (() => void) | null {
+  const openSets = useContext(ManageSetsContext);
+  return openSets === null
+    ? null
+    : () => request({ kind: "close", then: openSets });
 }
 
 /** What leaving would discard, and how the question says so. */
@@ -229,7 +255,7 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
   const [saving, setSaving] = useState(false);
   const [editingCode, setEditingCode] = useState(false);
   const [savingCode, setSavingCode] = useState(false);
-  const [asking, setAsking] = useState(false);
+  const [pending, setPending] = useState<Leave | null>(null);
   // Closed from outside (the editor giving way to its narrow-window notice),
   // the editor's draft went with the dialog, so nothing is left to guard.
   useEffect(() => {
@@ -238,10 +264,14 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     setSaving(false);
     setEditingCode(false);
     setSavingCode(false);
-    setAsking(false);
+    setPending(null);
   }, [open]);
+  const go = (leave: Leave): void => {
+    onOpenChange(false);
+    leave.then?.();
+  };
   return {
-    asking,
+    asking: pending !== null,
     // What a discard would throw away: both drafts where both are open, as a
     // breakpoint draft stays while the code is open over it.
     discarding: discardingOf(editing, editingCode),
@@ -249,20 +279,20 @@ function useLeaveGuard(onOpenChange: (open: boolean) => void, open: boolean) {
     setSaving,
     setEditingCode,
     setSavingCode,
-    request: (): void => {
+    request: (leave: Leave): void => {
       if (saving || savingCode) return;
       if (editing || editingCode) {
-        setAsking(true);
+        setPending(leave);
         return;
       }
-      onOpenChange(false);
+      go(leave);
     },
-    keepEditing: (): void => setAsking(false),
+    keepEditing: (): void => setPending(null),
     discard: (): void => {
       setEditing(false);
       setEditingCode(false);
-      setAsking(false);
-      onOpenChange(false);
+      if (pending !== null) go(pending);
+      setPending(null);
     },
   };
 }
@@ -577,6 +607,9 @@ function useSetListHref(): string | undefined {
  */
 function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
   const href = useSetListHref();
+  // Inside the builder, the list of sets is the Pages panel, in this window:
+  // Site settings and Page settings close, and the panel opens on its sets.
+  const openSets = useContext(ManageSetsContext);
   const name =
     read.layouts.find(layout => layout.id === read.defaultLayout)?.title ??
     "none set";
@@ -591,7 +624,15 @@ function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
         </span>{" "}
         <span className="font-medium">{name}</span>
       </p>
-      {href === undefined ? null : (
+      {openSets !== null ? (
+        <button
+          type="button"
+          onClick={openSets}
+          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Change in Pages ▸ Header & footer
+        </button>
+      ) : href === undefined ? null : (
         <a
           href={href}
           target="_blank"

@@ -23,6 +23,7 @@ import {
 } from "react-hook-form";
 
 import type { EditorView } from "./editor-view";
+import { ManageSetsContext } from "./manage-sets";
 import {
   settingsAddressOf,
   useSavedRevision,
@@ -162,36 +163,49 @@ export function editorSettings(
   // first tab, whichever tab it was left on.
   return dialog => (
     <RemountOnStyleReplay>
-      <SettingsDialog
-        key={view.pages.settingsRequest?.count ?? 0}
-        {...dialog}
-        kind={of.kind}
-        pageTitle={page.title}
-        fieldName={of.fieldName}
-        // Other plugins' tabs, in the same row as the page's own.
-        place={place}
-        // The page's header & footer, where its form has one.
-        headerFooter={
-          pageLayout === null ? null : <HeaderFooterMenu control={of.control} />
-        }
-        openAsForm={of.openAsForm}
-        // Built only while the dialog is drawn, from the page on screen.
-        share={
-          // Prepared only while Settings is open: the shell asks for the
-          // dialog on every pass, open or not.
-          dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
-        }
-        // The SEO plugin's group, where the page has one: its fields are then
-        // among the page's own, and the preview is not all there is.
-        seoFields={page.seo !== undefined}
-        address={pageAddressOf(view, page)}
-        breakpoints={{
-          value: canvasRender.styleContext.breakpoints,
-          onSave: saveBreakpoints,
-          status: siteStyleStatus(siteStylePending, siteStyleError),
-          refresh: refreshSiteStyle,
+      {/* The page's header & footer menu's "Manage headers & footers", and
+          the site default line: the Pages panel opens on its sets. */}
+      <ManageSetsContext.Provider
+        value={() => {
+          // Settings closes itself first, as it may be left (it asks over
+          // an unsaved draft); then the panel opens on its sets.
+          view.requestPanel("pages");
+          view.pages.revealSets();
         }}
-      />
+      >
+        <SettingsDialog
+          key={view.pages.settingsRequest?.count ?? 0}
+          {...dialog}
+          kind={of.kind}
+          pageTitle={page.title}
+          fieldName={of.fieldName}
+          // Other plugins' tabs, in the same row as the page's own.
+          place={place}
+          // The page's header & footer, where its form has one.
+          headerFooter={
+            pageLayout === null ? null : (
+              <HeaderFooterMenu control={of.control} />
+            )
+          }
+          openAsForm={of.openAsForm}
+          // Built only while the dialog is drawn, from the page on screen.
+          share={
+            // Prepared only while Settings is open: the shell asks for the
+            // dialog on every pass, open or not.
+            dialog.open ? pagePreview(view, page) : { title: page.title ?? "" }
+          }
+          // The SEO plugin's group, where the page has one: its fields are then
+          // among the page's own, and the preview is not all there is.
+          seoFields={page.seo !== undefined}
+          address={pageAddressOf(view, page)}
+          breakpoints={{
+            value: canvasRender.styleContext.breakpoints,
+            onSave: saveBreakpoints,
+            status: siteStyleStatus(siteStylePending, siteStyleError),
+            refresh: refreshSiteStyle,
+          }}
+        />
+      </ManageSetsContext.Provider>
     </RemountOnStyleReplay>
   );
 }

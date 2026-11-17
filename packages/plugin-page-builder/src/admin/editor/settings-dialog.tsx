@@ -51,7 +51,14 @@ import {
   TabsTrigger,
 } from "@nextlyhq/ui";
 import { ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+} from "react";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
@@ -60,6 +67,7 @@ import {
 } from "../../library-contract";
 import { PAGE_BUILDER_SETTINGS_PLACE } from "../../settings-place-contract";
 
+import { ManageSetsContext } from "./manage-sets";
 import type { SettingsAddress } from "./settings-address";
 import { PageFieldsTab, usePageFields } from "./settings-fields";
 import { DocumentGeneral, PageGeneral } from "./settings-general";
@@ -222,10 +230,13 @@ export function SettingsDialog({
   const page = kind === "page";
   const site = useSiteSettingsEntry(open);
   const tabs = useSettingsTabs({ page, fieldName, place, onOpenChange });
+  const leaveToSets = useLeaveToSets(onOpenChange);
   const body = useRef<HTMLDivElement | null>(null);
   useFocusShownField(open, tabs.shown, tabs.focusPath, body, tabs.focused);
   return (
-    <>
+    // The header & footer menu's "Manage headers & footers" and Site
+    // settings' default line leave through here for the Pages panel's sets.
+    <ManageSetsContext.Provider value={leaveToSets}>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           // One height for every tab, so moving between them never resizes
@@ -282,8 +293,25 @@ export function SettingsDialog({
         site={site.read}
         breakpoints={breakpoints}
       />
-    </>
+    </ManageSetsContext.Provider>
   );
+}
+
+/**
+ * The editor's way to its list of sets, closing Page settings first: it
+ * holds no draft of its own (its changes are the page's, kept unsaved), and
+ * Site settings over it asks first about its own. Null where the editor
+ * offers none.
+ */
+function useLeaveToSets(
+  onOpenChange: (open: boolean) => void
+): (() => void) | null {
+  const openSets = useContext(ManageSetsContext);
+  if (openSets === null) return null;
+  return () => {
+    onOpenChange(false);
+    openSets();
+  };
 }
 
 /**

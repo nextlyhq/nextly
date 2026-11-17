@@ -19,7 +19,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement, ReactNode } from "react";
+import { useContext, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SiteCodeRead, SiteSettingsRead } from "../../library-contract";
@@ -208,6 +208,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
   ),
 }));
 
+import { ManageSetsContext } from "./manage-sets";
 const { SettingsDialog } = await import("./settings-dialog");
 const { HeaderFooterMenu } = await import("./settings-general");
 
@@ -873,6 +874,124 @@ describe("Site settings", () => {
     });
     expect(change.getAttribute("href")).toBe("/admin/collections/site_layouts");
     expect(change.getAttribute("target")).toBe("_blank");
+  });
+
+  it("opens the builder's own list of sets from the site default line, inside the builder", async () => {
+    const openSets = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <SettingsDialog
+          open
+          onOpenChange={onOpenChange}
+          returnFocus={() => null}
+          kind="page"
+          pageTitle="Pricing"
+          fieldName="layout"
+          place={null}
+          share={{ title: "Who we are", description: "We build tools." }}
+          seoFields
+          address={null}
+          breakpoints={{
+            value: { viewport: [], container: [] },
+            onSave: vi.fn(),
+            status: "ready",
+            refresh: vi.fn(),
+          }}
+        />
+      </ManageSetsContext.Provider>
+    );
+    await openSite();
+    const line = screen.getByRole("region", {
+      name: "Site default header & footer",
+    });
+    expect(within(line).queryByRole("link")).toBeNull();
+    await userEvent.click(
+      within(line).getByRole("button", {
+        name: "Change in Pages ▸ Header & footer",
+      })
+    );
+    // Both dialogs give way to the Pages panel.
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(openSets).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before leaving a breakpoint edit for the Pages panel, and leaves only on discard", async () => {
+    const openSets = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <SettingsDialog
+          open
+          onOpenChange={onOpenChange}
+          returnFocus={() => null}
+          kind="page"
+          pageTitle="Pricing"
+          fieldName="layout"
+          place={null}
+          share={{ title: "Who we are", description: "We build tools." }}
+          seoFields
+          address={null}
+          breakpoints={{
+            value: { viewport: [], container: [] },
+            onSave: vi.fn(),
+            status: "ready",
+            refresh: vi.fn(),
+          }}
+        />
+      </ManageSetsContext.Provider>
+    );
+    await openSite();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit breakpoints" })
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Change in Pages ▸ Header & footer" })
+    );
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask.textContent).toContain("Discard your breakpoint changes?");
+    expect(openSets).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(ask).getByRole("button", { name: /^Discard/ })
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(openSets).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes Page settings for the Pages panel from the header & footer menu", () => {
+    const openSets = vi.fn();
+    let leave: (() => void) | null = null;
+    function Menu(): null {
+      leave = useContext(ManageSetsContext);
+      return null;
+    }
+    const onOpenChange = vi.fn();
+    render(
+      <ManageSetsContext.Provider value={openSets}>
+        <SettingsDialog
+          open
+          onOpenChange={onOpenChange}
+          returnFocus={() => null}
+          kind="page"
+          pageTitle="Pricing"
+          fieldName="layout"
+          headerFooter={<Menu />}
+          place={null}
+          share={{ title: "Who we are" }}
+          seoFields
+          breakpoints={{
+            value: { viewport: [], container: [] },
+            onSave: vi.fn(),
+            status: "ready",
+            refresh: vi.fn(),
+          }}
+        />
+      </ManageSetsContext.Provider>
+    );
+    act(() => leave?.());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(openSets).toHaveBeenCalledTimes(1);
   });
 
   it("says when the site has no default", async () => {

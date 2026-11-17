@@ -255,7 +255,9 @@ describe("the canvas frame", () => {
               ? border
               : name === "--font-sans"
                 ? "Inter"
-                : "",
+                : name === "--nx-builder-select-on-light"
+                  ? "rgb(37, 99, 235)"
+                  : "",
         } as CSSStyleDeclaration;
       }
     );
@@ -277,11 +279,15 @@ describe("the canvas frame", () => {
       }
       return undefined;
     };
-    const words = ".nx-canvas-region__mark";
-    expect(handed(words, "--nx-builder-border")).toBe("rgb(1, 2, 3)");
+    // A header or footer's tag holds the admin's words, in its face; its
+    // outline and tag take their hue from the region's own select tokens.
+    const words = ".nx-canvas-region__tag";
     expect(handed(words, "--font-sans")).toBe("Inter");
     expect(handed(".nx-canvas-region", "--nx-builder-border")).toBe(
       "rgb(1, 2, 3)"
+    );
+    expect(handed(".nx-canvas-region", "--nx-builder-select-on-light")).toBe(
+      "rgb(37, 99, 235)"
     );
     // The admin's face stays on its own words: the page's root, and the
     // region's site content, keep the site's own value of a shared name.
@@ -293,7 +299,9 @@ describe("the canvas frame", () => {
       page?.documentElement.style.getPropertyValue("--nx-builder-border")
     ).toBe("");
     // A token the editor does not declare is not invented.
-    expect(handed(words, "--nx-builder-accent")).toBe(undefined);
+    expect(handed(".nx-canvas-region", "--nx-builder-select-on-dark")).toBe(
+      undefined
+    );
     // A list's note to its author holds the admin's words alone, so it takes
     // the admin's face; a list showing its empty state holds the site's
     // content, so it takes none of a name a site may share.
@@ -305,7 +313,9 @@ describe("the canvas frame", () => {
     await act(async () => {
       document.documentElement.classList.add("dark");
     });
-    expect(handed(words, "--nx-builder-border")).toBe("rgb(4, 5, 6)");
+    expect(handed(".nx-canvas-region", "--nx-builder-border")).toBe(
+      "rgb(4, 5, 6)"
+    );
     document.documentElement.classList.remove("dark");
     vi.restoreAllMocks();
   });
