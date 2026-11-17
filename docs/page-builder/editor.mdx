@@ -717,6 +717,22 @@ ring and padding the inner one. Each side shows its value.
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
 
+### Using a variable in a field
+
+Every other value in **Style** reaches your variables through its own menu:
+
+- **A size** (a font size, a gap, a radius, a width): open its unit menu. Your variables
+  come first, under **Your spacing** and **Your sizes**, then the units.
+- **A colour**: open its swatch. Your colour variables come first.
+- **A font**: open the font list. **Font variables** come first.
+- **A field with no unit menu** (a line height, a shadow) has a menu of its own at its end.
+
+A field holding a variable shows it in green with the variable's name. Hover it, or move
+to it with Tab, to see what it is, for example "Spacing variable XL · 64px ·
+--site-space-xl": its kind, its value and the CSS name the page reads it from. Click the
+name to choose another variable. **Unlink** keeps the value the field shows now as a plain
+one, so it no longer changes with the variable. To remove the value, use the row's reset.
+
 ## The bottom bar
 
 The bottom bar shows where you are: **Page**, then each block holding the selected
