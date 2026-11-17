@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A block's background image is chosen, not typed. In the Style tab's Background section the author picks an image from the Media library, uploads one, or pastes a link, and sees a thumbnail with Replace and Remove. Position is a nine-point picker whose points say the CSS they write, and Size is Cover, Fit or Tile. A position or size set any other way reads "Custom". The nine-point picker an image's focal point uses reads "Custom" the same way.
+A block's background image is chosen, not typed. In the Style tab's Background section the author picks an image from the Media library, uploads one, or pastes a link, and sees a thumbnail with Replace and Remove. Position is a nine-point picker whose points say the CSS they write, and a position set any other way reads "Custom". The nine-point picker an image's focal point uses reads "Custom" the same way.
