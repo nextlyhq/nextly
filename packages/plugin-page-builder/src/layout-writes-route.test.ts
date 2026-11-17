@@ -40,6 +40,10 @@ function writes(rows: Record<string, Record<string, unknown>>) {
         },
       };
     }),
+    readSaved: vi.fn(async (collection, id) => {
+      calls.push({ op: "readSaved", args: [collection, id] });
+      return rows[id] ?? null;
+    }),
     update: vi.fn(async (collection, id, data) => {
       calls.push({ op: "update", args: [collection, id, data] });
       const row = { ...rows[id], ...data };
@@ -56,16 +60,34 @@ function writes(rows: Record<string, Record<string, unknown>>) {
   return { fake, calls };
 }
 
-const MAIN = { id: "main", title: "Main", slug: "main", status: "published" };
+const MAIN = {
+  id: "main",
+  title: "Main",
+  slug: "main",
+  status: "published",
+  _rev: "rev-1",
+};
 
 describe("renaming a set", () => {
-  it("writes its title and nothing else, as the caller", async () => {
+  it("writes its title and nothing else, from the set as saved and carrying its version", async () => {
     const { fake, calls } = writes({ main: { ...MAIN } });
     const written = await renameLayout("site_layouts", "main", "Site", fake);
     expect(written).toEqual({ id: "main", title: "Site" });
     expect(calls).toEqual([
-      { op: "update", args: ["site_layouts", "main", { title: "Site" }] },
+      { op: "readSaved", args: ["site_layouts", "main"] },
+      {
+        op: "update",
+        args: ["site_layouts", "main", { title: "Site", _rev: "rev-1" }],
+      },
     ]);
+  });
+
+  it("is not found for a set the caller cannot read, and writes nothing", async () => {
+    const { fake, calls } = writes({});
+    await expect(
+      renameLayout("layouts", "gone", "Site", fake)
+    ).rejects.toSatisfy(error => NextlyError.isNotFound(error));
+    expect(calls.some(call => call.op === "update")).toBe(false);
   });
 });
 
@@ -95,16 +117,11 @@ describe("copying a set", () => {
 });
 
 describe("the routes", () => {
-  it("are gated by the set write each makes, on the sets collection as the site named it", () => {
-    const routes = layoutWriteRoutes();
-    const gate = (path: string) =>
-      routes
-        .find(route => route.path === path)
-        ?.requiredPermission({
-          collection: (slug: string, action: string) => `${action}-${slug}`,
-        } as never);
-    expect(gate("/layouts/:id/title")).toBe("update-layouts");
-    expect(gate("/layouts/:id/duplicate")).toBe("create-layouts");
+  it("leave who may write to core's own write, as the caller, rather than a collection-wide gate", () => {
+    for (const route of layoutWriteRoutes()) {
+      expect(route.checksAccess).toBe(true);
+      expect("requiredPermission" in route).toBe(false);
+    }
   });
 
   it("refuses a title that is empty or too long before anything is written", async () => {

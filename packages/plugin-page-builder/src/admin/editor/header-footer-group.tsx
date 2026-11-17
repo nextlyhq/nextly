@@ -165,6 +165,12 @@ function GroupBody({
   /** Reads the sets and their counts again, after a write here. */
   reread: () => void;
 }): React.JSX.Element | null {
+  // The names renamed here, as saved: a published set's rename is saved as a
+  // change not yet published, and the list reads the live name, so the row
+  // keeps the saved one for as long as the panel is open.
+  const [renamed, setRenamed] = React.useState<ReadonlyMap<string, string>>(
+    () => new Map()
+  );
   if (read.error !== null) {
     return (
       <div className="grid justify-items-start gap-2 text-sm text-muted-foreground">
@@ -192,8 +198,12 @@ function GroupBody({
           note={setNote(set, meta.defaultLayout, counts?.[set.id])}
           picture={picture(set.regions)}
           may={{
-            rename: meta.canUpdateLayouts,
+            rename: meta.canUpdateAnyLayout ?? meta.canUpdateLayouts,
             duplicate: meta.canCreateLayouts === true,
+          }}
+          shownTitle={renamed.get(set.id) ?? set.title}
+          onRenamed={title => {
+            setRenamed(current => new Map(current).set(set.id, title));
           }}
           onWritten={reread}
         />
@@ -241,17 +251,22 @@ function refusalOf(error: unknown): string {
  */
 function SetRow({
   set,
+  shownTitle,
   href,
   note,
   picture,
   may,
+  onRenamed,
   onWritten,
 }: {
   set: LayoutChoice;
+  /** The name the row shows: the saved one after a rename here. */
+  shownTitle: string;
   href: string;
   note: string;
   picture: React.ReactNode;
   may: { readonly rename: boolean; readonly duplicate: boolean };
+  onRenamed: (title: string) => void;
   onWritten: () => void;
 }): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
@@ -269,12 +284,15 @@ function SetRow({
         <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5 py-1 text-sm">
           <SetPicture>{picture}</SetPicture>
           <RenameField
-            title={set.title}
+            title={shownTitle}
             label="Header & footer set name"
             onDone={title => {
               setRenaming(false);
-              if (title !== null && title !== set.title) {
-                write(() => renameLayout(set.id, title));
+              if (title !== null && title !== shownTitle) {
+                write(async () => {
+                  const saved = await renameLayout(set.id, title);
+                  onRenamed(saved.title);
+                });
               }
             }}
           />
@@ -288,7 +306,7 @@ function SetRow({
         >
           <SetPicture>{picture}</SetPicture>
           <span className="grid min-w-0">
-            <span className="truncate font-medium">{set.title}</span>
+            <span className="truncate font-medium">{shownTitle}</span>
             <span className="truncate text-xs text-muted-foreground">
               {note}
             </span>
@@ -300,7 +318,7 @@ function SetRow({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label={`More for ${set.title}`}
+            aria-label={`More for ${shownTitle}`}
             className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
           >
             <MoreHorizontal aria-hidden="true" className="size-4" />

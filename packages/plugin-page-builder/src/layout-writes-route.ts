@@ -4,13 +4,20 @@
  *
  * ## Who may write
  *
- * Each route is gated by the set write it makes, on the sets' collection as
- * the site named it: `update` to rename, `create` to copy, checked by the
- * dispatcher before the handler runs, as every collection write's own gate
- * is. The write itself then runs through the Direct API AS THE CALLER
- * (`readingAsUser`, `overrideAccess: false`), so the collection's own rules,
- * row filters and field rules apply exactly as to the caller's own writes in
- * the admin, and a refusal is core's.
+ * Core, and nothing here, as for the Pages panel's page writes. Each write
+ * runs through the Direct API AS THE CALLER (`readingAsUser`,
+ * `overrideAccess: false`), so the sets collection's own update and create
+ * rules, its row filters and its field rules decide, before anything is
+ * written, exactly as for the caller's own writes in the admin: a rule that
+ * lets an author update only some sets lets them rename those. A refusal is
+ * core's, answered as core answered it.
+ *
+ * ## A rename's version
+ *
+ * The set is read first as it is SAVED, as the caller (its working draft
+ * where one waits), and the rename carries that read's version, so a write
+ * made since is not silently overwritten. The title it answers is the saved
+ * one: a published set's rename is saved as a change not yet published.
  *
  * ## What a copy holds
  *
@@ -25,16 +32,17 @@ import {
   NextlyError,
   respondMutation,
   type PluginRouteContext,
-  type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { requireNextly } from "nextly/runtime";
 import { z } from "nextly/zod";
 
 import { LAYOUTS_SLUG } from "./collections/layouts";
 import { readBodyWith } from "./composition-route-kit";
+import { documentVersionOf, withVersionFrom } from "./document-version";
 import {
   entryOf,
   findAsCaller,
+  readSavedAsCaller,
   type AsCallerFindArgs,
   type AsCallerPage,
 } from "./entry-reads";
@@ -66,6 +74,11 @@ const LayoutParams = z.object({ id: z.string().trim().min(1).max(200) });
  */
 export interface LayoutWrites {
   find(args: AsCallerFindArgs): Promise<AsCallerPage>;
+  /** The set as it is saved, or null where the caller may not read it. */
+  readSaved(
+    collection: string,
+    id: string
+  ): Promise<Record<string, unknown> | null>;
   /** Each answers the row core wrote, as core returns it to this caller. */
   update(
     collection: string,
@@ -90,14 +103,28 @@ function written(row: unknown, collection: string): WrittenLayout {
   return { id: entry.id, title: entry.title };
 }
 
-/** Rename a set: its title and nothing else. */
+/**
+ * Rename a set: its title and nothing else, made from the set as it is saved
+ * and carrying that read's version.
+ */
 export async function renameLayout(
   collection: string,
   id: string,
   title: string,
   writes: LayoutWrites
 ): Promise<WrittenLayout> {
-  return written(await writes.update(collection, id, { title }), collection);
+  const saved = await writes.readSaved(collection, id);
+  if (saved === null) {
+    throw NextlyError.notFound({
+      logContext: { route: LAYOUT_TITLE_ROUTE_PATH, collection },
+    });
+  }
+  const row = await writes.update(
+    collection,
+    id,
+    withVersionFrom({ title }, documentVersionOf(saved))
+  );
+  return written(row, collection);
 }
 
 /**
@@ -145,6 +172,12 @@ function directLayoutWrites(ctx: PluginRouteContext): LayoutWrites {
   const asUser = () => readingAsUser(ctx);
   return {
     find: args => findAsCaller(ctx, args),
+    readSaved: (collection, id) =>
+      readSavedAsCaller(ctx, {
+        collection,
+        id,
+        select: { id: true, title: true },
+      }),
     update: async (collection, id, data) =>
       (
         await requireNextly().update({
@@ -169,15 +202,15 @@ function directLayoutWrites(ctx: PluginRouteContext): LayoutWrites {
 /** One of the routes, as the plugin declares it. */
 interface LayoutWriteRoute {
   method: "POST" | "PATCH";
+  checksAccess: true;
   path: string;
-  requiredPermission: (scope: PluginRoutePermissionScope) => string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 }
 
 /**
- * The two route declarations. Each permission is COMPUTED, so a host that
- * renamed the sets collection still has routes its authors can call, and the
- * dispatcher checks it before the handler reads or writes anything.
+ * The two route declarations, thin on purpose. No `public`, which makes each
+ * authenticated, and no `requiredPermission`: the permission is core's to
+ * judge on the write itself, per set, as for the page writes.
  */
 export function layoutWriteRoutes(): LayoutWriteRoute[] {
   const setsOf = (ctx: PluginRouteContext) =>
@@ -186,8 +219,7 @@ export function layoutWriteRoutes(): LayoutWriteRoute[] {
     {
       method: "PATCH",
       path: LAYOUT_TITLE_ROUTE_PATH,
-      requiredPermission: ({ collection }) =>
-        collection(LAYOUTS_SLUG, "update"),
+      checksAccess: true, // Core judges each write, as the caller.
       handler: async (req, ctx) => {
         // The path first, then the body, so a bad address is refused before
         // anything else is read.
@@ -202,8 +234,7 @@ export function layoutWriteRoutes(): LayoutWriteRoute[] {
     {
       method: "POST",
       path: LAYOUT_DUPLICATE_ROUTE_PATH,
-      requiredPermission: ({ collection }) =>
-        collection(LAYOUTS_SLUG, "create"),
+      checksAccess: true, // Core judges each write, as the caller.
       handler: async (_req, ctx) => {
         const { id } = parseRouteParams(ctx.params, LayoutParams, "set route");
         return respondMutation<WrittenLayout>(

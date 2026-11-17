@@ -274,6 +274,22 @@ describe("a set's menu", () => {
     await userEvent.type(field, "Launch{Enter}");
     expect(setWrites.renameLayout).toHaveBeenCalledWith("landing", "Launch");
     await vi.waitFor(() => expect(refetch).toHaveBeenCalled());
+    // The list still reads the live name; the row shows the saved one.
+    expect(screen.getByRole("link", { name: /^Launch/ })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /^Landing/ })).toBeNull();
+  });
+
+  it("offers Rename to an author whose rule lets them update some sets", async () => {
+    rights.update = false;
+    answer([set("main", "Main"), set("landing", "Landing")]);
+    (
+      choices.data as { meta: { canUpdateAnyLayout?: boolean } }
+    ).meta.canUpdateAnyLayout = true;
+    render(<HeaderFooterGroup folds={folds} />);
+    await openMenu("Landing");
+    expect(
+      screen.getAllByRole("menuitem").map(entry => entry.textContent)
+    ).toEqual(["Open", "Rename", "Duplicate"]);
   });
 
   it("copies a set, says so, then reads the sets again", async () => {
