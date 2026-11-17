@@ -785,24 +785,116 @@ function findStep(workflow: Workflow, name: string): ResolvedWorkflowStep {
  * A workflow's own action has no collection rule, so its permission answers for every part.
  */
 async function partsAllowed(
-  input: TakeStepInput,
+  document: ReviewDocument,
+  asked: WorkflowCaller,
   parts: readonly (string | null)[],
   action: string,
-  caller: ResolvedCaller,
-  slug: string
+  caller: ResolvedCaller
 ): Promise<(part: string | null) => boolean> {
   if (!isEntryWrite(action)) {
-    const allowed = decidePermission(caller.actor, action, slug).allowed;
+    const allowed = decidePermission(
+      caller.actor,
+      action,
+      document.scopeSlug
+    ).allowed;
     return () => allowed;
   }
   const answers = new Map<string | null, boolean>();
   for (const part of parts) {
-    answers.set(
-      part,
-      await entryWriteAllowed(input.document, part, action, input.caller)
-    );
+    answers.set(part, await entryWriteAllowed(document, part, action, asked));
   }
   return part => answers.get(part) === true;
+}
+
+/**
+ * Whether `caller` is one who may take `step` at all: an approval or a request for changes is
+ * taken only by a signed-in person, never by a key or trusted code.
+ */
+function takenBy(step: ResolvedWorkflowStep, caller: WorkflowCaller): boolean {
+  return !stepNeedsPerson(step) || caller.kind === "user";
+}
+
+/**
+ * Whether `step` refuses the person `accountable` for the act on a part `enteredBy` brought into
+ * its stage: a step that refuses self-approval, asked of the one who entered the stage.
+ */
+function refusesSelf(
+  step: ResolvedWorkflowStep,
+  accountable: string | null,
+  enteredBy: string | null | undefined
+): boolean {
+  return (
+    !allowsSelfApproval(step) &&
+    accountable !== null &&
+    enteredBy === accountable
+  );
+}
+
+/**
+ * A part as the steps out of its stage are judged for a caller: where it stands, and who brought
+ * it there.
+ *
+ * @experimental
+ */
+export interface StepJudgedPart {
+  part: string | null;
+  /** Its stage; null for a part with nothing unpublished, which no step leaves. */
+  stage: string | null;
+  enteredBy: string | null;
+}
+
+/**
+ * Which steps out of each part's stage `caller` may take on `document`, judged by the checks a
+ * step makes of who takes it, through the same functions the step runs: its permission
+ * (`partsAllowed`, the collection's own gate for a built-in write), a person for an approval or a
+ * request for changes (`takenBy`), and the self-approval a step refuses (`refusesSelf`). What a
+ * step checks of the content when taken (the revision and version seen, a comment, fields an
+ * approver cannot read) is asked then. Read on the pool.
+ *
+ * @experimental
+ */
+export async function stepsTakeableBy(
+  adapter: DrizzleAdapter,
+  workflow: Workflow,
+  document: ReviewDocument,
+  caller: WorkflowCaller,
+  parts: readonly StepJudgedPart[]
+): Promise<(part: string | null, step: string) => boolean> {
+  const resolved = await resolveCaller(adapter, caller);
+  const staged = parts.filter(entry => entry.stage !== null);
+  // Each action any step out of a part's stage needs, asked once for every part in a stage.
+  const actions = new Set<string>();
+  for (const entry of staged) {
+    for (const step of workflow.steps) {
+      if (entry.stage !== null && step.from.includes(entry.stage)) {
+        actions.add(stepAction(workflow, step));
+      }
+    }
+  }
+  const allowedOn = new Map<string, (part: string | null) => boolean>();
+  for (const action of actions) {
+    allowedOn.set(
+      action,
+      await partsAllowed(
+        document,
+        caller,
+        staged.map(entry => entry.part),
+        action,
+        resolved
+      )
+    );
+  }
+  return (part, name) => {
+    const entry = parts.find(candidate => candidate.part === part);
+    const step = workflow.steps.find(candidate => candidate.name === name);
+    if (!entry || entry.stage === null || !step) return false;
+    if (!step.from.includes(entry.stage)) return false;
+    return (
+      allowedOn.get(stepAction(workflow, step))?.(part) === true &&
+      takenBy(step, caller) &&
+      !refusesSelf(step, resolved.accountable, entry.enteredBy)
+    );
+  };
 }
 
 /** Everything a step reads on the pool, before its transaction opens. */
@@ -831,7 +923,13 @@ async function prepareStep(
     dialect: adapter.getCapabilities().dialect,
     table,
     action,
-    allowedOn: await partsAllowed(input, parts, action, caller, slug),
+    allowedOn: await partsAllowed(
+      input.document,
+      input.caller,
+      parts,
+      action,
+      caller
+    ),
     liveOn: await livePartsOf(adapter, input.document, parts),
     approves: allowsPublish(workflow, step.to),
     approver: await approverOf(
@@ -1016,7 +1114,7 @@ function checkPermission(c: StepContext, movable: readonly ReadPart[]): void {
 
 /** Approvals and requests for changes come only from a signed-in person. */
 function checkPerson(c: StepContext): void {
-  if (stepNeedsPerson(c.step) && c.input.caller.kind !== "user") {
+  if (!takenBy(c.step, c.input.caller)) {
     throw NextlyError.personOnly({
       doing: "approve or request changes",
       logContext: { refusal: "workflow-person-only", step: c.step.name },
@@ -1026,11 +1124,10 @@ function checkPerson(c: StepContext): void {
 
 /** The person accountable for a part's stage may not take a step that refuses it. */
 function checkSelfApproval(c: StepContext, movable: readonly ReadPart[]): void {
-  const accountable = c.caller.accountable;
   if (
-    !allowsSelfApproval(c.step) &&
-    accountable !== null &&
-    movable.some(entry => entry.state?.enteredBy === accountable)
+    movable.some(entry =>
+      refusesSelf(c.step, c.caller.accountable, entry.state?.enteredBy)
+    )
   ) {
     throw NextlyError.forbidden({
       publicData: { reason: "self-approval" },

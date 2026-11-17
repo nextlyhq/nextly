@@ -17,10 +17,17 @@
  *   take the stage's primary step, else the roles that may; no one in a stage with no step out.
  * - Each part names its last move: the latest workflow event that involved it, not the document's
  *   latest and not its first.
+ * - Each step out of a part's stage says whether the caller may take it, judged as the step itself
+ *   judges its caller (its permission, a person for an approval, no self-approval where refused),
+ *   and whether it is the stage's primary step.
+ * - A document of a collection with no workflow reads as no workflow and no parts; a missing
+ *   document, or one the caller may not read, is not found either way.
  *
  * The plausible broken surfaces: one that checks only the step's permission (and so shows review
  * state the caller may not read), one that moves every document of a bulk request or none, one
- * that lets a bulk approval through, and a REST route and a Direct API call that disagree.
+ * that lets a bulk approval through, one that tells every caller they may take every step, one that
+ * answers "no workflow" before asking whether the caller may read the document, and a REST route
+ * and a Direct API call that disagree.
  */
 
 // Set before the harness boots (env validation reads it once), so a session can be signed.
@@ -89,6 +96,15 @@ const briefs = defineCollection({
   status: true,
   versions: { drafts: true },
   workflow: straight,
+  fields: [text({ name: "title" })],
+});
+
+/** No workflow attached. */
+const PLAIN = "plain";
+const plain = defineCollection({
+  slug: PLAIN,
+  status: true,
+  versions: { drafts: true },
   fields: [text({ name: "title" })],
 });
 
@@ -345,11 +361,13 @@ const BOB: Who = { kind: "person", id: "bob" };
 /** The parts of a document's review state, as either door answers them. */
 const partsOf = (state: Doc): Doc[] => state.parts as Doc[];
 
-/** The one part of a document that has only the shared part. */
-async function onlyPart(door: Door, id: string): Promise<Doc> {
-  const parts = partsOf(
-    await door.reviewState(ALICE, { collection: PAGES, id })
-  );
+/** The one part of a document that has only the shared part, as `who` reads it. */
+async function onlyPart(
+  door: Door,
+  id: string,
+  who: Who = ALICE
+): Promise<Doc> {
+  const parts = partsOf(await door.reviewState(who, { collection: PAGES, id }));
   expect(parts).toHaveLength(1);
   return parts[0];
 }
@@ -359,6 +377,12 @@ async function roleNamed(id: string): Promise<Doc> {
   const roles = new ServiceContainer(app().adapter).roles;
   return { id, name: (await roles.getRoleById(id)).name };
 }
+
+/** A part's steps out of its stage, by name. */
+const stepsByName = (part: Doc): Record<string, Doc> =>
+  Object.fromEntries(
+    (part.steps as Doc[]).map(step => [String(step.name), step])
+  );
 
 const byId = (roles: Doc[]) =>
   [...roles].sort((a, b) => String(a.id).localeCompare(String(b.id)));
@@ -408,6 +432,181 @@ describe.each(getConfiguredTestDialects())(
             steps: [expect.objectContaining({ name: "send", kind: "submit" })],
           }),
         ]);
+      });
+
+      it("tells the caller which steps out of a part's stage they may take, by each step's permission", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const RITA: Who = { kind: "person", id: "rita" };
+        await person(app(), "rita", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        const forRita = stepsByName(await onlyPart(door, id, RITA));
+        const forAlice = stepsByName(await onlyPart(door, id, ALICE));
+
+        // Clear names sign-off: Rita holds it, Alice does not.
+        expect(forRita.clear.mayTake).toBe(true);
+        expect(forAlice.clear.mayTake).toBe(false);
+        // Park names none, so it needs the right to edit: Alice holds it, Rita does not.
+        expect(forAlice.park.mayTake).toBe(true);
+        expect(forRita.park.mayTake).toBe(false);
+      });
+
+      it("tells a writer they may send a draft on, and one who may not edit that they may not", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const RITA: Who = { kind: "person", id: "rita" };
+        await person(app(), "rita", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), PAGES);
+
+        expect(stepsByName(await onlyPart(door, id, ALICE)).send).toMatchObject(
+          { kind: "submit", mayTake: true }
+        );
+        expect(stepsByName(await onlyPart(door, id, RITA)).send).toMatchObject({
+          kind: "submit",
+          mayTake: false,
+        });
+      });
+
+      it("tells an API key it may take no approval, whatever it holds", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const KIM: Who = { kind: "person", id: "kim" };
+        await person(app(), "kim", [
+          ["read", PAGES],
+          ["update", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+        const key: Who = {
+          kind: "key",
+          owner: "kim",
+          grants: [
+            ["read", PAGES],
+            ["update", PAGES],
+            ["sign-off", PAGES],
+          ],
+        };
+
+        const forKey = stepsByName(await onlyPart(door, id, key));
+        const forKim = stepsByName(await onlyPart(door, id, KIM));
+
+        expect(forKey.clear.mayTake).toBe(false);
+        expect(forKey.bounce.mayTake).toBe(false);
+        // A move it holds the permission for, it may take.
+        expect(forKey.park.mayTake).toBe(true);
+        // Its owner, a person holding the same, may approve.
+        expect(forKim.clear.mayTake).toBe(true);
+      });
+
+      it("tells the person who brought a part into its stage they may not take a step that refuses it", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const RITA: Who = { kind: "person", id: "rita" };
+        await person(app(), "rita", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          enteredBy: "rita",
+        });
+
+        const steps = stepsByName(await onlyPart(door, id, RITA));
+
+        // Clear refuses self-approval; Bounce, which needs the same permission, does not.
+        expect(steps.clear.mayTake).toBe(false);
+        expect(steps.bounce.mayTake).toBe(true);
+      });
+
+      it("marks the stage's primary step, and only it", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const inLegal = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, inLegal, null), "legal", {
+          definitionHash: HASH,
+        });
+        const inWriting = await entry(app(), PAGES);
+
+        const legal = (await onlyPart(door, inLegal)).steps as Doc[];
+        const writing = (await onlyPart(door, inWriting)).steps as Doc[];
+
+        // Three steps out of Legal check, Clear marked primary.
+        expect(legal.map(step => [step.name, step.primary])).toEqual([
+          ["clear", true],
+          ["bounce", false],
+          ["park", false],
+        ]);
+        // A stage's only step out is its primary one.
+        expect(writing.map(step => [step.name, step.primary])).toEqual([
+          ["send", true],
+        ]);
+      });
+
+      it("answers a document of a collection with no workflow as no workflow and no parts", async () => {
+        current = await bootSteps(dialect, undefined, {
+          collections: [plain],
+        });
+        await person(app(), "alice", [
+          ["read", PLAIN],
+          ["update", PLAIN],
+        ]);
+        const id = await entry(app(), PLAIN);
+
+        const state = await door.reviewState(ALICE, { collection: PLAIN, id });
+        // A step on it is still refused, as having no workflow.
+        const step = await refusalOf(() =>
+          door.takeStep(ALICE, {
+            document: { collection: PLAIN, id },
+            step: "send",
+            parts: [null],
+            seen: [],
+          })
+        );
+
+        expect(state).toEqual({ workflow: null, parts: [] });
+        expect(step).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+      });
+
+      it("answers a missing document, or one the caller may not read, as not found, with a workflow or none", async () => {
+        current = await bootSteps(dialect, undefined, {
+          collections: [plain],
+        });
+        await person(app(), "alice", [
+          ["read", PLAIN],
+          ["read", PAGES],
+        ]);
+        // Bob holds a step on Pages and nothing at all of the plain collection.
+        await person(app(), "bob", [["sign-off", PAGES]]);
+        const id = await entry(app(), PLAIN);
+        const missing = "00000000-0000-4000-8000-000000000000";
+
+        const missingPlain = await refusalOf(() =>
+          door.reviewState(ALICE, { collection: PLAIN, id: missing })
+        );
+        const missingPage = await refusalOf(() =>
+          door.reviewState(ALICE, { collection: PAGES, id: missing })
+        );
+        const unreadable = await refusalOf(() =>
+          door.reviewState(BOB, { collection: PLAIN, id })
+        );
+
+        expect(missingPlain).toEqual({ status: 404, code: "NOT_FOUND" });
+        expect(missingPage).toEqual({ status: 404, code: "NOT_FOUND" });
+        expect(unreadable).toEqual({ status: 404, code: "NOT_FOUND" });
       });
 
       it("leaves out the parts in a language its reader may not read the document in", async () => {
@@ -797,6 +996,42 @@ describe.each(getConfiguredTestDialects())(
         expect(moveOf("es")).toBeNull();
         expect(moveOf(null)).toBeNull();
       });
+    });
+    it("tells trusted code it may take every step but an approval or a request for changes, as a step refuses those", async () => {
+      current = await bootSteps(dialect);
+      const id = await entry(app(), PAGES);
+      await seedState(app(), partOf(PAGES, id, null), "legal", {
+        definitionHash: HASH,
+      });
+      const document = { collection: PAGES, id };
+
+      const state = (await app().nextly.workflows.reviewState({
+        document,
+      })) as unknown as Doc;
+      const steps = stepsByName(partsOf(state)[0]);
+      const clear = await app()
+        .nextly.workflows.takeStep({
+          document,
+          step: "clear",
+          parts: [null],
+          seen: [
+            {
+              part: null,
+              revision: 1,
+              version: await versionOf(app(), PAGES, id, null),
+            },
+          ],
+        })
+        .then(
+          () => null,
+          (error: { code?: string }) => error.code
+        );
+
+      expect(steps.park.mayTake).toBe(true);
+      expect(steps.clear.mayTake).toBe(false);
+      expect(steps.bounce.mayTake).toBe(false);
+      // As the step itself answers trusted code.
+      expect(clear).toBe("FORBIDDEN");
     });
   }
 );
