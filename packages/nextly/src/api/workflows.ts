@@ -21,8 +21,20 @@ import {
   readAccessCaller,
   readableEntities,
 } from "../auth/entity-read-access";
-import type { AuthContext } from "../auth/middleware";
+import {
+  authorizeCaller,
+  authorizeCallerForAny,
+  isErrorResponse,
+  type AuthContext,
+} from "../auth/middleware";
+import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import type { RequestActor } from "../auth/request-actor";
 import { container } from "../di/container";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+  type RouteGrant,
+} from "../domains/auth/system-write-policy";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { registeredWorkflows } from "../domains/workflows/registry";
@@ -39,6 +51,12 @@ import {
   type Assignment,
   type WorkflowCaller,
 } from "../domains/workflows/steps";
+import {
+  listWorkflowSummaries,
+  readWorkflowSettingsView,
+  refuseDefinitionKeys,
+  updateWorkflowSettings,
+} from "../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 
@@ -125,6 +143,50 @@ const WaitingQuery = z
   })
   .passthrough();
 
+const SettingsSlug = z.object({ slug: z.string().min(1) }).passthrough();
+
+const Assigned = z
+  .object({ kind: z.enum(["user", "role"]), id: z.string().min(1) })
+  .strict();
+
+/** A colour as a stage shows it: hex only, so a value reaches a style as a colour and nothing else. */
+const Colour = z
+  .string()
+  .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/, {
+    message: "A colour is a hex value such as #aa3300.",
+  });
+
+const SettingsChangeBody = z
+  .object({
+    slug: z.string().min(1),
+    revision: z.number().int().min(0),
+    defaultReviewers: z.record(z.string(), Assigned.nullable()).optional(),
+    labels: z
+      .record(
+        z.string(),
+        z
+          .object({
+            label: z.string().trim().min(1).max(100).nullable().optional(),
+            colour: Colour.nullable().optional(),
+          })
+          .strict()
+          .nullable()
+      )
+      .optional(),
+    emails: z
+      .object({
+        assigned: z.boolean().optional(),
+        approved: z.boolean().optional(),
+        changesRequested: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    grants: z
+      .record(z.string(), z.array(z.string().min(1)).max(100))
+      .optional(),
+  })
+  .strict();
+
 /** Parsed at the boundary: a body or query that does not fit is the client's mistake. */
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -143,6 +205,8 @@ export type WorkflowAsker = {
   user: UserContext;
   scope: AuthenticatedScope | undefined;
   caller: WorkflowCaller & { kind: "user" | "key" };
+  /** The authenticated caller, as the settings permissions are asked of it. */
+  auth: AuthContext;
 } | null;
 
 /**
@@ -158,7 +222,12 @@ export async function workflowAskerOf(
 ): Promise<NonNullable<WorkflowAsker>> {
   const { user, authenticatedScope: scope } = await readCaller(auth);
   if (scope === undefined) {
-    return { user, scope, caller: { kind: "user", userId: auth.userId } };
+    return {
+      user,
+      scope,
+      caller: { kind: "user", userId: auth.userId },
+      auth,
+    };
   }
   if (!apiKeyId) {
     throw NextlyError.validation({
@@ -175,8 +244,45 @@ export async function workflowAskerOf(
     user,
     scope,
     caller: { kind: "key", keyId: apiKeyId, userId: auth.userId, scope },
+    auth,
   };
 }
+
+/**
+ * Refuses the asker unless they hold `grant`, asked of the decision the settings routes ask
+ * (`requireAnyPermission`'s for any of several, `requirePermission`'s for one). Trusted code is
+ * not asked.
+ */
+async function assertGrant(
+  asker: WorkflowAsker,
+  grant: RouteGrant
+): Promise<void> {
+  if (asker === null) return;
+  const decision =
+    "anyOf" in grant
+      ? await authorizeCallerForAny(asker.auth, [...grant.anyOf], grant.names)
+      : await authorizeCaller(asker.auth, grant.action, grant.resource);
+  if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
+}
+
+/**
+ * A workflow's settings are read by whoever may read settings or change them, as a plugin's
+ * settings are: a grant of the change alone would otherwise open a page that cannot load.
+ */
+const SETTINGS_READ: RouteGrant = {
+  anyOf: [
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
+    ...SYSTEM_WRITE_POLICY.settings.update.anyOf,
+  ],
+};
+
+/** Who a settings change is recorded as: the person, or the key itself. */
+const actorOf = (asker: WorkflowAsker): RequestActor | null => {
+  if (asker === null) return null;
+  return asker.caller.kind === "key"
+    ? { type: "apiKey", id: asker.caller.keyId }
+    : { type: "user", id: asker.caller.userId };
+};
 
 /** The step's caller: the asker's, or the system for trusted code. */
 const callerOf = (asker: WorkflowAsker): WorkflowCaller =>
@@ -352,6 +458,45 @@ export const workflowOperations = {
     });
   },
 
+  /** The registered workflows, each with its stages, steps and attachments. */
+  async list(asker: WorkflowAsker) {
+    await assertGrant(asker, SETTINGS_READ);
+    const items = listWorkflowSummaries();
+    return {
+      items,
+      meta: {
+        total: items.length,
+        page: 1,
+        limit: items.length,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+      },
+    };
+  },
+
+  /** A workflow's settings, as they read now. */
+  async readSettings(asker: WorkflowAsker, input: unknown) {
+    await assertGrant(asker, SETTINGS_READ);
+    const { slug } = parse(SettingsSlug, input);
+    return readWorkflowSettingsView(adapter(), slug);
+  },
+
+  /**
+   * A change to a workflow's settings over the revision the caller read. A change of grants
+   * changes what roles hold, so it also asks to update roles, as a role's own permissions do.
+   */
+  async updateSettings(asker: WorkflowAsker, input: unknown) {
+    await assertGrant(asker, SYSTEM_WRITE_POLICY.settings.update);
+    // Before the body is parsed, so a part of the definition is named as one, not as an unknown key.
+    refuseDefinitionKeys(input);
+    const { slug, ...change } = parse(SettingsChangeBody, input);
+    if (change.grants !== undefined) {
+      await assertGrant(asker, SYSTEM_WRITE_POLICY.roles.setPermissions);
+    }
+    return updateWorkflowSettings(adapter(), slug, change, actorOf(asker));
+  },
+
   /** What waits for the caller, a page at a time. Trusted code has nothing waiting for it. */
   async waiting(asker: NonNullable<WorkflowAsker>, input: unknown) {
     const query = parse(WaitingQuery, input);
@@ -394,8 +539,37 @@ export const workflowOperations = {
 /** The REST routes, by the method the route parser names. */
 const ROUTES: Record<
   string,
-  (request: Request, asker: NonNullable<WorkflowAsker>) => Promise<Response>
+  (
+    request: Request,
+    asker: NonNullable<WorkflowAsker>,
+    params: Record<string, string>
+  ) => Promise<Response>
 > = {
+  async listWorkflows(_request, asker) {
+    const { items, meta } = await workflowOperations.list(asker);
+    return respondList(items, meta);
+  },
+
+  async getWorkflowSettings(_request, asker, params) {
+    return respondDoc(
+      await workflowOperations.readSettings(asker, { slug: params.slug })
+    );
+  },
+
+  async updateWorkflowSettings(request, asker, params) {
+    const body: unknown = await request.json();
+    return respondMutation(
+      "Workflow settings saved.",
+      await workflowOperations.updateSettings(
+        asker,
+        // The slug the path names, over any the body names.
+        typeof body === "object" && body !== null && !Array.isArray(body)
+          ? { ...body, slug: params.slug }
+          : body
+      )
+    );
+  },
+
   async getReviewState(request, asker) {
     const query = Object.fromEntries(new URL(request.url).searchParams);
     return respondDoc(
@@ -474,7 +648,11 @@ const ROUTES: Record<
  */
 export const handleWorkflowRequest = privateToSession(
   withErrorHandler(
-    async (request: Request, method: string): Promise<Response> => {
+    async (
+      request: Request,
+      method: string,
+      params: Record<string, string> = {}
+    ): Promise<Response> => {
       // Authenticated first: a cold worker registers services only for a request that carries
       // credentials, so booting first would answer an anonymous request with a server error.
       const auth = await requireRouteAuthentication(request);
@@ -487,7 +665,7 @@ export const handleWorkflowRequest = privateToSession(
           logContext: { service: "workflows", method },
         });
       }
-      return route(request, asker);
+      return route(request, asker, params);
     }
   )
 );

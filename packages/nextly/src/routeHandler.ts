@@ -1687,10 +1687,11 @@ async function serveServiceRequest(
   }
 
   // ==================== WORKFLOWS DIRECT DISPATCH ====================
-  // Review state, steps and assignments. Beside releases and for the same reason: the handler
-  // owns its auth and parses its own JSON, so it stays above the shared body read below.
+  // Review state, steps, assignments and a workflow's settings. Beside releases and for the same
+  // reason: the handler owns its auth and parses its own JSON, so it stays above the shared body
+  // read below. The route's params carry the workflow a settings route names.
   if (service === "workflows") {
-    return handleWorkflowRequest(req, method);
+    return handleWorkflowRequest(req, method, routeParams);
   }
 
   // ==================== CONTENT EVENTS BY SUBJECT ====================

@@ -1,6 +1,7 @@
 /**
  * `nextly.workflows`: a document's review state, taking a step, assigning, what waits for the
- * caller, and steps or assignments over several documents, from server code.
+ * caller, steps or assignments over several documents, and the registered workflows and their
+ * settings, from server code.
  *
  * Each runs the operation the REST route runs (`api/workflows`), so one caller gets one answer
  * through either door. A trusted call (the Direct API's default, `overrideAccess: true`) takes a
@@ -23,6 +24,11 @@ import type {
   AssignResult,
   TakeStepResult,
 } from "../../domains/workflows/steps";
+import type {
+  WorkflowSettingsChange,
+  WorkflowSettingsView,
+  WorkflowSummary,
+} from "../../domains/workflows/workflow-settings-api";
 import { NextlyError } from "../../errors";
 import type { DirectAPIConfig } from "../types/shared";
 
@@ -90,7 +96,51 @@ export interface WorkflowsNamespace {
   waiting(
     args: WorkflowCallArgs & { page?: number; limit?: number }
   ): Promise<{ items: WaitingPart[]; meta: PaginationMeta }>;
+  /** The registered workflows, each with its stages, steps and attachments. */
+  list(
+    args?: WorkflowCallArgs
+  ): Promise<{ items: WorkflowSummary[]; meta: PaginationMeta }>;
+  /** A workflow's settings: read them, or change them over the revision read. */
+  settings: WorkflowSettingsNamespace;
 }
+
+/** `nextly.workflows.settings`. @experimental */
+export interface WorkflowSettingsNamespace {
+  /** The workflow's settings, as they read now. */
+  read(
+    args: WorkflowCallArgs & { slug: string }
+  ): Promise<WorkflowSettingsView>;
+  /**
+   * Change the workflow's settings over `revision`, the one read; each part named is merged into
+   * what is stored. A part of the definition named is refused, as is a stale revision.
+   */
+  update(
+    args: WorkflowCallArgs & { slug: string } & WorkflowSettingsChange
+  ): Promise<WorkflowSettingsView>;
+}
+
+/**
+ * The options a call is made with rather than the change it asks for: everything else in a
+ * settings update's arguments is the change, passed on whole so a part the change may not name is
+ * refused rather than dropped.
+ */
+const CALL_OPTIONS: ReadonlySet<string> = new Set([
+  "overrideAccess",
+  "trusted",
+  "enforceFieldAccess",
+  "fieldAccessUser",
+  "user",
+  "actor",
+  "req",
+  "context",
+  "request",
+  "showHiddenFields",
+  "disableErrors",
+  "locale",
+  "fallbackLocale",
+  "principal",
+  "apiKeyId",
+]);
 
 /** One assignment, as a call names it. @experimental */
 export interface WorkflowAssignmentInput {
@@ -176,5 +226,25 @@ export function createWorkflowsNamespace(
           ...(a.limit === undefined ? {} : { limit: a.limit }),
         });
       }),
+    list: (args = {}) =>
+      runAsCaller(defaultConfig, args, async a => {
+        const { operations, asker } = await prepared(a);
+        return operations.list(asker);
+      }),
+    settings: {
+      read: args =>
+        runAsCaller(defaultConfig, args, async a => {
+          const { operations, asker } = await prepared(a);
+          return operations.readSettings(asker, { slug: a.slug });
+        }),
+      update: args =>
+        runAsCaller(defaultConfig, args, async a => {
+          const { operations, asker } = await prepared(a);
+          const change = Object.fromEntries(
+            Object.entries(a).filter(([key]) => !CALL_OPTIONS.has(key))
+          );
+          return operations.updateSettings(asker, change);
+        }),
+    },
   };
 }
