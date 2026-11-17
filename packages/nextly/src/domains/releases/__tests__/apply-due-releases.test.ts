@@ -1484,3 +1484,90 @@ describe("a release nothing about retrying could fix is STOPPED", () => {
     expect(result.blocked).toBe(0);
   });
 });
+
+describe("applyDueReleases asks whether each document going live is held back", () => {
+  const blockedIn = (d: ApplyDueReleasesDeps): string[] =>
+    vi
+      .mocked(d.repository.blockReleases)
+      .mock.calls.flatMap(call => call[0].map(entry => entry.id));
+
+  it("refuses a held publish without writing it, and stops its release rather than retrying it", async () => {
+    const publish = vi.fn(async () => {});
+    const held = member({ entryId: "e1" });
+    const d: ApplyDueReleasesDeps = {
+      ...deps({ members: [held], mutations: { publish } }),
+      notApproved: async documents =>
+        new Set(documents.map(document => document.id)),
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.outcomes.map(outcome => outcome.failure)).toEqual([
+      "NOT_APPROVED",
+    ]);
+    expect(blockedIn(d)).toEqual(["r1"]);
+    expect(result).toMatchObject({ applied: 0, blocked: 1, published: 0 });
+  });
+
+  it("asks about the member it is about to publish, by its id and document", async () => {
+    const asked = vi.fn(
+      async (_documents: readonly { id: string; entryId: string }[]) =>
+        new Set<string>()
+    );
+    const d: ApplyDueReleasesDeps = {
+      ...deps({ members: [member({ id: "m-pub", entryId: "e7" })] }),
+      notApproved: asked,
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(asked.mock.calls.map(call => call[0])).toEqual([
+      [
+        {
+          id: "m-pub",
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: "e7",
+        },
+      ],
+    ]);
+    expect(result).toMatchObject({ applied: 1, published: 1 });
+  });
+
+  it("never asks about a document coming down", async () => {
+    const asked = vi.fn(async () => new Set(["anything"]));
+    const unpublish = vi.fn(async () => {});
+    const d: ApplyDueReleasesDeps = {
+      ...deps({
+        members: [member({ action: "unpublish" })],
+        mutations: { unpublish },
+      }),
+      notApproved: asked,
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(asked).not.toHaveBeenCalled();
+    expect(unpublish).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ applied: 1, blocked: 0, published: 1 });
+  });
+
+  it("writes nothing and retries when the question itself fails, without stopping the release", async () => {
+    const publish = vi.fn(async () => {});
+    const d: ApplyDueReleasesDeps = {
+      ...deps({ mutations: { publish } }),
+      notApproved: () => Promise.reject(new Error("connection reset")),
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.outcomes[0]).toMatchObject({
+      failure: "APPROVAL_CHECK_FAILED",
+      detail: "connection reset",
+    });
+    expect(blockedIn(d)).toEqual([]);
+    expect(result).toMatchObject({ blocked: 0, published: 0 });
+  });
+});

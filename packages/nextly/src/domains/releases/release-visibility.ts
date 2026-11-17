@@ -26,6 +26,7 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
+import { goingLiveHold, type GoingLiveHold } from "./going-live-hold";
 import type { DueCheck } from "./release-read";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
@@ -70,15 +71,49 @@ export const NO_RELEASE_VISIBILITY: ReleaseVisibility = {
 export function createReleaseVisibility(deps: {
   cache: DueCheck;
   repository: RevealSource;
+  /**
+   * What holds a document back from going live, asked per read: the registered hold when left
+   * out, looked up when a read needs it, so a hold registered after this was built still counts.
+   */
+  hold?: () => GoingLiveHold;
 }): ReleaseVisibility {
+  const hold = deps.hold ?? goingLiveHold;
   return {
     async decisions(query: RevealQuery): Promise<ReleaseDecisions> {
       // The cheap check first, always. Reversing these two turns the common
       // case — nothing scheduled anywhere — from a memo read into a query
       // against the members table on every read of every collection.
       if (!(await deps.cache.mayHaveDue(query.now))) return NO_DECISIONS;
-      return deps.repository.findDueDecisions(query);
+      const due = await deps.repository.findDueDecisions(query);
+      return withoutHeld(due, query, hold());
     },
+  };
+}
+
+/**
+ * `due` without the documents it would reveal that are held back from going live now: the run
+ * refuses to publish those (`notApproved` in `apply-due-releases`), so a read in the window
+ * between the release's moment and its run must not show them either. Asked only of what would be
+ * revealed; a withdrawal is never held, as a document coming down is never blocked.
+ */
+async function withoutHeld(
+  due: ReleaseDecisions,
+  query: RevealQuery,
+  hold: GoingLiveHold
+): Promise<ReleaseDecisions> {
+  if (due.reveal.length === 0) return due;
+  const held = await hold.held(
+    due.reveal.map(entryId => ({
+      id: entryId,
+      scopeKind: query.scopeKind,
+      scopeSlug: query.scopeSlug,
+      entryId,
+    }))
+  );
+  if (held.size === 0) return due;
+  return {
+    reveal: due.reveal.filter(entryId => !held.has(entryId)),
+    hide: due.hide,
   };
 }
 

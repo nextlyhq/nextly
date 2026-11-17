@@ -67,6 +67,7 @@ import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
 import { asReleaseRun } from "./early-stop";
+import { goingLiveHold, type GoingLiveDocument } from "./going-live-hold";
 import {
   componentsToStop,
   planReleaseMaterialisation,
@@ -168,6 +169,16 @@ export interface ApplyDueReleasesDeps {
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
+  /**
+   * Which of these documents going live are held back now, by id: asked again for each member
+   * the pass publishes, after the schedule check and before the write, since what the checks
+   * passed before the moment may have changed without anything telling the release. A member
+   * coming down is never asked. The registered hold (`goingLiveHold`) when left out, the one the
+   * read's projection of a due release asks, so the run and a reader agree.
+   */
+  notApproved?: (
+    documents: readonly GoingLiveDocument[]
+  ) => Promise<ReadonlySet<string>>;
   now?: () => Date;
   /**
    * Where the pass's fairness rotation comes from.
@@ -231,7 +242,17 @@ export type MaterialisationFailure =
    * The release was cancelled OR RESCHEDULED between this pass reading it and
    * acting on it, so the plan describes a schedule that no longer exists.
    */
-  | "RELEASE_NO_LONGER_SCHEDULED";
+  | "RELEASE_NO_LONGER_SCHEDULED"
+  /**
+   * The document going live is held back now (`notApproved`): a workflow
+   * holds a part it would publish that is not approved.
+   */
+  | "NOT_APPROVED"
+  /**
+   * Asking whether the document is held back failed; not evidence either
+   * way, so nothing is written and the next pass asks again.
+   */
+  | "APPROVAL_CHECK_FAILED";
 
 /**
  * Whether retrying could ever change this outcome.
@@ -249,6 +270,10 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
   NO_RECORDED_AUTHOR: false,
   AUTHOR_UNAVAILABLE: false,
   LOCALE_SCOPE_UNSUPPORTED: false,
+  // A withdrawn approval comes back only through a person's step, and a
+  // release retried each tick meanwhile would hold silently, looking healthy.
+  // Stopped, so its owner is told and schedules it again once it is approved.
+  NOT_APPROVED: false,
 
   // Documented at their declarations as evidence of nothing: a lookup that
   // errored does not mean the user is gone, and a re-read that errored does not
@@ -256,6 +281,7 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
   // database blip permanently halt a launch the next pass would have completed.
   IDENTITY_LOOKUP_FAILED: true,
   SCHEDULE_CHECK_FAILED: true,
+  APPROVAL_CHECK_FAILED: true,
 
   // Ambiguous, and resolved toward retrying deliberately. "Refused or errored"
   // covers both a permission the caller will never gain and a connection that
@@ -589,7 +615,47 @@ async function applyOne(
   const refused = await scheduleRefusal(deps, action, base);
   if (refused !== null) return refused;
 
+  const held = await approvalRefusal(deps, action, base);
+  if (held !== null) return held;
+
   return writeAndConfirm(deps, action, identity.user, base);
+}
+
+/**
+ * Why this document may not go live now, or null when it may: held back by
+ * what governs publishing beyond the release's own checks (`notApproved`).
+ * Only a publish is asked; a document coming down is never held.
+ *
+ * Never a rejection, for the reason {@link scheduleRefusal} gives: a read
+ * that fails here is recorded and retried rather than ending the pass.
+ */
+async function approvalRefusal(
+  deps: ApplyDueReleasesDeps,
+  action: MaterialisationAction,
+  base: Omit<MaterialisationOutcome, "failure">
+): Promise<MaterialisationOutcome | null> {
+  if (action.effect !== "publish") return null;
+  const ask =
+    deps.notApproved ?? (documents => goingLiveHold().held(documents));
+  try {
+    const held = await ask([
+      {
+        id: action.memberId,
+        scopeKind: action.ref.scopeKind,
+        scopeSlug: action.ref.scopeSlug,
+        entryId: action.ref.entryId,
+      },
+    ]);
+    return held.has(action.memberId)
+      ? { ...base, failure: "NOT_APPROVED" }
+      : null;
+  } catch (error) {
+    return {
+      ...base,
+      failure: "APPROVAL_CHECK_FAILED",
+      detail: messageOf(error),
+    };
+  }
 }
 
 /**
