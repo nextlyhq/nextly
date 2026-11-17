@@ -22,6 +22,7 @@ import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { SegmentChoices } from "./segment-choices";
 import {
   identityOfKey,
+  NONE,
   offeredPreset,
   presetKey,
   presetLabels,
@@ -125,14 +126,20 @@ export function SpacerHeightPresets({
   const presets = spacingPresets(control, tokens, mode);
   if (presets.length === 0) return null;
   const at = { state, breakpoint };
+  const held = offeredPreset(stored, presets);
   return (
-    <div className="nx-block-shortcuts" data-control="spacer-height">
+    <div
+      className="nx-block-shortcuts nx-spacer-presets"
+      data-control="spacer-height"
+    >
       <span id={`${id}-presets`} className="nx-inspector__field-name">
         Presets
       </span>
       <SegmentChoices
         options={presets.map(preset => presetKey(preset.identity))}
-        on={offeredPreset(stored, presets)}
+        // A zero height is no preset here (there is no None to mark), so
+        // it marks none and the first preset keeps the group's Tab stop.
+        on={held === NONE ? undefined : held}
         labels={presetLabels(presets)}
         labelId={`${id}-presets`}
         onChoose={choice => {

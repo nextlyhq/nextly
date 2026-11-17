@@ -139,6 +139,22 @@ describe("a Spacer's Height presets", () => {
     ).toBe("true");
   });
 
+  it("keeps the first preset's Tab stop on a Spacer stored at zero", () => {
+    mount("core/spacer", {
+      styles: { base: { [BASE_BREAKPOINT]: { height: "0px" } } },
+    });
+    const radios = within(presets()).getAllByRole("radio");
+    expect(
+      radios.some(radio => radio.getAttribute("aria-checked") === "true")
+    ).toBe(false);
+    expect(radios[0]?.tabIndex).toBe(0);
+  });
+
+  it("wears the spacing popover's wrapping chips, in the panel's width", () => {
+    mount("core/spacer");
+    expect(presets().closest(".nx-spacer-presets")).not.toBeNull();
+  });
+
   it("is held on a Spacer locked in Layers", () => {
     mount("core/spacer", { locked: true });
     // Held by the section's fieldset, as the section's other fields are.
