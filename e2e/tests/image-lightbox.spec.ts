@@ -124,19 +124,11 @@ function lightboxOn(page: Page) {
 
 /*
  * Every case runs twice: with JavaScript off, which is what the lightbox
- * promises, and on, where nothing a script does may change it. With it off,
- * the page must be readable from its HTML alone, and the published route
- * still streams the page's body in a part only script reveals; that run is
- * enabled once the body renders in the first HTML.
+ * promises, and on, where nothing a script does may change it.
  */
 for (const script of [false, true]) {
   test.describe(`an enlarged Image on the live page, JavaScript ${script ? "on" : "off"}`, () => {
     test.describe.configure({ timeout: 180_000 });
-    test.skip(
-      !script,
-      "The published route sends the page body hidden until JavaScript runs; " +
-        "enabled once it renders in the first HTML."
-    );
 
     test("opens full size with its caption, and Close, Escape and a click outside close it, each giving focus back", async ({
       page,
