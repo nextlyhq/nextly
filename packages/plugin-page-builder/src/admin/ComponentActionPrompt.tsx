@@ -61,6 +61,12 @@ import type { ComponentLibraryRead } from "./component-library-client";
 import { focusAfterClose, subjectOf } from "./library-dialog";
 import { usePatternLibrary } from "./pattern-library-client";
 
+/**
+ * What a detach confirms: the blocks stay, and the component no longer
+ * reaches them. Said the same way whichever component it was.
+ */
+const DETACHED = "Detached. These blocks no longer update with the component.";
+
 /** Which form, and the page it acts on, snapshotted at the gesture. */
 export interface ComponentActionRequest {
   readonly action: "detach" | "duplicate" | "update-pattern";
@@ -263,7 +269,7 @@ function DetachForm({
         "The page could not take the detached blocks. Nothing changed."
       );
     } else {
-      toast.success(`Detached from ${name}`);
+      toast.success(DETACHED);
     }
     onClose();
   };
@@ -484,8 +490,8 @@ function UpdatePatternForm({
 
   return (
     <ActionDialog
-      title="Update a pattern"
-      description={`${subject} replaces the pattern's content. Pages that inserted it earlier keep their own copies.`}
+      title="Update a saved section"
+      description={`${subject} replaces the saved section's content. Pages that inserted it earlier keep their own copies.`}
       busy={busy}
       onClose={onClose}
       returnFocusTo={returnFocusTo}
@@ -494,17 +500,17 @@ function UpdatePatternForm({
         <Buttons
           busy={busy}
           disabled={pattern === undefined}
-          verb="Update pattern"
+          verb="Update saved section"
           working="Updating…"
           onClose={onClose}
         />
       }
     >
       <div className="grid gap-1.5">
-        <Label htmlFor="nx-update-pattern">Pattern</Label>
+        <Label htmlFor="nx-update-pattern">Saved section</Label>
         <Select value={chosen} onValueChange={setChosen} disabled={busy}>
-          <SelectTrigger id="nx-update-pattern" aria-label="Pattern">
-            <SelectValue placeholder="Choose a pattern" />
+          <SelectTrigger id="nx-update-pattern" aria-label="Saved section">
+            <SelectValue placeholder="Choose a saved section" />
           </SelectTrigger>
           <SelectContent>
             {patterns.map(entry => (
@@ -516,14 +522,15 @@ function UpdatePatternForm({
         </Select>
         {patterns.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            There are no patterns yet. Save one with “Save as pattern” first.
+            There are no saved sections yet. Save one with “Save as section…”
+            first.
           </p>
         ) : null}
       </div>
       <Problem
         text={
           failed
-            ? (update.error ?? "The pattern could not be updated.")
+            ? (update.error ?? "The saved section could not be updated.")
             : undefined
         }
       />

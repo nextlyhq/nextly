@@ -25,10 +25,12 @@ export {
   type FieldGroupsNamespace,
 } from "./field-groups";
 export {
+  createEmailDeliveriesNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
   createEmailTemplatesNamespace,
   createUserFieldsNamespace,
+  type EmailDeliveriesNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
   type EmailTemplatesNamespace,

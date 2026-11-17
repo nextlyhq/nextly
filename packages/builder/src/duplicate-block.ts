@@ -52,8 +52,8 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { layerLabel } from "./layers";
 import { positionOf, type OpPosition } from "./op-vocabulary";
+import { layerLabel } from "./panels/layers/layers";
 
 /** The suffix that keeps two copies of a named block apart. */
 export const COPY_SUFFIX = " copy";

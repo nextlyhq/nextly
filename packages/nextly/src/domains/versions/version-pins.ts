@@ -29,7 +29,6 @@
  * interleave: the pin lands before the pass reads the pins, or waits for it.
  *
  * @module domains/versions/version-pins
- * @experimental
  */
 
 import { createHash } from "node:crypto";
@@ -122,8 +121,6 @@ const holders = new Map<
  * release each other's pins. The same registration again (same name and
  * label) returns the same handle, since a module reloaded in development runs
  * its registration again.
- *
- * @experimental
  */
 export function registerVersionPinHolder(
   definition: VersionPinHolderDefinition
@@ -361,8 +358,6 @@ function holderHandle(name: string): RegisteredVersionPinHolder {
 
 /**
  * The version pin API.
- *
- * @experimental
  */
 export const versionPins = {
   /** Every slot on a document, of every holder. */

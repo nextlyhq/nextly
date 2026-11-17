@@ -19,7 +19,6 @@
  * never moves a person's marker.
  *
  * @module domains/versions/version-views
- * @experimental
  */
 
 import { createHash } from "node:crypto";

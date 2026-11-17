@@ -793,6 +793,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // read-only caller passing it still sees the published document.
         includeWorkingDraft: isTruthyParam(p.draft),
         status,
+        // `?details=1` attaches `_details` (who changed it, where it is
+        // served), only for a signed-in admin user: anyone else gets the
+        // plain Single.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
 
       // Transform rich text fields to requested format when not JSON.

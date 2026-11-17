@@ -15,7 +15,8 @@
  * - Sort: the direction in words for the field's kind; Alt+↑ and Alt+↓ on a
  *   focused row, and Move up and Move down in its menu, reorder the keys.
  * - How many: refused inline outside its bounds, written inside them.
- * - Canvas shows: the switch asks the editor to show the list empty.
+ * - Preview the empty message: the switch asks the editor to show the list
+ *   empty.
  */
 import {
   cleanup,
@@ -79,8 +80,8 @@ function register(): void {
           relation: { type: "object", display: "listRelation" },
           filters: { type: "array", display: "listFilters" },
           sort: { type: "text", display: "sort", collectionProp: "collection" },
-          limit: { label: "Number of items", type: "number" },
-          offset: { label: "Skip the first", type: "number" },
+          limit: { label: "How many", type: "number" },
+          offset: { label: "Skip", type: "number" },
         },
         slots: { children: {}, empty: {} },
         render: () => null,
@@ -208,7 +209,7 @@ describe("a list's source", () => {
   it("offers the page entry's relations above the collections", async () => {
     mount({ collection: "posts" }, { entryCollection: "posts" });
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Posts" })
+      await screen.findByRole("button", { name: "Show entries from Posts" })
     );
     expect(listed("Sources")).toEqual([
       "This post's categories",
@@ -222,7 +223,7 @@ describe("a list's source", () => {
   it("says why no relation is offered where none can be read", async () => {
     mount({ collection: "posts" });
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Posts" })
+      await screen.findByRole("button", { name: "Show entries from Posts" })
     );
     expect(screen.getByText(/Not available here\./)).toBeDefined();
     expect(listed("Sources")).toEqual(["No collection", "Categories", "Posts"]);
@@ -244,14 +245,18 @@ describe("a list's source", () => {
       ];
     mount({ collection: "categories" }, {}, inPosts("children"));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Categories" })
+      await screen.findByRole("button", {
+        name: "Show entries from Categories",
+      })
     );
     expect(listed("Sources")).toContain("Each post's categories");
     cleanup();
     clearBlocks();
     mount({ collection: "categories" }, {}, inPosts("empty"));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Categories" })
+      await screen.findByRole("button", {
+        name: "Show entries from Categories",
+      })
     );
     expect(listed("Sources")).not.toContain("Each post's categories");
   });
@@ -285,7 +290,9 @@ describe("a list's source", () => {
     ];
     mount({ collection: "categories" }, {}, inEmptyOf);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Categories" })
+      await screen.findByRole("button", {
+        name: "Show entries from Categories",
+      })
     );
     expect(screen.getByText(WHEN_EMPTY)).toBeDefined();
     expect(screen.queryByText(GENERIC)).toBeNull();
@@ -294,7 +301,9 @@ describe("a list's source", () => {
     // On its own, with no entry around it: the generic note.
     mount({ collection: "categories" });
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Categories" })
+      await screen.findByRole("button", {
+        name: "Show entries from Categories",
+      })
     );
     expect(screen.getByText(GENERIC)).toBeDefined();
     expect(screen.queryByText(WHEN_EMPTY)).toBeNull();
@@ -324,7 +333,7 @@ describe("a list's source", () => {
       { entryCollection: "posts" }
     );
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Posts" })
+      await screen.findByRole("button", { name: "Show entries from Posts" })
     );
     fireEvent.click(
       screen.getByRole("option", { name: "This post's categories" })
@@ -345,7 +354,7 @@ describe("a list's source", () => {
       limit: 6,
     });
     fireEvent.click(
-      await screen.findByRole("button", { name: "Source Posts" })
+      await screen.findByRole("button", { name: "Show entries from Posts" })
     );
     fireEvent.click(screen.getByRole("option", { name: "Categories" }));
     expect(writes(editor)).toEqual([{ collection: "categories", limit: 6 }]);
@@ -488,7 +497,7 @@ describe("the judgement the group shows", () => {
         ]),
       }
     );
-    await screen.findByRole("button", { name: "Source Notes" });
+    await screen.findByRole("button", { name: "Show entries from Notes" });
     // Not offered, so marked as not in the list; but the save takes it.
     expect(screen.queryByText(/visitors can't see|does not have/)).toBeNull();
   });
@@ -533,7 +542,7 @@ describe("the judgement for a host naming no readable fields", () => {
         ]),
       }
     );
-    await screen.findByRole("button", { name: "Source Notes" });
+    await screen.findByRole("button", { name: "Show entries from Notes" });
     // Every kind a field is offered with, judged as a field of that kind.
     expect(screen.queryAllByText(/cannot compare|cannot order by/)).toEqual([]);
   });
@@ -739,7 +748,7 @@ describe("a fallen-back sort's Choose a field", () => {
 describe("how many entries a list shows", () => {
   it("refuses a number of items outside 1 to 100 inline, writing nothing", async () => {
     const editor = mount({ collection: "posts", limit: 6 });
-    const field = await screen.findByLabelText("Number of items");
+    const field = await screen.findByLabelText("How many");
     fireEvent.change(field, { target: { value: "101" } });
     fireEvent.blur(field);
     expect(screen.getByText("Show between 1 and 100 entries.")).toBeDefined();
@@ -752,7 +761,7 @@ describe("how many entries a list shows", () => {
 
   it("skips a whole number of entries, refusing a negative one", async () => {
     const editor = mount({ collection: "posts" });
-    const field = await screen.findByLabelText("Skip the first");
+    const field = await screen.findByLabelText("Skip");
     fireEvent.change(field, { target: { value: "-1" } });
     fireEvent.blur(field);
     expect(
@@ -765,9 +774,7 @@ describe("how many entries a list shows", () => {
 
   it("shows 0 to skip when none is stored, and stores nothing for it", async () => {
     const editor = mount({ collection: "posts" });
-    const field = (await screen.findByLabelText(
-      "Skip the first"
-    )) as HTMLInputElement;
+    const field = (await screen.findByLabelText("Skip")) as HTMLInputElement;
     // The value a list reads, as a value rather than a hint.
     expect(field.value).toBe("0");
     fireEvent.blur(field);
@@ -794,7 +801,9 @@ describe("how many entries match, for the selected list", () => {
       expect.objectContaining({ collection: "posts", limit: 3 })
     );
     // Drawn again with the same query, nothing is counted again.
-    fireEvent.click(screen.getByRole("radio", { name: "When empty" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Preview the empty message" })
+    );
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(countListEntries).toHaveBeenCalledTimes(1);
     expect(editor.apply).not.toHaveBeenCalled();
@@ -815,7 +824,7 @@ describe("how many entries match, for the selected list", () => {
       { collection: "posts" },
       { countListEntries: vi.fn(async () => undefined) }
     );
-    await screen.findByLabelText("Number of items");
+    await screen.findByLabelText("How many");
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(screen.queryByText(/match(es)?, so/)).toBeNull();
     cleanup();
@@ -828,7 +837,7 @@ describe("how many entries match, for the selected list", () => {
         }),
       }
     );
-    await screen.findByLabelText("Number of items");
+    await screen.findByLabelText("How many");
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(screen.queryByText(/match(es)?, so/)).toBeNull();
   });
@@ -837,7 +846,9 @@ describe("how many entries match, for the selected list", () => {
 describe("what the canvas shows", () => {
   it("asks the editor to draw the list's empty state, which writes nothing", async () => {
     const editor = mount({ collection: "posts" });
-    fireEvent.click(await screen.findByRole("radio", { name: "When empty" }));
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Preview the empty message" })
+    );
     expect(editor.showListEmpty).toHaveBeenCalledWith("list", true);
     expect(editor.apply).not.toHaveBeenCalled();
   });
@@ -867,7 +878,7 @@ describe("the group, from the keyboard", () => {
       filters: [{ field: "title", op: "contains", value: "build" }],
       sort: "-publishedAt",
     });
-    await screen.findByRole("button", { name: "Source Posts" });
+    await screen.findByRole("button", { name: "Show entries from Posts" });
     const group = document.querySelector('[data-content-control="listQuery"]');
     const focusable = Array.from(
       group?.querySelectorAll<HTMLElement>("button, input, [tabindex]") ?? []

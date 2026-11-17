@@ -16,9 +16,9 @@
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 
 import type { StatusTone } from "@admin/components/features/widgets/frame/row-parts";
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import type { PinTarget } from "@admin/hooks/queries/useDashboardPins";
 import { describeActivityActor } from "@admin/lib/dashboard";
+import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 
 /** The rows the card's `load` read, the one shape this card is drawn from. */
 type ListResult = CoreListWidgetData;
@@ -95,21 +95,28 @@ function statusLabel(row: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Where a row links: a collection's entry, or a Single, which has one page.
- * The language it was saved in rides along as `?locale=`, the parameter the
- * edit page reads, so the link opens the version that was saved.
+ * Where a row links, by the admin's one rule for opening a document: a
+ * collection's entry where its collection opens entries, or a Single, which
+ * has one page. The language it was saved in rides along as `?locale=`, the
+ * parameter the edit page reads, so the link opens the version that was
+ * saved; a language other than the default opens the form.
  */
-function editHref(target: PinTarget, locale: string | undefined): string {
-  const path =
-    target.targetType === "single"
-      ? buildRoute(ROUTES.SINGLE_EDIT, { slug: target.targetSlug })
-      : buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+function editHref(
+  target: PinTarget,
+  locale: string | undefined,
+  addressOf: DocumentAddressOf
+): string {
+  const options = locale === undefined ? {} : { locale };
+  return target.targetType === "single"
+    ? addressOf({ kind: "single", slug: target.targetSlug }, options)
+    : addressOf(
+        {
+          kind: "collection",
           slug: target.targetSlug,
           id: target.entryId,
-        });
-  return locale === undefined
-    ? path
-    : `${path}?${new URLSearchParams({ locale }).toString()}`;
+        },
+        options
+      );
 }
 
 /** The document a row names, or `undefined` when it names an entry without its id. */
@@ -149,7 +156,8 @@ function saverOf(row: Record<string, unknown>): string | undefined {
  * one to show.
  */
 export function continueRowFrom(
-  row: Record<string, unknown>
+  row: Record<string, unknown>,
+  addressOf: DocumentAddressOf
 ): ContinueRow | undefined {
   const key = text(row.id);
   const title = text(row.entryTitle);
@@ -166,7 +174,7 @@ export function continueRowFrom(
       ? { collection: target.targetSlug }
       : {}),
     ...(icon === undefined ? {} : { icon }),
-    href: editHref(target, text(row.locale)),
+    href: editHref(target, text(row.locale), addressOf),
     ...(savedBy === undefined ? {} : { savedBy }),
     ...(editedAt === undefined ? {} : { editedAt }),
     ...(status === undefined ? {} : { status }),
@@ -176,9 +184,12 @@ export function continueRowFrom(
 }
 
 /** The rows of a list answer this build can read, in the order the source sent them. */
-export function continueRows(result: ListResult): ContinueRow[] {
+export function continueRows(
+  result: ListResult,
+  addressOf: DocumentAddressOf
+): ContinueRow[] {
   return result.items.flatMap(row => {
-    const read = continueRowFrom(row);
+    const read = continueRowFrom(row, addressOf);
     return read ? [read] : [];
   });
 }

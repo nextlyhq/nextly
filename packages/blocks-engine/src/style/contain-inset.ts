@@ -110,6 +110,7 @@ export function withContainInset(
   const flags = [
     ...declarations.flatMap(sizeFlag),
     ...declarations.flatMap(flowFlag),
+    ...declarations.flatMap(fillsFlag),
   ];
   return flags.length === 0 ? padded : [...padded, ...flags];
 }
@@ -156,6 +157,32 @@ export const OUT_OF_FLOW_PROPERTY = "--nx-out-of-flow";
 const OUT_OF_FLOW = new Set(["absolute", "fixed"]);
 
 /** The flag a block's own `position` sets, if it sets one. */
+/**
+ * The flag a block's own `min-width` sets: `1` while it is at least the full
+ * width of the box the block is laid out in, `0` otherwise.
+ *
+ * A flex item its author made fill the row is as wide as the box its inset is
+ * measured from, so it keeps its inset: the site sheet reads the item flag
+ * only where this one is 0. A flag of its own, in the rule that sets the
+ * minimum width, like the others.
+ */
+export const FILLS_ROW_PROPERTY = "--nx-fills-row";
+
+/** A percentage of at least 100, the only minimum width that fills the row. */
+const FULL_PERCENT = /^\+?(\d+(?:\.\d*)?|\.\d+)%$/;
+
+/** The flag a block's own `min-width` sets, if it sets one. */
+function fillsFlag(declaration: Declaration): Declaration[] {
+  if (declaration.property !== "min-width") return [];
+  const value = declaration.value.trim().toLowerCase();
+  // `inherit` takes the parent's minimum, `auto` unless an author set one,
+  // which does not fill the row: it clears an earlier flag rather than
+  // leaving it standing.
+  const percent = FULL_PERCENT.exec(value);
+  const fills = percent !== null && Number(percent[1]) >= 100;
+  return [{ property: FILLS_ROW_PROPERTY, value: fills ? "1" : "0" }];
+}
+
 function flowFlag(declaration: Declaration): Declaration[] {
   if (declaration.property !== "position") return [];
   const value = declaration.value.trim().toLowerCase();
@@ -190,10 +217,21 @@ function itemFlag(declarations: readonly Declaration[]): Declaration[] {
     // `inherit` takes a layout no rule here can know, so it is read as no
     // row: the inset is then never lost, at the most an item over-padded.
     const value = display.value.trim().toLowerCase();
-    flags.push({
-      property: SIZED_ITEM_PROPERTY,
-      value: ROW_LAYOUTS.has(value) ? "1" : "0",
-    });
+    if (value === "contents") {
+      // No box of its own: its children are items of the layout around it,
+      // which set this block's own flags, so they take those. A direction
+      // stated in this same rule is still written below, so a breakpoint that
+      // turns the wrapper into a flex column keeps its direction's flag.
+      flags.push({ property: SIZED_ITEM_PROPERTY, value: "inherit" });
+      if (!declarations.some(d => d.property === "flex-direction")) {
+        flags.push({ property: COLUMN_FLOW_PROPERTY, value: "inherit" });
+      }
+    } else {
+      flags.push({
+        property: SIZED_ITEM_PROPERTY,
+        value: ROW_LAYOUTS.has(value) ? "1" : "0",
+      });
+    }
   }
   const direction = declarations.findLast(d => d.property === "flex-direction");
   if (direction !== undefined) {

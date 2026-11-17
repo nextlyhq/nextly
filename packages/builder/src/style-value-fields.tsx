@@ -27,13 +27,14 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
+import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
 import { DecorationField, drawsDecoration } from "./decoration-field";
 import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
 import { useLabelScrub } from "./label-scrub";
-import { useCanvasTokenMode } from "./prefers-dark";
 import { SectionHeld } from "./section-held";
 import {
   alignmentGroupFor,
@@ -122,6 +123,8 @@ function SelectField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const current = typeof stored === "string" ? stored : "";
   const hint = useUnsetHint("Not set");
   // The validator accepts a keyword case-insensitively, with surrounding CSS
@@ -140,7 +143,7 @@ function SelectField({
       <Select value={current} onValueChange={value => onCommit(value)}>
         <SelectTrigger
           id={id}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
           <SelectValue placeholder={hint} />
@@ -272,6 +275,8 @@ function OptionSelect({
   /** What follows the list in its row: the site's variables, where offered. */
   after?: React.ReactNode;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const current = storedKey(stored) ?? "";
   const inherited = React.useContext(InheritedValue);
   const hint =
@@ -287,7 +292,7 @@ function OptionSelect({
       >
         <SelectTrigger
           id={id}
-          aria-describedby={describedBy}
+          aria-describedby={described}
           aria-invalid={describedBy === undefined ? undefined : true}
         >
           <SelectValue placeholder={hint} />
@@ -326,6 +331,8 @@ function LengthOrNumberField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const { draft, setDraft } = useDraft(stored);
   const mode = useCanvasTokenMode();
   const hint = useUnsetHint("1.5, 24px or 150%");
@@ -348,7 +355,7 @@ function LengthOrNumberField({
       placeholder={hint}
       // A value, not words: no list of earlier entries over the field.
       autoComplete="off"
-      aria-describedby={describedBy}
+      aria-describedby={described}
       aria-invalid={describedBy === undefined ? undefined : true}
       onChange={event => setDraft(event.target.value)}
       // Nothing of its own is written while a drag on the label owns it.
@@ -796,6 +803,8 @@ function PercentSlider({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [preview, setPreview] = React.useState<number | undefined>(undefined);
   // Held with its section, as the fieldset holds the form controls; a
   // slider's thumb is not one, so it is told.
@@ -821,7 +830,7 @@ function PercentSlider({
           // may hold the focus when it arrives.
           ...(describedBy === undefined
             ? {}
-            : { "aria-describedby": describedBy }),
+            : { "aria-describedby": described }),
         },
       ]}
     />
@@ -854,6 +863,10 @@ function ToggleField({
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
+  // What each option writes, from the field it is drawn in.
+  const optionWrites = React.useContext(OptionWrites);
   return (
     <div
       // The field's id sits on the GROUP rather than on any one button. The
@@ -867,30 +880,34 @@ function ToggleField({
       className="nx-style-inspector__toggle"
       role="group"
       aria-labelledby={labelledBy}
-      aria-describedby={describedBy}
+      aria-describedby={described}
     >
       {options.map(option => {
         const pressed = stored === option;
         return (
-          <button
+          // What this option writes, on hover or keyboard focus.
+          <CssHint
             key={option}
-            type="button"
-            aria-pressed={pressed}
-            // Marked on the BUTTONS rather than on the group, which carries the
-            // description. `aria-invalid` is not a state `role="group"`
-            // supports, so setting it there would be an attribute a screen
-            // reader is entitled to ignore — and the file's own rule is that a
-            // control described by a refusal must also read as invalid, or it
-            // announces the message as a hint rather than as a failure.
-            aria-invalid={describedBy === undefined ? undefined : true}
-            // Pressing the pressed option CLEARS rather than re-writing it,
-            // which is the only way a group of options can reach unset without
-            // spending a button on "neither".
-            onClick={() => onCommit(pressed ? null : option)}
-            title={option}
+            writes={optionWrites?.(option) ?? `${cssProperty}: ${option}`}
           >
-            {keywordLabel(cssProperty, option)}
-          </button>
+            <button
+              type="button"
+              aria-pressed={pressed}
+              // Marked on the BUTTONS rather than on the group, which carries the
+              // description. `aria-invalid` is not a state `role="group"`
+              // supports, so setting it there would be an attribute a screen
+              // reader is entitled to ignore — and the file's own rule is that a
+              // control described by a refusal must also read as invalid, or it
+              // announces the message as a hint rather than as a failure.
+              aria-invalid={describedBy === undefined ? undefined : true}
+              // Pressing the pressed option CLEARS rather than re-writing it,
+              // which is the only way a group of options can reach unset without
+              // spending a button on "neither".
+              onClick={() => onCommit(pressed ? null : option)}
+            >
+              {keywordLabel(cssProperty, option)}
+            </button>
+          </CssHint>
         );
       })}
     </div>

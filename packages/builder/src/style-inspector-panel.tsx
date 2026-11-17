@@ -7,10 +7,10 @@
  * sections a block offers, which properties sit in each, and which control each
  * property draws all live there, where they can be asserted without a DOM.
  *
- * **One section open at a time.** The choice is remembered across selections
- * rather than reset, because an author working on spacing selects one block
- * after another and means to stay on spacing; it falls back to the first
- * section only when the newly selected block does not offer the open one.
+ * **Sections fold on their own**, and stay as the author left them across
+ * selections and visits (`panel-folds`), because an author working on spacing
+ * selects one block after another and means to keep Spacing open; a section
+ * nothing remembers opens when it holds a value or is the first.
  *
  * **Text commits on blur, discrete controls immediately**, the same rule the
  * content tab follows and for the same reason: undo is built from op inverses,
@@ -66,12 +66,17 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
-import { useCanvasFrame } from "./canvas-frame-context";
+import { useCanvasFrame } from "./canvas/canvas-frame-context";
+import {
+  CanvasTokenModeProvider,
+  useCanvasTokenModeAt,
+} from "./canvas/prefers-dark";
+import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
-import { layerLabel } from "./layers";
-import { CanvasTokenModeProvider, useCanvasTokenModeAt } from "./prefers-dark";
+import { PanelFoldsProvider } from "./panel-folds-context";
+import { layerLabel } from "./panels/layers/layers";
 import type { SideOrientation } from "./side-orientation";
 import {
   BLOCK_TARGET,
@@ -381,11 +386,16 @@ export function StyleInspectorPanel(
 ): React.JSX.Element {
   return (
     <FontChoicesContext.Provider value={props.fonts}>
-      {props.tokenMode === undefined ? (
-        <StyleInspectorOwnMode {...props} />
-      ) : (
-        <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
-      )}
+      {/* The panel's own folds where nothing above lends them. */}
+      <PanelFoldsProvider>
+        <CssNamesProvider>
+          {props.tokenMode === undefined ? (
+            <StyleInspectorOwnMode {...props} />
+          ) : (
+            <StyleInspectorBody {...props} tokenMode={props.tokenMode} />
+          )}
+        </CssNamesProvider>
+      </PanelFoldsProvider>
     </FontChoicesContext.Provider>
   );
 }
@@ -415,11 +425,6 @@ function StyleInspectorBody({
   showReadOnlyReason = true,
   tokenMode,
 }: StyleInspectorPanelProps & { tokenMode: TokenMode }): React.JSX.Element {
-  // `null` is "the author has not chosen yet", which is NOT the same as the
-  // empty string the accordion sends when they collapse the open section. The
-  // two collapsed onto one value made the first section impossible to close,
-  // and closing any later one silently opened the first.
-  const [openGroup, setOpenGroup] = React.useState<string | null>(null);
   // The form an author chose at a union position, keyed by property and path.
   // Panel state rather than document state: it is only consulted where nothing
   // is stored, so there is nothing to persist — the moment a value exists, the
@@ -546,18 +551,6 @@ function StyleInspectorBody({
    * the block's lock does not hold a site-wide style.
    */
   const readOnlyReason = targetReadOnly(target, editor, inspected.nodeId);
-  const groups = inspected.sections.map(section => section.key);
-  // Held rather than left to the accordion, so the open section survives a
-  // change of selection. Falling back to the first is what keeps it valid when
-  // the newly selected block does not offer the section that was open — an
-  // accordion asked to open a section it does not have shows nothing open at
-  // all, which reads as the panel having failed to load.
-  //
-  // Compared as strings because that is what the accordion hands back, and
-  // narrowing its argument to a catalog group would be this file claiming to
-  // know the vocabulary rather than reading it off the sections in hand.
-  const available = new Set<string>(groups);
-  const open = openSection(openGroup, available, groups[0] ?? "");
   /*
    * What every section and field below needs from this panel, assembled once.
    *
@@ -612,9 +605,6 @@ function StyleInspectorBody({
               <NoStyleProperties count={inspected.sections.length} />
               <StyleSections
                 sections={inspected.sections}
-                nodeId={inspected.nodeId}
-                open={open}
-                onOpen={setOpenGroup}
                 readOnlyReason={readOnlyReason}
                 surroundings={surroundings}
                 fit={inspected.objectFit}
@@ -780,23 +770,4 @@ function sharesItsId(editor: EditorState, id: string): boolean {
     if (node.id === id) seen += 1;
   });
   return seen > 1;
-}
-
-/**
- * Which section is open, given what the author has said.
- *
- * Three states, not two: not yet chosen falls back to the first section so the
- * panel never opens onto a column of headings; the empty string is an explicit
- * collapse and is honoured; and a section the newly selected block does not
- * offer falls back, because an accordion asked to open one it does not have
- * shows nothing open at all.
- */
-function openSection(
-  chosen: string | null,
-  available: ReadonlySet<string>,
-  first: string
-): string {
-  if (chosen === null) return first;
-  if (chosen === "") return "";
-  return available.has(chosen) ? chosen : first;
 }

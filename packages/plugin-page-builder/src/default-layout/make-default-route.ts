@@ -135,8 +135,8 @@ async function makeDefault(
   if (body.dryRun === true) {
     return respondMutation<MakeDefaultResult>(
       previous === id
-        ? "This Layout is already the default."
-        : "This Layout would become the default.",
+        ? "This header & footer set is already the default."
+        : "This header & footer set would become the default.",
       { defaultLayout: id, previousDefaultLayout: previous, dryRun: true, by }
     );
   }
@@ -153,12 +153,15 @@ async function makeDefault(
     previousChangedBy: before.defaultLayoutChangedBy,
   });
 
-  return respondMutation<MakeDefaultResult>("The default Layout was changed.", {
-    defaultLayout: id,
-    previousDefaultLayout: previous,
-    dryRun: false,
-    by,
-  });
+  return respondMutation<MakeDefaultResult>(
+    "The default header & footer set was changed.",
+    {
+      defaultLayout: id,
+      previousDefaultLayout: previous,
+      dryRun: false,
+      by,
+    }
+  );
 }
 
 /** The RESOLVED slugs: a host may rename the Layouts collection or the Single. */
@@ -243,7 +246,7 @@ async function restoreIfUnusable(
   throw NextlyError.conflict({
     reason: "state",
     message:
-      "That Layout stopped being published, so the default was left as it was.",
+      "That header & footer set stopped being published, so the default was left as it was.",
     logContext: { reason: "make-default-raced-unpublish", layoutId: id },
   });
 }
@@ -279,7 +282,8 @@ async function requirePublishedLayout(
   if (!(await layoutExists(nextly, slugs, id))) throw NextlyError.notFound();
   throw NextlyError.conflict({
     reason: "state",
-    message: "Only a published Layout can be the default. Publish it first.",
+    message:
+      "Only a published header & footer set can be the default. Publish it first.",
     logContext: { reason: "make-default-unpublished", layoutId: id },
   });
 }

@@ -54,8 +54,10 @@ import {
   namedQueriesPath,
   type NamedQueriesResponse,
 } from "../named-queries-contract";
+import { allowanceToWire } from "../page-allowance";
 
 import { sessionAnswer } from "./session-answers";
+import { readStarted } from "./startup-reads";
 
 /** One custom source, as the builder's Source menu and Inputs read it. */
 export interface CanvasCustomSource {
@@ -99,12 +101,20 @@ function hiddenReadOf(value: unknown): NamedQueryHiddenRead | undefined {
  * Source menu offers what it did before rather than an empty group.
  */
 export async function listCustomSources(
-  locale?: string
+  locale?: string,
+  userId: string | null = null
 ): Promise<readonly CanvasCustomSource[]> {
-  const body = await readPluginRoute<NamedQueriesResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path: namedQueriesPath(locale),
-  });
+  // The builder's start-up answer when it opens, the route otherwise.
+  const path = namedQueriesPath(locale);
+  const body = await readStarted(
+    path,
+    () =>
+      readPluginRoute<NamedQueriesResponse>({
+        plugin: PAGE_BUILDER_PLUGIN_NAME,
+        path,
+      }),
+    userId
+  );
   const items =
     typeof body === "object" && body !== null
       ? (body as Partial<NamedQueriesResponse>).items
@@ -316,9 +326,10 @@ export function canvasNamedHost(
           limit: asked.window.limit,
           offset: asked.window.offset,
           ...(locale === undefined ? {} : { locale }),
+          // `null` for a site that sets no limit, which JSON can carry.
           ...(asked.allowance === undefined
             ? {}
-            : { allowance: asked.allowance }),
+            : { allowance: allowanceToWire(asked.allowance) }),
           // The list it is for, so the server's log names it.
           ...(asked.node === undefined ? {} : { node: asked.node }),
         },
@@ -463,7 +474,7 @@ export function canvasNamedQueriesIn(
     sessionAnswer(
       userId,
       JSON.stringify(["custom-sources", locale ?? ""]),
-      () => listCustomSources(locale)
+      () => listCustomSources(locale, userId)
     );
   // One host per read of the sources, so the canvas's context, which holds
   // it, stays one object until the sources are read again.

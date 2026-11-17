@@ -336,13 +336,13 @@ describe("the Design column", () => {
     ).toBe("Not published yet: visitors see the Blog post template");
   });
 
-  it("says Template for an entry drawn with the template", () => {
+  it("says Collection template for an entry drawn with the template", () => {
     cellRead = {
       data: answer({ id: "t1", title: "Blog post", status: "published" }),
       error: null,
     };
     render(<DesignCell collection="posts" row={{ id: 7 }} />);
-    expect(screen.getByText("Template")).toBeTruthy();
+    expect(screen.getByText("Collection template")).toBeTruthy();
   });
 
   it("draws on the server, before any row on screen is known", () => {
@@ -359,7 +359,7 @@ describe("the Design column", () => {
     cellRead = { data: answer(BLOG_POST, [ownDesign("p1")]), error: null };
     render(page(["p1", "p2"]));
     expect(screen.getByText("Own design")).toBeTruthy();
-    expect(screen.getByText("Template")).toBeTruthy();
+    expect(screen.getByText("Collection template")).toBeTruthy();
     expect(lookups).toEqual([]);
   });
 
@@ -381,7 +381,7 @@ describe("the Design column", () => {
     // template while the cell's read is asked again.
     cellRead = { data: answer(null), error: null, fetching: true };
     render(<DesignCell collection="posts" row={{ id: "p1" }} />);
-    expect(screen.getByText("Template")).toBeTruthy();
+    expect(screen.getByText("Collection template")).toBeTruthy();
   });
 
   it("draws from the read that gave its list the column while its own read is out", () => {
@@ -396,7 +396,7 @@ describe("the Design column", () => {
     const { container } = render(
       <DesignCell collection="posts" row={{ id: "p1" }} />
     );
-    expect(screen.getByText("Template")).toBeTruthy();
+    expect(screen.getByText("Collection template")).toBeTruthy();
     expect(container.querySelector("[aria-hidden='true']")).toBeNull();
   });
 });
@@ -446,7 +446,7 @@ describe("the rows on screen, past a capped answer", () => {
     await waitFor(() => expect(screen.getByText("Own design")).toBeTruthy());
     // The rows it finds none for are drawn with the template, which only the
     // lookup can say.
-    expect(screen.getAllByText("Template")).toHaveLength(2);
+    expect(screen.getAllByText("Collection template")).toHaveLength(2);
     // One path for the whole page, never one per row.
     expect([...new Set(lookups)]).toEqual([
       "/templates/entry-designs?collection=posts&entries=p1,p2,p9",

@@ -6,7 +6,6 @@
  * to decide, through the same access check as the document's history.
  *
  * @module domains/content-events/repository
- * @experimental
  */
 
 import {
@@ -116,8 +115,6 @@ export interface ContentEventProducer {
 
 /**
  * The record of content events, read.
- *
- * @experimental
  */
 export class ContentEventsRepository extends BaseService {
   private readonly events: EventsTable;

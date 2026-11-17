@@ -134,6 +134,43 @@ const DOCUMENT = {
       ],
       { display: "flex" }
     ),
+    container(
+      "40",
+      "core/box",
+      { as: "div", contained: false },
+      [
+        container(
+          "41",
+          "core/box",
+          { as: "div", contained: true },
+          [text("42", "Full row item")],
+          { minWidth: "100%" }
+        ),
+      ],
+      { display: "flex" }
+    ),
+    container(
+      "43",
+      "core/box",
+      { as: "div", contained: false },
+      [
+        container(
+          "44",
+          "core/box",
+          { as: "div", contained: false },
+          [
+            container("45", "core/box", { as: "div", contained: true }, [
+              text("46", "Wrapped item one"),
+            ]),
+            container("47", "core/box", { as: "div", contained: true }, [
+              text("48", "Wrapped item two"),
+            ]),
+          ],
+          { display: "contents" }
+        ),
+      ],
+      { display: "flex" }
+    ),
     container("35", "core/columns", { as: "div", contained: false }, [
       container("36", "core/column", { as: "div", contained: true }, [
         text("37", "Column item one"),
@@ -355,6 +392,8 @@ test("a contained flex item is not inset from the row, nor a grid item from the 
   for (const words of [
     "Row item one",
     "Row item two",
+    "Wrapped item one",
+    "Wrapped item two",
     "Column item one",
     "Column item two",
   ]) {
@@ -362,6 +401,15 @@ test("a contained flex item is not inset from the row, nor a grid item from the 
     expect(band.width).toBeLessThan(pageWidth);
     near(text.left, band.left + gutter);
   }
+});
+
+test("a flex item its author made fill the row keeps its inset", async ({
+  page,
+}) => {
+  const { pageWidth, inset } = await open(page, WIDE);
+  const { text, band } = await placed(page, "Full row item");
+  near(band.width, pageWidth);
+  near(text.left, inset);
 });
 
 test("the inset follows the writing direction", async ({ page }) => {

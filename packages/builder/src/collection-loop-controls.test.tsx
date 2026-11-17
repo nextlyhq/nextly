@@ -20,7 +20,7 @@ import {
   useLoopCollections,
   type LoopCollections,
 } from "./collection-loop-controls";
-import { ShowWhen } from "./condition-controls";
+import { ShowWhen } from "./conditions/condition-controls";
 import type { ContentServices, LoopCollection } from "./content-controls";
 import { useEditorState } from "./editor-state";
 

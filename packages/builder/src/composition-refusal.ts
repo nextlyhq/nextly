@@ -65,7 +65,7 @@ const REFUSAL_COPY: Record<PlanProblem, string> = {
   "exceeds-limits": "This selection is too large to save. Try a smaller one.",
 
   // From the destination, for the verbs that write back to the page.
-  "not-a-pattern": "That library entry is not a pattern.",
+  "not-a-pattern": "That library entry is not a saved section.",
   "duplicate-destination":
     "Two blocks on this page share one id. Reload and try again.",
   "destination-locked":
