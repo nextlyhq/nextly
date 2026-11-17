@@ -986,6 +986,73 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       });
     });
 
+    it("reads a translation saved through another spelling of the id, as the database matched it", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "worded", {
+        title: "a",
+        body: { said: "en a" },
+      });
+      const other = await created(t, "worded", {
+        title: "b",
+        body: { said: "en b" },
+      });
+      await t.nextly.update({
+        collection: "worded",
+        id: other,
+        locale: "de",
+        data: { body: { said: "de b" }, _overwrite: true },
+        overrideAccess: true,
+      } as never);
+      // MySQL finds the entry by another spelling of its id, and the
+      // translation is kept under the spelling the save named; the others
+      // find no entry.
+      const saved = await t.nextly
+        .update({
+          collection: "worded",
+          id: id.toUpperCase(),
+          locale: "de",
+          data: { body: { said: "de a" }, _overwrite: true },
+          overrideAccess: true,
+        } as never)
+        .then(
+          () => true,
+          () => false
+        );
+      expect(saved).toBe(dialect === "mysql");
+      const shown = saved
+        ? { kind: "value", value: { said: "de a" } }
+        : { kind: "absent" };
+
+      expect(
+        await languagesReader(
+          t,
+          "probe"
+        )({
+          collection: "worded",
+          id,
+          field: "body",
+          form: "published",
+          locale: "de",
+        } as never)
+      ).toEqual(shown);
+      const many = await poolReaderOf(
+        t,
+        "probe",
+        "en"
+      )({
+        collection: "worded",
+        ids: [id, other],
+        field: "body",
+        form: "published",
+        locale: "de",
+      });
+      expect(many.get(id)).toEqual(shown);
+      expect(many.get(other)).toEqual({
+        kind: "value",
+        value: { said: "de b" },
+      });
+    });
+
     it("reads a language's value as stored, whatever that language's status", async () => {
       const t = await bootLanguages(dialect);
       const id = await created(t, "staged", {

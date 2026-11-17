@@ -1128,7 +1128,8 @@ async function languageRows(
  * The row of `companion` in `ask.locale` for each of `ask.ids`, selecting
  * `ask.projection`, by entry: `undefined` for an entry with none. A batch of
  * {@link STORED_ROWS_AT_ONCE} entries a query, each row told apart by the
- * entry it belongs to; one entry alone is read by its key.
+ * entry it belongs to, as the database matched it; one entry alone is read
+ * by its key.
  */
 async function languageRowsOf(
   connection: StoredFieldConnection,
@@ -1138,29 +1139,69 @@ async function languageRowsOf(
     readonly ids: readonly string[];
     readonly locale: string;
   }
-): Promise<Map<string, Record<string, unknown> | undefined>> {
+): Promise<Map<string, Record<string, unknown>>> {
   const table = companion.table as Record<string, unknown>;
   const executor = (connection.executor ??
     getService("adapter").getDrizzle()) as CompanionSelect;
   const inLanguage = eq(table._locale as never, ask.locale);
-  const found = new Map<string, Record<string, unknown> | undefined>();
+  const found = new Map<string, Record<string, unknown>>();
   for (let from = 0; from < ask.ids.length; from += STORED_ROWS_AT_ONCE) {
-    const batch = ask.ids.slice(from, from + STORED_ROWS_AT_ONCE);
-    const [only] = batch;
-    if (batch.length === 1 && only !== undefined) {
-      const rows = await executor
-        .select(ask.projection)
-        .from(companion.table)
-        .where(and(eq(table._parent as never, only), inLanguage))
-        .limit(1);
-      found.set(only, rows[0]);
-      continue;
-    }
-    const rows = await executor
-      .select({ ...ask.projection, p: table._parent })
-      .from(companion.table)
-      .where(and(inArray(table._parent as never, batch), inLanguage));
-    for (const row of rows) found.set(String(row.p), row);
+    const rows = await matchedByKey(
+      ask.ids.slice(from, from + STORED_ROWS_AT_ONCE),
+      async batch =>
+        (
+          await executor
+            .select({ ...ask.projection, p: table._parent })
+            .from(companion.table)
+            .where(and(inArray(table._parent as never, batch), inLanguage))
+        ).map(row => [String(row.p), row] as const),
+      async id =>
+        (
+          await executor
+            .select(ask.projection)
+            .from(companion.table)
+            .where(and(eq(table._parent as never, id), inLanguage))
+            .limit(1)
+        )[0]
+    );
+    for (const [id, row] of rows) found.set(id, row);
+  }
+  return found;
+}
+
+/**
+ * What `many` reads of `keys` in one query, by the key each was asked by.
+ *
+ * `many` answers each row under the key it is stored under. A database whose
+ * comparison ignores case or trailing spaces (MySQL's) matches a key spelt
+ * otherwise, so a row under a key nobody asked by is one of those: then each
+ * key still unanswered is read alone by `one`, and the database says which
+ * row is its own. One key alone is read by `one`, as a read of it alone is.
+ */
+async function matchedByKey<T>(
+  keys: readonly string[],
+  many: (keys: readonly string[]) => Promise<Iterable<readonly [string, T]>>,
+  one: (key: string) => Promise<T | undefined>
+): Promise<Map<string, T>> {
+  const found = new Map<string, T>();
+  const answerAlone = async (key: string) => {
+    const row = await one(key);
+    if (row !== undefined) found.set(key, row);
+  };
+  const [only] = keys;
+  if (keys.length === 1 && only !== undefined) {
+    await answerAlone(only);
+    return found;
+  }
+  const asked = new Set(keys);
+  let spelledOtherwise = false;
+  for (const [key, row] of await many(keys)) {
+    if (asked.has(key)) found.set(key, row);
+    else spelledOtherwise = true;
+  }
+  if (!spelledOtherwise) return found;
+  for (const key of keys.filter(each => !found.has(each))) {
+    await answerAlone(key);
   }
   return found;
 }
@@ -1374,28 +1415,11 @@ async function draftsMatching(
   ids: readonly string[],
   slot: string | null
 ): Promise<Map<string, VersionRow>> {
-  const alone = async (id: string) =>
-    repo.findWorkingDraft({ ...scope, entryId: id }, slot);
-  const found = new Map<string, VersionRow>();
-  const [only] = ids;
-  if (ids.length === 1 && only !== undefined) {
-    const draft = await alone(only);
-    if (draft !== undefined) found.set(only, draft);
-    return found;
-  }
-  const asked = new Set(ids);
-  let spelledOtherwise = false;
-  for (const [id, draft] of await repo.findWorkingDraftsOf(scope, ids, slot)) {
-    if (asked.has(id)) found.set(id, draft);
-    else spelledOtherwise = true;
-  }
-  if (!spelledOtherwise) return found;
-  for (const id of ids) {
-    if (found.has(id)) continue;
-    const draft = await alone(id);
-    if (draft !== undefined) found.set(id, draft);
-  }
-  return found;
+  return matchedByKey(
+    ids,
+    async batch => await repo.findWorkingDraftsOf(scope, batch, slot),
+    id => repo.findWorkingDraft({ ...scope, entryId: id }, slot)
+  );
 }
 
 /**
