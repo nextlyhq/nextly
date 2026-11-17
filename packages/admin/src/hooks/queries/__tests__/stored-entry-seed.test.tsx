@@ -24,7 +24,11 @@ import { useStoredEntry } from "../useStoredReferences";
 
 type Doc = Record<string, unknown>;
 
-const populated = { id: "e1", updatedAt: "v1", author: { id: "a", name: "Ana" } };
+const populated = {
+  id: "e1",
+  updatedAt: "v1",
+  author: { id: "a", name: "Ana" },
+};
 const stored = { id: "e1", updatedAt: "v1", author: "a", reviewer: "hidden" };
 
 /** Answers like the server: `_stored` beside the entry when asked for it. */
@@ -176,10 +180,35 @@ describe("the edit page's entry reads", () => {
     await act(() => result.current.populated.refetch());
     await waitFor(() =>
       expect(
-        client.getQueryData(
-          storedEntryKey("pages", "e1", { draft: true })
-        )
+        client.getQueryData(storedEntryKey("pages", "e1", { draft: true }))
       ).toEqual(next)
     );
+  });
+
+  it("hands nothing to a cache emptied while the populated read was on its way", async () => {
+    server();
+    const { client, wrapper } = clientAndWrapper();
+    const { result, unmount } = renderHook(() => usePair(), { wrapper });
+    await waitFor(() => expect(result.current.stored.data).toBeDefined());
+    let answer: (value: unknown) => void = () => undefined;
+    get.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          answer = resolve;
+        })
+    );
+    const refetch = result.current.populated.refetch();
+    // Signed out while the read was on its way: the cache is emptied.
+    unmount();
+    client.clear();
+    answer({ ...populated, updatedAt: "v2", _stored: { ...stored } });
+    await act(async () => {
+      await refetch;
+      await Promise.resolve();
+    });
+
+    expect(
+      client.getQueryData(storedEntryKey("pages", "e1", { draft: true }))
+    ).toBeUndefined();
   });
 });

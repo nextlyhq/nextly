@@ -96,10 +96,10 @@ export function readCarryingStored<T>(
     if (onTheWay.get(hash) === carried) onTheWay.delete(hash);
     if (carried.taken || stored === undefined) return;
     // Not asked for: the stored read is not reading, so it is handed this
-    // one, of the same version as the populated read beside it.
-    if (queryClient.getQueryState(storedKey)?.fetchStatus === "fetching") {
-      return;
-    }
+    // one, of the same version as the populated read beside it. Only a read
+    // the cache still holds: one emptied meanwhile (a sign-out) gets nothing.
+    const state = queryClient.getQueryState(storedKey);
+    if (state === undefined || state.fetchStatus === "fetching") return;
     queryClient.setQueryData(storedKey, stored);
   });
   return response.then(withoutStored);

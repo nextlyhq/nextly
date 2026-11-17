@@ -1037,8 +1037,10 @@ Relationship population depth. `0` returns only IDs; `1+` populates referenced d
 ### stored
 
 On a read of one collection entry, `?stored=1` adds `_stored`: the same entry as a read
-with `depth=0` in the same `locale`, `fallback-locale`, `draft` and `status` returns it,
-with every relationship and upload as its stored id. It is the read an editor needs beside a
+with `depth=0` in the same `locale`, `fallback-locale`, `fallback`, `draft` and `status`
+returns it, with every relationship and upload as its stored id. The options that shape
+only the populated read (`select`, `translation-status`, `source-locales`, `translations`
+and the rich text formats) do not apply to it. It is the read an editor needs beside a
 populated one: a populated read leaves out a related document the caller may not read, or
 one that no longer exists, and `_stored` still names it.
 

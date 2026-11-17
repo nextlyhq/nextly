@@ -43,6 +43,8 @@ const SECRETS = "stored_secrets";
 const NOTES = "stored_notes";
 /** Translated: its title per language, its code shared. */
 const GUIDES = "stored_guides";
+/** Translated and published per language. */
+const TALKS = "stored_talks";
 /** The note whose stored read the hook refuses. */
 const BREAKS_STORED = "breaks-stored";
 
@@ -58,6 +60,7 @@ describe.each(getConfiguredTestDialects())(
     let breaksId: string;
     let guideId: string;
     let hiddenId: string;
+    let talkId: string;
 
     async function session(user: { id: string; roleId: string }) {
       const token = await signAccessToken(
@@ -172,6 +175,12 @@ describe.each(getConfiguredTestDialects())(
               text({ name: "code", localized: false }),
             ],
           }),
+          defineCollection({
+            slug: TALKS,
+            localized: true,
+            status: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
         ],
         localization: { locales: ["en", "es"], defaultLocale: "en" },
       });
@@ -217,17 +226,15 @@ describe.each(getConfiguredTestDialects())(
       // The first account made is the site's owner, whom no rule limits; the
       // reads below are an editor's.
       await person("owner", [`read-${PEOPLE}`]);
-      ana = await person(
-        "ana",
-        [
-          ...[PEOPLE, NOTES, GUIDES].flatMap(slug => [
-            `create-${slug}`,
-            `read-${slug}`,
-            `update-${slug}`,
-          ]),
-          `publish-${NOTES}`,
-        ]
-      );
+      ana = await person("ana", [
+        ...[PEOPLE, NOTES, GUIDES, TALKS].flatMap(slug => [
+          `create-${slug}`,
+          `read-${slug}`,
+          `update-${slug}`,
+        ]),
+        `publish-${NOTES}`,
+        `publish-${TALKS}`,
+      ]);
       // May read the people, not the notes.
       carl = await person("carl", [`read-${PEOPLE}`]);
 
@@ -278,6 +285,13 @@ describe.each(getConfiguredTestDialects())(
         `collections/${GUIDES}/entries/${guideId}?locale=es`,
         { title: "Empieza aquí", _overwrite: true }
       );
+
+      // Published in English only.
+      const talk = await write("POST", `collections/${TALKS}/entries`, {
+        title: "Opening talk",
+        status: "published",
+      });
+      talkId = String(talk.id);
     }, 180_000);
 
     afterAll(async () => {
@@ -286,11 +300,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("is the separate depth-0 read, a related row the caller may not read kept as its id", async () => {
-      const { together, apart } = await bothWays(
-        NOTES,
-        noteId,
-        "status=all"
-      );
+      const { together, apart } = await bothWays(NOTES, noteId, "status=all");
       expect(together._stored).toEqual(apart);
       // The populated half is the entry's own read, as without the option.
       const alone = await read(
@@ -332,6 +342,19 @@ describe.each(getConfiguredTestDialects())(
       expect(together.title).toBe("Empieza aquí");
       expect(together._stored).toEqual(apart);
       expect((together._stored as Doc).code).toBe("g-1");
+    });
+
+    it("answers both in the same document language with ?fallback=document", async () => {
+      // Not published in Spanish: the published read falls back to English,
+      // and the stored read with it, rather than answering not found.
+      const { together, apart } = await bothWays(
+        TALKS,
+        talkId,
+        "locale=es&fallback=document"
+      );
+      expect(together).toMatchObject({ title: "Opening talk", _locale: "en" });
+      expect(together._stored).toEqual(apart);
+      expect((together._stored as Doc)._locale).toBe("en");
     });
 
     it("is refused whole for a caller the entry's read refuses", async () => {

@@ -1587,6 +1587,9 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the entry is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
       };
       const read = async (params: Parameters<typeof svc.getEntry>[0]) =>
         unwrapServiceResult(await svc.getEntry(params), {
@@ -1602,9 +1605,6 @@ const COLLECTIONS_METHODS: Record<
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
         richTextStyles: parseRichTextStyles(p.richTextStyles),
-        // `?fallback=document`: answer in the first published language of the
-        // chain where the entry is not published in the requested one.
-        wholeDocumentFallback: parseFallbackParam(p.fallback),
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
