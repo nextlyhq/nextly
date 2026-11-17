@@ -357,10 +357,29 @@ export function canvasContentRect(element: Element, root: HTMLElement): Rect {
 }
 
 /**
+ * The words a selection covers inside `element`, in the canvas's content
+ * coordinates: the selection's own box when it is in the element and covers
+ * anything, and the element's box otherwise. What a bar drawn over selected
+ * words is placed against.
+ */
+export function selectedWordsRect(element: Element, root: HTMLElement): Rect {
+  const selection = element.ownerDocument.getSelection();
+  if (selection !== null && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    if (element.contains(range.commonAncestorContainer)) {
+      const box = range.getBoundingClientRect();
+      if (box.width > 0 || box.height > 0) return clientRectInCanvas(box, root);
+    }
+  }
+  return canvasContentRect(element, root);
+}
+
+/**
  * A rectangle in CLIENT coordinates, in the canvas's content coordinates.
  *
  * The conversion {@link canvasContentRect} applies to an element's own box,
- * for a rectangle that is not one element's: the visible part of a viewport.
+ * for a rectangle that is not one element's: the visible part of a viewport,
+ * or the words a selection covers ({@link selectedWordsRect}).
  */
 function clientRectInCanvas(box: Rect, root: HTMLElement): Rect {
   const rootBox = root.getBoundingClientRect();

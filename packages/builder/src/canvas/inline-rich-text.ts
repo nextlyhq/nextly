@@ -17,9 +17,12 @@
 
 import {
   findNode,
+  isOneParagraphProp,
   isRichTextValue,
+  toOneParagraph,
   type BlockDocument,
   type BlockNode,
+  type PropSchema,
   type RichTextValue,
 } from "@nextlyhq/blocks-engine";
 
@@ -52,10 +55,32 @@ export interface InlineRichTextTarget {
    * be a second statement of that shape, and the two would drift.
    */
   readonly value: RichTextValue | undefined;
+  /**
+   * Whether the value is restricted to ONE paragraph of words with bold,
+   * italic, links and line breaks (`oneParagraph`): edited with only those,
+   * and written only as that.
+   */
+  readonly oneParagraph?: true;
 }
 
-function targetFor(node: BlockNode, prop: string): InlineRichTextTarget {
+function targetFor(
+  node: BlockNode,
+  prop: string,
+  schema: PropSchema | undefined
+): InlineRichTextTarget {
   const stored = (node.props as Record<string, unknown> | undefined)?.[prop];
+  if (isOneParagraphProp(schema)) {
+    // Read through the restriction the page is drawn by, so an older string
+    // opens as its words and line breaks, and a value holding more opens as
+    // what the page shows of it.
+    return {
+      nodeId: node.id,
+      prop,
+      stored,
+      value: toOneParagraph(stored).value,
+      oneParagraph: true,
+    };
+  }
   return {
     nodeId: node.id,
     prop,
@@ -65,6 +90,18 @@ function targetFor(node: BlockNode, prop: string): InlineRichTextTarget {
     // whatever a migration, an import or a hand-edited row left there.
     value: isRichTextValue(stored) ? stored : undefined,
   };
+}
+
+/**
+ * A finished edit of a target as it is written: restricted to one paragraph
+ * for a target that is (the save half of the restriction the renderer applies
+ * when it reads), and as the editor gave it otherwise.
+ */
+function writtenValue(
+  target: Pick<InlineRichTextTarget, "oneParagraph">,
+  value: unknown
+): unknown {
+  return target.oneParagraph === true ? toOneParagraph(value).value : value;
 }
 
 /**
@@ -84,9 +121,11 @@ export function richInlineTargets(
   document: BlockDocument,
   nodeId: string
 ): readonly InlineRichTextTarget[] {
-  const found = inlinePropsOfKind(document, nodeId, "rich");
+  const found = inlinePropsOfKind(document, nodeId, ["rich", "line"]);
   if (found === null) return [];
-  return found.entries.map(([name]) => targetFor(found.node, name));
+  return found.entries.map(([name, schema]) =>
+    targetFor(found.node, name, schema)
+  );
 }
 
 /**
@@ -209,8 +248,12 @@ export function richInlineTextOp(
   // passage is not one, and writing it would put a shape into the document that
   // every reader of the format would then have to survive.
   if (!isRichTextValue(next)) return null;
-  if (!richTextChanged(before, next)) return null;
+  // Both readings through the restriction, for a one-paragraph value: the
+  // editor's raw state carries fields its serializer adds, and only the
+  // restricted form is what is stored.
+  const written = writtenValue(target, next);
+  if (!richTextChanged(writtenValue(target, before), written)) return null;
   const node = findNode(document.nodes, nodeId);
   if (node === undefined) return null;
-  return { kind: "update", id: nodeId, patch: propPatch(node, prop, next) };
+  return { kind: "update", id: nodeId, patch: propPatch(node, prop, written) };
 }

@@ -15,7 +15,6 @@
 
 import type { UpgradeStep } from "../upgrade-step";
 
-import { schemaEventsStep } from "./schema-events";
 import { storedPasswordsStep } from "./stored-passwords";
 import { versionPasswordsStep } from "./version-passwords";
 
@@ -38,7 +37,6 @@ const zonedDatesStep: UpgradeStep = {
 };
 
 export const UPGRADE_STEPS: readonly UpgradeStep[] = [
-  schemaEventsStep,
   storedPasswordsStep,
   versionPasswordsStep,
   retiredManageStep,

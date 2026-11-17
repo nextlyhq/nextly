@@ -56,6 +56,7 @@ import {
   checkCssValue,
   checkUrlValue,
   decodeIdentifier,
+  referencesCustomProperty,
 } from "./css-value";
 import {
   MAX_TOKEN_NAME_LENGTH,
@@ -174,6 +175,13 @@ export interface SiteTokenSet {
    * {@link DarkModeStrategy}.
    */
   darkMode?: DarkModeStrategy;
+  /**
+   * The page widths a size made with "Fluid…" grows across, in px: the
+   * smallest screen and the largest. 360 to 1280 where unset. Never
+   * emitted: each fluid size's value already holds it, and a change of it
+   * remakes those values.
+   */
+  fluidRange?: { readonly min: number; readonly max: number };
 }
 
 /**
@@ -683,7 +691,7 @@ function typeInstead(kind: TokenKind): string {
  * that agree today drift, and the drift is invisible because a missing token
  * looks exactly like a token whose value did not apply.
  *
- * `prefix` and `darkMode` come from the override when it states them, because
+ * `prefix`, `darkMode` and `fluidRange` come from the override when it states them, because
  * they are site-wide decisions rather than per-token values. A site that sets a
  * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
  * for declaring and for referencing from a single value for exactly this
@@ -715,6 +723,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.darkMode === undefined
       ? {}
       : { darkMode: override.darkMode }),
+    // Site-wide too: the widths the sizes made with Fluid… grow between.
+    ...(override?.fluidRange === undefined
+      ? {}
+      : { fluidRange: override.fluidRange }),
   };
 }
 
@@ -1238,6 +1250,13 @@ export function emitTokenBlocks(
   // The light values of the variables that have a dark one: what a light
   // marker has to restore, and nothing else.
   const undoDark: string[] = [];
+  // The light declarations of the variables with no dark value of their own
+  // that read another variable, such as a shadow coloured by a colour
+  // variable. A custom property's `var()` is resolved where it is declared
+  // and inherited as the result, so one declared only on the root keeps the
+  // light colour under a dark marker on <body> or a wrapper. Declared again in
+  // every mode block, it resolves on the same element as what it reads.
+  const reread: string[] = [];
   const seen = new Map<string, string>();
   /*
    * The tokens this call actually WROTE.
@@ -1356,6 +1375,8 @@ export function emitTokenBlocks(
         `${property}:${writtenTokenValue(token.kind, token.values.dark)}`
       );
       undoDark.push(`${property}:${lightValue}`);
+    } else if (referencesCustomProperty(lightValue)) {
+      reread.push(`${property}:${lightValue}`);
     }
   }
 
@@ -1386,9 +1407,9 @@ export function emitTokenBlocks(
   // dark one the nearer marker decides.
   if (dark.length > 0) {
     css +=
-      deviceDarkBlockFor(selector, dark) +
-      darkSelectorFor(selector, dark) +
-      markerBlockFor(selector, "light", undoDark);
+      deviceDarkBlockFor(selector, [...dark, ...reread]) +
+      darkSelectorFor(selector, [...dark, ...reread]) +
+      markerBlockFor(selector, "light", [...undoDark, ...reread]);
   }
   return { css, issues, emitted };
 }

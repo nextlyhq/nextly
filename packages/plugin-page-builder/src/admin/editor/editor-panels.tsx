@@ -45,6 +45,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -321,7 +322,7 @@ function useOfferedLibrary({
 /** What `usePanelRequests` returns. */
 type PanelRequests = {
   openPanelRequest:
-    | { panel: LeftPanel; view?: string; count: number }
+    | { panel: LeftPanel; view?: string; count: number; unlessHidden?: boolean }
     | undefined;
   requestPanel: RequestPanel;
   /**
@@ -329,7 +330,14 @@ type PanelRequests = {
    * a container (its empty-container "+"), or in the gap right after a block
    * (the "+" between sections). Neither is what selecting the block implies.
    */
-  openInsertPanel: (place?: InsertPlaceRequest) => void;
+  openInsertPanel: (place?: InsertPlaceRequest, tab?: AddTab) => void;
+  /** The tab the press Add has yet to answer asks for, if it names one. */
+  addSummonTab: AddTab | undefined;
+  /**
+   * Opens Add as the editor's own request, on an empty page: shown in the
+   * left side unless the author hid that side themselves.
+   */
+  openAddUnlessHidden: () => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
   /** The block the last gap's "+" chose to add right after, if any. */
@@ -366,6 +374,9 @@ interface RequestPanel {
   (panel: "design", view?: DesignView): void;
   (panel: Exclude<LeftPanel, "design">, view?: string): void;
 }
+
+/** A tab of the Add panel a press can ask for. */
+type AddTab = "blocks" | "sections";
 
 /** A position in the page, as the in-place picker names one. */
 type InsertPosition = Extract<InsertPlace, { at: unknown }>["at"];
@@ -422,7 +433,8 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
    * variables to fix a typeface the site does not provide.
    */
   const [openPanelRequest, setOpenPanelRequest] = useState<
-    { panel: LeftPanel; view?: string; count: number } | undefined
+    | { panel: LeftPanel; view?: string; count: number; unlessHidden?: boolean }
+    | undefined
   >(undefined);
   const requestPanel = useCallback((panel: LeftPanel, view?: string): void => {
     setOpenPanelRequest(current => ({
@@ -442,15 +454,24 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
    */
   const [addPresses, setAddPresses] = useState(0);
   const [answeredPress, setAnsweredPress] = useState(0);
+  const [pressTab, setPressTab] = useState<AddTab | undefined>(undefined);
   const reveals = useDesignReveals(requestPanel);
   const openInsertPanel = useCallback(
-    (place?: InsertPlaceRequest): void => {
+    (place?: InsertPlaceRequest, tab?: AddTab): void => {
       setPlaceRequest(place);
+      setPressTab(tab);
       setAddPresses(count => count + 1);
       requestPanel("add");
     },
     [requestPanel]
   );
+  const openAddUnlessHidden = useCallback((): void => {
+    setOpenPanelRequest(current => ({
+      panel: "add",
+      count: (current?.count ?? 0) + 1,
+      unlessHidden: true,
+    }));
+  }, []);
   /*
    * A "+"'s choice lasts while its block stays selected. Selecting anything
    * else, the block just added included, ends it, so selecting the block
@@ -470,7 +491,9 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
     openInsertPanel,
     ...heldPlaces(held),
     addSummon: addPresses > answeredPress ? addPresses : undefined,
+    addSummonTab: addPresses > answeredPress ? pressTab : undefined,
     onAddSummoned: setAnsweredPress,
+    openAddUnlessHidden,
     ...reveals,
   };
 }
@@ -630,7 +653,23 @@ function useEditorRequests(
 ): PanelRequests & Pick<EditorPanels, "insertPicker" | "browseAll"> {
   const requests = usePanelRequests(editor.selectedId);
   const picker = usePickerPanel(editor, requests.openInsertPanel);
+  useAddOnEmptyOpen(
+    editor.document.nodes.length === 0,
+    requests.openAddUnlessHidden
+  );
   return { ...requests, ...picker };
+}
+
+/**
+ * An editor that opens on a document holding no blocks opens Add, which is
+ * what an empty page needs first, unless the author hid the left side; asked
+ * once, when the editor opens, and never again as blocks come and go.
+ */
+function useAddOnEmptyOpen(empty: boolean, openAdd: () => void): void {
+  const openedEmpty = useRef(empty);
+  useEffect(() => {
+    if (openedEmpty.current) openAdd();
+  }, [openAdd]);
 }
 
 /** The in-place picker's state, and "Browse all" carrying its target on. */
@@ -812,6 +851,7 @@ export function editorPanelRenderer({
   insertAfter,
   insertAt,
   addSummon,
+  addSummonTab,
   onAddSummoned,
   pages,
   canvasRender,
@@ -872,6 +912,7 @@ export function editorPanelRenderer({
     | "insertAfter"
     | "insertAt"
     | "addSummon"
+    | "addSummonTab"
     | "onAddSummoned"
     | "pages"
     | "designFolds"
@@ -907,6 +948,7 @@ export function editorPanelRenderer({
           // A canvas press still to answer, whether Add opened for it or
           // was already open.
           summoned={addSummon}
+          {...(addSummonTab === undefined ? {} : { summonedTab: addSummonTab })}
           onSummoned={onAddSummoned}
           pictures={{
             siteStyle: canvasSiteStyle,

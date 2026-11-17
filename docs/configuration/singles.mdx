@@ -193,16 +193,36 @@ Where the Single is served on your site, as a fixed path: `"/"` for a homepage, 
 
 Configure how the single appears in the admin panel via the `admin` property.
 
-| Property       | Type      | Default | Description                                                                            |
-| -------------- | --------- | ------- | -------------------------------------------------------------------------------------- |
-| `group`        | `string`  | None    | Sidebar group name.                                                                    |
-| `icon`         | `string`  | None    | Lucide icon name (e.g. `"Settings"`, `"Menu"`, `"Home"`).                              |
-| `hidden`       | `boolean` | `false` | Hide from sidebar navigation (still reachable via direct URL and API).                 |
-| `order`        | `number`  | `100`   | Sort order within sidebar group (lower = higher).                                      |
-| `sidebarGroup` | `string`  | None    | Custom sidebar group slug; moves the entry from its default section to a custom group. |
-| `description`  | `string`  | None    | Help text below the single title.                                                      |
+| Property       | Type      | Default    | Description                                                                            |
+| -------------- | --------- | ---------- | -------------------------------------------------------------------------------------- |
+| `group`        | `string`  | None       | Sidebar group name.                                                                    |
+| `icon`         | `string`  | None       | Lucide icon name (e.g. `"Settings"`, `"Menu"`, `"Home"`).                              |
+| `hidden`       | `boolean` | `false`    | Hide from sidebar navigation (still reachable via direct URL and API).                 |
+| `order`        | `number`  | `100`      | Sort order within sidebar group (lower = higher).                                      |
+| `sidebarGroup` | `string`  | None       | Custom sidebar group slug; moves the entry from its default section to a custom group. |
+| `description`  | `string`  | None       | Help text below the single title.                                                      |
+| `opensIn`      | `string`  | Main field | Experimental. See [Where a Single opens](#where-a-single-opens).                       |
 
 > **Singles do not support `useAsTitle`, `pagination`, `preview`, or admin-component overrides** — those concepts are collection-specific.
+
+### Where a Single opens
+
+A Single opens where a collection's entry of the same shape would, by the one
+rule in [Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens).
+With the Page Builder installed, a Single whose main field is a page layout,
+such as a Homepage with a title and a `blocks` field, opens straight in the
+builder from the sidebar, the Content screen, the dashboard and every other
+link that opens it. The builder's **⋯** menu offers **Open as form**, and its
+back arrow reads **Back to content** and returns to the Content screen. A
+Single whose main field is anything else opens as its form, and so does one
+opened by a reader who may only read it, or in a language other than the
+default.
+
+To keep a Single opening as its form, set `admin: { opensIn: "form" }` on it.
+Startup is refused when a Single's `opensIn` names a view it can't open in: one
+no plugin offers on a field type, or one whose field type isn't among its
+top-level fields. A view a plugin declares on a collection's slug is never a
+Single's.
 
 ### The side panel
 

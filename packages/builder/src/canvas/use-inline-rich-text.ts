@@ -35,11 +35,18 @@
  * @module use-inline-rich-text
  */
 
+import { toOneParagraph } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "../editor-state";
 
 import { useCanvasFrame } from "./canvas-frame-context";
+import {
+  formatBar,
+  TEXT_FORMAT_ACTIONS,
+  type FormatSelection,
+  type FormatSession,
+} from "./format-bar-state";
 import {
   INLINE_EDIT_DISCARDED,
   INLINE_EDIT_UNAVAILABLE,
@@ -228,6 +235,129 @@ interface EditorSession {
   detach(): void;
   /** Keep this attachment when something else asks for the shared editor. */
   hold(): void;
+  /** The format bar's verbs, where the editor offers them. */
+  format?(mark: "bold" | "italic"): void;
+  link?(url: string | null, options?: { readonly newTab?: boolean }): void;
+  selection?(): FormatSelection | undefined;
+}
+
+/**
+ * How a passage is attached: held to ONE paragraph, for a value restricted
+ * to one (`oneParagraph`), by the engine's own restriction.
+ */
+interface AttachOptions {
+  readonly paragraph?: {
+    readonly restrict: (value: unknown) => {
+      readonly value: unknown;
+      readonly dropped: boolean;
+    };
+    readonly onDropped?: () => void;
+    /** Told after every change of the words, with the restricted value. */
+    readonly onChange?: (value: unknown) => void;
+    readonly onSelection?: (state: FormatSelection) => void;
+  };
+}
+
+/** The bar's verbs on a session, when the editor offers all of them. */
+function formatVerbs(session: EditorSession): FormatSession | null {
+  if (
+    session.format === undefined ||
+    session.link === undefined ||
+    session.selection === undefined
+  )
+    return null;
+  return {
+    format: mark => session.format?.(mark),
+    link: (url, options) => session.link?.(url, options),
+    selection: () => session.selection?.(),
+    focus: () => session.focus(),
+  };
+}
+
+/**
+ * How a one-paragraph value is attached: held to one paragraph by the engine's
+ * own restriction, so the editor holds what is saved and drawn, with a paste
+ * that lost formatting and every move of the selection told to the format bar.
+ */
+const ONE_PARAGRAPH: AttachOptions = {
+  paragraph: {
+    restrict: toOneParagraph,
+    onDropped: () => formatBar.setDropped(true),
+    onSelection: state => formatBar.selected(state),
+  },
+};
+
+/** Hand the editor a passage, held to one paragraph when its value is one. */
+function attachPassage(
+  live: LoadedEditor,
+  element: HTMLElement,
+  target: { readonly oneParagraph?: true },
+  value: unknown
+): Attachment {
+  return target.oneParagraph === true
+    ? live.attach(element, value, ONE_PARAGRAPH)
+    : live.attach(element, value);
+}
+
+/** Serve the format bar for a one-paragraph value, where the editor can. */
+function serveFormatBar(
+  target: { readonly oneParagraph?: true },
+  session: EditorSession,
+  element: HTMLElement,
+  finish: () => unknown
+): void {
+  if (target.oneParagraph !== true) return;
+  const verbs = formatVerbs(session);
+  if (verbs === null) return;
+  formatBar.open({
+    element,
+    session: verbs,
+    actions: TEXT_FORMAT_ACTIONS,
+    finish: () => {
+      finish();
+    },
+  });
+}
+
+/** Which of the format bar's keys a press is, if any. */
+function formatKeyOf(event: KeyboardEvent): "mark" | "link" | "bar" | null {
+  if (commandWith(event, "b") || commandWith(event, "i")) return "mark";
+  if (commandWith(event, "k")) return "link";
+  return event.altKey && event.key === "F10" ? "bar" : null;
+}
+
+/**
+ * The format bar's keys, for a passage it serves, answering whether the press
+ * was one of them. ⌘B and ⌘I are the editor's own and are only kept from the
+ * page's shortcuts; ⌘K opens the address field for the selected words (or the
+ * link the caret is in); Alt+F10 takes the focus to the bar, as it takes it
+ * to a toolbar everywhere else in the builder.
+ */
+function handleFormatKey(event: KeyboardEvent, element: HTMLElement): boolean {
+  const served = formatBar.get().target;
+  if (served?.element !== element) return false;
+  const key = formatKeyOf(event);
+  if (key === null) return false;
+  event.stopPropagation();
+  if (key === "mark") return true;
+  event.preventDefault();
+  if (key === "bar") {
+    formatBar.requestFocus();
+    return true;
+  }
+  const selection = served.session.selection();
+  if (selection !== undefined && (!selection.collapsed || selection.link))
+    formatBar.setLinking(true);
+  return true;
+}
+
+/** Whether a key press is the platform's command modifier with `key`. */
+function commandWith(event: KeyboardEvent, key: string): boolean {
+  return (
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    event.key.toLowerCase() === key
+  );
 }
 
 /** What asking the facade for the editor produced, as this module reads it. */
@@ -238,7 +368,11 @@ type Attachment =
 /** The facade's editor, as this module uses it. */
 interface LoadedEditor {
   /** Refused for a passage this editor cannot take, or while it is held. */
-  attach(element: HTMLElement, value: unknown): Attachment;
+  attach(
+    element: HTMLElement,
+    value: unknown,
+    options?: AttachOptions
+  ): Attachment;
 }
 
 /**
@@ -431,6 +565,7 @@ export function useInlineRichText(
     mounted.current = null;
     setEditing(null);
     if (live === null) return;
+    formatBar.close(live.element);
     // The element's markup and attributes are the editor's to put back: it is
     // what changed them, and it is what a plugin using the facade directly
     // relies on. Only this module's own mark is this module's to remove.
@@ -754,8 +889,13 @@ export function useInlineRichText(
          */
         const caret =
           point === null ? undefined : caretOffsetAt(element, point);
-        const attachment = live.attach(
+        // A one-paragraph value is held to it while it is typed, by the
+        // restriction it is saved and drawn by, and its selection is told to
+        // the format bar.
+        const attachment = attachPassage(
+          live,
           element,
+          target,
           carry === null ? target.value : carry.words
         );
         if (attachment.status === "refused") {
@@ -793,6 +933,7 @@ export function useInlineRichText(
           // A carried passage keeps the baselines it opened with.
           baseline: carry === null ? session.read() : carry.baseline,
         };
+        serveFormatBar(target, session, element, commit);
       },
       () => {
         /*
@@ -826,6 +967,7 @@ export function useInlineRichText(
      * would destroy the words before the author let go of the key.
      */
     const onKeyDown = (event: KeyboardEvent) => {
+      if (handleFormatKey(event, element)) return;
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
@@ -844,9 +986,13 @@ export function useInlineRichText(
     /*
      * Leaving the passage finishes the edit, as it does for plain text. Enter
      * is deliberately NOT an exit here: a passage holds paragraphs, so Enter
-     * belongs to the value.
+     * belongs to the value. Nor is moving to the format bar: an author pressing
+     * its buttons, or typing a link's address, is still editing.
      */
-    const onBlur = () => commit();
+    const onBlur = () => {
+      if (formatBar.holdsFocus()) return;
+      commit();
+    };
 
     const trackCaret = () => {
       const live = mounted.current;
@@ -895,6 +1041,7 @@ export function useInlineRichText(
           caret: live.caret,
         };
         mounted.current = null;
+        formatBar.close(live.element);
         live.session.detach();
         live.element.removeAttribute(EDITING_ATTRIBUTE);
       } else if (live !== null) {

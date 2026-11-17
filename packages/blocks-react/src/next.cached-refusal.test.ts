@@ -309,6 +309,10 @@ function siteIn(timezone: string | null) {
     findSingle: vi.fn(async () => null),
     publicSiteSettings: vi.fn(async () => site),
     media: { findByID: vi.fn(async () => null) },
+    // Its plugins, as an instance carries them, none offering forms: the
+    // route reads the page's forms from them, not from the process's
+    // instance, which this process never starts.
+    plugins: {},
   };
 }
 

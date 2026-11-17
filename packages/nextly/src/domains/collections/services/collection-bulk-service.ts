@@ -1187,8 +1187,11 @@ export class CollectionBulkService extends BaseService {
     // read, and the gate this asks and the rows written must read the same
     // body.
     const data = { ...params.data };
-    const gate = await writeGateFor(data, "collection", () =>
-      this.mutationService.hasLifecycle(params.collectionName)
+    const gate = await writeGateFor(
+      data,
+      "collection",
+      await this.mutationService.collectionTableNameOf(params.collectionName),
+      () => this.mutationService.hasLifecycle(params.collectionName)
     );
     // A rule answering a filter allows the write for the entries it matches:
     // the list below is narrowed to them, and each is judged again as it is

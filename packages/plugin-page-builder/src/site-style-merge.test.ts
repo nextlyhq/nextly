@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { fluidValue } from "@nextlyhq/blocks-engine";
 import { mergedValue, mergeSiteStyleSection } from "./site-style-merge";
 
 const token = (name: string, light: string, extra: object = {}) => ({
@@ -249,6 +250,96 @@ describe("merging tokens", () => {
     expect(merged.conflicts).toMatchObject([
       { key: "prefix", setting: true, kind: "changed", kept: "mine" },
     ]);
+  });
+});
+
+describe("merging sizes made with Fluid… and the fluid range", () => {
+  const OLD = { min: 360, max: 1280 };
+  const NEW = { min: 320, max: 1440 };
+  const lead = (small: number, large: number, range: typeof OLD) => ({
+    name: "font-size.lead",
+    kind: "dimension",
+    values: { light: fluidValue({ small, large }, range) },
+    fluid: { small, large },
+  });
+
+  it("writes a size again from the sizes and the range the merge kept", () => {
+    // Mine changed the range and remade the size across it; theirs changed
+    // the size's two sizes across the old range. Merged field by field, the
+    // value would be neither: mine's clamp beside their sizes.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [lead(16, 20, OLD)], fluidRange: OLD },
+      { tokens: [lead(16, 20, NEW)], fluidRange: NEW },
+      { tokens: [lead(18, 24, OLD)], fluidRange: OLD },
+      "mine"
+    );
+    const value = merged.value as {
+      tokens: { values: { light: string }; fluid: unknown }[];
+      fluidRange: unknown;
+    };
+    expect(value.fluidRange).toEqual(NEW);
+    expect(value.tokens[0]?.fluid).toEqual({ small: 18, large: 24 });
+    expect(value.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 18, large: 24 }, NEW)
+    );
+  });
+
+  it("merges the range whole, never one width from each side", () => {
+    // Field by field, the width mine left alone took theirs, which held no
+    // range: { max: 1440 } alone, a range the save refuses.
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [lead(16, 20, OLD)], fluidRange: OLD },
+      {
+        tokens: [lead(16, 20, { min: 360, max: 1440 })],
+        fluidRange: { min: 360, max: 1440 },
+      },
+      { tokens: [lead(16, 20, OLD)] },
+      "mine"
+    );
+    expect((merged.value as { fluidRange: unknown }).fluidRange).toEqual({
+      min: 360,
+      max: 1440,
+    });
+  });
+
+  it("rewrites nothing where no tier stores a range to write a size across", () => {
+    // Made across the code's own range, which the stored tier does not hold:
+    // writing it across the default would move every fluid size.
+    const coded = lead(16, 20, NEW);
+    const brand = {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#111" },
+    };
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [coded, brand] },
+      { tokens: [coded, { ...brand, label: "Brand" }] },
+      { tokens: [coded, { ...brand, values: { light: "#222" } }] },
+      "mine"
+    );
+    const value = merged.value as { tokens: { values: { light: string } }[] };
+    expect(value.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, NEW)
+    );
+  });
+
+  it("leaves a size written by hand as it is", () => {
+    const typed = {
+      name: "space.stack",
+      kind: "dimension",
+      values: { light: "clamp(1rem, 2vw, 2rem)" },
+    };
+    const merged = mergeSiteStyleSection(
+      "tokens",
+      { tokens: [typed], fluidRange: OLD },
+      { tokens: [typed], fluidRange: NEW },
+      { tokens: [typed], fluidRange: OLD },
+      "mine"
+    );
+    expect(merged.value).toEqual({ tokens: [typed], fluidRange: NEW });
   });
 });
 

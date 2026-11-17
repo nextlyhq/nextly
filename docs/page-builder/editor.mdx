@@ -33,8 +33,14 @@ name for other collections) and returns to the list, asking first if there are
 unsaved changes. On an entry that opens as a form, such as a post, it reads
 **Exit editor** and returns to the form.
 
-To keep a collection's entries opening as a form, set `admin: { opensIn: "form" }`
-on it in code. See [Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens).
+A Single whose main field is a page layout, such as a Homepage, opens in the
+builder the same way, from the sidebar and every other link. Its **⋯** menu
+offers **Open as form**, and its arrow reads **Back to content** and returns to
+the Content screen, asking first if there are unsaved changes.
+
+To keep a collection's entries, or a Single, opening as a form, set
+`admin: { opensIn: "form" }` on it in code. See
+[Where an entry opens](/docs/plugins/admin-ui#where-an-entry-opens).
 
 ## With nothing selected
 
@@ -233,11 +239,11 @@ returns you to the entry with that row's **Open in builder** focused.
 
 The inspector edits the selected block in up to three tabs, in this order:
 
-| Tab      | What it holds                                                                                                                                                                                                                |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                                                                                      |
-| Style    | How the block looks.                                                                                                                                                                                                         |
-| Advanced | Where and when it shows (**Visible on**, **Show when**, and **Keep out of search previews** on every container), then its HTML: its **HTML tag** where it has a choice, **Anchor (ID)**, **CSS classes** and **Attributes**. |
+| Tab      | What it holds                                                                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                                                                                   |
+| Style    | How the block looks.                                                                                                                                                                                                      |
+| Advanced | Where and when it shows (**Hide on**, **Show when**, and **Keep out of search previews** on every container), then its HTML: its **HTML tag** where it has a choice, **Anchor (ID)**, **CSS classes** and **Attributes**. |
 
 A tab with nothing in it for the selected block isn't shown: a Spacer or a Section,
 which say nothing themselves, have only Style and Advanced. The tab you choose stays
@@ -461,6 +467,31 @@ and nothing changes. If an Image's file is deleted from the media library, the b
 
 An Image with no picture draws nothing on the published page.
 
+## Bold, italic and links in a Text
+
+A Text is one paragraph of words, edited where it is shown: double-click it on the
+canvas, or select it and press <kbd>Enter</kbd>. Select some words and a small bar
+appears just above them:
+
+- **B** makes them bold and **I** italic. <kbd>Ctrl</kbd>+<kbd>B</kbd> and
+  <kbd>Ctrl</kbd>+<kbd>I</kbd> do the same.
+- **Link** (or <kbd>Ctrl</kbd>+<kbd>K</kbd>) asks for the address, with **Open in a new
+  tab**. An address that would run a script is refused. With a link selected, **Remove
+  link** takes it off.
+
+<kbd>Alt</kbd>+<kbd>F10</kbd> moves to the bar from the keyboard, the arrow keys
+move along it, and <kbd>Escape</kbd> goes back to the words.
+
+A Text stays one paragraph: <kbd>Enter</kbd> (and <kbd>Shift</kbd>+<kbd>Enter</kbd>)
+starts a new line in it. Paste a passage with headings or lists and the words stay
+while the rest goes, with the note "Text keeps words, bold, italic and links. Use Rich
+text for headings and lists". Headings, lists and quotes belong in a **Rich text**
+block.
+
+The Text's field in the inspector edits the same words, and the canvas shows them as you
+type. A Text bound to a field takes a text field's words as one plain paragraph; a
+rich-text field isn't offered for it.
+
 ## Pages
 
 **Pages** in the rail lists the site's pages, grouped by the kind of page when the
@@ -628,6 +659,23 @@ A block hidden on a device still counts as a block above the next one. When ever
 block above it is hidden, the first block shown in a normal-flow container keeps the
 gap above it; give that block a top margin of 0 on that device to remove it.
 
+### Setting margin and padding
+
+**Style → Spacing** draws a block's margin and padding as one box: margin is the outer
+ring and padding the inner one. Each side shows its value.
+
+- **Click a side** (or press Enter on it) to open its popover. It holds:
+  - your spacing variables as presets, smallest first, after **None**;
+  - a number with its unit;
+  - **Apply to**: **This side**, **Top & bottom** (or **Left & right**), or **All sides**.
+- **Type a number** on a side to set it straight away. Tab saves it and moves to the next
+  side, so `4 0 Tab 4 0 Tab…` goes round the box: Top, Right, Bottom, Left, margin first,
+  then padding.
+- **A value in green** comes from one of your spacing variables, so it changes when the
+  variable does.
+- **To reset a side**, use the popover's **⋯ → Reset**, right-click the side, or press
+  Alt+Backspace (Option+Delete on a Mac).
+
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
 
@@ -726,11 +774,19 @@ up**, **Move down**, **Move in** or **Move out**.
 - **Point at a row** and its block is outlined on the canvas. **Click a row** to select
   its block; the canvas scrolls to it.
 - **Hide a block on one device.** Point at a row and click its eye: the block is hidden
-  on the device you are editing, on the canvas and on the published page. Every other
-  device keeps showing it. A hidden row is dimmed and says **Hidden**. Select a hidden
-  block in Layers and the canvas shows it while it is selected, tagged "Hidden on" the
-  device. **Visible on**, in the Advanced tab, shows each device and hides or shows the
-  block on any one of them.
+  on the device you are editing, on the published page. Every other device keeps
+  showing it. A hidden row is dimmed and says **Hidden**, and a row hidden on another
+  device shows an eye with a slash through it, its tooltip naming the devices. On the
+  canvas, at a device it is hidden on, the block is still drawn, striped and tagged
+  "Hidden on Mobile · still here in the builder", so you can find and edit it; a
+  visitor on that device sees nothing of it, and Preview as visitor shows the page
+  without it.
+- **Hide on**, in the Advanced tab's Visibility section, has one toggle per device the
+  site defines, each with its icon and name. Press a device to hide the block there
+  alone: hiding it on Desktop leaves Tablet and Mobile showing. Hover a toggle to see
+  the CSS it writes, such as `display: none at 768–1023px`. While the block is hidden
+  anywhere, every tab says so at the top ("Hidden on Mobile. Visitors on that device
+  won't see it."), with **Change** to go to Hide on.
 - **Lock a block** with the padlock on its row. A locked block can't be moved, changed or
   deleted, nor can anything inside it, until it is unlocked.
 - **Rename a block** by double-clicking its row, pressing <kbd>F2</kbd>, or choosing
@@ -953,6 +1009,9 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd>                                 | While editing a Text, make the selected words bold or italic                                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                                | While editing a Text, link the selected words                                                                                     |
+| <kbd>Alt</kbd>+<kbd>F10</kbd>                                                               | While editing a Text, move to the formatting bar                                                                                  |
 | <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
