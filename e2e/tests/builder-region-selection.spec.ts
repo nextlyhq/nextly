@@ -33,7 +33,12 @@ import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { fileAccount, test } from "./support/test";
 
-test.describe.configure({ mode: "serial", lock: [LOCK.siteDefaultLayout] });
+// Each test opens the builder, whose first draw on a dev server is slow.
+test.describe.configure({
+  mode: "serial",
+  lock: [LOCK.siteDefaultLayout],
+  timeout: 120_000,
+});
 
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
@@ -89,7 +94,12 @@ async function component(
         content: {
           formatVersion: 1,
           kind: "component",
-          nodes: [heading("h", text)],
+          // Two lines, as tall as a site's own header or footer is: room for
+          // the tag inside it.
+          nodes: [
+            heading("h", text),
+            paragraph("p", "Land and site surveys since 2004"),
+          ],
         },
         status: "published",
       },
