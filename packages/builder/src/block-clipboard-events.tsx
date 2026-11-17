@@ -18,7 +18,7 @@
  * @module block-clipboard-events
  */
 
-import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
+import { useIsomorphicLayoutEffect, type ShortcutBinding } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
@@ -40,20 +40,20 @@ import { BUILDER_CHROME_CLASS } from "./shell-state";
  * would stop the very event that carries the clipboard. Registered so Help,
  * which reads the editor's bindings, lists what these keys do.
  */
-export const CLIPBOARD_KEY_HELP = (
-  [
-    ["mod+c", "Copy the selected blocks"],
-    ["mod+x", "Cut the selected blocks"],
-    ["mod+v", "Paste copied blocks"],
-  ] as const
-).map(([keys, description]) => ({
-  keys,
-  description,
-  when: () => false,
-  whenTyping: false,
-  preventDefault: false,
-  run: () => undefined,
-}));
+export const CLIPBOARD_KEY_HELP: readonly ShortcutBinding[] = [
+  ["mod+c", "Copy the selected blocks"],
+  ["mod+x", "Cut the selected blocks"],
+  ["mod+v", "Paste copied blocks"],
+].map(
+  ([keys = "", description = ""]): ShortcutBinding => ({
+    keys,
+    description,
+    when: () => false,
+    whenTyping: false,
+    preventDefault: false,
+    run: () => undefined,
+  })
+);
 
 /**
  * Whether a clipboard event is the editor's to answer: raised in the canvas,
