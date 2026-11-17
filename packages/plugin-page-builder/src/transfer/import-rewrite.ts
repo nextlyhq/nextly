@@ -20,6 +20,8 @@
  * @module transfer/import-rewrite
  */
 import {
+  CONTENT_WIDTH_PROP,
+  contentWidthTokenOf,
   BASE_BREAKPOINT,
   isComponentInstance,
   isTokenRef,
@@ -144,9 +146,16 @@ function rewriteNode(
     next.props = rewritePlacement(node.props, maps, lookups);
     return next;
   }
+  // A container's own content width names a variable, mapped as a style's is.
+  if (contentWidthTokenOf(node) !== undefined) {
+    next.props = {
+      ...node.props,
+      [CONTENT_WIDTH_PROP]: rewriteTokens(node.props[CONTENT_WIDTH_PROP], maps),
+    };
+  }
   const mediaProps = lookups.mediaProps(node.type);
   if (mediaProps.length === 0) return next;
-  const props = { ...node.props };
+  const props = { ...next.props };
   for (const prop of mediaProps) {
     const media = mediaIdOf(props[prop]);
     if (media !== undefined) props[prop] = mapped(maps.media, media);

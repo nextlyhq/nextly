@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { panelLabel } from "./editor-rail";
 import { EDITOR_WORDS } from "./editor-words";
 import { inspectorTabLabels } from "./inspector-panel";
-import { RAIL_GROUPS } from "./shell-state";
+import { LEFT_PANELS } from "./shell-state";
 
 describe("the editor's words", () => {
   it("names its places with the agreed words, spelled once", () => {
@@ -26,7 +26,7 @@ describe("the editor's words", () => {
   it("names every rail panel from the catalogue", () => {
     // Read through the rail's own function, so a label typed beside the
     // catalogue instead of read from it fails here.
-    for (const panel of [...RAIL_GROUPS.top, ...RAIL_GROUPS.bottom]) {
+    for (const panel of LEFT_PANELS) {
       expect(panelLabel(panel)).toBe(EDITOR_WORDS[panel]);
     }
   });
@@ -35,6 +35,7 @@ describe("the editor's words", () => {
     expect(inspectorTabLabels()).toEqual([
       EDITOR_WORDS.content,
       EDITOR_WORDS.style,
+      EDITOR_WORDS.advanced,
     ]);
   });
 });

@@ -660,12 +660,7 @@ export function welcomePageDocument(
     kind: "page",
     nodes: welcomePageBody(cardId),
   };
-  const plan = planInsertPattern(
-    body,
-    pattern,
-    { index: 0 },
-    nesting
-  );
+  const plan = planInsertPattern(body, pattern, { index: 0 }, nesting);
   if (plan.problem !== undefined) {
     throw new Error(
       `[seed] the hero pattern could not be inserted: ${plan.problem}`

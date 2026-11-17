@@ -640,6 +640,10 @@ export {
   searchVariableGroups,
   variableMatchesByTab,
 } from "./tokens-studio";
+// How many of the Styles tab's styles a search matches, by the tab's own rule,
+// and the way a host hands the tab its search.
+export { stylesTabMatches } from "./styles-tab-matches";
+export { SharedStylesHostSearch } from "./shared-styles-panel";
 export type { DesignTab, VariableGroup } from "./tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.

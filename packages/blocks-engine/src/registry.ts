@@ -593,7 +593,6 @@ function assertKnownSupports(
   }
 }
 
-
 /**
  * What reads a registry: its blocks, its supports, and the views validation,
  * nesting, slot defaults and migration take. A route or a check is handed

@@ -1776,3 +1776,37 @@ describe("a Design tab's view of the variables", () => {
     );
   });
 });
+
+describe("renaming from the keyboard", () => {
+  it("opens a row's editor on F2 with its name ready to type over", async () => {
+    render(<Hosted tokens={SITE} />);
+    const brand = row(/^Brand/);
+    brand.focus();
+    fireEvent.keyDown(brand, { key: "F2" });
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name") as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    expect(name.selectionStart).toBe(0);
+    expect(name.selectionEnd).toBe(name.value.length);
+  });
+
+  it("closes the editor on Escape and hands focus back to its row", async () => {
+    render(<Hosted tokens={SITE} />);
+    const brand = row(/^Brand/);
+    brand.focus();
+    fireEvent.keyDown(brand, { key: "F2" });
+    const editor = await screen.findByRole("dialog");
+    const name = within(editor).getByLabelText("Name");
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    fireEvent.keyDown(name, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(row(/^Brand/)));
+  });
+
+  it("offers no rename on F2 where the variables are read-only", () => {
+    render(<Hosted tokens={SITE} readOnly />);
+    const brand = row(/^Brand/);
+    fireEvent.keyDown(brand, { key: "F2" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});

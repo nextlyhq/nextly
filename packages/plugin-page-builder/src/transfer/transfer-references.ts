@@ -16,6 +16,7 @@
  */
 import {
   bindablePropKind,
+  contentWidthTokenOf,
   imageValueOf,
   isComponentInstance,
   isPlainRecord,
@@ -158,13 +159,19 @@ export function collectStyleReferences(
   });
 }
 
-function collectNodeReferences(
+/**
+ * What a node's look names: the variables and breakpoints in its styles, the
+ * variable its own content width names, its shared styles, and the devices it
+ * is hidden on.
+ */
+function collectLookReferences(
   node: BlockNode,
-  into: TransferReferences,
-  mediaProps: (type: string) => readonly string[],
-  imageExposures: ((componentId: string) => ReadonlySet<string>) | undefined
+  into: TransferReferences
 ): void {
   collectStyleReferences(node.styles, into);
+  // A container's own content width names a variable the compiler writes.
+  const ownWidth = contentWidthTokenOf(node);
+  if (ownWidth !== undefined) into.tokens.add(ownWidth);
   for (const id of node.classes ?? []) {
     if (typeof id === "string" && id !== "") into.classes.add(id);
   }
@@ -173,6 +180,15 @@ function collectNodeReferences(
     for (const breakpoint of Object.keys(devices))
       into.breakpoints.add(breakpoint);
   }
+}
+
+function collectNodeReferences(
+  node: BlockNode,
+  into: TransferReferences,
+  mediaProps: (type: string) => readonly string[],
+  imageExposures: ((componentId: string) => ReadonlySet<string>) | undefined
+): void {
+  collectLookReferences(node, into);
   const props = isRecord(node.props) ? node.props : {};
   if (isComponentInstance(node)) {
     collectPlacement(props, into, imageExposures);
