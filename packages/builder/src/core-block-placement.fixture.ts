@@ -383,13 +383,6 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/image",
-    setting: "loading",
-    tab: "content",
-    section: "Image",
-    label: "Loading",
-  },
-  {
-    block: "core/image",
     setting: "whenClicked",
     tab: "content",
     section: "When clicked",
@@ -429,6 +422,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     tab: "content",
     section: "Caption",
     label: "Caption",
+  },
+  {
+    block: "core/image",
+    setting: "loading",
+    tab: "advanced",
+    section: "HTML",
+    label: "Load right away",
   },
   {
     block: "core/image",

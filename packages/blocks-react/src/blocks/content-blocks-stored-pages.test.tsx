@@ -192,12 +192,18 @@ describe("the settings added beside them", () => {
     "core/column",
     "core/card",
     "core/button",
+    "core/image",
   ])("offer %s a shadow", name => {
     expect(offered(name)).toContain("boxShadow");
   });
 
   it.each(["core/heading", "core/list"])("offer %s a background", name => {
     expect(offered(name)).toContain("backgroundColor");
+  });
+
+  it("offer an Image the text and colour its caption takes", () => {
+    expect(offered("core/image")).toContain("fontSize");
+    expect(offered("core/image")).toContain("color");
   });
 
   it("offer a Divider its line, and no text colour", () => {

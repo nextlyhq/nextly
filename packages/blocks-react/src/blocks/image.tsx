@@ -910,19 +910,22 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
     decorative: { label: "Decorative, no alt text", type: "checkbox" },
+    // How the browser fetches the picture: an HTML detail, so in Advanced ›
+    // HTML. Drawn as one switch named by `eager`'s words: two states with a
+    // safe default are a yes-or-no question. The stored values stay as they
+    // are.
     loading: {
-      label: "Loading",
+      label: "Load right away",
       optionLabels: {
         lazy: "Load when near the screen",
-        eager: "Load immediately",
+        eager: "Load right away",
       },
-      // Drawn as one switch named by `eager`'s words: two states with a safe
-      // default are a yes-or-no question. The stored values stay as they are.
       display: "switch",
       switchOn: "eager",
-      hint: "Turn on for images at the top of the page.",
+      hint: "For images near the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
+      group: "advanced",
     },
     // What a click does, with the link it follows beside it in the same
     // section: the editor draws the link's settings only while Link is
@@ -981,10 +984,14 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // its choices: upload, the media library, or a link.
   example: { props: {} },
   supports: {
+    // Text and its colour style the caption, which inherits them.
+    typography: true,
+    color: true,
     spacing: true,
     dimensions: true,
     border: true,
     effects: true,
+    shadow: true,
     position: true,
   },
   // Interactive content while it links or enlarges, so a link (a linked box
