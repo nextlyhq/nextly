@@ -57,6 +57,8 @@ interface Seeded {
   setTitle: string;
   starter: string;
   page: string;
+  /** A page of its own, so the first test's open editor holds no lock on it. */
+  forAuthor: string;
 }
 
 let seeded: Seeded | undefined;
@@ -162,29 +164,34 @@ async function seed(page: Page): Promise<Seeded> {
   // Read after the component is published: a site's first published header
   // may fill the default, and the starter is then put back.
   const start = await defaultWithStarter(page);
-  const pageId = await idOf(
-    await api.post(`${API}/collections/pages/entries`, {
-      data: {
-        title: `Use a component ${STAMP}`,
-        slug: PAGE_SLUG,
-        status: "published",
-        content: {
-          formatVersion: 1,
-          kind: "page",
-          nodes: [
-            {
-              id: "body",
-              type: "core/heading",
-              version: 1,
-              props: { text: "Page body", level: "h1" },
-            },
-          ],
+  const pageNamed = async (slug: string) =>
+    idOf(
+      await api.post(`${API}/collections/pages/entries`, {
+        data: {
+          title: `Use a component ${slug}`,
+          slug,
+          status: "published",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "body",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Page body", level: "h1" },
+              },
+            ],
+          },
         },
-      },
-    }),
-    "creating the page"
-  );
-  seeded = { ...start, page: pageId };
+      }),
+      `creating ${slug}`
+    );
+  seeded = {
+    ...start,
+    page: await pageNamed(PAGE_SLUG),
+    forAuthor: await pageNamed(`${PAGE_SLUG}-author`),
+  };
   return seeded;
 }
 
@@ -303,7 +310,7 @@ test.describe("for an author who may not publish header & footer sets", () => {
   });
 
   test("shows the starter's card without Use a component", async ({ page }) => {
-    const { page: id, set, starter } = await seed(page);
+    const { forAuthor: id, set, starter } = await seed(page);
     // The starter is back in the default, as a fresh site has it.
     await gotoAdmin(page, "/");
     await putHeader(page, set, starter);
