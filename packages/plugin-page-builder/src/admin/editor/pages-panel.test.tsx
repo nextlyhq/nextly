@@ -160,6 +160,9 @@ function Harness() {
       <output aria-label="Settings request">
         {mount.settingsRequest?.count ?? "none"}
       </output>
+      <button type="button" onClick={mount.revealSets}>
+        Reveal sets
+      </button>
       {mount.renderPagesPanel({ unsavedWork })}
     </>
   );
@@ -417,6 +420,21 @@ describe("the panel's groups", () => {
         .getByRole("button", { name: "Pages, 1" })
         .getAttribute("aria-expanded")
     ).toBe("true");
+  });
+});
+
+describe("showing the sets", () => {
+  it("unfolds the Header & footer group when asked to show the sets", async () => {
+    kept.set("nx-pb-pages-folds:ada", JSON.stringify(["header-footer"]));
+    Element.prototype.scrollIntoView = vi.fn();
+    await mount([item("a", "Home")]);
+    await userEvent.click(screen.getByRole("button", { name: "Reveal sets" }));
+    await vi.waitFor(() =>
+      expect(JSON.parse(kept.get("nx-pb-pages-folds:ada") ?? "[]")).toEqual([])
+    );
+    await vi.waitFor(() =>
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+    );
   });
 });
 
