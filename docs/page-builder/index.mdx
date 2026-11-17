@@ -27,11 +27,18 @@ It ships as a plugin, `@nextlyhq/plugin-page-builder`.
   fill it in for an icon that says something on its own. A linked icon is named by its
   label, or by the icon's name when there is none. The page stores the icon's id
   (`lucide:star`); an id the set no longer draws renders nothing, and the editor says so.
-- **Accordion titles and icons.** An accordion's **Titles as** (Content tab) draws each
-  section's title as text or as a heading from level 2 to 6, and its **Icon** and
-  **Position** (Style tab) choose a chevron, a plus, no icon or the browser's own triangle,
-  before or after the title. Some screen readers announce a section title as the button's
+- **Accordion titles and icons.** An accordion's **Titles as** (Content tab, Behaviour)
+  draws each section's title as plain text or as a heading from level 2 to 6, and its
+  **Icon** and **Icon position** (Style tab) choose a chevron, a plus, no icon or the
+  browser's own triangle, before or after the title. Some screen readers announce a section title as the button's
   text rather than as a heading; the section still opens and closes as normal.
+- **Columns, sections and linked containers.** A Columns block picks its columns in its
+  Content tab: 2 equal, 3 equal, 4 equal, Wide left, Wide right or Wide middle, adding or
+  removing empty columns to match, and **Stack on** puts the columns one under another on
+  tablets and phones, on phones only, or never. A Section's **Height** (Style tab, Size) is
+  Fit content or Full screen. A Box or a Card can link as a whole to a page on this site or
+  to an address, opening in a new tab if you choose; its link relationship is under
+  Advanced, HTML.
 - **Your own blocks**, defined in code, which the page renderer takes beside the
   built-in ones.
 - **Per-breakpoint styling.** Style a block separately for each breakpoint: the Style tab
@@ -91,20 +98,22 @@ indexes every page and Single again, and until it has finished, counts read as "
 least" rather than as exact.
 
 Last, run `npx nextly generate:types`. It writes the file that registers the builder's
-screen with the admin, and that file also loads the editor's styles, so there is nothing
-to import by hand. In a project created before that file existed, import the generated
-file in your admin page, `src/app/admin/[[...params]]/page.tsx`; see
-[Admin UI](/docs/plugins/admin-ui).
+screen with the admin. The builder fetches its own stylesheet when one of its screens or
+fields opens, so there is nothing to import by hand. In a project created before that file
+existed, import the generated file in your admin page,
+`src/app/admin/[[...params]]/page.tsx`; see [Admin UI](/docs/plugins/admin-ui).
 
-An admin page that still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand
-keeps working: it loads the same stylesheet, once. You can remove the import.
+If your admin page still imports `@nextlyhq/plugin-page-builder/styles/editor.css` by hand,
+remove the import. The builder keeps working with it, but the import puts the editor's
+stylesheet on every admin screen, the sign-in page included, instead of only where the
+builder opens.
 
 ## In the admin
 
 The Page Builder has its own item in the admin's rail, right after **Forms** (after
 **Media** on a site without the form builder). Its panel lists the libraries pages are
-built from, each with how many you can see: **Patterns**, **Components**, **Layouts** and
-**Templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
+built from, each with how many you can see: **Saved sections**, **Components**, **Header & footer** and
+**Collection templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
 needs fixing.
 
 Clicking the item opens the **Page Builder** overview
@@ -145,8 +154,6 @@ anything it is drawn from, refreshes it.
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
 import type {
@@ -183,7 +190,6 @@ const route = createPublicBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   styleContext: {
     breakpoints: {
       viewport: [
@@ -213,6 +219,87 @@ export default route.ContentPage;
   least a `base` breakpoint.
 </Callout>
 
+The route draws the blocks your site registered, the core set and every block a plugin adds,
+custom ones included, with nothing passed: it reads them from the page builder of the site the
+process serves. A visitor reaching a page before anyone has opened the admin sees the same
+blocks. To draw a page with a set of your own, pass it as `blocks`
+(`createBlockResolver([...coreBlocks, myBlock])` from `@nextlyhq/blocks-react`); a resolver
+passed there is always the one used.
+
+### Images sized to where they appear
+
+<Callout type="info">
+  The `imageCopies` route option and `pageBuilderImageCopies()` are
+  **experimental**: their names and shape may change before they are marked
+  stable.
+</Callout>
+
+Add `media.copiesOf` to the route's reader and `imageCopies` to the route above, and a
+visitor downloads each image at about the size it is drawn, not at its upload size:
+
+```tsx
+// src/app/(frontend)/[...slug]/page.tsx
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderImageCopies } from "@nextlyhq/plugin-page-builder";
+import { getNextly } from "nextly";
+import type { NextlyContentReader } from "nextly/runtime";
+
+import nextlyConfig from "../../../../nextly.config";
+
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+const instance = () => getNextly({ config: nextlyConfig });
+
+// The reader above, whose media now also answers for an image's copies.
+const reader: NextlyContentReader & {
+  media: Pick<NextlyInstance["media"], "findByID" | "copiesOf">;
+} = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+    copiesOf: async args => (await instance()).media.copiesOf(args),
+  },
+};
+
+const route = createPublicBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  // Your route's other options stay as they are, its `styleContext` among them.
+  imageCopies: pageBuilderImageCopies(reader),
+});
+```
+
+The copies are the resized versions your site's media already keeps, from 96 to 1920
+pixels wide and never wider than the upload. With the option set:
+
+- **An Image block from the media library offers its copies with `srcset` and `sizes`.** How wide it is drawn on
+  each device comes from your breakpoints: the whole width at the top of the page,
+  shared out across a row of Columns, and narrowed by a width or maximum width the block
+  sets for itself on every device. No copy more than twice the widest of those is sent.
+- **The page's first block loads first.** The images in the first top-level block load at
+  once and with high priority. Every other image keeps its lazy loading.
+- **The first section's background image is sized and found early.** Where the first
+  top-level block sets a background image once, for every device and in its resting
+  state, at a size the box sets (`cover`, `contain` or a length), each device draws a
+  copy about twice its width. The page's `<head>` preloads
+  each copy for the viewports it is drawn at, so the browser starts on it before the
+  stylesheet arrives.
+- **Each image's copies are looked up once,** then kept until the image or its copies
+  change.
+
+The original is drawn as it always was when:
+
+- the route has no `imageCopies`;
+- the image is given by its address rather than picked from the media library, so its
+  width and height are not known; or your storage keeps no resized copies;
+- the upload is narrower than the smallest copy, or the lookup fails;
+- for the background, its address is not the media route's (`/api/media/<id>/raw`), so
+  no media item is named by it; it is drawn at the image's own size (no size, or
+  `auto`), which a narrower copy would shrink; or it changes by device or on hover, it
+  is layered with a gradient, or the block has custom CSS.
+
 ### One process, several sites
 
 A page reads everything through the `nextly` it is given: its entry, the lists and Singles it
@@ -220,6 +307,19 @@ shows, and the site settings, the site's name, address, logo and the time zone i
 filters use. A process serving several sites, each through an instance of its own, gives each
 route its own `nextly`, and each page shows its own site. Only a route given no `nextly` reads the
 process's registered instance.
+
+Bind each of those routes to its site's blocks too, with `blocks: blocksOf(builder)` from
+`@nextlyhq/plugin-page-builder`, where `builder` is that site's `pageBuilder()`. A route given
+no `blocks` reads the blocks of the process's registered instance. The same goes for
+`loadSiteStyle`, which takes the same `blocks`. One limit remains: a plugin that adds blocks in
+code from its `init` (`blockRegistry(ctx).register`) reaches the page builder whose site started
+last, because a process keeps one set of plugin services. Blocks a plugin declares under
+`contributes.declarations` reach each site's own page builder. And while two sites run at once,
+a save is judged by the field rules of the site that started last, for the same reason: a
+process keeps one set of field types. In a production build each route holds its own copy of
+the plugin, which never starts, so `blocksOf(builder)` and `namedQueriesOf(builder)` read the
+started site's through the instance there; on a process running two sites at once, that is the
+site that started last.
 
 Give each of those routes its own `cacheScope` too, such as the site's id. Every public read a
 route makes, its site settings among them, is cached under it, and two routes over different
@@ -336,8 +436,6 @@ published page would never show them. Styles a page already held there still sav
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx, serving the breakpoints the editor saved
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
@@ -372,7 +470,6 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   siteStyles: {
     read: () => loadSiteStyle({ nextly: reader }),
     // Named so that saving the site style refreshes cached pages.
@@ -605,7 +702,7 @@ deleted has no address left, so none of its entries is served, own design or not
 #### Collections made in the Schema Builder
 
 A collection made in the Schema Builder has no code to declare its address in, so
-its template stores it. Open **Templates** in the Page Builder's panel, open the
+its template stores it. Open **Collection templates** in the Page Builder's panel, open the
 collection's template and set its **Address**; once the template is published its
 entries are served there, with no restart. The same rules apply as to an address
 declared in code, and an address declared in code wins over a stored one. When you
@@ -629,9 +726,9 @@ collections and repeats its child blocks once per entry — a post list, a team 
 product row — without anyone writing a query. The developer decides which collections are
 available to it; the editor decides which entries it shows and what each one looks like.
 
-In the editor, the list's Content tab edits its query:
+In the editor, the list's Content tab edits its query, under **Entries**:
 
-- **Source**: a collection, or a to-many relation of the page's entry (on a collection's
+- **Show entries from**: a collection, or a to-many relation of the page's entry (on a collection's
   entry) or of each item of the list around it, such as a post's categories.
 - **Filters**: rows an entry must all meet, each read as one sentence, for example
   Title contains "build" or Published is on or after 1 Sept 2026. Only fields visitors can
@@ -639,13 +736,15 @@ In the editor, the list's Content tab edits its query:
 - **Sort**: one row per key, each with its direction in words (Newest first, A–Z, Highest
   first). Entries with the same values keep a fixed order, and entries with no value come
   last.
-- **How many**: Number of items (1 to 100), Skip the first, and Split into pages. Under
-  Number of items the selected list says how many entries match and how many show, for
+- **Entries shown**: How many (1 to 100), Skip, and Split into pages. Under How many the
+  selected list says how many entries match and how many show, for
   example "4 entries match, so 3 show.", counted as you read them on the canvas. Under
   Split into pages, while it is on, it says how many pages that makes, for example "24
   entries match, so 3 pages of 10." See [Splitting a list into pages](#splitting-a-list-into-pages).
-- **When nothing matches**: Canvas shows Entries or When empty, to design the list's empty
-  state, which visitors see when no entry matches.
+- **When nothing matches**: Preview the empty message, to design the list's empty state,
+  which visitors see when no entry matches.
+
+The list's HTML tag (Advanced, HTML) renders it as a generic box, a section or an article.
 
 A prop bound to the page's own entry or to a Single shows, on the canvas, the value you could
 see in the admin, your drafts included, read with your own access; one you may not read shows
@@ -665,7 +764,7 @@ set through the API with [`set-list-query`](/docs/page-builder/compose-through-t
 
 ### Splitting a list into pages
 
-Turn on **Split into pages** and the list shows Number of items entries on each page, each
+Turn on **Split into pages** and the list shows How many entries on each page, each
 page at its own address: the list on `/news` shows its first page there, the second at
 `/news/page/2`, the third at `/news/page/3`, and so on. Under its entries the list draws
 links to the previous and next pages and the page numbers, as ordinary links a visitor can
@@ -673,7 +772,7 @@ share and a search engine can follow. The links are parts of the list (Pages, Pa
 Current page and Page gap), so the Style tab styles them as it styles the list; by default
 they are outlined boxes, with the current page filled in the site's primary colour.
 
-- Skip the first is applied once, before paging: with 25 entries, 10 skipped and 10 on a
+- Skip is applied once, before paging: with 25 entries, 10 skipped and 10 on a
   page, page 1 shows entries 11 to 20 and page 2 entries 21 to 25, the last.
 - `/news/page/1` redirects permanently to `/news`, so the first page has one address. A
   number past the last page, or written any other way (`/page/0`, `/page/02`,
@@ -690,7 +789,7 @@ One list on a page can be split into pages, so the page's address names one list
 The save is refused, naming the reason, for a second list split into pages on the same
 page, a list split into pages inside another list (it repeats once per outer entry, with no
 address of its own), a list of related entries (they have no count of pages), and a list in
-a component or a Layout region (each shows on many pages). A list on a Single's page shows
+a component or a header & footer set region (each shows on many pages). A list on a Single's page shows
 its first page only, since a Single's route serves no later pages.
 
 The loop reads through the route's **public reader**, which every blocks route binds to each

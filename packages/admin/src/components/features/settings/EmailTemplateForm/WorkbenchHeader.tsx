@@ -127,6 +127,21 @@ function StateLine({
   isActive: boolean;
 }) {
   const nameOwner = useOwnerName();
+  const senders = [
+    ...(record.sentBy?.declared ?? []),
+    ...(record.sentBy?.referenced ?? []),
+  ];
+  const summary =
+    senders.length > 0 ? senders.join(", ") : (record.description ?? "");
+  // Said beside whatever was checked, and instead of a plain description
+  // when nothing was: an unanswered plugin must not read as quiet. A blank
+  // template with nothing checked says only that.
+  const incomplete = record.referencesComplete === false;
+  const summaryText = incomplete
+    ? [summary, "some senders couldn't be checked"]
+        .filter(part => part.length > 0)
+        .join(" · ")
+    : summary;
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
       <Badge variant="outline" className="shrink-0">
@@ -140,8 +155,8 @@ function StateLine({
       <span className="shrink-0" data-testid="workbench-owner">
         {nameOwner(record)}
       </span>
-      {tier === "desktop" && record.description ? (
-        <span className="truncate">· {record.description}</span>
+      {tier === "desktop" && summaryText ? (
+        <span className="truncate">· {summaryText}</span>
       ) : null}
     </div>
   );

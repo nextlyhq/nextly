@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CSS_NUMBER,
+  lineHeightAsPixels,
   measurementOf,
   scrubbedValue,
   scrubOrigin,
@@ -294,6 +295,40 @@ describe("units offered", () => {
     expect(unitChoicesFor(OPACITY)).toEqual([]);
   });
 
+  it("offers the small, dynamic and large screen heights on a height", () => {
+    // Where a phone's moving toolbar matters: `100vh` is taller than the
+    // screen while the toolbar shows, and `svh` is what Full screen writes.
+    for (const property of ["height", "minHeight", "maxHeight"]) {
+      const leaf = entry(property).shape as unknown as StyleLeaf;
+      expect(unitChoicesFor(leaf), property).toEqual([
+        "px",
+        "rem",
+        "em",
+        "vw",
+        "vh",
+        "svh",
+        "dvh",
+        "lvh",
+        "%",
+      ]);
+    }
+  });
+
+  it("keeps the screen-height variants off every other length", () => {
+    // Still typeable there, as any unit the engine accepts is; only the menu
+    // stays short.
+    for (const leaf of [
+      PADDING,
+      MARGIN,
+      entry("width").shape as unknown as StyleLeaf,
+    ]) {
+      const units = unitChoicesFor(leaf);
+      for (const unit of ["svh", "dvh", "lvh"]) {
+        expect(units, leaf.cssProperty).not.toContain(unit);
+      }
+    }
+  });
+
   it("carries the number across a unit change rather than converting it", () => {
     // A conversion would need the font size and the viewport, neither knowable
     // from here. `16px` becoming `16rem` is what was asked for; inventing
@@ -468,5 +503,19 @@ describe("where a drag on a label starts", () => {
   it("does not start on text that is not one measurement", () => {
     expect(scrubOrigin(MARGIN, "auto", "px", undefined)).toBeUndefined();
     expect(scrubOrigin(PADDING, "10px 20px", "px", undefined)).toBeUndefined();
+  });
+});
+
+describe("a line height that reads as pixels", () => {
+  it("is a bare number above 4, offered as that many pixels", () => {
+    expect(lineHeightAsPixels("20")).toBe("20px");
+    expect(lineHeightAsPixels("4.5")).toBe("4.5px");
+    expect(lineHeightAsPixels(" 24 ")).toBe("24px");
+  });
+
+  it("is never 4 or under, a value with a unit, or a function", () => {
+    for (const value of ["4", "1.5", "0", "-6", "20px", "150%", "calc(20px)"]) {
+      expect(lineHeightAsPixels(value), value).toBeUndefined();
+    }
   });
 });

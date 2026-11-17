@@ -114,7 +114,7 @@ const SURFACES: ReadonlyArray<{
       await expect(page.getByRole("tree", { name: "Layers" })).toBeVisible();
     },
   },
-  ...["Variables", "Shared styles", "Fonts"].map(tab => ({
+  ...["Colours", "Type", "Spacing", "Styles"].map(tab => ({
     name: `Design, ${tab}`,
     open: async (page: Page) => {
       await railButton(page, "Design").click();
@@ -125,10 +125,10 @@ const SURFACES: ReadonlyArray<{
     },
   })),
   {
-    name: "the Variables add menu",
+    name: "the Spacing add menu",
     open: async page => {
       await railButton(page, "Design").click();
-      await page.getByRole("tab", { name: "Variables", exact: true }).click();
+      await page.getByRole("tab", { name: "Spacing", exact: true }).click();
       await page
         .getByRole("button", { name: "Add spacing, radius or shadow" })
         .click();
@@ -147,9 +147,7 @@ const SURFACES: ReadonlyArray<{
       if ((await typography.getAttribute("data-state")) !== "open") {
         await typography.locator("button").first().click();
       }
-      await page
-        .getByRole("button", { name: "More typography properties" })
-        .click();
+      await page.getByRole("button", { name: "More text properties" }).click();
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },

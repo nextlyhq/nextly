@@ -119,6 +119,13 @@ export interface LayoutChoice {
    */
   readonly regions: readonly LayoutRegion[];
   /**
+   * Whether the set holds no header and no footer: its published areas name
+   * no component, or, for a set never published, its own areas name none.
+   * Choosing one would be the same as "No header or footer", so the picker
+   * offers it only to a page that already names it.
+   */
+  readonly isEmpty: boolean;
+  /**
    * Where the Layout stands with Remove Layout, when it is behind its fence:
    * being removed now, or unpublished by it and not published since. A page
    * write naming it is refused, so the picker offers it no longer. Absent for

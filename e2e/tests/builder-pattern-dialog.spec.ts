@@ -94,8 +94,8 @@ test.describe("the save-as-pattern dialog", () => {
       .locator('[data-nx-node="pattern-source"]')
       .first()
       .click();
-    await page.getByRole("button", { name: "Save as pattern" }).click();
-    const dialog = page.getByRole("dialog", { name: "Save as pattern" });
+    await page.getByRole("button", { name: "Save as section…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Save as section" });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel("Name").fill("Heading from the pattern test");
     // Required: without a granularity the browser's own validation stops the

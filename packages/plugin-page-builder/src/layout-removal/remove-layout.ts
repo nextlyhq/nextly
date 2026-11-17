@@ -308,8 +308,8 @@ async function dryRun(
     !check.complete;
   return {
     message: blocked
-      ? "This Layout can't be removed yet."
-      : "This Layout can be removed.",
+      ? "This header & footer set can't be removed yet."
+      : "This header & footer set can be removed.",
     item: { ...request, check },
   };
 }
@@ -635,8 +635,8 @@ async function settle(
   const still = await stillUsedAfterTheDelete(deps, layoutId, settled.live);
   const done =
     request.action === "delete"
-      ? "The Layout was deleted."
-      : "The Layout was unpublished.";
+      ? "The header & footer set was deleted."
+      : "The header & footer set was unpublished.";
   if (still !== null) {
     return {
       message: movedPages ? done : still.message,

@@ -66,7 +66,7 @@ describe("VersionDiffView, reporting what it has shown", () => {
 
     expect(await screen.findByText("Views")).toBeInTheDocument();
     expect(onShown).toHaveBeenCalledTimes(1);
-    expect(onShown).toHaveBeenCalledWith({ from: 1, to: 2 });
+    expect(onShown).toHaveBeenCalledWith({ from: 1, to: 2, locale: null });
   });
 
   it("reports nothing when the comparison fails", async () => {
@@ -93,7 +93,7 @@ describe("VersionDiffView, reporting what it has shown", () => {
       <VersionDiffView scope={scope} from={1} to={2} onShown={onShown} />
     );
     await waitFor(() =>
-      expect(onShown).toHaveBeenCalledWith({ from: 1, to: 2 })
+      expect(onShown).toHaveBeenCalledWith({ from: 1, to: 2, locale: null })
     );
 
     rerender(
@@ -104,7 +104,19 @@ describe("VersionDiffView, reporting what it has shown", () => {
     );
 
     expect(screen.getByText("Views")).toBeInTheDocument();
-    expect(onShown).not.toHaveBeenCalledWith({ from: 2, to: 3 });
+    expect(onShown).not.toHaveBeenCalledWith({ from: 2, to: 3, locale: null });
     expect(onShown).toHaveBeenLastCalledWith(null);
+  });
+
+  it("reports the language the comparison's answer names", async () => {
+    // The host's address may name no language; the answer always does.
+    diffSpy.mockResolvedValue({ ...answer(1, 2), locale: "fr" });
+    const onShown = vi.fn();
+
+    render(<VersionDiffView scope={scope} from={1} to={2} onShown={onShown} />);
+
+    await waitFor(() =>
+      expect(onShown).toHaveBeenCalledWith({ from: 1, to: 2, locale: "fr" })
+    );
   });
 });

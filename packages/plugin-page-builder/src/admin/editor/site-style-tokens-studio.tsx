@@ -14,10 +14,13 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
+  DESIGN_TAB_GROUPS,
   TokensPanel,
+  type DesignTab,
   type TokensPanelProps,
   type VariablesPreview,
   useVariablesHeader,
+  variableMatchesByTab,
 } from "@nextlyhq/builder/shell";
 import { useCan } from "@nextlyhq/plugin-sdk/client";
 import {
@@ -36,14 +39,17 @@ import {
   tokenOverrideOf,
   tokenSaveOutcome,
 } from "../../site-style";
-import { readSiteStyleRecord } from "../../site-style-record";
+import {
+  readSiteStyleRecord,
+  tokensKeptAfterRefusal,
+} from "../../site-style-record";
 import { sameStoredValue } from "../../stored-json";
 import { conflictWords } from "../conflict-words";
 import { useHeldSiteStyle, useSaveSiteStyle } from "../site-style-client";
 import { useShown } from "../use-shown";
 import { useVariablesClient } from "../variables-client";
 
-import { useDesignHeaderSlot } from "./design-panel";
+import { useDesignBrowse, useDesignHeaderSlot } from "./design-panel";
 
 /**
  * The tokens studio, and the state that belongs to it rather than to the editor.
@@ -144,6 +150,7 @@ export function TokensStudio({
     readOnly: !mayChange,
     preview,
   });
+  useReportVariableMatches(edits ?? editable);
   const studio: TokensPanelProps = {
     tokens: edits ?? editable,
     supplied: baseline,
@@ -257,14 +264,25 @@ function useTokenCommits(
      * meanwhile is kept rather than dropped by a copy that never saw it.
      */
     const shownBefore = shownNow() ?? editable;
-    const base =
-      shownBefore === undefined
-        ? undefined
-        : tokenOverrideOf(baseline, shownBefore);
     show(next);
     setIssue(undefined);
     setConflict(undefined);
+    send(next, shownBefore, { hold: true, keepIssue: false });
+  };
+
+  /*
+   * Saves a set shown, and settles its answer. A refusal of the latest edit
+   * takes back only the variables refused: the rest of the edit is shown
+   * and saved again at once, and the reason stays said while it is.
+   */
+  const send = (
+    next: SiteTokenSet,
+    from: SiteTokenSet | undefined,
+    how: { hold: boolean; keepIssue: boolean }
+  ): void => {
     latest.current = next;
+    const base =
+      from === undefined ? undefined : tokenOverrideOf(baseline, from);
     /*
      * Only what DIFFERS from the site's own defaults. `merged` is what the
      * canvas compiles, so saving it whole would copy every config token into
@@ -272,10 +290,44 @@ function useTokenCommits(
      */
     const sent = tokenOverrideOf(baseline, next);
     void save("tokens", sent, {
-      hold: true,
+      hold: how.hold,
       ...(base === undefined ? {} : { base }),
     }).then(result => {
-      settleTokenSave(result, next, { latest, persisted }, show, setIssue);
+      const kept =
+        result.saved || latest.current !== next
+          ? undefined
+          : // Judged against what is known stored: the last set a save
+            // stored, or the set as loaded before any save here.
+            partlyKept(next, persisted.current ?? editable ?? null);
+      if (kept !== undefined) {
+        show(kept);
+        // Said as any refusal of the latest edit is said.
+        const said = tokenSaveOutcome(
+          false,
+          result.issues,
+          next,
+          next,
+          persisted.current
+        ).issue;
+        setIssue(said ?? undefined);
+        send(kept, persisted.current ?? undefined, {
+          hold: false,
+          keepIssue: true,
+        });
+        return;
+      }
+      settleTokenSave(
+        result,
+        next,
+        { latest, persisted },
+        show,
+        // A save of what a refusal kept leaves the refusal's reason said.
+        how.keepIssue
+          ? (issue: string | undefined) => {
+              if (issue !== undefined) setIssue(issue);
+            }
+          : setIssue
+      );
       adoptMergedTokens(
         result,
         sent,
@@ -399,6 +451,18 @@ function useSharedStyleOpening(onShowSharedStyles: (() => void) | undefined): {
 }
 
 /**
+ * What a refused edit keeps once only its refused variables are taken back,
+ * or nothing when that is everything, and the set stored before stands.
+ */
+function partlyKept(
+  refused: SiteTokenSet,
+  persisted: SiteTokenSet | null
+): SiteTokenSet | undefined {
+  const kept = tokensKeptAfterRefusal(refused, persisted);
+  return kept === null || kept === persisted ? undefined : kept;
+}
+
+/**
  * What a token save's answer does to the studio: the set it shows, the line
  * it says, and the last set known to be stored. `tokenSaveOutcome` decides;
  * this applies.
@@ -490,22 +554,60 @@ function absenceOf(pending: boolean): "pending" | "failed" {
 const VariablesStudio = createContext<TokensPanelProps | null>(null);
 
 /** The Variables tab: the studio's variables, in the panel its frame holds. */
-export function VariablesTab(): React.JSX.Element | null {
+export function VariablesTab({
+  tab,
+}: {
+  /** The Design tab this is: its groups are the ones listed. */
+  tab: Exclude<DesignTab, "styles">;
+}): React.JSX.Element | null {
   const studio = useContext(VariablesStudio);
-  return studio === null ? null : <TokensPanel {...studio} />;
+  const { search, setSearch, searchRef, folds } = useDesignBrowse();
+  return studio === null ? null : (
+    <TokensPanel
+      {...studio}
+      groups={DESIGN_TAB_GROUPS[tab]}
+      search={search}
+      onSearch={setSearch}
+      searchRef={searchRef}
+      {...(folds === undefined ? {} : { folds })}
+    />
+  );
+}
+
+/**
+ * How many variables the panel's search matches in each tab, reported to
+ * the panel for the counts beside its tab names, whichever tab is open: the
+ * studio holds the variables for all of them.
+ */
+function useReportVariableMatches(tokens: SiteTokenSet | undefined): void {
+  const { search, reportMatches } = useDesignBrowse();
+  const matches = useMemo(
+    () => variableMatchesByTab(tokens, search),
+    [tokens, search]
+  );
+  useEffect(() => {
+    reportMatches(matches);
+  }, [matches, reportMatches]);
 }
 
 /**
  * The style the tab opens as it mounts, sent from the Variables tab, read
  * once and then taken from the studio, so the tab chosen again later opens
  * on its list.
+ *
+ * The Design search is cleared for the trip: kept from the tab the author
+ * came from, it matched the variable, and could hide the style they were
+ * sent to.
  */
 export function useStyleToOpen(): string | undefined {
   const toOpen = useContext(SharedStyleToOpen);
   const [initial] = useState(toOpen.id);
   const { taken } = toOpen;
+  const { setSearch } = useDesignBrowse();
   useEffect(() => {
-    if (initial !== undefined) taken();
-  }, [initial, taken]);
+    if (initial === undefined) return;
+    setSearch("");
+    taken();
+  }, [initial, taken, setSearch]);
   return initial;
 }

@@ -222,6 +222,8 @@ export const emailDeliveriesPg = pgTable(
     index("email_deliveries_status_created_idx").on(t.status, t.createdAt),
     // One provider's history, newest first.
     index("email_deliveries_provider_idx").on(t.providerId, t.createdAt),
+    // Deliveries by provider type, which outlives a deleted provider.
+    index("email_deliveries_provider_type_idx").on(t.providerType, t.createdAt),
     // The shape a retention pass needs: one class at a time, oldest first.
     // Present with the column and unused for the same reason.
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
@@ -229,6 +231,13 @@ export const emailDeliveriesPg = pgTable(
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
+    // One template's history, and when each template was last sent: the
+    // Activity list's template filter, and the Messages list's "Last sent".
+    index("email_deliveries_template_idx").on(
+      t.templateSlug,
+      t.status,
+      t.createdAt
+    ),
   ]
 );
 

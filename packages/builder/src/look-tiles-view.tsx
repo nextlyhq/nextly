@@ -19,7 +19,6 @@ import * as React from "react";
 
 import { siteBaseOf } from "./block-look-rows";
 import type { EditorState } from "./editor-state";
-import { variationLabel } from "./inserter";
 import {
   boundLooksOf,
   lookChoice,
@@ -30,6 +29,7 @@ import {
   wornLook,
   type LookTile,
 } from "./look-tiles";
+import { variationLabel } from "./panels/add/inserter";
 import { radioGroupStep } from "./roving-radios";
 
 export interface LookTilesProps {

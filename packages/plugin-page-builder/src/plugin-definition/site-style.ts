@@ -5,7 +5,7 @@
  * the routes for the stored site style, the font catalogue, the shared styles
  * and the variables.
  */
-import { allBlocks, DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 
 import { classUsageIndex } from "../class-usage-reconcile";
@@ -36,6 +36,7 @@ import {
   variableRoutes,
   type VariableCheckSetup,
 } from "../variables-routes";
+
 import type { InitContext, siteStyleReads } from "./install-context";
 import { componentStoreOf } from "./options";
 import type { Definition } from "./state";
@@ -108,7 +109,7 @@ export function installSiteStyleLocks(
       tokenUsageIndex,
       ctx.services.jobs
     ),
-    blocks: allBlocks,
+    blocks: () => def.blocks.all(),
     documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
     limits: opts.limits ?? DEFAULT_LIMITS,
     pathOf: () => "tokens",
@@ -174,7 +175,7 @@ export function routesForSiteStyle(
       usage: ctx =>
         usageSourceOf(ctx.self.collections, tokenUsageIndex, ctx.services.jobs),
       // A block type's own default styles are a use, read per request.
-      blocks: allBlocks,
+      blocks: () => def.blocks.all(),
       inUse: (ctx, readNamed) =>
         variableRemovalChecks({
           usage: usageSourceOf(
@@ -182,7 +183,7 @@ export function routesForSiteStyle(
             tokenUsageIndex,
             ctx.services.jobs
           ),
-          blocks: allBlocks,
+          blocks: () => def.blocks.all(),
           documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
           limits: opts.limits ?? DEFAULT_LIMITS,
           uncovered: uncoveredPagesOf(ctx),

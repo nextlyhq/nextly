@@ -2,14 +2,17 @@
  * A Columns row's layout as tiles, and where it stacks: what each choice
  * writes, and which empty columns it adds or removes with it.
  *
- * Every choice writes Style values on the row and nothing on its columns: a
- * layout is its `grid-template-columns` at the edited device, and stacking is
- * the row laid out as a flex column at a device and below. Column order is
- * never written per column, so moving one never leaves a stale order behind.
+ * A Content control: how many columns a row holds is its structure. Every
+ * choice writes the row's own style values, whatever the Style tab is
+ * editing, and nothing on its columns: a layout is its
+ * `grid-template-columns`, and stacking is the row laid out as a flex column
+ * at a device and below. Column order is never written per column, so moving
+ * one never leaves a stale order behind.
  *
  * @module columns-layout
  */
 import {
+  BASE_BREAKPOINT,
   getBlock,
   makeNode,
   type BlockNode,
@@ -18,7 +21,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { offeredTiers } from "./canvas-width";
+import { offeredTiers } from "./canvas/canvas-width";
 import type { BuilderOp } from "./op-vocabulary";
 import {
   readStyleValue,
@@ -43,41 +46,18 @@ export interface ColumnsLayout {
   readonly tracks: readonly number[];
 }
 
+/**
+ * The six layouts, named for what an author sees rather than as ratios: the
+ * same tiles the first-add picker offers. A template stored that none of them
+ * writes (`1fr 3fr`) keeps its meaning and reads as the row's own.
+ */
 export const COLUMNS_LAYOUTS: readonly ColumnsLayout[] = [
   {
-    key: "auto",
-    label: "Auto",
-    template: undefined,
-    count: undefined,
-    tracks: [1, 1],
-  },
-  {
-    key: "50-50",
-    label: "50 / 50",
+    key: "2",
+    label: "2 equal",
     template: "1fr 1fr",
     count: 2,
     tracks: [1, 1],
-  },
-  {
-    key: "33-67",
-    label: "33 / 67",
-    template: "1fr 2fr",
-    count: 2,
-    tracks: [1, 2],
-  },
-  {
-    key: "67-33",
-    label: "67 / 33",
-    template: "2fr 1fr",
-    count: 2,
-    tracks: [2, 1],
-  },
-  {
-    key: "25-75",
-    label: "25 / 75",
-    template: "1fr 3fr",
-    count: 2,
-    tracks: [1, 3],
   },
   {
     key: "3",
@@ -93,9 +73,30 @@ export const COLUMNS_LAYOUTS: readonly ColumnsLayout[] = [
     count: 4,
     tracks: [1, 1, 1, 1],
   },
+  {
+    key: "wide-left",
+    label: "Wide left",
+    template: "2fr 1fr",
+    count: 2,
+    tracks: [2, 1],
+  },
+  {
+    key: "wide-right",
+    label: "Wide right",
+    template: "1fr 2fr",
+    count: 2,
+    tracks: [1, 2],
+  },
+  {
+    key: "wide-middle",
+    label: "Wide middle",
+    template: "1fr 2fr 1fr",
+    count: 3,
+    tracks: [1, 2, 1],
+  },
 ];
 
-/** The template a row's block gives it by default: what Auto returns it to. */
+/** The template a row's block gives it by default: equal columns that wrap. */
 export function defaultTemplate(row: BlockNode): string | undefined {
   const base = (
     getBlock(row.type)?.baseStyles as
@@ -106,20 +107,29 @@ export function defaultTemplate(row: BlockNode): string | undefined {
 }
 
 /**
- * The tile a template is: `auto` for none or the block's own default,
- * `custom` for one no tile writes.
+ * The tile a template is. None set, or the block's own default, is equal
+ * columns, so it reads as the tile of as many as the row holds (a row placed
+ * and left as it came reads "2 equal"), or `none` where no tile lays out that
+ * many. A template no tile writes is `custom`: the row's own, set in Style.
  */
 export function layoutOf(
   stored: StyleValue | undefined,
-  byDefault?: string
+  byDefault: string | undefined,
+  count: number
 ): string {
-  if (stored === undefined) return "auto";
   const written = typeof stored === "string" ? stored.trim() : undefined;
-  if (written !== undefined && written === byDefault?.trim()) return "auto";
+  if (
+    stored === undefined ||
+    (written !== undefined && written === byDefault?.trim())
+  ) {
+    return (
+      COLUMNS_LAYOUTS.find(
+        layout => layout.count === count && layout.tracks.every(t => t === 1)
+      )?.key ?? "none"
+    );
+  }
   return (
-    COLUMNS_LAYOUTS.find(
-      layout => layout.template !== undefined && layout.template === written
-    )?.key ?? "custom"
+    COLUMNS_LAYOUTS.find(layout => layout.template === written)?.key ?? "custom"
   );
 }
 
@@ -236,7 +246,13 @@ function isEmpty(column: BlockNode): boolean {
 }
 
 export type LayoutPlan =
-  | { readonly ok: true; readonly ops: readonly BuilderOp[] }
+  | {
+      readonly ok: true;
+      /** Everything the tile writes: its template, then its columns. */
+      readonly ops: readonly BuilderOp[];
+      /** Only the empty columns it adds or removes to match its count. */
+      readonly columnOps: readonly BuilderOp[];
+    }
   | { readonly ok: false; readonly reason: string };
 
 /** Ops adding empty columns at the row's end until it holds `count`. */
@@ -279,15 +295,14 @@ function removedColumns(
 }
 
 /**
- * What choosing a tile does: the template at the edited device, and the
- * empty columns added or removed to match its count, as ops for one step. A
- * tile that would remove a column holding content is refused, with why.
+ * What choosing a tile does: its template, and the empty columns added or
+ * removed to match its count, as ops for one step. A tile that would remove
+ * a column holding content is refused, with why.
  */
 export function planLayout(
   row: BlockNode,
   key: string,
-  at: Address,
-  inherited?: string
+  at: Address
 ): LayoutPlan {
   const layout = COLUMNS_LAYOUTS.find(each => each.key === key);
   if (layout === undefined) return { ok: false, reason: "Not a layout." };
@@ -296,22 +311,17 @@ export function planLayout(
   if (!Array.isArray(removed)) return { ok: false, reason: removed.reason };
   const added = addedColumns(row, count);
   if (added === undefined) return { ok: false, reason: "No column to add." };
-  // Auto clears what is set here; where a wider device's layout reaches
-  // this one, clearing would leave it in force, so Auto writes the block's
-  // own template here instead.
-  const inheritsAnother =
-    layout.template === undefined &&
-    inherited !== undefined &&
-    layoutOf(inherited, defaultTemplate(row)) !== "auto";
-  const value = inheritsAnother
-    ? (defaultTemplate(row) ?? null)
-    : (layout.template ?? null);
   const style = chainedStyleOp(row, [
-    { address: { ...at, property: "gridTemplateColumns", path: [] }, value },
+    {
+      address: { ...at, property: "gridTemplateColumns", path: [] },
+      value: layout.template ?? null,
+    },
   ]);
+  const columnOps = [...added, ...removed];
   return {
     ok: true,
-    ops: [...(style === null ? [] : [style]), ...added, ...removed],
+    ops: [...(style === null ? [] : [style]), ...columnOps],
+    columnOps,
   };
 }
 
@@ -389,7 +399,7 @@ export interface ReachedStack {
  */
 export type AppliedAt = (
   tier: string,
-  cssProperty: "display" | "flex-direction"
+  cssProperty: "display" | "flex-direction" | "grid-template-columns"
 ) => { value: string; breakpoint: string; own: boolean } | undefined;
 
 /**
@@ -435,6 +445,20 @@ export function stackOf(
     if (stack !== undefined) return { on: tier.on, reversed: stack.reversed };
   }
   return { on: "never", reversed: false };
+}
+
+/**
+ * Whether the row stores a layout of its own: a template on its base
+ * values, or a stack at any device. What the Content section's dot says.
+ */
+export function layoutHoldsValue(row: BlockNode, tiers: StackTiers): boolean {
+  const template = readStyleValue(row.styles, {
+    state: "base",
+    breakpoint: BASE_BREAKPOINT,
+    property: "gridTemplateColumns",
+    path: [],
+  });
+  return template !== undefined || stackOf(row, tiers, "base").on !== "never";
 }
 
 /** The display the block lays a row out with, from its own defaults. */

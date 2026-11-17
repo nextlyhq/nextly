@@ -87,7 +87,7 @@ export function useUpdatePattern(
   // The insert panel's read, so a later insert serves the new content.
   return useRouteCall(
     updatePatternPath(patternId),
-    "The pattern could not be updated. Try again.",
+    "The saved section could not be updated. Try again.",
     [LIBRARY_ROUTE_PATH]
   );
 }

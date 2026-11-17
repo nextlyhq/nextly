@@ -17,35 +17,61 @@
  * DOM. What is only true here is which keys ask for it, when they are allowed
  * to, and that the answer reaches the one place a document changes.
  *
+ * This module is the hook and its provider, and the entry for the rest: the
+ * keys and what each action says are in `keyboard-announcements.ts`, the
+ * contexts the toolbar and menus read in `block-actions-context.ts`, and what
+ * the hook takes and returns in `keyboard-actions-options.ts`.
+ *
  * @module keyboard-actions
  */
 
-import {
-  registryNestingSource,
-  type ComponentLookup,
-  type NestingSource,
-} from "@nextlyhq/blocks-engine";
+import { registryNestingSource } from "@nextlyhq/blocks-engine";
 import { useIsomorphicLayoutEffect, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { blockActionRunners } from "./builder-commands";
+import {
+  type BlockActions,
+  BlockActionsContext,
+  NestingContext,
+  SelectionActionsContext,
+  ToolbarFocusContext,
+  type ToolbarFocusSlot,
+} from "./block-actions-context";
 import {
   CANVAS_ESCAPE_PRIORITY,
   escapeOutcome,
   modalIsOpen,
   pressOrigin,
   returnFocusToCanvas,
-} from "./canvas-escape";
-import { useCanvasFrame } from "./canvas-frame-context";
+} from "./canvas/canvas-escape";
+import { useCanvasFrame } from "./canvas/canvas-frame-context";
+import {
+  patternSaveRefusal,
+  SAVE_PATTERN_GRANT_REFUSAL,
+  toolbarActions,
+  turnIntoChoice,
+  type MoveJudge,
+  type MovePosition,
+} from "./canvas/toolbar-actions";
 import type { EditorState } from "./editor-state";
 import { lockViewOf } from "./inspector";
 import { placedComponentId } from "./instance-inspector";
 import {
-  keyboardMovePosition,
-  type MoveDirection,
-  type MoveEffect,
-} from "./keyboard-move";
-import { pathTo } from "./layers";
+  type BlockKeyboardActionsOptions,
+  type BlockKeyboardActionsResult,
+  type CanvasFrameSlot,
+  type ComponentVerbId,
+  componentVerbRunner,
+  type SharedBlockVerbs,
+} from "./keyboard-actions-options";
+import {
+  deletionAnnouncement,
+  EFFECT_ANNOUNCEMENT,
+  lockSentence,
+  MOVE_KEYS,
+  UNDO_KEYS_SPOKEN,
+} from "./keyboard-announcements";
+import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
 import { lockedBlockWording, lockRefusalWording } from "./lock-refusal";
 import { lockBlockingMove } from "./locking";
 import {
@@ -53,537 +79,37 @@ import {
   refusalAnnouncement,
   unmovedAnnouncement,
 } from "./move-refusal";
-import type { BuilderOp } from "./op-vocabulary";
-import {
-  offerSignal,
-  useSelectionOffer,
-  type OfferSignal,
-  type SelectionOffer,
-} from "./selection-offer";
+import { pathTo } from "./panels/layers/layers";
+import { offerSignal, useSelectionOffer } from "./selection-offer";
 import {
   isRefusal,
   selectionDeletion,
   selectionDuplication,
   selectionMove,
 } from "./selection-ops";
-import type { SharedStyleOffer } from "./shared-style-target";
-import {
-  patternSaveRefusal,
-  SAVE_PATTERN_GRANT_REFUSAL,
-  toolbarActions,
-  turnIntoChoice,
-  type ComponentVerbsOffer,
-  type MoveJudge,
-  type MovePosition,
-  type ToolbarAction,
-  type ToolbarActionId,
-  type TurnIntoChoice,
-} from "./toolbar-actions";
+import { blockActionRunners } from "./shell/builder-commands";
 
-/**
- * The bindings, and why these keys.
- *
- * `alt+ArrowUp`/`alt+ArrowDown` is the line-move gesture from VS Code and the
- * editors that copied it, so it arrives already known rather than needing to be
- * taught. `alt+ArrowLeft`/`alt+ArrowRight` follows the indent convention every
- * outliner and list editor shares, and it matches the axis the rule itself
- * names — `indent` and `outdent` are its own words for the effect.
- *
- * Deliberately NOT Gutenberg's `mod+shift+alt+T`/`Y`. A four-key chord for the
- * commonest structural edit in the editor is undiscoverable and awkward on a
- * laptop, and the two letters carry no relationship to the direction they move.
- */
-export const MOVE_KEYS: ReadonlyArray<{
-  keys: string;
-  direction: MoveDirection;
-  description: string;
-}> = [
-  {
-    keys: "alt+ArrowUp",
-    direction: "up",
-    description: "Move the selected block up",
-  },
-  {
-    keys: "alt+ArrowDown",
-    direction: "down",
-    description: "Move the selected block down",
-  },
-  {
-    keys: "alt+ArrowRight",
-    direction: "indent",
-    description: "Move the selected block into the container above it",
-  },
-  {
-    keys: "alt+ArrowLeft",
-    direction: "outdent",
-    description: "Move the selected block out of its container",
-  },
-];
-
-/**
- * What each effect is announced as.
- *
- * Derived from the effect the rule already decided rather than inferred here
- * from the direction pressed. `alt+ArrowLeft` is `outdent` only when there is a
- * container to leave, and re-deriving it from the keystroke would announce a
- * move out of a group that never happened.
- *
- * Three sentences rather than one, because the three are not the same event to
- * someone who cannot see the result: reordering keeps a block among its
- * siblings, while indenting and outdenting change which block CONTAINS it.
- */
-const EFFECT_ANNOUNCEMENT: Readonly<Record<MoveEffect, string>> = {
-  reorder: "Block moved",
-  indent: "Block moved into the container above it",
-  outdent: "Block moved out of its container",
-};
-
-/**
- * How a deletion is announced.
- *
- * Names what went AND how to get it back. A screen-reader user cannot see an
- * undo control, so for them the announcement is the only place the recovery
- * path exists — and a container takes its children with it, which is invisible
- * from the block they had selected: a collapsed section looks exactly like an
- * empty one.
- *
- * The count is stated rather than prompted for. A confirmation on every delete
- * is friction people learn to click through, so it stops being a decision and
- * becomes a keystroke — protecting nobody while costing everybody. That trade
- * only holds because undo is reachable, which is why these ship together.
- */
-/**
- * @param name - what to CALL the block, already resolved by the caller.
- *
- * A resolved name rather than a type, so the one rule that decides what a block
- * is called lives in `layerLabel` and this only phrases it. Taking a type and
- * resolving here would put a second resolution in the one surface a
- * screen-reader user hears — and it would have to reach for `blockLabel`, which
- * knows nothing about the name the author gave this instance.
- */
-function deletionAnnouncement(name: string, descendants: number): string {
-  const what =
-    descendants === 0
-      ? `${name} deleted`
-      : `${name} deleted, with ${descendants} ${descendants === 1 ? "block" : "blocks"} inside`;
-  return `${what}. Undo with ${UNDO_KEYS_SPOKEN}.`;
-}
-
-/** How the undo shortcut is READ ALOUD, which is not how it is parsed. */
-const UNDO_KEYS_SPOKEN = "Control or Command Z";
-
-/**
- * The structural verbs, as callables.
- *
- * Published so a POINTER surface can press exactly what a keystroke presses.
- * The floating toolbar offers the same five actions, and a toolbar that applied
- * its own ops would be a second answer to "what does duplicate do" — which an
- * author meets as two buttons that disagree, months after the second one was
- * written.
- *
- * Every one is silent when it has no subject, so a caller may press any of them
- * without first asking whether it applies. `toolbarActions` answers that
- * separately, for drawing a control as unavailable rather than for guarding the
- * call.
- */
-export interface BlockActions {
-  /** Move the selection one step in `direction`, lock permitting. */
-  readonly move: (direction: MoveDirection) => void;
-  /** Delete the selection and everything inside it, lock permitting. */
-  readonly delete: () => void;
-  /** Copy the selection in beside itself and select the copy. */
-  readonly duplicate: () => void;
-  /** Select the container holding the selection. */
-  readonly selectParent: () => void;
-  /**
-   * Begin storing the selection in the pattern library.
-   *
-   * Unlike the four above it this runs NO op: it hands the gesture back to the
-   * host, which owns the library, the form that names what is saved and the
-   * write that stores it. It travels with the others because every surface over
-   * these verbs — toolbar, context menu, palette — must reach it the same way,
-   * and a second channel for one verb is how one surface comes to offer what
-   * another cannot run.
-   *
-   * No keystroke is bound to it here. The others are direct manipulations of a
-   * selection an author is looking at; this opens a form, and a shortcut that
-   * opens a modal belongs to the host's own key map rather than to the canvas.
-   */
-  readonly saveAsPattern: () => void;
-  /**
-   * Begin saving the block's look as a shared style, handed to the host as
-   * the pattern save is. Absent where the host offers no shared styles.
-   */
-  readonly saveAsSharedStyle?: () => void;
-  /**
-   * Open the selected placement's component in its own view, through the
-   * host. Like Save as pattern it runs no op: where the component opens, and
-   * whether this author may, are the host's. Silent for any other selection.
-   * Optional, so a host built before it keeps compiling.
-   */
-  readonly editComponent?: () => void;
-  /**
-   * Begin turning the selection into a component: replacing it with a
-   * placement, or keeping it and saving a copy. Like `saveAsPattern`, this
-   * hands the gesture to the host, which owns the form and the write. Absent
-   * where the host offers no components.
-   */
-  readonly turnIntoComponent?: () => void;
-  /** Detach the selected placement, duplicate its component, update a pattern. */
-  readonly detachComponent?: () => void;
-  readonly duplicateComponent?: () => void;
-  readonly updatePattern?: () => void;
-}
-
-/**
- * The verbs, for a surface rendered under {@link BlockKeyboardActions}.
- *
- * `null` until a provider is above it, which {@link useBlockActionsContext}
- * turns into a thrown error rather than a silently inert toolbar.
- */
-const BlockActionsContext = React.createContext<BlockActions | null>(null);
-
-/**
- * The nesting rules the editor is judging placements by, for surfaces below it.
- *
- * A SECOND context rather than a field on {@link BlockActions}, because the two
- * are different kinds of thing: those are verbs to run, this is a rule source to
- * ask. Folding it in would make every consumer of the verbs re-render when a
- * host swapped its rules, and would put a non-verb in a type whose name promises
- * verbs.
- *
- * `null` means no provider, which {@link useNestingSource} answers with the
- * registry — the same default every surface here already applies.
- */
-const NestingContext = React.createContext<NestingSource | null>(null);
-
-/**
- * The verbs for the current selection, computed once for every surface.
- *
- * The bar, the right-click menu and the palette each need the same list, and
- * `toolbarActions` is not a cheap read: deciding whether a selection can be
- * saved BUILDS the document a save would store — it clones the selected forest,
- * re-identifies it and surveys the result — because that is what makes the
- * answer exact. Asked three times, an ordinary edit copies and walks a large
- * selection three times before anything is drawn.
- *
- * Published from here because this is the one place above all three that
- * already holds the editor and the rules they must agree about.
- */
-const SelectionActionsContext = React.createContext<SelectionOffer | null>(
-  null
-);
-
-/**
- * The shared verb list, or `null` when there is no provider above.
- *
- * Deliberately NOT "compute it for me": a caller that handed this a fallback to
- * run would have to be told when to run it, and the honest answer — whenever
- * anything the fallback closes over changes — is exactly what this hook cannot
- * see. Written that way it memoised on the context alone, so a surface outside a
- * provider kept its FIRST answer for ever: stale availability and stale refusal
- * reasons on every later selection.
- *
- * Answering `null` hands that decision back to the caller, which is the only
- * place the inputs are known.
- */
-/**
- * The sentence for ops the editor's locks refuse, or null when they keep every
- * lock: the editor's own question, worded as every lock refusal is.
- */
-function lockSentence(
-  editor: Pick<EditorState, "lockRefusalFor">,
-  ops: readonly BuilderOp[]
-): string | null {
-  const found = editor.lockRefusalFor(ops);
-  return found === undefined
-    ? null
-    : refusalAnnouncement(lockRefusalWording(found));
-}
-
-export function useSelectionActionsContext(): SelectionOffer | null {
-  return React.useContext(SelectionActionsContext);
-}
-
-const ToolbarFocusContext = React.createContext<ToolbarFocusSlot | null>(null);
-
-/**
- * The nearest provider's toolbar focus slot, or `null` outside one: the
- * block toolbar puts its focus call here for Alt+F10.
- */
-export function useToolbarFocusSlot(): ToolbarFocusSlot | null {
-  return React.useContext(ToolbarFocusContext);
-}
-
-/**
- * The verbs from the nearest {@link BlockKeyboardActions}.
- *
- * Throws when there is none. A toolbar without them would render its buttons
- * and do nothing on every press, which looks like a broken editor rather than
- * like a missing wrapper — and it would reach a person before it reached a
- * developer.
- */
-export function useBlockActionsContext(): BlockActions {
-  const actions = React.useContext(BlockActionsContext);
-  if (actions === null) {
-    throw new Error(
-      "[@nextlyhq/builder] Block actions are only available inside " +
-        "<BlockKeyboardActions>. Render it as an ancestor of whatever uses them."
-    );
-  }
-  return actions;
-}
-
-/**
- * The nesting rules to judge a placement by, from the nearest provider.
- *
- * Falls back to the registry, which is what the canvas, the insert panel and the
- * keyboard route all default to — so a surface outside a provider answers the
- * way it did before this existed.
- *
- * It exists because a host MAY supply its own rules, and until this a surface
- * had no way to reach them: `BlockKeyboardActions` took a `nesting` option and
- * kept it, so the keyboard enforced the host's rules while the toolbar and the
- * context menu consulted the registry. One selection could then be offered on
- * one surface and refused on another, for the same document.
- */
-export function useNestingSource(): NestingSource {
-  const supplied = React.useContext(NestingContext);
-  // Memoised on the supplied value so a surface that depends on the identity —
-  // `toolbarActions` is called inside a memo keyed on its arguments — is not
-  // handed a new object every render.
-  return React.useMemo(() => supplied ?? registryNestingSource(), [supplied]);
-}
-
-/**
- * The verbs for the current selection, as a surface OUTSIDE the provider is
- * handed them: which are offered and why not, and a way to run one.
- *
- * The inspector is drawn beside the canvas rather than under this provider,
- * and its card offers Duplicate and Delete. Handing it these is what keeps
- * that menu to the toolbar's verdicts and verbs rather than a second copy.
- */
-export interface SharedBlockVerbs {
-  /** What to show while no menu is open: the locks are not asked. */
-  readonly actions: readonly ToolbarAction[];
-  /** The same verbs with the locks asked, for a menu as it opens. */
-  readonly withLocks: () => readonly ToolbarAction[];
-  /** Listen for a change to what `withLocks` would answer; optional. */
-  readonly subscribe?: OfferSignal["subscribe"];
-  readonly run: (id: ToolbarActionId) => void;
-}
-
-export interface BlockKeyboardActionsOptions {
-  /**
-   * The editor whose document these move blocks in.
-   *
-   * The whole state rather than a document and an `apply` separately: the move
-   * is computed against a document and applied through a store, and passing
-   * them apart lets a caller hand a document from one render to an `apply`
-   * bound to another.
-   */
-  editor: EditorState;
-  /**
-   * The nesting rule source, for explaining a refused move.
-   *
-   * Optional, defaulting to the registry — which is what the canvas asks, so a
-   * refusal reads the same whether the author dragged the block or moved it
-   * with the keyboard. Present as an option only so a test can supply a rule
-   * set without registering blocks globally.
-   */
-  nesting?: NestingSource;
-  /**
-   * The component definitions the canvas draws, for judging a moved instance.
-   *
-   * An instance node's own type is not a registered block, so the nesting
-   * rule restricts it nowhere; a move is judged by the ROOTS of the definition
-   * it draws instead, resolved through this map as a drop of the same instance
-   * is (`placementTypesOf`). Optional, because a host whose library has not
-   * loaded has nothing to resolve against — an unresolvable instance is judged
-   * by its own type, which is how a placeholder stays movable.
-   */
-  definitions?: ComponentLookup;
-  /**
-   * Begin storing the selection in the library, when the author asks to.
-   *
-   * Supplied by the host because everything the gesture needs is the host's:
-   * which collection a pattern goes in, what it is called, and the route that
-   * writes it. Nothing here can do any of that, and a builder that guessed would
-   * be guessing about somebody else's schema.
-   */
-  onSaveAsPattern: () => void;
-  /**
-   * Whether the author may create a pattern at all. Defaults to true.
-   *
-   * Supplied by the host for the same reason `onSaveAsPattern` is: the grant is
-   * held against the collection a pattern goes in, a site may have renamed it,
-   * and nothing here can know either. A builder that guessed would be guessing
-   * about somebody else's schema.
-   *
-   * Permissive while unknown — see `toolbarActions`, which explains why this one
-   * refusal defaults the opposite way to the rest.
-   */
-  mayCreatePattern?: boolean;
-  /**
-   * Open a placed component in its own view, given its id and the
-   * placement's node id. Supplied by the host, which knows where that view is
-   * and whether this author may update components; omitted, "Edit component"
-   * is not offered anywhere.
-   */
-  onEditComponent?: (componentId: string, nodeId: string) => void;
-  /**
-   * Whether the bindings are live. Defaults to true.
-   *
-   * A host that mounts the canvas inside something modal turns them off rather
-   * than unmounting the canvas, so the selection survives whatever is over it.
-   */
-  enabled?: boolean;
-  /**
-   * Begin typing the selected block's text in place, reporting whether it
-   * could be.
-   *
-   * The keyboard route to the gesture a double-click performs. A pointer-only
-   * way into editing would leave the text of every block unreachable without a
-   * mouse, which is the plainest kind of WCAG 2.1.1 failure — and it is a real
-   * one here, because the canvas is where the text is.
-   *
-   * Optional: a host that has not wired inline editing registers no binding at
-   * all, rather than one that presses and does nothing.
-   */
-  onEditText?: (nodeId: string) => boolean;
-  /**
-   * Making components from a selection, where the host has a component
-   * library: whether the author may, and the gestures that open the host's
-   * forms. Absent, neither verb is offered.
-   */
-  components?: ComponentVerbsHost;
-  /**
-   * Saving a block's look as a shared style, where the host has the site's
-   * shared styles: what it knows of them and the author's right, and the
-   * gesture that opens its form. Absent, the verb is not offered.
-   */
-  sharedStyles?: SharedStyleVerbHost;
-  /**
-   * Esc pressed with no block selected, which otherwise does nothing: a host
-   * editing a look on its own leaves it, back to editing blocks.
-   *
-   * @experimental Settles with the Design panel's Block looks group.
-   */
-  onEscapeWithoutSelection?: () => void;
-}
-
-/**
- * The host's side of "Save as shared style…".
- *
- * @experimental Settles with the shared-styles editor.
- */
-export interface SharedStyleVerbHost extends SharedStyleOffer {
-  readonly onSaveAsSharedStyle: () => void;
-}
-
-/**
- * The host's side of "Turn into component…".
- *
- * @experimental Settles when the composition API ships.
- */
-export interface ComponentVerbsHost extends ComponentVerbsOffer {
-  /**
-   * Open the form, told which way is open: replacing the selection with a
-   * placement, keeping it and saving a copy, or both, with the reason for a
-   * way that is not.
-   */
-  readonly onTurnIntoComponent: (choice: TurnIntoChoice) => void;
-  /** Detach the selected placement. Absent, with no definitions, Detach is not offered. */
-  readonly onDetachComponent?: () => void;
-  readonly onDuplicateComponent?: () => void;
-  /** Update a pattern. Absent, with no `mayUpdatePattern`, it is not offered. */
-  readonly onUpdatePattern?: () => void;
-}
-
-/** The verbs the host runs for the menu's component group. */
-type ComponentVerbId =
-  | "turn-into-component"
-  | "detach-component"
-  | "duplicate-component"
-  | "update-pattern";
-
-/** The host's gesture for one component verb, if it offers it. */
-function componentVerbRunner(
-  host: ComponentVerbsHost,
-  id: ComponentVerbId,
-  /** Which way "Turn into component…" may go, asked when it was pressed. */
-  choice: () => TurnIntoChoice
-): (() => void) | undefined {
-  const runners: Record<ComponentVerbId, (() => void) | undefined> = {
-    "turn-into-component": () => host.onTurnIntoComponent(choice()),
-    "detach-component": host.onDetachComponent,
-    "duplicate-component": host.onDuplicateComponent,
-    "update-pattern": host.onUpdatePattern,
-  };
-  return runners[id];
-}
-
-/** What the hook hands back: the region's text, and the verbs behind the keys. */
-export interface BlockKeyboardActionsResult {
-  /** The live region's current text. Owned by one region and one only. */
-  readonly announcement: string;
-  /** The same verbs the keystrokes run, for a pointer surface to press. */
-  readonly actions: BlockActions;
-  /**
-   * The rules this resolved placements by: the host's, or the registry.
-   *
-   * Returned so the provider can publish the SAME source it enforced, rather
-   * than every surface below resolving the default again and a host-supplied
-   * one reaching only the keyboard.
-   */
-  readonly nesting: NestingSource;
-  /**
-   * What to OFFER for the current selection, computed once for every surface.
-   *
-   * Told apart from {@link BlockKeyboardActionsResult.actions} by the question
-   * each answers: those are verbs to RUN, this is the list of what may be run
-   * and why not. Returned so the provider publishes the same list it built
-   * rather than each surface rebuilding it — and rebuilding it is not cheap,
-   * because deciding whether a selection can be saved builds the document a
-   * save would store. Its depth moves are judged with the position function
-   * the move verb itself runs; its locks are asked only by a menu that opens.
-   */
-  readonly offer: SelectionOffer;
-  /** `offer.actions`, as this result has always carried it. */
-  readonly selectionActions: ToolbarAction[];
-  /** `offer.depthMoves`, as this result has always carried it. */
-  readonly depthMoves: SelectionOffer["depthMoves"];
-  /**
-   * Where this editor's block toolbar puts the call that finds its tab stop,
-   * for Alt+F10 to focus. Held per editor rather than looked up in the
-   * document, which may hold another editor's toolbar first.
-   */
-  readonly toolbarFocus: ToolbarFocusSlot;
-  /**
-   * Where the canvas's frame is put for Escape to send focus back to, filled
-   * by {@link BlockKeyboardActions}. Empty, Escape moves the selection from
-   * wherever it is pressed.
-   */
-  readonly canvasFrame: CanvasFrameSlot;
-}
-
-/**
- * Holds the canvas's frame, or `null` while there is none.
- *
- * A slot rather than a context read inside the hook: the canvas frame's
- * context changes with every zoom and resize the canvas reports, and the
- * Escape binding needs only the frame, when the key lands. Filled by a child
- * of its own, so a resize re-renders that child alone.
- */
-type CanvasFrameSlot = React.MutableRefObject<HTMLIFrameElement | null>;
-
-/**
- * Holds the call that finds an editor's block toolbar's tab stop, which
- * answers `null` while no bar is drawn.
- */
-export type ToolbarFocusSlot = React.MutableRefObject<
-  (() => HTMLElement | null) | null
->;
+// The keys and what is announced, the contexts the toolbar and menus read,
+// and what the hook takes and returns live in modules of their own beside
+// it; every name this module exported still is.
+// Part of this module's exported names; no importer in the package reads it.
+// fallow-ignore-next-line unused-type
+export type { ToolbarFocusSlot } from "./block-actions-context";
+export {
+  type BlockActions,
+  useBlockActionsContext,
+  useNestingSource,
+  useSelectionActionsContext,
+  useToolbarFocusSlot,
+} from "./block-actions-context";
+export type {
+  BlockKeyboardActionsOptions,
+  BlockKeyboardActionsResult,
+  ComponentVerbsHost,
+  SharedBlockVerbs,
+  SharedStyleVerbHost,
+} from "./keyboard-actions-options";
+export { MOVE_KEYS } from "./keyboard-announcements";
 
 /**
  * Register the move bindings for as long as the caller is mounted.

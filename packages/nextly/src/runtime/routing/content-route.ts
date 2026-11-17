@@ -46,6 +46,7 @@ import type {
   PageStructuredDataHints,
 } from "../seo/page-metadata-contract";
 
+import { isDraftModeRequest } from "./draft-mode";
 import { answerNotFound, triggerPermanentRedirect } from "./not-found";
 import {
   confirmedLanguage,
@@ -535,26 +536,6 @@ export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
 
 const MAX_STATIC_PARAMS_PER_PAGE = 500;
 
-/**
- * Whether this request is in Next's draft mode.
- *
- * Imported inside the call: `next/headers` resolves only within a request, so a
- * static import would make loading this module fail in every other context,
- * the CLI among them. Outside a request there is no draft mode to read, so the
- * answer is no; Next's own signals (a postponed prerender, a dynamic bail-out)
- * are handed back to it rather than read as no.
- */
-async function draftModeEnabled(): Promise<boolean> {
-  try {
-    const { draftMode } = await import("next/headers");
-    return (await draftMode()).isEnabled;
-  } catch (error) {
-    const { unstable_rethrow } = await import("next/navigation");
-    unstable_rethrow(error);
-    return false;
-  }
-}
-
 function buildRoute<TNode>(
   config: ContentRouteConfig<TNode>,
   content: "public" | "restricted"
@@ -725,7 +706,7 @@ function buildRoute<TNode>(
     // request the flag alone is read, which keeps the render static. The
     // preview link turns draft mode on when it opens (`createPreviewRoute`),
     // and the hook still decides which entry, if any, that link may see.
-    if (isPublic && !(await draftModeEnabled())) return false;
+    if (isPublic && !(await isDraftModeRequest())) return false;
     return typeof decision === "function" ? decision(context) : decision;
   }
 

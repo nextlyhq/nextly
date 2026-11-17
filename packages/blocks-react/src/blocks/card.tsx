@@ -54,6 +54,8 @@ import { LAYOUT } from "./categories";
 import {
   CONTAINER_CHILD_GAP,
   CONTAINER_SUPPORTS,
+  CONTENT_WIDTH_PROPS,
+  containerLinkProps,
   linkableContentModel,
   renderLinkableContainer,
 } from "./container";
@@ -140,9 +142,9 @@ export const card: BlockDefinition<ContainerProps, PageContext> = defineBlock({
     // announced as a landmark, which is noise on a card that merely groups a
     // heading and a sentence. The author knows which one theirs is.
     as: htmlTagProp(["div", "article", "section", "aside"]),
-    contained: { label: "Constrain content width", type: "checkbox" },
+    ...CONTENT_WIDTH_PROPS,
     // A whole-card link, as on `core/box`.
-    link: { label: "Whole card links to", role: "content", type: "url" },
+    ...containerLinkProps("The whole card becomes the link"),
   },
   defaultProps: { as: "div", contained: false },
   example: { props: { as: "div" } },

@@ -38,7 +38,7 @@ import { RemountOnStyleReplay } from "./site-style-history";
 import { siteStyleStatus } from "./site-style-studios";
 
 /** What the editor reads of the page's own fields as the author has them now. */
-interface PageFacts {
+export interface PageFacts {
   /** The form's `title` while it is text, for the top bar and the preview. */
   title: string | undefined;
   /** The SEO plugin's fields, where the document has them. */
@@ -107,6 +107,21 @@ function pagePreview(view: EditorView, page: PageFacts): SharePreview {
 }
 
 /**
+ * The page whose saved address Settings and the right panel read, in the
+ * language being edited, as a localized slug is; null for a page never saved.
+ */
+export function pageAddressOf(
+  view: Pick<EditorView, "locale">,
+  page: PageFacts
+): SettingsAddress | null {
+  if (page.address === null) return null;
+  return {
+    ...page.address,
+    ...(view.locale === undefined ? {} : { locale: view.locale }),
+  };
+}
+
+/**
  * Settings, as the shell's rail opens it: the entry's own fields and a share
  * preview built from the page as it is now, and the site's breakpoints, read
  * from the same answer the canvas and the device buttons are.
@@ -127,9 +142,13 @@ export function editorSettings(
   } = view;
   // Remounted when a style change is undone or redone, as every surface
   // showing the site's style is, so its breakpoints show the set replayed.
+  // Drawn afresh for each request to open it (the right panel's "All page
+  // settings…", a Pages row's "Settings"), so it opens on the page's own
+  // first tab, whichever tab it was left on.
   return dialog => (
     <RemountOnStyleReplay>
       <SettingsDialog
+        key={view.pages.settingsRequest?.count ?? 0}
         {...dialog}
         pageFields={entryFields}
         // Other plugins' tabs beside the page's own settings.
@@ -145,15 +164,7 @@ export function editorSettings(
         // The SEO plugin's group, where the page has one: its fields are then
         // among the page's own, and the preview is not all there is.
         seoFields={page.seo !== undefined}
-        // Read in the language being edited, as a localized slug is.
-        address={
-          page.address === null
-            ? null
-            : {
-                ...page.address,
-                ...(view.locale === undefined ? {} : { locale: view.locale }),
-              }
-        }
+        address={pageAddressOf(view, page)}
         breakpoints={{
           value: canvasRender.styleContext.breakpoints,
           onSave: saveBreakpoints,
