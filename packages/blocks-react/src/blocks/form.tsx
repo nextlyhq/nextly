@@ -296,16 +296,40 @@ function providerSentMessage(props: FormProps, drawing: FormDrawing): string {
 }
 
 /**
+ * The attribute on the box a picked form that is gone draws where an author
+ * is looking, so the editor can say so over it.
+ */
+export const FORM_UNAVAILABLE_ATTRIBUTE = "data-nx-form-unavailable";
+
+/**
+ * What a picked form that is gone draws: nothing on a page a visitor is
+ * served; where an author is looking (`diagnostics`), an empty box in the
+ * block's own classes, the place the editor says "This form was deleted."
+ * over, so the block is not lost from the canvas.
+ */
+function gone(ctx: PageContext, className: string): ReactElement | null {
+  if (ctx.diagnostics !== true) return null;
+  return (
+    <div
+      className={className}
+      {...{ [FORM_UNAVAILABLE_ATTRIBUTE]: "missing" }}
+    />
+  );
+}
+
+/**
  * A provider's form, as the page's reader sees it: drawn from its
  * description; its closed message where it takes no answers now; nothing
- * where it is gone, or where this page cannot read it.
+ * where it is gone (an empty box where an author is looking), or where this
+ * page cannot read it.
  */
 async function renderPicked(
   picked: FormReference,
   args: BlockRenderArgs<FormProps>
 ): Promise<ReactElement | null> {
   const { ctx, props, className, partClass } = args;
-  // The editor's canvas draws a picked form through its own routes.
+  // Nowhere to read it from: the canvas reads one through the editor's own
+  // route, as the person editing.
   if (ctx.forms === undefined) return null;
   let drawing: Awaited<
     ReturnType<NonNullable<PageContext["forms"]>["describe"]>
@@ -325,7 +349,7 @@ async function renderPicked(
   )
     return null;
   if ("unavailable" in drawing) {
-    if (drawing.unavailable !== "closed") return null;
+    if (drawing.unavailable !== "closed") return gone(ctx, className);
     return (
       <div className={className}>
         <p className={partClass("message")}>
