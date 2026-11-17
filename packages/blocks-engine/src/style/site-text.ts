@@ -37,6 +37,7 @@ import { isPlainRecord } from "../plain-record";
 import type { ValidationIssue } from "../validation";
 
 import type { TypographicElement } from "./compile-page-states";
+import { customPropertiesReferenced } from "./css-value-check";
 import type { FluidSizes } from "./fluid-value";
 import { validateStyleValues } from "./validate-style-value";
 
@@ -551,8 +552,11 @@ function valueIssues(
 }
 
 /**
- * The rows using each variable, by the variable's identity: for a removal
- * that refuses a type size a row still points at, naming the row.
+ * The rows using each variable: by the variable's identity for a `$token`,
+ * and by the custom property for a value reading one through `var()`, which
+ * the site's prefix ties to a variable (`tokenCustomProperty`). The two kinds
+ * of key never meet: an identity never starts with `--`. For a removal that
+ * refuses a variable a row still uses, naming the row.
  */
 export function siteTextUses(
   stated: SiteTextMap | undefined
@@ -570,12 +574,18 @@ export function siteTextUses(
       entry.color,
       entry.hoverColor,
     ];
-    for (const value of values) {
-      if (!isTokenRef(value)) continue;
-      const roles = uses.get(value.$token) ?? [];
+    for (const key of values.flatMap(usageKeysOf)) {
+      const roles = uses.get(key) ?? [];
       if (!roles.includes(role)) roles.push(role);
-      uses.set(value.$token, roles);
+      uses.set(key, roles);
     }
   }
   return uses;
+}
+
+/** What one row value uses: a `$token`'s identity, or each `var()` it reads. */
+function usageKeysOf(value: unknown): readonly string[] {
+  if (isTokenRef(value)) return [value.$token];
+  if (typeof value !== "string" || !value.includes("(")) return [];
+  return customPropertiesReferenced(value) ?? [];
 }

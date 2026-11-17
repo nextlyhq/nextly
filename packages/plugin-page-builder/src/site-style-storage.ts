@@ -455,10 +455,7 @@ function refuseDroppedSiteTextUses(
   tokens: unknown
 ): void {
   const section = readStoredJson(tokens);
-  const reasons = siteTextReasons(
-    dropped,
-    isPlainRecord(section) ? section.siteText : undefined
-  );
+  const reasons = siteTextReasons(dropped, section);
   if (reasons.length === 0) return;
   throw NextlyError.validation({
     errors: reasons.map(reason => ({

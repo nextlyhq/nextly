@@ -12,8 +12,10 @@
  */
 import {
   isPlainRecord,
+  resolveTokenPrefix,
   SITE_TEXT_LABELS,
   siteTextUses,
+  tokenCustomProperty,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -30,18 +32,29 @@ interface SiteTextReason {
 
 /**
  * The reasons the site's text gives against removing each variable, naming
- * the rows ("Display is used by Site text: Heading 1."). `siteText` is the
- * stored map as the write would leave it, read whether or not anything
- * validated it.
+ * the rows ("Display is used by Site text: Heading 1."). `section` is the
+ * stored token set as the write would leave it, its rows and its prefix,
+ * read whether or not anything validated it.
  */
 export function siteTextReasons(
   removable: readonly { readonly id: string; readonly name: string }[],
-  siteText: unknown
+  section: unknown
 ): SiteTextReason[] {
-  const uses = siteTextUses(isPlainRecord(siteText) ? siteText : undefined);
+  const read = isPlainRecord(section) ? section : {};
+  const siteText = isPlainRecord(read.siteText) ? read.siteText : undefined;
+  const uses = siteTextUses(siteText);
+  const { prefix } = resolveTokenPrefix(
+    typeof read.prefix === "string" ? read.prefix : undefined
+  );
   return removable.flatMap(({ id, name }) => {
-    const roles = uses.get(id);
-    if (roles === undefined) return [];
+    // Pointed at by its identity, or read through `var()` of its property.
+    const roles = [
+      ...new Set([
+        ...(uses.get(id) ?? []),
+        ...(uses.get(tokenCustomProperty(id, prefix)) ?? []),
+      ]),
+    ];
+    if (roles.length === 0) return [];
     const rows = roles.map(role => SITE_TEXT_LABELS[role]).join(", ");
     return [
       {

@@ -19,6 +19,7 @@ import {
   SITE_TEXT_ROLES,
   siteTextStyles,
   siteTextUses,
+  tokenCustomProperty,
   tokenRef,
   type SiteTextEntry,
   type SiteTextMap,
@@ -267,8 +268,13 @@ export function siteTextUseWords(
   identities: readonly string[]
 ): string | undefined {
   const uses = siteTextUses(tokens.siteText);
+  const { prefix } = resolveTokenPrefix(tokens.prefix);
+  // Pointed at by its identity, or read through `var()` of its property.
+  const usedBy = (identity: string, role: SiteTextRole): boolean =>
+    uses.get(identity)?.includes(role) === true ||
+    uses.get(tokenCustomProperty(identity, prefix))?.includes(role) === true;
   const roles = SITE_TEXT_ROLES.filter(role =>
-    identities.some(identity => uses.get(identity)?.includes(role))
+    identities.some(identity => usedBy(identity, role))
   );
   if (roles.length === 0) return undefined;
   return `Site text: ${roles.map(role => SITE_TEXT_LABELS[role]).join(", ")}`;

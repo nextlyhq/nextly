@@ -141,4 +141,14 @@ describe("a removal a row refuses", () => {
     );
     expect(siteTextUseWords(set, ["color.primary"])).toBeUndefined();
   });
+
+  it("names a row reading a variable through var() of its custom property", () => {
+    const set: SiteTokenSet = {
+      ...SITE,
+      siteText: { h2: { fontSize: "var(--site-font-size-display)" } },
+    };
+    expect(siteTextUseWords(set, ["font-size.display"])).toBe(
+      "Site text: Heading 2"
+    );
+  });
 });

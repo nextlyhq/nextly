@@ -1430,6 +1430,30 @@ describe("removing a type size a Site text row uses", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("refuses where a row names it through var() of its custom property", async () => {
+    const { store, write } = storeOf({
+      tokens: [display, displayLine],
+      siteText: { h2: { fontSize: "var(--site-font-size-display)" } },
+    });
+    const inUse = vi.fn<VariablesInUseCheck>(async () => undefined);
+    expect(
+      await refusal(
+        removeVariables(
+          post({ ids: ["font-size.display"] }),
+          store,
+          new Set(),
+          checksOf(inUse)
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "Display is used by Site text: Heading 2."
+      ),
+    });
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("removes it once no row uses it", async () => {
     const { store, write } = storeOf({
       tokens: [display, displayLine],

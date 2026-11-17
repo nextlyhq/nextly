@@ -763,7 +763,7 @@ export async function removeVariables(
       // A Site text row names its variables in this same section, so the
       // refusal is read from the section the write is made from.
       reasons.push(
-        ...siteTextReasons(removable, read.section.siteText).map(
+        ...siteTextReasons(removable, read.section).map(
           reason => reason.message
         )
       );
