@@ -289,22 +289,21 @@ test.describe("the editing bar", () => {
       100
     );
 
-    const frame = await panel.boundingBox();
+    const frame = await box(panel);
     const tabs = inspector(page).locator(".nx-inspector__tabrow");
     for (const [name, part] of [
       ["the tab row", tabs],
       ["the bar", bar(page)],
     ] as const) {
-      const found = await part.boundingBox();
-      expect(found, name).not.toBeNull();
+      const found = await box(part);
+      // A pixel either way, for the rounding of both boxes.
+      expect(found.y, `${name} below the panel's top`).toBeGreaterThanOrEqual(
+        frame.y - 1
+      );
       expect(
-        found?.y ?? -1,
-        `${name} below the panel's top`
-      ).toBeGreaterThanOrEqual(Math.floor(frame?.y ?? 0));
-      expect(
-        (found?.y ?? 0) + (found?.height ?? 0),
+        found.y + found.h,
         `${name} above the panel's bottom`
-      ).toBeLessThanOrEqual(Math.ceil((frame?.y ?? 0) + (frame?.height ?? 0)));
+      ).toBeLessThanOrEqual(frame.y + frame.h + 1);
     }
     // Drawn over what scrolls under it, the bar below the tab row.
     const tabsBox = await box(tabs);
@@ -322,10 +321,8 @@ test.describe("the editing bar", () => {
       "the target chip is on top, not covered"
     ).toBe(true);
     // The block card scrolled away.
-    const card = await inspector(page)
-      .locator("[data-block-card]")
-      .boundingBox();
-    expect((card?.y ?? 0) + (card?.height ?? 0)).toBeLessThan(frame?.y ?? 0);
+    const card = await box(inspector(page).locator("[data-block-card]"));
+    expect(card.y + card.h).toBeLessThan(frame.y);
 
     // The keyboard order is the document's: tabs, then the bar's chips.
     const order = await inspector(page).evaluate(root => {
