@@ -903,3 +903,29 @@ describe("a size made fluid from two sizes", () => {
     expect(dark.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
   });
 });
+
+describe("a fluid line height typed by hand", () => {
+  it("drops its two sizes, as any other size does", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "line-height.loose",
+          kind: "dimension",
+          values: { light: "24px" },
+        },
+      ],
+    };
+    const made = setFluidSize(
+      set,
+      0,
+      { small: 24, large: 32 },
+      {
+        min: 360,
+        max: 1280,
+      }
+    );
+    const typed = writeTokenValue(made, 0, "light", "28px");
+    if (!("tokens" in typed)) throw new Error("the write was refused");
+    expect(typed.tokens.tokens[0]?.fluid).toBeUndefined();
+  });
+});

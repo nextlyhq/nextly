@@ -447,13 +447,20 @@ export function setTokenValue(
 ): SiteTokenSet {
   const token = tokens.tokens[at];
   if (token === undefined) return tokens;
-  // A light value typed by hand is no longer the one its fluid sizes made,
-  // so it keeps no sizes, and a change of the site's fluid range leaves it.
-  const { fluid: _made, ...rest } = token;
   return withToken(tokens, at, {
-    ...(mode === "light" ? rest : token),
+    ...(mode === "light" ? withoutFluid(token) : token),
     values: { ...token.values, [mode]: value },
   });
+}
+
+/**
+ * A token whose light value is being typed by hand: no longer the one its
+ * fluid sizes made, so it keeps no sizes, and a change of the site's fluid
+ * range leaves it. Every write of a light value by hand goes through here.
+ */
+function withoutFluid(token: SiteToken): SiteToken {
+  const { fluid: _made, ...rest } = token;
+  return rest;
 }
 
 /**
@@ -609,7 +616,7 @@ export function writeTokenValue(
   const darkFits = dark === undefined || lineHeightKindOf(dark) === kind;
   return {
     tokens: withToken(tokens, at, {
-      ...token,
+      ...withoutFluid(token),
       kind,
       values: darkFits ? { ...token.values, light: value } : { light: value },
     }),
