@@ -201,10 +201,15 @@ export function withSiteTextRow(
     ...tokens.siteText,
   };
   delete rest[role];
+  // The row's size as given, with the font it holds now, never the given one.
+  const { fontFamily: _given, ...sized } =
+    entry ?? resolveSiteText(undefined)[role] ?? {};
   const next =
-    font === undefined || entry?.fontFamily !== undefined
-      ? entry
-      : { ...(entry ?? resolveSiteText(undefined)[role]), fontFamily: font };
+    font !== undefined
+      ? { ...sized, fontFamily: font }
+      : entry === undefined
+        ? undefined
+        : sized;
   const siteText: SiteTextMap =
     next === undefined ? rest : { ...rest, [role]: next };
   return { ...tokens, siteText };

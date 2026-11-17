@@ -152,6 +152,28 @@ describe("what a role's hover says it writes", () => {
 });
 
 describe("a row's size edits keep the font", () => {
+  it("keeps the Headings font when a row the site's code supplies is reset to it", () => {
+    const supplied = {
+      h2: { fontSize: "40px", fontFamily: "Georgia, serif" },
+    };
+    const set = withFontRole(
+      { ...SITE, siteText: supplied },
+      "heading",
+      '"Lora", serif',
+      supplied
+    );
+    const reset = withSiteTextRow(set, "h2", supplied.h2);
+    expect(reset.siteText?.h2).toEqual({
+      fontSize: "40px",
+      fontFamily: { $token: "font.heading" },
+    });
+    // With no font picked, a reset brings back no font either.
+    const cleared = withFontRole(set, "heading", undefined, supplied);
+    expect(withSiteTextRow(cleared, "h2", supplied.h2).siteText?.h2).toEqual({
+      fontSize: "40px",
+    });
+  });
+
   it("keeps a heading's font when it is pointed at another type size, or reset", () => {
     const set = withFontRole(SITE, "heading", '"Lora", serif');
     const sized = withTypeSize(set, "h2", "font-size.h1");
