@@ -83,9 +83,12 @@ async function visitor(
   return { context, page: await context.newPage() };
 }
 
-/** The message a send comes back to, by its outcome. */
+/**
+ * The message a send comes back to, by its outcome: the one on screen, since
+ * a hidden copy of the page may hold the same id.
+ */
 const result = (page: Page, outcome: string) =>
-  page.locator(`#form-contact-${outcome}`);
+  page.locator(`#form-contact-${outcome}:visible`);
 
 // Every test here needs the page readable from its HTML alone, and the
 // published route streams the page's body in a part only script reveals.
