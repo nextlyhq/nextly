@@ -54,14 +54,17 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { appLanguageOrder } from "../../i18n/configured-locales";
+import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/companion-columns";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
+import { companionColumnNames } from "../../i18n/runtime/companion-io";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
+import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
   reconcileFile,
   recordAlreadyApplied,
@@ -297,7 +300,13 @@ export async function writeCollectionSave(
   } = {}
 ): Promise<CollectionSaveResult> {
   const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, options);
+  const written = await writeSave(deps, save, {
+    ...options,
+    // The file runs here, planned from the history: a translations table
+    // the history does not describe would meet statements written for
+    // another one.
+    runsFile: deps.applies && options.appliedBy === undefined,
+  });
   // Once a push has run, the database changed outside the files: they stay.
   let pushed = false;
   try {
@@ -408,7 +417,7 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: { historyChecked?: boolean }
+  options: { historyChecked?: boolean; runsFile?: boolean }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
@@ -420,6 +429,9 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
+  if (options.runsFile === true) {
+    await refuseCompanionDrift(deps, save, plan.table);
+  }
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
@@ -1138,6 +1150,72 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
     });
   }
   return entity;
+}
+
+/**
+ * Refuse a save whose translations table (`<table>_locales`) is not, in the
+ * database, what the migration history records of it, before anything is
+ * written: the save's file is planned from that record, and run over another
+ * table it would fail part way or translate the wrong columns. The refusal is
+ * the one `nextly migrate` gives a database that matches neither end of a
+ * migration (`NEXTLY_MIGRATION_DRIFT`), naming each column the database has
+ * that the history does not (`+`) and each it lacks (`-`).
+ *
+ * Judged only for a save that is translated before or after, and only where
+ * the newest snapshot records the table and says which of its tables were
+ * translated: a table no snapshot records is adopted from the database, and a
+ * snapshot from before that record says nothing of its translations table.
+ */
+async function refuseCompanionDrift(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<void> {
+  if (save.previous?.localized !== true && save.entity?.localized !== true) {
+    return;
+  }
+  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const recordedTable = latest?.data.snapshot.tables.find(
+    t => t.name === table
+  );
+  if (latest === null || recordedTable === undefined) return;
+  const recordsTranslations =
+    latest.data.translatedFieldsRecorded === true ||
+    latest.data.snapshot.tables.some(t => t.localized === true);
+  if (!recordsTranslations) return;
+
+  const recorded = new Set(
+    recordedTable.localized === true
+      ? (recordedTable.localizedColumns ?? [])
+      : []
+  );
+  const live = new Set(
+    (await companionColumnNames(deps.adapter, table)).filter(
+      column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
+    )
+  );
+  const companion = `${table}_locales`;
+  const driftItems: DriftItem[] = [
+    ...[...live]
+      .filter(column => !recorded.has(column))
+      .map(column => ({
+        kind: "+" as const,
+        detail: `${companion}.${column} present in DB`,
+      })),
+    ...[...recorded]
+      .filter(column => !live.has(column))
+      .map(column => ({
+        kind: "-" as const,
+        detail: `${companion}.${column} absent from DB`,
+      })),
+  ];
+  if (driftItems.length === 0) return;
+  const migration = latest.filename.replace(/\.snapshot\.json$/, "");
+  throw migrationDriftError({
+    migration,
+    file: join(deps.migrationsDir, `${migration}.sql`),
+    driftItems,
+  });
 }
 
 /** A slug as a migration name spells it. */

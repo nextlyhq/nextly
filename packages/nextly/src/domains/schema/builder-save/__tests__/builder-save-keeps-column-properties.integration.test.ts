@@ -206,6 +206,39 @@ const ROADS: Road[] = [
       ),
   },
   {
+    // Translation turned on in the same save: the fields here are shared, so no value moves and
+    // the save's own file runs, the companion brought in step after it.
+    name: "a Single's schema dialog turning translation on (its migration file)",
+    table: "single_hero",
+    runsFile: true,
+    create: createHero,
+    save: async (t, fields, renamed) =>
+      dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
+          schemaVersion: (
+            await t.getService("singleRegistryService").getSingle("hero")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "single_hero",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
     name: "a Single's settings save (its migration file)",
     table: "single_hero",
     // The service writes the save's migration file, and in development the writer runs it, as the
@@ -258,6 +291,44 @@ const ROADS: Road[] = [
                 renameResolutions: [
                   {
                     tableName: "comp_card",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
+    // Translation turned on in the same save, as for the Single above.
+    name: "a field group turning translation on (its migration file)",
+    table: "comp_band",
+    runsFile: true,
+    async create(_t, fields) {
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "band", label: "Band", fields }
+      );
+    },
+    save: async (t, fields, renamed) =>
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "band" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
+          schemaVersion: (
+            await t.getService("fieldGroupRegistryService").getComponent("band")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "comp_band",
                     fromColumn: "heading",
                     toColumn: renamed,
                     choice: "rename",
