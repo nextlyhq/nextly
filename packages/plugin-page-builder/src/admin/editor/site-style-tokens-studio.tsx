@@ -594,10 +594,12 @@ export function ColoursTab({
   components: ComponentLookup;
   limits: DocumentLimits;
 }): React.JSX.Element | null {
-  const tokens = useContext(VariablesStudio)?.tokens;
+  const studio = useContext(VariablesStudio);
+  const tokens = studio?.tokens;
+  const classes = studio?.classes;
   const used = useMemo(
-    () => usedOnPage(document, components, limits, tokens),
-    [document, components, limits, tokens]
+    () => usedOnPage(document, components, limits, tokens, classes),
+    [document, components, limits, tokens, classes]
   );
   return <VariablesTab tab="colours" usedOnPage={used} />;
 }

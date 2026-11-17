@@ -9,6 +9,7 @@ import {
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
   type BlockNode,
+  type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
@@ -36,11 +37,18 @@ const document = (
 ): BlockDocument => ({ formatVersion: DOCUMENT_FORMAT_VERSION, kind, nodes });
 
 const TOKENS: SiteTokenSet = {
-  tokens: ["primary", "accent", "muted", "border"].map(name => ({
-    name: `color.${name}`,
-    kind: "color" as const,
-    values: { light: "#000000" },
-  })),
+  tokens: [
+    ...["primary", "accent", "muted", "border"].map(name => ({
+      name: `color.${name}`,
+      kind: "color" as const,
+      values: { light: "#000000" },
+    })),
+    {
+      name: "shadow.lift",
+      kind: "shadow",
+      values: { light: "0 1px 2px var(--site-color-accent)" },
+    },
+  ],
 };
 
 describe("the variables the open page uses", () => {
@@ -65,6 +73,39 @@ describe("the variables the open page uses", () => {
     expect(
       [...usedOnPage(page, components, DEFAULT_LIMITS, TOKENS)].sort()
     ).toEqual(["color.accent", "color.muted", "color.primary"]);
+  });
+
+  it("reads the shared styles and block looks its blocks wear", () => {
+    const page = document([
+      { ...coloured("p1", "#111111"), classes: ["c-card"] },
+    ]);
+    const library: NamedClass[] = [
+      {
+        id: "c-card",
+        slug: "card",
+        label: "Card",
+        orderIndex: 0,
+        styles: { base: { base: { color: { $token: "color.border" } } } },
+      },
+    ];
+    expect([
+      ...usedOnPage(page, new Map(), DEFAULT_LIMITS, TOKENS, library),
+    ]).toEqual(["color.border"]);
+  });
+
+  it("reads the colour a variable it uses names through var()", () => {
+    const page = document([
+      {
+        id: "p1",
+        type: "core/box",
+        version: 1,
+        props: {},
+        styles: { base: { base: { boxShadow: { $token: "shadow.lift" } } } },
+      },
+    ]);
+    expect(
+      [...usedOnPage(page, new Map(), DEFAULT_LIMITS, TOKENS)].sort()
+    ).toEqual(["color.accent", "shadow.lift"]);
   });
 
   it("reads a component placed inside itself once", () => {
