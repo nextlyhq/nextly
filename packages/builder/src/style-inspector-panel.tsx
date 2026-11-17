@@ -590,7 +590,7 @@ function StyleInspectorBody({
   return (
     <StyleTargetContext.Provider value={target}>
       <TokenPrefixContext.Provider value={tokenPrefixOf(cascade)}>
-        <ParentArrangementContext.Provider value={inspection?.parent}>
+        <ParentArrangementContext.Provider value={inspection?.parentLayout}>
           <AppliedAtTier.Provider
             value={appliedAtReader({
               cascade,
