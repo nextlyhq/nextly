@@ -73,6 +73,16 @@ function shownRectOf(
   return { rect: space.place(visible), element, scale: space.scale };
 }
 
+/** Where the chooser goes, when there is a layer and a block to draw it for. */
+function shownFor(
+  layer: HTMLElement | null,
+  nodeId: string | undefined
+): ReturnType<typeof shownRectOf> {
+  return layer === null || nodeId === undefined
+    ? null
+    : shownRectOf(layer, nodeId);
+}
+
 /** Two rectangles at the same place and size. */
 function sameRect(a: Rect | null, b: Rect | null): boolean {
   if (a === null || b === null) return a === b;
@@ -168,8 +178,7 @@ export function FirstAddChoosers({
   const measure = React.useCallback(() => {
     const element = layer.current;
     const id = latest.current;
-    const found =
-      element === null || id === undefined ? null : shownRectOf(element, id);
+    const found = shownFor(element, id);
     if (element === null || id === undefined || found === null) {
       setRect(current => (current === null ? current : null));
       return;
