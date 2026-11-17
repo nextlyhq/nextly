@@ -733,6 +733,21 @@ describe("readLayoutChoices", () => {
     );
   });
 
+  it("says whether the caller may create sets", async () => {
+    const { nextly } = fake(store);
+    const may = await readLayoutChoices(context(), nextly, asked());
+    expect(may.meta.canCreateLayouts).toBe(true);
+    const mayNot = {
+      ...context(),
+      caller: {
+        identity: async () => ({ user: { id: "author" } }),
+        can: async (action: string) => action !== "create",
+      },
+    } as unknown as Parameters<typeof readLayoutChoices>[0];
+    const refused = await readLayoutChoices(mayNot, nextly, asked());
+    expect(refused.meta.canCreateLayouts).toBe(false);
+  });
+
   it("says nothing of unfocused sets' changes when not asked", async () => {
     const { nextly } = fake({
       ...store,

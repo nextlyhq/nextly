@@ -200,6 +200,18 @@ export interface LayoutChoicesResponse {
      */
     readonly canUpdateLayouts: boolean;
     /**
+     * Whether the caller may create sets, which offers a set's "Duplicate"
+     * in the builder's Pages panel. Optional: an answer from before it was
+     * sent offers no copy.
+     */
+    readonly canCreateLayouts?: boolean;
+    /**
+     * Whether the caller may update ANY set, a rule over set rows included,
+     * which offers a set's "Rename" in the builder's Pages panel: the write
+     * itself judges the row. Optional, as `canCreateLayouts` is.
+     */
+    readonly canUpdateAnyLayout?: boolean;
+    /**
      * Whether more Layouts match than the list holds: the picker then offers
      * a search, since the rest are reachable by title.
      */
