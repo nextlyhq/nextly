@@ -81,7 +81,11 @@ vi.mock("./entry-block-resolver", async () => {
 const CONFIG = {};
 // The admin's media read, which the picture resolves images through: one
 // function for every call, as the admin's own hook keeps it.
-const READ_MEDIA = async () => null;
+const READ_MEDIA = vi.fn(async (id: string) =>
+  id === "m1"
+    ? { url: "/media/m1.png", altText: "Site logo", width: 64, height: 64 }
+    : null
+);
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   usePluginClientConfig: () => CONFIG,
@@ -212,5 +216,37 @@ describe("the entry page's preview of the page", () => {
     expect(counted.draws).toBe(1);
     expect(screen.getByRole("img", { name: "Logo", hidden: true })).toBe(logo);
     expect(counted.lateRuns).toBe(runs);
+  });
+});
+
+describe("the entry page's preview resolving images", () => {
+  /** Hands the test the render inputs the entry form draws with. */
+  function Probe({
+    onRender,
+  }: {
+    onRender: (
+      render: ReturnType<typeof useRestingPageRender>["render"]
+    ) => void;
+  }): null {
+    onRender(useRestingPageRender("page-builder", pageWith("Hello")).render);
+    return null;
+  }
+
+  it("resolves a media id through the admin's media read, as the canvas does", async () => {
+    let inputs: ReturnType<typeof useRestingPageRender>["render"] | undefined;
+    await act(async () => {
+      render(<Probe onRender={value => (inputs = value)} />);
+    });
+
+    // Without a context of its own the renderer's stand-in answers nothing,
+    // and the picture draws no image the page holds.
+    const resolved = await inputs?.context?.resolveMedia("m1");
+    expect(READ_MEDIA).toHaveBeenCalledWith("m1");
+    expect(resolved).toEqual({
+      url: "/media/m1.png",
+      alt: "Site logo",
+      width: 64,
+      height: 64,
+    });
   });
 });

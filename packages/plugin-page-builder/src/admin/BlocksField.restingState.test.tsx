@@ -353,7 +353,7 @@ describe("the entry form at rest", () => {
 
     const { container } = render(<Host />);
 
-    expect(container.textContent).toContain("1 section");
+    expect(container.textContent).toContain("Sections (1)");
   });
 
   /*

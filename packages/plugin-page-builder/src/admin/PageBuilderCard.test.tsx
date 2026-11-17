@@ -267,7 +267,10 @@ describe("PageBuilderCard", () => {
   it("offers no action when the field cannot be edited", () => {
     render(<PageBuilderCard {...base} document={doc(2)} canEdit={false} />);
 
-    expect(screen.queryByRole("button")).toBeNull();
+    // The fold over the sections is the only control: it shows, never edits.
+    expect(
+      screen.getAllByRole("button").map(button => button.textContent)
+    ).toEqual(["Sections (2)"]);
     expect(screen.queryByRole("link")).toBeNull();
   });
 

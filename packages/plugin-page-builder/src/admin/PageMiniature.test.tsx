@@ -711,6 +711,8 @@ describe("PageMiniature inside a header & footer set", () => {
         regions={[]}
       />
     );
-    expect(container.textContent).toBe("Hello from the page");
+    expect(container.textContent).toContain("Hello from the page");
+    // Drawn as before: no part of a header & footer set, so no part scope.
+    expect(container.querySelector("[class*='nx-pb-part-']")).toBeNull();
   });
 });
