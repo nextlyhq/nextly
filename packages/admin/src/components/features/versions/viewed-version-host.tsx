@@ -679,7 +679,8 @@ function useFieldRestore(
  * whether the person may still change each field judged again as it is read
  * and as it is restored: the document can turn read-only after it was shown
  * (another editor takes it), and the field's restore is then withdrawn as
- * "Restore…" is.
+ * "Restore…" is; and a field read-only when shown is offered once it may be
+ * changed again.
  */
 export function fieldRestoreOf(
   rows: RestoreRow[],
@@ -689,7 +690,16 @@ export function fieldRestoreOf(
   const byName = new Map(rows.map(row => [row.name, row]));
   const rowNow = (name: string): RestoreRow | undefined => {
     const row = byName.get(name);
-    if (!row || row.disabled || editor.canEdit(name)) return row;
+    // Only whether the person may change the field moves while the version
+    // is on screen; a hidden, removed or language-less field stays as judged.
+    if (!row || (row.disabled && row.disabled !== "read-only")) return row;
+    if (editor.canEdit(name)) {
+      if (!row.disabled) return row;
+      // Read-only when shown, changeable now: offered as any changeable
+      // field is, with the version's value the plan kept for it.
+      const { disabled: _disabled, reason: _reason, ...offered } = row;
+      return { ...offered, chosen: true };
+    }
     return {
       ...row,
       chosen: false,
@@ -700,10 +710,12 @@ export function fieldRestoreOf(
   return {
     rowFor: rowNow,
     restore: name => {
-      if (rowNow(name)?.chosen !== true) return;
+      const row = rowNow(name);
+      if (row?.chosen !== true) return;
+      // The row as judged now, so one offered again since it was shown goes in.
       restoreIntoEditor({
         editor,
-        rows,
+        rows: [row],
         names: [name],
         versionNo: version.versionNo,
         savedAt: version.savedAt,

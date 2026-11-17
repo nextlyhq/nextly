@@ -79,4 +79,56 @@ describe("fieldRestoreOf", () => {
     restore.restore("title");
     expect(restoreIntoEditor).not.toHaveBeenCalled();
   });
+
+  it("offers a field again once the document stops being read-only", () => {
+    restoreIntoEditor.mockClear();
+    // Shown while another editor held the document: judged read-only then.
+    const heldElsewhere: RestoreRow = {
+      ...title,
+      chosen: false,
+      disabled: "read-only",
+      reason: "You can't edit this field",
+    };
+    let editable = false;
+    const restore = fieldRestoreOf(
+      [heldElsewhere],
+      editorWhere(() => editable),
+      { versionNo: 3, savedAt: null }
+    );
+
+    // The other editor lets the document go.
+    editable = true;
+
+    expect(restore.rowFor("title")).toMatchObject({ chosen: true });
+    expect(restore.rowFor("title")?.disabled).toBeUndefined();
+    restore.restore("title");
+    expect(restoreIntoEditor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        names: ["title"],
+        rows: [expect.objectContaining({ name: "title", value: "Then" })],
+      })
+    );
+    expect(
+      restoreIntoEditor.mock.calls[0]?.[0].rows[0].disabled
+    ).toBeUndefined();
+  });
+
+  it("keeps a hidden field disabled whatever the document's lock", () => {
+    const hidden: RestoreRow = {
+      name: "secret",
+      label: "Secret",
+      chosen: false,
+      disabled: "hidden",
+      reason: "Hidden: you can't read this field",
+      replacesUnsaved: false,
+      shared: false,
+    };
+    const restore = fieldRestoreOf(
+      [hidden],
+      editorWhere(() => true),
+      { versionNo: 3, savedAt: null }
+    );
+
+    expect(restore.rowFor("secret")).toMatchObject({ disabled: "hidden" });
+  });
 });

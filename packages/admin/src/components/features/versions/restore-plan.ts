@@ -144,9 +144,12 @@ function rowFor(
   if (input.versionLocale === null && input.translatable?.has(name) === true) {
     return { ...base, ...disabledAs("no-language") };
   }
+  // A field the person may read but not change now keeps the version's value:
+  // what stops the change (another editor holding the document, a condition)
+  // can clear while the version is on screen, and the field is offered then.
   return input.canEdit(name)
     ? { ...base, chosen: true, value }
-    : { ...base, ...disabledAs("read-only") };
+    : { ...base, ...disabledAs("read-only"), value };
 }
 
 /** An empty value as the version stored it: its own "" or [], else null. */

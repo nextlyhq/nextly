@@ -172,6 +172,8 @@ describe("restorePlan", () => {
       chosen: false,
       disabled: "read-only",
       reason: "You can't edit this field",
+      // Carried, so the field can be offered again once it may be changed.
+      value: 1,
     });
   });
 
