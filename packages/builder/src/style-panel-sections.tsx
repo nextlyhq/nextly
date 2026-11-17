@@ -50,6 +50,7 @@ import { SpacingBox } from "./spacing-box-fields";
 import {
   BlockShortcutsFields,
   BlockPresetsOver,
+  SpacerHeightPresets,
 } from "./style-block-shortcuts";
 import {
   StyleTargetContext,
@@ -529,6 +530,13 @@ function SectionFields({
           >
             {property.property === "minHeight" ? (
               <BlockPresetsOver surroundings={surroundings} />
+            ) : null}
+            {property.property === "height" ? (
+              <SpacerHeightPresets
+                surroundings={surroundings}
+                control={property.controls[0]}
+                stored={property.value}
+              />
             ) : null}
             <StylePropertyFields
               property={withOverlayOffered(property, surroundings, target)}

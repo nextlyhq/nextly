@@ -9,7 +9,7 @@
  *   through the host's `findLinkTargets` and offers what was typed as an
  *   address. Set, it is a chip naming the page, the entry or the address,
  *   with ✕ to clear it.
- * - **Open in new tab** is a switch row, and **Link options** a disclosure of
+ * - **Open in a new tab** is a switch row, and **Link options** a disclosure of
  *   `rel` checkboxes. Both are drawn only while a link is set.
  *
  * Which props make up the link, and what each change writes, are decided in
@@ -1202,7 +1202,7 @@ export function LinkGroupField({
       {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>
           <div className="nx-inspector__field" data-content-control="checkbox">
-            <Label htmlFor={tabId}>Open in new tab</Label>
+            <Label htmlFor={tabId}>Open in a new tab</Label>
             <Switch
               id={tabId}
               disabled={!writable(group.target)}

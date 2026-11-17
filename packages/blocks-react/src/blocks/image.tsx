@@ -741,6 +741,10 @@ const IMAGE_BASE_STYLES = {
 const IMAGE_PARTS = {
   // The button an enlarged picture is, and the lightbox it opens.
   ...LIGHTBOX_PARTS,
+  // The enlarge button, unclipped: the picture inside it takes its own
+  // corners and draws its own shadow, which a clip would cut off. Nothing
+  // else in the button draws past the picture's box.
+  enlarge: unclipped(LIGHTBOX_PARTS.enlarge),
   // A captioned picture's figure: the picture and its caption in a column,
   // so a height set on the block is shared between them rather than
   // overflowed.
@@ -759,9 +763,10 @@ const IMAGE_PARTS = {
     },
   },
   // The picture inside a wrapper (a figure, a link) takes its corners,
-  // proportion, fit and focal point from the root, from every tier that styles
-  // it (a look, a shared style, the node's own values), so the wrapper's box,
-  // and a caption inside it, is never rounded or squared by them. It may
+  // proportion, fit, focal point and shadow from the root, from every tier
+  // that styles it (a look, a shared style, the node's own values), so the
+  // wrapper's box, and a caption inside it, is never rounded, squared or
+  // shadowed by them: a shadow follows the picture's own shape. It may
   // shrink to the room the wrapper leaves it, where the fit crops or fits it.
   picture: {
     takesFromRoot: {
@@ -770,6 +775,7 @@ const IMAGE_PARTS = {
         "aspectRatio",
         "objectFit",
         "objectPosition",
+        "boxShadow",
       ],
       // The enlarge button sits between the figure and the picture, as a
       // link does inside a captioned picture's figure.
@@ -802,8 +808,8 @@ const IMAGE_PARTS = {
           display: "inline-block",
           maxWidth: "100%",
           minHeight: "0",
-          // Clipped, so nothing the picture draws past its corners shows.
-          overflow: "hidden",
+          // Not clipped: the picture rounds its own corners, and its shadow
+          // falls past them.
         },
       },
     },
@@ -822,7 +828,11 @@ const IMAGE_PARTS = {
       },
     },
   },
+  // The caption takes the block's text size itself, inside its figure: set
+  // on the figure, a size would reach the caption scaled by its own smaller
+  // default, so 20px would read 17.5px. The default stays its own.
   caption: {
+    takesFromRoot: { properties: ["fontSize"], whenRootIs: ["frame"] },
     baseStyles: {
       base: {
         base: {
@@ -839,12 +849,24 @@ const IMAGE_PARTS = {
   },
 } as const;
 
+/** A part's styles without the clip its base sets. */
+function unclipped<Part extends { baseStyles: { base: { base: object } } }>(
+  part: Part
+): Part {
+  const { overflow: _clip, ...base } = part.baseStyles.base.base as Record<
+    string,
+    unknown
+  >;
+  return { ...part, baseStyles: { base: { base } } } as Part;
+}
+
 /** The Content section a click's choice and its link are drawn in. */
 const WHEN_CLICKED_SECTION = "When clicked";
 
 /**
- * The shared link props, each placed in the When clicked section, where the
- * editor draws them under the choice that uses them.
+ * The shared link props, placed in the When clicked section, where the
+ * editor draws them under the choice that uses them; all but `rel`, which is
+ * in Advanced › HTML.
  */
 function whenClickedLinkProps(): {
   readonly [Name in keyof typeof LINK_PROPS]: (typeof LINK_PROPS)[Name] & {
@@ -859,7 +881,10 @@ function whenClickedLinkProps(): {
     },
     entryId: { ...LINK_PROPS.entryId, section: WHEN_CLICKED_SECTION },
     target: { ...LINK_PROPS.target, section: WHEN_CLICKED_SECTION },
-    rel: { ...LINK_PROPS.rel, section: WHEN_CLICKED_SECTION },
+    // How the page relates to where it links is an HTML detail: drawn in
+    // Advanced › HTML with the block's other HTML settings, not with the
+    // click's choice.
+    rel: { ...LINK_PROPS.rel, section: "HTML" },
   };
 }
 
@@ -906,19 +931,22 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     src: { label: "Image address", role: "content", type: "url" },
     alt: { label: "Alt text", role: "content", type: "text" },
     decorative: { label: "Decorative, no alt text", type: "checkbox" },
+    // How the browser fetches the picture: an HTML detail, so in Advanced ›
+    // HTML. Drawn as one switch named by `eager`'s words: two states with a
+    // safe default are a yes-or-no question. The stored values stay as they
+    // are.
     loading: {
-      label: "Loading",
+      label: "Load right away",
       optionLabels: {
         lazy: "Load when near the screen",
-        eager: "Load immediately",
+        eager: "Load right away",
       },
-      // Drawn as one switch named by `eager`'s words: two states with a safe
-      // default are a yes-or-no question. The stored values stay as they are.
       display: "switch",
       switchOn: "eager",
-      hint: "Turn on for images at the top of the page.",
+      hint: "For images near the top of the page.",
       type: "select",
       options: [...IMAGE_LOADING],
+      group: "advanced",
     },
     // What a click does, with the link it follows beside it in the same
     // section: the editor draws the link's settings only while Link is
@@ -977,10 +1005,16 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
   // its choices: upload, the media library, or a link.
   example: { props: {} },
   supports: {
+    // Text and its colour style the caption: it inherits them, and takes
+    // the text size itself (see its part).
+    typography: true,
+    color: true,
     spacing: true,
     dimensions: true,
     border: true,
     effects: true,
+    // On the picture itself, whatever wraps it: see the picture part.
+    shadow: true,
     position: true,
   },
   // Interactive content while it links or enlarges, so a link (a linked box

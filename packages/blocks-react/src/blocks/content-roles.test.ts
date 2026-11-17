@@ -14,7 +14,7 @@ import { coreBlocks } from "./index";
 
 /** The content props of each core block that has any. */
 const CONTENT: Record<string, readonly string[]> = {
-  "core/heading": ["text", "href"],
+  "core/heading": ["text", "href", "entryCollection", "entryId"],
   // A whole-block link is content: where the block leads is what an editor
   // changes, as on Heading and Button.
   "core/box": ["link", "entryCollection", "entryId"],

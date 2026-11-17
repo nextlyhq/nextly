@@ -30,6 +30,8 @@ export const EDITOR_WORDS = {
   sharedStyles: "Shared styles",
   blockStyles: "Block styles",
   fonts: "Fonts",
+  // The Type tab's section setting every page's text.
+  siteText: "Site text",
   sections: "Saved sections",
   content: "Content",
   style: "Style",
@@ -53,6 +55,16 @@ export const CONVERSION_WORDS = {
   saveAsSection: "Save as section…",
   turnIntoComponent: "Turn into component…",
   detachFromComponent: "Detach from component",
+} as const;
+
+/**
+ * The top bar's light and dark preview: its name for assistive technology,
+ * which stays the same pressed or not, and its tooltip, which says that
+ * nothing a visitor sees changes with it.
+ */
+export const DARK_PREVIEW_WORDS = {
+  name: "Preview in dark mode",
+  tooltip: "Preview only. Visitors see what their own device is set to.",
 } as const;
 
 /**
