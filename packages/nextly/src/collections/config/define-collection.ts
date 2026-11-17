@@ -387,6 +387,31 @@ export interface CollectionAdminOptions {
   disableDelete?: boolean;
 
   /**
+   * @experimental Where the admin opens this collection's entries: `"form"`,
+   * or the path of a full-screen document view the collection has (a plugin's
+   * view on this collection, or one offered on a field type this collection
+   * holds at its top level).
+   *
+   * Every admin link meant to open an entry follows it: a list row, a
+   * dashboard card's row. The form keeps its own address whatever this says,
+   * and the admin opens the form instead for a reader who may not update the
+   * entry, and for an entry opened in a language other than the default.
+   *
+   * Without it, an entry opens in a view that asks to open first for the
+   * collection's main field (the first top-level field that is not hidden,
+   * not the title and not `slug`), and in the form otherwise.
+   *
+   * A path no view answers, or a field-type view whose field type is not
+   * among the collection's top-level fields, stops the boot.
+   *
+   * @example
+   * ```typescript
+   * admin: { opensIn: "form" }
+   * ```
+   */
+  opensIn?: string;
+
+  /**
    * Icon identifier for the collection.
    * Should be a valid icon name from the icon library (e.g., Lucide).
    *

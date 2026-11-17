@@ -160,7 +160,7 @@ export const entryContent: BlockDefinition<EntryContentProps, PageContext> =
     props: {
       // Which of the collection's top-level blocks fields it draws, chosen
       // from the collection's own in the inspector.
-      field: { label: "Field", type: "entryField" },
+      field: { label: "Show field", section: "Entry", type: "entryField" },
       ...CONTENT_WIDTH_PROPS,
     },
     defaultProps: { contained: false },

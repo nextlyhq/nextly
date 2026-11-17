@@ -55,6 +55,7 @@ import {
   ComponentVariantsSection,
 } from "./component-variants-panel";
 import { ContentServicesContext } from "./content-controls";
+import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
 import {
@@ -301,7 +302,9 @@ export function InspectorPanel({
       <ComponentVariantsContext.Provider value={componentVariants}>
         <CanvasPassageContext.Provider value={canvasPassage}>
           <PanelFoldsProvider>
-            <SelectionInspector {...panel} />
+            <CssNamesProvider>
+              <SelectionInspector {...panel} />
+            </CssNamesProvider>
           </PanelFoldsProvider>
         </CanvasPassageContext.Provider>
       </ComponentVariantsContext.Provider>
@@ -615,6 +618,11 @@ function SelectionInspector({
           services={contentServices}
           reasonId={reasonId}
           fields={fields}
+          around={{
+            breakpoints: styleOnly.breakpoints,
+            cascade,
+            renderedTag: canvas.tag,
+          }}
         />
 
         <TabsContent value="style">

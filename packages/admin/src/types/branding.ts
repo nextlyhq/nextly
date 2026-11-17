@@ -283,7 +283,14 @@ export interface PluginMetadata {
        * Offered on every collection and Single with a TOP-LEVEL field of this
        * type, via `contributes.admin.documentViews`; the document decides.
        */
-      | { fieldType: string }
+      | {
+          fieldType: string;
+          /**
+           * Present when the view asks to open first on a collection whose
+           * main field is of this type, unless the collection says otherwise.
+           */
+          opensFirst?: "mainField";
+        }
     )
   >;
   /**
