@@ -44,7 +44,7 @@ import type {
 import { conditionAllows } from "../visibility";
 
 import { ICON_TYPE, iconMayDraw } from "./icon";
-import { firstMediaRead, IMAGE_TYPE, imageMayDraw } from "./image";
+import { firstMediaRead, IMAGE_TYPE, imageFollowsLink } from "./image";
 import { readClaimOf } from "./props";
 
 /** Where a prop's value comes from: as set, or a list item's field path. */
@@ -145,16 +145,23 @@ function addFollows(node: BlockNode, follows: Map<string, Set<string>>): void {
 }
 
 /**
- * Whether a block draws what its link wraps, asked of what each prop holds
- * or is bound to, by the block's own check, the one its render makes before
- * it reads its link: an image with nothing to draw, or an icon naming none,
- * reads no link. A block with no such check (a button) always may.
+ * Whether a block follows its link, asked of what each prop holds or is
+ * bound to, and of its props as drawn, by the block's own check, the one its
+ * render makes before it reads its link: an image with nothing to draw, or
+ * one whose click does not follow its link, or an icon naming none, reads no
+ * link. A block with no such check (a button) always may.
  */
 const DRAWS_BEFORE_LINKING: Readonly<
-  Record<string, (has: (prop: string) => boolean) => boolean>
+  Record<
+    string,
+    (
+      has: (prop: string) => boolean,
+      props: Readonly<Record<string, unknown>>
+    ) => boolean
+  >
 > = {
-  [IMAGE_TYPE]: imageMayDraw,
-  [ICON_TYPE]: iconMayDraw,
+  [IMAGE_TYPE]: imageFollowsLink,
+  [ICON_TYPE]: has => iconMayDraw(has),
 };
 
 /** Whether a node names an entry to link to, by props set or bound. */
@@ -184,7 +191,7 @@ function linkedEntry(
     : undefined;
   const has = (prop: string) =>
     textOf(props[prop]) !== undefined || filled?.bound?.[prop] !== undefined;
-  if (draws !== undefined && !draws(has)) return undefined;
+  if (draws !== undefined && !draws(has, props)) return undefined;
   const collection = textOf(props[LINK_COLLECTION_PROP]);
   const id = textOf(props[LINK_ID_PROP]);
   return collection === undefined || id === undefined
