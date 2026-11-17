@@ -25,7 +25,6 @@ import { FormSourceControl, type FormSources } from "./form-source-control";
 import type { BlockInspection, EditableProp } from "./inspector";
 import type { PanelSection } from "./panel-section";
 
-
 /** The sections the block places these props in, by their names. */
 const FIELDS_SECTION = "Fields";
 const AFTER_SENDING_SECTION = "After sending";
@@ -138,14 +137,16 @@ export function formSectionBodies(
     ...(picked ? ([[FORM_SECTION, null]] as const) : []),
     [
       FIELDS_SECTION,
-      picked ? null : <FormFieldsControl
-        key="fields"
-        id={`${inspection.nodeId}-form-fields`}
-        value={values.fields}
-        types={fieldTypesOf(fieldsProp)}
-        disabled={!writable("fields")}
-        onCommit={next => onCommit("fields", next)}
-      />,
+      picked ? null : (
+        <FormFieldsControl
+          key="fields"
+          id={`${inspection.nodeId}-form-fields`}
+          value={values.fields}
+          types={fieldTypesOf(fieldsProp)}
+          disabled={!writable("fields")}
+          onCommit={next => onCommit("fields", next)}
+        />
+      ),
     ],
     [
       AFTER_SENDING_SECTION,

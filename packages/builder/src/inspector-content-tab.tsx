@@ -283,9 +283,15 @@ function ContentSurface({
   );
   // The Form's Fields and After sending, which the builder draws in place
   // of their generated rows.
-  const stored = findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
+  const stored =
+    findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
   const formWritable = (name: string) =>
-    propIsWritable(editor.document, inspection.nodeId, name, lockViewOf(editor));
+    propIsWritable(
+      editor.document,
+      inspection.nodeId,
+      name,
+      lockViewOf(editor)
+    );
   // Where a Form's form comes from, read only while a Form is inspected.
   const formSources = useFormSources(
     inspection.blockName === FORM_BLOCK ? services?.listForms : undefined

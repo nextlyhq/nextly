@@ -222,10 +222,9 @@ describe("the routes", () => {
     });
     const response = await editorFormsRoutes(
       registered(failing)
-    ).describe.handler(
-      new Request("http://site/x?provider=forms&ref=7"),
-      { user: AUTHOR } as never
-    );
+    ).describe.handler(new Request("http://site/x?provider=forms&ref=7"), {
+      user: AUTHOR,
+    } as never);
     expect(response.status).toBe(502);
   });
 });

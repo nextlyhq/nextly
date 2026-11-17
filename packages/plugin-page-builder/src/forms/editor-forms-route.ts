@@ -142,7 +142,10 @@ interface EditorFormsRoute {
   readonly method: "GET";
   readonly path: string;
   readonly checksAccess: true;
-  readonly handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
+  readonly handler: (
+    req: Request,
+    ctx: PluginRouteContext
+  ) => Promise<Response>;
 }
 
 /**

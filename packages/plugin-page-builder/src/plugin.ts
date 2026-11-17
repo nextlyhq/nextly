@@ -30,12 +30,12 @@ import {
   seedDefaultLayoutAtStart,
 } from "./default-layout/install";
 import { blocksFieldType } from "./fields/blocksField";
+import { editorFormsRoutes } from "./forms/editor-forms-route";
 import {
   createFormProviders,
   FORM_SERVICE,
   startFormProviders,
 } from "./forms/providers";
-import { editorFormsRoutes } from "./forms/editor-forms-route";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";

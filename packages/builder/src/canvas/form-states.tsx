@@ -26,11 +26,7 @@
  * @module canvas/form-states
  */
 import { walkNodes } from "@nextlyhq/blocks-engine";
-import {
-  Select,
-  SelectContent,
-  SelectTrigger,
-} from "@nextlyhq/ui";
+import { Select, SelectContent, SelectTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { ContentServices, PickedFormState } from "../content-services";
@@ -259,11 +255,7 @@ export function FormStates({
   const sources = useFormSources(picking ? services?.listForms : undefined);
 
   return (
-    <div
-      ref={layer}
-      className="nx-form-states"
-      {...{ [CHROME_ATTRIBUTE]: "" }}
-    >
+    <div ref={layer} className="nx-form-states" {...{ [CHROME_ATTRIBUTE]: "" }}>
       {hidden
         ? null
         : plates.map(plate => (
@@ -313,13 +305,16 @@ function FormNotice({
     <div
       className="nx-form-states__place"
       data-form-notice={kind}
-      style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
+      style={{
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }}
     >
       <div
         className={
-          kind === "deleted"
-            ? "nx-form-states__plate"
-            : "nx-form-states__tag"
+          kind === "deleted" ? "nx-form-states__plate" : "nx-form-states__tag"
         }
         role="note"
         // The notice's own presses stay on it: the canvas beneath would

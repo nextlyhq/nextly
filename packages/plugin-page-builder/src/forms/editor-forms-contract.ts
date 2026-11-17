@@ -10,10 +10,7 @@
  *
  * @module forms/editor-forms-contract
  */
-import type {
-  FormDescription,
-  FormListing,
-} from "@nextlyhq/plugin-sdk/blocks";
+import type { FormDescription, FormListing } from "@nextlyhq/plugin-sdk/blocks";
 
 /** Where the Form block's picker reads the site's forms. */
 export const EDITOR_FORMS_ROUTE_PATH = "/forms/editor/list";

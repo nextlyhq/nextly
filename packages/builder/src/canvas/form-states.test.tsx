@@ -20,7 +20,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type {
   ContentServices,
@@ -124,10 +132,10 @@ const picked = (ref: string) => ({ form: { provider: "forms", ref } });
 
 describe("a picked form on the canvas", () => {
   it("says a draft is one, and nothing over a published form", async () => {
-    mount(
-      [formNode("a", picked("2")), formNode("b", picked("1"))],
-      { "2": "draft", "1": "published" }
-    );
+    mount([formNode("a", picked("2")), formNode("b", picked("1"))], {
+      "2": "draft",
+      "1": "published",
+    });
     expect(
       await screen.findByText(
         "Draft form: visitors can't send it until it's published"
@@ -135,9 +143,9 @@ describe("a picked form on the canvas", () => {
     ).toBeTruthy();
     expect(document.querySelectorAll("[data-form-notice]")).toHaveLength(1);
     expect(
-      document.querySelector("[data-form-notice]")?.getAttribute(
-        "data-form-notice"
-      )
+      document
+        .querySelector("[data-form-notice]")
+        ?.getAttribute("data-form-notice")
     ).toBe("draft");
     // A draft is still picked on purpose: nothing to pick instead.
     expect(screen.queryByRole("combobox")).toBeNull();
@@ -186,7 +194,13 @@ describe("a picked form on the canvas", () => {
 
 describe("a simple form on the canvas", () => {
   it("says its answers have nowhere to go while Send to is empty", async () => {
-    mount([formNode("a", { action: "" }), formNode("b", { action: "https://example.com/hook" })], {});
+    mount(
+      [
+        formNode("a", { action: "" }),
+        formNode("b", { action: "https://example.com/hook" }),
+      ],
+      {}
+    );
     expect(
       await screen.findByText(
         "Answers have nowhere to go yet: add an address, or install the Forms plugin to save them"
