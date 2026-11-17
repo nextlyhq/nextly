@@ -511,16 +511,11 @@ describe("a canvas mounted outside the editor shell", () => {
 
 describe("a Layout region drawn in the canvas frame", () => {
   it("is styled by the frame's own sheet, in the admin's tokens, at the admin's size", () => {
-    const lock = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__lock");
-    expect(declared(lock, "background")).toBe(
-      "var(--nx-builder-surface-raised)"
-    );
-    expect(declared(lock, "color")).toBe("var(--nx-builder-text-muted)");
-    const words = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__mark-body");
-    expect(declared(words, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
-    expect(declared(words, "font-family")).toBe(
-      "var(--font-sans, system-ui), sans-serif"
-    );
+    const tag = ruleIn(CANVAS_FRAME_SHEET, ".nx-canvas-region__tag");
+    expect(declared(tag, "background")).toBe("var(--nx-region-mark)");
+    expect(declared(tag, "color")).toBe("var(--nx-region-mark-text)");
+    expect(declared(tag, "zoom")).toBe("calc(1 / var(--nx-canvas-zoom, 1))");
+    expect(declared(tag, "font")).toContain("var(--font-sans, system-ui)");
     // One home: the editor's own sheet never reaches the frame, so it holds
     // none of these rules.
     expect(CHROME.includes(".nx-canvas-region")).toBe(false);

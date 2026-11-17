@@ -260,6 +260,8 @@ export function Canvas({
   onListSortField,
   overlay,
   regions,
+  selectedRegion = null,
+  onSelectRegion,
   conditionsUnchecked,
   conditionsApplied,
   composed,
@@ -446,7 +448,8 @@ export function Canvas({
         drawn={drawn}
         rendered={render}
         environment={environment}
-        selection={marked}
+        selected={selectedRegion}
+        onSelect={onSelectRegion}
       >
         {page}
       </RegionsAround>

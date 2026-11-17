@@ -1,7 +1,7 @@
 /**
- * Where a Layout region's mark sits: outside the region at the edge it shares
- * with the page, inside only where outside would leave the screen, and across
- * within the part of the frame on screen.
+ * Where a header or footer's tag sits: inside the region, at its top left,
+ * or at its bottom left where the top left is off screen, and across within
+ * the part of the frame on screen. Never outside, over the page.
  */
 import { describe, expect, it } from "vitest";
 
@@ -11,68 +11,43 @@ import {
   regionMarkPlacement,
 } from "./canvas-region-placement";
 
-describe("which side of its page edge a region's mark sits on", () => {
+describe("which corner inside a region its tag sits in", () => {
   const viewport = 800;
-  const height = 40;
+  const height = 24;
 
-  it("hangs below a header, and flips inside where below is off screen", () => {
-    // A 48px header at the top of the page: room below.
+  it("sits at the top left while the region's top is on screen", () => {
+    // A 48px header at the top of the page.
     expect(
-      regionMarkPlacement({
-        area: "header",
-        edge: { top: 0, bottom: 48 },
-        height,
-        viewport,
-      })
-    ).toBe("outside");
-    // A tall header whose bottom edge is at the foot of the canvas.
+      regionMarkPlacement({ edge: { top: 0, bottom: 48 }, height, viewport })
+    ).toBe("top");
+    // A footer whose top edge is on screen, its foot below the canvas.
     expect(
-      regionMarkPlacement({
-        area: "header",
-        edge: { top: 500, bottom: 790 },
-        height,
-        viewport,
-      })
-    ).toBe("inside");
+      regionMarkPlacement({ edge: { top: 700, bottom: 980 }, height, viewport })
+    ).toBe("top");
   });
 
-  it("sits above a footer, and flips inside where above is off screen", () => {
+  it("drops to the bottom left where the top is scrolled off screen", () => {
+    // A tall footer scrolled so its top edge is above the canvas.
     expect(
-      regionMarkPlacement({
-        area: "footer",
-        edge: { top: 600, bottom: 672 },
-        height,
-        viewport,
-      })
-    ).toBe("outside");
-    // Scrolled so the footer's top edge is at the head of the canvas.
+      regionMarkPlacement({ edge: { top: -200, bottom: 300 }, height, viewport })
+    ).toBe("bottom");
+    // A header scrolled the same way.
     expect(
-      regionMarkPlacement({
-        area: "footer",
-        edge: { top: 10, bottom: 82 },
-        height,
-        viewport,
-      })
-    ).toBe("inside");
+      regionMarkPlacement({ edge: { top: -40, bottom: 60 }, height, viewport })
+    ).toBe("bottom");
   });
 
-  it("stays outside where inside is off screen too: a region scrolled away", () => {
+  it("keeps the top where the bottom is no better: a region scrolled away", () => {
     expect(
-      regionMarkPlacement({
-        area: "header",
-        edge: { top: -300, bottom: -100 },
-        height,
-        viewport,
-      })
-    ).toBe("outside");
+      regionMarkPlacement({ edge: { top: -300, bottom: -100 }, height, viewport })
+    ).toBe("top");
     expect(
-      regionMarkPlacement({
-        area: "footer",
-        edge: { top: 900, bottom: 972 },
-        height,
-        viewport,
-      })
-    ).toBe("outside");
+      regionMarkPlacement({ edge: { top: 900, bottom: 972 }, height, viewport })
+    ).toBe("top");
+    // A region too short to show the tag under its own top: still the top.
+    expect(
+      regionMarkPlacement({ edge: { top: -10, bottom: 12 }, height, viewport })
+    ).toBe("top");
   });
 });
 

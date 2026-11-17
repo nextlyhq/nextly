@@ -182,13 +182,13 @@ export interface LayersPanelProps {
    */
   definitions?: ComponentLookup;
   /**
-   * The regions of the page's Layout, shown as read-only rows: a header above
-   * the page's blocks, a footer below them.
+   * The regions of the page's layout, shown as rows of their own: a header
+   * above the page's blocks, a footer below them.
    *
    * Outside the tree on purpose. They are not the page's blocks, so they take
-   * no part in its selection, its drag and drop, its locks or its visibility;
-   * each is one button an author reaches by Tab, and activating it shows the
-   * region on the canvas.
+   * no part in its block selection, its drag and drop, its locks or its
+   * visibility; each is one button an author reaches by Tab, and activating
+   * it selects the region, as a click on the canvas does.
    */
   regions?: readonly LayersRegionRow[];
   /**
@@ -222,27 +222,30 @@ export interface LayersPanelProps {
   shortcuts?: boolean;
 }
 
-/** One region of the page's Layout, as a read-only row in Layers. */
+/** One region of the page's layout, as a row of its own in Layers. */
 export interface LayersRegionRow {
   readonly area: RegionArea;
-  /** The area's name, "Header". */
+  /** The region's name, "Site header". */
   readonly name: string;
-  /** Where it comes from, "from Layout Main". */
+  /** Where it comes from, "Main header & footer". */
   readonly origin: string;
-  /** Show the region on the canvas. */
+  /** Whether the region is the canvas's selection. */
+  readonly selected?: boolean;
+  /** Select the region, and show it on the canvas. */
   readonly onActivate: () => void;
 }
 
-/** A region of the page's Layout, as a row that is not one of the page's blocks. */
+/** A region of the page's layout, as a row that is not one of the page's blocks. */
 function RegionRow({ row }: { row: LayersRegionRow }): React.JSX.Element {
   return (
     <button
       type="button"
       className="nx-layers-region"
       data-nx-layers-region={row.area}
-      // Named whole, so it is announced as one sentence: what it is, where it
-      // comes from, and that it cannot be changed here.
-      aria-label={`${row.name}, ${row.origin}, locked`}
+      // Named whole, so it is announced as one sentence: what it is and where
+      // it comes from. Pressed while the region is selected.
+      aria-label={`${row.name}, ${row.origin}`}
+      aria-pressed={row.selected === true}
       onClick={row.onActivate}
     >
       <Lock size={14} aria-hidden="true" />

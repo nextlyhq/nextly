@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * The regions of a page's Layout on the canvas: drawn around the page, locked,
- * and telling the author where they come from.
+ * The regions of a page's Layout on the canvas: drawn around the page, their
+ * content out of reach, and selected as a whole, with marks drawn inside.
  */
 import {
   clearBlocks,
@@ -33,6 +33,7 @@ import {
 
 import { CHROME_ATTRIBUTE, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
+import type { CanvasProps } from "./canvas-props";
 import { CANVAS_REGION_CLASS, type CanvasRegion } from "./canvas-regions";
 
 afterEach(cleanup);
@@ -159,22 +160,24 @@ function regionOf(
         } as unknown as BlockDocument,
       ],
     ]),
-    label: `${area === "header" ? "Header" : "Footer"}, from Layout Main`,
-    badge: `${area === "header" ? "Header" : "Footer"} · from Layout`,
-    edit: {
-      href: "/admin/collections/layouts/main",
-      text: "Edit Layout ↗",
-      name: "Edit Layout Main (opens in a new tab)",
-    },
+    label: `${siteName(area)}, from the Main header & footer`,
+    badge: `${siteName(area)} · Main`,
+    name: siteName(area),
     ...extra,
   };
+}
+
+/** What a region is called on the canvas, as a host says it. */
+function siteName(area: "header" | "footer"): string {
+  return area === "header" ? "Site header" : "Site footer";
 }
 
 const sheet = { breakpoints: { viewport: [], container: [] } };
 
 function renderCanvas(
   regions: readonly CanvasRegion[] | undefined,
-  onSelect = vi.fn()
+  onSelect = vi.fn(),
+  more: Pick<CanvasProps, "onSelectRegion" | "selectedRegion"> = {}
 ) {
   render(
     <Canvas
@@ -183,9 +186,22 @@ function renderCanvas(
       regions={regions}
       onSelect={onSelect}
       render={{ styleContext: sheet } as never}
+      {...more}
     />
   );
   return onSelect;
+}
+
+/** The drawn region an author reaches by this name. */
+function regionNamed(name: string): HTMLElement {
+  return screen.getByRole("button", { name });
+}
+
+/** The frame sheet's rules for a header or footer's marks. */
+function regionRules(): string {
+  const at = CANVAS_FRAME_SHEET.indexOf(".nx-canvas-region {");
+  expect(at).toBeGreaterThan(-1);
+  return CANVAS_FRAME_SHEET.slice(at);
 }
 
 describe("the regions of a page's Layout on the canvas", () => {
@@ -294,127 +310,121 @@ describe("the regions of a page's Layout on the canvas", () => {
     renderCanvas([regionOf("header", "Top"), regionOf("footer", "Bottom")]);
     const sheets = document.querySelectorAll("style[data-nx-site-sheet]");
     expect(sheets).toHaveLength(1);
-    const header = screen.getByRole("group", {
-      name: "Header, from Layout Main",
-    });
+    const header = regionNamed("Site header, from the Main header & footer");
     expect(header.contains(sheets[0]!)).toBe(true);
   });
 
-  it("is chrome: not selectable, its content inert, no node of the page", () => {
-    const onSelect = renderCanvas([regionOf("header", "Top")]);
-    const header = screen.getByRole("group", {
-      name: "Header, from Layout Main",
+  it("is chrome: no node of the page, its content inert; a click selects the region, never a block", () => {
+    const onSelectRegion = vi.fn();
+    const onSelect = renderCanvas([regionOf("header", "Top")], vi.fn(), {
+      onSelectRegion,
     });
+    const header = regionNamed("Site header, from the Main header & footer");
     expect(header.hasAttribute(CHROME_ATTRIBUTE)).toBe(true);
     expect(header.querySelector(`[${NODE_ID_ATTRIBUTE}]`)).toBeNull();
     // The region's own link cannot be reached or followed.
     const link = screen.getByText("Top").closest("a");
     expect(link?.closest("[inert]")).not.toBeNull();
-    fireEvent.click(header);
+    fireEvent.click(screen.getByText("Top"));
+    expect(onSelectRegion).toHaveBeenCalledWith("header");
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("shows its tag on a click, with the Edit link opening a new tab", () => {
-    renderCanvas([regionOf("header", "Top")]);
-    expect(screen.queryByRole("status")).toBeNull();
-    fireEvent.click(
-      screen.getByRole("group", { name: "Header, from Layout Main" })
-    );
-    const tag = screen.getByRole("status");
-    expect(tag.textContent).toContain("Header, from Layout Main");
-    const edit = screen.getByRole("link", {
-      name: "Edit Layout Main (opens in a new tab)",
+  it("is one Tab stop named for it, which Enter or Space selects", () => {
+    const onSelectRegion = vi.fn();
+    renderCanvas([regionOf("header", "Top"), regionOf("footer", "Bottom")], vi.fn(), {
+      onSelectRegion,
     });
-    expect(edit.getAttribute("href")).toBe("/admin/collections/layouts/main");
-    expect(edit.getAttribute("target")).toBe("_blank");
-    expect(edit.textContent).toBe("Edit Layout ↗");
+    const header = regionNamed("Site header, from the Main header & footer");
+    const footer = regionNamed("Site footer, from the Main header & footer");
+    expect(header.tabIndex).toBe(0);
+    expect(footer.tabIndex).toBe(0);
+    // Nothing inside either is a stop of its own: no lock, and its content's
+    // links are inert.
+    const stops = header.querySelectorAll("button, a[href], [tabindex]");
+    expect(
+      Array.from(stops).filter(stop => stop.closest("[inert]") === null)
+    ).toHaveLength(0);
+    expect(header.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.keyDown(header, { key: "Enter" });
+    expect(onSelectRegion).toHaveBeenLastCalledWith("header");
+    fireEvent.keyDown(footer, { key: " " });
+    expect(onSelectRegion).toHaveBeenLastCalledWith("footer");
+    // Any other key is left to the editor.
+    fireEvent.keyDown(header, { key: "Delete" });
+    expect(onSelectRegion).toHaveBeenCalledTimes(2);
   });
 
-  it("is reached by one lock named for it, which opens the tag; Escape closes it and returns focus to the lock", () => {
-    renderCanvas([regionOf("header", "Top")]);
-    const header = screen.getByRole("group", {
-      name: "Header, from Layout Main",
-    });
-    // The region itself is no tab stop; its lock is.
-    expect(header.tabIndex).toBe(-1);
-    const lock = screen.getByRole("button", {
-      name: "Header, from Layout Main, locked",
-    });
-    expect(lock.getAttribute("aria-expanded")).toBe("false");
-    lock.focus();
-    // Enter and Space press a button, which the browser delivers as a click.
-    fireEvent.click(lock);
-    expect(lock.getAttribute("aria-expanded")).toBe("true");
-    const tag = screen.getByRole("status");
-    expect(lock.getAttribute("aria-controls")).toBe(tag.id);
-    const edit = screen.getByRole("link", {
-      name: "Edit Layout Main (opens in a new tab)",
-    });
-    edit.focus();
-    fireEvent.keyDown(edit, { key: "Escape" });
-    expect(screen.queryByRole("status")).toBeNull();
-    expect(document.activeElement).toBe(lock);
-    // A host showing the region, as Layers does, lands on the lock.
-    lock.blur();
-    header.focus();
-    expect(document.activeElement).toBe(lock);
-  });
-
-  it("rests as a lock, widens into its badge on hover, and opens its tag on a click", () => {
-    renderCanvas([regionOf("header", "Top")]);
-    const header = screen.getByRole("group", {
-      name: "Header, from Layout Main",
-    });
-    expect(header.dataset.state).toBe("rest");
-    // The badge is the lock's words, never its name.
-    const badge = header.querySelector(".nx-canvas-region__badge");
-    expect(badge?.textContent).toBe("Header · from Layout");
-    expect(badge?.getAttribute("aria-hidden")).toBe("true");
-    // The pointer widens it through the stylesheet alone, so resting or
-    // moving the pointer on a region never draws it again.
-    fireEvent.mouseEnter(header);
-    expect(header.dataset.state).toBe("rest");
-    fireEvent.mouseLeave(header);
-    expect(header.dataset.state).toBe("rest");
-    expect(CANVAS_FRAME_SHEET).toMatch(
-      /\.nx-canvas-region:is\(:hover, :focus-within\):not\(\[data-state="open"\]\)\s+\.nx-canvas-region__badge\s*\{\s*display: inline;/
-    );
-    expect(CANVAS_FRAME_SHEET).not.toContain('[data-state="hover"]');
-    fireEvent.click(header);
-    expect(header.dataset.state).toBe("open");
-    // The lock closes what it opened.
-    fireEvent.click(
-      screen.getByRole("button", { name: "Header, from Layout Main, locked" })
-    );
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  it("closes its tag on a press anywhere else, and when the canvas selects something", () => {
+  it("shows it is selected with its name as the tag, and its badge as the tag at rest", () => {
     const props = {
       document: page,
       siteStyles: sheet as never,
-      regions: [regionOf("header", "Top")],
+      regions: [regionOf("header", "Top"), regionOf("footer", "Bottom")],
       onSelect: vi.fn(),
+      onSelectRegion: vi.fn(),
       render: { styleContext: sheet } as never,
     };
-    const { rerender } = render(<Canvas {...props} />);
-    const header = screen.getByRole("group", {
-      name: "Header, from Layout Main",
-    });
+    const { rerender } = render(<Canvas {...props} selectedRegion={null} />);
+    const header = regionNamed("Site header, from the Main header & footer");
+    const tag = header.querySelector(".nx-canvas-region__tag");
+    // The tag repeats the name the region is announced by, so it is hidden
+    // from a screen reader.
+    expect(tag?.getAttribute("aria-hidden")).toBe("true");
+    expect(tag?.textContent).toBe("Site header · Main");
+    expect(header.hasAttribute("data-selected")).toBe(false);
+    rerender(<Canvas {...props} selectedRegion="header" />);
+    expect(header.getAttribute("aria-pressed")).toBe("true");
+    expect(header.hasAttribute("data-selected")).toBe(true);
+    expect(tag?.textContent).toBe("Site header");
+    const footer = regionNamed("Site footer, from the Main header & footer");
+    expect(footer.hasAttribute("data-selected")).toBe(false);
+    // A click on the selected region asks nothing again.
     fireEvent.click(header);
-    // A press inside keeps it open.
-    fireEvent.pointerDown(screen.getByRole("status"));
-    expect(screen.queryByRole("status")).not.toBeNull();
-    fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole("status")).toBeNull();
-    fireEvent.click(header);
-    rerender(<Canvas {...props} selectedIds={["p"]} />);
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(props.onSelectRegion).not.toHaveBeenCalled();
   });
 
-  it("hangs its mark outside the region, and inside where outside would leave the screen", () => {
-    // A header whose bottom edge is at the foot of the window.
-    const bottom = window.innerHeight - 4;
+  it("draws its outline and tag inside its own box, with nothing hanging over the page", () => {
+    renderCanvas([regionOf("header", "Top")]);
+    const header = regionNamed("Site header, from the Main header & footer");
+    // Its marks are its own children: the tag, and the outline as the
+    // region's own pseudo-element, both placed in its box.
+    expect(header.querySelector(".nx-canvas-region__lock")).toBeNull();
+    const tag = header.querySelector(".nx-canvas-region__tag");
+    expect(tag?.parentElement).toBe(header);
+    const rules = regionRules();
+    // Nothing of the region is placed past its own edges.
+    expect(rules).not.toMatch(/top:\s*100%|bottom:\s*100%/);
+    expect(rules).not.toMatch(/outline-offset:\s*[1-9]/);
+    // The outline is drawn inside, over the content, and takes no pointer.
+    expect(rules).toMatch(
+      /\.nx-canvas-region::after\s*\{[^}]*inset:\s*0;[^}]*pointer-events:\s*none;/
+    );
+    // The tag takes no pointer, so the pointer leaving the region over the
+    // tag is the pointer leaving the region.
+    expect(rules).toMatch(
+      /\.nx-canvas-region__tag\s*\{[^}]*position:\s*absolute;[^}]*pointer-events:\s*none;/
+    );
+    // Hover is the stylesheet's alone: no React state for the pointer.
+    expect(rules).toMatch(/\.nx-canvas-region:hover::after/);
+    expect(rules).toMatch(/\.nx-canvas-region\[data-selected\]::after/);
+  });
+
+  it("takes the select hue for the page's ground, as the block marks do", () => {
+    renderCanvas([regionOf("header", "Top")]);
+    const header = regionNamed("Site header, from the Main header & footer");
+    // jsdom paints no ground, so the page reads as light.
+    expect(header.getAttribute("data-nx-page-scheme")).toBe("light");
+    const rules = regionRules();
+    expect(rules).toMatch(
+      /\.nx-canvas-region\s*\{[^}]*--nx-region-mark:\s*var\(--nx-builder-select-on-light\);[^}]*--nx-region-mark-text:\s*var\(--nx-builder-select-text-on-light\);/
+    );
+    expect(rules).toMatch(
+      /\.nx-canvas-region\[data-nx-page-scheme="dark"\]\s*\{[^}]*--nx-region-mark:\s*var\(--nx-builder-select-on-dark\);[^}]*--nx-region-mark-text:\s*var\(--nx-builder-select-text-on-dark\);/
+    );
+  });
+
+  it("places its tag at the top left inside, and at the bottom left where the top is off screen", () => {
+    // A footer scrolled so its top edge is above the canvas.
     const box = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(function (this: HTMLElement) {
@@ -423,70 +433,40 @@ describe("the regions of a page's Layout on the canvas", () => {
           return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
         }
         if (this.classList.contains("nx-canvas-region")) {
-          return DOMRect.fromRect({
-            x: 0,
-            y: bottom - 120,
-            width: 1280,
-            height: 120,
-          });
+          return DOMRect.fromRect({ x: 0, y: -200, width: 1280, height: 400 });
         }
-        if (this.classList.contains("nx-canvas-region__mark")) {
-          return DOMRect.fromRect({ x: 8, y: 0, width: 300, height: 34 });
+        if (this.classList.contains("nx-canvas-region__tag")) {
+          return DOMRect.fromRect({ x: 8, y: 0, width: 120, height: 24 });
         }
         return DOMRect.fromRect();
       });
     try {
-      renderCanvas([regionOf("header", "Top")]);
-      const mark = document.querySelector(".nx-canvas-region__mark");
-      expect(mark?.getAttribute("data-placement")).toBe("inside");
+      renderCanvas([regionOf("footer", "Bottom")]);
+      const tag = document.querySelector(".nx-canvas-region__tag");
+      expect(tag?.getAttribute("data-placement")).toBe("bottom");
       cleanup();
-      // CONTROL: the same header with room below keeps it outside.
+      // CONTROL: the same footer with its top on screen keeps the top.
       box.mockImplementation(function (this: HTMLElement) {
         if (this.classList.contains("nx-canvas")) {
           return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
         }
         if (this.classList.contains("nx-canvas-region")) {
-          return DOMRect.fromRect({ x: 0, y: 0, width: 1280, height: 48 });
+          return DOMRect.fromRect({ x: 0, y: 200, width: 1280, height: 400 });
         }
-        if (this.classList.contains("nx-canvas-region__mark")) {
-          return DOMRect.fromRect({ x: 8, y: 0, width: 300, height: 34 });
+        if (this.classList.contains("nx-canvas-region__tag")) {
+          return DOMRect.fromRect({ x: 8, y: 0, width: 120, height: 24 });
         }
         return DOMRect.fromRect();
       });
-      renderCanvas([regionOf("header", "Top")]);
+      renderCanvas([regionOf("footer", "Bottom")]);
       expect(
         document
-          .querySelector(".nx-canvas-region__mark")
+          .querySelector(".nx-canvas-region__tag")
           ?.getAttribute("data-placement")
-      ).toBe("outside");
+      ).toBe("top");
     } finally {
       box.mockRestore();
     }
-  });
-
-  it("offers no Edit link to someone who may not update the Layout", () => {
-    renderCanvas([regionOf("header", "Top", { edit: undefined })]);
-    fireEvent.click(
-      screen.getByRole("group", { name: "Header, from Layout Main" })
-    );
-    expect(screen.getByRole("status").textContent).toContain(
-      "Header, from Layout Main"
-    );
-    expect(screen.queryByRole("link", { name: /Edit Layout/ })).toBeNull();
-  });
-
-  it("says which part has changes a visitor does not see yet", () => {
-    renderCanvas([
-      regionOf("header", "Top", {
-        note: "Draft changes not live: Layout Main",
-      }),
-    ]);
-    fireEvent.click(
-      screen.getByRole("group", { name: "Header, from Layout Main" })
-    );
-    expect(screen.getByRole("status").textContent).toContain(
-      "Draft changes not live: Layout Main"
-    );
   });
 
   it("tells a region's blocks the frame the canvas draws in, as the page's", async () => {
@@ -631,7 +611,7 @@ describe("the regions of a page's Layout on the canvas", () => {
 
   it("draws the page alone, as before, with no regions", () => {
     renderCanvas(undefined);
-    expect(screen.queryByRole("group")).toBeNull();
+    expect(document.querySelector(`.${CANVAS_REGION_CLASS}`)).toBeNull();
     expect(
       document.querySelectorAll("style[data-nx-site-sheet]").length
     ).toBeLessThanOrEqual(1);

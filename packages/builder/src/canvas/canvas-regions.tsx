@@ -1,25 +1,27 @@
 /**
- * The regions of a page's Layout, drawn on the canvas around the page and
- * locked.
+ * The regions of a page's layout, its header and footer, drawn on the canvas
+ * around the page.
  *
- * A Layout's header and footer are what a visitor sees around the page, so the
- * canvas draws them, from the PUBLISHED Layout and components the host hands
- * over. They are not the page's to edit: nothing in them can be selected,
- * dragged onto or typed into, and a click shows where they come from, with a
- * way to edit the Layout in a new tab so the page's own undo history survives.
+ * A layout's header and footer are what a visitor sees around the page, so the
+ * canvas draws them, from the PUBLISHED documents the host hands over. They
+ * are not the page's to edit: nothing in them can be dragged onto or typed
+ * into, and their links and forms are inert. Each is selected as a whole, by
+ * a click or by Enter or Space on its one Tab stop, and the host's sidebar
+ * then says where it comes from (`region-selection` holds which one).
  *
  * Drawn as part of the canvas's rendered subtree, inside the canvas root, so
  * whatever surface the canvas lives on (today the admin page, later the
  * editor's own frame) carries them with the page.
  *
- * What says so never covers the region's content: a small lock outside the
- * region, at the edge it shares with the page, which widens into a short
- * badge on hover or focus and opens the full tag beside it on a click
- * (`canvas-region-placement` has where, and when it flips inside).
+ * What marks a region is drawn inside it, never over the page: the outline on
+ * the region's own edge, and a small tag at its top left (its bottom left
+ * where the top is scrolled away; `canvas-region-placement` has where). A
+ * mark hanging past the region covered the page's first or last block, and
+ * hover flickered along the strip it covered.
  *
  * A region is drawn again only when what it is drawn from changes: its
  * document, its definitions, its sheet and the canvas's shared inputs. The
- * hover cue is the stylesheet's (`:hover`, `:focus-within`), not React state,
+ * hover cue is the stylesheet's (`:hover`, `:focus-visible`), not React state,
  * and what its async blocks drew (a logo, a button) is kept between draws, so
  * an insert on the page or the pointer resting on the footer never blinks it.
  *
@@ -37,18 +39,13 @@ import {
   type PartSheet,
 } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
-import { Lock } from "lucide-react";
 import {
   memo,
-  useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
-  type FocusEvent,
   type JSX,
   type KeyboardEvent,
-  type MouseEvent,
   type RefObject,
 } from "react";
 
@@ -73,6 +70,7 @@ import {
   screenScrollers,
   scrollEventTarget,
 } from "./geometry-dom";
+import { pageSchemeOf } from "./site-ground";
 
 /**
  * The class on a Layout region's frame. Its blocks are a document of their
@@ -81,7 +79,7 @@ import {
  */
 export const CANVAS_REGION_CLASS = "nx-canvas-region";
 
-/** One region of the page's Layout, as the host hands it to the canvas. */
+/** One region of the page's layout, as the host hands it to the canvas. */
 export interface CanvasRegion {
   /** Which area: drawn before the page for a header, after it for a footer. */
   readonly area: RegionArea;
@@ -89,88 +87,81 @@ export interface CanvasRegion {
   readonly document: BlockDocument;
   /** The PUBLISHED definitions that document reaches, nested ones included. */
   readonly definitions?: DefinitionsById;
-  /** What the region is and where it comes from: "Header, from Layout Main". */
-  readonly label: string;
-  /** A short form shown on hover or focus: "Header · from Layout". */
-  readonly badge: string;
   /**
-   * The way to edit the Layout, for someone who may update it: a link that
-   * opens in a new tab. Absent for anyone else, who gets the label alone.
+   * What the region is and where it comes from, as it is announced: "Site
+   * header, from the Main header & footer".
    */
-  readonly edit?: {
-    readonly href: string;
-    /** The visible text, "Edit Layout ↗". */
-    readonly text: string;
-    /** The accessible name, which says it opens in a new tab. */
-    readonly name: string;
-  };
-  /** Which part has changes a visitor does not see yet, when one does. */
-  readonly note?: string;
+  readonly label: string;
+  /** Its tag while the pointer or focus is on it: "Site header · Main". */
+  readonly badge: string;
+  /** Its tag while it is selected: "Site header". */
+  readonly name: string;
 }
 
 /** The attribute naming a drawn region's area, for a host scrolling to it. */
 export const REGION_ATTRIBUTE = "data-nx-region";
 
-/**
- * How a region's mark is shown: closed, or with the tag open beside it after
- * a click, Enter or Space. While closed, the stylesheet widens the lock into
- * its badge when the pointer or focus is on the region: a pointer crossing
- * the region changes no state, so it never draws the region again.
- */
-type MarkState = "rest" | "open";
+/** The attribute a drawn region carries while it is selected. */
+export const REGION_SELECTED_ATTRIBUTE = "data-selected";
 
 /**
- * One locked region on the canvas.
+ * One region on the canvas, selected as a whole.
  *
  * Its content is `inert`: the region's links and forms cannot be followed or
- * focused, and the pointer falls through to the region itself, which answers a
- * click by opening its tag. The lock is the region's one focus stop, named
- * for the region and that it is locked; Enter or Space opens the tag, Tab
- * then reaches the Edit link beside it, and Escape closes it and returns focus
- * to the lock. The tag also closes on a click anywhere else, when focus leaves
- * the region, and when the canvas selects something else. Nothing traps focus.
+ * focused, and the pointer falls through to the region itself, which answers
+ * a click by asking to be selected. The region is its own one Tab stop, named
+ * for what it is and where it comes from; Enter or Space selects it.
  *
- * Marked as chrome, so the canvas's selection, hit-testing and link guard all
- * leave it alone: it is not part of the document being edited.
+ * Marked as chrome, so the canvas's block selection, hit-testing and link
+ * guard all leave it alone: it is not part of the document being edited.
  */
 export function CanvasRegionFrame({
   region,
   rendered,
   sheet,
-  selection,
+  selected,
+  onSelect,
 }: {
   region: CanvasRegion;
   /** The canvas's own renderer inputs, less what belongs to the page alone. */
   rendered: Omit<PageRendererProps, "document" | "siteStyles"> | undefined;
   /** How this part treats the site sheet, and the scope it compiles under. */
   sheet: PartSheet;
-  /** The canvas's selection, which closes the tag when it changes. */
-  selection?: readonly string[];
+  /** Whether this region is the canvas's selection. */
+  selected: boolean;
+  /** Ask for this region to be selected; absent, the region selects nothing. */
+  onSelect: ((area: RegionArea) => void) | undefined;
 }): JSX.Element {
-  const [state, setState] = useState<MarkState>("rest");
   const frame = useRef<HTMLDivElement | null>(null);
-  const lock = useRef<HTMLButtonElement | null>(null);
-  const mark = useRef<HTMLDivElement | null>(null);
-  const tagId = useId();
-  const open = state === "open";
+  const tag = useRef<HTMLSpanElement | null>(null);
   const canvas = useCanvasFrame();
-  const place = useMarkPlace(frame, mark, region.area, canvas, state);
-  const handlers = useRegionHandlers(setState, frame, lock, open);
-  useClosedOnOutsidePress(open, frame, canvas, handlers.rest);
-  useClosedOnSelection(selection, handlers.rest);
+  const place = useMarkPlace(frame, tag, canvas, selected);
+  const choose = (): void => {
+    if (!selected) onSelect?.(region.area);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    // Space would scroll the canvas; Enter is the region's own here.
+    event.preventDefault();
+    choose();
+  };
 
   return (
     <div
       ref={frame}
       className={CANVAS_REGION_CLASS}
       {...{ [CHROME_ATTRIBUTE]: "", [REGION_ATTRIBUTE]: region.area }}
-      role="group"
+      {...(selected ? { [REGION_SELECTED_ATTRIBUTE]: "" } : {})}
+      role="button"
       aria-label={region.label}
-      // Focusable only by a host's call, as Layers does to show the region:
-      // its focus is handed to the lock, the one stop a key reaches.
-      tabIndex={-1}
-      data-state={state}
-      {...handlers.frame}
+      aria-pressed={selected}
+      tabIndex={0}
+      onClick={choose}
+      onKeyDown={onKeyDown}
+      // The ground under the marks, judged as the pointer arrives, since a
+      // hover cue changes no state and so runs no effect.
+      onPointerEnter={() => markScheme(frame.current)}
     >
       <div className="nx-canvas-region__content" inert>
         <RegionContent
@@ -180,33 +171,32 @@ export function CanvasRegionFrame({
           sheet={sheet}
         />
       </div>
-      <div
-        ref={mark}
-        className="nx-canvas-region__mark"
+      <span
+        ref={tag}
+        className="nx-canvas-region__tag"
         data-placement={place.placement}
         style={{ left: place.left }}
+        // The region's own name says what the tag does.
+        aria-hidden="true"
       >
-        <div className="nx-canvas-region__mark-body">
-          <button
-            ref={lock}
-            type="button"
-            className="nx-canvas-region__lock"
-            aria-label={`${region.label}, locked`}
-            aria-expanded={open}
-            aria-controls={open ? tagId : undefined}
-            {...handlers.lock}
-          >
-            <Lock size={12} aria-hidden="true" />
-            <span className="nx-canvas-region__badge" aria-hidden="true">
-              {region.badge}
-            </span>
-          </button>
-          {open ? <RegionTag region={region} id={tagId} /> : null}
-        </div>
-      </div>
+        {selected ? region.name : region.badge}
+      </span>
     </div>
   );
 }
+
+/**
+ * State on the region the page's ground it is drawn over, so its marks take
+ * the hue for that ground, as the block marks over the page do.
+ */
+function markScheme(region: HTMLElement | null): void {
+  const root = rootOf(region);
+  if (region === null || root === null) return;
+  region.setAttribute(PAGE_SCHEME_ATTRIBUTE, pageSchemeOf(root));
+}
+
+/** The attribute stating the page's ground under a region's marks. */
+const PAGE_SCHEME_ATTRIBUTE = "data-nx-page-scheme";
 
 /** What a region's content is drawn from. */
 interface RegionContentProps {
@@ -299,99 +289,30 @@ function sameFields(
   );
 }
 
-/** The open tag: where the region comes from, and the way to edit it. */
-function RegionTag({
-  region,
-  id,
-}: {
-  region: CanvasRegion;
-  id: string;
-}): JSX.Element {
-  return (
-    <div className="nx-canvas-region__tag" id={id} role="status">
-      <span>{region.label}</span>
-      {region.note === undefined ? null : (
-        <span className="nx-canvas-region__note">{region.note}</span>
-      )}
-      {region.edit === undefined ? null : (
-        <a
-          className="nx-canvas-region__edit"
-          href={region.edit.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={region.edit.name}
-        >
-          {region.edit.text}
-        </a>
-      )}
-    </div>
-  );
-}
-
-/**
- * The region's and its lock's handlers: a click on the region opens the tag
- * and one on the lock toggles it, Escape closes it back onto the lock, and
- * focus leaving closes it. Hover and focus widening the lock into its badge
- * are the stylesheet's, so they need no handler.
- */
-function useRegionHandlers(
-  setState: (next: MarkState | ((now: MarkState) => MarkState)) => void,
-  frame: RefObject<HTMLDivElement | null>,
-  lock: RefObject<HTMLButtonElement | null>,
-  open: boolean
-) {
-  const rest = (): void => setState("rest");
-  return {
-    rest,
-    frame: {
-      onFocus: (event: FocusEvent<HTMLDivElement>) => {
-        if (event.target === frame.current) lock.current?.focus();
-      },
-      onClick: () => setState("open"),
-      onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.key !== "Escape" || !open) return;
-        setState("rest");
-        lock.current?.focus();
-      },
-      onBlur: (event: FocusEvent<HTMLDivElement>) => {
-        // Closed once focus leaves the region and its tag together, so
-        // moving from the lock to the Edit link keeps the tag open.
-        if (!frame.current?.contains(event.relatedTarget)) rest();
-      },
-    },
-    lock: {
-      onClick: (event: MouseEvent<HTMLButtonElement>) => {
-        // The lock toggles; the region's own click only opens.
-        event.stopPropagation();
-        setState(now => (now === "open" ? "rest" : "open"));
-      },
-    },
-  };
-}
-
-/** Where the mark sits: which side of the page edge, and how far in. */
+/** Where the tag sits: which corner inside the region, and how far in. */
 interface MarkPlace {
   readonly placement: RegionMarkPlacement;
   readonly left: number;
 }
 
 /**
- * The mark's place, measured whenever it changes size (the tag opening, at
- * once; the badge widening on hover, a frame later) and whenever the page or
- * the canvas around the frame scrolls or resizes, so a mark that would leave
- * the screen is brought back onto it.
+ * The tag's place, measured whenever it changes size (its words changing on
+ * selection, at once; on hover, a frame later) and whenever the page or the
+ * canvas around the frame scrolls or resizes, so a tag that would leave the
+ * screen is brought back onto it. The ground under the marks is judged with
+ * it.
  */
 function useMarkPlace(
   frame: RefObject<HTMLDivElement | null>,
-  mark: RefObject<HTMLDivElement | null>,
-  area: RegionArea,
+  mark: RefObject<HTMLSpanElement | null>,
   canvas: CanvasFrame,
-  state: MarkState
+  selected: boolean
 ): MarkPlace {
   const [place, setPlace] = useState<MarkPlace>(AT_REST);
   useIsomorphicLayoutEffect(() => {
     const measure = (): void => {
-      const next = markPlaceOf(frame.current, mark.current, area, canvas);
+      markScheme(frame.current);
+      const next = markPlaceOf(frame.current, mark.current, canvas);
       if (next === undefined) return;
       setPlace(now =>
         now.placement === next.placement && now.left === next.left ? now : next
@@ -438,12 +359,12 @@ function useMarkPlace(
         frame.current?.ownerDocument.defaultView?.cancelAnimationFrame(pending);
       }
     };
-  }, [frame, mark, area, canvas, state]);
+  }, [frame, mark, canvas, selected]);
   return place;
 }
 
-/** Outside, at the inset: where a mark sits before anything is measured. */
-const AT_REST: MarkPlace = { placement: "outside", left: REGION_MARK_INSET };
+/** At the top, at the inset: where a tag sits before anything is measured. */
+const AT_REST: MarkPlace = { placement: "top", left: REGION_MARK_INSET };
 
 /** The canvas root a region is drawn in, or `null` before it is. */
 function rootOf(region: HTMLElement | null): HTMLElement | null {
@@ -451,14 +372,13 @@ function rootOf(region: HTMLElement | null): HTMLElement | null {
 }
 
 /**
- * The mark's place from the boxes as drawn, or nothing before they are: the
- * region's and the mark's boxes and the part of the canvas on screen, all in
+ * The tag's place from the boxes as drawn, or nothing before they are: the
+ * region's and the tag's boxes and the part of the canvas on screen, all in
  * the canvas's content coordinates, read through the one geometry module.
  */
 function markPlaceOf(
   region: HTMLElement | null,
   mark: HTMLElement | null,
-  area: RegionArea,
   canvas: CanvasFrame
 ): MarkPlace | undefined {
   const root = rootOf(region);
@@ -468,7 +388,6 @@ function markPlaceOf(
   const band = onScreenBandOf(root, canvas.frame);
   return {
     placement: regionMarkPlacement({
-      area: area === "footer" ? "footer" : "header",
       edge: { top: box.y - band.y, bottom: box.y + box.height - band.y },
       height: size.height,
       viewport: band.height,
@@ -479,57 +398,4 @@ function markPlaceOf(
       width: size.width,
     }),
   };
-}
-
-/**
- * Close the open tag on a press anywhere outside the region: on the page, in
- * the editor's panels, wherever the canvas's documents are.
- */
-function useClosedOnOutsidePress(
-  open: boolean,
-  frame: RefObject<HTMLDivElement | null>,
-  canvas: CanvasFrame,
-  close: () => void
-): void {
-  const latest = useRef(close);
-  latest.current = close;
-  useEffect(() => {
-    if (!open) return;
-    const onPress = (event: Event): void => {
-      const target = event.target;
-      // Read by shape, not `instanceof`: a press in the frame comes from
-      // another window, whose nodes are not this window's `Node`s.
-      const inside =
-        typeof target === "object" &&
-        target !== null &&
-        "nodeType" in target &&
-        frame.current?.contains(target as Node) === true;
-      if (!inside) latest.current();
-    };
-    const documents = inputDocuments(canvas);
-    for (const doc of documents) {
-      doc.addEventListener("pointerdown", onPress, true);
-    }
-    return () => {
-      for (const doc of documents) {
-        doc.removeEventListener("pointerdown", onPress, true);
-      }
-    };
-  }, [open, frame, canvas]);
-}
-
-/** Close the open tag when the canvas selects something else. */
-function useClosedOnSelection(
-  selection: readonly string[] | undefined,
-  close: () => void
-): void {
-  const key = selection === undefined ? "" : selection.join("\u0000");
-  const seen = useRef(key);
-  const latest = useRef(close);
-  latest.current = close;
-  useEffect(() => {
-    if (seen.current === key) return;
-    seen.current = key;
-    latest.current();
-  }, [key]);
 }
