@@ -3,7 +3,8 @@
  * document it runs, and what each committed write's document is judged
  * again with), and the routes for a collection loop's menus, the named
  * queries, a list's entries, the canvas's bound props, the binding picker,
- * an unbind's plan and the report itself.
+ * an unbind's plan, the report itself, and where the builder shows each
+ * Single's values, from the index the report's sweep keeps beside it.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import type { PluginRoute, PluginRouteIdentity } from "@nextlyhq/plugin-sdk";
@@ -17,13 +18,14 @@ import {
   readableSingles,
   visibleBindings,
 } from "../bindings-report/readable";
-import { bindingsToFixRoute } from "../bindings-report/route";
+import { bindingsToFixRoute, singleLabelsOf } from "../bindings-report/route";
 import {
   registerBindingReportOnWrite,
   runFullCheck,
   type BindingReportDeps,
 } from "../bindings-report/scan";
 import { bindingReportStore } from "../bindings-report/store";
+import { bindingUsesReader } from "../bindings-report/uses-store";
 import { canvasBindingsRoute } from "../canvas-bindings-route";
 import { canvasSourcesChangedRoute } from "../canvas-sources-changed-route";
 import { COMPONENTS_SLUG } from "../collections/components";
@@ -39,6 +41,7 @@ import {
 import { listEntriesRoute } from "../list-entries-route";
 import { loopCollectionsRoute } from "../loop-collections-route";
 import { namedQueriesRoute } from "../named-queries";
+import { shownOnRoute } from "../shown-on-route";
 import { unbindPlanRoute } from "../unbind-plan-route";
 
 import type { InitContext } from "./install-context";
@@ -275,6 +278,7 @@ export function routesForBindings(
   readonly bindingFields: PluginRoute;
   readonly unbindPlan: PluginRoute;
   readonly bindingsToFix: PluginRoute;
+  readonly shownOn: PluginRoute;
 } {
   const { opts, state, namedQueryDeclarations, requireTemplateGuard } = def;
   return {
@@ -338,6 +342,21 @@ export function routesForBindings(
       defaultLocale: () =>
         state.bindingReportCtx?.config.localization?.defaultLocale,
       readableSingles: (routeCtx, slugs) => readableSingles(routeCtx, slugs),
+      blocks: def.blocks,
+    }),
+    // Where the builder shows one Single's values, for its side panel: from
+    // the index the report's sweep keeps, each place listed only where the
+    // caller may read it, and the rest counted.
+    shownOn: shownOnRoute({
+      uses: () =>
+        state.bindingReportCtx === null
+          ? null
+          : bindingUsesReader(state.bindingReportCtx.db),
+      readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
+      readableSingles: (routeCtx, slugs) => readableSingles(routeCtx, slugs),
+      singleLabels: (routeCtx, slugs) => singleLabelsOf(routeCtx, slugs),
+      defaultLocale: () =>
+        state.bindingReportCtx?.config.localization?.defaultLocale,
       blocks: def.blocks,
     }),
   };

@@ -39,6 +39,16 @@ export interface ReadableDocument {
   readonly collectionLabel: string;
 }
 
+/**
+ * A document as far as what the caller may read of it is asked: which one,
+ * and the blocks fields its rows are in. A stored report row is one, and so
+ * is a document's place in the index of where documents bind a Single.
+ */
+export type ReadableQuestion = Pick<
+  StoredDocumentReport,
+  "documentKey" | "kind" | "slug" | "documentId"
+> & { readonly rows: readonly Pick<BindingReportRow, "blocksField">[] };
+
 /** How many ids one read asks for. */
 const IDS_PER_READ = 200;
 
@@ -48,7 +58,7 @@ function topFieldOf(blocksField: string | undefined): string {
 }
 
 /** The blocks fields a document's rows are in. */
-function fieldsNamed(entry: StoredDocumentReport): string[] {
+function fieldsNamed(entry: ReadableQuestion): string[] {
   return [
     ...new Set(entry.rows.map(row => topFieldOf(row.blocksField))),
   ].filter(field => field !== "");
@@ -128,7 +138,7 @@ async function readAsCaller(
 async function readCollection(
   ctx: ReadableContext,
   slug: string,
-  entries: readonly StoredDocumentReport[],
+  entries: readonly ReadableQuestion[],
   found: Map<string, ReadableDocument>
 ): Promise<void> {
   const naming = await collectionNaming(ctx, slug);
@@ -209,7 +219,7 @@ export async function readableSingles(
 /** One reported Single, as the caller may read it. */
 async function readSingle(
   ctx: IdentifiedCaller,
-  entry: StoredDocumentReport,
+  entry: ReadableQuestion,
   found: Map<string, ReadableDocument>
 ): Promise<void> {
   const read = await singleAsCaller(ctx, entry.slug);
@@ -226,10 +236,10 @@ async function readSingle(
 /** Each reported document the caller may read, by its key. */
 export async function readableAsCaller(
   ctx: ReadableContext,
-  entries: readonly StoredDocumentReport[]
+  entries: readonly ReadableQuestion[]
 ): Promise<ReadonlyMap<string, ReadableDocument>> {
   const found = new Map<string, ReadableDocument>();
-  const bySlug = new Map<string, StoredDocumentReport[]>();
+  const bySlug = new Map<string, ReadableQuestion[]>();
   for (const entry of entries) {
     if (entry.kind === "single") {
       await readSingle(ctx, entry, found);
