@@ -73,7 +73,7 @@ let undoEdit: (() => void) | undefined;
  * when the document was last stored, as the host reports it. A store is the
  * one followed by the other.
  */
-let beforeStore: (() => void) | undefined;
+const beforeStores = new Set<() => void>();
 let storedAt: Date | null = null;
 const storeListeners = new Set<() => void>();
 let documentActions: { storedAt: Date | null } | null = null;
@@ -86,7 +86,9 @@ function announceStore(): void {
   });
 }
 function store(): void {
-  act(() => beforeStore?.());
+  act(() => {
+    for (const before of [...beforeStores]) before();
+  });
   announceStore();
 }
 
@@ -296,8 +298,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   },
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
+  // Registered while mounted and run in the order registered, every one of
+  // them, as the admin's storing gate runs them: the editor is not the only
+  // part of the view that asks to run before a store.
   useBeforeDocumentAction: (handler: () => void) => {
-    beforeStore = handler;
+    const latest = React.useRef(handler);
+    latest.current = handler;
+    React.useEffect(() => {
+      const run = () => latest.current();
+      beforeStores.add(run);
+      return () => {
+        beforeStores.delete(run);
+      };
+    }, []);
   },
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
@@ -415,7 +428,6 @@ beforeEach(() => {
   passage = null;
   heldAtExit.length = 0;
   undoEdit = undefined;
-  beforeStore = undefined;
   storedAt = null;
   documentActions = null;
   storeListeners.clear();
@@ -519,7 +531,9 @@ describe("the unsaved-work report", () => {
     editDocument();
     // The store commits the edited page, and the author edits again before
     // it is answered: the second edit is not in what was stored.
-    act(() => beforeStore?.());
+    act(() => {
+      for (const before of [...beforeStores]) before();
+    });
     act(() => edit?.({ ...EDITED }));
     announceStore();
 

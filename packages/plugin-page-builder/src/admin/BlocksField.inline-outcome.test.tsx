@@ -59,11 +59,16 @@ let commits = 0;
  */
 let savedFrom: unknown;
 
+/** Everything the view registered to run before an action stores the document. */
+const beforeActions = new Set<(action: string) => void | Promise<void>>();
+
 /**
- * What the editor asked to run before an action stores the document, as the
- * editor hosting it registers it. Called here the way that host calls it.
+ * Run what the view registered before an action stores the document: each
+ * handler in turn, as the editor hosting it calls them.
  */
-let beforeAction: ((action: string) => void | Promise<void>) | undefined;
+async function beforeAction(action: string): Promise<void> {
+  for (const before of [...beforeActions]) await before(action);
+}
 
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
@@ -313,8 +318,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   useReportUnsavedWork: () => {},
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
+  // Registered while mounted and run in the order registered, every one of
+  // them, as the admin's storing gate runs them: the editor is not the only
+  // part of the view that asks to run before a store.
   useBeforeDocumentAction: (handler: (action: string) => void) => {
-    beforeAction = handler;
+    const latest = React.useRef(handler);
+    latest.current = handler;
+    React.useEffect(() => {
+      const run = (action: string) => latest.current(action);
+      beforeActions.add(run);
+      return () => {
+        beforeActions.delete(run);
+      };
+    }, []);
   },
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
@@ -412,7 +428,6 @@ beforeEach(() => {
   commits = 0;
   savedFrom = undefined;
   offeredSaveVerb = undefined;
-  beforeAction = undefined;
 });
 
 afterEach(() => {
@@ -506,7 +521,7 @@ describe("saving with an inline edit that could not be written", () => {
    */
   async function save(): Promise<void> {
     await act(async () => {
-      await beforeAction?.("save");
+      await beforeAction("save");
     });
   }
 
