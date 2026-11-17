@@ -24,6 +24,12 @@
  * read, each leave the row dirty to be judged again on the next pass, rather
  * than an older answer kept.
  *
+ * The same pass writes where each judged document binds a Single, the index
+ * a Single's panel reads (`uses.ts`): read off each stored value, the draft
+ * and the published one, not composed with the components it places, since
+ * a component's own document holds its bindings. It is settled and recorded
+ * with the document's report row, under its mark (`store.ts`).
+ *
  * Judged as the system: the report says what is broken; who may see each row
  * is the route's question.
  *
@@ -60,6 +66,8 @@ import type {
 } from "../host-rewrite/rewrite";
 
 import { documentBindingReport, type BindingReportRow } from "./rows";
+import { bindingUsesOf } from "./uses";
+import type { DocumentUse } from "./uses-store";
 import type {
   BindingReportStore,
   DirtyDocument,
@@ -234,27 +242,59 @@ async function documentRows(
     "shapesOf" | "limits" | "namedQueries" | "blocks"
   >,
   reading: DocumentReading
-): Promise<{
-  readonly rows: BindingReportRow[];
-  readonly incomplete: boolean;
-}> {
+): Promise<Judged> {
   const rows: BindingReportRow[] = [];
+  const uses: DocumentUse[] = [];
   let incomplete = false;
   const shared = new Set<string>();
   for (const candidate of hosts) {
     const judged = await hostRows(candidate, shared, deps, reading);
     incomplete ||= judged.incomplete;
     rows.push(...judged.rows);
+    uses.push(...judged.uses);
   }
   const layout = await reading.layoutOf?.(at);
   if (layout !== undefined) {
     const judged = await valueRows(at, layout.value, deps, reading.components);
     incomplete ||= judged.incomplete;
+    // The Layout's own uses are its document's, judged there.
     for (const row of judged.rows) {
       rows.push({ ...row, layout: layout.id, blocksField: "layout" });
     }
   }
-  return { rows, incomplete };
+  return { rows, uses, incomplete };
+}
+
+/** One document's judgement: its report rows, and where it binds a Single. */
+interface Judged {
+  readonly rows: BindingReportRow[];
+  readonly uses: DocumentUse[];
+  readonly incomplete: boolean;
+}
+
+/**
+ * Where one host's stored values bind a Single: the published value's uses,
+ * and the draft's where it holds another value.
+ */
+function hostUses(
+  read: Awaited<ReturnType<HostReader>>,
+  where: Pick<DocumentUse, "blocksField" | "locale">,
+  maxNodes: number
+): DocumentUse[] {
+  const published = valueOf(read.published);
+  const draft = valueOf(read.draft);
+  const versions: ["draft" | "published", unknown][] = [];
+  if (published !== undefined) versions.push(["published", published]);
+  if (
+    draft !== undefined &&
+    (published === undefined ||
+      JSON.stringify(draft) !== JSON.stringify(published))
+  ) {
+    versions.push(["draft", draft]);
+  }
+  return versions.flatMap(([version, value]) =>
+    bindingUsesOf(value, maxNodes).map(use => ({ ...use, version, ...where }))
+  );
 }
 
 /**
@@ -270,13 +310,11 @@ async function hostRows(
     "shapesOf" | "limits" | "namedQueries" | "blocks"
   >,
   reading: DocumentReading
-): Promise<{
-  readonly rows: BindingReportRow[];
-  readonly incomplete: boolean;
-}> {
+): Promise<Judged> {
+  const none = { rows: [], uses: [] };
   // A host searched row by row (a blocks field inside a repeater) is not one
   // document the report can point an author at; it is left out.
-  if (access === "scan") return { rows: [], incomplete: false };
+  if (access === "scan") return { ...none, incomplete: false };
   let read;
   try {
     read = await reading.read(host);
@@ -284,20 +322,30 @@ async function hostRows(
     // Not read is not judged: a read that failed (the database, or a value
     // that kept changing while it was read) leaves the document marked, so
     // its last verdict stands until a later pass reads it.
-    return { rows: [], incomplete: true };
+    return { ...none, incomplete: true };
   }
   const value = valueOf(read.draft) ?? valueOf(read.published);
-  if (value === undefined) return { rows: [], incomplete: false };
+  if (value === undefined) return { ...none, incomplete: false };
   const field = host.path.join(".");
   if (maybeShared === true) {
     const seen = `${field}\u0000${JSON.stringify(value)}`;
-    if (shared.has(seen)) return { rows: [], incomplete: false };
+    if (shared.has(seen)) return { ...none, incomplete: false };
     shared.add(seen);
   }
   const perLanguage = host.locale !== undefined && maybeShared !== true;
   const judged = await valueRows(host, value, deps, reading.components);
   return {
     incomplete: judged.incomplete,
+    uses: hostUses(
+      read,
+      {
+        blocksField: field,
+        ...(perLanguage && host.locale !== undefined
+          ? { locale: host.locale }
+          : {}),
+      },
+      deps.limits().maxNodes
+    ),
     rows: judged.rows.map(row => ({
       ...row,
       blocksField: field,
@@ -463,9 +511,11 @@ async function settleOne(
   // A document gone, or holding no blocks field any more, has nothing.
   const judged =
     hosts.length === 0
-      ? { rows: [], incomplete: false }
+      ? { rows: [], uses: [], incomplete: false }
       : await documentRows(at, hosts, deps, reading);
-  if (!judged.incomplete) await store.settle(marked, judged.rows);
+  if (!judged.incomplete) {
+    await store.settle(marked, judged.rows, judged.uses);
+  }
 }
 
 /** What the check of every document walks the site with. */
@@ -494,7 +544,7 @@ async function checkDocument(
   if (first === undefined) return;
   const judged = await documentRows(first, document.hosts, deps, reading);
   if (judged.incomplete) await store.markDirty(reported(first, deps));
-  else await store.record(reported(first, deps), judged.rows);
+  else await store.record(reported(first, deps), judged.rows, judged.uses);
 }
 
 /**
@@ -550,5 +600,8 @@ export async function runFullCheck(
     cursor: null,
     startedAt: null,
   });
+  // Every document has had its uses written once: a Single's panel stops
+  // saying it is still checking pages.
+  await store.markUsesFilled();
   return "complete";
 }

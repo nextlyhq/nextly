@@ -15,6 +15,11 @@
  * judged again, so the report never keeps an answer older than the document.
  * The check of every document leaves a dirty row to that judgement.
  *
+ * Beside each document's issues, the same judgement writes where it binds a
+ * Single (`uses-store.ts`), in one transaction with the row it settles or
+ * records and under the same mark, so the index a Single's panel reads is
+ * never older than the report.
+ *
  * @module bindings-report/store
  */
 import {
@@ -35,6 +40,12 @@ import {
 import { bindingIssues, bindingReportRuns } from "../schema/tables";
 
 import type { BindingReportRow } from "./rows";
+import {
+  dropUsesBefore,
+  markUsesFilled,
+  replaceUses,
+  type DocumentUse,
+} from "./uses-store";
 
 /** The one row of `binding_report_runs`: the check of every document. */
 const FULL_CHECK = "full";
@@ -48,6 +59,12 @@ const LIST_PAGE = 500;
  * whole seconds.
  */
 const CLOCK_GRAIN_MS = 1000;
+
+/**
+ * How many marked documents a drop of rows no longer found reads, to keep
+ * their uses: one past what one statement names, so more is seen as more.
+ */
+const DROP_MARKED_MAX = 501;
 
 /** A document waiting to be judged, and the mark its judgement must still find. */
 export interface DirtyDocument {
@@ -88,12 +105,14 @@ export interface StoredDocumentReport extends ReportedDocument {
 /** The report's store. */
 export interface BindingReportStore {
   /**
-   * Record a document's rows, as the check of every document judged them;
-   * a row marked dirty is left to the judgement that settles it.
+   * Record a document's rows and where it binds a Single, as the check of
+   * every document judged them; a row marked dirty is left, with its uses,
+   * to the judgement that settles it.
    */
   record(
     document: ReportedDocument,
-    rows: readonly BindingReportRow[]
+    rows: readonly BindingReportRow[],
+    uses: readonly DocumentUse[]
   ): Promise<void>;
   /** Mark a document to be judged again, with a fresh token. */
   markDirty(document: ReportedDocument): Promise<void>;
@@ -103,12 +122,14 @@ export interface BindingReportStore {
    */
   dirty(limit: number, after?: string): Promise<DirtyDocument[]>;
   /**
-   * Settle a marked document with its rows; `false`, changing nothing, when
-   * it was marked again since `token` was read.
+   * Settle a marked document with its rows and where it binds a Single, in
+   * one transaction; `false`, changing nothing, when it was marked again
+   * since `token` was read.
    */
   settle(
     marked: DirtyDocument,
-    rows: readonly BindingReportRow[]
+    rows: readonly BindingReportRow[],
+    uses: readonly DocumentUse[]
   ): Promise<boolean>;
   /** Every document with a broken binding, newest judged first. */
   list(): Promise<StoredDocumentReport[]>;
@@ -118,8 +139,13 @@ export interface BindingReportStore {
   fullCheck(): Promise<FullCheck>;
   /** Record where it stands now. */
   setFullCheck(state: FullCheck): Promise<void>;
-  /** Drop the rows judged before `at`: documents a complete check no longer found. */
+  /**
+   * Drop the rows judged before `at`, and their uses: documents a complete
+   * check no longer found.
+   */
   dropCheckedBefore(at: Date): Promise<void>;
+  /** Mark the index of where documents bind Singles filled once. */
+  markUsesFilled(): Promise<void>;
 }
 
 type Dialect = Parameters<typeof isUniqueViolation>[0];
@@ -167,7 +193,10 @@ function reportOf(row: {
 
 /** The report's store over this plugin's own tables. */
 export function bindingReportStore(
-  db: Pick<PluginDatabase, "select" | "insert" | "update" | "delete" | "table">,
+  db: Pick<
+    PluginDatabase,
+    "select" | "insert" | "update" | "delete" | "table" | "transaction"
+  >,
   dialect: Dialect
 ): BindingReportStore {
   const issues = () => db.table(bindingIssues);
@@ -187,7 +216,7 @@ export function bindingReportStore(
   };
 
   return {
-    record: async (document, rows) => {
+    record: async (document, rows, uses) => {
       const keyed = eq(issues().documentKey, document.documentKey);
       const values = {
         kind: document.kind,
@@ -197,13 +226,33 @@ export function bindingReportStore(
         issues: rows,
         updatedAt: new Date(),
       };
-      // A row a write marked is the judgement's to settle.
-      const clean = and(keyed, isNull(issues().dirty)) ?? keyed;
-      if ((await db.update(bindingIssues, values).where(clean)) > 0) return;
+      // A row a write marked is the judgement's to settle, uses and all.
+      const cleanIn = (t: ReturnType<typeof issues>) => {
+        const key = eq(t.documentKey, document.documentKey);
+        return and(key, isNull(t.dirty)) ?? key;
+      };
+      const recorded = await db.transaction(async tx => {
+        const clean = cleanIn(tx.table(bindingIssues));
+        if ((await tx.update(bindingIssues, values).where(clean)) === 0) {
+          return false;
+        }
+        await replaceUses(tx, document, uses);
+        return true;
+      });
+      if (recorded) return;
       const held = await db.select(bindingIssues).where(keyed).first();
-      if (held === null) {
-        await insert({ documentKey: document.documentKey, ...values });
+      if (held !== null) return;
+      if (!(await insert({ documentKey: document.documentKey, ...values }))) {
+        return;
       }
+      // The new row, still unmarked, holds the fence while its uses go in:
+      // a write marking it meanwhile leaves them to its judgement.
+      await db.transaction(async tx => {
+        const touched = await tx
+          .update(bindingIssues, { updatedAt: new Date() })
+          .where(cleanIn(tx.table(bindingIssues)));
+        if (touched > 0) await replaceUses(tx, document, uses);
+      });
     },
 
     markDirty: async document => {
@@ -262,21 +311,27 @@ export function bindingReportStore(
       );
     },
 
-    settle: async (marked, rows) => {
-      const where =
-        and(
-          eq(issues().documentKey, marked.document.documentKey),
-          eq(issues().dirty, marked.token)
-        ) ?? eq(issues().dirty, marked.token);
-      const settled = await db
-        .update(bindingIssues, {
-          issues: rows,
-          dirty: null,
-          updatedAt: new Date(),
-        })
-        .where(where);
-      return settled > 0;
-    },
+    settle: async (marked, rows, uses) =>
+      // The row's update holds it until the commit, so a write marking it
+      // again waits for these uses, and its own judgement replaces them.
+      db.transaction(async tx => {
+        const t = tx.table(bindingIssues);
+        const where =
+          and(
+            eq(t.documentKey, marked.document.documentKey),
+            eq(t.dirty, marked.token)
+          ) ?? eq(t.dirty, marked.token);
+        const settled = await tx
+          .update(bindingIssues, {
+            issues: rows,
+            dirty: null,
+            updatedAt: new Date(),
+          })
+          .where(where);
+        if (settled === 0) return false;
+        await replaceUses(tx, marked.document, uses);
+        return true;
+      }),
 
     list: async () => {
       const found: StoredDocumentReport[] = [];
@@ -310,7 +365,21 @@ export function bindingReportStore(
       await db
         .delete(bindingIssues)
         .where(and(stale, isNull(issues().dirty)) ?? stale);
+      // A document still marked keeps its uses for its judgement to replace.
+      const marked = await db
+        .select(bindingIssues)
+        .where(isNotNull(issues().dirty))
+        .orderBy(asc(issues().documentKey))
+        .limit(DROP_MARKED_MAX)
+        .all();
+      await dropUsesBefore(
+        db,
+        before,
+        marked.map(row => row.documentKey)
+      );
     },
+
+    markUsesFilled: () => markUsesFilled(db, dialect),
 
     fullCheck: async () => {
       const row = await db

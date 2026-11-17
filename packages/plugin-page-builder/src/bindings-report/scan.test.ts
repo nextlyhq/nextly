@@ -2,7 +2,8 @@
  * The check of every document for the bindings report: nothing to do while
  * the schema is unchanged, a walk once it changes, resumed where a pass
  * stopped, never writing over a save judged after it read the document, and
- * rows of documents no longer there dropped once it completes.
+ * rows of documents no longer there dropped once it completes; and, in the
+ * same pass, where each document binds a Single, settled with its row.
  */
 import {
   createBlockRegistry,
@@ -16,6 +17,7 @@ import type { HostDocument } from "../host-rewrite/rewrite";
 import type { BindingReportRow } from "./rows";
 import { runFullCheck, type BindingReportDeps } from "./scan";
 import type { BindingReportStore, FullCheck, ReportedDocument } from "./store";
+import type { DocumentUse } from "./uses-store";
 
 /** A page's key in the report, as the check writes it. */
 const keyOf = (id: string): string =>
@@ -40,8 +42,10 @@ function memoryStore() {
     startedAt: null,
   };
   let tokens = 0;
+  let filled = 0;
+  const uses = new Map<string, readonly DocumentUse[]>();
   const store: BindingReportStore = {
-    record: async (document, found) => {
+    record: async (document, found, used) => {
       const held = rows.get(document.documentKey);
       // A row a write marked is the judgement's to settle.
       if (held !== undefined && held.dirty !== null) return;
@@ -51,6 +55,7 @@ function memoryStore() {
         at: new Date(),
         dirty: null,
       });
+      uses.set(document.documentKey, used);
     },
     markDirty: async document => {
       tokens += 1;
@@ -72,7 +77,7 @@ function memoryStore() {
         .map(([, row]) => row)
         .slice(0, limit)
         .map(row => ({ document: row.document, token: row.dirty ?? "" })),
-    settle: async (marked, found) => {
+    settle: async (marked, found, used) => {
       const held = rows.get(marked.document.documentKey);
       if (held === undefined || held.dirty !== marked.token) return false;
       rows.set(marked.document.documentKey, {
@@ -81,6 +86,7 @@ function memoryStore() {
         at: new Date(),
         dirty: null,
       });
+      uses.set(marked.document.documentKey, used);
       return true;
     },
     list: async () =>
@@ -105,11 +111,15 @@ function memoryStore() {
       for (const [key, row] of rows) {
         if (row.dirty === null && row.at.getTime() < at.getTime() - 1000) {
           rows.delete(key);
+          uses.delete(key);
         }
       }
     },
+    markUsesFilled: async () => {
+      filled += 1;
+    },
   };
-  return { store, rows, check: () => check };
+  return { store, rows, uses, filled: () => filled, check: () => check };
 }
 
 const POSTS: readonly BindingFieldShape[] = [{ name: "title", type: "text" }];
@@ -129,8 +139,31 @@ const pageBinding = (path: string) => ({
   ],
 });
 
-/** A site of pages, each with its content, and the documents it read. */
-function site(contents: Record<string, unknown>, fingerprint: () => string) {
+/** A page whose heading, named `name`, shows a Single's field. */
+const pageShowing = (single: string, path: string, name?: string) => ({
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    {
+      id: "hero",
+      type: "core/heading",
+      version: 1,
+      ...(name === undefined ? {} : { name }),
+      props: { text: "Own", level: 2 },
+      bindings: { text: { $bind: path, source: "single", sourceKey: single } },
+    },
+  ],
+});
+
+/**
+ * A site of pages, each with its content (and a draft, where `drafts` holds
+ * one), and the documents it read.
+ */
+function site(
+  contents: Record<string, unknown>,
+  fingerprint: () => string,
+  drafts: Record<string, unknown> = {}
+) {
   const host = (id: string): HostAddress => ({
     kind: "collection",
     slug: "pages",
@@ -168,7 +201,10 @@ function site(contents: Record<string, unknown>, fingerprint: () => string) {
             kind: "value" as const,
             value: contents[address.id ?? ""],
           },
-          draft: null,
+          draft:
+            drafts[address.id ?? ""] === undefined
+              ? null
+              : { kind: "value" as const, value: drafts[address.id ?? ""] },
           liveState: null,
         };
       },
@@ -372,7 +408,8 @@ describe("the check of every document", () => {
           codes: ["binding-field-missing"],
           shows: { kind: "nothing" },
         },
-      ]
+      ],
+      []
     );
     // Recorded well before the check starts.
     const held = memory.rows.get(keyOf("gone"));
@@ -382,5 +419,84 @@ describe("the check of every document", () => {
       await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER())
     ).toBe("complete");
     expect(await memory.store.list()).toEqual([]);
+  });
+
+  it("records where each document binds a Single, named as Layers names its block", async () => {
+    const memory = memoryStore();
+    const pages = site(
+      {
+        a: pageShowing("homepage", "headline", "Hero headline"),
+        b: pageBinding("title"),
+      },
+      () => "v1"
+    );
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(memory.uses.get(keyOf("a"))).toEqual([
+      {
+        nodeId: "hero",
+        blockType: "core/heading",
+        blockName: "Hero headline",
+        prop: "text",
+        sourceKey: "homepage",
+        path: "headline",
+        version: "published",
+        blocksField: "content",
+      },
+    ]);
+    // A page binding only its entry binds no Single.
+    expect(memory.uses.get(keyOf("b"))).toEqual([]);
+  });
+
+  it("records a draft's uses beside the published value's, and a draft like it once", async () => {
+    const memory = memoryStore();
+    const pages = site(
+      { a: pageBinding("title"), b: pageShowing("homepage", "headline") },
+      () => "v1",
+      {
+        a: pageShowing("homepage", "tagline"),
+        b: pageShowing("homepage", "headline"),
+      }
+    );
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(
+      memory.uses.get(keyOf("a"))?.map(use => [use.version, use.path])
+    ).toEqual([["draft", "tagline"]]);
+    expect(
+      memory.uses.get(keyOf("b"))?.map(use => [use.version, use.path])
+    ).toEqual([["published", "headline"]]);
+  });
+
+  it("settles a saved document's uses with its row, and drops them once the binding is gone", async () => {
+    const memory = memoryStore();
+    const contents: Record<string, unknown> = {
+      a: pageShowing("homepage", "headline"),
+    };
+    const pages = site(contents, () => "v1");
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
+    // Saved without the binding: the write marks it, the next pass settles.
+    contents.a = pageBinding("title");
+    await memory.store.markDirty({
+      documentKey: keyOf("a"),
+      kind: "collection",
+      slug: "pages",
+      documentId: "a",
+      place: "pages",
+    });
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(memory.uses.get(keyOf("a"))).toEqual([]);
+  });
+
+  it("marks the index filled only when a check of every document completes", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const using = deps(memory.store, pages.reading);
+    expect(await runFullCheck(pages.walk, using, new Date(0))).toBe("paused");
+    expect(memory.filled()).toBe(0);
+    expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
+    expect(memory.filled()).toBe(1);
+    // Nothing changed: no check, and no second mark.
+    expect(await runFullCheck(pages.walk, using, LATER())).toBe("current");
+    expect(memory.filled()).toBe(1);
   });
 });
