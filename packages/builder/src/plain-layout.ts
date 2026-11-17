@@ -62,6 +62,12 @@ export interface LayoutTiers {
   /** The values the edited target stores at a device itself. */
   readonly own: (device: string) => LayoutValues;
   /**
+   * Every tier the page's styles are written for, in their order, where it
+   * holds more than {@link order} (two tiers at one width): what survives a
+   * clear is read through all of them.
+   */
+  readonly cascadeOrder?: readonly string[];
+  /**
    * What is in force at a device beneath the target's own values there: a
    * shared style it wears, its block's defaults. Absent where nothing but the
    * target is read, as for a shared style edited on its own.
@@ -540,7 +546,7 @@ function surviving(tiers: LayoutTiers, device: string): LayoutValues {
   const merged: Partial<Record<LayoutProperty, string>> = {
     ...(tiers.beneath?.(device) ?? {}),
   };
-  for (const each of tiers.order) {
+  for (const each of tiers.cascadeOrder ?? tiers.order) {
     if (each === device) break;
     Object.assign(merged, tiers.own(each));
   }

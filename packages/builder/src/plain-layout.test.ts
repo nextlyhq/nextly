@@ -621,3 +621,32 @@ describe("a flex direction with no plain reading", () => {
     expect(block.read()).toMatchObject({ mode: "row" });
   });
 });
+
+describe("a clear at a device beside a hidden tier of the same width", () => {
+  it("spells out the default where the hidden tier's value would stay", () => {
+    // "md2" is compiled before "md" at one width; the switcher offers "md".
+    const own: Record<string, LayoutValues> = {
+      base: { display: "flex" },
+      md2: { flexDirection: "inherit" },
+      md: {},
+      sm: {},
+    };
+    const cascade = ["base", "md2", "md", "sm"];
+    const tiers: LayoutTiers = {
+      order: ORDER,
+      cascadeOrder: cascade,
+      own: device => own[device] ?? {},
+      inForce: ownCascade(
+        cascade,
+        device => own[device] ?? {},
+        () => ({})
+      ),
+    };
+    expect(readArrange(tiers, "md")).toEqual({ mode: "custom" });
+    expect(planPlain(tiers, "md")).toContainEqual({
+      device: "md",
+      property: "flexDirection",
+      value: "row",
+    });
+  });
+});

@@ -12,6 +12,7 @@
  */
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   findNode,
   type BreakpointSet,
   type NodeStyles,
@@ -83,20 +84,14 @@ function deviceOrder(breakpoints: BreakpointSet | undefined): string[] {
 }
 
 /**
- * Every viewport tier in the order the page's styles are written, widest
- * first and, of two at one width, the later after: a target's own values are
- * read through all of them, though the switcher offers one of each width.
+ * Every viewport tier the page's styles are written for, in their order, as
+ * the engine answers it: a target's own values are read through all of them,
+ * though the switcher offers one tier of each width.
  */
 function compiledOrder(breakpoints: BreakpointSet | undefined): string[] {
-  const tiers = (breakpoints?.viewport ?? [])
-    .map((tier, index) => ({ tier, index }))
-    .filter(({ tier }) => tier.maxWidth !== undefined)
-    .sort(
-      (a, b) =>
-        (b.tier.maxWidth ?? 0) - (a.tier.maxWidth ?? 0) || a.index - b.index
-    )
-    .map(({ tier }) => tier.id);
-  return [BASE_BREAKPOINT, ...tiers];
+  return breakpointContexts(breakpoints)
+    .filter(context => context.axis === "viewport")
+    .map(context => context.id);
 }
 
 /** The edited target's styles: the block's, or the shared style's. */
@@ -171,6 +166,7 @@ function layoutTiers(
   });
   return {
     order,
+    cascadeOrder: compiledOrder(surroundings.breakpoints),
     own,
     inForce,
     ...(beneath === undefined ? {} : { beneath }),
