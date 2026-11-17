@@ -28,6 +28,7 @@ import { styleControlsFor, type StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";
 import { CSS_NUMBER, lineHeightAsPixels } from "./style-numeric";
 import { NumericField } from "./style-numeric-field";
+import { typeScaleProperty } from "./tokens-studio";
 
 /** What every value field is given. */
 export interface ValueFieldProps {
@@ -42,6 +43,8 @@ export interface ValueFieldProps {
    * in other words: a number and a unit menu.
    */
   css?: string | undefined;
+  /** Which of the variable's values this field edits. */
+  mode?: "light" | "dark";
 }
 
 /**
@@ -352,18 +355,25 @@ function SizeField({
  * while it is one. A typed unit is taken as it is.
  */
 export function LineHeightInput({
+  id,
   label,
   value,
   placeholder,
   readOnly,
   refusedBy,
   onCommit,
-}: ValueFieldProps & { placeholder?: string }): React.JSX.Element {
+}: Omit<ValueFieldProps, "label"> & {
+  /** The field's name where no visible label points at it. */
+  label: string | undefined;
+  id?: string;
+  placeholder?: string;
+}): React.JSX.Element {
   const times = CSS_NUMBER.test((value === "" ? placeholder : value) ?? "");
   return (
     <span className="nx-vars-editor__times">
       <CommitInput
-        label={label}
+        {...(id === undefined ? {} : { id })}
+        {...(label === undefined ? {} : { label })}
         value={value}
         readOnly={readOnly}
         refusedBy={refusedBy}
@@ -435,5 +445,41 @@ export function LineHeightHint({
 export function valueFieldFor(
   token: SiteToken
 ): (props: ValueFieldProps) => React.JSX.Element {
+  // A line height before a size: one stored as a length is still a line
+  // height, and a number typed over it means a multiple, never a length.
+  if (typeScaleProperty(token) === "line-height") return LineHeightValue;
   return token.kind === "dimension" ? SizeValue : TextValue;
+}
+
+/** A line height under its own label, with its hint, outside a type pair. */
+function LineHeightValue({
+  label,
+  value,
+  readOnly,
+  refusedBy,
+  onCommit,
+  mode = "light",
+}: ValueFieldProps): React.JSX.Element {
+  const id = React.useId();
+  return (
+    <div className="nx-vars-editor__field">
+      <label className="nx-vars-editor__label" htmlFor={id}>
+        {label}
+      </label>
+      <LineHeightInput
+        id={id}
+        label={undefined}
+        value={value}
+        readOnly={readOnly}
+        refusedBy={refusedBy}
+        onCommit={onCommit}
+      />
+      <LineHeightHint
+        value={value}
+        mode={mode}
+        readOnly={readOnly}
+        onCommit={onCommit}
+      />
+    </div>
+  );
 }

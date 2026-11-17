@@ -228,6 +228,23 @@ describe("a line height", () => {
     expect(savedValue(onChange, "line-height.body")).toBe("20px");
   });
 
+  it("edits a line height with no type size of its own as a line height, never a size", async () => {
+    const onChange = vi.fn();
+    const alone: SiteTokenSet = {
+      tokens: [
+        { name: "line-height.hero", kind: "dimension", values: { light: "24px" } },
+      ],
+    };
+    render(<Hosted tokens={alone} onChange={onChange} />);
+    const editor = await openEditor(/^Hero/);
+    const light = within(editor).getByLabelText("Light");
+    // The whole value in one field, with no unit menu to add px to a number.
+    expect(light).toHaveProperty("value", "24px");
+    expect(within(editor).queryByLabelText("Unit for Light")).toBeNull();
+    enter(light, "1.5");
+    expect(savedValue(onChange, "line-height.hero")).toBe("1.5");
+  });
+
   it("explains rather than offers pixels for a dark line height, which must be the same kind as its light", async () => {
     const paired: SiteTokenSet = {
       tokens: [

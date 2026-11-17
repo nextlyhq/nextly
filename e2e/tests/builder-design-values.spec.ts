@@ -137,7 +137,8 @@ test("a line height of 20 offers 20px, and uses it when asked", async ({
     await openEditorWith(page, NODES, "values-text");
     await openDesign(page, "Type");
     const panel = page.getByRole("region", { name: "Design panel" });
-    await panel.getByRole("button", { name: /^Body/ }).click();
+    // The type size's row; the Type tab also lists the Body font.
+    await panel.getByRole("button", { name: /^Body, size/ }).click();
     const editor = page.locator(".nx-vars-editor");
     const line = editor.getByLabel("Line height, light");
     await expect(line).toHaveValue("1.5");

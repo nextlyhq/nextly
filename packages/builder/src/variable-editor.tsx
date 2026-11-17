@@ -563,6 +563,7 @@ function ModeValues({
         refusedBy={refusedIn("light")}
         onCommit={value => onCommit("light", value)}
         css={cssOf(token.values.light)}
+        mode="light"
       />
       <DarkValue
         token={token}
@@ -813,6 +814,7 @@ function DarkValue({
         refusedBy={refusedBy}
         onCommit={onCommit}
         css={cssOf(dark)}
+        mode="dark"
       />
       {readOnly ? null : (
         <Button
