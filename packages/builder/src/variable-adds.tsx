@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 import type { NewVariable, VariableGroup } from "./tokens-studio";
 
@@ -71,13 +71,21 @@ export function EmptyGroup({ text }: { text: string }): React.JSX.Element {
   return <p className="nx-vars__empty">{text}</p>;
 }
 
+/**
+ * What an add row reports: the kind to add, and the add row's own button,
+ * where focus goes back to when the new row is not drawn once its editor
+ * closes. The button rather than whatever has focus: chosen from a menu,
+ * focus is on an item that goes with the menu.
+ */
+export type OnAdd = (what: NewVariable, from: HTMLElement | null) => void;
+
 /** A group's add rows, at the end of its list. */
 export function AddRows({
   group,
   onAdd,
 }: {
   group: VariableGroup;
-  onAdd: (what: NewVariable) => void;
+  onAdd: OnAdd;
 }): React.JSX.Element {
   return (
     <div className="nx-vars__add-rows">
@@ -94,8 +102,9 @@ function AddRow({
   onAdd,
 }: {
   spec: AddRowSpec;
-  onAdd: (what: NewVariable) => void;
+  onAdd: OnAdd;
 }): React.JSX.Element {
+  const trigger = React.useRef<HTMLButtonElement>(null);
   const face = (
     <>
       <Plus aria-hidden="true" size={14} />
@@ -108,7 +117,7 @@ function AddRow({
       <button
         type="button"
         className="nx-vars__add-row"
-        onClick={() => onAdd(only[0])}
+        onClick={event => onAdd(only[0], event.currentTarget)}
       >
         {face}
       </button>
@@ -119,13 +128,16 @@ function AddRow({
     // its rows stay focusable (axe: aria-hidden-focus).
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
-        <button type="button" className="nx-vars__add-row">
+        <button ref={trigger} type="button" className="nx-vars__add-row">
           {face}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="nx-vars__menu">
         {spec.options.map(([what, label]) => (
-          <DropdownMenuItem key={what} onSelect={() => onAdd(what)}>
+          <DropdownMenuItem
+            key={what}
+            onSelect={() => onAdd(what, trigger.current)}
+          >
             {label}
           </DropdownMenuItem>
         ))}

@@ -221,6 +221,40 @@ describe("pressing an add row", () => {
     ).toEqual(["Brand"]);
   });
 
+  it("hands focus back to the add row it came from when a search hides the new row, from a menu too", async () => {
+    // "wide" lists the other values, so their add row is drawn; the new
+    // size does not match it, so its row goes once its editor closes.
+    render(<Host initialSearch="wide" />);
+    const addValue = (): HTMLElement =>
+      within(group("other")).getByRole("button", { name: "Add value" });
+    fireEvent.keyDown(addValue(), { key: "Enter" });
+    // Chosen from the keyboard: focus is on the item, which goes with the
+    // menu, not on the add row.
+    const item = await screen.findByRole("menuitem", { name: "Size" });
+    item.focus();
+    fireEvent.click(item);
+    const editor = await screen.findByRole("dialog", { name: "Edit New size" });
+    fireEvent.keyDown(within(editor).getByLabelText("Name"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      document.querySelector('[data-variable-key="size.new-size"]')
+    ).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(addValue()));
+  });
+
+  it("hands focus back to a one-kind add row the same way", async () => {
+    render(<Host initialSearch="brand" />);
+    const addColour = (): HTMLElement =>
+      within(group("colours")).getByRole("button", { name: "Add colour" });
+    fireEvent.click(addColour());
+    const editor = await screen.findByRole("dialog", {
+      name: "Edit New colour",
+    });
+    fireEvent.keyDown(within(editor).getByLabelText("Name"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(addColour()));
+  });
+
   it("marks nothing New where the new row matches the search", async () => {
     // "e" matches "Text", so the colours are listed, and "New colour" too.
     render(<Host initialSearch="e" />);
