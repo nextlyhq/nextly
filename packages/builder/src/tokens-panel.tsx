@@ -48,7 +48,7 @@ import {
   useColourGroupDrop,
   useColourGroupHost,
 } from "./colour-group-ui";
-import { colourGroups } from "./colour-groups";
+import { colourGroups, inColourGroup } from "./colour-groups";
 import {
   GroupToggle,
   OwnSearch,
@@ -321,8 +321,17 @@ function VariablesView({
   const { query, needle, searching, setQuery, own } = useViewSearch(
     hosted.search
   );
-  const { root, openKey, fresh, toggle, add, duplicate, forget, commitFrom } =
-    useOpenVariable({ tokens, onChange, currentTokens, onSettle });
+  const {
+    root,
+    openKey,
+    fresh,
+    toggle,
+    add,
+    duplicate,
+    forget,
+    commitFrom,
+    focus,
+  } = useOpenVariable({ tokens, onChange, currentTokens, onSettle });
   const ownSearch = React.useRef<HTMLInputElement>(null);
   // Where focus goes once a variable is removed: the host's search where it
   // keeps one, else the view's own.
@@ -393,6 +402,7 @@ function VariablesView({
             fresh,
             forget,
             search,
+            focus,
           })}
         />
       </ViewBody>
@@ -496,6 +506,8 @@ interface RowsHost {
   readonly held: string | null;
   /** The row just added or copied, never saved, while its editor is open. */
   readonly fresh: string | null;
+  /** Focuses a row once it is drawn, wherever it is drawn now. */
+  readonly focus: (key: string) => void;
 }
 
 /** The groups a search leaves, or that none match. */
@@ -513,7 +525,7 @@ function VariableGroups({
   }[];
   searching: boolean;
   folds: GroupFolds | undefined;
-  onAdd: OnAdd;
+  onAdd: OnAddTo;
   rows: RowsHost;
 }): React.JSX.Element {
   const colours = useColourGroupHost(
@@ -563,6 +575,17 @@ function VariableGroups({
                   usage={rows.usage}
                   reach={rowReach(entry, rows.usage)}
                   onRemoved={() => rows.onRemoved(entry.row.key)}
+                  onMoved={next => {
+                    // Moved into another group, the row is drawn there anew:
+                    // that group is opened and the row keeps the focus.
+                    const into = colourGroups(next).find(candidate =>
+                      candidate.identities.includes(entry.row.identity)
+                    );
+                    if (into !== undefined) {
+                      openFold(folds, colourGroupFoldKey(into.name));
+                    }
+                    rows.focus(entry.row.key);
+                  }}
                 />
               )}
             </Group>
@@ -574,6 +597,13 @@ function VariableGroups({
 
 /** What the Colours tab's group changes commit under: no row's editor. */
 const COLOUR_GROUPS_KEY = "colour-groups";
+
+/** An add, with the named group of colours whose list its add row ends. */
+type OnAddTo = (
+  what: Parameters<OnAdd>[0],
+  from: Parameters<OnAdd>[1],
+  group?: string
+) => void;
 
 /** One section of the list: a group, or one named group of colours. */
 interface ListSection {
@@ -852,11 +882,13 @@ function useOpenVariable({
   /** The row just added, while its editor is open; a search keeps it. */
   fresh: string | null;
   toggle: (key: string, open: boolean) => void;
-  add: OnAdd;
+  add: OnAddTo;
   duplicate: (entry: VariableEntry) => void;
   forget: (key: string) => void;
   /** Each row editor's commit; see {@link useCommitsSettled}. */
   commitFrom: (key: string) => (next: SiteTokenSet) => void;
+  /** Focuses a row once it is drawn, as after a move to another group. */
+  focus: (key: string) => void;
 } {
   const root = React.useRef<HTMLDivElement>(null);
   const [openKey, setOpenKey] = React.useState<string | null>(null);
@@ -871,11 +903,22 @@ function useOpenVariable({
   // after its label) or after the editor closed onto a new row.
   React.useEffect(() => {
     if (focusKey === null) return;
-    const row = root.current?.querySelector<HTMLElement>(
-      `[data-variable-key="${CSS.escape(focusKey)}"]`
-    );
-    if (row) row.focus();
-    else if (origin.current?.isConnected === true) origin.current.focus();
+    const find = (): HTMLElement | null | undefined =>
+      root.current?.querySelector<HTMLElement>(
+        `[data-variable-key="${CSS.escape(focusKey)}"]`
+      );
+    const row = find();
+    if (row) {
+      row.focus();
+      // A row drawn anew, as one moved into another group is, has its button
+      // replaced once just after it mounts, as its editor's anchor registers.
+      // Focus follows the new one, unless it has gone elsewhere since.
+      window.setTimeout(() => {
+        const owner = row.ownerDocument;
+        if (row.isConnected || owner.activeElement !== owner.body) return;
+        find()?.focus();
+      }, 0);
+    } else if (origin.current?.isConnected === true) origin.current.focus();
     setFocusKey(null);
   }, [focusKey, tokens]);
 
@@ -903,10 +946,12 @@ function useOpenVariable({
     setOpenKey(key);
   };
 
-  // The search is kept: the new row is added where the author is.
-  const add: OnAdd = (what, from) => {
+  // The search is kept: the new row is added where the author is, in the
+  // named group of colours its add row ends.
+  const add: OnAddTo = (what, from, group) => {
     origin.current = from;
-    opened(addVariable(currentTokens() ?? tokens, what));
+    const made = addVariable(currentTokens() ?? tokens, what);
+    opened({ ...made, tokens: inColourGroup(made.tokens, made.at, group) });
   };
 
   const duplicate = (entry: VariableEntry): void => {
@@ -956,6 +1001,7 @@ function useOpenVariable({
     duplicate,
     forget,
     commitFrom,
+    focus: setFocusKey,
   };
 }
 
@@ -1152,7 +1198,7 @@ function Group({
   readOnly: boolean;
   /** The row whose editor is open, which is drawn even past the page. */
   openKey: string | null;
-  onAdd: OnAdd;
+  onAdd: OnAddTo;
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
@@ -1194,7 +1240,7 @@ function Group({
           named={named}
           onAdd={(what, from) => {
             openFold(folds, foldKey);
-            onAdd(what, from);
+            onAdd(what, from, named?.name);
           }}
         />
       )}

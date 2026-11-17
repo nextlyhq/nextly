@@ -1311,7 +1311,16 @@ export function labelNewVariable(
   if (partner !== undefined) {
     next[partnerAt] = { ...partner, name: `${LINE_HEIGHT_PREFIX}${words}` };
   }
-  return { ...relabelled, tokens: next };
+  // With no id, its code name is its identity, so the colour order follows
+  // the new name: the variable keeps its place.
+  const order = relabelled.order?.map(identity =>
+    identity === token.name ? `${prefix}.${words}` : identity
+  );
+  return {
+    ...relabelled,
+    tokens: next,
+    ...(order === undefined ? {} : { order }),
+  };
 }
 
 /**

@@ -63,6 +63,8 @@ export interface VariableRowProps {
   onRemoved: () => void;
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
+  /** A colour moved by Alt+Up or Alt+Down, with the set the move made. */
+  onMoved?: ((next: SiteTokenSet) => void) | undefined;
   /**
    * Just added or copied and never saved, while its editor is open: its
    * editor's code name follows its name as it is typed. `marked` while a
@@ -92,6 +94,7 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
+  onMoved,
   fresh,
   usage,
   reach,
@@ -111,7 +114,10 @@ export function VariableRow({
   const onKeyDown = rowKeys(changing, {
     rename: setRenaming,
     menu: setMenuOpen,
-    move: colourMoveOf(entry, tokens, onChange),
+    move: colourMoveOf(entry, tokens, next => {
+      onChange(next);
+      onMoved?.(next);
+    }),
   });
   // A colour row can be dragged to another place in the colour order.
   const drag = useColourRowDrag(entry.row);

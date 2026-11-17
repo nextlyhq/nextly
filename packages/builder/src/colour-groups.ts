@@ -182,6 +182,25 @@ export function moveColour(
   );
 }
 
+/**
+ * The set with the variable at a place put into a named group, where it is a
+ * colour and a group is named; otherwise the set as it was. A colour added
+ * from a group's add row joins that group, an empty new one included.
+ */
+export function inColourGroup(
+  tokens: SiteTokenSet,
+  at: number,
+  group: string | undefined
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (group === undefined || token === undefined || !isColour(token)) {
+    return tokens;
+  }
+  const next = [...tokens.tokens];
+  next[at] = { ...token, group };
+  return { ...tokens, tokens: next };
+}
+
 /** The set with a colour moved to the end of a group. */
 export function moveColourToGroup(
   tokens: SiteTokenSet,

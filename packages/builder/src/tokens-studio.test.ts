@@ -905,6 +905,34 @@ describe("duplicating a variable", () => {
     ]);
   });
 
+  it("keeps a copied colour's place when its name, and so its code name, changes", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        {
+          name: "color.brand",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#111111" },
+        },
+        {
+          name: "color.accent",
+          kind: "color",
+          group: "Brand",
+          values: { light: "#222222" },
+        },
+      ],
+      order: ["color.accent", "color.brand"],
+    };
+    const made = duplicateVariable(set, 1, "Accent");
+    const named = labelNewVariable(made.tokens, made.at, "Highlight");
+    expect(named.tokens[made.at]?.name).toBe("color.highlight");
+    expect(named.order).toEqual([
+      "color.accent",
+      "color.highlight",
+      "color.brand",
+    ]);
+  });
+
   it("keeps a copy of a long name within the label limit", () => {
     const long = "L".repeat(MAX_TOKEN_LABEL_LENGTH);
     const set: SiteTokenSet = {

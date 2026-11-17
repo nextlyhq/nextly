@@ -13,6 +13,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
@@ -66,11 +67,30 @@ const SITE: SiteTokenSet = {
 /** The latest set the panel wrote, by test. */
 let saved: SiteTokenSet = SITE;
 
-function Host({ readOnly = false }: { readOnly?: boolean }): React.JSX.Element {
+function Host({
+  readOnly = false,
+  folding = false,
+}: {
+  readOnly?: boolean;
+  /** Whether the groups fold, as the Design panel's do. */
+  folding?: boolean;
+}): React.JSX.Element {
   const [set, setSet] = React.useState(SITE);
   const latest = React.useRef(set);
+  const [folded, setFolded] = React.useState<ReadonlySet<string>>(new Set());
+  const folds = {
+    folded,
+    onFold: (group: string, fold: boolean) =>
+      setFolded(now => {
+        const next = new Set(now);
+        if (fold) next.add(group);
+        else next.delete(group);
+        return next;
+      }),
+  };
   return (
     <TokensPanel
+      {...(folding ? { folds } : {})}
       tokens={set}
       currentTokens={() => latest.current}
       readOnly={readOnly}
@@ -178,6 +198,36 @@ describe("moving a colour", () => {
     expect(shape(saved)).toEqual([
       "Brand: color.brand color.accent color.text",
       "Text and surfaces: color.muted",
+    ]);
+  });
+
+  it("keeps focus on a colour Alt+Down moves into the next group, opening it where folded", async () => {
+    render(<Host folding />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Text and surfaces, \d+$/ })
+    );
+    expect(listed()).toEqual(["Brand: Brand, Accent", "Text and surfaces: "]);
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Accent,/ }), {
+      key: "ArrowDown",
+      altKey: true,
+    });
+    expect(shape(saved)).toEqual([
+      "Brand: color.brand",
+      "Text and surfaces: color.accent color.text color.muted",
+    ]);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^Accent,/ })
+      )
+    );
+    // And the next press still moves it.
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Accent,/ }), {
+      key: "ArrowDown",
+      altKey: true,
+    });
+    expect(shape(saved)).toEqual([
+      "Brand: color.brand",
+      "Text and surfaces: color.text color.accent color.muted",
     ]);
   });
 
@@ -300,6 +350,23 @@ describe("a group's name", () => {
       "Brand: Brand, Accent",
       "Text and surfaces: Text, Muted",
       "New group: ",
+    ]);
+  });
+});
+
+describe("a new group's Add colour", () => {
+  it("adds the colour to that group", async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: "New group" }));
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(field, { target: { value: "Accents" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
+    await screen.findByRole("dialog", { name: "Edit New colour" });
+    expect(listed()).toEqual([
+      "Brand: Brand, Accent",
+      "Text and surfaces: Text, Muted",
+      "Accents: New colour",
     ]);
   });
 });
