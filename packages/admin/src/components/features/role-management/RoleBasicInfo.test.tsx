@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { describe, it, expect, vi } from "vitest";
 
@@ -15,12 +16,15 @@ function RoleBasicInfoWrapper({
   isSystemRole = false,
   isLoading = false,
   onNameChange = vi.fn(),
+  errors = {},
 }: {
   defaultValues?: Partial<RoleFormValuesType>;
   isEditMode?: boolean;
   isSystemRole?: boolean;
   isLoading?: boolean;
   onNameChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  /** Errors set on the fields once mounted, as a failed submit sets them. */
+  errors?: Partial<Record<"name" | "slug", string>>;
 }) {
   const form = useForm<RoleFormValuesType>({
     defaultValues: {
@@ -31,6 +35,14 @@ function RoleBasicInfoWrapper({
       ...defaultValues,
     },
   });
+
+  useEffect(() => {
+    for (const [field, message] of Object.entries(errors)) {
+      form.setError(field as "name" | "slug", { message });
+    }
+    // Set once, as a submit would; the errors are the test's fixed input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Form {...form}>
@@ -138,6 +150,37 @@ describe("RoleBasicInfo", () => {
       await user.type(nameInput, "Test");
 
       expect(handleNameChange).toHaveBeenCalledTimes(4); // Once per character
+    });
+  });
+
+  describe("Errors", () => {
+    const failedSubmit = {
+      name: "Role name is required.",
+      slug: "Slug is required.",
+    };
+
+    it("shows a new role's name error alone, not the slug's that follows from it", async () => {
+      render(<RoleBasicInfoWrapper errors={failedSubmit} />);
+
+      expect(
+        await screen.findByText("Role name is required.")
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Slug is required.")).not.toBeInTheDocument();
+    });
+
+    it("shows a new role's slug error once the name has none", async () => {
+      render(<RoleBasicInfoWrapper errors={{ slug: failedSubmit.slug }} />);
+
+      expect(await screen.findByText("Slug is required.")).toBeInTheDocument();
+    });
+
+    it("shows both on an existing role, whose slug the name does not fill in", async () => {
+      render(<RoleBasicInfoWrapper isEditMode errors={failedSubmit} />);
+
+      expect(
+        await screen.findByText("Role name is required.")
+      ).toBeInTheDocument();
+      expect(screen.getByText("Slug is required.")).toBeInTheDocument();
     });
   });
 

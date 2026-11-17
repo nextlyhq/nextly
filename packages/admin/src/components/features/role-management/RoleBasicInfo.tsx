@@ -1,6 +1,6 @@
 import { FieldShell, Input, Textarea } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import type { UseFormReturn } from "react-hook-form";
+import { useFormState, type UseFormReturn } from "react-hook-form";
 
 import { FormField } from "@admin/components/ui/form";
 import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
@@ -15,10 +15,16 @@ interface RoleBasicInfoProps {
 
 export function RoleBasicInfo({
   form,
+  isEditMode,
   isSystemRole,
   isLoading,
   handleNameChange,
 }: RoleBasicInfoProps): JSX.Element {
+  // A new role's slug is made from its name, so while the name has an error
+  // the slug's own says the same thing again, on a field the name fills in:
+  // the name's error alone is shown.
+  const { errors } = useFormState({ control: form.control, name: "name" });
+  const slugFollowsName = !isEditMode && errors.name !== undefined;
   return (
     <>
       <FormField
@@ -54,7 +60,7 @@ export function RoleBasicInfo({
           <FieldShell
             label="Slug"
             description="Auto-generated from the name field."
-            error={fieldState.error?.message}
+            error={slugFollowsName ? undefined : fieldState.error?.message}
           >
             <Input
               placeholder="manager"

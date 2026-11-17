@@ -7,7 +7,7 @@
  * must credit each grant to the base that gives it.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,7 +32,9 @@ vi.mock("../../services/roleApi", () => ({
 }));
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import { navigateTo } from "@admin/lib/navigation";
 
+import { ROUTES } from "../../constants/routes";
 import { roleApi } from "../../services/roleApi";
 import { useRoleForm } from "../useRoleForm";
 
@@ -147,5 +149,40 @@ describe("useRoleForm's roles screen data", () => {
       ["Editor", ["p1"]],
       ["Author", ["p2"]],
     ]);
+  });
+});
+
+describe("useRoleForm's name and Cancel", () => {
+  beforeEach(() => {
+    vi.mocked(protectedApi.get).mockResolvedValue({ items: [] } as never);
+  });
+
+  it("tells an empty name, or one of spaces alone, that it is required", async () => {
+    const { result } = render();
+
+    for (const name of ["", "   "]) {
+      result.current.form.setValue("name", name);
+      await act(() => result.current.form.trigger("name"));
+      expect(result.current.form.getFieldState("name").error?.message).toBe(
+        "Role name is required."
+      );
+    }
+
+    // CONTROL: a name too short, but not empty, is still told so.
+    result.current.form.setValue("name", "ab");
+    await act(() => result.current.form.trigger("name"));
+    expect(result.current.form.getFieldState("name").error?.message).toBe(
+      "Role name must be at least 3 characters."
+    );
+  });
+
+  it("goes back to the roles list on Cancel, saving nothing", async () => {
+    const { result } = render();
+
+    act(() => result.current.handleCancel());
+
+    expect(navigateTo).toHaveBeenCalledWith(ROUTES.SECURITY_ROLES);
+    expect(roleApi.createRole).not.toHaveBeenCalled();
+    expect(roleApi.updateRole).not.toHaveBeenCalled();
   });
 });

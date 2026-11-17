@@ -103,6 +103,7 @@ const fetchInheritedPermissions = async (childIds: string[]) => {
 /** The grammar a slug the form sets is held to. */
 const newSlugSchema: z.ZodString = z
   .string()
+  .min(1, { message: "Slug is required." })
   .min(3, { message: "Slug must be at least 3 characters." })
   .max(50, { message: "Slug must not exceed 50 characters." })
   .regex(/^[a-z0-9_-]+$/, {
@@ -117,8 +118,12 @@ const roleFormSchema: z.ZodObject<{
   permissions: z.ZodArray<z.ZodString>;
   baseRoleId: z.ZodOptional<z.ZodString>;
 }> = z.object({
+  // Trimmed, so a name of spaces alone is no name; an empty one is told it
+  // is required rather than that it is too short.
   name: z
     .string()
+    .trim()
+    .min(1, { message: "Role name is required." })
     .min(3, { message: "Role name must be at least 3 characters." })
     .max(50, { message: "Role name must not exceed 50 characters." })
     .refine(val => /^[a-zA-Z0-9\s_-]+$/.test(val), {
@@ -394,8 +399,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     }
   };
 
+  // Leaves the form for the roles list without saving, as a save leaves it.
   const handleCancel = () => {
     setError(null);
+    navigateTo(ROUTES.SECURITY_ROLES);
   };
 
   // Load permissions from server
@@ -676,7 +683,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const handleNameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!isEditMode) {
-        const value = e.target.value;
+        // From the name as it is saved, trimmed, so a space typed at either
+        // end does not become an underscore in the slug.
+        const value = e.target.value.trim();
         const slugValue = value
           .toLowerCase()
           .replace(/\s+/g, "_")
