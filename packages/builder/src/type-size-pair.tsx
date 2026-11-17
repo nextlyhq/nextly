@@ -48,11 +48,25 @@ function lineHeightAt(address: StyleAddress): StyleAddress {
 }
 
 /**
+ * What a field at `address` writes with a font size pick: the paired line
+ * height, for the field's write to make in the same edit.
+ */
+export function lineHeightPairFor(
+  address: StyleAddress,
+  tokens: SiteTokenSet | undefined
+): (
+  value: StyleValue,
+  styles: NodeStyles | undefined
+) => { address: StyleAddress; value: StyleValue } | undefined {
+  return (value, styles) => pairedLineHeight(address, value, styles, tokens);
+}
+
+/**
  * The line height a font size pick writes with it, or `undefined` for none:
  * only a type size with a line height of its own, picked for a block that has
  * no line height at the same state and breakpoint.
  */
-export function pairedLineHeight(
+function pairedLineHeight(
   address: StyleAddress,
   value: StyleValue,
   styles: NodeStyles | undefined,
@@ -86,6 +100,7 @@ export function TypeSizeLineHint({
   address,
   styles,
   tokens,
+  onBlock,
   readOnly,
   onCommit,
 }: {
@@ -93,10 +108,13 @@ export function TypeSizeLineHint({
   address: StyleAddress;
   styles: NodeStyles | undefined;
   tokens: SiteTokenSet | undefined;
+  /** Whether the field edits a block, not a shared style: only then shown. */
+  onBlock: boolean;
   readOnly: boolean;
   onCommit: (value: StyleValue) => unknown;
 }): React.JSX.Element | null {
-  if (address.property !== "lineHeight" || tokens === undefined) return null;
+  const asked = onBlock && address.property === "lineHeight";
+  if (!asked || tokens === undefined) return null;
   const size = readStyleValue(styles, { ...address, property: "fontSize" });
   const choice = pickedTypeSize(tokens, size);
   const partner = choice?.lineHeight;

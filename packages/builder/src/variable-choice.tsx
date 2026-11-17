@@ -35,6 +35,7 @@ import {
   type SiteTokenSet,
   type StyleLeaf,
   type StyleValue,
+  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import {
   Popover,
@@ -582,6 +583,55 @@ export function UnlinkButton({
 }
 
 /**
+ * What a chip says: its name, the value shown beside it, and its tooltip.
+ */
+function chipWords({
+  leaf,
+  tokens,
+  identity,
+  times,
+  mode,
+  variable,
+  offered,
+}: {
+  leaf: StyleLeaf;
+  tokens: SiteTokenSet | undefined;
+  identity: string;
+  times: number | undefined;
+  mode: TokenMode;
+  variable: SiteVariable | undefined;
+  offered: readonly SiteVariable[];
+}): {
+  name: string;
+  shownValue: SiteVariable | undefined;
+  tip: string | undefined;
+} {
+  // Named through the list's own rule, so two variables sharing a name read
+  // here as they do there, and the chip says which one the document holds.
+  const named =
+    variable === undefined ? identity : variableLabel(variable, offered);
+  // A type size in a font size field reads by its name and pair, "H2 ·
+  // 28 / 1.2", which says its line height too; its value is in the pair.
+  const typeSize =
+    leaf.cssProperty === "font-size" && times === undefined
+      ? pickedTypeSize(tokens, { $token: identity }, mode)
+      : undefined;
+  const name = chipName(named, typeSize?.pair, times);
+  if (variable === undefined) {
+    return { name, shownValue: undefined, tip: undefined };
+  }
+  // The pair already holds the value, so it is not said twice; the tooltip
+  // says the value itself, so a type size is named plainly there.
+  return typeSize === undefined
+    ? { name, shownValue: variable, tip: variableTip(variable, name, tokens) }
+    : {
+        name,
+        shownValue: undefined,
+        tip: variableTip(variable, named, tokens),
+      };
+}
+
+/**
  * What a chip names its variable: a type size by its name and pair, a
  * scaled variable by its scale ("padding-y × 0.75"), any other by name.
  */
@@ -617,24 +667,15 @@ export function VariableChip({
   const mode = useCanvasTokenMode();
   const variable = variableFor(identity, tokens, mode);
   const offered = variablesFor(leaf, tokens, mode);
-  // Named through the list's own rule, so two variables sharing a name read
-  // here as they do there, and the chip says which one the document holds.
-  const named =
-    variable === undefined ? identity : variableLabel(variable, offered);
-  // A type size in a font size field reads by its name and pair, "H2 ·
-  // 28 / 1.2", which says its line height too; its value is in the pair.
-  const typeSize =
-    leaf.cssProperty === "font-size" && times === undefined
-      ? pickedTypeSize(tokens, { $token: identity }, mode)
-      : undefined;
-  const name = chipName(named, typeSize?.pair, times);
-  // The pair already holds the value, so it is not said twice.
-  const shownValue = typeSize === undefined ? variable : undefined;
-  // The tooltip says the value itself, so a type size is named plainly there.
-  const tip =
-    variable === undefined
-      ? undefined
-      : variableTip(variable, typeSize === undefined ? name : named, tokens);
+  const { name, shownValue, tip } = chipWords({
+    leaf,
+    tokens,
+    identity,
+    times,
+    mode,
+    variable,
+    offered,
+  });
   return (
     // A group, so it can carry a name: a bare paragraph maps to a role that
     // prohibits one. Focusable by script only, as the field's label targets it.
