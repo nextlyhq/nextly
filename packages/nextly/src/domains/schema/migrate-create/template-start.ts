@@ -12,9 +12,10 @@
  *   fields the template does not list (each is new), and with the fields the
  *   template lists that the declaration lost (each is removed);
  * - a listed entity no longer declared: its table, to be removed;
- * - a declared entity the template does not list: new, unless a plugin
- *   contributes it, which no template lists, or it is a field group, which
- *   the format has no place for. Those are taken as made whole.
+ * - a declared entity the template does not list: new, unless it is a
+ *   collection a plugin contributes, which no template lists and which is
+ *   taken as made whole. A field group is always new: the format has no place
+ *   for one, and a template's migration makes no table for one.
  *
  * Names only: a listed field whose type or options changed is not seen, since
  * the template's wording for them is not the declaration's.
@@ -51,6 +52,9 @@ function asMade(
   const declaredNames = new Set(declared.fields.map(field => field.name));
   return {
     ...declared,
+    // The table the template made, where the file names it: a declaration
+    // that has since moved the entity to another table has changed it.
+    tableName: listed.tableName ?? declared.tableName,
     fields: [
       // A field without a name (a layout container) is not one the template
       // could list, so it stays.
@@ -105,7 +109,6 @@ export function templateStartingTables(args: {
   template: TemplateEntities;
   collections: readonly MinimalConfigEntity[];
   singles: readonly MinimalConfigEntity[];
-  components: readonly MinimalConfigEntity[];
   /** The slugs of the collections a plugin contributes (`pluginCollectionSources`). */
   pluginCollections: ReadonlySet<string>;
   dialect: SupportedDialect;
@@ -113,7 +116,7 @@ export function templateStartingTables(args: {
   return buildDesiredSnapshotFromConfig(
     madeOf(args.collections, args.template.collections, args.pluginCollections),
     madeOf(args.singles, args.template.singles, new Set()),
-    [...args.components],
+    [],
     args.dialect
   );
 }

@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defineCollection, text } from "../../../../config";
+import { defineCollection, defineFieldGroup, text } from "../../../../config";
 import {
   nothingUnwritten,
   unwrittenChangeLines,
@@ -108,13 +108,17 @@ describe("a project starting from the blog template's snapshot", () => {
   });
 
   /** What both readers are asked with, for the declared entities. */
-  const asked = (declared: { collections: Entity[]; singles: Entity[] }) => ({
+  const asked = (declared: {
+    collections: Entity[];
+    singles: Entity[];
+    fieldGroups?: unknown[];
+  }) => ({
     config: {
       // The plugin's collection is in the configuration's list, as a resolved
       // configuration holds it.
       collections: [...declared.collections, submissions],
       singles: declared.singles,
-      fieldGroups: [],
+      fieldGroups: declared.fieldGroups ?? [],
       plugins: [formsPlugin],
       localization: undefined,
       db: { uiSchemaFile: "./ui-schema.json", migrationsDir },
@@ -128,6 +132,7 @@ describe("a project starting from the blog template's snapshot", () => {
   const linesFor = async (declared: {
     collections: Entity[];
     singles: Entity[];
+    fieldGroups?: unknown[];
   }) => unwrittenChangeLines(await unwrittenChangesOf(asked(declared)));
 
   /** `declared` with `change` applied to the collection `slug`. */
@@ -206,6 +211,34 @@ describe("a project starting from the blog template's snapshot", () => {
       "- drop_index idx_dc_posts_byline on dc_posts",
       "- drop_table dc_authors",
     ]);
+  });
+
+  it("names a field group added, whose table the template never made", async () => {
+    const lines = await linesFor({
+      ...(await blog()),
+      fieldGroups: [
+        defineFieldGroup({
+          slug: "tpl_callout",
+          fields: [text({ name: "heading" })],
+        }),
+      ],
+    });
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\+ .*tpl_callout/);
+  });
+
+  it("names a listed collection given another table: the template's table is the one that exists", async () => {
+    const lines = await linesFor(
+      withCollection(await blog(), "tags", tags => ({
+        ...tags,
+        dbName: "dc_tpl_labels",
+      }))
+    );
+
+    // The template made `dc_tags`; the declaration now asks for another table.
+    expect(lines.some(line => /dc_tags\b/.test(line))).toBe(true);
+    expect(lines.some(line => /dc_tpl_labels\b/.test(line))).toBe(true);
   });
 
   it("migrate:create writes the added field alone, and the next comparison names nothing", async () => {

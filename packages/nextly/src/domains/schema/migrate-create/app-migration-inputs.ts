@@ -180,7 +180,6 @@ export async function appMigrationInputs(
         template,
         collections,
         singles,
-        components,
         pluginCollections: new Set(
           pluginCollectionSources(config.plugins ?? []).keys()
         ),
