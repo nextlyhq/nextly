@@ -47,6 +47,8 @@
  * - image-states: an Image's empty state on the canvas, its upload, link and
  *   missing file.
  * - form-fields: a Form's Fields and After sending.
+ * - first-add: the chooser a block just added asks for on the canvas, such
+ *   as the Columns layouts.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -107,3 +109,5 @@
 @import "./image-states.css";
 
 @import "./form-fields.css";
+
+@import "./first-add.css";

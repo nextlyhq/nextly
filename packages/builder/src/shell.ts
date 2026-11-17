@@ -482,6 +482,15 @@ export type { EmptyContainerAppendersProps } from "./canvas/empty-container-appe
 export { ImageStates } from "./canvas/image-states";
 export type { ImageStatesProps } from "./canvas/image-states";
 /**
+ * The chooser a block just added asks for, drawn over it on the canvas while
+ * the editor's first-add step holds: the Columns layouts with Skip. A canvas
+ * overlay composed like the ones above, from the editor alone.
+ *
+ * @experimental
+ */
+export { FirstAddChoosers } from "./canvas/first-add-choosers";
+export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
