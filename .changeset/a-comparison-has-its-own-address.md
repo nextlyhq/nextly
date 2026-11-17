@@ -38,3 +38,18 @@ Opening a comparison marks its newer version as seen. "Restore…" opens the edi
 list for the version on show. Nothing is written until you save there. On a document with
 drafts, that save keeps the draft unpublished; a document without drafts saves straight to the
 live document.
+
+The comparison page follows its own language and visit. An address that names a language but no
+version (`?from=published&locale=fr`) compares that language's part, and "Restore…" opens the
+editor in the language of the comparison on screen, even when the address names none. "The
+version you last looked at" is worked out afresh on each visit to the page. A comparison against
+a baseline is fetched once, not twice. Every baseline the server registers can be named in the
+address, the workflow ones (`since-submitted`, `since-approved`) included; a name it does not
+know is answered with the ones it does. A comparison that failed to load offers "Try again", and
+"Restore…" stays available for the version named while there is nothing to compare it with. The
+version list marks both versions being compared, with the version compared to as its current row.
+Closing history before a version handed over by "Restore…" has loaded no longer leaves the
+restore request behind. When there is nothing to compare with, the reason is a plain sentence
+rather than the baseline's name in quotes. New, experimental: `nextly/comparison-baseline-name`,
+the one grammar a baseline's name has, which the server registers names by and the admin reads an
+address by.
