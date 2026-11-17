@@ -689,13 +689,24 @@ export function addToken(
 /* ------------------------------------------------------------------ groups */
 
 /** The groups the Design panel shows variables in, in order. */
-export type VariableGroup = "colours" | "type" | "fonts" | "spacing" | "other";
+export type VariableGroup =
+  | "colours"
+  | "type"
+  | "fonts"
+  | "spacing"
+  | "radius"
+  | "shadows"
+  | "content"
+  | "other";
 
 const VARIABLE_GROUPS: readonly VariableGroup[] = [
   "colours",
   "type",
   "fonts",
   "spacing",
+  "radius",
+  "shadows",
+  "content",
   "other",
 ];
 
@@ -704,7 +715,10 @@ const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   colours: "Colours",
   type: "Type scale",
   fonts: "Fonts and weights",
-  spacing: "Spacing, radius & shadows",
+  spacing: "Spacing",
+  radius: "Radius",
+  shadows: "Shadows",
+  content: "Content width",
   other: "Other values",
 };
 
@@ -721,7 +735,7 @@ export const DESIGN_TAB_GROUPS: Readonly<
 > = {
   colours: ["colours"],
   type: ["type", "fonts"],
-  spacing: ["spacing", "other"],
+  spacing: ["spacing", "radius", "shadows", "content", "other"],
   styles: [],
 };
 
@@ -765,7 +779,12 @@ const SIZE_PREFIX = "font-size.";
 const LINE_HEIGHT_PREFIX = "line-height.";
 
 /** Code-name prefixes of a spacing step, and of a radius. */
-const SPACING_PREFIXES = ["space.", "spacing.", "gap."];
+// A button's paddings are spacing too: set alongside the rest, with the
+// same fields.
+const SPACING_PREFIXES = ["space.", "spacing.", "gap.", "button.padding"];
+
+/** The site's content width, which has a group of its own. */
+const CONTENT_WIDTH = "content.width";
 const RADIUS_PREFIX = "radius.";
 
 /** The families a length variable belongs to, each made for its own fields. */
@@ -824,13 +843,14 @@ export function variableGroupOf(token: {
   kind: TokenKind;
 }): VariableGroup {
   if (token.kind === "color") return "colours";
-  if (token.kind === "shadow") return "spacing";
+  if (token.kind === "shadow") return "shadows";
+  if (token.name === CONTENT_WIDTH) return "content";
   if (token.kind === "fontFamily" || token.kind === "fontWeight") {
     return "fonts";
   }
   const family = lengthFamilyOf(token);
   if (family === "font-size" || family === "line-height") return "type";
-  if (family === "spacing" || family === "radius") return "spacing";
+  if (family === "spacing" || family === "radius") return family;
   return "other";
 }
 

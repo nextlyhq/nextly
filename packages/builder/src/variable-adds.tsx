@@ -36,13 +36,19 @@ export const ADDS: Readonly<
     empty: "No type sizes yet.",
   },
   spacing: {
-    rows: [
-      { label: "Add spacing", options: [["spacing", "Spacing"]] },
-      { label: "Add radius", options: [["radius", "Radius"]] },
-      { label: "Add shadow", options: [["shadow", "Shadow"]] },
-    ],
-    empty: "No spacing, radii or shadows yet.",
+    rows: [{ label: "Add spacing", options: [["spacing", "Spacing"]] }],
+    empty: "No spacing yet.",
   },
+  radius: {
+    rows: [{ label: "Add radius", options: [["radius", "Radius"]] }],
+    empty: "No radii yet.",
+  },
+  shadows: {
+    rows: [{ label: "Add shadow", options: [["shadow", "Shadow"]] }],
+    empty: "No shadows yet.",
+  },
+  // The site's one content width, built in: nothing to add beside it.
+  content: { rows: [], empty: "" },
   fonts: {
     rows: [
       { label: "Add font", options: [["fontFamily", "Font"]] },
