@@ -31,6 +31,8 @@ vi.mock("@admin/hooks/queries", () => ({
   useBulkUpdateEntries: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@admin/hooks/queries/useCollections", () => ({
+  // The list opens rows by its own copy of the collection.
+  useEveryNavCollection: () => ({ data: undefined }),
   useCollection: () => ({
     data: { name: "posts", label: "Posts", localized: true, fields: [] },
     isLoading: false,

@@ -110,7 +110,9 @@ test("a type size picked for a heading is stored as a reference, and follows the
     // Named by its label, which also carries where the value comes from.
     const fontSize = inspector.getByRole("textbox", { name: /^Font size/ });
     if (!(await fontSize.isVisible())) {
-      await inspector.getByRole("button", { name: /^Typography/ }).click();
+      await inspector
+        .getByRole("button", { name: /^Text(\s?has changes)?$/ })
+        .click();
     }
     await expect(fontSize).toBeVisible();
 
@@ -177,7 +179,12 @@ test("a type size picked for a heading is stored as a reference, and follows the
     );
 
     // Design changes the variable's size; the heading follows, untouched.
+    // A type size is under Type.
     await openDesign(page);
+    await page
+      .getByRole("region", { name: "Design panel" })
+      .getByRole("tab", { name: /^Type/ })
+      .click();
     await page
       .getByRole("button", { name: /^Display/ })
       .first()
@@ -251,7 +258,9 @@ test("Escape closes an open picker and leaves the selection, the next returns to
       await inspector.getByRole("tab", { name: "Style" }).click();
       // Opened by its own state rather than by what is visible this instant:
       // a section read while the inspector redraws would be toggled shut.
-      const typography = inspector.getByRole("button", { name: /^Typography/ });
+      const typography = inspector.getByRole("button", {
+        name: /^Text(\s?has changes)?$/,
+      });
       if ((await typography.getAttribute("aria-expanded")) !== "true") {
         await typography.click();
       }

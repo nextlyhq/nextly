@@ -118,6 +118,7 @@ describe("the push's type-change offer and the repair's rule", () => {
     const result = await classify([op("links", "text", "jsonb")], () => ({
       judgement,
       keyedBy: "id",
+      conversion: textToJsonb,
       cleared: [{ id: "p1" }],
     }));
 
@@ -144,6 +145,7 @@ describe("the push's type-change offer and the repair's rule", () => {
       classify([op("slug", "text", "varchar(5)")], () => ({
         judgement,
         keyedBy: "id",
+        conversion: textToVarchar,
         cleared: [],
       }))
     ).rejects.toMatchObject({
@@ -178,6 +180,7 @@ describe("the push's type-change offer and the repair's rule", () => {
     const result = await classify([op("links", "text", "jsonb")], () => ({
       judgement,
       keyedBy: "id",
+      conversion: textToJsonb,
       cleared: [],
     }));
     expect(result.events).toEqual([]);
@@ -194,19 +197,18 @@ describe("the push's type-change offer and the repair's rule", () => {
   });
 
   it("asks about a pair the rule has no conversion for as before, saying how many rows hold a value", async () => {
-    const judgement = await judgeColumn(
-      {
-        ...textToJsonb,
-        from: { type: "timestamp", nullable: true },
-        to: { type: "text", nullable: true },
-      },
-      []
-    );
+    const timestampToText: ColumnConversion = {
+      ...textToJsonb,
+      from: { type: "timestamp", nullable: true },
+      to: { type: "text", nullable: true },
+    };
+    const judgement = await judgeColumn(timestampToText, []);
     expect(judgement.reasons.map(r => r.kind)).toEqual(["no-conversion"]);
 
     const result = await classify([op("seen", "timestamp", "text")], () => ({
       judgement,
       keyedBy: "id",
+      conversion: timestampToText,
       cleared: [],
     }));
     const [event] = result.events as TypeChangeEvent[];
@@ -218,23 +220,26 @@ describe("the push's type-change offer and the repair's rule", () => {
   });
 
   it("judges a widening too: a SQLite integer becoming a real is lossy where a row holds a word", async () => {
-    const judgement = await judgeColumn(
-      {
-        dialect: "sqlite",
-        from: { type: "integer", nullable: true },
-        to: { type: "real", nullable: true },
-        compareAs: "number",
-      },
-      [
-        { key: { id: "p0" }, text: "3", storage: "integer" },
-        { key: { id: "p1" }, text: "word", storage: "text" },
-      ]
-    );
+    const integerToReal: ColumnConversion = {
+      dialect: "sqlite",
+      from: { type: "integer", nullable: true },
+      to: { type: "real", nullable: true },
+      compareAs: "number",
+    };
+    const judgement = await judgeColumn(integerToReal, [
+      { key: { id: "p0" }, text: "3", storage: "integer" },
+      { key: { id: "p1" }, text: "word", storage: "text" },
+    ]);
     expect(judgement.class).toBe("lossy");
 
     const result = await classify(
       [op("price", "integer", "real")],
-      () => ({ judgement, keyedBy: "id", cleared: [{ id: "p1" }] }),
+      () => ({
+        judgement,
+        keyedBy: "id",
+        conversion: integerToReal,
+        cleared: [{ id: "p1" }],
+      }),
       "sqlite"
     );
     const [event] = result.events as TypeChangeEvent[];
@@ -242,20 +247,23 @@ describe("the push's type-change offer and the repair's rule", () => {
   });
 
   it("makes a widening the rule has no conversion for without a word, as before", async () => {
-    const judgement = await judgeColumn(
-      {
-        dialect: "mysql",
-        from: { type: "tinyint", nullable: true },
-        to: { type: "int", nullable: true },
-        compareAs: "number",
-      },
-      []
-    );
+    const tinyintToInt: ColumnConversion = {
+      dialect: "mysql",
+      from: { type: "tinyint", nullable: true },
+      to: { type: "int", nullable: true },
+      compareAs: "number",
+    };
+    const judgement = await judgeColumn(tinyintToInt, []);
     expect(judgement.reasons.map(r => r.kind)).toEqual(["no-conversion"]);
 
     const result = await classify(
       [op("rank", "tinyint", "int")],
-      () => ({ judgement, keyedBy: "id", cleared: [] }),
+      () => ({
+        judgement,
+        keyedBy: "id",
+        conversion: tinyintToInt,
+        cleared: [],
+      }),
       "mysql"
     );
     expect(result.events).toEqual([]);

@@ -130,6 +130,9 @@ export type QueuedMessage =
       templateCopies?: { cc: string[]; bcc: string[] };
     };
 
+/** The longest template slug the queue records, as its column holds. */
+const TEMPLATE_SLUG_LENGTH = 255;
+
 /** The queue's table for a dialect. */
 export type EmailQueueTable =
   | typeof emailQueuePg
@@ -443,6 +446,15 @@ export async function storeQueuedEmail(
   const erasedAs = input.person
     ? await deletedDigestOf(tx, input, input.person)
     : undefined;
+  // The template it is sent from, in clear for the Activity list: a slug
+  // names a kind of message, never a person. A name longer than any stored
+  // template's can name none, and is recorded as no template on every
+  // dialect rather than refused by the narrower columns of two.
+  const templateSlug =
+    input.message.kind === "template" &&
+    input.message.slug.length <= TEMPLATE_SLUG_LENGTH
+      ? input.message.slug
+      : null;
   if (input.person && erasedAs !== undefined) {
     await db.insert(table).values({
       id,
@@ -453,6 +465,7 @@ export async function storeQueuedEmail(
       principalKind: input.person.kind,
       principalId: erasedAs,
       failure: null,
+      templateSlug,
       createdAt: now,
       updatedAt: now,
       settledAt: now,
@@ -478,6 +491,7 @@ export async function storeQueuedEmail(
     principalKind: input.person?.kind ?? null,
     principalId: input.person?.id ?? null,
     failure: null,
+    templateSlug,
     createdAt: now,
     updatedAt: now,
     settledAt: null,

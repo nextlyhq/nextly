@@ -34,7 +34,6 @@ import {
   useDocumentActions,
   useDocumentIdentity,
   useDocumentStatus,
-  usePluginRoute,
   writePluginRoute,
   type DocumentActions,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -63,6 +62,7 @@ import type {
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
 import { MovePagesDialog } from "./RemoveLayoutMove";
 
 /** Which Layout the action removes, and how it stands. */
@@ -147,7 +147,7 @@ export function RemoveLayoutToolbarSlot(_props: {
   const status = useDocumentStatus();
   const actions = useDocumentActions();
   const collection = identity?.kind === "collection";
-  const resolved = usePluginRoute<PageCollectionResponse>({
+  const resolved = useBuilderRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
     enabled: collection,
@@ -209,14 +209,20 @@ export function RemoveLayoutAction({
         settle(
           asked,
           check === undefined
-            ? { kind: "failed", message: "The Layout could not be checked." }
+            ? {
+                kind: "failed",
+                message: "The header & footer set could not be checked.",
+              }
             : { kind: "checked", check }
         );
       },
       (error: unknown) =>
         settle(asked, {
           kind: "failed",
-          message: reasonOf(error, "The Layout could not be checked."),
+          message: reasonOf(
+            error,
+            "The header & footer set could not be checked."
+          ),
         })
     );
   };
@@ -253,7 +259,10 @@ export function RemoveLayoutAction({
       (error: unknown) =>
         settle(asked, {
           kind: "failed",
-          message: reasonOf(error, "The Layout could not be removed."),
+          message: reasonOf(
+            error,
+            "The header & footer set could not be removed."
+          ),
         })
     );
   };
@@ -267,7 +276,7 @@ export function RemoveLayoutAction({
         {...(heldBecause === undefined ? {} : { title: heldBecause })}
         onClick={open}
       >
-        Remove Layout…
+        Remove header & footer set…
       </Button>
       <AlertDialog
         open={state.kind !== "closed"}
@@ -337,14 +346,14 @@ function PlainDialog({
   return (
     <>
       <AlertDialogHeader>
-        <AlertDialogTitle>Remove Layout</AlertDialogTitle>
+        <AlertDialogTitle>Remove header & footer set</AlertDialogTitle>
         <AlertDialogDescription>{describe(state)}</AlertDialogDescription>
       </AlertDialogHeader>
       <DialogBody state={state} />
       <AlertDialogFooter>
         {state.kind === "deleted" ? (
           <Button type="button" onClick={toList}>
-            Back to Layouts
+            Back to Header & footer
           </Button>
         ) : (
           <AlertDialogCancel disabled={state.kind === "removing"}>
@@ -385,7 +394,7 @@ function describe(state: DialogState): string {
   switch (state.kind) {
     case "closed":
     case "checking":
-      return "Checking which pages use this Layout…";
+      return "Checking which pages use this header & footer set…";
     case "failed":
     case "deleted":
       return state.message;
@@ -394,7 +403,7 @@ function describe(state: DialogState): string {
       const blocked = blockedBy(state.check);
       if (blocked === "default") return DEFAULT_LAYOUT_REFUSAL;
       if (blocked === "pages") return PAGES_USE_IT;
-      return "No page uses this Layout. Unpublishing takes it off the site and keeps it here; deleting removes it for good.";
+      return "No page uses this header & footer set. Unpublishing takes it off the site and keeps it here; deleting removes it for good.";
     }
   }
 }
@@ -440,7 +449,7 @@ function DialogBody({ state }: { state: DialogState }): JSX.Element | null {
       ) : null}
       {complete ? null : (
         <p className="text-sm text-muted-foreground">
-          {`At least ${String(counted)} ${counted === 1 ? "page uses" : "pages use"} this Layout. Not every page could be checked.`}
+          {`At least ${String(counted)} ${counted === 1 ? "page uses" : "pages use"} this header & footer set. Not every page could be checked.`}
         </p>
       )}
     </div>
@@ -475,7 +484,7 @@ function ConfirmButtons({
         disabled={busy}
         onClick={() => onConfirm("delete")}
       >
-        {busy ? "Removing…" : "Delete Layout"}
+        {busy ? "Removing…" : "Delete header & footer set"}
       </Button>
     </>
   );

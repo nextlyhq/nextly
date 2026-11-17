@@ -5,7 +5,9 @@
  * the route areas, the services and the jobs share.
  */
 import {
+  createBlockRegistry,
   createNamedQueryRegistry,
+  type BlockRegistry,
   namedQueryDeclaration,
   type NamedQueryRegistry,
   type NamedQuerySource,
@@ -35,11 +37,16 @@ import {
 } from "../retired-history";
 import type { RetiredPins } from "../retired-pins";
 import { resolveFontOptions } from "../site-fonts/options";
+import {
+  siteHeaderFooterOption,
+  type SiteHeaderFooter,
+} from "../site-header-footer";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import type { VariablesInUseCheck } from "../site-style-storage";
 import { checkedTemplateAddresses } from "../templates/template-addresses";
 import type { TemplateGuardSetup } from "../templates/template-guard";
 import type { BackfillHost } from "../usage-backfill-wiring";
+
 import type { InitContext } from "./install-context";
 import { fontCatalogueParts, type PageBuilderOptions } from "./options";
 
@@ -178,6 +185,13 @@ export interface DefinitionState {
 export interface Definition {
   readonly opts: PageBuilderOptions;
   readonly state: DefinitionState;
+  /**
+   * This page builder's block registry: filled on each boot through the
+   * registration service, and read by its validation, its routes and the
+   * site's public routes. Its own, so two sites in one process never share
+   * blocks.
+   */
+  readonly blocks: BlockRegistry;
   readonly namedQuerySource: NamedQuerySource;
   readonly namedQueryDeclarations: () => NamedQueryDeclaration[];
   readonly templateAddresses: ReadonlyMap<string, readonly string[]>;
@@ -197,6 +211,8 @@ export interface Definition {
   readonly configClassIds: Set<string>;
   readonly fonts: ReturnType<typeof fontCatalogueParts>;
   readonly canvasPath: string | undefined;
+  /** Who draws the site's header and footer, refused at boot when unknown. */
+  readonly siteHeaderFooter: SiteHeaderFooter;
   readonly usage: {
     reconcile?: CommittedWriteReconciler;
     origins?: OriginStore;
@@ -389,6 +405,9 @@ export function createDefinition(opts: PageBuilderOptions): Definition {
   const fonts = fontCatalogueParts(resolveFontOptions(opts.fonts));
   // The canvas route's path, refused at boot when it names another origin.
   const canvasPath = canvasPathOption(opts.canvasPath);
+  // Who draws the site's header and footer, refused at boot when it is
+  // neither value, so a typo never reads as the default.
+  const siteHeaderFooter = siteHeaderFooterOption(opts.siteHeaderFooter);
 
   // The usage indexes' reconciler for a write made in a transaction the
   // caller owns, which their hooks skip. Set by `init`, read per request.
@@ -425,6 +444,7 @@ export function createDefinition(opts: PageBuilderOptions): Definition {
   return {
     opts,
     state,
+    blocks: createBlockRegistry(),
     namedQuerySource,
     namedQueryDeclarations,
     templateAddresses,
@@ -441,6 +461,7 @@ export function createDefinition(opts: PageBuilderOptions): Definition {
     configClassIds,
     fonts,
     canvasPath,
+    siteHeaderFooter,
     usage,
     retiredHistory,
     requireRemovalHolds,

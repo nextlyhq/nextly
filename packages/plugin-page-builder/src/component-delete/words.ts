@@ -24,7 +24,7 @@ export function leftWords(reason: LeftDocumentReason): string {
     case "write-refused":
       return "Saving the converted copy was refused by the document's own rules.";
     case "layout":
-      return "A Layout uses the component. Choose a different component in that Layout first.";
+      return "A header & footer set uses the component. Choose a different component in that header & footer set first.";
   }
 }
 

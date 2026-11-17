@@ -40,9 +40,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
 import { fieldLabel, propLabel } from "./inspector";
 import type { BuilderOp } from "./op-vocabulary";
+import { blockLabel } from "./panels/add/inserter";
 
 /**
  * What the host knows about the component being edited that its document does

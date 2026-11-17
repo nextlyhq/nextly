@@ -506,6 +506,13 @@ exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_DEFINITION_MISSING 1`] = `
+"✗ The newest migration snapshot records a Builder collection 'articles' that neither \`nextly.config.ts\` nor \`./ui-schema.json\` declares.
+  Why:  \`./ui-schema.json\` is part of the code: \`migrate:create\` reads the Builder's entities from it. Without them, a migration written now would drop each one's table and its content.
+  Next: Restore \`./ui-schema.json\` from version control and commit it with your migrations. To remove an entity, delete it in the Schema Builder, which writes the migration that drops it. Then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-definition-missing  (BUILDER_DEFINITION_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
 "✗ nextly migrate does not apply a file with a Schema Builder name that is not recognised as an earlier Builder's: 1761732000000_update_posts.sql, which has a statement on a table that is not its own entity's, or one that cannot be read.
   Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
@@ -514,9 +521,9 @@ exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSI
 `;
 
 exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 1`] = `
-"✗ A field in \`ui-schema.json\` relates to a collection that does not exist.
+"✗ A field in \`./ui-schema.json\` relates to a collection that does not exist.
   Why:  articles.author relates to unknown target 'authors'
-  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`ui-schema.json\`, or create the collection it names, then run the command again.
+  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`./ui-schema.json\`, or create the collection it names, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
@@ -953,6 +960,16 @@ exports[`each code, as a command ends with it > MIGRATION_NAME_REQUIRED 1`] = `
   Why:  Only a \`--blank\` migration may be created without a name.
   Next: Name it, as in \`nextly migrate:create add_excerpt\` or \`--name=add_excerpt\`, or pass \`--blank\` for an empty migration.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-name-required  (MIGRATION_NAME_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_NOT_PROVEN 1`] = `
+"✗ 20261020_120000_add_posts.sql is pending, and the database already stands where it ends, not where it starts.
+  Why:  It was neither run nor recorded as applied without running: its snapshot does not show what 1 statement does.
+        Statements it would have skipped:
+          1. ALTER TABLE "dc_posts" ADD COLUMN "slug" text (the database has it)
+          2. UPDATE "dc_posts" SET "slug" = (not shown by its snapshot)
+  Next: Run the statements not marked "the database has it" by hand, or confirm they are not needed, then record the file with \`nextly migrate:resolve --applied 20261020_120000_add_posts\` and run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
@@ -1933,6 +1950,13 @@ exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] =
   Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
   Next: Rename it, or re-run with \`--target-table-name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_LEDGER_UNREADABLE 1`] = `
+"✗ The table "nextly_migrations" holds records \`nextly upgrade\` cannot read: the record of 0001_init.sql has the status "rolled_back".
+  Why:  \`nextly upgrade\` moves the records an earlier release kept in \`nextly_migrations\` into \`nextly_schema_events\`, and reads every one before writing any. One of them it cannot read, so nothing was changed.
+  Next: Rename the table if Nextly did not create it, then run \`nextly upgrade\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-ledger-unreadable  (UPGRADE_LEDGER_UNREADABLE)"
 `;
 
 exports[`each code, as a command ends with it > WIDGET_GENERATE_CANCELLED 1`] = `

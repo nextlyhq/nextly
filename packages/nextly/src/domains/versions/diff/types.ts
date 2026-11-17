@@ -27,8 +27,6 @@ export type TextSegment = { op: -1 | 0 | 1; text: string };
  * A container with no name still has a heading on the form, so it keeps its
  * place here with `name: null`; one with neither a name nor a label shows no
  * heading and is left out.
- *
- * @experimental
  */
 export interface DiffPathSegment {
   /** The container's key, or null for a container that has none. */
@@ -52,15 +50,11 @@ interface FieldDiffBase {
    * Always present on a comparison this server returns; optional in the type
    * so a node built elsewhere (a fixture, a plugin's renderer test) stays
    * valid.
-   *
-   * @experimental
    */
   declaredLabel?: string | null;
   /**
    * The containers the field sits inside, outermost first; empty at the top of
    * the document. Always present on a comparison this server returns.
-   *
-   * @experimental
    */
   path?: DiffPathSegment[];
   /** The field's declared type, so the renderer can pick a display. */
@@ -219,11 +213,9 @@ export interface UnknownFieldDiff {
    * every document (such as when it was first published), `removed` for a
    * field the content type no longer has. Removed fields come last. Always
    * present on a comparison this server returns.
-   *
-   * @experimental
    */
   reason?: "system" | "removed";
-  /** @experimental See {@link FieldDiffBase.path}. */
+  /** See {@link FieldDiffBase.path}. */
   path?: DiffPathSegment[];
 }
 
@@ -235,8 +227,6 @@ export interface UnknownFieldDiff {
  *
  * A new member of the {@link FieldDiff} union: a consumer that switches over
  * `kind` exhaustively adds a `hidden` case (or a default) when it upgrades.
- *
- * @experimental
  */
 export interface HiddenFieldDiff extends FieldDiffBase {
   kind: "hidden";
@@ -367,16 +357,12 @@ export interface VersionDiff {
    * `replaces` names the version the baseline named instead, when retention
    * had removed it ("the version you last looked at was removed; comparing
    * with the nearest older one").
-   *
-   * @experimental
    */
   baseline?: { name: string; versionNo: number; replaces?: number };
   /**
    * True when fields were withheld from the reader. Their changes cannot be
    * shown, so `hasChanges: false` then means only that nothing the reader may
    * read changed, never that the versions are the same.
-   *
-   * @experimental
    */
   incomplete?: boolean;
   fields: FieldDiff[];

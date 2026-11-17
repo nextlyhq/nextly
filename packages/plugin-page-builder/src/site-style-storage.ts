@@ -863,7 +863,7 @@ export async function loadSiteStyleVersioned(
 }
 
 /** The site style a stored record resolves to over the code's defaults. */
-function resolvedSiteStyleOf(
+export function resolvedSiteStyleOf(
   stored: StoredSiteStyle,
   defaults: SiteStyleData | undefined
 ): SiteStyleData {

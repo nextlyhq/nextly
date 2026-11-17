@@ -23,7 +23,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import type { JSX, ReactElement } from "react";
 import { useId, useState } from "react";
 
 import {
@@ -42,6 +42,7 @@ import {
   useClaimRecoveryOffer,
   type HostedRecoveryOffer,
 } from "./RecoveryOfferContext";
+import { LAST_VISIT_NOTICE } from "./save-publish-state";
 import { formatTimeAgo } from "./time-ago";
 import type { DocumentSaveState } from "./useDocumentActionBindings";
 
@@ -73,7 +74,7 @@ export interface StoredDocument {
  * visit wait, in a view whose chip makes the recovery offer: the chip itself
  * keeps the bar's one short status, "Unsaved changes".
  */
-const LAST_VISIT_NOTICE = "Changes from your last visit aren't saved yet.";
+const LAST_VISIT_SENTENCE = `${LAST_VISIT_NOTICE}.`;
 
 /**
  * What the indicator draws: one of the four states, the changes from a last
@@ -197,24 +198,32 @@ function FailedSaveState({
       <span id={detailId} className="sr-only">
         {view.detail}
       </span>
-      <TooltipProvider delayDuration={300}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            {/* A real button, so Retry is reachable from the keyboard and
-                focusing it shows what failed. A failure nothing here can try
-                again offers no Retry that would only fail again; its control
-                still takes focus, to say what failed and where to fix it. */}
-            {view.retry === undefined ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2"
-                aria-describedby={detailId}
-              >
-                Details
-              </Button>
-            ) : (
+      {view.retry === undefined ? (
+        // A failure nothing here can try again offers no Retry that would
+        // only fail again. Details opens what failed on a click and stays
+        // open to be read: a tooltip closes on the press that would open it.
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2"
+              aria-describedby={detailId}
+            >
+              Details
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" side="bottom" className="w-72 text-sm">
+            <p>{view.detail}</p>
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* A real button, so Retry is reachable from the keyboard and
+                  focusing it shows what failed. */}
               <Button
                 type="button"
                 variant="ghost"
@@ -227,13 +236,13 @@ function FailedSaveState({
               >
                 Retry
               </Button>
-            )}
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="end">
-            <p>{view.detail}</p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="end">
+              <p>{view.detail}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
     </>
   );
 }
@@ -300,6 +309,7 @@ function OfferChip({
   leave,
   take,
   notice,
+  trigger,
 }: {
   label: string;
   /** What the popover holds, said after the label to a screen reader. */
@@ -313,6 +323,11 @@ function OfferChip({
   take: OfferAnswer;
   /** A sentence said first in the popover, above when the work is from. */
   notice?: string;
+  /**
+   * The control that opens it, where a surface draws its own (a Save
+   * button); the chip's own words otherwise.
+   */
+  trigger?: ReactElement;
 }): JSX.Element {
   // Made here, so the banner a document view would draw stands down.
   useClaimRecoveryOffer();
@@ -324,17 +339,19 @@ function OfferChip({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={`${label}: ${purpose}`}
-          className="-mx-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted data-[state=open]:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span className={cn("whitespace-nowrap", WORDS_IN_NARROW_BAR)}>
-            {label}
-          </span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        </button>
+        {trigger ?? (
+          <button
+            type="button"
+            aria-label={`${label}: ${purpose}`}
+            className="-mx-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted data-[state=open]:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className={cn("whitespace-nowrap", WORDS_IN_NARROW_BAR)}>
+              {label}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          </button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 text-sm">
         {notice === undefined ? null : (
@@ -379,7 +396,7 @@ function OfferChip({
  * the editor says the same thing in a second place; and no button beside it,
  * so the top bar is no wider than it is for unsaved work alone.
  */
-function RecoveryOfferChip({
+export function RecoveryOfferChip({
   label,
   offer,
 }: {
@@ -413,21 +430,25 @@ export interface OfferedSave {
  * are from, with Save, which keeps them (the document's own Save, offered
  * while they wait), and Discard, which stops offering them.
  */
-function LastVisitChip({
+export function LastVisitChip({
   label,
   offer,
   save,
+  trigger,
 }: {
   label: string;
   offer: HostedRecoveryOffer;
   save: OfferedSave;
+  /** A surface's own control that opens it, such as its Save button. */
+  trigger?: ReactElement;
 }): JSX.Element {
   return (
     <OfferChip
       label={label}
       purpose="Save or Discard"
       offer={offer}
-      notice={LAST_VISIT_NOTICE}
+      notice={LAST_VISIT_SENTENCE}
+      {...(trigger === undefined ? {} : { trigger })}
       lead="You made them"
       // Discard lasts: the point is emptied, so no later session offers it.
       leave={{ label: "Discard", run: offer.discard }}

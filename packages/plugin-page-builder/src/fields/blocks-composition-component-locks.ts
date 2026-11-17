@@ -10,8 +10,6 @@
  */
 import {
   contentOnlyExposures,
-  registryBlockSource,
-  registryNestingSource,
   variantLockChanges,
   variantNamesIn,
   type BlockDocument,
@@ -132,8 +130,8 @@ export async function judgeLockedExposures(
   report: ReturnType<typeof issueReport>
 ): Promise<void> {
   const sources = {
-    definitions: registryBlockSource(),
-    nesting: registryNestingSource(),
+    definitions: setup.blocks.blockSource(),
+    nesting: setup.blocks.nestingSource(),
   };
   const after = contentOnlyExposures(document as ComponentDocument, sources);
   if (after.length === 0) return;

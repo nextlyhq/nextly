@@ -10,6 +10,7 @@
  * @module fields/blocks-composition-setup
  */
 import type {
+  BlockRegistryReader,
   DocumentLimits,
   LockedExposure,
   NamedQuerySource,
@@ -87,6 +88,8 @@ export interface CompositionSetup {
   readonly store: ComponentStoreAddress;
   /** The caps the renderer draws under. */
   readonly limits: DocumentLimits;
+  /** The site's block registry, whose nesting rules and locks are judged. */
+  readonly blocks: BlockRegistryReader;
   /** Who places a component; absent where the index cannot be reached. */
   readonly hostsOf?: HostFinder;
   /**

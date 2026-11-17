@@ -331,6 +331,18 @@ export function VersionHistorySheet({
     selected === null ? null : predecessorOf(versions, selected, false);
   const previousVersionNo =
     previousTarget?.kind === "version" ? previousTarget.versionNo : null;
+  // The newest version in the chosen one's language, to compare against for
+  // everything since it, and to read the fields a first version holds that
+  // the content type no longer has. The language comes from the version's own
+  // read too, so a version a link names beyond the loaded rows still finds it.
+  const newestVersionNo =
+    selected === null
+      ? null
+      : newestInLocale(
+          versions,
+          selected,
+          detail.data === undefined ? undefined : (detail.data.locale ?? null)
+        );
 
   // Hand the chosen version to the document area, and take it back whenever
   // nothing is chosen — including when the panel closes, so dismissing it never
@@ -435,6 +447,7 @@ export function VersionHistorySheet({
         comparedWithKind === "version" && previousVersionNo !== null
           ? { kind: "version", versionNo: previousVersionNo }
           : { kind: comparedWithKind === "first" ? "first" : "unknown" },
+      newestInLocale: newestVersionNo,
       about: viewedAbout,
     });
   }, [
@@ -448,6 +461,7 @@ export function VersionHistorySheet({
     viewedAbout,
     comparedWithKind,
     previousVersionNo,
+    newestVersionNo,
     scopeId,
     setViewing,
   ]);
@@ -464,11 +478,9 @@ export function VersionHistorySheet({
   const listFresh = !isRefetching && !isRefetchError;
   const canComparePrevious =
     selectedPresent && previousVersionNo !== null && listFresh;
-  // The newest version in the chosen one's language, to compare against for
-  // everything since it; withheld on the same freshness grounds, since a stale
-  // list can name a newest that has since been pruned.
-  const newestVersionNo =
-    selected === null ? null : newestInLocale(versions, selected);
+  // Comparing against the newest version in the chosen one's language is
+  // withheld on the same freshness grounds, since a stale list can name a
+  // newest that has since been pruned.
   const canCompareCurrent =
     selectedPresent && newestVersionNo !== null && listFresh;
 
@@ -691,6 +703,8 @@ export function VersionHistorySheet({
         <SheetContent
           side="right"
           className="p-0 flex flex-col"
+          // Where the history panel is, for a check that reads it alone.
+          data-history-panel=""
           // Width from the same constant the reservation is made with, so the
           // space kept clear cannot drift from the space taken. Capped at the
           // window because the panel is wider than a phone.
