@@ -55,6 +55,7 @@ import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import {
   isStatusOnlyWrite,
   stripImmutableSystemFields,
+  withoutContributedColumns,
   writableBodyOf,
   writeGateFor,
 } from "../../../lib/immutable-system-fields";
@@ -2482,37 +2483,6 @@ export class SingleMutationService extends BaseService {
       locale: options.locale,
     });
 
-    // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
-    // `updateEntry` for why Strapi withholds `"*"` from its update method and
-    // why Nextly, having one door for both, has to enforce the split here.
-    if (sweepAllLocales) {
-      const named = Object.keys(data);
-      const statusOnly = named.length === 1 && named[0] === "status";
-      // The VALUE, not merely the key — see the collection guard for why a
-      // coerced non-string splits the write instead of refusing it.
-      if (statusOnly && !isLifecycleStatus(data.status)) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
-            `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
-            `${JSON.stringify(data.status)}.`,
-        };
-      }
-      if (!statusOnly) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `locale '${EVERY_LOCALE}' moves the publication status of every ` +
-            `language and writes nothing else, so it accepts a 'status' patch ` +
-            `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
-            `To write field values, name the language they belong to.`,
-        };
-      }
-    }
-
     // Set true once the update transaction commits with a real write (which
     // always appends the outbox event); lets the catch and the `!updated`
     // return report a committed-but-post-hook-failed write as `eventRecorded`
@@ -2567,6 +2537,41 @@ export class SingleMutationService extends BaseService {
         };
       }
 
+      // 1.04. The wildcard moves a LIFECYCLE and nothing else — see the same guard on
+      // `updateEntry` for why Strapi withholds `"*"` from its update method and
+      // why Nextly, having one door for both, has to enforce the split here.
+      if (sweepAllLocales) {
+        // Judged on what the write stores: a column a schema hook contributed is never written,
+        // so it makes the patch no field write.
+        const named = Object.keys(
+          withoutContributedColumns(data, singleMeta.tableName)
+        );
+        const statusOnly = named.length === 1 && named[0] === "status";
+        // The VALUE, not merely the key — see the collection guard for why a
+        // coerced non-string splits the write instead of refusing it.
+        if (statusOnly && !isLifecycleStatus(data.status)) {
+          return {
+            success: false,
+            statusCode: 400,
+            message:
+              `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
+              `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
+              `${JSON.stringify(data.status)}.`,
+          };
+        }
+        if (!statusOnly) {
+          return {
+            success: false,
+            statusCode: 400,
+            message:
+              `locale '${EVERY_LOCALE}' moves the publication status of every ` +
+              `language and writes nothing else, so it accepts a 'status' patch ` +
+              `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
+              `To write field values, name the language they belong to.`,
+          };
+        }
+      }
+
       // 1.05. The wildcard moves a LIFECYCLE, so a Single that has none has
       // nothing for it to move. Mirrors the collection path, and for the same
       // reason: a Single carrying an ordinary user field named `status` has the
@@ -2619,6 +2624,7 @@ export class SingleMutationService extends BaseService {
       const gate = await writeGateFor(
         data,
         "single",
+        singleMeta.tableName,
         () => (singleMeta as { status?: boolean }).status === true
       );
       // Handed on as the status alone: the system columns a status-only body
@@ -2673,7 +2679,12 @@ export class SingleMutationService extends BaseService {
       // its name, on the Single's row or a language's: refused here, with access judged and
       // before any hook, rather than written or left to fail in the database. The keys a read
       // adds are taken off, so a document sent back as it was read still saves.
-      data = writableBodyOf(data, "single", singleMeta.fields);
+      data = writableBodyOf(
+        data,
+        "single",
+        singleMeta.fields,
+        singleMeta.tableName
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The
