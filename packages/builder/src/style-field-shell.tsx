@@ -7,11 +7,12 @@
  *
  * @module style-field-shell
  */
-import type {
-  BreakpointId,
-  SiteTokenSet,
-  StyleState,
-  StyleValue,
+import {
+  isTokenRef,
+  type BreakpointId,
+  type SiteTokenSet,
+  type StyleState,
+  type StyleValue,
 } from "@nextlyhq/blocks-engine";
 import { Label, TooltipProvider } from "@nextlyhq/ui";
 import { RotateCcw } from "lucide-react";
@@ -23,7 +24,8 @@ import { CssHint, CssNamesLine, OptionWrites, FieldNamesId } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import { InheritedValue } from "./inherited-value";
 import { LabelScrubRow, useLabelScrubProps } from "./label-scrub";
-import { CompactSides, sideKeysFor } from "./spacing-box";
+import { CompactSides, fieldDescribedBy, sideKeysFor } from "./spacing-box";
+import { SpacingSide } from "./spacing-side";
 import { contrastObscuredAbove, contrastObscuredIn } from "./style-colour";
 import { commitsFor, partnerColour } from "./style-colour-field";
 import {
@@ -42,6 +44,7 @@ import {
 import { targetKey, useFieldTarget } from "./style-field-target";
 import type { BreakpointBadge, BreakpointSource } from "./style-provenance";
 import { SharedValueLine, ProvenanceDot } from "./style-provenance-indicators";
+import { editableText } from "./style-text-field";
 import { labelFocusOnly } from "./style-value-fields";
 import type { StyleAddress, StylePolicy } from "./style-values";
 
@@ -230,9 +233,13 @@ export function StyleControlField({
   const answer = provenanceOf(control.leaf);
   const inherited = inheritedShown(stored, answer);
 
-  const readOnly = showsNoField(control, stored, clearOnly);
   // A spacing-box side resets by key: see `sideKeysFor`.
   const inBox = React.useContext(CompactSides);
+  // Drawn in the spacing box as a button that opens the side's popover,
+  // which edits a variable it holds as readily as a number.
+  const asSide =
+    inBox && side !== undefined && drawnAsSide(control, stored, clearOnly);
+  const readOnly = asSide ? false : showsNoField(control, stored, clearOnly);
   const sideKeys = sideKeysFor(side, inBox, stored, readOnly, id, commit);
   const labelId = `${id}-label`;
   // Computed once and used by both the control and its message: two spellings
@@ -292,20 +299,35 @@ export function StyleControlField({
                 descendant={control.leaf.descendant}
               />
               <InheritedValue.Provider value={inherited}>
-                <ControlOrFont
-                  id={id}
-                  labelledBy={labelId}
-                  control={control}
-                  stored={stored}
-                  actionName={actionName}
-                  clearOnly={clearOnly}
-                  tokens={tokens}
-                  prefersDark={prefersDark}
-                  pairedColour={pairedColour}
-                  obscuredBy={obscuredBy}
-                  describedBy={describedBy}
-                  onCommit={commit}
-                />
+                {asSide ? (
+                  <SpacingSide
+                    id={id}
+                    labelledBy={labelId}
+                    name={actionName}
+                    control={control}
+                    stored={stored}
+                    inherited={inherited}
+                    tokens={tokens}
+                    describedBy={fieldDescribedBy(describedBy, true, id)}
+                    onCommit={commit}
+                    onCommitSides={writes.commitSides}
+                  />
+                ) : (
+                  <ControlOrFont
+                    id={id}
+                    labelledBy={labelId}
+                    control={control}
+                    stored={stored}
+                    actionName={actionName}
+                    clearOnly={clearOnly}
+                    tokens={tokens}
+                    prefersDark={prefersDark}
+                    pairedColour={pairedColour}
+                    obscuredBy={obscuredBy}
+                    describedBy={describedBy}
+                    onCommit={commit}
+                  />
+                )}
               </InheritedValue.Provider>
             </LabelScrubRow>
             <CssNamesLine id={namesId} names={[control.leaf.cssProperty]} />
@@ -335,6 +357,19 @@ export function StyleControlField({
       </FieldNamesId.Provider>
     </OptionWrites.Provider>
   );
+}
+
+/**
+ * Whether a spacing-box side is drawn as its button: a length it can show,
+ * a number or a variable. A value it can only remove keeps its own surface.
+ */
+function drawnAsSide(
+  control: StyleControl,
+  stored: StyleValue | undefined,
+  clearOnly: boolean
+): boolean {
+  if (clearOnly || control.leaf.kind !== "dimension") return false;
+  return isTokenRef(stored) || editableText(control, stored) !== undefined;
 }
 
 /** The id a field's refusal is said under, or none while nothing is refused. */

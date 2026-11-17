@@ -126,11 +126,21 @@ export function NumericField({
   tokens,
   describedBy,
   onCommit,
+  seed,
+  offerVariables = true,
 }: {
   id: string;
   control: StyleControl;
   stored: StyleValue | undefined;
   tokens: SiteTokenSet | undefined;
+  /**
+   * What the field starts with in place of the stored value, as if typed:
+   * the digit that opened a spacing side's popover.
+   */
+  seed?: string | undefined;
+  /** Whether it offers the site's variables beside it (a ◇); a spacing
+   * side's popover lists them as its presets instead. */
+  offerVariables?: boolean;
   /**
    * This control's own name, position included.
    *
@@ -156,6 +166,7 @@ export function NumericField({
   // the unitless draft, leaving `12px` stored — and the menu composed from
   // THAT, committing `12rem` and discarding the 20 they were looking at.
   const { draft, setDraft } = useDraft(stored);
+  useSeededDraft(seed, setDraft);
   // Read from the DRAFT, so the menu offers units for the quantity on screen
   // and swaps the unit on that quantity rather than on a superseded one.
   const measurement = measurementOfText(draft);
@@ -283,17 +294,33 @@ export function NumericField({
       ) : null}
       {/* The site's variables for this field, after its unit; nothing where
           the site has none the property takes. */}
-      <VariableChoice
-        leaf={control.leaf}
-        tokens={tokens}
-        bound={false}
-        empty={stored === undefined}
-        current={undefined}
-        label={actionName}
-        onPick={identity => onCommit({ $token: identity })}
-      />
+      {offerVariables ? (
+        <VariableChoice
+          leaf={control.leaf}
+          tokens={tokens}
+          bound={false}
+          empty={stored === undefined}
+          current={undefined}
+          label={actionName}
+          onPick={identity => onCommit({ $token: identity })}
+        />
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The seed put in the draft once, after the draft has read the stored value:
+ * the first character of a value typed on a spacing side, which opened it.
+ */
+function useSeededDraft(
+  seed: string | undefined,
+  setDraft: (value: string) => void
+): void {
+  const first = React.useRef(seed);
+  React.useEffect(() => {
+    if (first.current !== undefined) setDraft(first.current);
+  }, [setDraft]);
 }
 
 /**

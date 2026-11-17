@@ -14,7 +14,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
+import {
+  batchStyleClearOps,
+  batchStyleWriteOps,
+  batchStyleWritesOps,
+} from "./batch-style";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import {
@@ -60,6 +64,7 @@ function writeStyleValue({
   policy,
   value,
   setIssue,
+  also = [],
 }: {
   editor: EditorState;
   nodeId: string;
@@ -68,6 +73,11 @@ function writeStyleValue({
   /** `null` clears, which is not the same as writing an empty value. */
   value: StyleValue | null;
   setIssue: (message: string | null) => void;
+  /**
+   * Other addresses set to the same value in the same op: the sides of a
+   * margin set together. A clear is of `address` alone.
+   */
+  also?: readonly StyleAddress[];
 }): CommitOutcome {
   const current = findNode(editor.document.nodes, nodeId);
   if (current === undefined) return "refused";
@@ -99,10 +109,7 @@ function writeStyleValue({
    * therefore not a detour around the simple case — it IS the simple case,
    * with the count left open.
    */
-  const write =
-    value === null
-      ? batchStyleClearOps([current], address, policy)
-      : batchStyleWriteOps([current], address, value, policy);
+  const write = styleWrite(current, address, also, value, policy);
   if (write.refused !== undefined) {
     setIssue(write.refused);
     return "refused";
@@ -123,6 +130,21 @@ function writeStyleValue({
     return "refused";
   }
   return "applied";
+}
+
+/** The ops that write one address, or several to one value, or clear one. */
+function styleWrite(
+  current: Parameters<typeof batchStyleClearOps>[0][number],
+  address: StyleAddress,
+  also: readonly StyleAddress[],
+  value: StyleValue | null,
+  policy: StylePolicy | undefined
+): ReturnType<typeof batchStyleClearOps> {
+  if (value === null) return batchStyleClearOps([current], address, policy);
+  if (also.length === 0) {
+    return batchStyleWriteOps([current], address, value, policy);
+  }
+  return batchStyleWritesOps([current], [address, ...also], value, policy);
 }
 
 /** A shared style's name by its class name, from the styles the block wears. */
@@ -221,6 +243,14 @@ export function useFieldTarget({
     onBlur: (event: React.FocusEvent<HTMLElement>) => void;
   };
   commit: (value: StyleValue | null) => CommitOutcome;
+  /**
+   * This field's value written at other paths of its property as well, as one
+   * edit: "Apply to: All sides" from a side of the spacing box.
+   */
+  commitSides: (
+    paths: readonly (readonly string[])[],
+    value: StyleValue
+  ) => CommitOutcome;
   resetBlock: () => void;
   moveTo: (shared: Extract<StyleTarget, { kind: "shared" }>) => void;
 } {
@@ -289,8 +319,19 @@ export function useFieldTarget({
         setIssue(reason);
         return true;
       });
-  const writeBlock = (value: StyleValue | null): CommitOutcome =>
-    writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
+  const writeBlock = (
+    value: StyleValue | null,
+    also?: readonly StyleAddress[]
+  ): CommitOutcome =>
+    writeStyleValue({
+      editor,
+      nodeId,
+      address,
+      policy,
+      value,
+      setIssue,
+      ...(also === undefined ? {} : { also }),
+    });
   return {
     target,
     nodeStyles,
@@ -322,6 +363,13 @@ export function useFieldTarget({
       quieten();
       return writeTarget(value);
     },
+    commitSides: (paths, value) => {
+      quieten();
+      const also = paths
+        .filter(path => path.join(".") !== address.path.join("."))
+        .map(path => ({ ...address, path }));
+      return writeTarget(value, also);
+    },
     resetBlock: () => {
       writeBlock(null);
     },
@@ -337,17 +385,26 @@ export function useFieldTarget({
         report: reportFor(shared),
       }),
   };
-  function writeTarget(value: StyleValue | null): CommitOutcome {
-    return target.kind === "shared"
-      ? writeSharedStyleValue({
-          target,
-          address,
-          policy,
-          value,
-          setIssue,
-          report: reportFor(target),
-        })
-      : writeBlock(value);
+  function writeTarget(
+    value: StyleValue | null,
+    also: readonly StyleAddress[] = []
+  ): CommitOutcome {
+    if (target.kind !== "shared") return writeBlock(value, also);
+    // A shared style is written by the host, one change at a time.
+    let outcome: CommitOutcome = "unchanged";
+    for (const at of [address, ...also]) {
+      const one = writeSharedStyleValue({
+        target,
+        address: at,
+        policy,
+        value,
+        setIssue,
+        report: reportFor(target),
+      });
+      if (one === "refused") return one;
+      if (one === "applied") outcome = one;
+    }
+    return outcome;
   }
 }
 
