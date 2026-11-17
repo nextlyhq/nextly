@@ -30,11 +30,11 @@ import { type JSX, useId, useState } from "react";
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import { namesFollowingName } from "@admin/lib/builder/entity-names";
 import { suggestIcon } from "@admin/lib/builder/icon-suggestion";
+import type { OfferedTemplate } from "@admin/lib/builder/schema-templates";
 import {
   entryKindChoices,
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
-import type { OfferedTemplate } from "@admin/lib/builder/schema-templates";
 import {
   useUnsavedAddresses,
   type UnsavedEntity,
