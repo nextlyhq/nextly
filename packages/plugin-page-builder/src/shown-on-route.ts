@@ -11,7 +11,11 @@
  * - The reader must be able to read the Single, or the route refuses: a
  *   Single they may not read is not theirs to ask about.
  * - A place is listed only when the reader may read its document, and the
- *   blocks field it is in, read as them (`bindings-report/readable`).
+ *   blocks field it is in by its whole path, read as them
+ *   (`bindings-report/readable`).
+ * - A place only in a document's unpublished working draft is listed only
+ *   for a reader who may edit that document's collection or Single, the
+ *   callers core shows a working draft to.
  * - The others are counted from the index, as the system, and answered as a
  *   number only: never a title, an id or an address of a document the
  *   reader may not open.
@@ -66,6 +70,11 @@ export interface ShownOnDeps {
     ctx: PluginRouteContext,
     entries: readonly ReadableQuestion[]
   ) => Promise<ReadonlyMap<string, ReadableDocument>>;
+  /**
+   * Whether the caller may edit documents of this collection or Single, so
+   * core would show them its working draft.
+   */
+  readonly mayEdit: (ctx: PluginRouteContext, slug: string) => Promise<boolean>;
   /** Whether the caller may read the Single, read as them. */
   readonly mayReadSingle: (
     ctx: PluginRouteContext,
@@ -87,38 +96,41 @@ export interface ShownOnDeps {
   readonly blocks: BlockRegistryReader;
 }
 
-/** One place, from the uses of one block of one document. */
+/** One place, from the uses of one block in one blocks field of one document. */
 interface Found {
   readonly key: string;
-  readonly first: StoredUse;
+  /** The use it is named by: a published one where it has one. */
+  first: StoredUse;
   /** Whether a use of it is in the default language, or in no one language. */
   inDefault: boolean;
-  readonly fields: Set<string>;
+  /** Whether a use of it is in the published value, not only the draft. */
+  published: boolean;
 }
 
 /** The query: `all=1` for every place. */
 const shownOnQuery = z.object({ all: z.enum(["1"]).optional() });
 
-/** The uses grouped by document and block, in the order they were read. */
+/**
+ * The uses grouped by document, blocks field and block, in the order they
+ * were read: each is edited, and may be read, on its own.
+ */
 function placesOf(
   uses: readonly StoredUse[],
   defaultLocale: string | undefined
 ): Found[] {
   const byKey = new Map<string, Found>();
   for (const use of uses) {
-    const key = `${use.documentKey}\u0000${use.nodeId}`;
+    const key = `${use.documentKey}\u0000${use.blocksField}\u0000${use.nodeId}`;
     const inDefault = use.locale === undefined || use.locale === defaultLocale;
+    const published = use.version === "published";
     const held = byKey.get(key);
     if (held === undefined) {
-      byKey.set(key, {
-        key,
-        first: use,
-        inDefault,
-        fields: new Set([use.blocksField]),
-      });
+      byKey.set(key, { key, first: use, inDefault, published });
     } else {
       held.inDefault ||= inDefault;
-      held.fields.add(use.blocksField);
+      // Named as the published value names it, which every reader may see.
+      if (published && !held.published) held.first = use;
+      held.published ||= published;
     }
   }
   return [...byKey.values()];
@@ -128,23 +140,17 @@ function placesOf(
 function questionsOf(places: readonly Found[]): ReadableQuestion[] {
   const byDocument = new Map<string, ReadableQuestion>();
   for (const place of places) {
-    const { documentKey, kind, slug, documentId } = place.first;
-    const rows = [...place.fields].map(blocksField => ({ blocksField }));
+    const { documentKey, kind, slug, documentId, blocksField } = place.first;
     const held = byDocument.get(documentKey);
     byDocument.set(documentKey, {
       documentKey,
       kind,
       slug,
       ...(documentId === undefined ? {} : { documentId }),
-      rows: [...(held?.rows ?? []), ...rows],
+      rows: [...(held?.rows ?? []), { blocksField }],
     });
   }
   return [...byDocument.values()];
-}
-
-/** A blocks field's top-level field, which the readable read names. */
-function topField(blocksField: string): string {
-  return blocksField.split(".")[0] ?? "";
 }
 
 /** The block's name as Layers shows it: the author's, else its block's label. */
@@ -188,6 +194,25 @@ function byTitle(a: ShownOnPlace, b: ShownOnPlace): number {
   );
 }
 
+/**
+ * The collections and Singles, of those whose places are only in a working
+ * draft, whose documents the caller may edit: asked once each.
+ */
+async function editorsOf(
+  ctx: PluginRouteContext,
+  places: readonly Found[],
+  deps: Pick<ShownOnDeps, "mayEdit">
+): Promise<ReadonlySet<string>> {
+  const asked = new Set(
+    places.flatMap(place => (place.published ? [] : [place.first.slug]))
+  );
+  const editors = new Set<string>();
+  for (const slug of asked) {
+    if (await deps.mayEdit(ctx, slug)) editors.add(slug);
+  }
+  return editors;
+}
+
 /** Answer one Single's places, as the caller may see them. */
 export async function readShownOn(
   slug: string,
@@ -221,13 +246,14 @@ export async function readShownOn(
     singleDocuments.size === 0
       ? new Map<string, string>()
       : await deps.singleLabels(ctx, singleDocuments);
+  const editors = await editorsOf(ctx, places, deps);
   const visible: ShownOnPlace[] = [];
   for (const place of places) {
     const document = readable.get(place.first.documentKey);
-    // Every field the block's uses are in must be one the reader may read.
     const open =
       document !== undefined &&
-      [...place.fields].every(field => document.fields.has(topField(field)));
+      document.fields.has(place.first.blocksField) &&
+      (place.published || editors.has(place.first.slug));
     if (open) visible.push(shownPlace(place, document, singles, deps.blocks));
   }
   visible.sort(byTitle);

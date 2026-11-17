@@ -51,6 +51,8 @@ interface Fixture {
   readonly singleReadable?: boolean;
   readonly installed?: boolean;
   readonly defaultLocale?: string;
+  /** Whether the reader may edit pages, so sees their working drafts. */
+  readonly editor?: boolean;
 }
 
 function depsFor(fixture: Fixture) {
@@ -77,6 +79,7 @@ function depsFor(fixture: Fixture) {
       return found;
     },
     mayReadSingle: async () => fixture.singleReadable !== false,
+    mayEdit: async () => fixture.editor !== false,
     singleLabels: async (_ctx, slugs) =>
       new Map([...slugs].map(slug => [slug, `The ${slug}`])),
     refresh,
@@ -124,6 +127,62 @@ describe("readShownOn", () => {
     expect(answer.places).toHaveLength(1);
     expect(ofSingle).toHaveBeenCalledTimes(1);
     expect(ofSingle).toHaveBeenCalledWith("homepage", expect.any(Number));
+  });
+
+  it("lists a block in each blocks field it is in as its own place, opened and judged there", async () => {
+    const { deps } = depsFor({
+      uses: [
+        use("home", "", { blockType: "", prop: "seo.title" }),
+        use("home", "", {
+          blockType: "",
+          prop: "seo.title",
+          blocksField: "footer",
+        }),
+      ],
+      fields: ["footer"],
+    });
+    const answer = await readShownOn("homepage", true, ctx, deps);
+    // The one in `content`, a field this reader may not read, is hidden.
+    expect(answer.places.map(place => place.blocksField)).toEqual(["footer"]);
+    expect(answer.hidden).toBe(1);
+  });
+
+  it("judges a blocks field inside a group by its whole path", async () => {
+    const { deps } = depsFor({
+      uses: [use("home", "hero", { blocksField: "hero.body" })],
+      // The read kept the group, and another of its fields, not this one.
+      fields: ["hero", "hero.tagline"],
+    });
+    const answer = await readShownOn("homepage", false, ctx, deps);
+    expect(answer.places).toEqual([]);
+    expect(answer.hidden).toBe(1);
+  });
+
+  it("lists a place only in a working draft for an editor, and counts it for anyone else", async () => {
+    const uses = [
+      use("home", "hero", { blockName: "Live name" }),
+      use("home", "hero", { version: "draft", blockName: "Draft name" }),
+      use("home", "fresh", { version: "draft", blockName: "Draft only" }),
+    ];
+    const reader = await readShownOn(
+      "homepage",
+      true,
+      ctx,
+      depsFor({ uses, editor: false }).deps
+    );
+    expect(reader.places.map(place => place.block)).toEqual(["Live name"]);
+    expect(reader.hidden).toBe(1);
+    expect(JSON.stringify(reader)).not.toContain("Draft");
+    const editor = await readShownOn(
+      "homepage",
+      true,
+      ctx,
+      depsFor({ uses }).deps
+    );
+    expect(editor.places.map(place => place.block).sort()).toEqual([
+      "Draft only",
+      "Live name",
+    ]);
   });
 
   it("lists only the places the reader may open, and counts the others as a number", async () => {

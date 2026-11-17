@@ -84,6 +84,11 @@ export interface FullCheck {
   readonly cursor: string | null;
   /** When the check under way started. */
   readonly startedAt: Date | null;
+  /**
+   * Whether a document a check judged could not be read, so its uses are
+   * still to be written and the index is not yet filled by it.
+   */
+  readonly usesPending: boolean;
 }
 
 /** Which document a row is about, and where it lives. */
@@ -114,8 +119,8 @@ export interface BindingReportStore {
     rows: readonly BindingReportRow[],
     uses: readonly DocumentUse[]
   ): Promise<void>;
-  /** Mark a document to be judged again, with a fresh token. */
-  markDirty(document: ReportedDocument): Promise<void>;
+  /** Mark a document to be judged again, with a fresh token, which it answers. */
+  markDirty(document: ReportedDocument): Promise<string>;
   /**
    * Up to `limit` documents marked to be judged again, in key order, after
    * the key `after` when given, so a pass walks them once with a cursor.
@@ -268,7 +273,7 @@ export function bindingReportStore(
       const keyed = eq(issues().documentKey, document.documentKey);
       const token = crypto.randomUUID();
       if ((await db.update(bindingIssues, { dirty: token }).where(keyed)) > 0) {
-        return;
+        return token;
       }
       if (
         await insert({
@@ -281,9 +286,10 @@ export function bindingReportStore(
           dirty: token,
         })
       ) {
-        return;
+        return token;
       }
       await db.update(bindingIssues, { dirty: token }).where(keyed);
+      return token;
     },
 
     dirty: async (limit, after) => {
@@ -421,6 +427,7 @@ export function bindingReportStore(
               after?: unknown;
               startedAt?: unknown;
               completedAt?: unknown;
+              usesPending?: unknown;
             })
           : {};
       return {
@@ -429,6 +436,7 @@ export function bindingReportStore(
         checking: row?.checking ?? null,
         cursor: typeof state.after === "string" ? state.after : null,
         startedAt: dateIn(state.startedAt),
+        usesPending: state.usesPending === true,
       };
     },
 
@@ -447,6 +455,7 @@ export function bindingReportStore(
           ...(state.completedAt === null
             ? {}
             : { completedAt: state.completedAt.toISOString() }),
+          ...(state.usesPending ? { usesPending: true } : {}),
         },
         updatedAt: new Date(),
       };

@@ -489,28 +489,33 @@ async function settleDirty(
   deps: BindingReportDeps,
   reading: DocumentReading,
   deadline: Date
-): Promise<boolean> {
+): Promise<{ readonly done: boolean; readonly unread: boolean }> {
   // A cursor over the marked keys: each is tried once a pass, and one left
   // marked (its judgement incomplete) is not read again until the next.
   let after: string | undefined;
+  let unread = false;
   for (;;) {
     const batch = await store.dirty(DIRTY_BATCH, after);
-    if (batch.length === 0) return true;
+    if (batch.length === 0) return { done: true, unread };
     for (const marked of batch) {
-      if (Date.now() >= deadline.getTime()) return false;
+      if (Date.now() >= deadline.getTime()) return { done: false, unread };
       after = marked.document.documentKey;
-      await settleOne(marked, store, deps, reading);
+      unread = (await settleOne(marked, store, deps, reading)) || unread;
     }
   }
 }
 
-/** Judge one marked document as stored, and settle it if the judgement is whole. */
+/**
+ * Judge one marked document as stored, and settle it if the judgement is
+ * whole; `true` when a stored value could not be read, so its uses could not
+ * be written either.
+ */
 async function settleOne(
   marked: DirtyDocument,
   store: BindingReportStore,
   deps: BindingReportDeps,
   reading: DocumentReading
-): Promise<void> {
+): Promise<boolean> {
   const { kind, slug, documentId } = marked.document;
   const at = {
     kind,
@@ -530,6 +535,7 @@ async function settleOne(
     // Single is known already, so a Single's panel does not wait with it.
     await store.keepUses(marked, judged.uses);
   }
+  return judged.unread;
 }
 
 /** What the check of every document walks the site with. */
@@ -546,19 +552,29 @@ export type FullCheckOutcome = "current" | "paused" | "complete";
 
 /**
  * One document judged and recorded; one whose judgement could not read a
- * source is marked to be judged again instead of recorded as it was found.
+ * source is marked to be judged again instead of recorded as it was found,
+ * with its uses written under that mark wherever every stored value was
+ * read. `true` when one could not be read, so its uses wait too.
  */
 async function checkDocument(
   document: HostDocument,
   store: BindingReportStore,
   deps: BindingReportDeps,
   reading: DocumentReading
-): Promise<void> {
+): Promise<boolean> {
   const first = document.hosts[0]?.host;
-  if (first === undefined) return;
+  if (first === undefined) return false;
   const judged = await documentRows(first, document.hosts, deps, reading);
-  if (judged.incomplete) await store.markDirty(reported(first, deps));
-  else await store.record(reported(first, deps), judged.rows, judged.uses);
+  const at = reported(first, deps);
+  if (!judged.incomplete) {
+    await store.record(at, judged.rows, judged.uses);
+    return false;
+  }
+  const token = await store.markDirty(at);
+  if (!judged.unread) {
+    await store.keepUses({ document: at, token }, judged.uses);
+  }
+  return judged.unread;
 }
 
 /**
@@ -568,6 +584,11 @@ async function checkDocument(
  * the last pass stopped until `deadline`, and records where it stopped. A
  * complete check records the fingerprint it was made against, and when, and
  * drops the rows of documents it no longer found.
+ *
+ * The index of where documents bind a Single is "filled" once a complete
+ * check has written every document's uses: at its end where no stored value
+ * failed to be read, else on the first later pass that judges every marked
+ * document with all of its values read (those that failed are marked).
  */
 export async function runFullCheck(
   site: FullCheckSite,
@@ -577,9 +598,15 @@ export async function runFullCheck(
   const store = deps.store();
   const reading = deps.reading();
   if (store === null || reading === null) return "paused";
-  if (!(await settleDirty(store, deps, reading, deadline))) return "paused";
+  const settled = await settleDirty(store, deps, reading, deadline);
+  if (!settled.done) return "paused";
   const fingerprint = await site.fingerprint();
   const state = await store.fullCheck();
+  if (state.usesPending && !settled.unread && state.checking === null) {
+    // Every document a complete check could not read has been judged since.
+    await store.setFullCheck({ ...state, usesPending: false });
+    await store.markUsesFilled();
+  }
   if (state.checked === fingerprint && state.checking === null) {
     return "current";
   }
@@ -588,12 +615,15 @@ export async function runFullCheck(
   const startedAt =
     resuming && state.startedAt !== null ? state.startedAt : new Date();
   let cursor = resuming ? state.cursor : null;
+  // Whether a value this check judged could not be read, its uses waiting.
+  let unread = state.usesPending && resuming;
   const progress = () => ({
     checked: state.checked,
     completedAt: state.completedAt,
     checking: fingerprint,
     cursor,
     startedAt,
+    usesPending: unread,
   });
   await store.setFullCheck(progress());
   for await (const document of site.documents(cursor)) {
@@ -601,7 +631,7 @@ export async function runFullCheck(
       await store.setFullCheck(progress());
       return "paused";
     }
-    await checkDocument(document, store, deps, reading);
+    unread = (await checkDocument(document, store, deps, reading)) || unread;
     cursor = site.cursorOf(document);
   }
   // Every document still on the site was judged since the check started, so a
@@ -613,9 +643,11 @@ export async function runFullCheck(
     checking: null,
     cursor: null,
     startedAt: null,
+    usesPending: unread,
   });
   // Every document has had its uses written once: a Single's panel stops
-  // saying it is still checking pages.
-  await store.markUsesFilled();
+  // saying it is still checking pages. One that could not be read is
+  // marked, and the pass that next reads it whole fills the index.
+  if (!unread) await store.markUsesFilled();
   return "complete";
 }

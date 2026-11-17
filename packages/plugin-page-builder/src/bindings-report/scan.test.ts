@@ -40,6 +40,7 @@ function memoryStore() {
     checking: null,
     cursor: null,
     startedAt: null,
+    usesPending: false,
   };
   let tokens = 0;
   let filled = 0;
@@ -60,12 +61,14 @@ function memoryStore() {
     markDirty: async document => {
       tokens += 1;
       const held = rows.get(document.documentKey);
+      const token = `t${String(tokens)}`;
       rows.set(document.documentKey, {
         document,
         rows: held?.rows ?? [],
         at: held?.at ?? new Date(),
-        dirty: `t${String(tokens)}`,
+        dirty: token,
       });
+      return token;
     },
     dirty: async (limit, after) =>
       [...rows.entries()]
@@ -541,5 +544,47 @@ describe("the check of every document", () => {
     };
     await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER());
     expect(memory.uses.get(document.documentKey)).toHaveLength(1);
+  });
+
+  it("writes a deferred document's uses during the check of every document", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const failing: BindingReportDeps = {
+      ...deps(memory.store, pages.reading),
+      shapesOf: async () => {
+        throw new Error("registry unavailable");
+      },
+    };
+    expect(await runFullCheck(pages.walk, failing, LATER())).toBe("complete");
+    // The report waits, marked; the uses are written, and the index filled.
+    expect(memory.rows.get(keyOf("a"))?.dirty).not.toBeNull();
+    expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
+    expect(memory.filled()).toBe(1);
+  });
+
+  it("fills the index only once a document the check couldn't read has been read", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const unreadable = {
+      ...pages.reading,
+      read: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+    expect(
+      await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER())
+    ).toBe("complete");
+    expect(memory.filled()).toBe(0);
+    expect(memory.check().usesPending).toBe(true);
+    // Still unreadable: still not filled.
+    await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER());
+    expect(memory.filled()).toBe(0);
+    // Read whole on a later pass: its uses written, the index filled.
+    expect(
+      await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER())
+    ).toBe("current");
+    expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
+    expect(memory.filled()).toBe(1);
+    expect(memory.check().usesPending).toBe(false);
   });
 });

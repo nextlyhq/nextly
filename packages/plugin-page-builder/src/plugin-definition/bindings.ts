@@ -360,6 +360,9 @@ export function routesForBindings(
           : bindingUsesReader(state.bindingReportCtx.db),
       readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
       mayReadSingle: (routeCtx, slug) => mayReadSingle(routeCtx, slug),
+      // Core shows a working draft only to a caller who may edit it.
+      mayEdit: async (routeCtx, slug) =>
+        (await routeCtx.caller?.can("update", slug)) === true,
       // Until the index has been filled once, a read starts the check that
       // fills it, as the report's read does.
       refresh,

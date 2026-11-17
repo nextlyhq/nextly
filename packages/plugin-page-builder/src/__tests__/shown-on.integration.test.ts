@@ -32,7 +32,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
-import { defineCollection, defineSingle, text } from "nextly/config";
+import { defineCollection, defineSingle, group, text } from "nextly/config";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -50,6 +50,7 @@ type Node = Record<string, unknown>;
 const ORIGIN = "http://localhost";
 const PAGES = "pages";
 const SECRETS = "sho_secrets";
+const GROUPED = "sho_grouped";
 const HOMEPAGE = "sho_homepage";
 const TABLE = "page_builder__binding_uses";
 
@@ -111,6 +112,25 @@ describe.each(getConfiguredTestDialects())(
             fields: [
               text({ name: "title" }),
               { name: "content", type: BLOCKS_TYPE } as never,
+            ],
+          }),
+          // A blocks field inside a group, which no one may read on its own.
+          defineCollection({
+            slug: GROUPED,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "hero",
+                fields: [
+                  text({ name: "tagline" }),
+                  {
+                    name: "body",
+                    type: BLOCKS_TYPE,
+                    access: { read: () => false },
+                  } as never,
+                ],
+              }),
             ],
           }),
         ],
@@ -367,6 +387,77 @@ describe.each(getConfiguredTestDialects())(
       ]) {
         expect(answer.text).not.toContain(trace);
       }
+    });
+
+    it("counts a block in a grouped blocks field the reader can't read, naming nothing of it", async () => {
+      const id = idOf(
+        await t.nextly.create({
+          collection: GROUPED,
+          data: {
+            title: "Grouped page",
+            hero: {
+              tagline: "Open to read",
+              body: documentOf("page", [
+                boundHeading("inner", "Withheld block"),
+              ]),
+            },
+          },
+          overrideAccess: true,
+        })
+      );
+      await pass();
+      // CONTROL: the index holds it, so a missing row is the reader's, not the sweep's.
+      const stored = await t.adapter.select<Record<string, unknown>>(TABLE);
+      expect(
+        stored.filter(row => (row.documentId ?? row.document_id) === id)
+      ).not.toHaveLength(0);
+      const reader = await person("grouped-reader");
+      await grant(reader, [`read-${GROUPED}`, `read-${HOMEPAGE}`]);
+
+      const answer = await shownOn(reader, true);
+      expect(answer.status, answer.text).toBe(200);
+      expect(answer.body.places.map(place => place.documentId)).not.toContain(
+        id
+      );
+      expect(answer.body.hidden).toBeGreaterThanOrEqual(1);
+      for (const trace of [id, "Withheld block", "inner", "hero.body"]) {
+        expect(answer.text).not.toContain(trace);
+      }
+    });
+
+    it("lists a block only in a page's working draft for its editors, and counts it for a reader", async () => {
+      const id = await page("Draft work", [boundHeading("live", "Live block")]);
+      // Edited and saved, not published: the new block is only in the draft.
+      await t.nextly.update({
+        collection: PAGES,
+        id,
+        data: asOverwrite({
+          content: documentOf("page", [
+            boundHeading("live", "Live block"),
+            boundHeading("pending", "Unpublished block"),
+          ]),
+        }),
+        overrideAccess: true,
+      });
+      await pass();
+      const reader = await person("draft-reader");
+      await grant(reader, ["read-pages", `read-${HOMEPAGE}`]);
+
+      const read = await shownOn(reader, true);
+      const blocks = read.body.places
+        .filter(place => place.documentId === id)
+        .map(place => place.block);
+      expect(blocks).toEqual(["Live block"]);
+      expect(read.text).not.toContain("Unpublished block");
+      expect(read.text).not.toContain("pending");
+
+      const edited = await shownOn(owner, true);
+      expect(
+        edited.body.places
+          .filter(place => place.documentId === id)
+          .map(place => place.block)
+          .sort()
+      ).toEqual(["Live block", "Unpublished block"]);
     });
 
     it("refuses a reader who may not read the Single", async () => {
