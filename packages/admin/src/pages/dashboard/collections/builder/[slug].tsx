@@ -58,7 +58,6 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
-import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -429,44 +428,41 @@ export default function CollectionBuilderEditPage({
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
   // is asked for match the DDL that actually runs.
-  // The saved fields the draft renamed, which the save answers as renames itself.
-  const draftRenames = useMemo(
-    () => draftRenamesOf(pending.changes),
-    [pending.changes]
-  );
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
-    slug,
-    missingSlugMessage: "Collection slug is missing",
-    label: displayLabel(settings, entitySlug),
-    confirmation,
-    // Judged against the fields as last saved, so a draft that changes a
-    // saved field's storage level is refused before it can lose values.
-    getValidatedFields: () => getValidatedFields(pending.saved),
-    preview: fields =>
-      unsaved
-        ? Promise.resolve(createPreview(fields))
-        : schemaApi.preview(entitySlug, fields, localized, drafts),
-    apply: (fields, version, resolutions, renames) =>
-      unsaved
-        ? createUnsaved(fields)
-        : schemaApi.apply(
-            entitySlug,
-            fields,
-            version,
-            resolutions,
-            renames,
-            localized,
-            drafts
-          ),
-    onNoChanges: saveSettingsOnly,
-    onApplied: unsaved ? onCreated : onSchemaApplied,
-    previewedWith: { localized },
-    draftRenames,
-    // Each changed setting is reviewed with the save, and a save of the
-    // settings alone is reviewed too.
-    settingChanges: pending.settingChanges,
-    fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
-  });
+  const { handleSave, confirmApply, reviewedSettingChanges, draftRenames } =
+    useSchemaSave({
+      slug,
+      missingSlugMessage: "Collection slug is missing",
+      label: displayLabel(settings, entitySlug),
+      confirmation,
+      // Judged against the fields as last saved, so a draft that changes a
+      // saved field's storage level is refused before it can lose values.
+      getValidatedFields: () => getValidatedFields(pending.saved),
+      // Its renames of saved fields are the save's to answer, as renames.
+      pendingChanges: pending.changes,
+      preview: fields =>
+        unsaved
+          ? Promise.resolve(createPreview(fields))
+          : schemaApi.preview(entitySlug, fields, localized, drafts),
+      apply: (fields, version, resolutions, renames) =>
+        unsaved
+          ? createUnsaved(fields)
+          : schemaApi.apply(
+              entitySlug,
+              fields,
+              version,
+              resolutions,
+              renames,
+              localized,
+              drafts
+            ),
+      onNoChanges: saveSettingsOnly,
+      onApplied: unsaved ? onCreated : onSchemaApplied,
+      previewedWith: { localized },
+      // Each changed setting is reviewed with the save, and a save of the
+      // settings alone is reviewed too.
+      settingChanges: pending.settingChanges,
+      fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
+    });
 
   // Discard all on an unsaved collection discards the collection itself: it
   // leaves this tab, and the editor returns to the list.

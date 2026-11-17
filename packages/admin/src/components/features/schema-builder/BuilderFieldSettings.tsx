@@ -230,7 +230,8 @@ function panelStateOf(
   given: ReadOnlyReason | null | undefined,
   entityReadOnly: boolean,
   saved: boolean,
-  namedByHooks: ReadonlyMap<string, string>
+  /** Absent for an entity with no stored hooks: none names a field. */
+  namedByHooks: ReadonlyMap<string, string> | undefined
 ): {
   reason: ReadOnlyReason | null;
   fieldReadOnly: boolean;
@@ -334,9 +335,6 @@ function DefinedAt({
   );
 }
 
-/** No stored hook names a field: an entity with none, or a kind that has none. */
-const NO_NAMED_FIELDS: ReadonlyMap<string, string> = new Map();
-
 export function BuilderFieldSettings({
   kind,
   fields,
@@ -353,7 +351,7 @@ export function BuilderFieldSettings({
   savedFields,
   lifecycleEnabled = false,
   startRenaming = false,
-  namedByHooks = NO_NAMED_FIELDS,
+  namedByHooks,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;

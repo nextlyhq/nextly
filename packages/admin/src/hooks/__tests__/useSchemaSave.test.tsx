@@ -10,7 +10,7 @@ import { renderHook } from "@admin/__tests__/utils";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { parseApiError } from "@admin/lib/api/parseApiError";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
-import type { DraftRename } from "@admin/lib/builder/rename-answers";
+import type { PendingChange } from "@admin/lib/builder/pending-changes";
 import type {
   SchemaPreviewRenameCandidate,
   SchemaPreviewResponse,
@@ -97,8 +97,8 @@ type Overrides = {
   onApplied?: (fields: FieldDefinition[]) => void | Promise<void>;
   /** The settings the preview and the apply are sent with, read at each render. */
   previewedWith?: () => unknown;
-  /** The saved fields the draft renamed. */
-  draftRenames?: DraftRename[];
+  /** The draft's pending changes: its renames of saved fields. */
+  draftRenames?: PendingChange[];
   /** The entity's settings changed since the save, read at each render. */
   settingChanges?: () => readonly SettingChange[];
   /** The field groups not saved yet that the fields use. */
@@ -132,7 +132,7 @@ function setup(overrides: Overrides = {}) {
       onNoChanges,
       onApplied,
       previewedWith: overrides.previewedWith?.(),
-      draftRenames: overrides.draftRenames,
+      pendingChanges: overrides.draftRenames,
       settingChanges: overrides.settingChanges?.() ?? [],
       fieldGroupsFirst: overrides.fieldGroupsFirst,
     })
@@ -752,10 +752,13 @@ describe("a rename the Builder made", () => {
     previousName: string,
     name: string,
     madeRequired = false
-  ): DraftRename => ({
+  ): PendingChange => ({
+    kind: "renamed",
+    fieldId: `f-${previousName}`,
     label: "Summary",
     previousName,
     name,
+    type: "text",
     madeRequired,
   });
 

@@ -17,13 +17,15 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import type { PendingChange } from "@admin/lib/builder/pending-changes";
 import {
+  draftRenamesOf,
   renameAnswers,
   renameNotOffered,
   withDecidedRenames,
@@ -136,8 +138,11 @@ export interface UseSchemaSaveOptions {
    * the preview was made with, as for the fields.
    */
   previewedWith?: unknown;
-  /** The saved fields the draft renamed. */
-  draftRenames?: readonly DraftRename[];
+  /**
+   * The draft's pending changes: its renames of saved fields are the save's to answer as renames
+   * (`draftRenamesOf`), and the review shows them as renames whose values are kept.
+   */
+  pendingChanges?: readonly PendingChange[];
   /**
    * The entity's settings changed since the save. A save that changes only
    * these is reviewed before it is saved, and a confirmation saves them only
@@ -171,6 +176,8 @@ export interface UseSchemaSaveReturn {
    * on its way is not listed, and the confirmation refuses it unseen.
    */
   reviewedSettingChanges: readonly SettingChange[];
+  /** The saved fields the draft renamed, for the review to show as renames whose values are kept. */
+  draftRenames: readonly DraftRename[];
   /** The toolbar's Save. */
   handleSave: () => void;
   /** The confirmation dialog's confirm. */
@@ -180,8 +187,8 @@ export interface UseSchemaSaveReturn {
   ) => void;
 }
 
-/** No renames, as one constant so the callbacks keep their identity across renders. */
-const NO_RENAMES: readonly DraftRename[] = [];
+/** No pending change, as one constant so the callbacks keep their identity across renders. */
+const NO_PENDING_CHANGES: readonly PendingChange[] = [];
 
 export function useSchemaSave({
   slug,
@@ -194,10 +201,16 @@ export function useSchemaSave({
   onNoChanges,
   onApplied,
   previewedWith,
-  draftRenames = NO_RENAMES,
+  pendingChanges = NO_PENDING_CHANGES,
   settingChanges = NO_SETTING_CHANGES,
   fieldGroupsFirst,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
+  // The saved fields the draft renamed, read once from its pending changes: the save answers
+  // them, and the page's review shows them.
+  const draftRenames = useMemo(
+    () => draftRenamesOf(pendingChanges),
+    [pendingChanges]
+  );
   // The groups the save creates first, by address: part of what a review agrees to, as the
   // fields are, so a confirmation creates exactly the groups the review listed.
   const creates = JSON.stringify(
@@ -401,5 +414,5 @@ export function useSchemaSave({
     ]
   );
 
-  return { handleSave, confirmApply, reviewedSettingChanges };
+  return { handleSave, confirmApply, reviewedSettingChanges, draftRenames };
 }

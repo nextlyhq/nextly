@@ -62,7 +62,7 @@ import { crumbsByPointer } from "./outline/FocusCrumbs";
 import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
-import type { BuilderFieldsApi } from "./types";
+import type { BuilderField, BuilderFieldsApi } from "./types";
 import { useMoveContext } from "./useMoveContext";
 
 type Props = {
@@ -381,13 +381,51 @@ function EditedFieldSettings({
   );
 }
 
+/** Each row's Rename… request, numbered, so asking again on the same field asks again. */
+let renameRequests = 0;
+
+/**
+ * The outline's Rename… for a row: whether its field offers it (as the settings panel asks, so the
+ * two never disagree), and opening the field's settings with the rename asked for.
+ */
+function renameCallbacksOf(
+  fields: readonly BuilderField[],
+  {
+    savedFieldIds,
+    locked,
+    namedByHooks,
+  }: {
+    savedFieldIds: ReadonlySet<string>;
+    locked: boolean;
+    namedByHooks: ReadonlyMap<string, string>;
+  },
+  onActiveChange: (next: ActiveOverlay) => void
+): Pick<OutlineCallbacks, "rename" | "canRename"> {
+  return {
+    rename: fieldId => {
+      renameRequests += 1;
+      onActiveChange({ kind: "edit", fieldId, renaming: renameRequests });
+    },
+    canRename: fieldId => {
+      const placement = findFieldPlacement(fields, fieldId);
+      return (
+        placement !== null &&
+        renameOffered(
+          placement.field,
+          placement.ancestors,
+          savedFieldIds.has(fieldId),
+          locked,
+          namedByHooks
+        )
+      );
+    },
+  };
+}
+
 /**
  * The field list and what sits above it: the read-only notice a code-first
  * entity gets, the page's own region, and the drag context around the list.
  */
-/** Each row's Rename… request, numbered, so asking again on the same field asks again. */
-let renameRequests = 0;
-
 function FieldListRegion({
   config,
   builder,
@@ -445,23 +483,11 @@ function FieldListRegion({
 
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
-    rename: fieldId => {
-      renameRequests += 1;
-      onActiveChange({ kind: "edit", fieldId, renaming: renameRequests });
-    },
-    canRename: fieldId => {
-      const placement = findFieldPlacement(builder.fields, fieldId);
-      return (
-        placement !== null &&
-        renameOffered(
-          placement.field,
-          placement.ancestors,
-          savedFieldIds.has(fieldId),
-          locked,
-          namedByHooks
-        )
-      );
-    },
+    ...renameCallbacksOf(
+      builder.fields,
+      { savedFieldIds, locked, namedByHooks },
+      onActiveChange
+    ),
     addAt: position => onActiveChange({ kind: "picker", position }),
     fields: builder.fields,
     judgeMove: (fieldId, target) =>

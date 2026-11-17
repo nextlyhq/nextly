@@ -61,7 +61,6 @@ import {
 import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
-import { draftRenamesOf } from "@admin/lib/builder/rename-answers";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
   removeUnsavedEntity,
@@ -368,46 +367,43 @@ export default function FieldGroupBuilderEditPage({
     [settings, entitySlug]
   );
 
-  // The saved fields the draft renamed, which the save answers as renames itself.
-  const draftRenames = useMemo(
-    () => draftRenamesOf(pending.changes),
-    [pending.changes]
-  );
-  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
-    slug,
-    missingSlugMessage: "Field group slug is missing",
-    label: displayLabel(settings, entitySlug),
-    confirmation,
-    // Judged against the fields as last saved, so a draft that changes a
-    // saved field's storage level is refused before it can lose values.
-    getValidatedFields: () => getValidatedFields(pending.saved),
-    // The i18n flag, as for the other kinds: the preview reports what a field
-    // leaving translation moves to the archive, which depends on it. An
-    // unsaved field group's review is its create, built here.
-    preview: fields =>
-      unsaved
-        ? Promise.resolve(createPreview(fields))
-        : fieldGroupApi.previewSchemaChanges(entitySlug, fields, localized),
-    apply: (fields, version, resolutions, renames) =>
-      unsaved
-        ? createUnsaved(fields)
-        : fieldGroupApi.applySchemaChanges(
-            entitySlug,
-            fields,
-            version,
-            resolutions,
-            renames,
-            localized
-          ),
-    onNoChanges: saveSettingsOnly,
-    onApplied: unsaved ? onCreated : onSchemaApplied,
-    previewedWith: { localized },
-    draftRenames,
-    // Each changed setting is reviewed with the save, and a save of the
-    // settings alone is reviewed too.
-    settingChanges: pending.settingChanges,
-    fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
-  });
+  const { handleSave, confirmApply, reviewedSettingChanges, draftRenames } =
+    useSchemaSave({
+      slug,
+      missingSlugMessage: "Field group slug is missing",
+      label: displayLabel(settings, entitySlug),
+      confirmation,
+      // Judged against the fields as last saved, so a draft that changes a
+      // saved field's storage level is refused before it can lose values.
+      getValidatedFields: () => getValidatedFields(pending.saved),
+      // Its renames of saved fields are the save's to answer, as renames.
+      pendingChanges: pending.changes,
+      // The i18n flag, as for the other kinds: the preview reports what a field
+      // leaving translation moves to the archive, which depends on it. An
+      // unsaved field group's review is its create, built here.
+      preview: fields =>
+        unsaved
+          ? Promise.resolve(createPreview(fields))
+          : fieldGroupApi.previewSchemaChanges(entitySlug, fields, localized),
+      apply: (fields, version, resolutions, renames) =>
+        unsaved
+          ? createUnsaved(fields)
+          : fieldGroupApi.applySchemaChanges(
+              entitySlug,
+              fields,
+              version,
+              resolutions,
+              renames,
+              localized
+            ),
+      onNoChanges: saveSettingsOnly,
+      onApplied: unsaved ? onCreated : onSchemaApplied,
+      previewedWith: { localized },
+      // Each changed setting is reviewed with the save, and a save of the
+      // settings alone is reviewed too.
+      settingChanges: pending.settingChanges,
+      fieldGroupsFirst: groupsFirst.fieldGroupsFirst,
+    });
 
   // Discard all on an unsaved field group discards the field group itself: it
   // leaves this tab, and the editor returns to the list.
