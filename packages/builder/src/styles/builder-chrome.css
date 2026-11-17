@@ -29,6 +29,8 @@
  * - inserters: the "+" on an empty container and between blocks.
  * - shared-styles: class chips, the Layers key hint, the zoom control, shared
  *   styles, block looks and the Fonts list rows.
+ * - block-styles: the Styles tab's Block styles section, its rows, their ⋯
+ *   menus and each type's "+ New" row.
  * - fonts: the Fonts panel, uploads, the catalogue and the font picker.
  * - spacing-box: the per-side box, spacing handles, lock repair, and the
  *   rows of list and relation fields.
@@ -75,6 +77,8 @@
 @import "./inserters.css";
 
 @import "./shared-styles.css";
+
+@import "./block-styles.css";
 
 @import "./fonts.css";
 
