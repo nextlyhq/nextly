@@ -35,6 +35,7 @@ import {
 import { PanelSections } from "./panel-section";
 import { variationLabel } from "./panels/add/inserter";
 import { radioGroupStep } from "./roving-radios";
+import { sectionEntries, type SettingEntry } from "./settings-index";
 
 export interface LookTilesProps {
   readonly editor: EditorState;
@@ -148,6 +149,34 @@ export function blockStyleTilesOf(
   return tiles.length === 0 ? undefined : { node, worn, tiles };
 }
 
+/** The section's key in the Style tab, which the panel's filter keeps it by. */
+const BLOCK_STYLE_KEY = "block-style";
+
+/**
+ * The Block style section as "Find a setting" and "Only changed" read it:
+ * one setting, found by its name and by each style's, and changed while the
+ * block wears a style other than its own. None where the section isn't drawn.
+ */
+export function blockStyleEntries(
+  editor: EditorState,
+  library: readonly NamedClass[] | undefined
+): SettingEntry[] {
+  const offered = blockStyleTilesOf(editor, library);
+  if (offered === undefined) return [];
+  return sectionEntries(
+    "style",
+    { key: BLOCK_STYLE_KEY, label: BLOCK_STYLE_SECTION },
+    [
+      {
+        id: "blockStyle",
+        label: BLOCK_STYLE_SECTION,
+        options: offered.tiles.map(tile => tile.name),
+        set: offered.worn !== null,
+      },
+    ]
+  );
+}
+
 export function LookTiles({
   editor,
   library,
@@ -190,7 +219,7 @@ export function LookTiles({
         tab="style"
         sections={[
           {
-            key: "block-style",
+            key: BLOCK_STYLE_KEY,
             label: BLOCK_STYLE_SECTION,
             // A style other than the block's own is a choice the block holds.
             holdsValue: worn !== null,

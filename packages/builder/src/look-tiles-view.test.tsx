@@ -268,6 +268,52 @@ describe("which section opens first", () => {
   });
 });
 
+describe("the Block style section while the panel is filtered", () => {
+  /** The section, or null when the filter hides it. */
+  const shownSection = (tab: HTMLElement): Element | null => {
+    const section = tab.querySelector('[data-section="block-style"]');
+    return section === null || section.closest("[hidden]") !== null
+      ? null
+      : section;
+  };
+  const find = (words: string): void => {
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Find a setting" }),
+      {
+        target: { value: words },
+      }
+    );
+  };
+
+  it("is found by its name and by a style's name", () => {
+    const tab = mountStyle(nodeOf("core/section"));
+    find("block style");
+    expect(shownSection(tab)).not.toBeNull();
+    find("hero");
+    expect(shownSection(tab)).not.toBeNull();
+    // A word it holds nothing for hides it, as any section.
+    find("opacity");
+    expect(shownSection(tab)).toBeNull();
+  });
+
+  it("stays under Only changed while the block wears a style of its own", () => {
+    const tab = mountStyle(
+      nodeOf("core/section", [lookId("core/section", "hero")])
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Only changed" }));
+    expect(shownSection(tab)).not.toBeNull();
+    expect(
+      within(tiles()).getByRole("radio", { checked: true }).textContent
+    ).toContain("Hero");
+  });
+
+  it("goes under Only changed while the block wears its own style", () => {
+    const tab = mountStyle(nodeOf("core/section"));
+    fireEvent.click(screen.getByRole("button", { name: "Only changed" }));
+    expect(shownSection(tab)).toBeNull();
+  });
+});
+
 describe("a block style the block can't take", () => {
   it("says why in plain words, without naming classes", () => {
     const raise = vi.fn();
