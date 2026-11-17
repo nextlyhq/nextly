@@ -27,6 +27,8 @@ const reads: { plugin: string; path: string }[] = [];
 let answer: () => Promise<unknown> = async () => ({});
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  // The person signed in, whom the builder's start-up answers are for.
+  useCurrentUserId: () => "ada",
   readPluginRoute: async (request: { plugin: string; path: string }) => {
     reads.push({ plugin: request.plugin, path: request.path });
     return answer();

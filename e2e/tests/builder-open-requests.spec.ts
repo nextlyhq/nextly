@@ -2,9 +2,9 @@
  * What the builder asks as it opens: each question once.
  *
  * The page builder's own reads (the collections a list may show, the custom
- * sources, the component library, what the author may do, the site style
- * and the Layout choices) arrive in one start-up request rather than one
- * request each, and no route is asked twice for the same thing: the open
+ * sources, what the author may do, the site style and the pages collection)
+ * arrive in one start-up request rather than one request each, each one
+ * answered there, and no route is asked twice for the same thing: the open
  * document's "bindings to fix" is read once, and the whole report only when
  * its list is opened.
  *
@@ -28,10 +28,9 @@ const LEAD = "00000000-0000-4000-8000-0000000c0001";
 const IN_THE_START_UP_READ = [
   "/loop-collections",
   "/named-queries",
-  "/library/components",
   "/capability",
   "/site/style",
-  "/layouts/choices",
+  "/layouts/page-collection",
 ];
 
 async function seed(page: Page): Promise<string> {
@@ -79,6 +78,9 @@ test("the builder asks each question once as it opens", async ({ page }) => {
   test.setTimeout(120_000);
   const id = await seed(page);
   const sent = apiRequests(page);
+  const startup = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith("/builder/startup")
+  );
   await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
   await expect(canvasBlock(page, LEAD)).toBeVisible({ timeout: 60_000 });
   // The reads started as it opened, settled.
@@ -88,6 +90,19 @@ test("the builder asks each question once as it opens", async ({ page }) => {
     .map(line => line.split(" ")[1] ?? "")
     .filter(url => url.startsWith(`${PLUGIN}/`))
     .map(url => new URL(url, "http://page").pathname.slice(PLUGIN.length));
+
+  // Each read the start-up request named, answered there.
+  const answered = (await (await startup).json()) as {
+    reads: Record<string, { status: number }>;
+  };
+  expect(
+    Object.keys(answered.reads)
+      .map(read => new URL(read, "http://page").pathname)
+      .sort()
+  ).toEqual([...IN_THE_START_UP_READ].sort());
+  for (const [read, answer] of Object.entries(answered.reads)) {
+    expect(answer.status, read).toBe(200);
+  }
 
   // One start-up request, standing in for the reads it names.
   expect(pluginPaths.filter(path => path === "/builder/startup")).toHaveLength(

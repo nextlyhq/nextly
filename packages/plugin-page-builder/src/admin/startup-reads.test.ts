@@ -12,6 +12,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 import {
   forgetStartedReads,
+  holdStartedReads,
   readStarted,
   STARTED_READ_HANDOFF_MS,
   startBuilderReads,
@@ -177,5 +178,29 @@ describe("the builder's start-up read, in the editor", () => {
     clock += STARTED_READ_HANDOFF_MS + 1;
     startBuilderReads("ada", ["/capability"], ask, now);
     expect(sent()).toBe(2);
+  });
+
+  it("drops what it read once the last editor that sent it closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ask } = startup({ "/capability": { status: 200, body: "kept" } });
+      const first = holdStartedReads();
+      startBuilderReads("ada", ["/capability"], ask);
+      // Undone and done again at once, as a development build mounts.
+      first();
+      const second = holdStartedReads();
+      await vi.runAllTimersAsync();
+      expect(await readStarted("/capability", route("route"), "ada")).toBe(
+        "kept"
+      );
+      startBuilderReads("ada", ["/site/style"], startup({}).ask);
+      second();
+      await vi.runAllTimersAsync();
+      const read = route("route");
+      expect(await readStarted("/site/style", read, "ada")).toBe("route");
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

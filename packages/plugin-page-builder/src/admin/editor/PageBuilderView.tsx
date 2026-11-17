@@ -79,7 +79,7 @@ function BoundEditor({
   return (
     <>
       {/* First, so the reads the editor asks as it mounts find it sent. */}
-      <BuilderStartup control={control} />
+      <BuilderStartup />
       <BlocksEditor
         // No key from the value: the editor seeds its own history from the value
         // it opened with, and keying it by whether that value exists remounted it

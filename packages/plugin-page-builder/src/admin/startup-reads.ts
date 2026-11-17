@@ -22,9 +22,10 @@
  *   (refused, failed, or the whole request failed) asks its route, so a
  *   refusal reaches the screen as the route words it;
  * - for the person it was read for. The start-up answer is one person's: it
- *   is dropped when the signed-in person changes or signs out (the editor's
- *   `BuilderStartup` says so), and a reader that knows who is asking is
- *   handed nothing read for someone else.
+ *   is dropped when the signed-in person changes or signs out and when the
+ *   builder closes (the editor's `BuilderStartup` says so), and no hook or
+ *   reader that knows who is asking is handed anything read for someone
+ *   else.
  *
  * A reader (`readStarted`) takes an answer once, as a cache's first read,
  * unless that read is given up (a mount undone at once), when the next takes
@@ -196,14 +197,15 @@ const PENDING = { kind: "pending" } as const;
 
 /**
  * The start-up answer for `path`, for a hook that would otherwise read its
- * route: `none` when there is none to take (the hook reads its route),
- * `pending` while it is on its way, `answered` once it arrived. A mount that
- * took an answer keeps it until it asks again through `release`, after which
- * it reads its route.
+ * route, as `userId`: `none` when there is none to take (the hook reads its
+ * route), `pending` while it is on its way, `answered` once it arrived. A
+ * mount that took an answer keeps it, for that person only, until it asks
+ * again through `release`, after which it reads its route.
  */
 export function useStartedAnswer<T>(
   path: string,
-  enabled: boolean
+  enabled: boolean,
+  userId: string | null
 ): { readonly answer: StartedAnswer<T>; readonly release: () => void } {
   useSyncExternalStore(
     subscribe,
@@ -211,17 +213,38 @@ export function useStartedAnswer<T>(
     () => version
   );
   const [released, setReleased] = useState(false);
-  const held = useRef<{ path: string; body: T } | undefined>(undefined);
+  const held = useRef<{ path: string; userId: string; body: T } | undefined>(
+    undefined
+  );
   const release = useRef(() => setReleased(true)).current;
-  if (!enabled || released) return { answer: NONE, release };
-  if (held.current?.path === path) {
+  if (!enabled || released || userId === null) return { answer: NONE, release };
+  if (held.current?.path === path && held.current.userId === userId) {
     return { answer: { kind: "answered", body: held.current.body }, release };
   }
-  const entry = handingOut(path, undefined, Date.now());
+  const entry = handingOut(path, userId, Date.now());
   if (entry === undefined) return { answer: NONE, release };
   if (entry.settled === undefined) return { answer: PENDING, release };
   const found = entry.settled?.[path];
   if (!answered(found)) return { answer: NONE, release };
-  held.current = { path, body: found?.body as T };
+  held.current = { path, userId, body: found?.body as T };
   return { answer: { kind: "answered", body: held.current.body }, release };
+}
+
+/** How many editors that send the start-up read are open. */
+let openEditors = 0;
+
+/**
+ * Count one editor open while it is mounted, and drop the start-up answers
+ * once none is: closing the builder, as signing out does, leaves nothing read
+ * for its person. Dropped a moment after, so a mount undone and done again at
+ * once (as a development build does) keeps what it sent.
+ */
+export function holdStartedReads(): () => void {
+  openEditors += 1;
+  return () => {
+    openEditors -= 1;
+    setTimeout(() => {
+      if (openEditors === 0) forgetStartedReads();
+    }, 0);
+  };
 }

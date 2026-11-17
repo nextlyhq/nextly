@@ -21,7 +21,7 @@
  *
  * @module admin/site-style-read
  */
-import { readPluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import { readPluginRoute, useCurrentUserId } from "@nextlyhq/plugin-sdk/admin";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 
@@ -74,6 +74,7 @@ export interface StoredSiteStyleRead {
 
 /** Read the stored site style through the plugin's route. */
 export function useStoredSiteStyle(): StoredSiteStyleRead {
+  const userId = useCurrentUserId();
   const query = useQuery<StoredSiteStyle>({
     queryKey: STORED_SITE_STYLE_KEY,
     queryFn: async ({ signal }) => {
@@ -86,7 +87,7 @@ export function useStoredSiteStyle(): StoredSiteStyleRead {
             path: SITE_STYLE_ROUTE_PATH,
             signal,
           }),
-        undefined,
+        userId,
         Date.now,
         signal
       );

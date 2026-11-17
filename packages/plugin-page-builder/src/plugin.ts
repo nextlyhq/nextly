@@ -162,11 +162,9 @@ export const pageBuilder = (
   const startup = routesForStartup({
     loopCollections: bindings.loopCollections,
     namedQueries: bindings.namedQueries,
-    componentLibrary: components.componentLibrary,
     patternCapability: components.patternCapability,
     siteStyle: siteStyle.siteStyle,
     pageCollection: pages.pageCollection,
-    layoutChoices: layouts.layoutChoices,
   });
   const plugin = definePlugin({
     name: PAGE_BUILDER_PLUGIN_NAME,

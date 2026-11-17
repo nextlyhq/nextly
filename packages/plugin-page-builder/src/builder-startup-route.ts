@@ -2,33 +2,34 @@
  * The builder's start-up read: several of this plugin's own reads asked in
  * one request, each answered as its own route answers it.
  *
- * The builder opens on seven reads of this plugin at once (the collections a
- * list may show, the custom sources, the component library, what the author
- * may do, the site style, the pages collection and the Layout choices). Each
- * one sent alone is a request, and on a deployed site a function call and a
- * draw on the session's read allowance. Here they are one.
+ * The builder opens on several reads of this plugin at once (the collections
+ * a list may show, the custom sources, what the author may do, the site
+ * style and the pages collection). Each one sent alone is a request, and on
+ * a deployed site a function call and a draw on the session's read
+ * allowance. Here they are one.
  *
  * ## Each read is its own route's
  *
  * The route is built from the very route objects the plugin registers, so a
  * read here runs the same handler with the same caller as a request to that
- * route would. Its gate is that route's own: a `requiredPermission` is
- * resolved from the route's declaration and asked of the caller, and a route
- * whose handler judges the caller (`checksAccess`, `siteWide: false`) judges
- * them here too. Nothing is decided twice, and nothing a route declares is
- * spelled again.
+ * route would. Only a route whose HANDLER judges every caller may be batched
+ * (`checksAccess: true` or `siteWide: false`): its access is decided where it
+ * always is, and this route decides nothing. A route gated by a declared
+ * `requiredPermission` is judged by the dispatcher before its handler runs,
+ * which a read here could not do the same way, so it is not batched.
  *
- * Only a route this answers exactly as the dispatcher would may be batched: a
- * `GET`, mounted under the plugin, with no path parameters, middleware, rate
- * limit, principal or timestamp formatting, and not public. Any other is
- * refused while the config is read.
+ * Nor is any route this could not answer exactly as the dispatcher would: it
+ * must be a `GET`, mounted under the plugin, with no path parameters,
+ * middleware, rate limit, principal or timestamp formatting, and not public.
+ * Any other is refused while the config is read.
  *
  * ## One refusal refuses one read
  *
  * Each read is answered on its own: its route's status, and its body when it
- * answered. A read the caller may not make, or one that failed, answers its
- * status and nothing else, so it never fails the reads beside it, and the
- * editor asks that route itself to show the refusal as the route words it.
+ * answered. A read its route refused, or one that failed, answers its status
+ * and nothing else, so it never fails the reads beside it, and the editor
+ * asks that route itself to show the refusal as the route words it. Each
+ * route is read at most once a request.
  *
  * The answer is one person's, so it is never stored.
  *
@@ -38,7 +39,6 @@ import {
   NextlyError,
   type PluginRoute,
   type PluginRouteContext,
-  type PluginRoutePermissionScope,
 } from "@nextlyhq/plugin-sdk";
 import { respondDoc } from "nextly";
 
@@ -61,75 +61,47 @@ function unbatchable(route: PluginRoute): string | undefined {
   if (route.rateLimit !== undefined) return "it has its own rate limit";
   if (route.formatTimestamps === true) return "it formats timestamps";
   if (route.mount === "root") return "it is mounted at the root";
-  const declared =
-    route.requiredPermission !== undefined ||
-    route.checksAccess === true ||
-    route.siteWide === false;
-  return declared ? undefined : "it declares no access";
+  if (route.requiredPermission !== undefined) {
+    return "the dispatcher judges its permission before its handler runs";
+  }
+  const judgesCaller = route.checksAccess === true || route.siteWide === false;
+  return judgesCaller ? undefined : "it declares no access";
+}
+
+/** Where a read is asked, as a URL of its own. */
+function addressOf(read: string): URL {
+  return new URL(read, "http://startup.invalid");
 }
 
 /**
- * The scope a route's permission resolver is handed, as the dispatcher builds
- * it: the plugin's own names, renamed or not, composed `<action>-<resource>`.
+ * The reads a request names, or a refusal of the request: between one and
+ * the most a request may name, each a path of this plugin, and no route
+ * named twice (with another query, say), so one request runs each route at
+ * most once.
  */
-function permissionScope(
-  self: PluginRouteContext["self"]
-): PluginRoutePermissionScope {
-  const named = (
-    map: Record<string, string>,
-    declared: string,
-    action: string
-  ): string =>
-    `${action}-${Object.hasOwn(map, declared) ? map[declared] : declared}`;
-  return {
-    plugin: self.name,
-    collection: (declared, action) => named(self.collections, declared, action),
-    single: (declared, action) => named(self.singles, declared, action),
-  };
-}
-
-/**
- * Whether the caller passes the route's own gate. A route whose handler
- * judges the caller passes here and is judged there; one that requires a
- * permission asks it of the caller, read as core reads a slug: the action up
- * to the first `-`, the resource after it.
- */
-async function passesGate(
-  route: PluginRoute,
-  ctx: PluginRouteContext
-): Promise<boolean> {
-  const required = route.requiredPermission;
-  if (required === undefined) return true;
-  if (ctx.caller === null) return false;
-  const slug =
-    typeof required === "function"
-      ? required(permissionScope(ctx.self))
-      : required;
-  const cut = slug.indexOf("-");
-  if (cut <= 0 || cut === slug.length - 1) return false;
-  return ctx.caller.can(slug.slice(0, cut), slug.slice(cut + 1));
-}
-
-/** The reads a request names, each once, or a refusal of the request. */
 function readsOf(req: Request): string[] {
-  const named = new URL(req.url).searchParams.getAll(
+  const reads = new URL(req.url).searchParams.getAll(
     BUILDER_STARTUP_READ_PARAM
   );
-  const reads = [...new Set(named)];
   const malformed = reads.some(
-    read => !read.startsWith("/") || read.length > BUILDER_STARTUP_PATH_MAX
+    read =>
+      !read.startsWith("/") ||
+      read.startsWith("//") ||
+      read.length > BUILDER_STARTUP_PATH_MAX
   );
+  const routes = new Set(reads.map(read => addressOf(read).pathname));
   if (
     reads.length === 0 ||
     reads.length > BUILDER_STARTUP_MAX_READS ||
-    malformed
+    malformed ||
+    routes.size !== reads.length
   ) {
     throw NextlyError.validation({
       errors: [
         {
           path: BUILDER_STARTUP_READ_PARAM,
           code: "INVALID",
-          message: `Name between 1 and ${String(BUILDER_STARTUP_MAX_READS)} reads, each a path of this plugin.`,
+          message: `Name between 1 and ${String(BUILDER_STARTUP_MAX_READS)} reads, each a path of this plugin and each route once.`,
         },
       ],
     });
@@ -172,11 +144,10 @@ async function answerRead(
   req: Request,
   ctx: PluginRouteContext
 ): Promise<BuilderStartupAnswer> {
-  const at = new URL(read, "http://startup.invalid");
+  const at = addressOf(read);
   const route = routes.get(at.pathname);
   if (route === undefined) return { status: 404 };
   try {
-    if (!(await passesGate(route, ctx))) return { status: 403 };
     return await answerOf(await route.handler(requestFor(req, at), ctx));
   } catch (error) {
     if (NextlyError.is(error)) return { status: error.statusCode };
@@ -212,7 +183,7 @@ export function builderStartupRoute(parts: readonly PluginRoute[]): {
   return {
     method: "GET",
     path: BUILDER_STARTUP_ROUTE_PATH,
-    // Each read is judged by its own route's gate, as the caller.
+    // Each read's own handler judges the caller.
     checksAccess: true,
     noStore: true,
     handler: async (req, ctx) => {

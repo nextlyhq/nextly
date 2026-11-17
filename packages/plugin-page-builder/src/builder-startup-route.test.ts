@@ -74,7 +74,7 @@ describe("the builder's start-up read", () => {
     const loops = echo("/loop-collections");
     const style = echo("/site/style");
     const route = builderStartupRoute([loops, style]);
-    const { ctx } = contextHolding([]);
+    const { ctx, asked } = contextHolding([]);
     const answer = await ask(
       route,
       ["/loop-collections?locale=fr", "/site/style"],
@@ -99,33 +99,8 @@ describe("the builder's start-up read", () => {
     // The same caller the request came with, for each.
     expect(loops.handler.mock.calls[0]?.[1]).toBe(ctx);
     expect(style.handler).toHaveBeenCalledTimes(1);
-  });
-
-  it("asks a read's own required permission, by the name the site gave the collection", async () => {
-    const choices = {
-      method: "GET" as const,
-      path: "/layouts/choices",
-      requiredPermission: ({
-        collection,
-      }: {
-        collection: (slug: string, action: string) => string;
-      }) => collection("layouts", "read"),
-      handler: vi.fn(async () => Response.json({ items: [] })),
-    };
-    const route = builderStartupRoute([choices]);
-
-    const refused = contextHolding([]);
-    const answer = await ask(route, ["/layouts/choices"], refused.ctx);
-    expect(refused.asked).toEqual(["read-site_layouts"]);
-    expect(answer.reads["/layouts/choices"]).toEqual({ status: 403 });
-    expect(choices.handler).not.toHaveBeenCalled();
-
-    const allowed = contextHolding(["read-site_layouts"]);
-    const granted = await ask(route, ["/layouts/choices"], allowed.ctx);
-    expect(granted.reads["/layouts/choices"]).toEqual({
-      status: 200,
-      body: { items: [] },
-    });
+    // It decides nothing itself: each handler judges its caller.
+    expect(asked).toEqual([]);
   });
 
   it("refuses one read without failing the others", async () => {
@@ -170,13 +145,16 @@ describe("the builder's start-up read", () => {
     expect(answer.reads["/layouts/page-collection"]).toEqual({ status: 404 });
   });
 
-  it("refuses a request naming no reads, too many, or one that is not a path", async () => {
+  it("refuses a request naming no reads, too many, one that is not a path, or one route twice", async () => {
     const route = builderStartupRoute([echo("/site/style")]);
     const { ctx } = contextHolding([]);
     for (const reads of [
       [],
-      Array.from({ length: 13 }, (_, n) => `/site/style?n=${String(n)}`),
+      Array.from({ length: 13 }, (_, n) => `/x${String(n)}`),
       ["https://elsewhere.test/site/style"],
+      ["//elsewhere.test/site/style"],
+      // One route twice, so one request would run it twice.
+      ["/site/style", "/site/style?again=1"],
     ]) {
       await expect(
         route.handler(new Request(`${BASE}${builderStartupPath(reads)}`), ctx)
@@ -194,6 +172,13 @@ describe("the builder's start-up read", () => {
       [{ formatTimestamps: true }, "timestamps"],
       [{ mount: "root" }, "root"],
       [{ siteWide: undefined }, "declares no access"],
+      [
+        {
+          siteWide: undefined,
+          requiredPermission: () => "read-layouts",
+        },
+        "judges its permission",
+      ],
     ] as const) {
       expect(() =>
         builderStartupRoute([

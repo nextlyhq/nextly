@@ -1,9 +1,9 @@
 /**
  * The builder's start-up read through Nextly's own request handler, as a
  * signed-in person, on every configured dialect: each read is answered as a
- * request to its own route answers it, a read the person's grants refuse is
- * refused alone while the rest answer, and nobody signed in is answered
- * nothing.
+ * request to its own route answers it, a read its route refuses the person is
+ * refused alone while the rest answer, a route gated by a declared permission
+ * is not one of its reads, and nobody signed in is answered nothing.
  */
 // Set before the harness boots: the routes verify the session with it.
 process.env.NEXTLY_SECRET =
@@ -27,11 +27,9 @@ import { call, holding, person, sessionOf } from "./transfer-harness";
 const READS = [
   "/loop-collections",
   "/named-queries",
-  "/library/components",
   "/capability",
   "/site/style",
   "/layouts/page-collection",
-  "/layouts/choices",
 ];
 
 /** GET one of the plugin's routes by its path, query included. */
@@ -83,19 +81,15 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("refuses a read the person's grants refuse, and answers the rest", async () => {
+    it("refuses a read its route refuses the person, and answers the rest", async () => {
       const t = await boot();
       // The site's first person is its owner; the author comes after.
       await person(t, "owner");
-      // May read components, and not Layouts.
-      const { cookie } = await holding(t, ["read-components"]);
+      // May read the media library, and edit nothing the builder opens.
+      const { cookie } = await holding(t, ["read-media"]);
       const answer = await get(
         cookie,
-        builderStartupPath([
-          "/layouts/choices",
-          "/library/components",
-          "/capability",
-        ])
+        builderStartupPath(["/site/style", "/capability"])
       );
       expect(answer.status).toBe(200);
       const reads = answer.body.reads as Record<
@@ -103,34 +97,27 @@ describe.each(getConfiguredTestDialects())(
         { status: number; body?: unknown }
       >;
       // Refused as the route itself refuses it, and nothing of it answered.
-      expect((await get(cookie, "/layouts/choices")).status).toBe(403);
-      expect(reads["/layouts/choices"]).toEqual({ status: 403 });
-      // Allowed, as the route allows it.
-      expect(reads["/library/components"]?.status).toBe(200);
-      expect(reads["/library/components"]?.body).toEqual(
-        (await get(cookie, "/library/components")).body
-      );
-      expect(reads["/capability"]?.status).toBe(200);
+      const own = await get(cookie, "/site/style");
+      expect(own.status).toBe(403);
+      expect(reads["/site/style"]).toEqual({ status: 403 });
+      // Answered, as the route answers it.
+      expect(reads["/capability"]).toEqual({
+        status: 200,
+        body: (await get(cookie, "/capability")).body,
+      });
     });
 
-    it("asks each read's own permission before its handler runs", async () => {
+    it("answers a route gated by a declared permission with nothing, as not one of its reads", async () => {
       const t = await boot();
-      await person(t, "owner");
-      // May read Layouts, and not components.
-      const { cookie } = await holding(t, ["read-layouts"]);
+      const owner = await sessionOf(t, await person(t, "owner"));
       const answer = await get(
-        cookie,
+        owner,
         builderStartupPath(["/library/components", "/layouts/choices"])
       );
-      const reads = answer.body.reads as Record<
-        string,
-        { status: number; body?: unknown }
-      >;
-      expect((await get(cookie, "/library/components")).status).toBe(403);
-      expect(reads["/library/components"]).toEqual({ status: 403 });
-      expect(reads["/layouts/choices"]).toEqual({
-        status: 200,
-        body: (await get(cookie, "/layouts/choices")).body,
+      expect(answer.status).toBe(200);
+      expect(answer.body.reads).toEqual({
+        "/library/components": { status: 404 },
+        "/layouts/choices": { status: 404 },
       });
     });
 

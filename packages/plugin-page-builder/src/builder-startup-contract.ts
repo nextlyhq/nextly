@@ -3,11 +3,11 @@
  * the editor that sends it.
  *
  * The builder opens on several of this plugin's reads at once: the
- * collections a list may show, the custom sources, the component library,
- * what the author may do, the site style, the pages collection and the
- * Layout choices. Sent one by one, each is a request, and on a deployed site
- * each request is a function call. The start-up read asks them in one request
- * and answers each as its own route would have.
+ * collections a list may show, the custom sources, what the author may do,
+ * the site style and the pages collection. Sent one by one, each is a
+ * request, and on a deployed site each request is a function call. The
+ * start-up read asks them in one request and answers each as its own route
+ * would have.
  *
  * Its own module, free of server imports, so the admin bundle takes the
  * shapes without the route's reads.

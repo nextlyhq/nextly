@@ -22,6 +22,7 @@ import type { CanvasRegion, LayersRegionRow } from "@nextlyhq/builder/shell";
 import {
   useDocumentIdentity,
   useDocumentLocale,
+  usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   Button,
@@ -95,7 +96,7 @@ function useLayoutChoices(
 } {
   // In the language being edited, so the regions read as the page reads.
   const locale = useDocumentLocale()?.code ?? null;
-  const read = useBuilderRoute<LayoutChoicesResponse>({
+  const read = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: layoutChoicesPath(
       selected,
@@ -225,27 +226,6 @@ export function usePageLayoutAsk<T extends FieldValues>(
     const layout = selectedOf(stored);
     return { layout, siteDefault: layout === null };
   }, [stored]);
-}
-
-/**
- * The Layout choices the editor asks as it opens on this form, by path, or
- * `undefined` on a form no page could be. Asked about the Layout the form
- * names and in the language being edited, as the canvas's regions ask it,
- * before it is known whether the form is a page's: the builder's start-up
- * read asks it with the rest.
- */
-export function useOpeningLayoutChoicesPath<T extends FieldValues>(
-  control: Control<T>
-): string | undefined {
-  const identity = useDocumentIdentity();
-  const locale = useDocumentLocale()?.code ?? null;
-  const layout: unknown = useWatch({
-    control,
-    name: LAYOUT_FIELD as Path<T>,
-  });
-  return identity?.kind === "collection"
-    ? layoutChoicesPath(layoutRelationId(layout), { locale })
-    : undefined;
 }
 
 /** The id the stored values select, which the choices are asked about. */

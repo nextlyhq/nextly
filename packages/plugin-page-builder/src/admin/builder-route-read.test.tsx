@@ -11,16 +11,25 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/** Who is signed in. */
+const who = vi.hoisted(() => ({ userId: "ada" as string | null }));
+/** Paths whose own read is already kept in the cache. */
+const cached = vi.hoisted(() => new Set<string>());
+
 /** Every request `usePluginRoute` was handed, in order. */
 const routeAsked: Array<Record<string, unknown>> = [];
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   readPluginRoute: vi.fn(),
+  useCurrentUserId: () => who.userId,
   usePluginRoute: (request: Record<string, unknown>) => {
     routeAsked.push(request);
     const enabled = request.enabled ?? true;
     return {
-      data: enabled ? { from: "route" } : undefined,
+      data:
+        enabled || cached.has(String(request.path))
+          ? { from: "route" }
+          : undefined,
       pending: false,
       error: null,
       refetch: vi.fn(),
@@ -42,6 +51,8 @@ afterEach(() => {
   cleanup();
   forgetStartedReads();
   routeAsked.length = 0;
+  cached.clear();
+  who.userId = "ada";
   vi.useRealTimers();
 });
 
@@ -150,5 +161,32 @@ describe("a read the builder opens on", () => {
     const request = { plugin: PLUGIN, path: "/capability", enabled: false };
     renderHook(() => useBuilderRoute(request));
     expect(lastAsked()).toBe(request);
+  });
+
+  it("never shows an answer read for one person to the next, even on the same mount", async () => {
+    startBuilderReads("ada", ["/capability"], async () => ({
+      "/capability": { status: 200, body: { from: "ada's start-up" } },
+    }));
+    const { result, rerender } = renderHook(() =>
+      useBuilderRoute({ plugin: PLUGIN, path: "/capability" })
+    );
+    await act(async () => {});
+    expect(result.current.data).toEqual({ from: "ada's start-up" });
+    who.userId = "grace";
+    rerender();
+    expect(result.current.data).toEqual({ from: "route" });
+    expect(lastAsked()).toEqual({ plugin: PLUGIN, path: "/capability" });
+  });
+
+  it("keeps showing its own kept answer while a start-up read is on its way", () => {
+    cached.add("/capability");
+    startBuilderReads("ada", ["/capability"], () => new Promise(() => {}));
+    const { result } = renderHook(() =>
+      useBuilderRoute({ plugin: PLUGIN, path: "/capability" })
+    );
+    expect(result.current).toMatchObject({
+      data: { from: "route" },
+      pending: false,
+    });
   });
 });
