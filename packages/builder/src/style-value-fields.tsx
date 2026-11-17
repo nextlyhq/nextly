@@ -430,6 +430,12 @@ const OWN_FIELDS: Readonly<
       Field: typeof AspectRatioField;
       /** Whether its tab stop is a button a label's `for` would click. */
       buttons: boolean;
+      /**
+       * The kind of value it draws, where one CSS property is written by
+       * several: `background-image` is both an image's address and a
+       * gradient, and only the address is a file to choose.
+       */
+      leaf?: StyleControl["leaf"]["kind"];
     }
   >
 > = {
@@ -455,6 +461,7 @@ const OWN_FIELDS: Readonly<
     draws: stored => stored === undefined || typeof stored === "string",
     Field: BackgroundImageField,
     buttons: false,
+    leaf: "url",
   },
   // Where the background image sits, as the object position does.
   "background-position": {
@@ -463,6 +470,19 @@ const OWN_FIELDS: Readonly<
     buttons: true,
   },
 };
+
+/**
+ * The field of its own a control is drawn with, if any: found by the CSS
+ * property it writes, and by the kind of value where an entry names one.
+ */
+function ownFieldFor(
+  leaf: StyleControl["leaf"]
+): (typeof OWN_FIELDS)[string] | undefined {
+  const own = OWN_FIELDS[leaf.cssProperty];
+  return own === undefined || (own.leaf !== undefined && own.leaf !== leaf.kind)
+    ? undefined
+    : own;
+}
 
 /**
  * Whether a field's label only moves focus: where the control drawn is a
@@ -474,7 +494,7 @@ export function labelFocusOnly(
   stored: StyleValue | undefined
 ): boolean {
   if (drawsIcons(leaf)) return true;
-  const own = OWN_FIELDS[leaf.cssProperty];
+  const own = ownFieldFor(leaf);
   return own !== undefined && own.buttons && own.draws(stored);
 }
 
@@ -578,7 +598,7 @@ export function ValueField({
   }
   // A property with a field of its own, where the stored value is one that
   // field can draw; any other spelling keeps the text field.
-  const own = OWN_FIELDS[control.leaf.cssProperty];
+  const own = ownFieldFor(control.leaf);
   if (own !== undefined && own.draws(stored)) {
     return (
       <own.Field

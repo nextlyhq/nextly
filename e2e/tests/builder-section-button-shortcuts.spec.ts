@@ -113,9 +113,13 @@ async function openStyle(
     .click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
   await page.getByRole("tab", { name: "Style" }).click();
-  const heading = page.getByRole("button", {
-    name: new RegExp(`^${sectionName}`),
-  });
+  // The section's heading is the button that folds; a control inside may be
+  // named after the section too ("Background position as CSS").
+  const heading = page
+    .locator('[role="tabpanel"]:not([hidden]) button[aria-expanded]', {
+      hasText: new RegExp(`^${sectionName}`),
+    })
+    .first();
   if ((await heading.getAttribute("aria-expanded")) !== "true") {
     await heading.click();
   }

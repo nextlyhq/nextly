@@ -295,11 +295,12 @@ function placeChoices(
 }
 
 /**
- * Rows whose stored key reads wrong as a word, by the CSS property they set:
- * the background's `url` is the image an author chooses, not an address.
+ * Rows whose stored key reads wrong as a word, by the kind of value and the
+ * CSS property they set: the background's `url` is the image an author
+ * chooses, not an address (a gradient writes the same property, as itself).
  */
 const ROW_LABELS: Readonly<Record<string, string>> = {
-  "background-image": "Image",
+  "url:background-image": "Image",
 };
 
 /**
@@ -314,7 +315,7 @@ function positionLabel(
   control: StyleControl,
   orientation: SideOrientation | undefined
 ): string {
-  const named = ROW_LABELS[control.leaf.cssProperty];
+  const named = ROW_LABELS[`${control.leaf.kind}:${control.leaf.cssProperty}`];
   if (named !== undefined) return named;
   const key = control.path[control.path.length - 1] ?? "";
   if (orientation === undefined) return fieldLabel(key);

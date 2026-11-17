@@ -2133,6 +2133,21 @@ describe("the site's host-fetch policy", () => {
   });
 });
 
+describe("the background image and gradient, which both write background-image", () => {
+  it("draws the image picker for the image only, and the gradient as its own field", () => {
+    // Both rows set `background-image`; only the image is a file to choose.
+    mount({ background: { image: true, gradient: true } });
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
+    const gradient = fieldsOf("backgroundGradient");
+    expect(gradient.queryByRole("textbox", { name: "Image link" })).toBeNull();
+    expect(gradient.queryByRole("button", { name: /Choose/ })).toBeNull();
+    // The gradient keeps the CSS value field it had.
+    expect(gradient.getAllByRole("textbox")).toHaveLength(1);
+  });
+});
+
 describe("the background image in the Inspector's Style tab", () => {
   it("reaches the host's media library, as the Content tab's controls do", () => {
     // Without the host's services the Style tab offers only a link, so a
