@@ -52,6 +52,8 @@ const LAST = "last";
 interface Seeded {
   page: string;
   empty: string;
+  /** A page of its own, so no other test's open editor holds its lock. */
+  forAuthor: string;
   previousDefault: string | null;
 }
 
@@ -170,9 +172,13 @@ async function seed(page: Page): Promise<Seeded> {
     paragraph(LAST, "Closing words"),
   ]);
   const empty = await pageWith(api, "regions-empty", []);
+  const forAuthor = await pageWith(api, "regions-author", [
+    heading(FIRST, "Section title"),
+  ]);
   seeded = {
     page: withText,
     empty,
+    forAuthor,
     previousDefault: choices.meta.defaultLayout,
   };
   return seeded;
@@ -464,7 +470,7 @@ test.describe("for an author who may not edit components", () => {
   test("shows the same card without Edit header, saying who can change it", async ({
     page,
   }) => {
-    const { page: id } = await seed(page);
+    const { forAuthor: id } = await seed(page);
     const authorPage = await author.context.newPage();
     await openBuilder(authorPage, id);
     await (await region(authorPage, "header")).click();
