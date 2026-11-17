@@ -77,7 +77,7 @@ afterEach(() => {
 });
 
 describe("the notice that a first header now fills the default", () => {
-  it("says the header now shows on every page, that pages with their own keep theirs, and links to the sets", async () => {
+  it("says the header now shows on every page, that pages with their own keep theirs, and links to the admin's list of sets on the form", async () => {
     render(<Toaster />);
     act(() => showFillNotices(filled("header", "Acme header")));
     expect(
@@ -92,6 +92,24 @@ describe("the notice that a first header now fills the default", () => {
       screen.getByRole("button", { name: "Change in Header & footer" })
     );
     expect(navigateTo).toHaveBeenCalledWith(SETS);
+  });
+
+  it("opens the Pages panel at its Header & footer group, in the builder", async () => {
+    const requestPanel = vi.fn();
+    const revealSets = vi.fn();
+    render(<Toaster />);
+    act(() =>
+      showFillNotices(filled("header", "Acme header"), {
+        requestPanel,
+        pages: { revealSets },
+      })
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Change in Header & footer" })
+    );
+    expect(requestPanel).toHaveBeenCalledWith("pages");
+    expect(revealSets).toHaveBeenCalled();
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   it("says footer for a footer", async () => {

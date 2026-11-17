@@ -14,7 +14,9 @@
  * it and a later visit says nothing.
  *
  * Mounted by the component's own screens: the builder and the admin's form.
- * "Change in Header & footer" opens the admin's list of sets.
+ * "Change in Header & footer" opens the Pages panel at its Header & footer
+ * group in the builder, as "Manage headers & footers" does there, and the
+ * admin's list of sets on the form, which has no such panel.
  *
  * @module admin/filled-default-notice
  */
@@ -24,7 +26,7 @@ import {
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { toast } from "@nextlyhq/ui";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import {
   CHANGE_IN_HEADER_FOOTER,
@@ -38,19 +40,36 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 /** Long enough to read both lines and reach the link. */
 const FILL_NOTICE_MS = 12_000;
 
-/** Say each fill, with the link to where the sets are changed. */
+/**
+ * The builder's way to its sets: open the Pages panel and show its Header &
+ * footer group. Absent on a screen without that panel.
+ */
+export interface BuilderSets {
+  readonly requestPanel: (panel: "pages") => void;
+  readonly pages: { readonly revealSets: () => void };
+}
+
+/**
+ * Say each fill, with the link to where the sets are changed: the builder's
+ * own sets where `sets` is given, else the admin's list.
+ */
 export function showFillNotices(
   result: FillNoticesResult,
-  open: (href: string) => void = navigateTo
+  sets?: BuilderSets
 ): void {
+  const open = (): void => {
+    if (sets === undefined) {
+      navigateTo(result.setsAddress);
+      return;
+    }
+    sets.requestPanel("pages");
+    sets.pages.revealSets();
+  };
   for (const fill of result.fills) {
     toast.success(fillHeadline(fill), {
       description: fillDetail(fill),
       duration: FILL_NOTICE_MS,
-      action: {
-        label: CHANGE_IN_HEADER_FOOTER,
-        onClick: () => open(result.setsAddress),
-      },
+      action: { label: CHANGE_IN_HEADER_FOOTER, onClick: open },
     });
   }
 }
@@ -77,8 +96,15 @@ async function takeFillNotices(): Promise<FillNoticesResult | undefined> {
  * this screen shows becomes live with nothing unpublished: on opening a live
  * one, and right after a publish. Nothing for any other kind of document.
  */
-export function useFilledDefaultNotice(documentKind: string): void {
+export function useFilledDefaultNotice(
+  documentKind: string,
+  sets?: BuilderSets
+): void {
   const isComponent = documentKind === "component";
+  // The latest way to the sets, read when a notice is said: asking again
+  // whenever the editor's panels re-render would ask the server again.
+  const setsRef = useRef(sets);
+  setsRef.current = sets;
   const status = useDocumentStatus();
   const live =
     status !== null && status.status === "published" && !status.hasWorkingDraft;
@@ -87,7 +113,7 @@ export function useFilledDefaultNotice(documentKind: string): void {
     // Said even when this screen has closed by the time the answer comes:
     // the server answers a fill once, so one not said now is never said.
     void takeFillNotices().then(result => {
-      if (result !== undefined) showFillNotices(result);
+      if (result !== undefined) showFillNotices(result, setsRef.current);
     });
   }, [isComponent, live]);
 }

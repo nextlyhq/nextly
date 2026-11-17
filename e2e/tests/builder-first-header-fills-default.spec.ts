@@ -2,14 +2,15 @@
  * The first header an author publishes takes the starter's place in the site
  * default, once, and the builder says so: "<Name> now shows on every page.",
  * "Pages that chose a different header keep theirs." and "Change in Header &
- * footer", which opens the list of sets. A second header published later
- * changes nothing and says nothing.
+ * footer", which opens the Pages panel at its Header & footer sets. A second
+ * header published later changes nothing and says nothing.
  *
  * The browser tests start on a fresh database, so the site default is the
  * boot's own seed, holding the untouched starter. This spec holds the site
  * default's lock, and puts the starter back in Main when it is done, so the
  * starter's own spec still finds it there. The fill happens once per site,
- * so no later publish in the run fills Main again.
+ * so no later publish in the run fills Main again; and only someone's publish
+ * fills, so the playground's own seeded header never does.
  *
  * Black box like the rest of `e2e/`: no product code is imported.
  *
@@ -184,10 +185,16 @@ test("the first header published in the builder takes the starter's place in Mai
   // The starter stays in Components, published.
   expect(await statusOf(page.request, starterHeader ?? "")).toBe("published");
 
+  // In the builder, the link opens the Pages panel at its sets.
   await link.click();
-  await expect(page).toHaveURL(/\/admin\/collections\/layouts(\?|$)/, {
-    timeout: 15_000,
-  });
+  await expect(
+    page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Pages" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("list", { name: "Header & footer sets" })
+  ).toBeVisible();
 });
 
 test("a second header published later changes nothing and says nothing", async ({

@@ -463,7 +463,7 @@ function EditorBody<TFieldValues extends FieldValues>({
     canvas.pageDataLimit
   );
   // A component published as the first header or footer: said once.
-  useFilledDefaultNotice(mount.initialDocument.kind);
+  useFilledDefaultNotice(mount.initialDocument.kind, panels);
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
     mount.offerEditComponent,
