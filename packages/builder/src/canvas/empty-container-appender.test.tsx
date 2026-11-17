@@ -54,12 +54,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
 import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
+import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { BUILDER_CHROME_CLASS } from "../shell-state";
 import {
   centeredControlRect,
   EmptyContainerAppenders,
 } from "./empty-container-appender";
 import { registrySlotSource } from "../panels/add/inserter";
+
+/** Points the editor's hovered block at a block, as the canvas pointer does. */
+function PointAt({ id }: { id: string | null }) {
+  const point = useHoveredBlockSetter();
+  React.useEffect(() => point(id), [id, point]);
+  return null;
+}
 
 /**
  * The `checkVisibility` the RUNTIME brought, read before any case can replace
@@ -177,11 +185,11 @@ describe("the empty-container appender", () => {
       />
     );
     const control = screen.getByRole("button", { name: /Box/ });
-    expect(control.textContent).toBe("Drop a block here, or click to add one");
+    expect(control.textContent).toBe("＋ Add a block, or drop one here");
     // Its name starts with the words it shows, so speaking them reaches it
     // (WCAG 2.5.3), and goes on to say which container.
     expect(control.getAttribute("aria-label")).toBe(
-      "Drop a block here, or click to add one, in Box"
+      "Add a block, or drop one here, in Box"
     );
   });
 
@@ -208,7 +216,7 @@ describe("the empty-container appender", () => {
       />
     );
     fireEvent.click(screen.getByRole("button", { name: /Box/ }));
-    expect(onAppend).toHaveBeenCalledWith("box-1");
+    expect(onAppend).toHaveBeenCalledWith("box-1", expect.any(HTMLElement));
   });
 
   it("marks itself as chrome so a press does not clear the selection", () => {
@@ -265,9 +273,12 @@ describe("the empty-container appender", () => {
     expect(screen.getAllByRole("button")).toHaveLength(2);
 
     fireEvent.click(screen.getByRole("button", { name: /Box/ }));
-    expect(onAppend).toHaveBeenLastCalledWith("box-1");
+    expect(onAppend).toHaveBeenLastCalledWith("box-1", expect.any(HTMLElement));
     fireEvent.click(screen.getByRole("button", { name: /Card/ }));
-    expect(onAppend).toHaveBeenLastCalledWith("card-1");
+    expect(onAppend).toHaveBeenLastCalledWith(
+      "card-1",
+      expect.any(HTMLElement)
+    );
   });
 
   it("finds a container nested inside another container's populated slot", () => {
@@ -307,7 +318,7 @@ describe("the empty-container appender", () => {
     // nested card, which has none of its own, does — one control, not zero.
     expect(screen.getAllByRole("button")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: /Card/ }));
-    expect(onAppend).toHaveBeenCalledWith("card-2");
+    expect(onAppend).toHaveBeenCalledWith("card-2", expect.any(HTMLElement));
   });
 });
 
@@ -334,7 +345,7 @@ describe("the accessible name it announces", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Drop a block here, or click to add one, in Header slot",
+        name: "Add a block, or drop one here, in Header slot",
       })
     ).toBeTruthy();
     // The un-named sibling still falls back to the block's own label, proving
@@ -342,14 +353,14 @@ describe("the accessible name it announces", () => {
     // does not disturb the existing fallback.
     expect(
       screen.getByRole("button", {
-        name: "Drop a block here, or click to add one, in Box",
+        name: "Add a block, or drop one here, in Box",
       })
     ).toBeTruthy();
   });
 
   it("ignores a name of only whitespace, the same way the Layers panel does", () => {
     // `authoredName` trims and treats a blank result as absent; a control
-    // announcing "Drop a block here, or click to add one, in    " would be no name at all.
+    // announcing "Add a block, or drop one here, in    " would be no name at all.
     const blankName = {
       id: "box-blank",
       type: "core/box",
@@ -368,7 +379,7 @@ describe("the accessible name it announces", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Drop a block here, or click to add one, in Box",
+        name: "Add a block, or drop one here, in Box",
       })
     ).toBeTruthy();
   });
@@ -775,7 +786,7 @@ async function flushObservers(): Promise<void> {
 /** The inline rectangle a control was drawn at, in the order left/top/w/h. */
 function drawnAt(name: string): [string, string, string, string] {
   const button = screen.getByRole("button", {
-    name: `Drop a block here, or click to add one, in ${name}`,
+    name: `Add a block, or drop one here, in ${name}`,
   });
   if (!(button instanceof HTMLElement)) throw new Error(`${name}: no element`);
   return [
@@ -1062,26 +1073,30 @@ describe("which containers it actually draws a control on", () => {
   function measuredCanvas(
     canvasDocument: BlockDocument,
     boxes: Record<string, Box>,
-    overlayDocument: BlockDocument = canvasDocument
+    overlayDocument: BlockDocument = canvasDocument,
+    pointedAt: string | null = null
   ): HTMLElement {
     registerShapes();
     withFakeResizeObserver();
 
     const { container } = render(
-      <div className={BUILDER_CHROME_CLASS}>
-        <Canvas
-          document={canvasDocument}
-          siteStyles={SITE_STYLES}
-          overlay={
-            <EmptyContainerAppenders
-              document={overlayDocument}
-              slots={registrySlotSource()}
-              blocks={{ get: () => undefined }}
-              onAppend={() => undefined}
-            />
-          }
-        />
-      </div>
+      <HoveredBlockProvider>
+        <PointAt id={pointedAt} />
+        <div className={BUILDER_CHROME_CLASS}>
+          <Canvas
+            document={canvasDocument}
+            siteStyles={SITE_STYLES}
+            overlay={
+              <EmptyContainerAppenders
+                document={overlayDocument}
+                slots={registrySlotSource()}
+                blocks={{ get: () => undefined }}
+                onAppend={() => undefined}
+              />
+            }
+          />
+        </div>
+      </HoveredBlockProvider>
     );
 
     layout(container, boxes);
@@ -1090,6 +1105,53 @@ describe("which containers it actually draws a control on", () => {
     act(() => observer.fire());
     return container;
   }
+
+  /** The overlay drawn over a container, beside its control. */
+  function overlayFor(name: string): HTMLElement {
+    const button = screen.getByRole("button", {
+      name: `Add a block, or drop one here, in ${name}`,
+    });
+    const area = button.previousElementSibling;
+    if (!(area instanceof HTMLElement)) throw new Error(`${name}: no overlay`);
+    expect(area.classList.contains("nx-empty-container-appenders__area")).toBe(
+      true
+    );
+    return area;
+  }
+
+  it("covers the whole container with its hover overlay, drawn as chrome", () => {
+    // Over the container's own box, not the control's: the tint and the
+    // solid outline are drawn here, above the block, never on its ground.
+    measuredCanvas(SHAPES, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+    });
+    const area = overlayFor("Wide box");
+    expect([
+      area.style.left,
+      area.style.top,
+      area.style.width,
+      area.style.height,
+    ]).toEqual(["0px", "0px", "400px", "200px"]);
+    expect(area.getAttribute("aria-hidden")).toBe("true");
+    // Not pointed at: drawn at rest as nothing, by the stylesheet.
+    expect(area.hasAttribute("data-pointed")).toBe(false);
+  });
+
+  it("marks the overlay of the container the pointer is over on the canvas", () => {
+    measuredCanvas(
+      SHAPES,
+      {
+        wide: { x: 0, y: 0, width: 400, height: 200 },
+        narrow: { x: 0, y: 300, width: 400, height: 200 },
+      },
+      SHAPES,
+      "wide"
+    );
+    expect(overlayFor("Wide box").hasAttribute("data-pointed")).toBe(true);
+    expect(overlayFor("Narrow column").hasAttribute("data-pointed")).toBe(
+      false
+    );
+  });
 
   it("draws NO control on a container whose root the stylesheet declines", () => {
     /*
@@ -1113,7 +1175,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Closed section",
+        name: "Add a block, or drop one here, in Closed section",
       })
     ).toBeNull();
   });
@@ -1202,7 +1264,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Shelled box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Bare box",
+        name: "Add a block, or drop one here, in Bare box",
       })
     ).toBeNull();
   });
@@ -1229,7 +1291,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Clipped box",
+        name: "Add a block, or drop one here, in Clipped box",
       })
     ).toBeNull();
   });
@@ -1266,7 +1328,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Box in a hidden wrapper",
+        name: "Add a block, or drop one here, in Box in a hidden wrapper",
       })
     ).toBeNull();
   });
@@ -1322,7 +1384,7 @@ describe("which containers it actually draws a control on", () => {
     ]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Box in a closed section",
+        name: "Add a block, or drop one here, in Box in a closed section",
       })
     ).toBeNull();
   });
@@ -1353,7 +1415,7 @@ describe("which containers it actually draws a control on", () => {
     });
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Box in a closed section",
+        name: "Add a block, or drop one here, in Box in a closed section",
       })
     ).toBeNull();
 
@@ -1400,12 +1462,12 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Wide box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Ghost box",
+        name: "Add a block, or drop one here, in Ghost box",
       })
     ).toBeNull();
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Closed section",
+        name: "Add a block, or drop one here, in Closed section",
       })
     ).toBeNull();
   });
@@ -1497,7 +1559,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Anchored box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Fixed box",
+        name: "Add a block, or drop one here, in Fixed box",
       })
     ).toBeNull();
   });
@@ -1522,7 +1584,7 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Anchored box")).toEqual(["40px", "78px", "320px", "44px"]);
     expect(
       screen.queryByRole("button", {
-        name: "Drop a block here, or click to add one, in Sticky box",
+        name: "Add a block, or drop one here, in Sticky box",
       })
     ).toBeNull();
   });
@@ -1675,7 +1737,7 @@ describe("which containers it actually draws a control on", () => {
       clipped: { x: 0, y: 100, width: 400, height: 200 },
     });
     const drawn = screen.getByRole("button", {
-      name: "Drop a block here, or click to add one, in Clipped box",
+      name: "Add a block, or drop one here, in Clipped box",
     });
     await act(async () => {
       drawn.setAttribute("style", drawn.getAttribute("style") ?? "");

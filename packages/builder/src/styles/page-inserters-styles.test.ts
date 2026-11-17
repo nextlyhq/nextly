@@ -40,3 +40,53 @@ describe("the + between sections on a touch screen", () => {
     expect(body).toContain("opacity: 1;");
   });
 });
+
+/** Every rule body in the sheet one of whose selectors names `className`. */
+function rulesNaming(className: string): string[] {
+  const sheet = CHROME.replace(/\/\*[\s\S]*?\*\//g, "");
+  const bodies: string[] = [];
+  for (const match of sheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if ((match[1] ?? "").includes(className)) bodies.push(match[2] ?? "");
+  }
+  return bodies;
+}
+
+/** A literal colour: a hex, an rgb or hsl function, or a named colour. */
+const LITERAL_COLOUR =
+  /#[\da-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch)\(|:\s*(?:white|black|blue|grey|gray|red)\b/i;
+
+describe("the gap + and the empty container's overlay take the editor's colours", () => {
+  it.each([
+    "nx-page-inserters__add",
+    "nx-page-inserters__line",
+    "nx-empty-container-appenders__area",
+  ])("states no literal colour in .%s", className => {
+    const bodies = rulesNaming(className);
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toMatch(LITERAL_COLOUR);
+  });
+
+  it("draws the empty container's overlay in the selection colour, outlined and tinted", () => {
+    const shown = rulesNaming(
+      ".nx-empty-container-appenders__area[data-pointed]"
+    ).join("");
+    expect(shown).toMatch(/outline: 1px solid var\(--nx-builder-select\)/);
+    expect(shown).toMatch(
+      /background: color-mix\(in srgb, var\(--nx-builder-select\) \d+%, transparent\)/
+    );
+  });
+
+  it("uses the system's Highlight for both under forced colours", () => {
+    const forced = CHROME.split("@media (forced-colors: active)").slice(1);
+    const add = forced.find(block =>
+      block.slice(0, block.indexOf("}")).includes(".nx-page-inserters__add")
+    );
+    expect(add).toMatch(/background: Highlight;/);
+    const area = forced.find(block =>
+      block
+        .slice(0, block.indexOf("}"))
+        .includes(".nx-empty-container-appenders__area[data-pointed]")
+    );
+    expect(area).toMatch(/outline-color: Highlight;/);
+  });
+});

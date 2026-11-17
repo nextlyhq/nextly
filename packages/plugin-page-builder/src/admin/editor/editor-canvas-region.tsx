@@ -16,6 +16,7 @@ import {
   CanvasMarks,
   DropIndicator,
   DropRefusal,
+  elementAnchor,
   EmptyContainerAppenders,
   PageInserters,
   RepairNotice,
@@ -144,7 +145,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
     spacingScrub,
     slots,
     blocks,
-    openInsertPanel,
+    insertPicker,
     locale,
     canvasSource,
     canvasFallback,
@@ -311,40 +312,43 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 {/*
                   Suppressed during a drag for the same reason the toolbar and
                   the bands are. Shown otherwise: empty containers always draw
-                  their placeholder box, so the "+" over it always has one.
+                  their placeholder outline, so the "+" over it always has one.
+                  Pressed, it opens the in-place picker beside it, aimed INSIDE
+                  the container for every block, with nothing selected on the
+                  way.
                 */}
                 <EmptyContainerAppenders
                   document={editor.document}
                   slots={slots}
                   blocks={blocks}
                   hidden={dragging}
-                  onAppend={nodeId => {
-                    // Select the container and open Add to add INSIDE it,
-                    // said explicitly: a layout block added with a container
-                    // selected goes after it, while this "+" means inside
-                    // for every block.
-                    editor.select(nodeId);
-                    openInsertPanel({ inside: nodeId });
-                  }}
+                  onAppend={(nodeId, control) =>
+                    insertPicker.open(
+                      { kind: "place", place: { inside: nodeId } },
+                      elementAnchor(control)
+                    )
+                  }
                 />
                 {/*
-                  The empty page's start card and the "+" between sections.
-                  The "+" selects the section above its gap and opens Add to
-                  add IN THE GAP, said explicitly: with a section selected a
-                  content block would otherwise go inside it. The start card
-                  opens Add on a page with nothing to select.
-                  Hidden mid-drag, when the drag's own line says where a block
-                  lands.
+                  The empty page's start card and the "+" in each gap. A gap's
+                  "+" opens the in-place picker beside it, aimed at exactly
+                  that gap, after the block before it, with nothing selected
+                  on the way. The start card opens Add on a page with nothing
+                  to select. Hidden mid-drag, when the drag's own line says
+                  where a block lands.
                 */}
                 <PageInserters
                   document={editor.document}
+                  selectedId={editor.selectedId}
                   componentTitle={componentLibrary.titleOf}
                   hidden={dragging}
-                  onStart={() => openInsertPanel()}
-                  onAddAfter={nodeId => {
-                    editor.select(nodeId);
-                    openInsertPanel({ after: nodeId });
-                  }}
+                  onStart={() => view.openInsertPanel()}
+                  onAddAfter={(nodeId, control) =>
+                    insertPicker.open(
+                      { kind: "place", place: { after: nodeId } },
+                      elementAnchor(control)
+                    )
+                  }
                 />
               </>
             }

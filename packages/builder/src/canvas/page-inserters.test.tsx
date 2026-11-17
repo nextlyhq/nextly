@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 
 /**
- * The controls that add a section to the page: the start card an empty page
- * shows, and the "+" in each gap between two top-level sections.
+ * The controls that add a block to the page: the start card an empty page
+ * shows, and the "+" in each gap between blocks: between top-level blocks,
+ * after the last one, and between the selected block's children.
  *
  * jsdom lays nothing out, so where a "+" is drawn is the browser's question;
  * here it is which gaps get one, what each says and reports, and which show.
@@ -142,8 +143,9 @@ function mount(
     hidden?: boolean;
     hovered?: string | null;
     onStart?: () => void;
-    onAddAfter?: (id: string) => void;
+    onAddAfter?: (id: string, control: HTMLElement) => void;
     componentTitle?: ComponentTitleOf;
+    selectedId?: string | null;
   } = {}
 ) {
   return render(
@@ -156,6 +158,9 @@ function mount(
           <PageInserters
             document={document}
             {...(props.hidden === undefined ? {} : { hidden: props.hidden })}
+            {...(props.selectedId === undefined
+              ? {}
+              : { selectedId: props.selectedId })}
             onStart={props.onStart ?? (() => undefined)}
             onAddAfter={props.onAddAfter ?? (() => undefined)}
             {...(props.componentTitle === undefined
@@ -169,7 +174,10 @@ function mount(
 }
 
 const gapButtons = () =>
-  screen.queryAllByRole("button", { name: /^Add a section after/ });
+  screen.queryAllByRole("button", { name: /^Add a block (between|after) / });
+
+const gapNames = () =>
+  gapButtons().map(button => button.getAttribute("aria-label"));
 
 describe("an empty page", () => {
   it("offers a start card whose button starts the page", async () => {
@@ -305,14 +313,13 @@ describe("an empty page", () => {
 });
 
 describe("the + between sections", () => {
-  it("is in each gap between two sections, naming the one above", async () => {
+  it("is in each gap between two sections and after the last, saying where it adds", async () => {
     mount(THREE);
     await act(async () => undefined);
-    expect(
-      gapButtons().map(button => button.getAttribute("aria-label"))
-    ).toEqual([
-      "Add a section after Our story",
-      "Add a section after Our team",
+    expect(gapNames()).toEqual([
+      "Add a block between Our story and Our team",
+      "Add a block between Our team and Contact",
+      "Add a block after Contact",
     ]);
     // Not on a page that has sections.
     expect(screen.queryByText("Start your page")).toBeNull();
@@ -322,9 +329,10 @@ describe("the + between sections", () => {
     boxless.add("team");
     mount(THREE);
     await act(async () => undefined);
-    expect(
-      gapButtons().map(button => button.getAttribute("aria-label"))
-    ).toEqual(["Add a section after Our story"]);
+    expect(gapNames()).toEqual([
+      "Add a block between Our story and Contact",
+      "Add a block after Contact",
+    ]);
   });
 
   it("puts the gap after every part a component placement draws", async () => {
@@ -377,10 +385,10 @@ describe("the + between sections", () => {
       gapButtons().map(button => button.closest("[data-near]") !== null);
     // At the placement's bottom, 72: the gap after it.
     fireEvent.pointerMove(root, { clientX: 500, clientY: 72 });
-    expect(near()).toEqual([false, true]);
+    expect(near()).toEqual([false, true, false]);
     // Inside it, between its parts at 60: no gap there.
     fireEvent.pointerMove(root, { clientX: 500, clientY: 60 });
-    expect(near()).toEqual([false, false]);
+    expect(near()).toEqual([false, false, false]);
   });
 
   it("measures a section drawn with display: contents by what it draws", async () => {
@@ -396,11 +404,10 @@ describe("the + between sections", () => {
     // Anything re-measures; a mutation inside the canvas does.
     team.append(document.createElement("span"));
     await act(async () => undefined);
-    expect(
-      gapButtons().map(button => button.getAttribute("aria-label"))
-    ).toEqual([
-      "Add a section after Our story",
-      "Add a section after Our team",
+    expect(gapNames()).toEqual([
+      "Add a block between Our story and Our team",
+      "Add a block between Our team and Contact",
+      "Add a block after Contact",
     ]);
   });
 
@@ -425,11 +432,10 @@ describe("the + between sections", () => {
       boxless.add("team");
       team.append(document.createElement("span"));
       await act(async () => undefined);
-      expect(
-        gapButtons().map(button => button.getAttribute("aria-label"))
-      ).toEqual([
-        "Add a section after Our story",
-        "Add a section after Our team",
+      expect(gapNames()).toEqual([
+        "Add a block between Our story and Our team",
+        "Add a block between Our team and Contact",
+        "Add a block after Contact",
       ]);
     } finally {
       Reflect.deleteProperty(Element.prototype, "checkVisibility");
@@ -460,9 +466,10 @@ describe("the + between sections", () => {
       contact?.before(part);
       await act(async () => undefined);
     }
-    expect(
-      gapButtons().map(button => button.getAttribute("aria-label"))
-    ).toEqual(["Add a section after Hero banner"]);
+    expect(gapNames()).toEqual([
+      "Add a block between Hero banner and Contact",
+      "Add a block after Contact",
+    ]);
   });
 
   it("keeps gaps apart whatever their sections' ids hold", async () => {
@@ -492,17 +499,20 @@ describe("the + between sections", () => {
     fireEvent.pointerMove(root, { clientX: 500, clientY: 24 });
     expect(
       gapButtons().map(button => button.closest("[data-near]") !== null)
-    ).toEqual([true, false, false]);
+    ).toEqual([true, false, false, false]);
   });
 
-  it("reports the section above the gap when pressed", async () => {
+  it("reports the block before the gap and the + pressed, selecting nothing", async () => {
     const onAddAfter = vi.fn();
     mount(THREE, { onAddAfter });
     await act(async () => undefined);
-    const [, second] = gapButtons();
-    if (second === undefined) throw new Error("no second gap");
+    const [, second, last] = gapButtons();
+    if (second === undefined || last === undefined) throw new Error("no gaps");
     fireEvent.click(second);
-    expect(onAddAfter).toHaveBeenCalledWith("team");
+    expect(onAddAfter).toHaveBeenLastCalledWith("team", second);
+    // After the last section: after it, at the end of the page.
+    fireEvent.click(last);
+    expect(onAddAfter).toHaveBeenLastCalledWith("contact", last);
   });
 
   it("shows only near its gap, never under the middle of a short block", async () => {
@@ -528,16 +538,19 @@ describe("the + between sections", () => {
 
       // 3px from the edge between the first two: that gap's "+" shows.
       fireEvent.pointerMove(root, { clientX: 500, clientY: 27 });
-      expect(near()).toEqual([true, false]);
+      expect(near()).toEqual([true, false, false]);
       // The middle of the second, 12px from either edge: none shows, so a
       // press there is the block's.
       fireEvent.pointerMove(root, { clientX: 500, clientY: 36 });
-      expect(near()).toEqual([false, false]);
+      expect(near()).toEqual([false, false, false]);
+      // The bottom of the last: the gap after it.
+      fireEvent.pointerMove(root, { clientX: 500, clientY: 70 });
+      expect(near()).toEqual([false, false, true]);
       // Leaving the canvas lets it go.
       fireEvent.pointerMove(root, { clientX: 500, clientY: 47 });
-      expect(near()).toEqual([false, true]);
+      expect(near()).toEqual([false, true, false]);
       fireEvent.pointerLeave(root);
-      expect(near()).toEqual([false, false]);
+      expect(near()).toEqual([false, false, false]);
     } finally {
       boxes.mockRestore();
     }
@@ -547,5 +560,116 @@ describe("the + between sections", () => {
     mount(THREE, { hidden: true, hovered: "team" });
     await act(async () => undefined);
     expect(gapButtons()).toHaveLength(0);
+  });
+});
+
+describe("the + between the selected block's children", () => {
+  /** Boxes, by id: x, y, width, height. Everything else is the page. */
+  const BOXES: Record<string, [number, number, number, number]> = {
+    hero: [0, 0, 1000, 100],
+    pricing: [0, 100, 1000, 200],
+    "box-a": [0, 120, 300, 160],
+    "box-b": [350, 120, 300, 160],
+    "box-c": [700, 120, 300, 160],
+    contact: [0, 300, 1000, 100],
+  };
+
+  /** A page of three sections, the second holding a row of three Boxes. */
+  const ROW = page([
+    section("hero", "Hero"),
+    section("pricing", "Pricing", [
+      section("box-a", "Box A"),
+      section("box-b", "Box B"),
+      section("box-c", "Box C"),
+    ]),
+    section("contact", "Contact"),
+  ]);
+
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        const id = this.getAttribute("data-nx-node");
+        const box = id === null ? undefined : BOXES[id];
+        return box === undefined
+          ? new DOMRect(0, 0, 1000, 400)
+          : new DOMRect(...box);
+      }
+    );
+  });
+
+  it("adds a gap down each line between Boxes in a row, in reading order", async () => {
+    mount(ROW, { selectedId: "pricing" });
+    await act(async () => undefined);
+    // The page's gaps, the one after its last section, and two between the
+    // Boxes, all in the order a reader meets them: so Tab meets them so too.
+    expect(gapNames()).toEqual([
+      "Add a block between Hero and Pricing",
+      "Add a block between Box A and Box B",
+      "Add a block between Box B and Box C",
+      "Add a block between Pricing and Contact",
+      "Add a block after Contact",
+    ]);
+    const between = gapButtons()[1]?.closest(".nx-page-inserters__gap");
+    if (!(between instanceof HTMLElement)) throw new Error("no gap");
+    // Down the line between the two Boxes, as tall as the row.
+    expect(between.getAttribute("data-line")).toBe("down");
+    expect(between.style.left).toBe("325px");
+    expect(between.style.top).toBe("120px");
+    expect(between.style.height).toBe("160px");
+  });
+
+  it("offers no children's gaps with nothing selected", async () => {
+    mount(ROW);
+    await act(async () => undefined);
+    expect(gapNames()).toEqual([
+      "Add a block between Hero and Pricing",
+      "Add a block between Pricing and Contact",
+      "Add a block after Contact",
+    ]);
+  });
+
+  it("shows a row's + only beside its line, inside the row", async () => {
+    mount(ROW, { selectedId: "pricing" });
+    await act(async () => undefined);
+    const root = document.querySelector(".nx-canvas");
+    if (root === null) throw new Error("no canvas");
+    const near = () =>
+      gapButtons().map(button => button.closest("[data-near]") !== null);
+    // 2px right of the line between Box A and Box B, in the row.
+    fireEvent.pointerMove(root, { clientX: 327, clientY: 200 });
+    expect(near()).toEqual([false, true, false, false, false]);
+    // On the same line, but above the row, in Hero: not that gap.
+    fireEvent.pointerMove(root, { clientX: 325, clientY: 50 });
+    expect(near()).toEqual([false, false, false, false, false]);
+  });
+
+  it("reports the Box before the gap when its + is pressed", async () => {
+    const onAddAfter = vi.fn();
+    mount(ROW, { selectedId: "pricing", onAddAfter });
+    await act(async () => undefined);
+    const button = gapButtons()[2];
+    if (button === undefined) throw new Error("no gap");
+    fireEvent.click(button);
+    expect(onAddAfter).toHaveBeenCalledWith("box-b", button);
+  });
+
+  it("runs a gap across a column of children for the column's width", async () => {
+    // The same Boxes stacked: a gap across, as wide as the two it is between.
+    BOXES["box-b"] = [0, 160, 300, 40];
+    BOXES["box-a"] = [0, 120, 300, 40];
+    BOXES["box-c"] = [0, 200, 300, 40];
+    try {
+      mount(ROW, { selectedId: "pricing" });
+      await act(async () => undefined);
+      const between = gapButtons()[1]?.closest(".nx-page-inserters__gap");
+      if (!(between instanceof HTMLElement)) throw new Error("no gap");
+      expect(between.getAttribute("data-line")).toBe("across");
+      expect(between.style.top).toBe("160px");
+      expect(between.style.width).toBe("300px");
+    } finally {
+      BOXES["box-a"] = [0, 120, 300, 160];
+      BOXES["box-b"] = [350, 120, 300, 160];
+      BOXES["box-c"] = [700, 120, 300, 160];
+    }
   });
 });
