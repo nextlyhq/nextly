@@ -17,11 +17,14 @@ import { SiteCssPrefixSetting } from "./site-css-prefix-setting";
 const sent: unknown[] = [];
 /** What the dry run answers with: the places naming the old prefix. */
 let dryRunUses = { oldPrefixUses: 0, usesComplete: true };
+/** While set, a save waits on it, as a slow request does. */
+let saveHeld: Promise<void> | null = null;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   writePluginRoute: async ({ body }: { path: string; body: unknown }) => {
     sent.push(body);
     const asked = body as { prefix: string; dryRun?: boolean };
+    if (asked.dryRun !== true && saveHeld !== null) await saveHeld;
     return asked.dryRun === true
       ? {
           message: "",
@@ -60,6 +63,7 @@ function changeButton(): HTMLButtonElement {
 beforeEach(() => {
   sent.length = 0;
   dryRunUses = { oldPrefixUses: 0, usesComplete: true };
+  saveHeld = null;
   reread.mockClear();
   refreshStyle.mockClear();
 });
@@ -157,6 +161,34 @@ describe("the CSS variable prefix setting", () => {
       { prefix: "--brand-" },
     ]);
     expect(reread).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).toContain("Saved");
+  });
+
+  it("stays saving, with the field held, while a confirmed change is on its way", async () => {
+    const user = userEvent.setup();
+    let release = (): void => undefined;
+    saveHeld = new Promise(resolve => {
+      release = resolve;
+    });
+    draw();
+    await user.clear(field());
+    await user.type(field(), "--brand-");
+    await user.click(changeButton());
+    const question = await screen.findByRole("alertdialog");
+    const confirm = screen
+      .getAllByRole("button", { name: "Change prefix" })
+      .find(button => question.contains(button));
+    if (confirm === undefined) throw new Error("no confirm button");
+    await user.click(confirm);
+
+    // The question closing must not undo the save's own state.
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByRole("status").textContent).toContain("Saving");
+    expect(field().disabled).toBe(true);
+    expect(changeButton().disabled).toBe(true);
+
+    release();
+    await waitFor(() => expect(refreshStyle).toHaveBeenCalledTimes(1));
     expect(screen.getByRole("status").textContent).toContain("Saved");
   });
 

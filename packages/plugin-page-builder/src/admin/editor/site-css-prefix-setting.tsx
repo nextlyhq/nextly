@@ -259,7 +259,14 @@ export function SiteCssPrefixSetting({
       <AlertDialog
         open={step.kind === "confirming"}
         onOpenChange={open => {
-          if (!open && step.kind === "confirming") setStep({ kind: "idle" });
+          // Only a question still being asked goes back to idle: confirming
+          // has already moved on to saving by the time the dialog closes,
+          // and that save keeps the field held until it answers.
+          if (!open) {
+            setStep(now =>
+              now.kind === "confirming" ? { kind: "idle" } : now
+            );
+          }
         }}
       >
         <AlertDialogContent>
