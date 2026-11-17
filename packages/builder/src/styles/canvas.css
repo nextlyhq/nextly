@@ -35,6 +35,10 @@
   min-width: 100%;
   min-height: 100%;
   width: max-content;
+  /* Clipped, so the chrome layer's reach past the frame is not content the
+     region scrolls to: with the page at the region's width it would be, and
+     the region would scroll by it and take focus as a scroller. */
+  overflow: clip;
 }
 
 /*

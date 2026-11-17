@@ -128,6 +128,17 @@ describe("the canvas's frame as a sheet on the editor's surface", () => {
     expect(frame).not.toMatch(/(?:^|\s)box-shadow\s*:/);
   });
 
+  it("keeps the chrome drawn past the frame from scrolling the region", () => {
+    /*
+     * The layer the editor's chrome is drawn in reaches a ring's distance
+     * past the frame. With the frame at the region's own width, that reach
+     * was content past the region's edge: the region scrolled by it and took
+     * focus as a scroller, which F6 and Tab then stopped on instead of
+     * passing into the page.
+     */
+    expect(declared(ruleFor(".nx-canvas-stage"), "overflow")).toBe("clip");
+  });
+
   it("draws that edge OUTSIDE the box the frame is fitted into", () => {
     /*
      * The box takes the frame's painted size exactly, and the chrome layer is

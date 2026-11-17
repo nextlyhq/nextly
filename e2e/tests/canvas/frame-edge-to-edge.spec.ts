@@ -94,6 +94,12 @@ for (const width of [1440, 1280]) {
         return Math.max(Math.abs(left), Math.abs(right));
       })
       .toBeLessThanOrEqual(1);
+    // Nothing past the region to scroll to: the frame fills it exactly.
+    const overflow = await region(page).evaluate(element => ({
+      across: element.scrollWidth - element.clientWidth,
+      down: element.scrollHeight - element.clientHeight,
+    }));
+    expect(overflow).toEqual({ across: 0, down: 0 });
     // No shadow around it.
     await expect(page.locator(".nx-canvas-frame")).toHaveCSS(
       "box-shadow",
