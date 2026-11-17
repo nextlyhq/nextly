@@ -27,7 +27,12 @@ import {
 import { BUILT_IN_WRITES } from "./code-hints";
 import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
 import { keywordLabel } from "./style-keyword-labels";
-import { COLUMNS_ROW, stackOf, stackTiers } from "./columns-layout";
+import {
+  COLUMNS_LAYOUTS,
+  COLUMNS_ROW,
+  stackOf,
+  stackTiers,
+} from "./columns-layout";
 import {
   advancedRowsBySection,
   HTML_SECTION,
@@ -107,13 +112,18 @@ function builderRows(
     path: [],
   });
   const stacked = stackOf(node, tiers, "base").on !== "never";
+  const layout: IndexedRow = {
+    id: "columnsLayout",
+    label: "Layout",
+    // The tiles' own words: "2 equal", "Wide left".
+    options: COLUMNS_LAYOUTS.map(each => each.label),
+    css: ["grid-template-columns"],
+    set: template !== undefined,
+  };
+  // Stack on is drawn only where the site has a tablet or mobile tier.
+  if (tiers.tablet === undefined && tiers.mobile === undefined) return [layout];
   return [
-    {
-      id: "columnsLayout",
-      label: "Layout",
-      css: ["grid-template-columns"],
-      set: template !== undefined,
-    },
+    layout,
     { id: "stackOn", label: "Stack on", css: ["flex-direction"], set: stacked },
     {
       id: "reverseStacked",

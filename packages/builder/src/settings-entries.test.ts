@@ -50,7 +50,25 @@ describe("a Columns row's Content", () => {
       label: "Layout",
       set: true,
     });
-    expect(byId.get("stackOn")).toMatchObject({ set: false });
+    expect(byId.get("columnsLayout")?.options).toContain("Wide left");
+    // A site with no tablet or mobile tier draws no Stack on.
+    expect(byId.has("stackOn")).toBe(false);
+  });
+
+  it("indexes Stack on where the site has a tier to stack at", () => {
+    const document = pageWith({
+      type: "core/columns",
+      props: { as: "div" },
+      slots: { children: [] },
+    });
+    const inspection = inspectSelection(document, "a")!;
+    const entries = contentEntries(inspection, findNode(document.nodes, "a"), {
+      viewport: [{ id: "md", label: "Tablet", maxWidth: 1024 }],
+      container: [],
+    } as never);
+    expect(entries.find(entry => entry.id === "stackOn")).toMatchObject({
+      set: false,
+    });
   });
 });
 
