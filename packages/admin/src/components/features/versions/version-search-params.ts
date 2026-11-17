@@ -9,6 +9,8 @@
  * @module components/features/versions/version-search-params
  */
 
+import { isComparisonBaselineName } from "nextly/comparison-baseline-name";
+
 import {
   defaultPair,
   pairEndingAt,
@@ -35,18 +37,6 @@ export const PREVIOUS_VERSION = "previous";
 export type ComparisonFrom = number | ServerBaseline;
 
 /**
- * The shape of a baseline's name: kebab-case, starting with a letter. The
- * server registers no name of any other shape, so nothing outside it can name
- * one. WHICH names exist is the server's to say: a well-formed name goes to
- * it, and one it does not know is refused there with the names it does.
- */
-const BASELINE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-
-function isServerBaseline(value: string): boolean {
-  return BASELINE_NAME.test(value);
-}
-
-/**
  * Whether a comparison's start is a baseline only the server resolves, which
  * it can pair with a version of its own choosing when the address names none.
  *
@@ -67,7 +57,10 @@ export function readFromParam(
 ): ComparisonFrom | undefined {
   const raw = Array.isArray(value) ? value[0] : value;
   if (raw === PREVIOUS_VERSION) return PREVIOUS_VERSION;
-  if (raw !== undefined && isServerBaseline(raw)) return raw;
+  // Read by the server's own grammar for a baseline's name, so a name the
+  // registry could hold goes to it. WHICH names exist is the server's to say:
+  // one it does not know is refused there with the names it does.
+  if (raw !== undefined && isComparisonBaselineName(raw)) return raw;
   return readVersionParam(raw);
 }
 

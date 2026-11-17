@@ -23,6 +23,7 @@
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 
+import { isComparisonBaselineName } from "./comparison-baseline-name";
 import {
   recordsServedContent,
   type RecordedVersionStatus,
@@ -122,8 +123,6 @@ export interface ComparisonBaseline {
   ): string | Promise<string>;
 }
 
-const BASELINE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-
 const registry = new Map<string, ComparisonBaseline>();
 
 /**
@@ -136,7 +135,8 @@ const registry = new Map<string, ComparisonBaseline>();
  * @experimental
  */
 export function registerComparisonBaseline(baseline: ComparisonBaseline): void {
-  if (!BASELINE_NAME.test(baseline.name)) {
+  // The one grammar a baseline's name has, which the admin reads names by.
+  if (!isComparisonBaselineName(baseline.name)) {
     throw NextlyError.invalidInput({
       message: `Comparison baseline name "${baseline.name}" must be kebab-case, such as "since-approved".`,
       logContext: { name: baseline.name },
