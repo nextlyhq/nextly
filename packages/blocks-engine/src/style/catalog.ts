@@ -13,6 +13,17 @@
  * Adding a property here is backwards-compatible; removing one, or changing an
  * existing one's meaning or value shape, is a document-format migration.
  */
+import {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_EFFECT_EXPANSIONS,
+  APPEAR_EFFECT_PROPERTY,
+  APPEAR_EFFECTS,
+  APPEAR_MAX_MILLISECONDS,
+  APPEAR_START_EXPANSIONS,
+  APPEAR_START_PROPERTY,
+  APPEAR_STARTS,
+} from "./appear";
 import type {
   ColorLeaf,
   CssValueLeaf,
@@ -34,17 +45,6 @@ import {
   DISCLOSURE_POSITION_PROPERTY,
   DISCLOSURE_POSITIONS,
 } from "./disclosure";
-import {
-  APPEAR_DELAY_PROPERTY,
-  APPEAR_DURATION_PROPERTY,
-  APPEAR_EFFECT_EXPANSIONS,
-  APPEAR_EFFECT_PROPERTY,
-  APPEAR_EFFECTS,
-  APPEAR_MAX_MILLISECONDS,
-  APPEAR_START_EXPANSIONS,
-  APPEAR_START_PROPERTY,
-  APPEAR_STARTS,
-} from "./appear";
 import { OVERLAY_COLOR, OVERLAY_STRENGTH } from "./overlay";
 
 // --- Leaf constructors ------------------------------------------------------
