@@ -28,6 +28,7 @@ import {
 import {
   useBlockClipboardVerbs,
   type BlockClipboardVerbs,
+  type ClipboardWrite,
 } from "./block-clipboard-verbs";
 import { useEditorState } from "./editor-state";
 import { BUILDER_CHROME_CLASS } from "./shell-state";
@@ -437,8 +438,8 @@ describe("which clipboard events are the blocks'", () => {
     const button = document.createElement("button");
     chrome().append(button);
     const verbs: BlockClipboardVerbs = {
-      copy: vi.fn((write?: (text: string) => boolean) => {
-        write?.("copied");
+      copy: vi.fn((write?: ClipboardWrite) => {
+        void write?.("copied");
         return true;
       }),
       cut: vi.fn(() => true),
