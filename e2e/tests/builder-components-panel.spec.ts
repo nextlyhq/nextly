@@ -532,13 +532,20 @@ test.describe("the Components panel", () => {
       page,
     }) => {
       // No pointer moves before a tap, so the + is shown and pressable from
-      // the start where the screen's pointer is coarse.
+      // the start where the screen's pointer is coarse, between blocks at
+      // least as deep as it: at full size here, so the heading is.
       const id = await createPage(page.request);
       await openBuilder(page, id);
       expect(
         await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches),
         "the browser reports a coarse pointer"
       ).toBe(true);
+      const zoom = page.getByRole("button", { name: /^Canvas zoom:/ });
+      await zoom.click();
+      await page
+        .getByRole("menuitemradio", { name: "100%", exact: true })
+        .click();
+      await expect(zoom).toHaveAttribute("aria-label", "Canvas zoom: 100%");
       const add = page.getByRole("button", {
         name: "Add a block between Heading and Section",
       });
