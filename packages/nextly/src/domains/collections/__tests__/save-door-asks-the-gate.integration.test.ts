@@ -31,6 +31,8 @@ describeEachDialect(
     // The services a plugin is handed, for the doors only a plugin reaches: an update of several
     // entries in one batch, and a save on a transaction the plugin opened.
     let services: PluginContext["services"] | undefined;
+    // How many times the "hooked" collection's hooks ran.
+    const hookCalls = { count: 0 };
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -66,6 +68,24 @@ describeEachDialect(
             slug: "notes",
             status: true,
             fields: [text({ name: "title" })],
+          }),
+          // Its hooks count each call, so a create the gate holds back can be seen to run none.
+          defineCollection({
+            slug: "hooked",
+            status: true,
+            fields: [text({ name: "title" })],
+            hooks: {
+              beforeOperation: [
+                () => {
+                  hookCalls.count += 1;
+                },
+              ],
+              beforeChange: [
+                () => {
+                  hookCalls.count += 1;
+                },
+              ],
+            },
           }),
           // A field of the author's own that happens to be called what the gate's option once was.
           defineCollection({
@@ -391,6 +411,28 @@ describeEachDialect(
       expect(seen.judged).toHaveLength(1);
       expect(poolReadsInside).toEqual([]);
       vi.restoreAllMocks();
+    });
+
+    // The gate's early answer to a create that publishes comes before any of its hooks: a create the
+    // gate holds back runs no hook (and so no side effect a hook makes) and writes nothing.
+    it("asks the gate before a publishing create runs any hook", async () => {
+      await boot();
+      hookCalls.count = 0;
+      heldUnlessWithoutReview();
+
+      const refusal = await refusalOf(
+        t!.nextly.create({
+          collection: "hooked",
+          data: { title: "Straight out", status: "published" },
+        } as never)
+      );
+      const rows = await t!.adapter.executeQuery<{ id: string }>(
+        `SELECT ${q("id")} AS id FROM ${q("dc_hooked")}`
+      );
+
+      expect(refusal).toMatch(/NOT_APPROVED/);
+      expect(hookCalls.count).toBe(0);
+      expect(rows).toHaveLength(0);
     });
 
     // Unpublishing is never gated: a save that takes an entry down is not held back.

@@ -8687,6 +8687,31 @@ export class CollectionMutationService extends BaseService {
       const { fields, storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
 
+      // A create that names "published" is a publish, so the publish gate's early answer is asked
+      // here, before any hook runs: a create the gate holds back runs no hook, and so no side effect
+      // a hook makes, and writes nothing. Nothing of the entry is live, and it has no id until its
+      // insert, so the gate is told none. Its verdict under the lock follows the insert, below,
+      // judged on the status the hooks left.
+      const earlyCreate =
+        body.status === "published"
+          ? this.statusSaveOf(
+              { ...params, entryId: "" },
+              {
+                status: body.status,
+                locale: params.locale,
+                everyLanguage: false,
+                withoutReview,
+              },
+              collection
+            )
+          : null;
+      if (earlyCreate) {
+        await refuseStatusSaveEarly(earlyCreate, {
+          languages: [],
+          shared: false,
+        });
+      }
+
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
       // Declared defaults are seeded before the first hook phase, so every hook
