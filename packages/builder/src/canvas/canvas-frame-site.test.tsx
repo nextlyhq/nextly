@@ -20,6 +20,7 @@ import {
   CanvasFrame,
   isPageAt,
   type CanvasFrameFallback,
+  type SiteChromeDrawn,
   type SiteFrameSource,
 } from "./canvas-frame";
 import { Canvas } from "./canvas";
@@ -227,6 +228,89 @@ describe("the canvas frame on a page the site serves", () => {
       await Promise.resolve();
     });
     expect(cues()).toHaveLength(5);
+  });
+
+  describe("what it reports of the site's layout around the page", () => {
+    /** Give the frame's element `id` a drawn box, as a browser lays it out. */
+    function drawnBox(frame: HTMLIFrameElement, id: string, y: number): void {
+      const element = frameDocument(frame).getElementById(id);
+      if (element === null) throw new Error(`no #${id} in the site's page`);
+      element.getBoundingClientRect = () => new DOMRect(0, y, 1280, 60);
+    }
+
+    function framed(onSiteChrome: (drawn: SiteChromeDrawn) => void) {
+      return render(
+        <CanvasFrame
+          width={1280}
+          title="Home"
+          source={siteSource()}
+          onSiteChrome={onSiteChrome}
+        >
+          <Page />
+        </CanvasFrame>
+      );
+    }
+
+    it("says the layout draws before and after the page, as a header and a footer do", async () => {
+      const onSiteChrome = vi.fn<(drawn: SiteChromeDrawn) => void>();
+      const { container } = framed(onSiteChrome);
+      const frame = frameIn(container);
+      arrive(frame, SITE_PAGE);
+      drawnBox(frame, "site-header", 0);
+      drawnBox(frame, "site-footer", 900);
+      await hydrate(frame);
+      expect(onSiteChrome).toHaveBeenLastCalledWith({
+        before: true,
+        after: true,
+      });
+    });
+
+    it("counts only what draws a box: a script or an empty part is no header", async () => {
+      const onSiteChrome = vi.fn<(drawn: SiteChromeDrawn) => void>();
+      const { container } = framed(onSiteChrome);
+      const frame = frameIn(container);
+      // jsdom lays nothing out, so every part here draws no box.
+      arrive(frame, SITE_PAGE);
+      await hydrate(frame);
+      expect(onSiteChrome).not.toHaveBeenCalled();
+    });
+
+    it("tells apart a layout that draws only above the page", async () => {
+      const onSiteChrome = vi.fn<(drawn: SiteChromeDrawn) => void>();
+      const { container } = framed(onSiteChrome);
+      const frame = frameIn(container);
+      arrive(frame, SITE_PAGE);
+      drawnBox(frame, "site-header", 0);
+      await hydrate(frame);
+      expect(onSiteChrome).toHaveBeenLastCalledWith({
+        before: true,
+        after: false,
+      });
+    });
+
+    it("reports a part the layout draws later, and nothing once the page is gone", async () => {
+      const onSiteChrome = vi.fn<(drawn: SiteChromeDrawn) => void>();
+      const { container, unmount } = framed(onSiteChrome);
+      const frame = frameIn(container);
+      arrive(frame, SITE_PAGE);
+      await hydrate(frame);
+      await act(async () => {
+        const doc = frameDocument(frame);
+        const footer = doc.createElement("footer");
+        footer.getBoundingClientRect = () => new DOMRect(0, 900, 1280, 60);
+        doc.body.append(footer);
+        await Promise.resolve();
+      });
+      expect(onSiteChrome).toHaveBeenLastCalledWith({
+        before: false,
+        after: true,
+      });
+      unmount();
+      expect(onSiteChrome).toHaveBeenLastCalledWith({
+        before: false,
+        after: false,
+      });
+    });
   });
 
   it("moves a cue when the part it covers moves without resizing", async () => {
