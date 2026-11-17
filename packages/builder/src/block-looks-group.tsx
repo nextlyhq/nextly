@@ -79,8 +79,14 @@ export interface BlockLooksGroupProps {
   readonly chip: (reach: SharedStyleReach) => React.ReactNode;
 }
 
-/** A block type's group in the author's folds. */
-function blockStyleFoldId(blockType: string): string {
+/**
+ * A block type's group in the author's folds, and the name a reveal finds it
+ * by (`data-group`), so a host sending the author to one type's styles opens
+ * the group this section draws.
+ *
+ * @experimental Settles with the Design panel's Block styles.
+ */
+export function blockStyleFoldId(blockType: string): string {
   return `block-styles:${blockType}`;
 }
 

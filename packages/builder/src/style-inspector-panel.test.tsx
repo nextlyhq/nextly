@@ -775,7 +775,7 @@ describe("the shared style target", () => {
     expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
-  describe("the Look row", () => {
+  describe("the Block style tiles", () => {
     const outline = {
       id: "look:acme/box:outline",
       slug: "box-outline",
@@ -784,7 +784,7 @@ describe("the shared style target", () => {
       blockType: "acme/box",
       styles: { base: { [BASE_BREAKPOINT]: { opacity: 0.5 } } } as NodeStyles,
     };
-    const looks = () => screen.getByRole("radiogroup", { name: "Look" });
+    const looks = () => screen.getByRole("radiogroup", { name: "Block style" });
 
     it("offers the block's own look and its type's looks, its own chosen", () => {
       mountTarget({ library: [card, outline] });
@@ -954,7 +954,9 @@ describe("the shared style target", () => {
 
     it("draws no row for a type with no looks", () => {
       mountTarget({ library: [card] });
-      expect(screen.queryByRole("radiogroup", { name: "Look" })).toBeNull();
+      expect(
+        screen.queryByRole("radiogroup", { name: "Block style" })
+      ).toBeNull();
     });
   });
 
@@ -2071,7 +2073,7 @@ describe("the site's host-fetch policy", () => {
 
   it("refuses a URL naming a host the site does not load from", () => {
     const editor = mount({ background: { image: true } }, undefined, REFUSE);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2092,7 +2094,7 @@ describe("the site's host-fetch policy", () => {
     // from "the panel refuses every URL". Both halves produce a refused write
     // in the test above; only this one distinguishes them.
     const editor = mount({ background: { image: true } }, undefined, ALLOW);
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2106,7 +2108,7 @@ describe("the site's host-fetch policy", () => {
     // scheme allowlist is the only limit. Passing an empty policy here rather
     // than a refusing one is what makes that distinct from a lockdown.
     const editor = mount({ background: { image: true } });
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
@@ -2123,13 +2125,50 @@ describe("the site's host-fetch policy", () => {
     render(<InspectorPanel editor={editor} policy={REFUSE} />);
 
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const field = fieldsOf("background").getByLabelText("Url");
+    const field = fieldsOf("background").getByLabelText("Image link");
 
     fireEvent.change(field, { target: { value: REMOTE } });
     fireEvent.blur(field);
 
     expect(editor.applyAll).not.toHaveBeenCalled();
     expect(field.getAttribute("aria-invalid")).toBe("true");
+  });
+});
+
+describe("the background image and gradient, which both write background-image", () => {
+  it("draws the image picker for the image only, and the gradient as its own field", () => {
+    // Both rows set `background-image`; only the image is a file to choose.
+    mount({ background: { image: true, gradient: true } });
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
+    const gradient = fieldsOf("backgroundGradient");
+    expect(gradient.queryByRole("textbox", { name: "Image link" })).toBeNull();
+    expect(gradient.queryByRole("button", { name: /Choose/ })).toBeNull();
+    // The gradient keeps the CSS value field it had.
+    expect(gradient.getAllByRole("textbox")).toHaveLength(1);
+  });
+});
+
+describe("the background image in the Inspector's Style tab", () => {
+  it("reaches the host's media library, as the Content tab's controls do", () => {
+    // Without the host's services the Style tab offers only a link, so a
+    // Choose button here is the services reaching the tab.
+    register({ background: { image: true } });
+    const editor = editorFor(documentOf());
+    const MediaPicker = () => null;
+    render(
+      <InspectorPanel
+        editor={editor}
+        contentServices={{ MediaPicker } as never}
+      />
+    );
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    expect(
+      fieldsOf("background").getByRole("button", {
+        name: "Choose Background image",
+      })
+    ).toBeTruthy();
   });
 });
 
@@ -4242,7 +4281,9 @@ describe("where a control's value came from", () => {
      * value, so the absent dot is the ambiguity being respected rather than the
      * panel having failed to render the field at all.
      */
-    expect(fieldsOf("background").getByLabelText("Url")).toBeTruthy();
+    expect(
+      fieldsOf("background").getByRole("group", { name: "Image" })
+    ).toBeTruthy();
     expect(dotIn("background")).toBeNull();
   });
 

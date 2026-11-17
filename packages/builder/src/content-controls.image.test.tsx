@@ -7,9 +7,10 @@
  * - Source: "Library | URL", one field shown at a time; switching sides
  *   writes nothing; a typed address replaces a stored file in one edit; a
  *   file and an address stored together show as they are.
- * - Alt text: "From library | Custom | Decorative", read as the block reads
- *   the props; each choice is one edit; decorative alt text kept and an
- *   empty alt are shown as they are and not rewritten.
+ * - Alt text: one field showing the words in use, the library's marked
+ *   "From the media library" until the author types their own, and
+ *   "Decorative, no alt text"; each change is one edit; decorative alt text
+ *   kept and an empty alt are shown as they are and not rewritten.
  * - Both are named for a screen reader and held by a lock.
  */
 import {
@@ -74,7 +75,7 @@ function register(): void {
           },
           src: { label: "Image address", role: "content", type: "url" },
           alt: { label: "Alt text", role: "content", type: "text" },
-          decorative: { label: "Decorative (no alt text)", type: "checkbox" },
+          decorative: { label: "Decorative, no alt text", type: "checkbox" },
         },
         render: () => null,
       },
@@ -257,52 +258,70 @@ describe("where an image's picture comes from", () => {
 });
 
 describe("what a screen reader is given for an image", () => {
-  const menu = () => screen.getByRole("combobox", { name: "Alt text" });
+  const field = () =>
+    screen.getByRole("textbox", { name: "Alt text" }) as HTMLTextAreaElement;
+  const decorative = () =>
+    screen.getByRole("checkbox", { name: "Decorative, no alt text" });
 
-  it("reads From library, with the library's words, where the page stores none", async () => {
-    mount({ mediaId: "m-1" });
-    expect(menu().textContent).toBe("From library");
-    expect(await screen.findByText("The team at launch")).toBeDefined();
+  it("shows the library's words in the field as the value in use, said as the library's", async () => {
+    const editor = mount({ mediaId: "m-1" });
+    await waitFor(() => expect(field().value).toBe("The team at launch"));
+    const source = screen.getByText("From the media library");
+    expect(field().getAttribute("aria-describedby")).toContain(source.id);
     // Said once, in the alt row, not again under the file's name.
     expect(screen.queryByText(/Library alt text:/)).toBeNull();
+    expect(editor.apply).not.toHaveBeenCalled();
   });
 
-  it("reads Custom, in a field of its own, where the page stores alt text", () => {
-    mount({ mediaId: "m-1", alt: "Written for this page" });
-    expect(menu().textContent).toBe("Custom");
-    expect(
-      (
-        screen.getByRole("textbox", {
-          name: "Custom alt text",
-        }) as HTMLTextAreaElement
-      ).value
-    ).toBe("Written for this page");
+  it("stores what the author types over the library's words, in one edit", async () => {
+    const editor = mount({ mediaId: "m-1" });
+    await waitFor(() => expect(field().value).toBe("The team at launch"));
+    fireEvent.change(field(), { target: { value: "Our launch team" } });
+    fireEvent.blur(field());
+    expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Our launch team" });
   });
 
-  it("shows an empty stored alt as an empty Custom, said, and writes nothing", async () => {
+  it("stores nothing for the library's words left as they are", async () => {
+    const editor = mount({ mediaId: "m-1" });
+    await waitFor(() => expect(field().value).toBe("The team at launch"));
+    fireEvent.focus(field());
+    fireEvent.keyDown(field(), { key: "Enter" });
+    fireEvent.blur(field());
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("shows the page's own words, with a way back to the library's", async () => {
+    const editor = mount({ mediaId: "m-1", alt: "Written for this page" });
+    expect(field().value).toBe("Written for this page");
+    expect(screen.queryByText("From the media library")).toBeNull();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Use the media library's alt text",
+      })
+    );
+    expect(written(editor)).toEqual({ mediaId: "m-1" });
+  });
+
+  it("goes back to the library's words when the field is emptied", () => {
+    const editor = mount({ mediaId: "m-1", alt: "Old" });
+    fireEvent.change(field(), { target: { value: "  " } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(written(editor)).toEqual({ mediaId: "m-1" });
+  });
+
+  it("shows an empty stored alt as empty, said, and writes nothing", async () => {
     const editor = mount({ mediaId: "m-1", alt: "" });
-    expect(menu().textContent).toBe("Custom");
+    expect(field().value).toBe("");
     expect(
-      await screen.findByText(
-        /Empty: screen readers skip this image\. The library has alt text/
-      )
+      await screen.findByText(/Empty: screen readers skip this image\./)
     ).toBeDefined();
     expect(editor.apply).not.toHaveBeenCalled();
   });
 
-  it("shows decorative alt text kept as it is, and writes nothing", () => {
-    const editor = mount({ mediaId: "m-1", decorative: true, alt: "Kept" });
-    expect(menu().textContent).toBe("Decorative");
-    expect(
-      screen.getByText(/Screen readers skip this image\..*Kept/)
-    ).toBeDefined();
-    expect(editor.apply).not.toHaveBeenCalled();
-  });
-
-  it("writes Decorative as the mark, keeping the alt, in one edit", () => {
+  it("marks the image decorative, keeping its alt, in one edit", () => {
     const editor = mount({ mediaId: "m-1", alt: "Kept" });
-    fireEvent.click(menu());
-    fireEvent.click(screen.getByRole("option", { name: "Decorative" }));
+    expect(decorative().getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(decorative());
     expect(written(editor)).toEqual({
       mediaId: "m-1",
       alt: "Kept",
@@ -310,27 +329,36 @@ describe("what a screen reader is given for an image", () => {
     });
   });
 
-  it("writes From library by removing the page's alt and the mark, in one edit", () => {
-    const editor = mount({ mediaId: "m-1", alt: "Kept", decorative: true });
-    fireEvent.click(menu());
-    fireEvent.click(screen.getByRole("option", { name: "From library" }));
-    expect(written(editor)).toEqual({ mediaId: "m-1" });
+  it("shows a decorative image's kept alt held, and unmarks it in one edit", () => {
+    const editor = mount({ mediaId: "m-1", decorative: true, alt: "Kept" });
+    expect(decorative().getAttribute("aria-checked")).toBe("true");
+    expect(field().value).toBe("Kept");
+    expect(field().hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/Screen readers skip this image\./)).toBeDefined();
+    fireEvent.click(decorative());
+    expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Kept" });
   });
 
-  it("writes Custom from the library's words", async () => {
-    const editor = mount({ mediaId: "m-1" });
-    await screen.findByText("The team at launch");
-    fireEvent.click(menu());
-    fireEvent.click(screen.getByRole("option", { name: "Custom" }));
-    expect(written(editor)).toEqual({
-      mediaId: "m-1",
-      alt: "The team at launch",
-    });
+  it("says nothing comes from the library for an image with no library file", () => {
+    mount({ src: "https://example.test/a.png" });
+    expect(field().value).toBe("");
+    expect(screen.queryByText("From the media library")).toBeNull();
   });
 
-  it("waits for the library's words before offering Custom, then starts from them", async () => {
-    // Chosen before the words arrive, Custom would store an empty alt and
-    // silence the description the image was being read with.
+  it("says so where the library has no alt text for the file", async () => {
+    mount(
+      { mediaId: "m-1" },
+      { services: { ...SERVICES, readMedia: async () => ({ name: "a.jpg" }) } }
+    );
+    expect(
+      await screen.findByText(
+        "The media library has no alt text for this picture."
+      )
+    ).toBeDefined();
+    expect(field().value).toBe("");
+  });
+
+  it("keeps words typed before the library's arrive", async () => {
     let settle: (summary: { alt: string }) => void = () => undefined;
     const editor = mount(
       { mediaId: "m-1" },
@@ -344,47 +372,62 @@ describe("what a screen reader is given for an image", () => {
         },
       }
     );
-    fireEvent.click(menu());
-    expect(
-      screen
-        .getByRole("option", { name: "Custom" })
-        .getAttribute("aria-disabled")
-    ).toBe("true");
-    // Not a lock: the other choices stay open meanwhile.
-    expect(
-      screen
-        .getByRole("option", { name: "Decorative" })
-        .getAttribute("aria-disabled")
-    ).not.toBe("true");
-    fireEvent.keyDown(document.activeElement ?? document.body, {
-      key: "Escape",
-    });
+    fireEvent.change(field(), { target: { value: "Typed first" } });
+    fireEvent.blur(field());
     await act(async () => {
       settle({ alt: "The team at launch" });
     });
-    fireEvent.click(menu());
-    fireEvent.click(screen.getByRole("option", { name: "Custom" }));
-    expect(written(editor)).toEqual({
-      mediaId: "m-1",
-      alt: "The team at launch",
-    });
+    expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Typed first" });
   });
 
-  it("commits the custom words on Enter, and keeps an emptied field empty", () => {
-    const editor = mount({ mediaId: "m-1", alt: "Old" });
-    const field = screen.getByRole("textbox", { name: "Custom alt text" });
-    fireEvent.change(field, { target: { value: "" } });
-    fireEvent.keyDown(field, { key: "Enter" });
-    expect(written(editor)).toEqual({ mediaId: "m-1", alt: "" });
+  it("keeps words being typed when the library's arrive", async () => {
+    let settle: (summary: { alt: string }) => void = () => undefined;
+    const editor = mount(
+      { mediaId: "m-1" },
+      {
+        services: {
+          ...SERVICES,
+          readMedia: () =>
+            new Promise(resolve => {
+              settle = resolve;
+            }),
+        },
+      }
+    );
+    fireEvent.focus(field());
+    fireEvent.change(field(), { target: { value: "Still typing" } });
+    await act(async () => {
+      settle({ alt: "The team at launch" });
+    });
+    expect(field().value).toBe("Still typing");
+    fireEvent.blur(field());
+    expect(written(editor)).toEqual({ mediaId: "m-1", alt: "Still typing" });
+  });
+
+  it("shows the library's words again when the field is emptied with none of the page's own", async () => {
+    // Nothing to remove, so nothing is written, and the library's words are
+    // still the ones in use: the field says so rather than staying blank.
+    const editor = mount({ mediaId: "m-1" });
+    await waitFor(() => expect(field().value).toBe("The team at launch"));
+    fireEvent.change(field(), { target: { value: "" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(field().value).toBe("The team at launch");
+    fireEvent.change(field(), { target: { value: "  " } });
+    fireEvent.blur(field());
+    expect(field().value).toBe("The team at launch");
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("gives way to the document while words are being typed, as an undo", () => {
+    const editor = mount({ mediaId: "m-1", alt: "Before" });
+    fireEvent.change(field(), { target: { value: "Half typed" } });
+    editor.storeNow({ mediaId: "m-1", alt: "Undone to this" });
+    expect(field().value).toBe("Undone to this");
   });
 
   it("is held by a lock", () => {
     mount({ mediaId: "m-1", alt: "Words" }, { locked: true });
-    expect(menu().hasAttribute("disabled")).toBe(true);
-    expect(
-      screen
-        .getByRole("textbox", { name: "Custom alt text" })
-        .hasAttribute("disabled")
-    ).toBe(true);
+    expect(field().hasAttribute("disabled")).toBe(true);
+    expect(decorative().hasAttribute("disabled")).toBe(true);
   });
 });

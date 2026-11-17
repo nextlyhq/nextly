@@ -498,7 +498,7 @@ function contextOf(
   >
 ): LegacyBookkeepingContext {
   return {
-    adapter: args.adapter as unknown as UpgradeAdapter,
+    adapter: args.adapter,
     db: args.adapter.getDrizzle(),
     dialect: args.dialect,
     bounds: args.bounds,
@@ -595,7 +595,7 @@ export async function previewLegacyConsolidation(args: {
   let tables: LegacyTablePlan[] | undefined;
   try {
     tables = await planWhileLegacyStands({
-      adapter: args.adapter as unknown as UpgradeAdapter,
+      adapter: args.adapter,
       db: args.adapter.getDrizzle(),
       dialect: args.dialect,
     });

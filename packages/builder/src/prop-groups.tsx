@@ -30,6 +30,7 @@ import type { EditableProp } from "./inspector";
 import { LinkGroupField } from "./link-control";
 import { linkGroupOf } from "./link-group";
 import { LIST_QUERY_PROPS, ListQueryField } from "./list-query-controls";
+import { WhenClickedField, whenClickedGroupOf } from "./when-clicked-control";
 
 /** What a group may say about one prop's binding beyond its name. */
 export interface BindableOptions {
@@ -139,6 +140,25 @@ const linkGroups: PropGroupFinder = props => {
   ];
 };
 
+/**
+ * What a click on a picture does, and the link Link follows: see
+ * `when-clicked-control`. Asked before the link alone, so the link it holds
+ * is drawn under the choice, and only while Link is chosen.
+ */
+const whenClickedGroups: PropGroupFinder = props => {
+  const group = whenClickedGroupOf(props, linkGroupOf(props));
+  if (group === undefined) return [];
+  return [
+    {
+      lead: group.choice,
+      drawn: group.drawn,
+      // Where the link goes, as the link's own group offers it.
+      bindable: new Set([group.link.link]),
+      render: context => <WhenClickedField group={group} {...context} />,
+    },
+  ];
+};
+
 /** An image's source, and its alt text: see `image-group`. */
 const imageGroups: PropGroupFinder = props => {
   const group = imageGroupOf(props);
@@ -208,6 +228,7 @@ const listQueryGroups: PropGroupFinder = props => {
 
 /** Every finder, in the order its groups claim props. */
 const FINDERS: readonly PropGroupFinder[] = [
+  whenClickedGroups,
   linkGroups,
   imageGroups,
   listQueryGroups,

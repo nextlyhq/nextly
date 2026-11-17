@@ -119,9 +119,12 @@ function mount(
 
 /** Open a section of the panel by its heading. */
 function open(section: string): void {
-  const heading = screen.getByRole("button", {
-    name: new RegExp(`^${section}`),
-  });
+  // The section's heading is the button that folds: a control inside it may
+  // be named after the section too ("Background position: Top left").
+  const heading = screen
+    .getAllByRole("button", { name: new RegExp(`^${section}`) })
+    .find(button => button.hasAttribute("aria-expanded"));
+  if (heading === undefined) throw new Error(`No ${section} section heading`);
   if (heading.getAttribute("aria-expanded") !== "true")
     fireEvent.click(heading);
 }
