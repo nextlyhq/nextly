@@ -1,7 +1,7 @@
 /**
  * The style state the inspector edits, which is `base` unless a setter came
- * with it; the tab a mount opens on for it; and the change of tab that returns
- * the canvas to `base` when the author leaves the Style tab.
+ * with it; the tab a mount opens on for it; and the tab the panel shows for
+ * the selected block.
  *
  * @module inspector-style-state
  */
@@ -10,22 +10,6 @@ import type { StyleState } from "@nextlyhq/blocks-engine";
 
 import type { StyleStateBinding } from "./inspector-panel-types";
 
-/**
- * The Style tab's own handler for a change of tab.
- *
- * Drops the forced interaction state when the author leaves the Style tab.
- *
- * The one real cost of placing the state control inside the Style tab is that
- * it goes off screen with the tab, so a state left switched on becomes a canvas
- * disagreeing with everything visible — the author edits the text of a button
- * drawn mid-press, with no control on screen saying why. Dropping it here
- * removes that state rather than documenting it.
- *
- * On the CHANGE rather than in an effect keyed on the tab: an effect would also
- * fire on mount and on any re-render that reasserted the same tab, which would
- * fight a host restoring a state deliberately. This runs exactly when a person
- * leaves the tab.
- */
 /**
  * The state the panel actually edits, which is `base` unless a setter came with
  * it.
@@ -60,12 +44,19 @@ export function openingTabFor(binding: StyleStateBinding | undefined): string {
   return editedStyleState(binding) === "base" ? "content" : "style";
 }
 
-export function tabChangeHandler(
-  setTab: (next: string) => void,
-  onStyleStateChange: ((state: StyleState) => void) | undefined
-): (next: string) => void {
-  return next => {
-    setTab(next);
-    if (next !== "style") onStyleStateChange?.("base");
-  };
+/**
+ * The tab the panel shows: the one the author chose, where the selected
+ * block has it, and the block's first tab otherwise.
+ *
+ * The author's choice is kept apart from what is shown, so a block without
+ * their tab (a Spacer has no Content) shows its first and the next block
+ * that has it shows theirs again: an author styling one block after another
+ * stays on Style however many blocks without Content they pass through.
+ *
+ * @param chosen - the tab the author last chose, or the one a mount opened on
+ * @param available - the selected block's tabs, in order
+ */
+export function shownTab(chosen: string, available: readonly string[]): string {
+  if (available.includes(chosen)) return chosen;
+  return available[0] ?? "content";
 }

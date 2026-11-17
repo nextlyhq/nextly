@@ -69,7 +69,11 @@ import {
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
 import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
-import { TOOLBAR_GAP_PX, toolbarPlacement } from "./toolbar-actions";
+import {
+  TOOLBAR_GAP_PX,
+  toolbarPlacement,
+  type ToolbarPlacement,
+} from "./toolbar-actions";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
 
 /**
@@ -572,10 +576,10 @@ function placementTag(
 /**
  * Whether the block toolbar takes the place above a block: above it, or
  * pinned over its top at the top of the screen, where a tag above would
- * collide with it either way.
+ * collide with it either way. A bar drawn inside the block leaves it free.
  */
-function takesTheTop(side: "above" | "below" | "pinned"): boolean {
-  return side !== "below";
+function takesTheTop(side: ToolbarPlacement["side"]): boolean {
+  return side !== "inside";
 }
 
 /** What a conditioned block's badge says about who sees it. */

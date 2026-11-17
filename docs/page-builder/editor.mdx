@@ -1,6 +1,6 @@
 ---
 title: Using the editor
-description: The editor's rail and panels, the Design panel's tabs, editing a template, Help, and the keyboard shortcuts.
+description: The editor's rail and panels, the inspector's tabs, the Design panel's tabs, editing a template, Help, and the keyboard shortcuts.
 ---
 
 The editor opens with the page on the canvas, the inspector on the right for the
@@ -130,6 +130,22 @@ returns you to the entry with that row's **Open Page Builder** focused.
   against Layers locks or variant locks, and a content-only slot is compared with its
   starting blocks alone. The server log notes each save whose Layers locks it couldn't
   check. Layers locks inside a group aren't checked on save either.
+
+## The inspector
+
+The inspector edits the selected block in up to three tabs, in this order:
+
+| Tab      | What it holds                                                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                |
+| Style    | How the block looks.                                                                                                                                   |
+| Advanced | Where and when it shows (**Visible on**, **Show when**, and **Never quote this** on a Section or a Box), then its HTML: its **CSS id** and attributes. |
+
+A tab with nothing in it for the selected block isn't shown: a Spacer, which says
+nothing, has only Style and Advanced. The tab you choose stays chosen as you select
+other blocks. A block without it opens on its first tab, and the next block that has it
+opens on yours again. If the editor opens with a state such as Hover already chosen, it
+opens on Style.
 
 ## Search
 
@@ -437,7 +453,7 @@ up**, **Move down**, **Move in** or **Move out**.
   on the device you are editing, on the canvas and on the published page. Every other
   device keeps showing it. A hidden row is dimmed and says **Hidden**. Select a hidden
   block in Layers and the canvas shows it while it is selected, tagged "Hidden on" the
-  device. **Visible on**, in the Content tab, shows each device and hides or shows the
+  device. **Visible on**, in the Advanced tab, shows each device and hides or shows the
   block on any one of them.
 - **Lock a block** with the padlock on its row. A locked block can't be moved, changed or
   deleted, nor can anything inside it, until it is unlocked.

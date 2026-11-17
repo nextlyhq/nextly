@@ -34,21 +34,22 @@ export function keptWhileHidden<P extends ShownOrNot>(
   );
 }
 
-/** What a Content tab is drawn from: the block, and the editor's page. */
+/** What a Content or Advanced tab is drawn from: the block, and the page. */
 interface DrawnFor {
   readonly block: Pick<BlockInspection, "nodeId">;
   readonly editor: { readonly document: BlockDocument };
 }
 
 /**
- * Whether the block a hidden Content tab was drawn for has changed: its
- * props, its CSS id or attributes, anything the page holds for it.
+ * Whether the block a hidden Content or Advanced tab was drawn for has
+ * changed: its props, its CSS id or attributes, anything the page holds for
+ * it.
  *
  * Heard so what the tab holds stays the block as it is: a block's own
  * inspector can hold its commit across an await, and a commit copies the
  * block's props whole, so one built on the block as it hid would put back an
- * undo made on Style since. Advanced follows its CSS id and attributes the
- * same way. Another block selected is not heard: the tab is drawn for that
+ * undo made on Style since, and Advanced follows its CSS id and attributes
+ * the same way. Another block selected is not heard: the tab is drawn for that
  * one when it shows.
  */
 export function ownBlockChanged(before: DrawnFor, after: DrawnFor): boolean {

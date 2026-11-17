@@ -480,18 +480,11 @@ function firstAttributes(): unknown {
     .attributes;
 }
 
-function openAdvancedSection(): void {
-  const summary = screen.getByText("Advanced", { selector: "summary" });
-  if (!(summary.parentElement as HTMLDetailsElement).open) {
-    fireEvent.click(summary);
-  }
-}
-
 describe("what Advanced writes as it goes away", () => {
   it("writes nothing more once Style has settled it, so an undo made there holds", async () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
-    openAdvancedSection();
+    openTab("Advanced");
     // An id another block holds, refused and kept in the field with its
     // reason, so what the panel holds stays apart from what is stored.
     const id = screen.getByLabelText("CSS id");
@@ -512,10 +505,10 @@ describe("what Advanced writes as it goes away", () => {
     expect(firstAttributes()).toEqual({ "data-x": "1" });
   });
 
-  it("shows an undo made on Style when Content comes back, for the same block", async () => {
+  it("shows an undo made on Style when Advanced comes back, for the same block", async () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
-    openAdvancedSection();
+    openTab("Advanced");
     const id = screen.getByLabelText("CSS id");
     act(() => (id as HTMLInputElement).focus());
     fireEvent.change(id, { target: { value: "intro" } });
@@ -526,7 +519,7 @@ describe("what Advanced writes as it goes away", () => {
       await editor().undo();
     });
     expect(editor().document.nodes[0]?.cssId).toBeUndefined();
-    openTab("Content");
+    openTab("Advanced");
     expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
       ""
     );
@@ -535,7 +528,7 @@ describe("what Advanced writes as it goes away", () => {
   it("still writes a draft typed while it shows, when another block is selected straight away", () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
-    openAdvancedSection();
+    openTab("Advanced");
     const value = screen.getByLabelText("Value of attribute 1");
     act(() => (value as HTMLInputElement).focus());
     fireEvent.change(value, { target: { value: "2" } });
