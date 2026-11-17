@@ -18,7 +18,6 @@ import {
   DropRefusal,
   elementAnchor,
   EmptyContainerAppenders,
-  FirstAddChoosers,
   PageInserters,
   RepairNotice,
   SpacingOverlay,
@@ -29,6 +28,7 @@ import { Button } from "@nextlyhq/ui";
 import { siteSheet } from "../../site-style";
 import type { LibraryReadState } from "../pattern-library-client";
 
+import { CanvasFirstAddChoosers } from "./canvas-first-add-choosers";
 import { CanvasImageStates } from "./canvas-image-states";
 import { previewedCanvas } from "./canvas-preview-mode";
 import { DoubleHeaderNotice } from "./double-header-notice";
@@ -368,8 +368,9 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
                 {/* A block just added that asks for a choice (Columns: its
                     layout) draws its chooser in place of its body until the
                     author picks or skips. Last, so it covers the "+" of the
-                    block's own empty columns; hidden mid-drag. */}
-                <FirstAddChoosers editor={editor} hidden={dragging} />
+                    block's own empty columns; hidden mid-drag. A store
+                    of the page ends it. */}
+                <CanvasFirstAddChoosers editor={editor} hidden={dragging} />
               </>
             }
           >

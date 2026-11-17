@@ -12,8 +12,8 @@
  * room for it rather than the chooser covering what follows. That minimum is
  * taken back the moment the chooser goes.
  *
- * Focus moves to the chooser when it opens, so it is reached from the
- * keyboard whichever way the block was added, and goes back where it was
+ * Focus moves to the chooser when it opens (the block brought into view
+ * first), so it is reached from the keyboard whichever way the block was added, and goes back where it was
  * once the author picks or skips.
  *
  * @module canvas/first-add-choosers
@@ -38,6 +38,7 @@ import {
   renderSkips,
   visiblePartOf,
 } from "./geometry-dom";
+import { revealNode } from "./reveal-node";
 
 export interface FirstAddChoosersProps {
   /** The editor whose first-add step this draws. */
@@ -127,6 +128,25 @@ function reserveRoom(
   }
 }
 
+/**
+ * Bring a block added off screen (at the end of a long page) into view once,
+ * as soon as its room is laid out at the plate's real width, so the whole
+ * chooser is shown rather than the empty row the block was.
+ */
+function revealOnce(
+  revealedFor: { current: string | undefined },
+  id: string,
+  found: { readonly element: Element; readonly rect: Rect },
+  laid: { readonly reserved: Reserved | null; readonly plateWidth: number }
+): void {
+  if (revealedFor.current === id) return;
+  if (laid.reserved?.element !== found.element) return;
+  if (Math.abs(laid.plateWidth - found.rect.width) >= 1) return;
+  revealedFor.current = id;
+  // At once: the plate is measured and focused at the block's new place.
+  revealNode(found.element.ownerDocument, id, { instant: true });
+}
+
 /** The chooser for the block just added, over the canvas. */
 export function FirstAddChoosers({
   editor,
@@ -135,6 +155,8 @@ export function FirstAddChoosers({
   const layer = React.useRef<HTMLDivElement | null>(null);
   const body = React.useRef<HTMLDivElement | null>(null);
   const reserved = React.useRef<Reserved | null>(null);
+  // The block last brought into view, so it is brought there once.
+  const revealedFor = React.useRef<string | undefined>(undefined);
   const [rect, setRect] = React.useState<Rect | null>(null);
   const firstAdd = hidden ? undefined : editor.firstAdd;
   const nodeId = firstAdd?.nodeId;
@@ -153,6 +175,10 @@ export function FirstAddChoosers({
       return;
     }
     reserveRoom(reserved, found, chooserHeight(body.current));
+    revealOnce(revealedFor, id, found, {
+      reserved: reserved.current,
+      plateWidth: body.current?.parentElement?.offsetWidth ?? 0,
+    });
     // Read again: the room just made moves what follows, and may grow it.
     const next = shownRectOf(element, id)?.rect ?? found.rect;
     setRect(current => (sameRect(current, next) ? current : next));
@@ -192,11 +218,11 @@ export function FirstAddChoosers({
     const tile = (): HTMLElement | null | undefined =>
       body.current?.querySelector<HTMLElement>("[tabindex='0']");
     tile()?.focus({ preventScroll: true });
-    // The surface the block was added from may hand focus on once it has
-    // closed (the block picker hands it to the canvas, a turn later). Taken
-    // back only from where nothing is being done: the canvas itself, or no
-    // element at all.
     const later = setTimeout(() => {
+      // The surface the block was added from may hand focus on once it has
+      // closed (the block picker hands it to the canvas, a turn later). Taken
+      // back only from where nothing is being done: the canvas itself, or no
+      // element at all.
       const active = own?.activeElement ?? null;
       const idle = active === null || active === own?.body || active === frame;
       if (idle && !body.current?.contains(active)) {

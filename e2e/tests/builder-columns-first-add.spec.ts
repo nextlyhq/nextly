@@ -47,8 +47,11 @@ interface StoredNode {
   slots?: { children?: StoredNode[] };
 }
 
-/** A draft page holding one Heading, and its id. */
-async function createPage(request: APIRequestContext): Promise<string> {
+/** A draft page holding one Heading (and `after` below it), and its id. */
+async function createPage(
+  request: APIRequestContext,
+  after: unknown[] = []
+): Promise<string> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const created = await request.post(ENTRIES, {
     data: {
@@ -65,6 +68,7 @@ async function createPage(request: APIRequestContext): Promise<string> {
             version: 1,
             props: { text: "Above the columns", level: "h2" },
           },
+          ...after,
         ],
       },
     },
@@ -158,13 +162,22 @@ test.describe("choosing a Columns layout when the row is added", () => {
     const row = canvasFrame(page).locator(
       `.nx-canvas [data-nx-node="${rowId}"]`
     );
-    const rowBox = await row.boundingBox();
-    const plateBox = await chooser(page).boundingBox();
-    if (rowBox === null || plateBox === null) throw new Error("not drawn");
-    expect(Math.abs(rowBox.x - plateBox.x)).toBeLessThan(2);
-    expect(Math.abs(rowBox.y - plateBox.y)).toBeLessThan(2);
-    expect(Math.abs(rowBox.width - plateBox.width)).toBeLessThan(2);
-    expect(rowBox.height + 2).toBeGreaterThanOrEqual(plateBox.height);
+    // Polled: the plate follows the row as the canvas settles.
+    await expect
+      .poll(async () => {
+        const rowBox = await row.boundingBox();
+        const plateBox = await chooser(page).boundingBox();
+        if (rowBox === null || plateBox === null) return "not drawn";
+        const over =
+          Math.abs(rowBox.x - plateBox.x) < 2 &&
+          Math.abs(rowBox.y - plateBox.y) < 2 &&
+          Math.abs(rowBox.width - plateBox.width) < 2 &&
+          rowBox.height + 2 >= plateBox.height;
+        return over
+          ? "over the row"
+          : `row ${JSON.stringify(rowBox)} plate ${JSON.stringify(plateBox)}`;
+      })
+      .toBe("over the row");
 
     await chooser(page).getByRole("button", { name: "3 equal" }).click();
     await expect(chooser(page)).toHaveCount(0);
@@ -281,5 +294,60 @@ test.describe("choosing a Columns layout when the row is added", () => {
     const [rowId] = await selection(page);
     if (rowId === undefined) throw new Error("no new row");
     await expect.poll(() => columnsOnCanvas(page, rowId)).toBe(3);
+  });
+  test("a save ends the chooser, keeping two equal columns", async ({
+    page,
+  }) => {
+    const pageId = await createPage(page.request);
+    await openBuilder(page, pageId);
+    const rowId = await addColumns(page);
+    await expect(chooser(page)).toBeVisible();
+
+    // A pick after the save would replace the stored insert in place, so the
+    // save point would read the changed row as stored: the save ends it.
+    await saveDraft(page);
+    await expect(chooser(page)).toHaveCount(0);
+    const stored = await storedRow(page, pageId, rowId);
+    expect(stored?.slots?.children).toHaveLength(2);
+  });
+
+  test("a row added at the end of a long page is scrolled into view with its chooser", async ({
+    page,
+  }) => {
+    // Tall spacers push the end of the page well below the canvas's view.
+    const spacers = Array.from({ length: 8 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-00000000f1${String(index).padStart(2, "0")}`,
+      type: "core/spacer",
+      version: 1,
+      props: {},
+      styles: { base: { base: { height: "400px" } } },
+    }));
+    const pageId = await createPage(page.request, spacers);
+    await openBuilder(page, pageId);
+    // Nothing selected: the row goes at the end of the page.
+    await addColumns(page);
+
+    const tile = chooser(page).getByRole("button", { name: "2 equal" });
+    await expect(tile).toBeFocused();
+    await expect(tile).toBeInViewport();
+    // The tile that has focus, and Skip, inside the canvas's view once a
+    // smooth scroll has settled.
+    const inView = async (
+      target: ReturnType<typeof chooser>
+    ): Promise<string> => {
+      const canvas = await page
+        .getByRole("region", { name: "Canvas" })
+        .boundingBox();
+      const box = await target.boundingBox();
+      if (canvas === null || box === null) return "not drawn";
+      return box.y >= canvas.y - 1 &&
+        box.y + box.height <= canvas.y + canvas.height + 1
+        ? "in view"
+        : `${String(box.y)}+${String(box.height)} in ${String(canvas.y)}+${String(canvas.height)}`;
+    };
+    await expect.poll(() => inView(tile)).toBe("in view");
+    await expect
+      .poll(() => inView(chooser(page).getByRole("button", { name: "Skip" })))
+      .toBe("in view");
   });
 });
