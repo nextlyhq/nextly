@@ -29,12 +29,12 @@ import {
 import * as React from "react";
 
 import { AspectRatioField, drawsAspectRatio } from "./aspect-ratio-field";
+import { BackgroundPositionField } from "./background-fields";
 import { BackgroundImageField } from "./background-image-control";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { CssHint, OptionWrites, useFieldDescription } from "./css-hint";
 import { DecorationField, drawsDecoration } from "./decoration-field";
-import { BackgroundPositionField } from "./background-fields";
 import { FocalPointField } from "./focal-point-field";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue, useUnsetHint } from "./inherited-value";
