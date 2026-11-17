@@ -41,6 +41,7 @@ import { componentUsageCount, componentUsageIndex } from "../component-usage";
 import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
+import { SITE_STYLE_SLUG } from "../site-style-storage";
 import { USAGE_BACKFILL_JOB } from "../usage-backfill-job";
 import { backfillScopeKey } from "../usage-backfill-scope";
 import {
@@ -775,6 +776,23 @@ describe.each(getConfiguredTestDialects())(
 
       it("keeps a page's count on every save, and a rebuild finds the same", async () => {
         const { t, tick, options } = await boot();
+        // The shared style the pages wear, which a page save checks exists.
+        await t.nextly.updateSingle({
+          slug: SITE_STYLE_SLUG,
+          data: {
+            classes: [
+              {
+                id: "c-card",
+                slug: "card",
+                label: "Card",
+                orderIndex: 0,
+                styles: { base: { base: { color: "#333333" } } },
+              },
+            ],
+            _overwrite: true,
+          },
+          overrideAccess: true,
+        });
         const first = await page(t, [styled("a"), styled("b")]);
         const second = await page(t, [styled("c"), text("d")]);
         await tick();
@@ -790,7 +808,10 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.update({
           collection: "pages",
           id: first,
-          data: { content: document("page", [styled("a"), text("b")]) },
+          data: {
+            content: document("page", [styled("a"), text("b")]),
+            _overwrite: true,
+          },
           overrideAccess: true,
         });
         await t.events.settle();

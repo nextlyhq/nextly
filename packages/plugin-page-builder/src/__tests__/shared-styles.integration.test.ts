@@ -473,7 +473,7 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.update({
         collection: "pages",
         id: homeId,
-        data: { content: pageOf([styled("a"), text("b")]) },
+        data: { content: pageOf([styled("a"), text("b")]), _overwrite: true },
         overrideAccess: true,
       });
       await t.events.settle();
