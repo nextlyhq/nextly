@@ -21,6 +21,7 @@ import { COMPONENTS_SLUG } from "../collections/components";
 import type { PagesCollectionOptions } from "../collections/pages";
 import { withRegisteredLooks } from "../core-looks";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "../library-route";
+import { MOST_PAGE_READS } from "../page-allowance";
 import { previewViewportsFromSiteStyle } from "../preview-viewports";
 import type { PublishReadinessSetup } from "../publish-readiness";
 import type { PageBuilderSiteCodeOptions } from "../site-code/route";
@@ -235,8 +236,8 @@ export interface PageBuilderOptions {
    * A page route given no `maxQueries` of its own renders under this, and
    * the editor's page data meter counts against it, so the two agree. A
    * route that sets its own `maxQueries` is not reflected in the meter.
-   * A whole number from 0, or `Infinity` for no limit (the meter then never
-   * warns). Defaults to 500.
+   * A whole number from 0 to 100,000, or `Infinity` for no limit (the meter
+   * then never warns). Defaults to 500.
    *
    * @experimental Settles with the editor's page data meter.
    */
@@ -610,12 +611,18 @@ export function adminClientConfig(
 export function pageDataLimitOf(opts: PageBuilderOptions): number | undefined {
   const limit = opts.maxQueries;
   if (limit === undefined) return undefined;
-  if (limit === Infinity || (Number.isInteger(limit) && limit >= 0)) {
+  // At most what the editor's count may ask its routes to allow, so every
+  // limit a site sets can be counted.
+  if (
+    limit === Infinity ||
+    (Number.isInteger(limit) && limit >= 0 && limit <= MOST_PAGE_READS)
+  ) {
     return limit;
   }
   throw new Error(
     "[page-builder] `maxQueries` is how many reads a page may make: a whole " +
-      `number from 0, or Infinity for no limit, not ${String(limit)}.`
+      `number from 0 to ${MOST_PAGE_READS.toLocaleString("en-US")}, or ` +
+      `Infinity for no limit, not ${String(limit)}.`
   );
 }
 

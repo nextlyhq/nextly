@@ -32,7 +32,7 @@ once the limit is used up or passed. If the count can't be made, it says "Page d
 couldn't count · Retry", since a page whose count is hidden could be over its limit.
 
 The limit is 500 unless the site's code sets another with
-`pageBuilder({ maxQueries })`. The page routes use it too, so the editor and the live
+`pageBuilder({ maxQueries })`, a whole number up to 100,000. The page routes use it too, so the editor and the live
 page count against one number. A route given its own `maxQueries` uses that instead,
 and the editor doesn't know it. `Infinity` sets no limit, and the top bar then never
 shows the count.

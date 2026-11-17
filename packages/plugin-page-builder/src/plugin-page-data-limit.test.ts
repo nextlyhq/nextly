@@ -9,6 +9,7 @@
 import { SITE_PAGE_DATA_LIMIT_SERVICE } from "@nextlyhq/blocks-react";
 import { describe, expect, it } from "vitest";
 
+import { MOST_PAGE_READS } from "./page-allowance";
 import { pageBuilder } from "./plugin";
 
 /** What the editor in the browser is sent. */
@@ -48,9 +49,17 @@ describe("the site's page data limit", () => {
     expect(offeredTo(plugin)).toBeUndefined();
   });
 
-  it.each([-1, 2.5, Number.NaN])("refuses %s at boot", limit => {
-    expect(() => pageBuilder({ maxQueries: limit })).toThrow(
-      /`maxQueries` is how many reads a page may make/
-    );
+  it("takes the most the editor's count can ask its routes for", () => {
+    const plugin = pageBuilder({ maxQueries: MOST_PAGE_READS });
+    expect(clientConfigOf(plugin).maxQueries).toBe(MOST_PAGE_READS);
   });
+
+  it.each([-1, 2.5, Number.NaN, MOST_PAGE_READS + 1])(
+    "refuses %s at boot",
+    limit => {
+      expect(() => pageBuilder({ maxQueries: limit })).toThrow(
+        /`maxQueries` is how many reads a page may make/
+      );
+    }
+  );
 });

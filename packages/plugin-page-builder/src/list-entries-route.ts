@@ -81,11 +81,8 @@ import {
   type ListEntriesRequest,
   type ListEntriesResponse,
 } from "./list-entries-contract";
-import { allowanceFromWire } from "./page-allowance";
+import { allowanceFromWire, MOST_PAGE_READS } from "./page-allowance";
 import type { TemplateGuardSetup } from "./templates/template-guard";
-
-/** The most reads a run may be allowed: far past any page's limit. */
-const MOST_READS = 100_000;
 
 /** A field name a list may name: no paths, operators or quoting. */
 const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -231,7 +228,7 @@ const ListEntriesNamedBody = z
           .number()
           .int()
           .min(0)
-          .max(MOST_READS)
+          .max(MOST_PAGE_READS)
           .nullable()
           .optional(),
       })

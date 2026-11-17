@@ -44,7 +44,7 @@ import {
 } from "./canvas-bindings-contract";
 import { readBodyWith } from "./composition-route-kit";
 import { editorReaderAsCaller, mediaReaderAsCaller } from "./entry-reads";
-import { allowanceFromWire } from "./page-allowance";
+import { allowanceFromWire, MOST_PAGE_READS } from "./page-allowance";
 
 /** A field name a binding may read: no paths, operators or quoting. */
 const NAME = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -58,9 +58,6 @@ const SLUG = z
 
 /** At most this many fields, follows or Singles in one ask: a page's worth. */
 const MOST = 200;
-
-/** The most reads an ask may be allowed: far past any page's allowance. */
-const MOST_READS = 100_000;
 
 /** What one source is read for, as the canvas sends it. */
 /*
@@ -142,7 +139,13 @@ const CanvasBindingsBody = z
       .optional(),
     // At most a published page's allowance: an ask is one page's reads.
     // `null` is no limit, for a site that sets none (`page-allowance`).
-    allowance: z.number().int().min(0).max(MOST_READS).nullable().optional(),
+    allowance: z
+      .number()
+      .int()
+      .min(0)
+      .max(MOST_PAGE_READS)
+      .nullable()
+      .optional(),
   })
   .strict()
   .refine(body => shapeLookupsOf(body) <= MOST, {

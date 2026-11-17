@@ -11,6 +11,13 @@
  * @module page-allowance
  */
 
+/**
+ * The most reads a route may be asked to allow: far past any page's need,
+ * and the most a site's limit may be, short of none at all, so every limit
+ * a site may set can be asked for.
+ */
+export const MOST_PAGE_READS = 100_000;
+
 /** An allowance as the editor sends it: a whole count, `null` for none. */
 export function allowanceToWire(
   allowance: number | undefined
