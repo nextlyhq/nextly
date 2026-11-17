@@ -142,7 +142,6 @@ export type { ComponentLibrary } from "./inspector-panel-types";
 export type { StyleStateBinding } from "./inspector-panel-types";
 export type {
   BlockInspectorResolver,
-  DocumentSettingsView,
   InspectorPanelProps,
 } from "./inspector-panel-types";
 export { editedStyleState } from "./inspector-style-state";
@@ -501,6 +500,53 @@ function ContentTabPanel({
   );
 }
 
+/**
+ * The selected block's card: its icon, type, name and lock, and the verbs
+ * its menu offers.
+ */
+function SelectedBlockCard({
+  block,
+  editor,
+  verbs,
+  reasonId,
+}: {
+  block: BlockInspection;
+  editor: InspectorPanelProps["editor"];
+  verbs: InspectorPanelProps["verbs"];
+  reasonId: string;
+}): React.JSX.Element {
+  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
+  return (
+    <BlockCard
+      icon={block.icon}
+      type={block.label}
+      name={block.identity.name}
+      description={block.description}
+      lock={lock}
+      // Withheld while a Layers lock holds the block, its own or one around
+      // it: renaming is a change like any other, and the op layer refuses it.
+      onRename={
+        lock.layers || lock.inheritedFrom !== undefined
+          ? undefined
+          : name => editor.apply(renameOp(block.nodeId, name))
+      }
+      onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
+      // Held inside a `contentOnly` area, which pins the node's own lock
+      // with its design: the save would refuse the change. The one predicate
+      // the multi-selection card asks too, so a block's Lock is offered alike
+      // however it was selected; inside a block locked in Layers it stays
+      // offered, since a change to the lock alone is always allowed.
+      lockHeld={
+        layersLockChangeable(lock)
+          ? undefined
+          : "The area it sits in fixes this."
+      }
+      verbs={verbs}
+      reasonId={reasonId}
+    />
+  );
+}
+
 function SelectionInspector({
   editor,
   canvasRoot,
@@ -609,7 +655,6 @@ function SelectionInspector({
     );
   }
   const block = surface.block;
-  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
   const tabs = inspectorTabsOf(block);
   const match = blockMatch(editor.document, block, filter, {
     state: styleState?.state,
@@ -627,47 +672,21 @@ function SelectionInspector({
 
   // Where the block is hidden, at the top of every tab; "Change" goes to
   // Hide on from the tabs it is not on.
-  const hiddenStatus = (
-    onChoose: ((tab: "advanced") => void) | undefined
-  ): React.JSX.Element => (
-    <HiddenStatus
-      editor={editor}
-      nodeId={block.nodeId}
-      breakpoints={styleOnly.breakpoints}
-      onChoose={onChoose}
-    />
-  );
+  const hidden = {
+    editor,
+    nodeId: block.nodeId,
+    breakpoints: styleOnly.breakpoints,
+  };
 
   return (
     // The "/" shortcut is the panel's: from anywhere in it but a text field.
     <div className="nx-inspector" onKeyDown={find.onKeyDown}>
-      <BlockCard
+      <SelectedBlockCard
         // Keyed by node, so a rename half-typed for one block does not carry
         // to the next.
         key={`${block.nodeId}:card`}
-        icon={block.icon}
-        type={block.label}
-        name={block.identity.name}
-        description={block.description}
-        lock={lock}
-        // Withheld while a Layers lock holds the block, its own or one around
-        // it: renaming is a change like any other, and the op layer refuses it.
-        onRename={
-          lock.layers || lock.inheritedFrom !== undefined
-            ? undefined
-            : name => editor.apply(renameOp(block.nodeId, name))
-        }
-        onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
-        // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change. The one predicate
-        // the multi-selection card asks too, so a block's Lock is offered alike
-        // however it was selected; inside a block locked in Layers it stays
-        // offered, since a change to the lock alone is always allowed.
-        lockHeld={
-          layersLockChangeable(lock)
-            ? undefined
-            : "The area it sits in fixes this."
-        }
+        block={block}
+        editor={editor}
         verbs={verbs}
         reasonId={reasonId}
       />
@@ -705,7 +724,7 @@ function SelectionInspector({
               tabs={tabs}
               shown={shown}
               onChoose={choose}
-              status={hiddenStatus(choose)}
+              status={<HiddenStatus {...hidden} onChoose={choose} />}
               block={block}
               editor={editor}
               onCommit={commit}
@@ -721,7 +740,7 @@ function SelectionInspector({
             />
 
             <TabsContent value="style">
-              {hiddenStatus(choose)}
+              <HiddenStatus {...hidden} onChoose={choose} />
               <FilterNote tab="style" onChoose={choose} />
               <StyleChangedElsewhere
                 styles={
@@ -758,7 +777,7 @@ function SelectionInspector({
               hidden={shown !== "advanced"}
             >
               {/* No "Change" here: Hide on is on this tab. */}
-              {hiddenStatus(undefined)}
+              <HiddenStatus {...hidden} />
               <FilterNote tab="advanced" onChoose={choose} />
               <AdvancedTab
                 block={block}

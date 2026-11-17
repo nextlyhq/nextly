@@ -40,7 +40,7 @@ import { editedBreakpointAtWidth } from "./canvas-width";
 export const DEVICE_HIDDEN_ATTRIBUTE = "data-nx-device-hidden";
 
 /** The tag on a block hidden on `device`. */
-export function deviceHiddenTag(device: string): string {
+function deviceHiddenTag(device: string): string {
   return `Hidden on ${device} · still here in the builder`;
 }
 

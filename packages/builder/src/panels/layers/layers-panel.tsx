@@ -914,6 +914,70 @@ function hiddenOnByBlock(
   return hidden;
 }
 
+/**
+ * The tree's rows, built again only when what a row draws changes: the
+ * blocks shown, the drag, the row being renamed, the device, and each
+ * block's Entry content field and the devices it is hidden on.
+ */
+function useTreeRows(
+  roots: readonly LayerNode[],
+  {
+    document,
+    device,
+    draggingId,
+    rows,
+  }: {
+    document: BlockDocument;
+    device: LayersPanelProps["device"];
+    draggingId: string | null;
+    rows: ReturnType<typeof useRowVerbs>;
+  }
+): TreeNode[] {
+  const icons = React.useMemo(iconsByType, []);
+  const entryContent = useEntryContentRows(document);
+  const hiddenOn = useHiddenOn(document, device);
+  const deviceName = deviceNameOf(device);
+  const { renamingId, onRenamed, act } = rows;
+  return React.useMemo(
+    () =>
+      roots.map(root =>
+        rowOf(root, {
+          icons,
+          draggingId,
+          renamingId,
+          deviceName,
+          onRenamed,
+          onAct: act,
+          entryContent,
+          hiddenOn,
+        })
+      ),
+    [
+      roots,
+      icons,
+      entryContent,
+      hiddenOn,
+      draggingId,
+      renamingId,
+      deviceName,
+      onRenamed,
+      act,
+    ]
+  );
+}
+
+/** {@link hiddenOnByBlock}, read again only when the page or the breakpoints change. */
+function useHiddenOn(
+  document: BlockDocument,
+  device: LayersPanelProps["device"]
+): ReadonlyMap<string, string> {
+  const breakpoints = device?.breakpoints;
+  return React.useMemo(
+    () => hiddenOnByBlock(document, breakpoints),
+    [document, breakpoints]
+  );
+}
+
 /** The device the eye acts on, by the name the device buttons give it. */
 function deviceNameOf(device: LayersPanelProps["device"]): string | undefined {
   if (device === undefined) return undefined;
@@ -1235,40 +1299,12 @@ export function LayersPanel({
     [opened, search.expand]
   );
 
-  const icons = React.useMemo(iconsByType, []);
-  const entryContent = useEntryContentRows(editor.document);
-  const hiddenOn = React.useMemo(
-    () => hiddenOnByBlock(editor.document, device?.breakpoints),
-    [editor.document, device?.breakpoints]
-  );
-  const deviceName = deviceNameOf(device);
-  const { renamingId, onRenamed, act } = rows;
-  const nodes = React.useMemo(
-    () =>
-      search.roots.map(root =>
-        rowOf(root, {
-          icons,
-          draggingId: drag.draggingId,
-          renamingId,
-          deviceName,
-          onRenamed,
-          onAct: act,
-          entryContent,
-          hiddenOn,
-        })
-      ),
-    [
-      search.roots,
-      icons,
-      entryContent,
-      hiddenOn,
-      drag.draggingId,
-      renamingId,
-      deviceName,
-      onRenamed,
-      act,
-    ]
-  );
+  const nodes = useTreeRows(search.roots, {
+    document: editor.document,
+    device,
+    draggingId: drag.draggingId,
+    rows,
+  });
 
   /*
    * Which keyboard is in front of the author, resolved AFTER mounting.
@@ -1342,7 +1378,7 @@ export function LayersPanel({
                 // Not during a drag, whose own marks say where it will land.
                 setHovered(drag.draggingId === null ? id : null),
               apple: apple ?? false,
-              act,
+              act: rows.act,
               // Read by the shortcut manager instead where the host has one.
               keys: !shortcuts,
             })}
@@ -1418,7 +1454,7 @@ export function LayersPanel({
         {drag.announcement === "" ? rows.notice : drag.announcement}
       </div>
 
-      {shortcuts ? <RowShortcuts scope={body} act={act} /> : null}
+      {shortcuts ? <RowShortcuts scope={body} act={rows.act} /> : null}
 
       {/*
         What a row's verb did, or why it could not, on screen: a refused eye or
