@@ -166,7 +166,7 @@ Custom database table name.
 | **Type** | `string` |
 | **Default** | `undefined` |
 
-Description displayed in the admin UI. Falls back to `admin.description`.
+Description displayed in the admin UI, including as the first line of the Single's side panel ("What this is"). Falls back to `admin.description`.
 
 ### `sanitize`
 
@@ -209,6 +209,18 @@ Configure how the single appears in the admin panel via the `admin` property.
 | `description` | `string` | None | Help text below the single title. |
 
 > **Singles do not support `useAsTitle`, `pagination`, `preview`, or admin-component overrides** — those concepts are collection-specific.
+
+### The side panel
+
+A Single's editor has a side panel that reads, top to bottom:
+
+1. **What this is**: the Single's `description` (or `admin.description`). Without one, it says "One entry the site uses in one place. There's only ever one" and then the Single's label.
+2. **Status**, **Publishing** and **Language**, where the Single has drafts or languages.
+3. **Last changed**: how long ago, and who made the change, named as their account names them now and never by email. **History** opens the Single's history, where it keeps versions and you may read them.
+4. Any sections plugins add to the Single's page.
+5. **For developers**: the API address (`/admin/api/singles/<slug>`, the one "View API response" reads) and the document's ID, each with a copy button.
+
+"For developers" takes the place of a collection entry's Details, so a plugin section placed `after: "details"` sits straight under it.
 
 ## Access control
 
