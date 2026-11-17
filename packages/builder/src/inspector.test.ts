@@ -878,7 +878,10 @@ describe("which choices a block's inspector offers", () => {
 
 describe("a prop that applies only to some values of another", () => {
   /** A list-like block: its kind, bulleted by default, and where it starts. */
-  function withList(props: Record<string, unknown>) {
+  function withList(
+    props: Record<string, unknown>,
+    defaultProps: Record<string, unknown> = { kind: "unordered" }
+  ) {
     clearBlocks();
     registerBlocks(
       [
@@ -890,7 +893,7 @@ describe("a prop that applies only to some values of another", () => {
             kind: { type: "select", options: ["unordered", "ordered"] },
             start: { type: "number", onlyWhen: { kind: ["ordered"] } },
           },
-          defaultProps: { kind: "unordered" },
+          defaultProps,
         },
       ] as never,
       { source: "inspector-test" }
@@ -912,7 +915,10 @@ describe("a prop that applies only to some values of another", () => {
   });
 
   it("reads the block's default while nothing is stored", () => {
-    // A new list is bulleted, so it offers no number to start at.
+    // Numbered by default, so a list storing no kind offers its start: an
+    // inspector reading only what is stored would leave it out.
+    expect(offeredStart(withList({}, { kind: "ordered" }))).toBe(true);
+    // Bulleted by default, so it offers no number to start at.
     expect(offeredStart(withList({}))).toBe(false);
   });
 
