@@ -6206,6 +6206,7 @@ describe("a stated NULL among the reconciled inputs", () => {
       tokenPrefix: null,
       previewContainer: null,
       previewStates: null,
+      siteText: null,
     });
 
     /*
@@ -6219,6 +6220,7 @@ describe("a stated NULL among the reconciled inputs", () => {
       "namedClasses",
       "previewContainer",
       "previewStates",
+      "siteText",
       "tokenPrefix",
     ]);
     expect(Object.values(stripped).every(v => v === undefined)).toBe(true);

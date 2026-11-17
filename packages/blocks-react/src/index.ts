@@ -121,9 +121,17 @@ export type { PageStyleCascade, PageStyleTraceInput } from "./page-style-trace";
 
 export type {
   DarkModeStrategy,
+  // The element tier's keys and the site's text, which `SiteTokenSet` and
+  // the compile context now carry: the same closure, one type further in.
+  ElementBaseKey,
+  FluidSizes,
   FontFaceDef,
   FontSource,
   SiteSheetInput,
+  SiteTextEntry,
+  SiteTextMap,
+  SiteTextRole,
+  SiteTextUnderline,
   SiteToken,
   SiteTokenSet,
   TokenKind,
@@ -148,19 +156,16 @@ export type {
  */
 export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
 /**
- * The typographic baseline, and the one way to apply it.
+ * The one way to give a compile context the site's element tier, derived
+ * from the site text map it carries (the engine's `siteTextElementBases`).
  *
- * Both are public because a host replacing the baseline needs to read what it
- * is replacing, and because a host assembling its own compile context must
- * reach the same answer the renderer does. Spreading the record in by hand is
- * the second implementation that would drift: `withTypographyDefaults` leaves a
- * context that states its own `elementBases` alone, and a caller open-coding
- * that check is one `??` away from overwriting a host's deliberate choice.
+ * Public because a host assembling its own compile context must reach the
+ * same answer the renderer does. Spreading the tier in by hand is the second
+ * implementation that would drift: `withTypographyDefaults` leaves a context
+ * that states its own `elementBases` alone, and a caller open-coding that
+ * check is one `??` away from overwriting a host's deliberate choice.
  */
-export {
-  TYPOGRAPHY_DEFAULTS,
-  withTypographyDefaults,
-} from "./blocks/typography-defaults";
+export { withTypographyDefaults } from "./blocks/typography-defaults";
 /**
  * Whether an image or embed address may be requested, by the renderer's one
  * filter: exported so a caller judging what a page draws, such as an unbind
