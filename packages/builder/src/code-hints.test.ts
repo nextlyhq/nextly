@@ -14,13 +14,11 @@ import {
   declarationsText,
   FULL_WIDTH_WRITES,
   heightShortcutWrites,
-  leafWrites,
+  controlWrites,
   propWrites,
   sizeShortcutWrites,
   tagWrites,
 } from "./code-hints";
-
-const leaf = { kind: "cssValue", cssProperty: "min-height", tokenKinds: [] };
 
 describe("what a control writes", () => {
   it("joins declarations as a developer writes them", () => {
@@ -32,22 +30,67 @@ describe("what a control writes", () => {
     ).toBe("flex-direction: column; gap");
   });
 
+  const control = (property: string, path: string[], cssProperty: string) => ({
+    property,
+    path,
+    leaf: { cssProperty },
+  });
+
   it("says a catalog control's property with the value it holds", () => {
-    expect(leafWrites(leaf as never, "40px", "--site-")).toBe(
+    const minHeight = control("minHeight", [], "min-height");
+    expect(controlWrites(minHeight, "40px", "--site-")).toBe(
       "min-height: 40px"
     );
-    expect(leafWrites(leaf as never, 3, "--site-")).toBe("min-height: 3");
     // And the property alone while it holds nothing.
-    expect(leafWrites(leaf as never, undefined, "--site-")).toBe("min-height");
+    expect(controlWrites(minHeight, undefined, "--site-")).toBe("min-height");
+  });
+
+  it("says a side of a property at its own path", () => {
+    expect(
+      controlWrites(
+        control("padding", ["blockStart"], "padding-block-start"),
+        "12px",
+        "--site-"
+      )
+    ).toBe("padding-block-start: 12px");
   });
 
   it("writes a site variable as the page's stylesheet names it", () => {
+    const minHeight = control("minHeight", [], "min-height");
     expect(
-      leafWrites(leaf as never, { $token: "space.section-y" }, "--brand-")
+      controlWrites(minHeight, { $token: "space.section-y" }, "--brand-")
     ).toBe("min-height: var(--brand-space-section-y)");
     expect(
-      leafWrites(leaf as never, { $token: "space.4", times: 2 }, "--site-")
+      controlWrites(minHeight, { $token: "space.4", times: 2 }, "--site-")
     ).toBe("min-height: calc(var(--site-space-4) * 2)");
+  });
+
+  it("writes an image as the page does: wrapped in url()", () => {
+    const written = controlWrites(
+      control("background", ["url"], "background-image"),
+      "/hero.jpg",
+      "--site-"
+    );
+    // With the overlay's layer in front, as the page's stylesheet writes it.
+    expect(written).toMatch(/^background-image: /);
+    expect(written).toContain('url("/hero.jpg")');
+    expect(written).not.toBe("background-image: /hero.jpg");
+  });
+
+  it("writes a keyword the engine expands as every declaration it becomes", () => {
+    const written = controlWrites(
+      control("disclosureIcon", [], "--nx-disclosure-icon"),
+      "plus",
+      "--site-"
+    );
+    // More than the one property a naive reading would say.
+    expect(written.split("; ").length).toBeGreaterThan(1);
+  });
+
+  it("falls back to the property alone for a value the engine refuses", () => {
+    expect(
+      controlWrites(control("minHeight", [], "min-height"), "red", "--site-")
+    ).toBe("min-height");
   });
 
   it("reads a block setting's code hint, one string or one per option", () => {

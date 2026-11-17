@@ -7,9 +7,7 @@
  * @module code-hints
  */
 import {
-  isTokenRef,
-  scaledTokenText,
-  tokenCustomProperty,
+  compileStyleValues,
   type PropSchema,
   type StyleLeaf,
 } from "@nextlyhq/blocks-engine";
@@ -31,34 +29,39 @@ export function declarationsText(
     .join("; ");
 }
 
-/**
- * A stored style value as text, where it is one a declaration can show: a
- * variable as the page's stylesheet names it, under the site's prefix.
- */
-function valueText(value: unknown, tokenPrefix: string): string | undefined {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (isTokenRef(value)) {
-    return scaledTokenText(
-      `var(${tokenCustomProperty(value.$token, tokenPrefix)})`,
-      value.times
-    );
-  }
-  return undefined;
+/** A catalog control, as far as saying what it writes goes. */
+export interface WritingControl {
+  /** The catalog property the control writes. */
+  readonly property: string;
+  /** Where inside the property's value it writes, outermost first. */
+  readonly path: readonly string[];
+  readonly leaf: Pick<StyleLeaf, "cssProperty">;
 }
 
 /**
- * What a catalog control writes: its leaf's CSS property, with the value it
- * holds or the option it offers. "min-height: 40px"; "flex-direction: column".
+ * What a catalog control writes for a value: the declarations the engine
+ * compiles it to, the page's own CSS (a URL wrapped, a keyword expanded, a
+ * variable under the site's prefix), or its CSS property alone while it holds
+ * nothing the engine writes. "min-height: 40px"; "flex-direction: column".
  */
-export function leafWrites(
-  leaf: StyleLeaf,
+export function controlWrites(
+  control: WritingControl,
   value: unknown,
   tokenPrefix: string
 ): string {
-  return declarationsText([
-    { property: leaf.cssProperty, value: valueText(value, tokenPrefix) },
-  ]);
+  if (value === undefined || value === null) return control.leaf.cssProperty;
+  const nested = control.path.reduceRight<unknown>(
+    (inner, key) => ({ [key]: inner }),
+    value
+  );
+  const { declarations } = compileStyleValues(
+    { [control.property]: nested },
+    "",
+    tokenPrefix
+  );
+  return declarations.length === 0
+    ? control.leaf.cssProperty
+    : declarationsText(declarations);
 }
 
 /**
@@ -91,7 +94,11 @@ export function heightShortcutWrites(fullScreen: string): {
 export function sizeShortcutWrites(sizes: {
   readonly small: { readonly times: number; readonly text: string };
   readonly large: { readonly times: number; readonly text: string };
-}): { readonly small: string; readonly medium: string; readonly large: string } {
+}): {
+  readonly small: string;
+  readonly medium: string;
+  readonly large: string;
+} {
   const scaled = (size: { times: number; text: string }) =>
     declarationsText([
       { property: "padding", value: `calc(<padding> * ${String(size.times)})` },
@@ -99,7 +106,10 @@ export function sizeShortcutWrites(sizes: {
     ]);
   return {
     small: scaled(sizes.small),
-    medium: declarationsText([{ property: "padding" }, { property: "font-size" }]),
+    medium: declarationsText([
+      { property: "padding" },
+      { property: "font-size" },
+    ]),
     large: scaled(sizes.large),
   };
 }

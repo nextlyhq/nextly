@@ -33,6 +33,7 @@ import {
   vi,
 } from "vitest";
 
+import { keyboardFocus, withNavigationNoted } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 
@@ -249,5 +250,32 @@ describe("Show CSS names", () => {
         .getByRole("menuitemcheckbox", { name: "Show CSS names" })
         .getAttribute("aria-checked")
     ).toBe("false");
+  });
+});
+
+describe("keyboard navigation, noted in the control's own document", () => {
+  it("reads a Tab pressed in another document, as an editor drawn in a frame", () => {
+    const frameDocument = document.implementation.createHTMLDocument("frame");
+    const control = frameDocument.createElement("button");
+    frameDocument.body.append(control);
+    // Mounting the control notes its own document, not the page's.
+    withNavigationNoted(undefined)(control);
+    frameDocument.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true })
+    );
+    expect(keyboardFocus(control)).toBe(true);
+    // Spent on that one focus.
+    expect(keyboardFocus(control)).toBe(false);
+  });
+
+  it("CONTROL: a Tab pressed in the page says nothing about the frame", () => {
+    const frameDocument = document.implementation.createHTMLDocument("frame");
+    const control = frameDocument.createElement("button");
+    frameDocument.body.append(control);
+    withNavigationNoted(undefined)(control);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true })
+    );
+    expect(keyboardFocus(control)).toBe(false);
   });
 });

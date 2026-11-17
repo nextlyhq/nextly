@@ -19,6 +19,14 @@ import { ChromeTooltip } from "./chrome-tooltip";
 import { useCssNames } from "./css-names-context";
 import { isElement } from "./dom-kind";
 
+/**
+ * What each option of the field around it writes, as the engine compiles it,
+ * for an option's own tooltip; `undefined` outside a field.
+ */
+export const OptionWrites: React.Context<
+  ((option: string) => string) | undefined
+> = React.createContext<((option: string) => string) | undefined>(undefined);
+
 /** A control's tooltip: what it does in words, then what it writes. */
 function HintContent({
   summary,
@@ -54,8 +62,6 @@ export function CssHint({
   /** The control: one element, which becomes the tooltip's trigger. */
   children: React.ReactElement<TriggerHandlers>;
 }): React.JSX.Element {
-  // Noted once per document: whether the last key moved between controls.
-  React.useEffect(() => noteNavigation(document), []);
   if (writes === undefined && summary === undefined) return children;
   return (
     // Its own provider, so a control drawn outside the panel still has one; a
@@ -66,7 +72,12 @@ export function CssHint({
         side="left"
         align="start"
       >
-        {React.cloneElement(children, ownElementsOnly(children.props))}
+        {React.cloneElement(children, {
+          ...ownElementsOnly(children.props),
+          // Noted in the control's own document, which is an iframe's where
+          // the editor is drawn in one.
+          ref: withNavigationNoted(children.props.ref),
+        })}
       </ChromeTooltip>
     </TooltipProvider>
   );
@@ -76,6 +87,24 @@ export function CssHint({
 interface TriggerHandlers {
   onFocus?: (event: React.FocusEvent<HTMLElement>) => void;
   onPointerMove?: (event: React.PointerEvent<HTMLElement>) => void;
+  ref?: React.Ref<HTMLElement> | undefined;
+}
+
+/**
+ * The control's own ref, with its document noted as it mounts: whether the
+ * last key pressed there moved between controls is read in that document.
+ */
+/** @internal Exported for its tests. */
+export function withNavigationNoted(
+  own: React.Ref<HTMLElement> | undefined
+): React.RefCallback<HTMLElement> {
+  return node => {
+    if (node !== null) noteNavigation(node.ownerDocument);
+    if (typeof own === "function") own(node);
+    else if (own !== null && own !== undefined) {
+      own.current = node;
+    }
+  };
 }
 
 /** The keys that move focus from one control to the next. */
@@ -114,7 +143,8 @@ function noteNavigation(at: Document): void {
  * Escape, opens no tooltip, so the Escape that follows still reaches the
  * editor.
  */
-function keyboardFocus(target: EventTarget): boolean {
+/** @internal Exported for its tests. */
+export function keyboardFocus(target: EventTarget): boolean {
   if (!isElement(target)) return false;
   const at = target.ownerDocument;
   const navigated = NAVIGATED.get(at) === true;
