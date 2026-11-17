@@ -59,9 +59,7 @@ export function showFillNotices(
  * Take the fills waiting for the signed-in author. Undefined when the ask
  * failed: nothing is said, and the fill itself has happened regardless.
  */
-export async function takeFillNotices(): Promise<
-  FillNoticesResult | undefined
-> {
+async function takeFillNotices(): Promise<FillNoticesResult | undefined> {
   try {
     const answer = await writePluginRoute<{ item?: FillNoticesResult }>({
       plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -77,9 +75,10 @@ export async function takeFillNotices(): Promise<
 /**
  * Ask for, and say, the fills waiting for the author, each time the component
  * this screen shows becomes live with nothing unpublished: on opening a live
- * one, and right after a publish. Nothing for any other document.
+ * one, and right after a publish. Nothing for any other kind of document.
  */
-export function useFilledDefaultNotice(isComponent: boolean): void {
+export function useFilledDefaultNotice(documentKind: string): void {
+  const isComponent = documentKind === "component";
   const status = useDocumentStatus();
   const live =
     status !== null && status.status === "published" && !status.hasWorkingDraft;

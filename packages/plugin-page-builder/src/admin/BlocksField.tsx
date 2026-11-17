@@ -203,7 +203,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     subject: restingDocument.kind === "component" ? "component" : "page",
   });
   // A component published as the first header or footer: said once.
-  useFilledDefaultNotice(restingDocument.kind === "component");
+  useFilledDefaultNotice(restingDocument.kind);
 
   return (
     <div ref={returnedTo}>

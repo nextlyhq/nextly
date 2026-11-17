@@ -61,7 +61,7 @@ const filled = (
 });
 
 function Screen({ isComponent }: { isComponent: boolean }) {
-  useFilledDefaultNotice(isComponent);
+  useFilledDefaultNotice(isComponent ? "component" : "page");
   return null;
 }
 

@@ -69,7 +69,7 @@ export interface FirstFillHookArgs {
 }
 
 /** The area `row` is published as, or null when it is not a published header or footer. */
-export function publishedAreaOf(row: unknown): StarterArea | null {
+function publishedAreaOf(row: unknown): StarterArea | null {
   if (typeof row !== "object" || row === null) return null;
   const { status, area, _isWorkingDraft } = row as Record<string, unknown>;
   if (status !== "published" || _isWorkingDraft === true) return null;

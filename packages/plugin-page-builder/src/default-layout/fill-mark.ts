@@ -31,7 +31,7 @@ import { siteOptions } from "../schema/tables";
 import type { StarterArea } from "./seed-names";
 
 /** The options-table row each area's mark is kept under. */
-export const FILL_MARK_OPTION: { readonly [A in StarterArea]: string } = {
+const FILL_MARK_OPTION: { readonly [A in StarterArea]: string } = {
   header: "filled-header",
   footer: "filled-footer",
 };
