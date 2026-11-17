@@ -9,6 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
 import { act, render, screen, within } from "@admin/__tests__/utils";
+import {
+  clearRegistry,
+  registerComponent,
+} from "@admin/lib/plugins/component-registry";
 
 const { barProps, paneProps, released, siteLocales, details, readHistory } =
   vi.hoisted(() => ({
@@ -393,6 +397,28 @@ describe("what the Single's panel says about the Single", () => {
     expect(
       docked().getByRole("region", { name: "Last changed" })
     ).toHaveTextContent("2 hours ago by Ana Lopez");
+  });
+
+  it("reads no details while a document view covers the Single, since nothing draws them", () => {
+    const VIEW = "@acme/pb/admin#Builder";
+    registerComponent(VIEW, () => <div data-testid="builder-view" />);
+    try {
+      render(
+        <SingleForm
+          schema={schema}
+          document={document}
+          onSubmit={vi.fn()}
+          documentView={{ component: VIEW, onExit: vi.fn() }}
+        />
+      );
+      expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+      // Asked for nothing: a read with no document named sends no request.
+      expect(
+        details.asked.mock.calls.filter(([target]) => target !== undefined)
+      ).toEqual([]);
+    } finally {
+      clearRegistry();
+    }
   });
 
   it("gives the API address View API response reads, under For developers", () => {
