@@ -5,11 +5,10 @@
  * here can only come from composing it over the library its write reads.
  */
 import {
-  clearBlocks,
+  createBlockRegistry,
   COMPONENT_INSTANCE_TYPE,
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
-  registerBlocks,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -31,6 +30,9 @@ import {
 } from "./blocks-composition";
 import type { ListFieldsReader, TemplateTargets } from "./list-query-judgement";
 
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
+
 const COMPONENTS = "nx_pb_components";
 const FIELD = "content";
 const STORE = { collection: COMPONENTS, field: FIELD };
@@ -43,7 +45,7 @@ const base = {
 };
 
 beforeEach(() => {
-  registerBlocks(
+  blocks.register(
     [
       // Declared slots: a child in a slot its container never declares is
       // refused on its own account, which these cases do not test.
@@ -117,7 +119,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 type Node = Record<string, unknown>;
@@ -231,6 +233,7 @@ function judge(
     {
       store: STORE,
       limits: limits ?? DEFAULT_LIMITS,
+      blocks,
       // Only the callbacks a case names: an absent one is never handed in.
       ...callbacks,
       composesDocuments: composesDocuments ?? true,

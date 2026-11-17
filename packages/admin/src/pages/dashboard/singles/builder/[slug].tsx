@@ -36,6 +36,7 @@ import {
 } from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
@@ -44,9 +45,9 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
-import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
@@ -54,7 +55,6 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
-import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi } from "@admin/services/singleApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -115,7 +115,9 @@ function singleSettings(single: ApiSingle): BuilderSettingsValues {
  */
 function unsavedSingle(entity: UnsavedEntity): ApiSingle {
   return {
-    id: `unsaved:single:${entity.address}`,
+    // The token, not the address: it is kept when the address moves, so
+    // the editor knows the entity as the same one under its new address.
+    id: `unsaved:single:${entity.token}`,
     slug: entity.address,
     label: entity.settings.singularName,
     tableName: "",
@@ -176,19 +178,33 @@ export default function SingleBuilderEditPage({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   } = useBuilderEntityState({
     entity: single,
     builder,
     toFields: loaded => loaded.fields ?? [],
     // An unsaved Single opens with what the dialog set.
     toSettings: loaded => unsaved?.settings ?? singleSettings(loaded),
-    isDirty: settingsAreDirty,
     onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
     // A saved Single is known by its slug, which an unsaved one shares; its
     // id tells them apart, so once saved the editor loads the server's afresh.
     identity: loaded => (unsaved ? loaded.id : loaded.slug),
     unsaved: unsaved !== undefined,
   });
+
+  // A change of the settings is a step; an unsaved single's address
+  // moves it at once, outside the history.
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "single",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug: address }),
+    });
 
   const isLocked = single?.locked === true;
   // Resolved once: the save hook refuses outright without a slug, so the
@@ -358,7 +374,7 @@ export default function SingleBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply } = useSchemaSave({
+  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
     slug,
     missingSlugMessage: "Single slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -386,23 +402,19 @@ export default function SingleBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    // Each changed setting is reviewed with the save, and a save of the
+    // settings alone is reviewed too.
+    settingChanges: pending.settingChanges,
   });
 
   // Discard all on an unsaved Single discards the Single itself: it leaves
   // this tab, and the editor returns to the list.
-  const pendingChanges = useMemo(
-    () =>
-      unsaved
-        ? {
-            ...pending,
-            discardLeaves: true,
-            discardAll: () => {
-              removeUnsavedEntity("single", entitySlug);
-              navigateTo(ROUTES.BUILDER_SINGLES);
-            },
-          }
-        : pending,
-    [unsaved, pending, entitySlug]
+  const pendingChanges = useUnsavedDiscard(
+    pending,
+    unsaved !== undefined,
+    "single",
+    entitySlug,
+    ROUTES.BUILDER_SINGLES
   );
 
   // ---------------------------- Loading / error guards ----------------------
@@ -452,7 +464,8 @@ export default function SingleBuilderEditPage({
       // As the save judges names: Draft/Published on as stored, or as the pending settings turn it
       // on, since its columns stand until the save that turns it off lands.
       lifecycleEnabled={single.status === true || drafts}
-      onSettingsChange={setSettings}
+      onSettingsChange={onSettingsChange}
+      unsavedAddress={unsavedAddress}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
@@ -465,6 +478,8 @@ export default function SingleBuilderEditPage({
         />
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs
@@ -473,6 +488,7 @@ export default function SingleBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
+        settingChanges={reviewedSettingChanges}
       />
     </BuilderPageLayout>
   );

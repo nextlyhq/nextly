@@ -33,9 +33,15 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import type { SavedComponent } from "./inserter";
+import type { SavedComponent } from "./panels/add/inserter";
 import type { ContentServices, MediaPickerProps } from "./content-controls";
 import { InspectorPanel } from "./inspector-panel";
+import type { SharedBlockVerbs } from "./keyboard-actions";
+
+/** Verbs as a host shares them: the menu's locked answers are the same list. */
+function shared(verbs: Omit<SharedBlockVerbs, "withLocks">): SharedBlockVerbs {
+  return { ...verbs, withLocks: () => verbs.actions };
+}
 
 afterEach(cleanup);
 
@@ -263,12 +269,12 @@ describe("what a selected instance is shown as", () => {
           definitions: new Map([["header", definition]]),
           components: LIBRARY,
         }}
-        verbs={{
+        verbs={shared({
           actions: [
             { id: "edit-component", label: "Edit component", enabled: true },
           ],
           run: vi.fn(),
-        }}
+        })}
       />
     );
     expect(
@@ -1679,13 +1685,13 @@ describe("the instance's card menu", () => {
       <InspectorPanel
         editor={editorFor(pageOf(instance()))}
         componentLibrary={{ definitions: lookup, components: LIBRARY }}
-        verbs={{
+        verbs={shared({
           actions: [
             { id: "duplicate", label: "Duplicate", enabled: true },
             { id: "delete", label: "Delete", enabled: true },
           ],
           run,
-        }}
+        })}
       />
     );
     fireEvent.keyDown(screen.getByRole("button", { name: /^Actions for/ }), {

@@ -190,6 +190,18 @@ const KEYWORD_LABELS: Readonly<
     inset: "Inset",
     outset: "Outset",
   },
+  "outline-style": {
+    auto: "Browser's focus ring",
+    none: "None",
+    solid: "Solid",
+    dashed: "Dashed",
+    dotted: "Dotted",
+    double: "Double",
+    groove: "Groove",
+    ridge: "Ridge",
+    inset: "Inset",
+    outset: "Outset",
+  },
   "container-type": {
     normal: "None",
     "inline-size": "Width",

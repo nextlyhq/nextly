@@ -29,11 +29,14 @@ import {
   type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import { FieldGroupUsedBy } from "@admin/components/features/schema-builder/FieldGroupUsedBy";
+import {
+  FieldGroupUsedBy,
+  knownPlaceCount,
+} from "@admin/components/features/schema-builder/FieldGroupUsedBy";
 import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { AlertTriangle, RefreshCw } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
-import { ROUTES } from "@admin/constants/routes";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useCreateFieldGroup,
   useFieldGroup,
@@ -41,14 +44,17 @@ import {
 } from "@admin/hooks/queries/useFieldGroups";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useBuilderSettingsChange } from "@admin/hooks/useBuilderSettingsChange";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import { useFieldGroupUsedBy } from "@admin/hooks/useFieldGroupUsedBy";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
   displayLabel,
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
+import { useUnsavedDiscard } from "@admin/hooks/useUnsavedDiscard";
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { fieldGroupCreatePayload } from "@admin/lib/builder/create-request";
 import { fieldGroupEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
@@ -57,7 +63,6 @@ import {
   type UnsavedEntity,
   useUnsavedEntity,
 } from "@admin/lib/builder/unsaved-entities";
-import { navigateTo } from "@admin/lib/navigation";
 import { fieldGroupApi } from "@admin/services/fieldGroupApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
@@ -98,33 +103,15 @@ function fieldGroupSettings(fieldGroup: ApiFieldGroup): BuilderSettingsValues {
 }
 
 /**
- * Field groups compare only the settings they actually render, rather than
- * using the shared comparator: the values it also reads — status, versions,
- * retention, revalidate, webhooks — have no control on this kind's modal, so
- * they are absent on both sides and could never differ.
- */
-function fieldGroupSettingsAreDirty(
-  original: BuilderSettingsValues | null,
-  current: BuilderSettingsValues | null
-): boolean {
-  if (!original || !current) return false;
-  return (
-    original.singularName !== current.singularName ||
-    original.description !== current.description ||
-    original.icon !== current.icon ||
-    original.category !== current.category ||
-    original.i18n !== current.i18n
-  );
-}
-
-/**
  * A field group created in the dialog and not saved yet, in the shape the page
  * loads a saved one in. Nothing of it is stored, so it has no table or
  * timestamps.
  */
 function unsavedFieldGroup(entity: UnsavedEntity): ApiFieldGroup {
   return {
-    id: `unsaved:field-group:${entity.address}`,
+    // The token, not the address: it is kept when the address moves, so
+    // the editor knows the entity as the same one under its new address.
+    id: `unsaved:field-group:${entity.token}`,
     slug: entity.address,
     label: entity.settings.singularName,
     tableName: "",
@@ -189,13 +176,13 @@ export default function FieldGroupBuilderEditPage({
     savedFieldIds,
     pinFields,
     pinSettings,
+    moveAddress,
   } = useBuilderEntityState({
     entity: fieldGroup,
     builder,
     toFields: loaded => loaded.fields ?? [],
     // An unsaved field group opens with what the dialog set.
     toSettings: loaded => unsaved?.settings ?? fieldGroupSettings(loaded),
-    isDirty: fieldGroupSettingsAreDirty,
     onLoad: loaded =>
       builder.form.reset({ singularName: fieldGroupName(loaded) }),
     // A saved field group is known by its slug, which an unsaved one shares;
@@ -204,6 +191,23 @@ export default function FieldGroupBuilderEditPage({
     identity: loaded => (unsaved ? loaded.id : loaded.slug),
     unsaved: unsaved !== undefined,
   });
+
+  // A change of the settings is a step; an unsaved field group's address
+  // moves it at once, outside the history.
+  const { onSettingsChange, unsavedAddress, saveHeld } =
+    useBuilderSettingsChange({
+      kind: "field-group",
+      unsaved,
+      settings,
+      setSettings,
+      moveAddress,
+      busy: confirmation.isBusy,
+      editRoute: address =>
+        buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug: address }),
+    });
+  // How many places use the field group, from the same query its used-by
+  // list reads; an unsaved one is used nowhere yet, and asked nothing.
+  const usedBy = useFieldGroupUsedBy(unsaved ? undefined : slug);
 
   const isLocked = fieldGroup?.locked === true;
   // Resolved once: the save hook refuses outright without a slug, so the
@@ -354,7 +358,7 @@ export default function FieldGroupBuilderEditPage({
     [settings, entitySlug]
   );
 
-  const { handleSave, confirmApply } = useSchemaSave({
+  const { handleSave, confirmApply, reviewedSettingChanges } = useSchemaSave({
     slug,
     missingSlugMessage: "Field group slug is missing",
     label: displayLabel(settings, entitySlug),
@@ -384,23 +388,19 @@ export default function FieldGroupBuilderEditPage({
     onNoChanges: saveSettingsOnly,
     onApplied: unsaved ? onCreated : onSchemaApplied,
     previewedWith: { localized },
+    // Each changed setting is reviewed with the save, and a save of the
+    // settings alone is reviewed too.
+    settingChanges: pending.settingChanges,
   });
 
   // Discard all on an unsaved field group discards the field group itself: it
   // leaves this tab, and the editor returns to the list.
-  const pendingChanges = useMemo(
-    () =>
-      unsaved
-        ? {
-            ...pending,
-            discardLeaves: true,
-            discardAll: () => {
-              removeUnsavedEntity("field-group", entitySlug);
-              navigateTo(ROUTES.BUILDER_FIELD_GROUPS);
-            },
-          }
-        : pending,
-    [unsaved, pending, entitySlug]
+  const pendingChanges = useUnsavedDiscard(
+    pending,
+    unsaved !== undefined,
+    "field-group",
+    entitySlug,
+    ROUTES.BUILDER_FIELD_GROUPS
   );
 
   // ---------------------------- Loading / error guards ----------------------
@@ -442,7 +442,9 @@ export default function FieldGroupBuilderEditPage({
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
-      onSettingsChange={setSettings}
+      onSettingsChange={onSettingsChange}
+      unsavedAddress={unsavedAddress}
+      usedByCount={knownPlaceCount(usedBy)}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}
@@ -498,6 +500,8 @@ export default function FieldGroupBuilderEditPage({
         </>
       }
       isSaving={isSaving || confirmation.isBusy}
+      // Save waits while an unsaved entity's new address is checked.
+      saveHeld={saveHeld}
       savingLabel="Saving field group changes…"
     >
       <ReconcileFieldGroupDialog
@@ -513,6 +517,7 @@ export default function FieldGroupBuilderEditPage({
         entityName={slug}
         onConfirm={confirmApply}
         creating={unsaved !== undefined}
+        settingChanges={reviewedSettingChanges}
       />
     </BuilderPageLayout>
   );

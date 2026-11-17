@@ -8,10 +8,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
 import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
-import {
-  DocumentPrimaryAction,
-  DocumentSaveIndicator,
-} from "@nextlyhq/plugin-sdk/admin";
+import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
@@ -20,9 +17,9 @@ import { OwnDesignsChip } from "../TemplateOwnDesigns";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
-import { PageReadMeter } from "./page-read-meter";
+import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
-import { PreviewButton } from "./preview-button";
+import { PreviewButton, type VisitorPreview } from "./preview-button";
 import { siteStyleStatus } from "./site-style-studios";
 
 /**
@@ -62,13 +59,17 @@ export function editorTopBar(
   /**
    * The page's title as the form has it now, the field being edited by its
    * address, where that field sits in words when below the top level, and
-   * the canvas, which a binding's Select brings its block into view in.
+   * the canvas, which a binding's Select brings its block into view in,
+   * and "Preview as visitor", which Preview's menu holds, and the page's
+   * data count, which the bar shows only near the limit.
    */
   page: {
     title: string | undefined;
     field: string;
     location?: string | undefined;
     canvas: HTMLElement | null;
+    visitor: VisitorPreview;
+    pageData: PageDataCount | null;
   }
 ): {
   topBar: React.JSX.Element;
@@ -119,16 +120,11 @@ export function editorTopBar(
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
-        {/* What the page costs to read, against its allowance: a page's
-            alone, since a component is read as part of each page placing it. */}
-        {view.initialDocument.kind === "page" ? (
-          <PageReadMeter
-            editor={editor}
-            drawnWith={view.canvasRender}
-            regions={view.canvasRegions}
-            componentTitle={view.componentLibrary.titleOf}
-          />
-        ) : null}
+        {/* The page's data against its limit, after undo and redo, in the
+            column that shortens first: shown only once the page nears its
+            limit, and only on a page, since a component is read as part of
+            each page placing it. */}
+        <PageReadMeter count={page.pageData} />
       </>
     ),
     topBarCenter: (
@@ -153,24 +149,17 @@ export function editorTopBar(
     ),
     topBarEnd: (
       <>
-        {/* Whether the work is stored, beside the verbs that store it: the
-          header's own chip, which reads the field's held work too. Its text
-          sits against Preview, so the width it reserves for its longest
-          state opens towards the panel buttons rather than between it and
-          what it describes. Reserved only where the bar has the room: below
-          1400px it takes what it shows, as the device labels give way there,
-          so the end column never runs into the zoom. Set in the bar's own
-          text size, as Preview beside it is. */}
         {/* First in the group, as the agreed bar has it: one search for
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
-        <DocumentSaveIndicator className="min-w-[9rem] shrink-0 justify-end text-sm @max-[1400px]/topbar:min-w-0" />
-        <PreviewButton />
-        {/* Last, at the bar's far end where the header kept them: the
-          document's leading action with its other ways to publish on its
-          arrow, which the builder's taking the window would otherwise leave
-          reachable only from the keyboard. */}
-        <DocumentPrimaryAction />
+        <PreviewButton visitor={page.visitor} />
+        {/* Last, at the bar's far end where the header kept them: Save and
+          Publish, which say themselves whether the work is saved and
+          whether the live page is behind, so nothing else in the bar says
+          it again. Publish's arrow keeps the other ways to publish, which
+          the builder's taking the window would otherwise leave reachable
+          only from the keyboard. */}
+        <DocumentSaveAndPublish />
       </>
     ),
   };

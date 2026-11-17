@@ -24,6 +24,7 @@
 import {
   MAX_TOKEN_NAME_LENGTH,
   blockLabelFrom,
+  contentWidthTokenOf,
   isPlainRecord,
   selectNodes,
   type DocumentLimits,
@@ -122,7 +123,12 @@ export function tokenUsageOf(
   const blocks = new Map<string, number>();
   for (const entry of selection.nodes) {
     const styles: unknown = (entry.node as { styles?: unknown }).styles;
-    for (const identity of variablesIn(styles)) {
+    const found = variablesIn(styles);
+    // A container's own content width is a prop the compiler writes from, so
+    // a variable it names is used as one in the styles is.
+    const ownWidth = contentWidthTokenOf(entry.node);
+    if (ownWidth !== undefined && namesAVariable(ownWidth)) found.add(ownWidth);
+    for (const identity of found) {
       blocks.set(identity, (blocks.get(identity) ?? 0) + 1);
     }
   }

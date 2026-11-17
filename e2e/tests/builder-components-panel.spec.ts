@@ -414,7 +414,7 @@ test.describe("the Components panel", () => {
 
     await expect(
       page.locator(".nx-insert-panel__placement").first()
-    ).toHaveText("Adding after Heading");
+    ).toHaveText("Adding between Heading and Section");
     await page.getByRole("combobox", { name: "Insert a block" }).fill(title);
     await tile(page, title).click();
     await saveDraft(page);
@@ -540,7 +540,7 @@ test.describe("the Components panel", () => {
       await add.tap();
       await expect(
         page.locator(".nx-insert-panel__placement").first()
-      ).toHaveText("Adding after Heading");
+      ).toHaveText("Adding between Heading and Section");
     });
   });
 

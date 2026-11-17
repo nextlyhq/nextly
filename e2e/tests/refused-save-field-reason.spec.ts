@@ -74,7 +74,7 @@ test("a refused save puts the server's reason on its field and keeps the edit", 
 
   // The edit the server will refuse: the second row fills the header too.
   await areas.nth(1).click();
-  await page.getByRole("option", { name: "header", exact: true }).click();
+  await page.getByRole("option", { name: "Header", exact: true }).click();
   await expect(areas.nth(1)).toHaveText(/header/i);
 
   const answer = page.waitForResponse(

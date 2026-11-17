@@ -157,10 +157,11 @@ export function pagesCollection(
       // choice rather than reconciling two controls.
       relationship({
         name: "layout",
-        label: "Layout",
+        label: "Header & footer",
         relationTo: LAYOUTS_SLUG,
         admin: {
-          description: "Leave empty to use the site's default Layout.",
+          description:
+            "Leave empty to use the site's default header & footer set.",
           hidden: true,
         },
         // A function, so it is no part of the stored schema: adding it changes

@@ -37,7 +37,7 @@ import {
   type ActionRecovery,
   type ContributedAction,
 } from "./DocumentActionBar";
-import { effectiveEntryStatus } from "./entry-address";
+import { effectiveEntryStatus, everPublishedOnRecord } from "./entry-address";
 import type {
   DeleteOutcome,
   SubmitOutcome,
@@ -346,6 +346,60 @@ export interface DocumentActionBindings {
    * then, as the Save control does.
    */
   keepsOffer: boolean;
+  /**
+   * The storing action under way (`save`, `publish`), or null: what a
+   * surface naming the work on each action's own control reads, since
+   * `saveState` says "saving" for both and for a tracked write alone.
+   */
+  storingAction: string | null;
+  /**
+   * Which action the failure `saveState` reports came from: `publish` for a
+   * failed Publish, `save` for every other failure (a Save, a tracked write,
+   * changes on offer that couldn't be kept), or null while nothing failed.
+   */
+  failedAction: string | null;
+  /**
+   * Whether the form holds unsaved work, a field's held work included: what
+   * `saveState` stops saying while a store runs or after one failed.
+   */
+  dirty: boolean;
+  /**
+   * What a failed write the document depends on (a site-wide Design change)
+   * says, or null: what a surface naming each action's failure on its own
+   * control reads while `saveState` still reports a failed Publish.
+   */
+  writeFailure: string | null;
+  /** Where the document is in its life, for a surface that says so itself. */
+  lifecycle: DocumentLifecycle;
+  /**
+   * Publishes what is on screen, as the header's Publish does: the offered
+   * Publish where the model offers one, and otherwise, on a published
+   * document of a drafts collection holding unsaved edits but no saved
+   * working draft, the same publish of those edits (the header saves them
+   * first there, then publishes). Undefined where neither applies.
+   */
+  publishLatest: (() => Promise<DocumentActionOutcome>) | undefined;
+}
+
+/** A document's place in its life, as the actions read it. */
+export interface DocumentLifecycle {
+  /** Whether the collection has a Draft/Published lifecycle at all. */
+  hasStatus: boolean;
+  /** Whether a published document keeps its edits as a working draft. */
+  draftsEnabled: boolean;
+  /** Whether this person may publish it. */
+  canPublish: boolean;
+  /** The active language's lifecycle status. */
+  status: "draft" | "published";
+  /** Whether saved changes wait beside the live version. */
+  hasWorkingDraft: boolean;
+  /** Whether the document has ever been public, on record. */
+  everPublished: boolean;
+  /**
+   * When the live version went live, where it is live and known: the live
+   * row's own time, which a working draft's save leaves alone.
+   */
+  liveSince: Date | null;
 }
 
 /**
@@ -770,7 +824,97 @@ export function useDocumentActionBindings({
     saveState,
     keepsOffer: keep.waiting,
     lastStoredAt: storedAt(gate.lastStore),
+    storingAction: gate.storingAction,
+    failedAction: failedActionOf(saveState, gate.lastStore, keep.refusal),
+    dirty: isDirty,
+    writeFailure:
+      gate.trackedFailure === null
+        ? null
+        : trackedFailureMessage(gate.trackedFailure),
+    lifecycle: {
+      hasStatus,
+      draftsEnabled,
+      canPublish: canPublishDocument,
+      status: effectiveStatus === "published" ? "published" : "draft",
+      hasWorkingDraft,
+      everPublished:
+        effectiveStatus === "published" || everPublishedOnRecord(entry),
+      liveSince:
+        effectiveStatus === "published" ? timeOf(entry?.updatedAt) : null,
+    },
+    publishLatest: latestPublish({
+      offered: withContributions.actions.some(
+        action => action.id === "publish"
+      ),
+      run,
+      publishEdits:
+        isPublishedEditState &&
+        hasStatus &&
+        draftsEnabled &&
+        canPublishDocument &&
+        canEdit &&
+        isDirty &&
+        !isReadingHistory &&
+        !writesRefused
+          ? performers.publish
+          : undefined,
+      reason: reasons.publish,
+      refusalFor,
+    }),
   };
+}
+
+/**
+ * Which action the failure the save state reports came from; see
+ * `DocumentActionBindings.failedAction`.
+ */
+function failedActionOf(
+  saveState: DocumentSaveState,
+  lastStore: StoringGate["lastStore"],
+  keepRefusal: KeepRefusal | null
+): string | null {
+  if (saveState.kind !== "failed") return null;
+  if (keepRefusal === null && lastStore.kind === "failed") {
+    return lastStore.action;
+  }
+  return "save";
+}
+
+/** A time the server sent, or null where it isn't one. */
+function timeOf(value: unknown): Date | null {
+  if (typeof value !== "string" && !(value instanceof Date)) return null;
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? null : time;
+}
+
+/**
+ * Publish, where the model offers it, and otherwise a published document's
+ * unsaved edits published as the header's Publish would publish them: the
+ * same performer, refused for the same reasons Publish is.
+ */
+function latestPublish({
+  offered,
+  run,
+  publishEdits,
+  reason,
+  refusalFor,
+}: {
+  offered: boolean;
+  run: (id: string) => Promise<DocumentActionOutcome>;
+  publishEdits: Performer | undefined;
+  reason: string | undefined;
+  refusalFor: (reason: string) => SubmitRefusal;
+}): (() => Promise<DocumentActionOutcome>) | undefined {
+  if (offered) return () => run("publish");
+  if (publishEdits === undefined) return undefined;
+  return () =>
+    reason === undefined
+      ? publishEdits()
+      : Promise.resolve({
+          ok: false,
+          reason: refusalFor(reason),
+          message: reason,
+        });
 }
 
 /**
@@ -1250,7 +1394,7 @@ function deriveSaveState({
     // that made it can do. The message says where.
     return {
       kind: "failed",
-      message: `${trackedFailure.label} wasn't saved: ${trackedFailure.message} Make that change again where you made it, and this page can then be saved.`,
+      message: trackedFailureMessage(trackedFailure),
     };
   }
   if (isDirty) return { kind: "unsaved" };
@@ -1258,6 +1402,14 @@ function deriveSaveState({
     kind: "saved",
     at: lastStore.kind === "stored" ? lastStore.at : null,
   };
+}
+
+/** What a failed write the document depends on says, naming the change. */
+function trackedFailureMessage(failure: {
+  label: string;
+  message: string;
+}): string {
+  return `${failure.label} wasn't saved: ${failure.message} Make that change again where you made it, and this page can then be saved.`;
 }
 
 /** A built-in action's performer, as `builtInPerformers` returns each. */

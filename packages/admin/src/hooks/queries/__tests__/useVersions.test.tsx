@@ -290,7 +290,9 @@ describe("useBaselineDiff", () => {
     );
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "published", 5);
+    expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "published", {
+      to: 5,
+    });
     expect(result.current.data?.baseline).toEqual({
       name: "published",
       versionNo: 3,
@@ -331,7 +333,7 @@ describe("useBaselineDiff", () => {
 
     rerender({ baseline: "draft" });
     await waitFor(() =>
-      expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "draft", 5)
+      expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "draft", { to: 5 })
     );
 
     expect(result.current.isPlaceholderData).toBe(true);
@@ -366,24 +368,107 @@ describe("useBaselineDiff", () => {
 
     rerender({ docScope: other });
     await waitFor(() =>
-      expect(baselineDiffSpy).toHaveBeenCalledWith(other, "published", 5)
+      expect(baselineDiffSpy).toHaveBeenCalledWith(other, "published", {
+        to: 5,
+      })
     );
 
     expect(result.current.data).toBeUndefined();
     expect(result.current.isPending).toBe(true);
   });
 
-  it("keeps the resolved pair when the comparison mounts again within the visit", async () => {
-    // The app's own cache time, so the first answer is still held when the
-    // page mounts again.
+  it("asks in the page's language when no version is named, and keeps each language's answer apart", async () => {
+    // With no version named, the server picks the part to compare by the
+    // language asked for; without it a French address compares the default
+    // language's part instead.
+    baselineDiffSpy.mockResolvedValue({
+      from: 3,
+      to: 5,
+      locale: "fr",
+      hasChanges: true,
+      fields: [],
+      baseline: { name: "published", versionNo: 3 },
+    });
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     const ownWrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
-    // Asked again after the newer version was marked seen, "last viewed" has
-    // nothing earlier to name.
+
+    const fr = renderHook(
+      () => useBaselineDiff({ scope, baseline: "published", locale: "fr" }),
+      { wrapper: ownWrapper }
+    );
+    await waitFor(() => expect(fr.result.current.isSuccess).toBe(true));
+    expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "published", {
+      locale: "fr",
+    });
+
+    // Another language is another question, never the French answer reused.
+    const de = renderHook(
+      () => useBaselineDiff({ scope, baseline: "published", locale: "de" }),
+      { wrapper: ownWrapper }
+    );
+    await waitFor(() => expect(de.result.current.isSuccess).toBe(true));
+    expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "published", {
+      locale: "de",
+    });
+    expect(baselineDiffSpy).toHaveBeenCalledTimes(2);
+    client.clear();
+  });
+
+  it("never answers a language named like the absent one with the absent one's answer", async () => {
+    // A language code is whatever the app configures, so no word can stand
+    // for "no language" in the key without some code meaning the same.
+    baselineDiffSpy.mockResolvedValue({
+      from: 3,
+      to: 5,
+      locale: null,
+      hasChanges: true,
+      fields: [],
+      baseline: { name: "published", versionNo: 3 },
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ownWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    // One mounted comparison moving between parts, as the page does when its
+    // address changes: a key shared by two parts would ask nothing new.
+    const { result, rerender } = renderHook(
+      ({ locale }: { locale?: string }) =>
+        useBaselineDiff({
+          scope,
+          baseline: "last-viewed",
+          ...(locale !== undefined ? { locale } : {}),
+        }),
+      { wrapper: ownWrapper, initialProps: {} }
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    for (const code of ["any", "auto", "null"]) {
+      rerender({ locale: code });
+      await waitFor(() =>
+        expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "last-viewed", {
+          locale: code,
+        })
+      );
+    }
+    expect(baselineDiffSpy).toHaveBeenCalledTimes(4);
+    client.clear();
+  });
+
+  it("keeps the version last looked at for the visit, and resolves it again on the next", async () => {
+    // The app's own cache time, so the first visit's answer is still held
+    // when the reader comes back.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ownWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
     baselineDiffSpy
       .mockResolvedValueOnce({
         from: 3,
@@ -393,25 +478,122 @@ describe("useBaselineDiff", () => {
         fields: [],
         baseline: { name: "last-viewed", versionNo: 3 },
       })
-      .mockRejectedValue(new Error("NO_BASELINE"));
+      .mockResolvedValueOnce({
+        from: 5,
+        to: 6,
+        locale: null,
+        hasChanges: true,
+        fields: [],
+        baseline: { name: "last-viewed", versionNo: 5 },
+      });
 
     const first = renderHook(
-      () => useBaselineDiff({ scope, baseline: "last-viewed", to: 5 }),
+      () => useBaselineDiff({ scope, baseline: "last-viewed" }),
       { wrapper: ownWrapper }
     );
     await waitFor(() => expect(first.result.current.isSuccess).toBe(true));
+    // Drawn again within the visit, it is the same answer, not a new question.
+    first.rerender();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(baselineDiffSpy).toHaveBeenCalledTimes(1);
     first.unmount();
 
+    // Version 5 was seen on that visit and version 6 saved since: the next
+    // visit compares 5 with 6, not the pair the last one resolved.
     const second = renderHook(
+      () => useBaselineDiff({ scope, baseline: "last-viewed" }),
+      { wrapper: ownWrapper }
+    );
+    await waitFor(() => expect(second.result.current.data?.from).toBe(5));
+    expect(baselineDiffSpy).toHaveBeenCalledTimes(2);
+    client.clear();
+  });
+});
+
+describe("a baseline comparison's fields", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+  });
+
+  /** One client for both hooks, mirroring the app's focus default. */
+  function sharedClient() {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, refetchOnWindowFocus: false },
+      },
+    });
+    const ownWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return { client, ownWrapper };
+  }
+
+  const answer = (name: string) => ({
+    from: 3,
+    to: 5,
+    locale: null,
+    hasChanges: true,
+    fields: [{ name: "title" }],
+    baseline: { name, versionNo: 3 },
+  });
+
+  it("draws the pair from the baseline's own answer, without asking for it again", async () => {
+    const { client, ownWrapper } = sharedClient();
+    baselineDiffSpy.mockResolvedValue(answer("published"));
+
+    const baseline = renderHook(
+      () => useBaselineDiff({ scope, baseline: "published", to: 5 }),
+      { wrapper: ownWrapper }
+    );
+    await waitFor(() => expect(baseline.result.current.isSuccess).toBe(true));
+
+    // Mounted once the answer has named the pair, as the page mounts its view.
+    const pair = renderHook(
+      () => useVersionDiff({ scope, from: 3, to: 5, seededBy: "published" }),
+      { wrapper: ownWrapper }
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(diffSpy).not.toHaveBeenCalled();
+    expect(pair.result.current.data?.fields).toEqual([{ name: "title" }]);
+    // The note about the baseline belongs to the page, not to the pair.
+    expect(pair.result.current.data?.baseline).toBeUndefined();
+
+    // On return the baseline is asked again, and its answer is the pair's:
+    // the pair is not asked a second time beside it.
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(baselineDiffSpy).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(diffSpy).not.toHaveBeenCalled();
+    client.clear();
+  });
+
+  it("still revalidates a frozen baseline's pair on return, against the live schema", async () => {
+    const { client, ownWrapper } = sharedClient();
+    baselineDiffSpy.mockResolvedValue(answer("last-viewed"));
+    diffSpy.mockResolvedValue({
+      ...answer("last-viewed"),
+      baseline: undefined,
+    });
+
+    const baseline = renderHook(
       () => useBaselineDiff({ scope, baseline: "last-viewed", to: 5 }),
       { wrapper: ownWrapper }
     );
-    // Given the chance to refetch: a refetch would have asked again by now.
+    await waitFor(() => expect(baseline.result.current.isSuccess).toBe(true));
+    renderHook(
+      () => useVersionDiff({ scope, from: 3, to: 5, seededBy: "last-viewed" }),
+      { wrapper: ownWrapper }
+    );
     await new Promise(resolve => setTimeout(resolve, 20));
+    expect(diffSpy).not.toHaveBeenCalled();
 
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(diffSpy).toHaveBeenCalledTimes(1));
     expect(baselineDiffSpy).toHaveBeenCalledTimes(1);
-    expect(second.result.current.isError).toBe(false);
-    expect(second.result.current.data?.from).toBe(3);
     client.clear();
   });
 });

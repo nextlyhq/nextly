@@ -34,8 +34,9 @@ import { PLAYGROUND, stop, waitFor } from "../../support/playground-dev-server";
  * The SEO plugin's log of addresses not found, on a production build, counts
  * the requests a route answered not found and nothing else: a page that is
  * found is never logged, whether visited, navigated to or prefetched; a
- * missing address the page builder's content route answers is logged once,
- * though its page and its head both answer it; a miss Nextly's own content
+ * missing address the page builder's cached content route answers is
+ * logged once under Cache Components, though its page and its head both
+ * answer it; a miss Nextly's own content
  * route decides (`/preview/blocks`) is logged once; a public route's miss is
  * logged where it is answered per request and never turns into an error
  * where it is not; and a prefetch of a missing address is never logged.
@@ -189,10 +190,12 @@ async function rowFor(path: string): Promise<Logged | undefined> {
 /**
  * Asks for a missing address of its own and waits for it to be logged: the
  * log is written after each response, so once this one is there, what the
- * requests before it would have written is there too.
+ * requests before it would have written is there too. Under `/preview/blocks`,
+ * a route answered per request, so its miss is logged with or without Cache
+ * Components.
  */
 async function settle(request: APIRequestContext, tag: string): Promise<void> {
-  const marker = `/seo-settle-${tag}-${run}`;
+  const marker = `/preview/blocks/seo-settle-${tag}-${run}`;
   await request.get(`${SEO_URL}${marker}`);
   await expect.poll(() => rowFor(marker), { timeout: 20_000 }).toBeDefined();
 }
@@ -237,11 +240,15 @@ test.describe("the SEO plugin's log of addresses not found, on a production buil
   test("logs a missing address once, though its page and its head both answer it", async ({
     request,
   }) => {
+    // The page builder's content route is public and cached: under Cache
+    // Components its miss is answered per request and logged once; without
+    // them the answer is rendered once and kept, and nothing is logged.
     const missing = `/seo-missing-${run}`;
     expect(answeredNotFound(await visit(request, missing))).toBe(true);
-    await expect.poll(() => rowFor(missing), { timeout: 20_000 }).toBeDefined();
     await settle(request, "missing");
-    expect((await rowFor(missing))?.hits).toBe(1);
+    expect((await rowFor(missing))?.hits).toBe(
+      CACHE_COMPONENTS ? 1 : undefined
+    );
   });
 
   test("logs a miss a route's own notFound decides once", async ({

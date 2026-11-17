@@ -64,6 +64,7 @@ import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWi
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { countWord, plural } from "@admin/lib/count-words";
 import {
   describeActivityActor,
   formatRelativeTime,
@@ -277,7 +278,8 @@ function DraftCount({
   return (
     <Link
       href={href}
-      aria-label={`${draft} drafts in ${label}`}
+      // "1 draft in Posts", "2 drafts in Posts".
+      aria-label={`${plural(draft, "draft")} in ${label}`}
       // A 24px target however few digits it holds, its figure kept at the cell's right edge.
       className="inline-flex min-h-6 min-w-6 items-center justify-end font-medium text-foreground hover:underline"
     >
@@ -554,7 +556,7 @@ function rowDetails(row: ContentRow, now: number): ReactNode[] {
   if (row.kind === "single") return ["Single", ...updated];
   const entries = (
     <Fragment key="entries">
-      <Count value={row.count} /> {row.count === 1 ? "entry" : "entries"}
+      <Count value={row.count} /> {countWord(row.count, "entry", "entries")}
     </Fragment>
   );
   const drafts =
@@ -563,7 +565,7 @@ function rowDetails(row: ContentRow, now: number): ReactNode[] {
       : [
           <Fragment key="drafts">
             <DraftCount slug={row.slug} label={row.label} draft={row.draft} />{" "}
-            {row.draft === 1 ? "draft" : "drafts"}
+            {countWord(row.draft, "draft")}
           </Fragment>,
         ];
   return [entries, ...drafts, ...updated];

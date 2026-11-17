@@ -19,7 +19,6 @@ import * as React from "react";
 
 import { siteBaseOf } from "./block-look-rows";
 import type { EditorState } from "./editor-state";
-import { variationLabel } from "./inserter";
 import {
   boundLooksOf,
   lookChoice,
@@ -30,6 +29,7 @@ import {
   wornLook,
   type LookTile,
 } from "./look-tiles";
+import { variationLabel } from "./panels/add/inserter";
 import { radioGroupStep } from "./roving-radios";
 
 export interface LookTilesProps {
@@ -123,15 +123,17 @@ export function LookTiles({
   const node =
     nodeId === null ? undefined : findNode(editor.document.nodes, nodeId);
   const labelId = React.useId();
+  const worn =
+    node === undefined || library === undefined
+      ? null
+      : wornLook(node.classes, looksOfType(library, node.type));
   const tiles =
     node === undefined || library === undefined
       ? []
-      : lookTiles(library, node.type, ownLookName(node.type));
+      : lookTiles(library, node.type, ownLookName(node.type), worn);
   if (node === undefined || library === undefined || tiles.length === 0) {
     return null;
   }
-  const looks = looksOfType(library, node.type);
-  const worn = wornLook(node.classes, looks);
   // Every look of the type comes off when another is chosen, those the
   // library no longer offers included, so none is left to return later.
   const removable = boundLooksOf(library, node.type);
@@ -219,6 +221,10 @@ export function LookTiles({
                 {tile.name}
                 {tile.id === null && tile.name !== "Default" ? (
                   <span className="nx-look-tile__tag">Default</span>
+                ) : null}
+                {/* Worn, and no longer offered to other blocks. */}
+                {tile.hidden ? (
+                  <span className="nx-look-tile__tag">Hidden</span>
                 ) : null}
               </span>
             </button>
