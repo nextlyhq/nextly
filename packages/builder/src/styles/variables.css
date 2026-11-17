@@ -215,14 +215,14 @@
 
 .nx-vars__row {
   display: grid;
-  flex: 1;
-  min-width: 0;
   grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem;
+  width: 100%;
   min-height: 29px;
   padding: 4px 2px;
   border: 0;
+  border-bottom: 1px solid var(--nx-border);
   background: transparent;
   color: var(--nx-foreground);
   font: inherit;
@@ -231,9 +231,27 @@
   cursor: pointer;
 }
 
+/* A variable's row shares its line with the ⋯, the line drawing the
+   border; the other lists' rows (fonts, shared styles) keep their own. */
+.nx-vars__line > .nx-vars__row {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+
+.nx-vars__row:hover,
+.nx-vars__row[data-state="open"],
+.nx-vars__row[data-open],
 .nx-vars__line:hover,
 .nx-vars__item[data-open] > .nx-vars__line {
   background: var(--nx-muted);
+}
+
+/* On the line, the line takes the hover, the row inside it none of its own. */
+.nx-vars__line > .nx-vars__row:hover,
+.nx-vars__line > .nx-vars__row[data-state="open"],
+.nx-vars__line > .nx-vars__row[data-open] {
+  background: transparent;
 }
 
 /* The ⋯: a full 24px target, muted until the row is pointed at or it has

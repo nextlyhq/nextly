@@ -237,7 +237,7 @@ test("shows no word for the code underneath in any tab", async ({ page }) => {
   }
 });
 
-test("F2 opens a row's editor to rename it, and Escape closes it back to the row without moving the selection", async ({
+test("F2 renames a row in place, and Escape closes the field back to the row without moving the selection", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -245,13 +245,15 @@ test("F2 opens a row's editor to rename it, and Escape closes it back to the row
   await clickBlock(page, "tabs-text");
   await expect.poll(() => selection(page)).toEqual(["tabs-text"]);
   await openDesign(page);
-  const row = page.locator(".nx-vars__row").first();
+  // The first variable's line: its row gives way to the name field while
+  // it is renamed, so the row is found inside it.
+  const line = page.locator(".nx-vars__item").first();
+  const row = line.locator(".nx-vars__row");
   await row.focus();
   await page.keyboard.press("F2");
-  const editor = page.locator(".nx-vars-editor");
-  await expect(editor).toBeVisible();
-  const name = editor.getByLabel("Name", { exact: true });
+  const name = line.getByRole("textbox", { name: /^Name of / });
   await expect(name).toBeFocused();
+  await expect(page.locator(".nx-vars-editor")).toHaveCount(0);
   // The whole name is selected, so typing replaces it.
   expect(
     await name.evaluate(
@@ -261,11 +263,11 @@ test("F2 opens a row's editor to rename it, and Escape closes it back to the row
   ).toBe(true);
 
   await page.keyboard.press("Escape");
-  await expect(editor).toBeHidden();
+  await expect(name).toHaveCount(0);
   await expect(row).toBeFocused();
   expect(await selection(page)).toEqual(["tabs-text"]);
-  // Back on the row, its count's tooltip may show again once the counts are
-  // read, and an Escape closes that first. The next leaves the panel for the
+  // Back on the row, its tooltip may show again once the counts are read,
+  // and an Escape closes that first. The next leaves the panel for the
   // canvas, and the block is still selected after every press.
   const tooltip = page.getByRole("tooltip");
   if (await tooltip.isVisible()) {

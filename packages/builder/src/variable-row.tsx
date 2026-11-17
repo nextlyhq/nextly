@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { markOf } from "./design-group-toggle";
 import { colourHexOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
@@ -102,21 +103,12 @@ export function VariableRow({
   const handOff = useHandOff(opened);
   const shown = shownName(entry);
   const changing = !readOnly && token !== undefined;
-  const onKeyDown = (event: React.KeyboardEvent): void => {
-    if (!changing) return;
-    if (event.key === "F2") {
-      event.preventDefault();
-      setRenaming(true);
-    } else if (
-      event.key === "ContextMenu" ||
-      (event.key === "F10" && event.shiftKey)
-    ) {
-      event.preventDefault();
-      setMenuOpen(true);
-    }
-  };
+  const onKeyDown = rowKeys(changing, {
+    rename: () => setRenaming(true),
+    menu: () => setMenuOpen(true),
+  });
   return (
-    <li className="nx-vars__item" data-open={open ? "" : undefined}>
+    <li className="nx-vars__item" data-open={markOf(open)}>
       <Popover open={open} onOpenChange={opened} modal>
         {/* The editor opens beside the whole row, the ⋯ with it. */}
         <PopoverAnchor asChild>
@@ -146,7 +138,7 @@ export function VariableRow({
                     // Drawn as chosen while its editor is open. Its own mark:
                     // the row's tooltip sets `data-state` too, over the
                     // popover's.
-                    data-open={open ? "" : undefined}
+                    data-open={markOf(open)}
                     onKeyDown={onKeyDown}
                   >
                     <RowLead
@@ -215,6 +207,26 @@ export function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * A row's own keys, as a file list has them: F2 renames in place, and
+ * Shift+F10 or the menu key opens its ⋯ menu. None on a row that cannot
+ * change.
+ */
+function rowKeys(
+  changing: boolean,
+  on: { rename: () => void; menu: () => void }
+): ((event: React.KeyboardEvent) => void) | undefined {
+  if (!changing) return undefined;
+  return event => {
+    const menu =
+      event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+    if (event.key !== "F2" && !menu) return;
+    event.preventDefault();
+    if (menu) on.menu();
+    else on.rename();
+  };
 }
 
 /** The row's name, and its kind where another row shares the name. */
