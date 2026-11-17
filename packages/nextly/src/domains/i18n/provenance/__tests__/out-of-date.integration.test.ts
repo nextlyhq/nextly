@@ -142,6 +142,19 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("never marks a field its language has cleared", async () => {
+      // A cleared translation has no value of its own to fall out of date: the language reads the
+      // field from another one. Its source changing says nothing about the language.
+      await boot(dialect);
+      const id = await translatedPost();
+      await save(id, "es", { summary: "" });
+      await save(id, "en", { summary: "Brief" });
+      const overview = await overviewOf(id);
+      expect(overview.es.stale).toBeUndefined();
+      expect(overview.es.fields?.summary).toBeUndefined();
+      expect(overview.es.fields?.title).toMatchObject({ outOfDate: false });
+    });
+
     it("never marks a value written originally in its language", async () => {
       await boot(dialect);
       const id = await translatedPost();

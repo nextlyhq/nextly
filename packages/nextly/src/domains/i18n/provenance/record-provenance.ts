@@ -305,6 +305,24 @@ async function recordTranslationProvenance(
     });
   };
   for (const [field, origin] of origins) {
+    // A translation cleared has no value of its own: its language reads the field from another,
+    // so it keeps no record that could put the language out of date. The default language keeps
+    // its record, cleared or not: it is the source, and its translations follow it.
+    if (
+      write.locale !== write.defaultLocale &&
+      isBlankValue(write.values[field])
+    ) {
+      const prefix = `${field}${ROW_PATH_SEPARATOR}`;
+      const cleared = [...existing]
+        .filter(([path]) => path === field || path.startsWith(prefix))
+        .map(([, id]) => id);
+      if (cleared.length > 0) {
+        await db.delete(TRANSLATION_PROVENANCE_TABLE, {
+          and: [{ column: "id", op: "IN", value: cleared }],
+        });
+      }
+      continue;
+    }
     const values = {
       valueFingerprint: valueFingerprint(
         write.values[field],
