@@ -21,6 +21,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { variableFor, variablesFor } from "./style-colour";
+import { NEW_SHADOW_VALUE } from "./tokens-studio";
 
 /**
  * A layer's colour: one of the site's colour variables, by the identity a
@@ -48,16 +49,6 @@ export interface ShadowLayer {
 export type ShadowReading =
   | { readonly kind: "layers"; readonly layers: readonly ShadowLayer[] }
   | { readonly kind: "css" };
-
-/** The layer "+ Add layer" adds, and a new shadow variable starts as. */
-export const NEW_SHADOW_LAYER: ShadowLayer = {
-  inset: false,
-  x: "0",
-  y: "4px",
-  blur: "12px",
-  spread: undefined,
-  colour: { kind: "raw", value: "rgba(0, 0, 0, 0.12)" },
-};
 
 /**
  * What a colour variable is offered at: a colour with no contrast partner,
@@ -225,4 +216,18 @@ function written(
         .join(" ");
     })
     .join(", ");
+}
+
+/**
+ * The layer "+ Add layer" adds: a new shadow variable's one layer, read
+ * from its value, so the two cannot differ. Last in the module, so
+ * everything reading it uses is defined first.
+ */
+export const NEW_SHADOW_LAYER: ShadowLayer = newShadowLayer();
+
+function newShadowLayer(): ShadowLayer {
+  const read = readShadow(NEW_SHADOW_VALUE, undefined);
+  const [layer] = read.kind === "layers" ? read.layers : [];
+  if (layer === undefined) throw new Error("A new shadow reads as no layer.");
+  return layer;
 }

@@ -56,6 +56,7 @@ import {
   withoutParts,
   type RemovalPlan,
 } from "./variable-removal";
+import { ShadowValue, ShadowVariables } from "./variable-shadow-value";
 import { swatchStyle } from "./variable-swatch";
 import type { VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
@@ -67,6 +68,7 @@ import {
   unwritableValue,
   valueFieldFor,
   variableCss,
+  type ValueFieldProps,
 } from "./variable-value-controls";
 
 export interface VariableEditorProps {
@@ -165,10 +167,7 @@ export function VariableEditor({
           isNew={isNew}
         />
       </div>
-      <VariableDescription
-        token={token}
-        supplied={suppliedOf(row.identity)}
-      />
+      <VariableDescription token={token} supplied={suppliedOf(row.identity)} />
       {token === undefined ? null : (
         <Values
           entry={entry}
@@ -444,15 +443,18 @@ function Values({
 }): React.JSX.Element {
   const { row, lineHeight } = entry;
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
-    <ModeValues
-      token={held}
-      cssOf={value => variableCss(tokens, held, value)}
-      readOnly={readOnly}
-      onCommit={(mode, value) => write(at, mode, value)}
-      onClear={() => onChange(clearDarkValue(tokens, at))}
-      refusedIn={mode => refusalAt(refused, at, mode)}
-      fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
-    />
+    // A shadow's Colour offers the site's colour variables.
+    <ShadowVariables.Provider value={tokens}>
+      <ModeValues
+        token={held}
+        cssOf={value => variableCss(tokens, held, value)}
+        readOnly={readOnly}
+        onCommit={(mode, value) => write(at, mode, value)}
+        onClear={() => onChange(clearDarkValue(tokens, at))}
+        refusedIn={mode => refusalAt(refused, at, mode)}
+        fluid={fluidHookOf({ token: held, tokens, at, onChange, readOnly })}
+      />
+    </ShadowVariables.Provider>
   );
   const lineToken =
     lineHeight === undefined ? undefined : tokens.tokens[lineHeight.at];
@@ -488,7 +490,13 @@ function TypeSizeFluid({
   onChange: (tokens: SiteTokenSet) => void;
   readOnly: boolean;
 }): React.JSX.Element | null {
-  const hook = fluidHookOf({ token: size, tokens, at: sizeAt, onChange, readOnly });
+  const hook = fluidHookOf({
+    token: size,
+    tokens,
+    at: sizeAt,
+    onChange,
+    readOnly,
+  });
   return hook === undefined ? null : <FluidButton hook={hook} />;
 }
 
@@ -710,7 +718,7 @@ function ModeValues({
   /** "Fluid…" on a size's light value, where it can be changed. */
   fluid: FluidHook | undefined;
 }): React.JSX.Element {
-  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
+  const Field = fieldFor(token);
   return (
     <>
       <Field
@@ -734,6 +742,17 @@ function ModeValues({
       />
     </>
   );
+}
+
+/**
+ * The field a variable's values are edited with: a colour's swatch and
+ * picker, a shadow's layers, and every other kind's own field.
+ */
+function fieldFor(
+  token: SiteToken
+): (props: ValueFieldProps) => React.JSX.Element {
+  if (token.kind === "color") return ColourValue;
+  return token.kind === "shadow" ? ShadowValue : valueFieldFor(token);
 }
 
 /**
@@ -996,7 +1015,7 @@ function DarkValue({
       </div>
     );
   }
-  const Field = token.kind === "color" ? ColourValue : valueFieldFor(token);
+  const Field = fieldFor(token);
   return (
     <>
       <Field

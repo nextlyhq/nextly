@@ -63,6 +63,7 @@ import {
   toggleShows,
 } from "./style-numeric";
 import { textNumber, UnitWords, NumericField } from "./style-numeric-field";
+import { drawsShadow, ShadowField } from "./style-shadow-field";
 import { useDraft, arrowStep, storedText } from "./style-text-field";
 import { tokenForTypedName } from "./style-variables";
 import { VariableChoice } from "./variable-choice";
@@ -556,6 +557,20 @@ export function ValueField({
         group={alignment}
         stored={stored}
         actionName={actionName}
+        describedBy={describedBy}
+        onCommit={onCommit}
+      />
+    );
+  }
+  // A shadow is built with the shadow control, as a shadow variable is.
+  if (drawsShadow(control.leaf, stored)) {
+    return (
+      <ShadowField
+        id={id}
+        control={control}
+        stored={stored}
+        actionName={actionName}
+        tokens={tokens}
         describedBy={describedBy}
         onCommit={onCommit}
       />
