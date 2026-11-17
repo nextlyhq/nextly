@@ -505,7 +505,9 @@ describe("NewEntityDialog", () => {
     expect(onCreate).toHaveBeenLastCalledWith(
       expect.objectContaining({
         description: "a".repeat(DESCRIPTION_MAX_LENGTH),
-      })
+      }),
+      // No template picked: Create hands over no template fields.
+      []
     );
   });
 
