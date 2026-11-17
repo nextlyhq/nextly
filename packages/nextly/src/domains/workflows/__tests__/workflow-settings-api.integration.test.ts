@@ -537,7 +537,8 @@ describe.each(getConfiguredTestDialects())(
           ["read", "settings"],
           ["update", "settings"],
         ]);
-        const desk = await role(app(), "legal-desk", []);
+        // A role holds at least one permission; this one has nothing to do with the workflow.
+        const desk = await role(app(), "legal-desk", [["read", "pages"]]);
 
         const list = await refusalOf(() => door.list("alice"));
         const read = await refusalOf(() => door.read("alice", "editorial"));

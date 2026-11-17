@@ -1202,6 +1202,13 @@ export const nextly = {
       (await requireNextlyOnceStarted()).workflows.assignMany(args),
     waiting: async args =>
       (await requireNextlyOnceStarted()).workflows.waiting(args),
+    list: async args => (await requireNextlyOnceStarted()).workflows.list(args),
+    settings: {
+      read: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.read(args),
+      update: async args =>
+        (await requireNextlyOnceStarted()).workflows.settings.update(args),
+    },
   } satisfies WorkflowsNamespace,
 
   users: {
