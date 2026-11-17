@@ -73,7 +73,39 @@ describe("the plugin's field types, described", () => {
     expect(
       describeField(field("text", { validation: { pattern: "[A-Z]+" } }))
         ?.pattern
-    ).toBe("[A-Z]+");
+    ).toBeDefined();
+  });
+
+  it("states a pattern the browser reads as the server does: matching part of the answer", () => {
+    // The server tests `new RegExp(pattern)` against the answer, which passes
+    // when any part of it matches. A browser's `pattern` must match the whole
+    // value, compiled as `^(?:pattern)$` with the `v` flag, so the stated
+    // pattern must accept the same answers.
+    const browserAccepts = (pattern: string, answer: string): boolean => {
+      const stated = describeField(field("text", { validation: { pattern } }))
+        ?.pattern;
+      if (stated === undefined) return true;
+      return new RegExp(`^(?:${stated})$`, "v").test(answer);
+    };
+    const serverAccepts = (pattern: string, answer: string): boolean =>
+      new RegExp(pattern).test(answer);
+    const cases: Array<[string, string]> = [
+      ["@example\\.com$", "ada@example.com"],
+      ["@example\\.com$", "ada@example.org"],
+      ["[A-Z]+", "abcD"],
+      ["[A-Z]+", "abcd"],
+      ["^[0-9]{5}$", "12345"],
+      ["^[0-9]{5}$", "123456"],
+      ["^ab|cd$", "abzz"],
+      ["^ab|cd$", "zzab"],
+    ];
+    for (const [pattern, answer] of cases) {
+      expect([pattern, answer, browserAccepts(pattern, answer)]).toEqual([
+        pattern,
+        answer,
+        serverAccepts(pattern, answer),
+      ]);
+    }
   });
 
   it("draws a Dropdown taking several answers as a group of checkboxes", () => {

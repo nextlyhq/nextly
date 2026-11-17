@@ -78,6 +78,26 @@ function wordingOf(
   };
 }
 
+/**
+ * A field's pattern as a browser's `pattern` attribute must say it to accept
+ * the same answers the server does. The server tests `new RegExp(pattern)`,
+ * which passes when any part of the answer matches; a browser compiles the
+ * attribute as `^(?:pattern)$` with the `v` flag, so it must match the whole
+ * value. Allowing any text around the pattern restores "any part matches".
+ * A pattern the browser could not compile under `v` is left out, because a
+ * browser ignores an invalid one anyway, and the server's check still applies.
+ */
+function browserPattern(pattern: string | undefined): string | undefined {
+  if (pattern === undefined) return undefined;
+  const stated = `[\\s\\S]*(?:${pattern})[\\s\\S]*`;
+  try {
+    new RegExp(`^(?:${stated})$`, "v");
+    return stated;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The limits a control states: a number's bounds, a file's types, a pattern. */
 function limitsOf(
   field: AnyFormField,
@@ -88,7 +108,7 @@ function limitsOf(
   const min = number ? finite(validation.min) : undefined;
   const max = number ? finite(validation.max) : undefined;
   const accept = field.type === "file" ? words(raw.accept) : undefined;
-  const pattern = words(validation.pattern);
+  const pattern = browserPattern(words(validation.pattern));
   return {
     ...(accept === undefined ? {} : { accept }),
     ...(min === undefined ? {} : { min }),
