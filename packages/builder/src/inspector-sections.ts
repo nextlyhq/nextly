@@ -116,9 +116,20 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["containerType", "more"],
     ],
   },
-  // How a block sits in its parent's row or grid. Its properties are still
-  // in Size; the section is in the order, and draws once it holds them.
-  { key: "inside-parent", label: "Inside its parent", properties: [] },
+  // How a block takes its place in its parent: Fill, Fit or Fixed drawn on
+  // top, and the CSS each choice writes behind "+ More".
+  {
+    key: "inside-parent",
+    label: "Inside its parent",
+    properties: [
+      ["flexGrow", "more"],
+      ["flexShrink", "more"],
+      ["flexBasis", "more"],
+      ["alignSelf", "more"],
+      ["justifySelf", "more"],
+      ["order", "more"],
+    ],
+  },
   {
     key: "spacing",
     label: "Spacing",
@@ -133,7 +144,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     // An image's fit and focal point first: how it fills its box is what an
     // author changes first on one. Both have an effect only on a replaced
     // element, so a box never shows them. A child's share of a Row or a Grid
-    // comes after its own size, and only inside one.
+    // is in "Inside its parent".
     properties: [
       ["objectFit", "common"],
       ["objectPosition", "common"],
@@ -142,12 +153,6 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["minWidth", "common"],
       ["maxWidth", "common"],
       ["aspectRatio", "common-on-media"],
-      ["flexGrow", "common"],
-      ["flexShrink", "common"],
-      ["flexBasis", "common"],
-      ["alignSelf", "common"],
-      ["justifySelf", "common"],
-      ["order", "common"],
       ["minHeight", "more"],
       ["maxHeight", "more"],
       ["overflow", "more"],

@@ -1075,3 +1075,20 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 0;
 }
+
+/* "Inside its parent": Width, and Height under a Row or a Grid. */
+.nx-inside-parent {
+  display: grid;
+  row-gap: var(--nx-builder-row-gap);
+  min-width: 0;
+}
+
+.nx-inside-parent__axis {
+  display: grid;
+  row-gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inside-parent__axis > .nx-inspector__note {
+  margin: 0;
+}

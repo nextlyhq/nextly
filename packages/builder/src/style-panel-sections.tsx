@@ -49,6 +49,7 @@ import {
   useArrangeReading,
   type ArrangeReading,
 } from "./plain-layout-controls";
+import { InsideParentFields } from "./plain-parent-controls";
 import { StylePropertyFields } from "./style-property-fields";
 import type { StyleProvenance } from "./style-provenance";
 import type { StyleTarget } from "./style-target";
@@ -386,6 +387,9 @@ function SectionFields({
       <SectionHeld.Provider value={readOnly}>
         {sectionKey === "layout" ? (
           <LayoutLead surroundings={surroundings} arrange={arrange} />
+        ) : null}
+        {sectionKey === "inside-parent" ? (
+          <InsideParentFields surroundings={surroundings} />
         ) : null}
         {sectionKey === "size" ? (
           <BlockShortcutsFields
