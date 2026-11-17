@@ -353,29 +353,31 @@ async function readerPins(
 }
 
 /**
- * How many of Mine's rows its pins take, of `limit`, with `pins` pins and
- * saves to show or not.
+ * How many of Mine's rows its pins take while there are saves to show, of
+ * `limit`.
  *
  * The card asks its "Number of entries" and one more (`listEntries(…) + 1`
- * in `core-widgets/continue.ts`), so its rows are `limit - 1`. While there
- * are saves to show, the pins take at most those rows less two, and at least
- * one, so recent work stays in sight: three of the default five. With no
- * saves to show, the pins take every row.
+ * in `core-widgets/continue.ts`), so its rows are `limit - 1`. The pins take
+ * at most those rows less two, and at least one, so recent work stays in
+ * sight: three of the default five. With no saves to show, the pins take
+ * every row.
  */
-function pinnedRowCount(
-  limit: number,
-  pins: number,
-  hasSaves: boolean
-): number {
+function pinRowsBesideSaves(limit: number): number {
   const cardRows = Math.max(1, limit - 1);
-  return Math.min(pins, hasSaves ? Math.max(1, cardRows - 2) : limit);
+  return Math.max(1, cardRows - 2);
 }
 
 /**
- * Mine: the newest pins first, as many as {@link pinnedRowCount} gives them,
- * then the reader's own latest saves of documents not pinned, newest first,
- * filling the rest of the `limit` rows. Enough saves are asked for that the
- * pins they also name cannot leave Mine short.
+ * Mine: the newest pins first, then the reader's own latest saves of
+ * documents not shown as a pin, newest first, filling the rest of the
+ * `limit` rows. While there are such saves, the pins take
+ * {@link pinRowsBesideSaves} rows; otherwise every row.
+ *
+ * A save of a document pinned but not shown (a seventh pin) is a recent save
+ * like any other, marked pinned so its menu offers Unpin: the document last
+ * worked on is never kept off the card by a pin the card does not show.
+ * Enough saves are asked for that the pins they also name cannot leave Mine
+ * short.
  */
 async function mineRows(
   caller: ReadCaller,
@@ -385,20 +387,30 @@ async function mineRows(
   if (person === undefined) return [];
   const pins = await readerPins(caller, person);
   const pinned = new Set(pins.map(pin => headingKey(pinRef(pin))));
+  const besideSaves = Math.min(pins.length, pinRowsBesideSaves(limit));
+  const shownBesideSaves = new Set(
+    pins.slice(0, besideSaves).map(pin => headingKey(pinRef(pin)))
+  );
   const edits = await recentEdits(caller, {
     limit: limit + pins.length,
     savedBy: person,
   });
   const saved = await editRows(
-    edits.filter(edit => !pinned.has(headingKey(documentOf(edit)))),
+    edits.filter(edit => !shownBesideSaves.has(headingKey(documentOf(edit)))),
     caller,
     pinned,
     "recent"
   );
-  const shownPins = pinnedRowCount(limit, pins.length, saved.length > 0);
+  // No save beside the pins they would show: the pins take every row, and
+  // any save left names a pin among them.
+  if (saved.length === 0) {
+    return pins
+      .slice(0, Math.min(pins.length, limit))
+      .map(pin => pinRow(pin, pins.length));
+  }
   return [
-    ...pins.slice(0, shownPins).map(pin => pinRow(pin, pins.length)),
-    ...saved.slice(0, limit - shownPins),
+    ...pins.slice(0, besideSaves).map(pin => pinRow(pin, pins.length)),
+    ...saved.slice(0, limit - besideSaves),
   ];
 }
 

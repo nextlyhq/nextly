@@ -761,6 +761,14 @@ describe.each(getConfiguredTestDialects())(
           await create(t, BEN, NOTES, { title: `Pin ${i}` }, at(50 - i))
         );
       }
+      // Ben's, pinned by Ana first of all, and later out of her reach.
+      const gated = await create(t, BEN, GATED, { title: "Gated" }, at(55));
+      await dashboardPinsService().pin(as(ANA), {
+        targetType: "collection",
+        targetSlug: GATED,
+        entryId: gated,
+      });
+      await new Promise(resolve => setTimeout(resolve, 15));
       // Pinned one after another, Pin 0 first: Pin 4 is the newest pin.
       for (const id of pinned) {
         await dashboardPinsService().pin(as(ANA), {
@@ -772,9 +780,25 @@ describe.each(getConfiguredTestDialects())(
         await new Promise(resolve => setTimeout(resolve, 15));
       }
       // As the card of five rows asks: its rows and one more.
-      const answer = await asked(as(ANA), "mine", { limit: 6 });
-      const items = answer.op === "list" ? answer.items : [];
-      expect(items.map(row => [row.entryId, row.group, row.pinCount])).toEqual([
+      const rowsOfMine = async () => {
+        const answer = await asked(as(ANA), "mine", { limit: 6 });
+        return (answer.op === "list" ? answer.items : []).map(row => [
+          row.entryId,
+          row.group,
+          row.pinCount,
+        ]);
+      };
+      expect(await rowsOfMine()).toEqual([
+        [pinned[4], "pinned", 6],
+        [pinned[3], "pinned", 6],
+        [pinned[2], "pinned", 6],
+        [saved[2], "recent", null],
+        [saved[1], "recent", null],
+        [saved[0], "recent", null],
+      ]);
+      // 🔴 A pin she may no longer read is not counted among the pins she is shown.
+      refused.add(ANA.id);
+      expect(await rowsOfMine()).toEqual([
         [pinned[4], "pinned", 5],
         [pinned[3], "pinned", 5],
         [pinned[2], "pinned", 5],

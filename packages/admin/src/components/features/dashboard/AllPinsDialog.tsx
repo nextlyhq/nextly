@@ -27,6 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
   Spinner,
+  toast,
 } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import {
@@ -162,7 +163,13 @@ function PinsBody(): JSX.Element {
       {unreadable.length > 0 && (
         <UnreadablePins
           count={unreadable.length}
-          remove={() => remove.mutate(unreadable)}
+          remove={() =>
+            remove.mutate(unreadable, {
+              // The list is read again either way; this says why some stayed.
+              onError: () =>
+                toast.error("Some pins could not be removed. Try again."),
+            })
+          }
           removing={remove.isPending}
         />
       )}

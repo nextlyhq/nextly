@@ -127,6 +127,29 @@ describe("View all pins", () => {
     expect(del).toHaveBeenCalledWith("/dashboard/pins", gone[1]);
   });
 
+  it("says so when a pin could not be removed", async () => {
+    const user = userEvent.setup();
+    answer({
+      items: [],
+      unreadable: [{ targetType: "single", targetSlug: "hidden" }],
+    });
+    del.mockRejectedValue(new Error("offline"));
+    render(
+      <>
+        <Toaster />
+        <AllPinsHost />
+      </>
+    );
+    openAllPins();
+    const notice = await screen.findByTestId("all-pins-unreadable");
+    await user.click(
+      within(notice).getByRole("button", { name: "Remove them" })
+    );
+    expect(
+      await screen.findByText("Some pins could not be removed. Try again.")
+    ).toBeInTheDocument();
+  });
+
   it("says one pin in the singular", () => {
     expect(unreadableText(1)).toBe("1 pin you can no longer open");
     expect(unreadableText(3)).toBe("3 pins you can no longer open");

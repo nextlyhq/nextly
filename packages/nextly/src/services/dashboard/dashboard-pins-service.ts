@@ -184,8 +184,11 @@ class DashboardPinsService {
    *
    * 🔴 Existence, not readability: a pin of something the reader may not read
    * now is kept, so it returns when their access does. The existence read
-   * ignores access, and what it learns reaches the reader only as their own
-   * pin of a deleted target going away.
+   * ignores access, and what it learns reaches the reader only about their
+   * own pins: one they can no longer read is listed as such
+   * (`ReaderPins.unreadable`, by its target alone, so they may remove it),
+   * and goes away when its target is deleted. That is the price of letting
+   * them free its place under the limit; no title, status or time is read.
    */
   private async livePins(userId: string): Promise<DashboardPin[]> {
     const pins = await this.pins.list(userId);
