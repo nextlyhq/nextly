@@ -496,6 +496,11 @@ export interface ColumnConversion {
    * and the refusal's both read it as it is, so a conversion is worded in one place.
    */
   change: string;
+  /**
+   * Whether it deletes stored values (it removes a column or a table), which the review shows as
+   * the data loss it is before the person confirms it.
+   */
+  deletesValues: boolean;
 }
 
 /** What a save would do, for the person to review before confirming it. */
@@ -594,7 +599,7 @@ async function adoptionFor(
         ? []
         : diffSnapshots({ tables: [live] }, { tables: [mapped] }).map(op => ({
             ...conversionOf(table, op),
-            change: changePhraseOf(op),
+            ...whatItDoes(op),
           })),
   };
 }
@@ -603,47 +608,75 @@ async function adoptionFor(
 const indexedOn = (index: { columns: string[] }) =>
   index.columns.length > 0 ? index.columns.join(", ") : "an expression";
 
+/** What a conversion does: its words, and whether it deletes stored values. */
+type WhatItDoes = Pick<ColumnConversion, "change" | "deletesValues">;
+/** A difference that keeps every stored value. */
+const keeps = (change: string): WhatItDoes => ({
+  change,
+  deletesValues: false,
+});
+/** A difference that deletes stored values: a column or a table removed. */
+const deletes = (change: string): WhatItDoes => ({
+  change,
+  deletesValues: true,
+});
+
 /**
- * What each kind of difference does, in plain words, completing "Saving brings it up to date:".
- * Keyed by every operation type, so a new one cannot reach the review unworded.
+ * What each kind of difference does: in plain words, completing "Saving brings it up to date:", and
+ * whether it deletes stored values. Keyed by every operation type, so a new one cannot reach the
+ * review unworded or unjudged.
  */
-const CHANGE_PHRASES: {
-  [K in Operation["type"]]: (op: Extract<Operation, { type: K }>) => string;
+const WHAT_EACH_DOES: {
+  [K in Operation["type"]]: (op: Extract<Operation, { type: K }>) => WhatItDoes;
 } = {
-  add_table: op => `creates the table ${op.table.name}`,
-  drop_table: op => `removes the table ${op.tableName}`,
-  rename_table: op => `renames the table ${op.fromName} to ${op.toName}`,
-  add_column: op => `adds the column ${op.column.name}`,
-  drop_column: op => `removes the column ${op.columnName}`,
-  rename_column: op => `renames ${op.fromColumn} to ${op.toColumn}`,
+  add_table: op => keeps(`creates the table ${op.table.name}`),
+  drop_table: op => deletes(`removes the table ${op.tableName}`),
+  rename_table: op => keeps(`renames the table ${op.fromName} to ${op.toName}`),
+  add_column: op => keeps(`adds the column ${op.column.name}`),
+  drop_column: op => deletes(`removes the column ${op.columnName}`),
+  rename_column: op => keeps(`renames ${op.fromColumn} to ${op.toColumn}`),
   change_column_type: op =>
-    `changes ${op.columnName} from ${op.fromType} to ${op.toType}`,
+    keeps(`changes ${op.columnName} from ${op.fromType} to ${op.toType}`),
   change_column_nullable: op =>
-    op.toNullable
-      ? `lets ${op.columnName} be empty`
-      : `requires a value in ${op.columnName}`,
+    keeps(
+      op.toNullable
+        ? `lets ${op.columnName} be empty`
+        : `requires a value in ${op.columnName}`
+    ),
   change_column_default: op =>
-    op.toDefault === undefined
-      ? `removes the default of ${op.columnName}`
-      : `sets the default of ${op.columnName} to ${op.toDefault}`,
+    keeps(
+      op.toDefault === undefined
+        ? `removes the default of ${op.columnName}`
+        : `sets the default of ${op.columnName} to ${op.toDefault}`
+    ),
   add_index: op =>
-    `adds ${op.index.unique ? "a unique index" : "an index"} on ${indexedOn(op.index)}`,
+    keeps(
+      `adds ${op.index.unique ? "a unique index" : "an index"} on ${indexedOn(op.index)}`
+    ),
   drop_index: op =>
-    `removes the ${op.index.unique ? "unique index" : "index"} on ${indexedOn(op.index)}`,
-  add_check: op => `adds the check ${op.check.name}`,
-  drop_check: op => `removes the check ${op.check.name}`,
+    keeps(
+      `removes the ${op.index.unique ? "unique index" : "index"} on ${indexedOn(op.index)}`
+    ),
+  add_check: op => keeps(`adds the check ${op.check.name}`),
+  drop_check: op => keeps(`removes the check ${op.check.name}`),
   add_foreign_key: op =>
-    `adds a reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`,
+    keeps(
+      `adds a reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`
+    ),
   drop_foreign_key: op =>
-    `removes the reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`,
+    keeps(
+      `removes the reference from ${op.foreignKey.columns.join(", ")} to ${op.foreignKey.referencesTable}`
+    ),
   change_foreign_key_action: op =>
-    `changes what ${op.columnName} does when the ${op.referencesTable} row it points to is deleted or updated`,
+    keeps(
+      `changes what ${op.columnName} does when the ${op.referencesTable} row it points to is deleted or updated`
+    ),
 };
 
-/** What `op` does, in plain words: a conversion's `change`. */
-function changePhraseOf(op: Operation): string {
-  const phrase = CHANGE_PHRASES[op.type] as (op: Operation) => string;
-  return phrase(op);
+/** What `op` does: a conversion's `change` and `deletesValues`. */
+function whatItDoes(op: Operation): WhatItDoes {
+  const judge = WHAT_EACH_DOES[op.type] as (op: Operation) => WhatItDoes;
+  return judge(op);
 }
 
 /** One difference between an adopted table and the mapping, as a conversion keyed for confirming. */

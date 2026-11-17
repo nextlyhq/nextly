@@ -163,6 +163,7 @@ describe("BuilderSchemaChangeDialogs", () => {
             from: "as an earlier version made it",
             to: "as Nextly declares it (add index)",
             change: "adds an index on created_at",
+            deletesValues: false,
           },
           {
             table: "dc_posts",
@@ -170,6 +171,7 @@ describe("BuilderSchemaChangeDialogs", () => {
             from: "text",
             to: "varchar(255)",
             change: "changes body from text to varchar(255)",
+            deletesValues: false,
           },
         ],
       })
@@ -184,7 +186,42 @@ describe("BuilderSchemaChangeDialogs", () => {
     ).toBeInTheDocument();
     // Nothing to tick: Save confirms every conversion listed.
     expect(within(section).queryByRole("checkbox")).not.toBeInTheDocument();
+    // A long list scrolls inside the dialog, from the keyboard too, so Save stays in reach.
+    expect(section).toHaveClass("max-h-48", "overflow-y-auto");
+    expect(section).toHaveAttribute("tabindex", "0");
+    // Nothing it brings up to date deletes a value: no data-loss alert, and the plain Save.
+    expect(screen.queryByText("Data loss warning")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  // An older table can hold a column its fields no longer declare, which bringing it up to date
+  // removes with every value in it: shown as the data loss it is, with the destructive Apply.
+  it("shows a conversion that removes a column as data loss, with the destructive Apply", async () => {
+    const user = userEvent.setup();
+    const { onConfirm } = renderDialogs(
+      preview({
+        conversions: [
+          {
+            table: "dc_posts",
+            column: "legacy_notes",
+            from: "as an earlier version made it",
+            to: "as Nextly declares it (drop column)",
+            change: "removes the column legacy_notes",
+            deletesValues: true,
+          },
+        ],
+      })
+    );
+
+    const alert = screen.getByText("Data loss warning").closest("[role=alert]");
+    expect(alert).toHaveTextContent(
+      "Bringing dc_posts up to date removes the column legacy_notes and the values stored in it."
+    );
+    expect(
+      screen.queryByRole("button", { name: /save changes/i })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /apply changes/i }));
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 

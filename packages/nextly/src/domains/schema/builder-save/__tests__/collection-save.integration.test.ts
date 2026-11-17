@@ -948,6 +948,7 @@ describe.each(getConfiguredTestDialects())(
                 from: "text",
                 to: "varchar(255)",
                 change: "changes body from text to varchar(255)",
+                deletesValues: false,
               },
             ]
           : []

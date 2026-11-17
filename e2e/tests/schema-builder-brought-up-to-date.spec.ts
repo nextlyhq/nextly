@@ -35,6 +35,7 @@ const conversionOf = (table: string) => ({
   from: "as an earlier version made it",
   to: "as Nextly declares it (add index)",
   change: "adds an index on created_at",
+  deletesValues: false,
 });
 
 /**

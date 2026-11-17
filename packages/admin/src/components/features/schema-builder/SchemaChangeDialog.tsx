@@ -25,7 +25,10 @@ import { AlertTriangle } from "lucide-react";
 import type { JSX } from "react";
 import { useId, useMemo, useState } from "react";
 
-import { broughtUpToDateLines } from "@admin/lib/builder/brought-up-to-date";
+import {
+  broughtUpToDateLines,
+  lossLinesOf,
+} from "@admin/lib/builder/brought-up-to-date";
 import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
 import type {
@@ -145,7 +148,11 @@ export function SchemaChangeDialog({
   // Whether saving deletes stored values, answered once from the preview's
   // rows and read by both the confirm's colour and the data-loss notice, so the
   // two cannot disagree. A refused save applies nothing, so it deletes nothing.
-  const deletesData = reviewDeletesData(changes) && !refused;
+  // What bringing an older table up to date deletes: a column or table it removes, with its values.
+  const conversionLosses = lossLinesOf(conversions);
+  const fieldsDeleteData = reviewDeletesData(changes);
+  const deletesData =
+    (fieldsDeleteData || conversionLosses.length > 0) && !refused;
   const promptedFields = interactiveFields.filter(
     f => !refusedColumns.has(f.name)
   );
@@ -465,17 +472,23 @@ export function SchemaChangeDialog({
             <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Data loss warning</AlertTitle>
             <AlertDescription>
-              {warnings.length > 0 ? (
-                warnings.map((w, i) => (
-                  <span key={i} className="block">
-                    {w}
-                  </span>
-                ))
-              ) : (
-                <span className="block">
-                  Saving deletes the values stored in the fields removed above.
+              {warnings.length > 0
+                ? warnings.map((w, i) => (
+                    <span key={i} className="block">
+                      {w}
+                    </span>
+                  ))
+                : fieldsDeleteData && (
+                    <span className="block">
+                      Saving deletes the values stored in the fields removed
+                      above.
+                    </span>
+                  )}
+              {conversionLosses.map(line => (
+                <span key={line} className="block">
+                  {line}
                 </span>
-              )}
+              ))}
             </AlertDescription>
           </Alert>
         ) : warnings.length > 0 ? (
@@ -618,6 +631,8 @@ function SchemaChangeDialogFooter({
 /**
  * What the save also brings up to date in a table an earlier Nextly version made, in the server's
  * own words. Nothing to tick: Save confirms every conversion listed, and Cancel confirms none.
+ * Bounded in height, as the change list is, so a long list scrolls inside the dialog and its Save
+ * and Cancel stay in reach; focusable, so the list scrolls from the keyboard too.
  */
 function BroughtUpToDate({
   conversions,
@@ -629,7 +644,8 @@ function BroughtUpToDate({
   return (
     <section
       aria-labelledby={headingId}
-      className="space-y-1.5 rounded-md border border-border bg-primary/5 p-3"
+      tabIndex={0}
+      className="max-h-48 space-y-1.5 overflow-y-auto rounded-md border border-border bg-primary/5 p-3"
     >
       <h3 id={headingId} className="text-sm font-medium">
         Brought up to date

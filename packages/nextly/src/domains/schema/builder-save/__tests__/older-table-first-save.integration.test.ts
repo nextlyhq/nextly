@@ -19,7 +19,12 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 
-import { asCreatedBefore, tableOf, withNoHistory } from "./helpers/older-table";
+import {
+  asCreatedBefore,
+  execOn,
+  tableOf,
+  withNoHistory,
+} from "./helpers/older-table";
 
 type Field = { name: string; type: string };
 
@@ -39,6 +44,7 @@ interface Preview {
     from: string;
     to: string;
     change: string;
+    deletesValues: boolean;
   }[];
   notices: string[];
 }
@@ -188,6 +194,7 @@ for (const kind of KINDS) {
           expect.objectContaining({
             table: kind.table,
             change: "adds an index on created_at",
+            deletesValues: false,
           })
         );
         expect(shown.notices).toContain(
@@ -203,6 +210,28 @@ for (const kind of KINDS) {
         expect(refusal).toBeDefined();
         expect(unconfirmedKeysOf(refusal)).toEqual(keys);
         expect(await tableOf(t, dialect, kind.table)).toEqual(before);
+      });
+
+      // An earlier version could leave a column its fields no longer declare, which bringing the
+      // table up to date removes with its values: named as a conversion that deletes values, so the
+      // review shows it as data loss.
+      it("names a column the fields no longer declare as a conversion that deletes values", async () => {
+        const q = (name: string) =>
+          dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        await execOn(t)(
+          `ALTER TABLE ${q(kind.table)} ADD COLUMN ${q("legacy_notes")} text`
+        );
+
+        const shown = await preview();
+
+        expect(shown.conversions).toContainEqual(
+          expect.objectContaining({
+            table: kind.table,
+            column: "legacy_notes",
+            change: "removes the column legacy_notes",
+            deletesValues: true,
+          })
+        );
       });
 
       it("saves once the previewed conversions are confirmed, and the next preview names none", async () => {

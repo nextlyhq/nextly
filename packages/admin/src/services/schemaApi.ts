@@ -133,6 +133,8 @@ export interface SchemaPreviewConversion {
   to: string;
   /** What it does, in plain words ("adds an index on created_at"), shown as it is. */
   change: string;
+  /** Whether it deletes stored values (it removes a column or a table): shown as data loss. */
+  deletesValues: boolean;
 }
 
 /**

@@ -412,6 +412,7 @@ describe("confirmApply", () => {
           from: "as an earlier version made it",
           to: "as Nextly declares it (add index)",
           change: "adds an index on created_at",
+          deletesValues: false,
         },
         {
           table: "dc_posts",
@@ -419,6 +420,7 @@ describe("confirmApply", () => {
           from: "text",
           to: "varchar(255)",
           change: "changes body from text to varchar(255)",
+          deletesValues: false,
         },
       ],
     });

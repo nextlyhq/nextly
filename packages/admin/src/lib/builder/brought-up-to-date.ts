@@ -22,6 +22,21 @@ export function acknowledgedConversionsOf(
 }
 
 /**
+ * One line per conversion that deletes stored values, for the review's data-loss warning: what it
+ * removes, in the server's words, and that the values stored in it go with it.
+ */
+export function lossLinesOf(
+  conversions: readonly SchemaPreviewConversion[]
+): string[] {
+  return conversions
+    .filter(conversion => conversion.deletesValues)
+    .map(
+      ({ table, change }) =>
+        `Bringing ${table} up to date ${change} and the values stored in it.`
+    );
+}
+
+/**
  * One line per table the save brings up to date: that an earlier version made it, then each
  * change the save makes to it, in the order the preview gives them.
  */
