@@ -118,16 +118,11 @@ export function editorTopBar(
             own design, opening the list; nothing on any other document. */}
         <OwnDesignsChip />
         <HistoryButtons editor={editor} inline={inline} />
-        {/* What the page costs to read, against its allowance: a page's
-            alone, since a component is read as part of each page placing it. */}
-        {view.initialDocument.kind === "page" ? (
-          <PageReadMeter
-            editor={editor}
-            drawnWith={view.canvasRender}
-            regions={view.canvasRegions}
-            componentTitle={view.componentLibrary.titleOf}
-          />
-        ) : null}
+        {/* The page's data against its limit, after undo and redo, in the
+            column that shortens first: shown only once the page nears its
+            limit, and only on a page, since a component is read as part of
+            each page placing it. */}
+        <PageReadMeter />
       </>
     ),
     topBarCenter: (

@@ -20,6 +20,7 @@ import { DocumentSettingsPanel } from "./document-settings-panel";
 import { servicesFor } from "./editor-services";
 import { pageAddressOf, type PageFacts } from "./editor-settings";
 import type { CardVerbs, EditorView } from "./editor-view";
+import { PageReadMeter } from "./page-read-meter";
 import {
   offerableFaces,
   offerableTokens,
@@ -169,6 +170,8 @@ export function editorInspector<TFieldValues extends FieldValues>(
           // The one signal Settings reads too: the SEO plugin's group on
           // the page's form.
           seoEditsPage={form.page.seo !== undefined}
+          // The page's data at every level, so it can always be found.
+          pageData={<PageReadMeter place="settings" />}
         />
       )}
     />
