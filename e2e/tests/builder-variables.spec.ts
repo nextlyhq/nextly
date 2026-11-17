@@ -605,7 +605,7 @@ test("a role that may read Design but not change it sees the variables read-only
       await expect(field).toBeEnabled();
       await expect(field).not.toBeEditable();
     }
-    // No Reset, Remove, "Use light value" or colour picker: no button at all.
+    // No Reset, Remove, "Remove dark value" or colour picker: no button at all.
     await expect(editor.getByRole("button")).toHaveCount(0);
     await name.selectText();
     expect(
@@ -760,7 +760,7 @@ test("each variable action is kept across a reload: rename, value, dark value, r
     // Clear its dark value: it follows light again.
     await rowNamed("Lagoon, light").click();
     const cleared = styleWrite(page);
-    await editor.getByRole("button", { name: "Use light value" }).click();
+    await editor.getByRole("button", { name: "Remove dark value" }).click();
     await cleared;
     await page.keyboard.press("Escape");
     await reloadDesign(page);

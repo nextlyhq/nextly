@@ -35,7 +35,6 @@ import {
   clearDarkValue,
   labelNewVariable,
   relabelToken,
-  setTokenValue,
   variableLabelIssue,
   writeTokenValue,
   type VariableEntry,
@@ -183,9 +182,10 @@ export function VariableEditor({
         <UsageLine
           identity={row.identity}
           reach={combinedReach(
-            [row.identity, ...(lineHeight === undefined ? [] : [lineHeight.identity])].map(
-              usage.reachOf
-            )
+            [
+              row.identity,
+              ...(lineHeight === undefined ? [] : [lineHeight.identity]),
+            ].map(usage.reachOf)
           )}
           usage={usage}
         />
@@ -844,7 +844,7 @@ function DarkValue({
   onCommit: (value: string) => void;
   onAdd: () => void;
   onClear: () => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const dark = token.values.dark;
   if (dark === undefined) {
     // Offered on what reads differently in dark mode, colours and shadows;

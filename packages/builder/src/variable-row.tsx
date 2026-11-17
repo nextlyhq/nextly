@@ -70,6 +70,8 @@ export interface VariableRowProps {
    * editor closes: marked "New", so its place in a narrowed list is clear.
    */
   marked?: boolean;
+  /** Never saved: its editor's code name follows its name as it is typed. */
+  isNew?: boolean;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
@@ -94,6 +96,7 @@ export function VariableRow({
   onRemoved,
   onDuplicate,
   marked = false,
+  isNew = false,
   usage,
   reach,
 }: VariableRowProps): React.JSX.Element {
@@ -196,6 +199,7 @@ export function VariableRow({
           onChange={onChange}
           onRemoved={onRemoved}
           removing={removing}
+          isNew={isNew}
           usage={usage}
           handOff={handOff}
         />
