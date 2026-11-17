@@ -92,8 +92,11 @@ const template = (
 });
 
 const folds = { folded: new Set<string>(), onFold: vi.fn() };
+/** Whether the author may create a template, as the panel read says. */
+let mayCreate = true;
 
 beforeEach(() => {
+  mayCreate = true;
   routeReads.length = 0;
   navigated.length = 0;
   folds.folded = new Set();
@@ -109,7 +112,11 @@ beforeEach(() => {
           published: false,
         }),
       ],
-      meta: { templatesCollection: "templates", definitions: {} },
+      meta: {
+        templatesCollection: "templates",
+        canCreateTemplates: mayCreate,
+        definitions: {},
+      },
     },
   };
   choices = {
@@ -184,11 +191,33 @@ describe("the Collection templates group", () => {
     ).toBeNull();
   });
 
+  it("offers no new template to an author who may change templates but not create one", () => {
+    mayCreate = false;
+    panel = {
+      data: {
+        items: [template("t1", "posts", "Blog post")],
+        meta: {
+          templatesCollection: "templates",
+          canCreateTemplates: false,
+          definitions: {},
+        },
+      },
+    };
+    render(<CollectionTemplatesGroup folds={folds} />);
+    expect(
+      screen.queryByRole("button", { name: /New collection template/ })
+    ).toBeNull();
+  });
+
   it("says what a template is for when there are none", () => {
     panel = {
       data: {
         items: [],
-        meta: { templatesCollection: "templates", definitions: {} },
+        meta: {
+          templatesCollection: "templates",
+          canCreateTemplates: mayCreate,
+          definitions: {},
+        },
       },
     };
     render(<CollectionTemplatesGroup folds={folds} />);

@@ -147,8 +147,10 @@ function GroupBody({
   }
   if (read.data === undefined) return null;
   const { items, meta } = read.data;
+  // Offered to an author who may create a template, for the collections
+  // that have none.
   const add =
-    without.length === 0 ? null : (
+    !meta.canCreateTemplates || without.length === 0 ? null : (
       <NewTemplateMenu
         collections={without}
         templatesCollection={meta.templatesCollection}

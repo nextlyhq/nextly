@@ -39,6 +39,7 @@ function reads(over: Partial<TemplatesPanelReads> = {}): TemplatesPanelReads {
     entryCount: vi.fn(async (slug: string) => (slug === "posts" ? 12 : 3)),
     ownDesignCount: vi.fn(async (slug: string) => (slug === "posts" ? 2 : 0)),
     definitions: vi.fn(async () => ({ logo: doc("l") })),
+    mayCreateTemplates: vi.fn(async () => true),
     ...over,
   };
 }
@@ -68,6 +69,7 @@ describe("the Pages panel's templates read", () => {
     ]);
     expect(answer.meta).toEqual({
       templatesCollection: "templates",
+      canCreateTemplates: true,
       definitions: { logo: doc("l") },
     });
   });

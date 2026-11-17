@@ -40,6 +40,12 @@ export interface TemplatesPanelResponse {
   readonly meta: {
     /** The templates collection, as the site named it. */
     readonly templatesCollection: string;
+    /**
+     * Whether the caller may create a template, which offers "+ New
+     * collection template": the collection choices route also answers one
+     * who may only change templates.
+     */
+    readonly canCreateTemplates: boolean;
     /** The published definitions the templates' documents reach, by id. */
     readonly definitions: Readonly<Record<string, BlockDocument>>;
   };

@@ -38,6 +38,7 @@ import {
   TEMPLATES_SLUG,
 } from "../collections/templates";
 import { asDocument } from "../component-store-source";
+import { chunked, ID_BATCH_SIZE } from "../id-batches";
 import { readingAsUser, type ComponentStore } from "../library-route";
 import {
   registryRecords,
@@ -80,8 +81,10 @@ export interface TemplatesPanelReads {
   ): Promise<ReadonlyMap<string, BlockDocument>>;
   /** How many entries the collection holds, counted as the system. */
   entryCount(collection: string): Promise<number>;
-  /** How many of them have a design of their own, as the system. */
+  /** How many of them a published design of their own serves, as the system. */
   ownDesignCount(collection: string): Promise<number>;
+  /** Whether the caller may create a template at all. */
+  mayCreateTemplates(): Promise<boolean>;
   /** The published definitions these documents reach, by id. */
   definitions(
     documents: readonly BlockDocument[]
@@ -94,7 +97,10 @@ export async function readTemplatesPanel(
 ): Promise<TemplatesPanelResponse> {
   const collections = await reads.collections();
   const labels = new Map(collections.map(entry => [entry.slug, entry.label]));
-  const meta = { templatesCollection: reads.templatesCollection };
+  const meta = {
+    templatesCollection: reads.templatesCollection,
+    canCreateTemplates: await reads.mayCreateTemplates(),
+  };
   if (collections.length === 0) {
     return { items: [], meta: { ...meta, definitions: {} } };
   }
@@ -176,12 +182,14 @@ function directPanelReads(
   // A count only: one row asked for, the total read from the list meta.
   const total = async (
     collection: string,
-    where?: WhereFilter
+    where?: WhereFilter,
+    status?: "published"
   ): Promise<number> =>
     (
       await nextly.find({
         collection,
         ...(where === undefined ? {} : { where }),
+        ...(status === undefined ? {} : { status }),
         select: { id: true },
         limit: 1,
         depth: 0,
@@ -209,48 +217,62 @@ function directPanelReads(
       return readable;
     },
     templates: async slugs => {
-      const found = await nextly.find({
-        collection: templates,
-        where: { [TEMPLATE_COLLECTION_FIELD]: { in: [...slugs] } },
-        select: {
-          id: true,
-          title: true,
-          [TEMPLATE_COLLECTION_FIELD]: true,
-          status: true,
-        },
-        status: "all",
-        sort: "title",
-        // A collection has one template, so the slugs bound the read.
-        limit: slugs.length,
-        depth: 0,
-        ...(await readingAsUser(ctx)),
-      });
-      return rowsOf(found).flatMap(row => {
-        const id = typeof row.id === "number" ? String(row.id) : row.id;
-        const collection = textOf(row, TEMPLATE_COLLECTION_FIELD);
-        if (typeof id !== "string" || collection === undefined) return [];
-        return [
-          {
-            id,
-            title: textOf(row, "title") ?? collection,
-            collection,
-            status: textOf(row, "status") ?? "draft",
+      // In batches: a list read is clamped to its largest page, so one read
+      // of many collections would answer for the first page only.
+      const found = { items: [] as unknown[] };
+      for (const batch of chunked(slugs, ID_BATCH_SIZE)) {
+        const page = await nextly.find({
+          collection: templates,
+          where: { [TEMPLATE_COLLECTION_FIELD]: { in: batch } },
+          select: {
+            id: true,
+            title: true,
+            [TEMPLATE_COLLECTION_FIELD]: true,
+            status: true,
           },
-        ];
-      });
+          status: "all",
+          sort: "title",
+          // A collection has one template, so the slugs bound the read.
+          limit: batch.length,
+          depth: 0,
+          ...(await readingAsUser(ctx)),
+        });
+        found.items.push(...rowsOf(page));
+      }
+      // One order across the batches, by title, as one read would sort.
+      return rowsOf(found)
+        .flatMap(row => {
+          const id = typeof row.id === "number" ? String(row.id) : row.id;
+          const collection = textOf(row, TEMPLATE_COLLECTION_FIELD);
+          if (typeof id !== "string" || collection === undefined) return [];
+          return [
+            {
+              id,
+              title: textOf(row, "title") ?? collection,
+              collection,
+              status: textOf(row, "status") ?? "draft",
+            },
+          ];
+        })
+        .sort((left, right) => left.title.localeCompare(right.title));
     },
     publishedDocuments: async ids => {
-      const found = await nextly.find({
-        collection: templates,
-        where: { id: { in: [...ids] } },
-        select: { id: true, [TEMPLATE_CONTENT_FIELD]: true },
-        status: "published",
-        limit: ids.length,
-        depth: 0,
-        ...(await readingAsUser(ctx)),
-      });
+      const rows: Record<string, unknown>[] = [];
+      // In batches, as the templates read is.
+      for (const batch of chunked(ids, ID_BATCH_SIZE)) {
+        const page = await nextly.find({
+          collection: templates,
+          where: { id: { in: batch } },
+          select: { id: true, [TEMPLATE_CONTENT_FIELD]: true },
+          status: "published",
+          limit: batch.length,
+          depth: 0,
+          ...(await readingAsUser(ctx)),
+        });
+        rows.push(...rowsOf(page));
+      }
       const documents = new Map<string, BlockDocument>();
-      for (const row of rowsOf(found)) {
+      for (const row of rows) {
         const id = typeof row.id === "number" ? String(row.id) : row.id;
         const document = asDocument(row[TEMPLATE_CONTENT_FIELD]);
         if (typeof id === "string" && document !== null) {
@@ -260,10 +282,16 @@ function directPanelReads(
       return documents;
     },
     entryCount: collection => total(collection),
+    // Only a PUBLISHED own design serves its entry: a draft one leaves the
+    // entry drawn by the collection's template, as visitors see it.
     ownDesignCount: collection =>
-      total(templates, {
-        [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection },
-      }),
+      total(
+        templates,
+        { [TEMPLATE_ENTRY_COLLECTION_FIELD]: { equals: collection } },
+        "published"
+      ),
+    mayCreateTemplates: async () =>
+      (await ctx.caller?.can("create", templates, { anyEntry: true })) === true,
     definitions: async documents =>
       publishedDefinitionsOf(
         nextly,
