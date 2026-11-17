@@ -82,6 +82,7 @@ import {
 } from "@admin/lib/plugins/component-registry";
 
 import { EntryForm } from "../EntryForm";
+import { useDocumentPreview } from "../EntryFormContext";
 
 const collection = {
   name: "posts",
@@ -284,5 +285,52 @@ describe("a side panel section declared to sit above the form on a phone", () =>
       .getAllByRole("region")
       .map(section => section.getAttribute("data-panel-section"));
     expect(sections).toEqual(["Design", "Status", "Publishing", "Details"]);
+  });
+});
+
+describe("a side panel section opening the preview beside the form", () => {
+  const SHOWS = "test/designs#Shows";
+
+  function Shows() {
+    const preview = useDocumentPreview();
+    return (
+      <button type="button" onClick={() => preview?.openBeside?.()}>
+        Preview
+      </button>
+    );
+  }
+
+  beforeEach(() => {
+    registerComponent(SHOWS, Shows as never);
+    branding.current = {
+      contributions: {
+        "collection.edit": {
+          sidebarSection: [
+            {
+              id: "acme-designs.design",
+              kind: "sidebarSection",
+              plugin: "@acme/designs",
+              label: "Design",
+              component: SHOWS,
+            },
+            { builtIn: "status" },
+          ],
+        },
+      },
+    };
+  });
+  afterEach(() => unregisterComponent(SHOWS));
+
+  it("opens the pane and folds the panel, as the bar's press does", () => {
+    renderEditor();
+    expect(lastPane().open).toBe(false);
+
+    act(() => {
+      within(dockedPanel()!).getByRole("button", { name: "Preview" }).click();
+    });
+    expect(lastPane().open).toBe(true);
+    expect(dockedPanel()).not.toBeInTheDocument();
+    expect(lastBar().isRailCollapsed).toBe(true);
+    expect(lastBar().previewPaneOpen).toBe(true);
   });
 });
