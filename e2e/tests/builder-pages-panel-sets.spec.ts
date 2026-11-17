@@ -187,19 +187,16 @@ test.describe("the Pages panel's sets and templates", () => {
     try {
       await openBuilder(page, await makePage(page, `Template page ${stamp()}`));
       await openPagesPanel(page);
-      const templates = page.getByRole("list", {
-        name: "Collection templates",
-      });
-      await templates
-        .getByRole("button")
-        .filter({ hasText: "Used by" })
-        .first()
-        .waitFor();
-      await templates
-        .getByRole("listitem")
-        .filter({ hasText: "Draft" })
-        .getByRole("button")
-        .first()
+      // Its row, by the name the panel gives its collection.
+      const listedNow = (await (
+        await page.request.get(`${PLUGIN}/templates/panel`)
+      ).json()) as { items: Array<{ id: string; collectionLabel: string }> };
+      const ours = listedNow.items.find(item => item.id === id);
+      if (ours === undefined)
+        throw new Error("The new template is not listed.");
+      await page
+        .getByRole("list", { name: "Collection templates" })
+        .getByRole("button", { name: new RegExp(`^${ours.collectionLabel}`) })
         .click();
       await expect(page).toHaveURL(
         new RegExp(`/collections/templates/${id}/builder`)
