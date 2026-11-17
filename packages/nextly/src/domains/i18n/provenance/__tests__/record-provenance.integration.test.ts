@@ -806,5 +806,23 @@ describe.each(getConfiguredTestDialects())(
         ).rejects.toMatchObject({ statusCode: 400 });
       }
     });
+    it("fingerprints a text value that looks like JSON as the text it is", async () => {
+      // Only a JSON-backed field is read back from text: a text field holding `[1, 2]` and then
+      // `[1,2]` has changed, so its translations must go out of date.
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "[1, 2]" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      const titleFingerprint = async () =>
+        (await rowsOf(id)).en?.find(row => row.fieldPath === "title")
+          ?.valueFingerprint;
+      expect(await titleFingerprint()).toBe(valueFingerprint("[1, 2]"));
+      expect((await save(id, "en", { title: "[1,2]" })).success).toBe(true);
+      expect(await titleFingerprint()).toBe(valueFingerprint("[1,2]"));
+      expect(valueFingerprint("[1,2]")).not.toBe(valueFingerprint("[1, 2]"));
+    });
   }
 );

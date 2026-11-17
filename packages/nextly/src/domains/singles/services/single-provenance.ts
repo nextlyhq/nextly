@@ -35,7 +35,12 @@ export interface SingleProvenanceWrite {
   locale: string;
   /** The values written, keyed by column. */
   values: Readonly<Record<string, unknown>>;
-  localizedFields: ReadonlyArray<{ name: string; column: string }>;
+  /** The Single's translated fields: each one's column, and whether its storage is JSON. */
+  localizedFields: ReadonlyArray<{
+    name: string;
+    column: string;
+    json?: boolean;
+  }>;
   savedBy: RequestActor;
   claims?: ProvenanceClaims;
   partState?: "live" | "draft";
@@ -86,6 +91,11 @@ export async function recordSingleProvenance(
     locale: write.locale,
     partState: write.partState ?? "live",
     values,
+    jsonFields: new Set(
+      write.localizedFields
+        .filter(field => field.json === true)
+        .map(field => field.name)
+    ),
     promotesDraft: write.promotesDraft,
     defaultLocale: deps.defaultLocale,
     savedBy: write.savedBy,

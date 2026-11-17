@@ -3827,6 +3827,11 @@ export class CollectionMutationService extends BaseService {
       writeLocale,
       companionData,
       localizedFieldValues,
+      // Which of those values are JSON, which some databases hand back as text: provenance reads
+      // only their text back to the value it encodes.
+      jsonFields: companion.localizedFields
+        .filter(field => field.json === true)
+        .map(field => field.name),
       hasStatus: companion.hasStatus,
       companionTable: companion.table,
     };
@@ -14052,6 +14057,8 @@ export class CollectionMutationService extends BaseService {
       translation: {
         writeLocale: string;
         localizedFieldValues?: Record<string, unknown>;
+        /** The fields among the values whose storage is JSON. */
+        jsonFields?: readonly string[];
       } | null;
       savedBy: RequestActor;
       provenance?: {
@@ -14076,6 +14083,7 @@ export class CollectionMutationService extends BaseService {
       ...document,
       partState: provenance.partState ?? "live",
       values: translation.localizedFieldValues ?? {},
+      jsonFields: new Set(translation.jsonFields ?? []),
       promotesDraft: provenance.promotesDraft,
       defaultLocale: this.localization.defaultLocale,
       savedBy: args.savedBy,

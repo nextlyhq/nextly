@@ -66,6 +66,11 @@ export interface ProvenanceWrite {
   partState: ProvenancePartState;
   /** The values written, by field name. */
   values: Readonly<Record<string, unknown>>;
+  /**
+   * The fields among `values` whose storage is JSON, which some databases hand back as text: only
+   * their text is read back to the value it encodes. Any other field's text is the value.
+   */
+  jsonFields?: ReadonlySet<string>;
   /** The site's default language: the source every other language is made from. */
   defaultLocale: string;
   savedBy?: RequestActor;
@@ -106,21 +111,26 @@ export function translationProvenancePresent(
 /**
  * A sha256 of a value as it was written, the same on every dialect. A write hands its values on
  * as the store will keep them, so each is read back to what it was first: a date as its ISO
- * string (canonical JSON would make every date `{}`), and a JSON object or array kept as text as
- * the value it encodes (so its keys are put in order, not compared as written).
+ * string (canonical JSON would make every date `{}`), and, for a field whose storage is JSON
+ * (`storedAsJson`), an object or array kept as text as the value it encodes (so its keys are put
+ * in order, not compared as written). Any other text is the value itself: a text field holding
+ * `[1, 2]` and then `[1,2]` has changed.
  */
-export function valueFingerprint(value: unknown): string {
+export function valueFingerprint(value: unknown, storedAsJson = false): string {
   return createHash("sha256")
-    .update(canonicalJson(writtenValueOf(value ?? null)) ?? "", "utf8")
+    .update(
+      canonicalJson(writtenValueOf(value ?? null, storedAsJson)) ?? "",
+      "utf8"
+    )
     .digest("hex");
 }
 
 /** A stored value read back to the value written; see {@link valueFingerprint}. */
-function writtenValueOf(value: unknown): unknown {
+function writtenValueOf(value: unknown, storedAsJson: boolean): unknown {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString();
   }
-  if (typeof value === "string") {
+  if (storedAsJson && typeof value === "string") {
     const text = value.trim();
     if (text.startsWith("{") || text.startsWith("[")) {
       try {
@@ -296,7 +306,10 @@ async function recordTranslationProvenance(
   };
   for (const [field, origin] of origins) {
     const values = {
-      valueFingerprint: valueFingerprint(write.values[field]),
+      valueFingerprint: valueFingerprint(
+        write.values[field],
+        write.jsonFields?.has(field) === true
+      ),
       origin: origin.origin,
       engine: origin.engine,
       ...actorColumns(write.savedBy),
@@ -342,7 +355,8 @@ async function recordRowOrigins(
   }
 ): Promise<void> {
   const prefix = `${args.field}${ROW_PATH_SEPARATOR}`;
-  const rows = rowsOf(writtenValueOf(args.value));
+  // A structure per language is stored as JSON: its value may arrive as text.
+  const rows = rowsOf(writtenValueOf(args.value, true));
   const claimedRows =
     args.claim !== undefined && "rows" in args.claim
       ? (args.claim.rows ?? {})
@@ -356,7 +370,7 @@ async function recordRowOrigins(
     if (originRowId === undefined) continue;
     await args.upsert(fieldPath, {
       ...args.fieldValues,
-      valueFingerprint: valueFingerprint(row),
+      valueFingerprint: valueFingerprint(row, true),
       // A row's own source value is not recorded: its row is.
       sourceFingerprint: null,
       originRowId,
