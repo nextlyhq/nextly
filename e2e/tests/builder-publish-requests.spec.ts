@@ -154,8 +154,6 @@ for (const status of ["published", "draft"] as const) {
     await page.locator('[data-publish-split] [data-primary="true"]').click();
     await expectSaved(page);
     await page.waitForLoadState("networkidle");
-    console.log(`[${status}]`, JSON.stringify(sent, null, 2));
-    console.log(`[${status}] canvas changes`, await changes());
 
     const entryPath = `${PAGES}/${id}`;
     const onEntry = (method: string) =>
@@ -163,10 +161,13 @@ for (const status of ["published", "draft"] as const) {
         const [m, url = ""] = line.split(" ");
         return m === method && url.split("?")[0] === entryPath;
       });
-    expect(onEntry("PATCH"), "writes of the entry").toHaveLength(1);
+    expect(
+      onEntry("PATCH"),
+      `writes of the entry, in ${JSON.stringify(sent)}`
+    ).toHaveLength(1);
     expect(
       onEntry("GET").length,
-      "reads of the entry after the write"
+      `reads of the entry after the write, in ${JSON.stringify(sent)}`
     ).toBeLessThanOrEqual(1);
     const media = sent.filter(line =>
       (line.split(" ")[1] ?? "").startsWith("/admin/api/media")
