@@ -551,6 +551,13 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
   },
   {
     block: "core/gallery",
+    setting: "whenClicked",
+    tab: "content",
+    section: "Layout",
+    label: "When clicked",
+  },
+  {
+    block: "core/gallery",
     setting: "as",
     tab: "advanced",
     section: "HTML",
