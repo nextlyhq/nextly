@@ -235,9 +235,9 @@ type ImageEmptyReason = "empty" | "missing";
  * on; the editor draws its choices over it. The box carries the block's own
  * classes, so a size, a proportion or a corner set on the block shapes it.
  *
- * A bound Image is left out: its picture is its binding's, and what it shows
- * without one is the binding's Fallback, which the binding's own controls
- * set.
+ * A bound Image, by its media or its address, is left out: its picture is
+ * its binding's, and what it shows without one is the binding's Fallback,
+ * which the binding's own controls set.
  */
 function emptyPicture({
   ctx,
@@ -253,7 +253,11 @@ function emptyPicture({
   missing: boolean;
 }): ReactElement | null {
   if (ctx?.diagnostics !== true) return null;
-  if (node?.bindings?.mediaId !== undefined) return null;
+  if (
+    node?.bindings?.mediaId !== undefined ||
+    node?.bindings?.src !== undefined
+  )
+    return null;
   const reason: ImageEmptyReason = missing ? "missing" : "empty";
   return (
     <div

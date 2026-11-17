@@ -109,6 +109,12 @@ describe("the Image boxes waiting for a picture", () => {
         bindings: { mediaId: { $bind: "entry.cover" } },
       } as BlockNode)
     ).toBe(false);
+    expect(
+      takesPicture({
+        ...imageNode("c", {}),
+        bindings: { src: { $bind: "entry.photoUrl" } },
+      } as BlockNode)
+    ).toBe(false);
   });
 });
 

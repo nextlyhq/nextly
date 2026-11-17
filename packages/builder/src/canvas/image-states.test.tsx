@@ -62,6 +62,18 @@ beforeEach(() => {
   // jsdom lays nothing out, so every element reports no box. The canvas
   // lays out each one here except an element marked as drawn nowhere, as a
   // box inside a closed accordion item is.
+  // Each element is laid out at the rectangle a case gives it, else at a
+  // 320 by 180 box at the origin.
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: Element) {
+      const [x, y, w, h] = (
+        this.getAttribute("data-test-rect") ?? "0,0,320,180"
+      )
+        .split(",")
+        .map(Number);
+      return new DOMRect(x, y, w, h);
+    }
+  );
   vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (
     this: Element
   ) {
@@ -196,7 +208,7 @@ describe("an Image with nothing chosen", () => {
   it("selects its block when the box itself is pressed", () => {
     const { select } = mount(page(imageNode("img")), EMPTY_BOX);
     fireEvent.click(screen.getByRole("group", { name: "Image" }));
-    expect(select).toHaveBeenCalledWith("img");
+    expect(select).toHaveBeenCalledWith("img", "replace");
   });
 });
 
@@ -509,5 +521,70 @@ describe("an answer that comes after the author moved on", () => {
     );
     expect(screen.queryByText("Add an image")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+describe("where a plate is drawn", () => {
+  it("covers only the part of the box a clipping ancestor shows", () => {
+    mount(
+      page(imageNode("img")),
+      '<div style="overflow: hidden" data-test-rect="0,0,320,100">' +
+        '<div data-nx-node="img" data-nx-image-empty="empty" data-test-rect="0,0,320,180"></div>' +
+        "</div>"
+    );
+    const plate = screen.getByRole("group", { name: "Image" });
+    expect(plate.style.height).toBe("100px");
+    expect(plate.style.width).toBe("320px");
+  });
+
+  it("draws none for a box its scroller has scrolled out of sight", () => {
+    mount(
+      page(imageNode("img")),
+      '<div style="overflow: auto" data-test-rect="0,0,320,100">' +
+        '<div data-nx-node="img" data-nx-image-empty="empty" data-test-rect="0,300,320,180"></div>' +
+        "</div>"
+    );
+    expect(screen.queryByText("Add an image")).toBeNull();
+  });
+});
+
+describe("selecting an empty Image from its box", () => {
+  it("keeps the canvas's modifiers: Shift extends, Ctrl or Cmd toggles", () => {
+    const { select } = mount(page(imageNode("img")), EMPTY_BOX);
+    const plate = screen.getByRole("group", { name: "Image" });
+    fireEvent.click(plate, { shiftKey: true });
+    fireEvent.click(plate, { metaKey: true });
+    fireEvent.click(plate);
+    expect(select.mock.calls).toEqual([
+      ["img", "extend"],
+      ["img", "toggle"],
+      ["img", "replace"],
+    ]);
+  });
+});
+
+describe("an Image bound to an address field", () => {
+  it("takes no dropped file, which would outrank its binding", () => {
+    const upload = vi.fn<Upload>();
+    const { root } = mount(
+      page(
+        imageNode("img", { src: "https://cdn.example/old.png" }, {
+          bindings: { src: { $bind: "entry.photoUrl" } },
+        } as never)
+      ),
+      '<img data-nx-node="img" src="https://cdn.example/old.png" alt="">',
+      { upload }
+    );
+    const over = fileDrag("dragover", [PNG()]);
+    act(() => {
+      root.querySelector('[data-nx-node="img"]')?.dispatchEvent(over);
+    });
+    expect(over.defaultPrevented).toBe(false);
+    act(() => {
+      root
+        .querySelector('[data-nx-node="img"]')
+        ?.dispatchEvent(fileDrag("drop", [PNG()]));
+    });
+    expect(upload).not.toHaveBeenCalled();
   });
 });

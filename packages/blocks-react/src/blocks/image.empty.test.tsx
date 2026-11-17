@@ -163,6 +163,14 @@ describe("core/image with no picture, on the canvas", () => {
     );
     expect(html).not.toContain("data-nx-image-empty");
   });
+
+  it("leaves an Image bound to an address field to its binding too", async () => {
+    const html = await draw(
+      page(imageNode({}, { bindings: { src: { $bind: "entry.photoUrl" } } })),
+      "canvas"
+    );
+    expect(html).not.toContain("data-nx-image-empty");
+  });
 });
 
 /** Every rule of the page's sheet, as selector and body, in order. */

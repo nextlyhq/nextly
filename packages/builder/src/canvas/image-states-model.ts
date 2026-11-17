@@ -117,11 +117,15 @@ export function imageNodeOf(
 }
 
 /**
- * Whether an Image takes a picture from here: one whose picture is its
- * binding's is filled by the binding instead.
+ * Whether an Image takes a picture from here: one whose picture is bound,
+ * to a media field or to an address field, is filled by its binding instead.
+ * Storing a file on it would outrank the binding and stop it following its
+ * field.
  */
 export function takesPicture(node: BlockNode): boolean {
-  return node.bindings?.mediaId === undefined;
+  return (
+    node.bindings?.mediaId === undefined && node.bindings?.src === undefined
+  );
 }
 
 /** Whether a drag carries files from outside the page. */

@@ -29,7 +29,10 @@
  *
  * Drawn like `EmptyContainerAppenders`, in the overlay over the canvas, at
  * each box's measured rectangle; see that module for why the rectangles are
- * read through `canvasContentRect` and kept current by `watchCanvasFor`.
+ * read in the canvas's content coordinates and kept current by
+ * `watchCanvasFor`. Each plate covers only the part of its box the page
+ * shows (`visiblePartOf`), so a clipping ancestor's hidden part is never
+ * covered.
  *
  * @module canvas/image-states
  */
@@ -48,6 +51,7 @@ import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
 import { lockViewOf, propIsWritable } from "../inspector";
+import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { nodeAddressOf, nodeElement } from "./canvas-addressing";
@@ -55,10 +59,10 @@ import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
-  canvasContentRect,
   layoutFragments,
   overlaySpaceOf,
   renderSkips,
+  visiblePartOf,
 } from "./geometry-dom";
 import {
   carriesFiles,
@@ -370,7 +374,10 @@ export function ImageStates({
     };
   }, [take, upload, writable, canvasFrame, editor.document]);
 
-  const selectImage = (nodeId: string): void => editor.select(nodeId);
+  const selectImage = (nodeId: string, mode?: SelectionMode): void => {
+    if (mode === undefined) editor.select(nodeId);
+    else editor.select(nodeId, mode);
+  };
 
   return (
     <div
@@ -389,7 +396,7 @@ export function ImageStates({
           dragging={dragging}
           canUpload={upload !== undefined}
           canPick={Picker !== undefined}
-          onSelect={() => selectImage(plate.nodeId)}
+          onSelect={mode => selectImage(plate.nodeId, mode)}
           onFiles={files => take(plate.nodeId, files)}
           onHeld={held =>
             setDropTarget(current =>
@@ -465,16 +472,35 @@ function isDrawn(element: Element): boolean {
   return layoutFragments(element) > 0 && !renderSkips(element);
 }
 
+/**
+ * Where a plate goes for an element: the part of it the page shows, cut to
+ * every ancestor that clips it (a fixed-height box with `overflow: hidden`, a
+ * scroller it has scrolled out of), so a plate drawn over the page never
+ * covers, or takes the clicks of, what that ancestor hides it under. `null`
+ * when the page shows none of it, lays it out nowhere, or clips it in a way
+ * that cannot be described.
+ */
+function shownRectOf(element: Element, space: Space): Rect | null {
+  if (!isDrawn(element)) return null;
+  const visible = visiblePartOf(element, space.root);
+  if (visible === null || visible === "hidden") return null;
+  return space.place(visible);
+}
+
 /** A plate over each Image box this page owns that waits for a picture. */
 function emptyPlates(space: Space, document: EditorState["document"]): Plate[] {
-  return emptyImageBoxes(space.root, document)
-    .filter(box => isDrawn(box.element))
-    .map((box, index) => ({
+  const plates: Plate[] = [];
+  emptyImageBoxes(space.root, document).forEach((box, index) => {
+    const rect = shownRectOf(box.element, space);
+    if (rect === null) return;
+    plates.push({
       key: `${box.nodeId}:${String(index)}`,
       nodeId: box.nodeId,
       reason: box.reason,
-      rect: space.place(canvasContentRect(box.element, space.root)),
-    }));
+      rect,
+    });
+  });
+  return plates;
 }
 
 /**
@@ -497,13 +523,9 @@ function busyPlates(
   for (const nodeId of ids) {
     if (drawn.has(nodeId)) continue;
     const element = nodeElement(space.root, nodeId);
-    if (element === null || !isDrawn(element)) continue;
-    plates.push({
-      key: `${nodeId}:filled`,
-      nodeId,
-      reason: "filled",
-      rect: space.place(canvasContentRect(element, space.root)),
-    });
+    const rect = element === null ? null : shownRectOf(element, space);
+    if (rect === null) continue;
+    plates.push({ key: `${nodeId}:filled`, nodeId, reason: "filled", rect });
   }
   return plates;
 }
@@ -528,7 +550,8 @@ interface ImagePlateProps {
   readonly dragging: boolean;
   readonly canUpload: boolean;
   readonly canPick: boolean;
-  readonly onSelect: () => void;
+  /** Select the Image, as a click on the canvas would: Shift extends, Ctrl or Cmd toggles. */
+  readonly onSelect: (mode: SelectionMode) => void;
   readonly onFiles: (files: FileList | null) => void;
   readonly onHeld: (held: boolean) => void;
   readonly onLibrary: () => void;
@@ -554,7 +577,9 @@ function ImagePlate(props: ImagePlateProps): React.JSX.Element {
       aria-label={plate.reason === "missing" ? WORDS.missing : "Image"}
       style={{ left: x, top: y, width, height }}
       onClick={event => {
-        if (event.target === event.currentTarget) onSelect();
+        if (event.target === event.currentTarget) {
+          onSelect(selectionModeFor(event));
+        }
       }}
       onContextMenu={event => event.stopPropagation()}
       onDragOver={event => {
