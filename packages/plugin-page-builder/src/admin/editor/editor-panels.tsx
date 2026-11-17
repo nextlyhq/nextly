@@ -89,6 +89,7 @@ import {
   useSectionPictures,
   type SectionPictureInputs,
 } from "./section-pictures";
+import { useSelectedRegion, type SelectedRegion } from "./selected-region";
 import type { FontsPanelWithUpload as FontsPanelWithUploadPart } from "./site-style-fonts";
 import {
   offerableFaces,
@@ -573,6 +574,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
   const pageLayout = usePageLayoutSettings(page.control);
   // From the form's unsaved values, so a change of Layout redraws at once.
   const layoutRegions = usePageLayoutRegions(page.control, page.canvasRoot);
+  // The header or footer selected on the canvas or in Layers.
+  const selectedRegion = useSelectedRegion(editor, layoutRegions);
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
    *
@@ -638,7 +641,8 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     availablePanels: AVAILABLE_PANELS,
     pageLayout,
     canvasRegions: layoutRegions.canvas,
-    layersRegions: layoutRegions.layers,
+    layersRegions: selectedRegion.layers,
+    selectedRegion,
     ...library,
     ...requests,
   };
@@ -801,8 +805,10 @@ export type EditorPanels = OfferedLibrary &
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
     canvasRegions: readonly CanvasRegion[];
-    /** The same regions, as read-only rows in Layers. */
+    /** The same regions, as rows in Layers that select them. */
     layersRegions: readonly LayersRegionRow[];
+    /** The header or footer selected, and what reads it. */
+    selectedRegion: SelectedRegion;
     availablePanels: typeof AVAILABLE_PANELS;
     search: { open: boolean; setOpen: (open: boolean) => void };
     pages: PagesPanelMount;
