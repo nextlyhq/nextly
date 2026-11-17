@@ -619,6 +619,16 @@ describe("the + between the selected block's children", () => {
     expect(between.style.height).toBe("160px");
   });
 
+  it("keeps a touch screen's + between blocks deeper than it", async () => {
+    // Every block here is at least 100px deep, so a "+" centred on a line
+    // leaves both middles clear: a touch screen keeps it shown.
+    mount(ROW, { selectedId: "pricing" });
+    await act(async () => undefined);
+    expect(
+      gapButtons().map(button => button.closest("[data-roomy]") !== null)
+    ).toEqual([true, true, true, true, true]);
+  });
+
   it("offers no children's gaps with nothing selected", async () => {
     mount(ROW);
     await act(async () => undefined);
