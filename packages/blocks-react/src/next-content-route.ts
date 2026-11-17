@@ -130,6 +130,16 @@ async function contentRedirect(path: string): Promise<never> {
   return permanentRedirect(path);
 }
 
+/**
+ * The site's handler a content route answers its misses with: the route's
+ * own, else its pages route's.
+ */
+export function contentMissHandler(
+  config: ContentPageConfig
+): ContentPageConfig["notFound"] {
+  return config.notFound ?? config.pages.notFound;
+}
+
 export function buildContentRoute(
   config: ContentPageConfig,
   isPublic: boolean
@@ -140,10 +150,7 @@ export function buildContentRoute(
    * How the route answers a miss: the site's handler, where it passed one
    * and the route answers misses per request.
    */
-  const notFound = perRequestNotFound(
-    config.notFound ?? config.pages.notFound,
-    isPublic
-  );
+  const notFound = perRequestNotFound(contentMissHandler(config), isPublic);
   /**
    * The tags a cached read of the address store carries: every collection
    * whose writes change who holds an address (the pages', the templates', and

@@ -115,6 +115,28 @@ describe("under Cache Components", () => {
       expect(reader.findSingle).toHaveBeenCalledTimes(1);
     });
 
+    it("(public) answers a missing Single with the site's own handler beneath a boundary", async () => {
+      const handler = vi.fn(async (): Promise<never> => {
+        throw NOT_FOUND;
+      });
+      const route = createPublicSinglePage({
+        slug: "homepage",
+        field: "content",
+        blocks,
+        nextly: emptyReader() as never,
+        notFound: handler,
+      });
+
+      const answer = (await route.SinglePage()) as ReactElement;
+
+      expect(answer.type).toBe(Suspense);
+      expect(handler).not.toHaveBeenCalled();
+      await expect(
+        throughBoundary(Promise.resolve(answer))
+      ).rejects.toMatchObject(NOT_FOUND);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
     it("hands its params to the page beneath the boundary, so a [locale] segment is read", async () => {
       const reader = recordingReader();
       const route = createSinglePage({
@@ -333,6 +355,26 @@ describe("without Cache Components", () => {
       ).rejects.toMatchObject(NOT_FOUND);
     }
   );
+
+  it("leaves a public page's miss to notFound() itself, with no boundary, whatever handler the site passed", async () => {
+    // Without Cache Components a public page is rendered once and kept, so
+    // the site's handler, which may read the request, is not called.
+    const handler = vi.fn(async (): Promise<never> => {
+      throw new Error("the site's handler ran");
+    });
+    const route = createPublicBlocksPage({
+      collections: ["pages"],
+      field: "content",
+      blocks,
+      nextly: emptyReader() as never,
+      notFound: handler,
+    });
+
+    await expect(
+      route.ContentPage({ params: Promise.resolve({ slug: ["missing"] }) })
+    ).rejects.toMatchObject(NOT_FOUND);
+    expect(handler).not.toHaveBeenCalled();
+  });
 
   it("rejects with not found for a missing Single", async () => {
     const route = createSinglePage({

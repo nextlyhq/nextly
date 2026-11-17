@@ -29,7 +29,7 @@ import {
   underCacheComponents,
   perRequestNotFound,
 } from "./next-blocks-route";
-import { buildContentRoute } from "./next-content-route";
+import { buildContentRoute, contentMissHandler } from "./next-content-route";
 import type {
   BlocksPageConfig,
   BlocksSinglePageConfig,
@@ -253,11 +253,11 @@ async function AnsweredMiss({
  * logs each miss with its headers), and a read of the request above a boundary
  * stops a build: a public route builds a path that holds nothing, the one it
  * lists while no page is published, as Next.js refuses an empty list. So the
- * page is built with a handler that throws `MISS_FOR_THE_BOUNDARY`, and the
+ * route is built with a handler that throws `MISS_FOR_THE_BOUNDARY`, and the
  * page answers that by rendering the site's handler beneath a boundary, as
- * the page did before it drew its content boundary-free. The head
- * (`generateMetadata`) keeps the site's own handler, so it still answers the
- * miss first for a crawler.
+ * the page did before it drew its content boundary-free. The head answers it
+ * with the site's handler itself (`missesAnsweredInHead`), so it still
+ * answers the miss first for a crawler.
  */
 function missesBeneathBoundary<A>(
   page: (args: A) => Promise<ReactElement>,
@@ -269,6 +269,27 @@ function missesBeneathBoundary<A>(
     } catch (error) {
       if (error !== MISS_FOR_THE_BOUNDARY) throw error;
       return withinBoundary(createElement(AnsweredMiss, { answer }));
+    }
+  };
+}
+
+/**
+ * A public route's head (`generateMetadata`), answering the route's deferred
+ * miss with the site's own handler, as the head answered it before: the head
+ * sits outside the page's boundary, where Next.js lets it read the request.
+ */
+function missesAnsweredInHead<A, M>(
+  head: (args: A) => Promise<M>,
+  answer: MissHandler
+): (args: A) => Promise<M> {
+  return async args => {
+    try {
+      return await head(args);
+    } catch (error) {
+      if (error !== MISS_FOR_THE_BOUNDARY) throw error;
+      await answer();
+      const { notFound } = await import("next/navigation");
+      return notFound();
     }
   };
 }
@@ -343,18 +364,23 @@ export function createPublicSinglePage(
   config: BlocksSinglePageConfig
 ): SingleRoute<ReactElement> {
   // No boundary, so the page's HTML holds it: see `withinBoundary`.
-  const route = createPublicSingleRoute<ReactElement>(
-    blocksSingleConfig(config, true)
-  );
   const answer = boundaryMissHandler(config.notFound);
-  if (answer === undefined) return route;
-  const page = createPublicSingleRoute<ReactElement>(
+  if (answer === undefined) {
+    return createPublicSingleRoute<ReactElement>(
+      blocksSingleConfig(config, true)
+    );
+  }
+  const route = createPublicSingleRoute<ReactElement>(
     blocksSingleConfig({ ...config, notFound: deferMiss }, true)
   );
   return {
     ...route,
     SinglePage: missesBeneathBoundary(
-      (args?: SingleRouteArgs) => page.SinglePage(args),
+      (args?: SingleRouteArgs) => route.SinglePage(args),
+      answer
+    ),
+    generateMetadata: missesAnsweredInHead(
+      (args?: SingleRouteArgs) => route.generateMetadata(args),
       answer
     ),
   };
@@ -405,17 +431,19 @@ export function createPublicBlocksPage(
   config: BlocksPageConfig
 ): StaticContentRoute<ReactElement> {
   // No boundary, so the page's HTML holds it: see `withinBoundary`.
-  const route = createPublicContentRoute<ReactElement>(
-    blocksRouteConfig(config, true)
-  );
   const answer = boundaryMissHandler(config.notFound);
-  if (answer === undefined) return route;
-  const page = createPublicContentRoute<ReactElement>(
+  if (answer === undefined) {
+    return createPublicContentRoute<ReactElement>(
+      blocksRouteConfig(config, true)
+    );
+  }
+  const route = createPublicContentRoute<ReactElement>(
     blocksRouteConfig({ ...config, notFound: deferMiss }, true)
   );
   return {
     ...route,
-    ContentPage: missesBeneathBoundary(page.ContentPage, answer),
+    ContentPage: missesBeneathBoundary(route.ContentPage, answer),
+    generateMetadata: missesAnsweredInHead(route.generateMetadata, answer),
   };
 }
 
@@ -459,13 +487,14 @@ export function createPublicContentPage(
   config: ContentPageConfig
 ): StaticContentRoute<ReactElement> {
   // No boundary, so the page's HTML holds it: see `withinBoundary`.
-  const route = buildContentRoute(config, true);
-  // The route's own rule for which handler answers its misses.
-  const answer = boundaryMissHandler(config.notFound ?? config.pages.notFound);
-  if (answer === undefined) return route;
-  const page = buildContentRoute({ ...config, notFound: deferMiss }, true);
+  const answer = boundaryMissHandler(contentMissHandler(config));
+  if (answer === undefined) return buildContentRoute(config, true);
+  // The deferral stands in for the site's handler wherever the route would
+  // ask it, its pages route included (`contentMissHandler`).
+  const route = buildContentRoute({ ...config, notFound: deferMiss }, true);
   return {
     ...route,
-    ContentPage: missesBeneathBoundary(page.ContentPage, answer),
+    ContentPage: missesBeneathBoundary(route.ContentPage, answer),
+    generateMetadata: missesAnsweredInHead(route.generateMetadata, answer),
   };
 }

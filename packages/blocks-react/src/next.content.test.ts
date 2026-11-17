@@ -18,7 +18,7 @@ import {
   listPageOf,
   type BindingSourceRef,
 } from "nextly/runtime";
-import { createElement, type ReactElement } from "react";
+import { createElement, Suspense, type ReactElement } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1145,20 +1145,59 @@ describe("a site's own not-found handler", () => {
     expect(site.calls()).toBe(2);
   });
 
-  it("answers a public route's miss under Cache Components, where the route answers it per request", async () => {
+  it.each([
+    ["on the route", (notFound: () => never) => config({ notFound })],
+    [
+      "on its pages",
+      (notFound: () => never) => {
+        const options = config();
+        return { ...options, pages: { ...options.pages, notFound } };
+      },
+    ],
+  ] as const)(
+    "answers a public route's miss under Cache Components beneath a boundary, with the handler given %s",
+    async (_, configured) => {
+      // The handler may read the request, which a build refuses above a
+      // boundary, so the page answers the miss beneath one; the head asks the
+      // handler itself, as before.
+      vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+      try {
+        const site = handler();
+        const route = createPublicContentPage(configured(site.notFound));
+        const answer = (await route.ContentPage(missing)) as ReactElement;
+        expect(answer.type).toBe(Suspense);
+        expect(site.calls()).toBe(0);
+        await expect(throughBoundary(Promise.resolve(answer))).rejects.toThrow(
+          "site: not found"
+        );
+        await expect(route.generateMetadata(missing)).rejects.toThrow(
+          "site: not found"
+        );
+        expect(site.calls()).toBe(2);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+
+  it("passes on anything else a public route's page throws under Cache Components", async () => {
+    // Only the route's own deferred miss is answered beneath the boundary: a
+    // fault reading the address store still fails the page.
     vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
     try {
       const site = handler();
       const route = createPublicContentPage(
-        config({ notFound: site.notFound })
+        config({
+          notFound: site.notFound,
+          resolveAddress: async () => {
+            throw new Error("the store is down");
+          },
+        })
       );
-      await expect(throughBoundary(route.ContentPage(missing))).rejects.toThrow(
-        "site: not found"
+      await expect(route.ContentPage(missing)).rejects.toThrow(
+        "the store is down"
       );
-      await expect(route.generateMetadata(missing)).rejects.toThrow(
-        "site: not found"
-      );
-      expect(site.calls()).toBe(2);
+      expect(site.calls()).toBe(0);
     } finally {
       vi.unstubAllEnvs();
     }
