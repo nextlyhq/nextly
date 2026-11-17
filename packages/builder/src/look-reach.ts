@@ -20,7 +20,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { BlockLookRow } from "./block-look-rows";
-import { looksOfType } from "./look-tiles";
+import { looksOfType, wornLook } from "./look-tiles";
 
 /** Marks a block an edit to the look being edited reaches. */
 export const LOOK_REACH_ATTRIBUTE = "data-nx-look-reach";
@@ -41,21 +41,13 @@ export function lookReach(
     if (
       look.own ||
       appliesLook(node.classes, looks, look.id) ||
-      (look.starred === true && wearsNone(node.classes, looks))
+      // Picked none of its type's looks, as the Style tab reads a block.
+      (look.starred === true && wornLook(node.classes, looks) === null)
     ) {
       reached.add(node.id);
     }
   });
   return reached;
-}
-
-/** Whether a block's classes apply none of its type's looks: it picked none. */
-function wearsNone(
-  classes: readonly string[] | undefined,
-  looks: readonly NamedClass[]
-): boolean {
-  const read = (classes ?? []).slice(0, MAX_CLASSES_PER_NODE);
-  return !looks.some(each => read.includes(each.id));
 }
 
 /**
