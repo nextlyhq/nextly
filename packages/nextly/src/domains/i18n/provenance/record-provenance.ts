@@ -19,6 +19,7 @@ import type {
   WhereClause,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
+import { walkNodes, type BlockNode } from "@nextlyhq/blocks-engine";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import {
@@ -453,17 +454,30 @@ async function recordRowOrigins(
   }
 }
 
-/** The rows of a structured value that carry an id, by id. */
+/**
+ * The rows of a structured value that carry an id, by id: a repeater's items, or a block
+ * document's nodes, a container's nested nodes included, read with the one walk every block
+ * reader takes (`walkNodes`).
+ */
 function rowsOf(value: unknown): Map<string, unknown> {
   const rows = new Map<string, unknown>();
-  if (!Array.isArray(value)) return rows;
-  for (const row of value) {
+  const keep = (row: unknown) => {
     const id =
       typeof row === "object" && row !== null
         ? (row as { id?: unknown }).id
         : undefined;
     if (typeof id === "string" && id !== "") rows.set(id, row);
+  };
+  if (Array.isArray(value)) {
+    for (const row of value) keep(row);
+    return rows;
   }
+  const nodes =
+    typeof value === "object" && value !== null
+      ? (value as { nodes?: unknown }).nodes
+      : undefined;
+  // The walk skips an entry that is no node, as every reader of a stored document does.
+  if (Array.isArray(nodes)) walkNodes(nodes as BlockNode[], keep);
   return rows;
 }
 
