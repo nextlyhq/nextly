@@ -23,8 +23,8 @@ import { Input, Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { offeredTiers } from "./canvas/canvas-width";
-import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
 import { layoutWritesText } from "./code-hints";
+import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
 import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import {
@@ -58,11 +58,11 @@ import {
   type Spread,
 } from "./plain-layout";
 import { SegmentChoices } from "./segment-choices";
-import type { SideOrientation } from "./side-orientation";
 import {
   sharedStyleChange,
   type SharedStyleChange,
 } from "./shared-style-target";
+import type { SideOrientation } from "./side-orientation";
 import {
   AppliedAtTier,
   BeneathAtTier,
@@ -70,9 +70,9 @@ import {
   type CascadeAt,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
-import type { StyleTarget } from "./style-target";
 import type { InspectedStyleProperty } from "./style-inspector";
 import { StylePropertyFields } from "./style-property-fields";
+import type { StyleTarget } from "./style-target";
 import { readStyleValue, type StyleAddress } from "./style-values";
 
 /**
@@ -99,7 +99,7 @@ function stylesOf(
   target: StyleTarget,
   surroundings: StyleFieldSurroundings
 ): NodeStyles | undefined {
-  if (target.kind === "shared") return target.style.styles as NodeStyles;
+  if (target.kind === "shared") return target.style.styles;
   return findNode(surroundings.editor.document.nodes, surroundings.nodeId)
     ?.styles;
 }
@@ -276,7 +276,7 @@ const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a block's Layout is drawn by Arrange: a container, not Columns. */
-function arrangesLayout(blockType: string | undefined): boolean {
+export function arrangesLayout(blockType: string | undefined): boolean {
   return blockType !== COLUMNS_ROW;
 }
 
@@ -1107,7 +1107,7 @@ function sharedColumnOnSpace(
   return {
     ...target,
     write: change => {
-      const write = change(target.style.styles as NodeStyles);
+      const write = change(target.style.styles);
       if (
         write.kind !== "write" ||
         !setsSpace(write.styles, state, breakpoint)
