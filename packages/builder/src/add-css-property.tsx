@@ -381,6 +381,17 @@ function CssPropertyPicker({
   React.useEffect(() => search.current?.focus(), []);
   const listed = addable.filter(entry => pickerMatches(entry, query));
   const current = listed[Math.min(active, listed.length - 1)];
+  const list = React.useRef<HTMLUListElement | null>(null);
+  // The chosen option kept in view: focus stays in the search field, so
+  // moving the choice from the keyboard doesn't scroll the list by itself.
+  const currentId = current?.id;
+  React.useEffect(() => {
+    if (currentId === undefined) return;
+    const option = [
+      ...(list.current?.querySelectorAll<HTMLElement>("[data-css-id]") ?? []),
+    ].find(each => each.dataset.cssId === currentId);
+    option?.scrollIntoView({ block: "nearest" });
+  }, [currentId]);
   const optionId = (entry: CssPropertyRow) => `${id}-${entry.id}`;
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
@@ -423,6 +434,7 @@ function CssPropertyPicker({
         onKeyDown={onKeyDown}
       />
       <ul
+        ref={list}
         className="nx-css-picker__list"
         id={listId}
         role="listbox"

@@ -196,18 +196,36 @@ export function offersArrange(section: StyleSection): boolean {
   );
 }
 
+/** What the block's plain controls draw, which decides what stays home. */
+export interface PlainControls {
+  /**
+   * The block's type where the block itself is edited, `undefined` for a
+   * shared style: a Section's Height presets are the block's own.
+   */
+  readonly blockType: string | undefined;
+  /**
+   * Whether Arrange reads the Layout in plain words (not Custom), so its
+   * Space between draws the space properties. Where the reading isn't known
+   * (the Style tab isn't drawn), taken as true wherever Arrange is drawn.
+   */
+  readonly arranges?: boolean | undefined;
+}
+
 /**
  * The properties a section's own plain controls draw, which stay in it
  * whatever their tier: Arrange's space between (rows and columns set apart
- * included), and the min height a Section's Height presets stand over. The
- * Height presets are the block's own, so not a shared style's.
+ * included) while Arrange reads the Layout in plain words, and the min height
+ * a Section's Height presets stand over. Under Arrange: Custom the raw rows
+ * hold the layout and its space rows are added like any other.
  */
 function drawnByPlainControls(
   section: StyleSection,
-  blockType: string | undefined
+  plain: PlainControls
 ): ReadonlySet<string> {
-  if (offersArrange(section)) return SPACE_PROPERTIES;
-  if (section.key === "size" && blockType === SECTION_BLOCK) {
+  if (offersArrange(section)) {
+    return plain.arranges === false ? NONE : SPACE_PROPERTIES;
+  }
+  if (section.key === "size" && plain.blockType === SECTION_BLOCK) {
     return MIN_HEIGHT;
   }
   return NONE;
@@ -220,21 +238,20 @@ const NONE: ReadonlySet<string> = new Set();
  * A block's sections as the Style tab draws them: each keeps what its tier
  * shows unasked and what its plain controls draw, and every other property
  * becomes a row "CSS properties" can hold. A section left with nothing is not
- * drawn. `blockType` is the block's type where the block itself is edited,
- * `undefined` for a shared style.
+ * drawn.
  */
 export function arrangeCssProperties(
   sections: readonly StyleSection[],
-  blockType: string | undefined
+  plain: PlainControls
 ): ArrangedStyle {
   const drawn: StyleSection[] = [];
   const extras: CssPropertyRow[] = [];
   for (const section of sections) {
     const kept: InspectedStyleProperty[] = [];
-    const plain = drawnByPlainControls(section, blockType);
+    const drawnHere = drawnByPlainControls(section, plain);
     for (const property of section.properties) {
       const { home, fields } = splitFields(property);
-      if (home.tierShows || plain.has(home.property)) kept.push(home);
+      if (home.tierShows || drawnHere.has(home.property)) kept.push(home);
       else extras.push(cssRow(home.property, home, [], section));
       for (const { field, row } of fields) {
         extras.push(cssRow(`${row.property}.${field}`, row, [field], section));

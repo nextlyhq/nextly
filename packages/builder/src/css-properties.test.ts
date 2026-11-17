@@ -81,7 +81,9 @@ function page(inner?: NodeStyles, outer?: NodeStyles): BlockDocument {
 function arranged(inner?: NodeStyles, outer?: NodeStyles) {
   const inspection = inspectStyle(page(inner, outer), "inner");
   if (inspection === null) throw new Error("the block was not inspected");
-  return arrangeCssProperties(inspection.sections, "acme/everything");
+  return arrangeCssProperties(inspection.sections, {
+    blockType: "acme/everything",
+  });
 }
 
 /** Styles at the base state and breakpoint. */
@@ -207,7 +209,9 @@ describe("the sections beside CSS properties", () => {
     });
     // Arrange draws rows and columns apart; a Section's Height presets stand
     // over its min height.
-    const section = keys(arrangeCssProperties(sections, "core/section"));
+    const section = keys(
+      arrangeCssProperties(sections, { blockType: "core/section" })
+    );
     expect(section.layout).toContain("rowGap");
     expect(section.size).toContain("minHeight");
     expect(section.extras).not.toContain("rowGap");
@@ -215,11 +219,24 @@ describe("the sections beside CSS properties", () => {
     // Another block, or a shared style, has no Height presets: its min height
     // is one of its CSS properties.
     for (const other of ["acme/everything", undefined]) {
-      const arranged = keys(arrangeCssProperties(sections, other));
+      const arranged = keys(
+        arrangeCssProperties(sections, { blockType: other })
+      );
       expect(arranged.size).not.toContain("minHeight");
       expect(arranged.extras).toContain("minHeight");
       expect(arranged.layout).toContain("rowGap");
     }
+    // Under Arrange: Custom the raw rows hold the layout, so its space rows
+    // are CSS properties, a set one drawn there and an unset one to add.
+    const custom = keys(
+      arrangeCssProperties(sections, {
+        blockType: "core/section",
+        arranges: false,
+      })
+    );
+    expect(custom.layout).not.toContain("rowGap");
+    expect(custom.extras).toContain("rowGap");
+    expect(custom.extras).toContain("columnGap");
   });
 
   it("keeps what a tier shows unasked, and moves a set value it doesn't to CSS properties", () => {

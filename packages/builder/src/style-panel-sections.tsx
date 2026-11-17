@@ -29,6 +29,7 @@ import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
 import { SectionHeading } from "./panel-section";
+import type { ParentArrangement } from "./plain-layout";
 import {
   ArrangeFields,
   arrangedAway,
@@ -38,7 +39,12 @@ import {
 } from "./plain-layout-controls";
 import { InsideParentFields, useDrawnChildRows } from "./plain-parent-controls";
 import { SectionHeld } from "./section-held";
-import { SettingSlot, sectionShown, useSettingsMatch } from "./settings-filter";
+import {
+  SettingSlot,
+  sectionShown,
+  useReportStyle,
+  useSettingsMatch,
+} from "./settings-filter";
 import { spacingRings } from "./spacing-box";
 import { SpacingBox } from "./spacing-box-fields";
 import {
@@ -66,6 +72,7 @@ export function StyleSections({
   readOnlyReason,
   surroundings,
   fit,
+  report,
 }: {
   sections: readonly StyleSection[];
   readOnlyReason: React.ComponentProps<
@@ -73,16 +80,39 @@ export function StyleSections({
   >["readOnlyReason"];
   surroundings: StyleFieldSurroundings;
   fit: string | undefined;
+  /** What the panel's filter is told beside the sections drawn here. */
+  report: {
+    readonly shared: boolean;
+    readonly styles: unknown;
+    readonly parent: ParentArrangement | undefined;
+  };
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
   const match = useSettingsMatch();
   const target = React.useContext(StyleTargetContext);
-  const arranged = arrangeCssProperties(
+  const layout = sections.find(offersArrange);
+  // Read here as Layout reads it, so what Arrange draws stays out of CSS
+  // properties only while Arrange draws it.
+  const reading = useArrangeReading(surroundings, layout !== undefined);
+  const arranges =
+    reading === undefined ? undefined : reading.arrange.mode !== "custom";
+  const arranged = arrangeCssProperties(sections, {
+    blockType:
+      target.kind === "block"
+        ? findNode(surroundings.editor.document.nodes, surroundings.nodeId)
+            ?.type
+        : undefined,
+    arranges,
+  });
+  // What the panel's filter keeps in Style: what these controls draw.
+  useReportStyle(
+    surroundings.nodeId,
     sections,
-    target.kind === "block"
-      ? findNode(surroundings.editor.document.nodes, surroundings.nodeId)?.type
-      : undefined
+    report.shared,
+    report.styles,
+    report.parent,
+    arranges
   );
   const added = useAddedProperties(surroundings.nodeId);
   // Drawn wherever the block has any Style section, so the tab always ends

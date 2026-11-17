@@ -100,6 +100,7 @@ import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
+import type { PlainFlow } from "./plain-layout";
 import {
   advancedEntries,
   contentEntries,
@@ -126,9 +127,8 @@ import {
   type StoredStyles,
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
+import { inspectStyle } from "./style-inspector";
 import { breakpointLabel } from "./style-provenance-indicators";
-import type { PlainFlow } from "./plain-layout";
-import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -869,7 +869,9 @@ function blockMatch(
               },
             },
         parent,
-        at.flow
+        at.flow,
+        // Whether Arrange owns the space rows, as the open Style tab reads it.
+        at.reported?.arranges
       ),
       ...advancedEntries(block, node),
     ],

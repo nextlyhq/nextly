@@ -231,6 +231,42 @@ describe("+ Add CSS property", () => {
     expect(offered().filter(flexOrGridOnly).length).toBeGreaterThan(0);
   });
 
+  it("offers a Custom layout's rows and columns apart, which Arrange doesn't draw then", () => {
+    // Column sizes with no plain words read as Arrange: Custom, whose raw
+    // rows hold the layout; space between isn't drawn by Arrange there.
+    mount(
+      pageOf(at({ display: "grid", gridTemplateColumns: "1fr 2fr" }), STACK)
+    );
+    openPicker();
+    expect(offered()).toContain("rowGap");
+    expect(offered()).toContain("columnGap");
+  });
+
+  it("keeps the option chosen from the keyboard in view", () => {
+    mount();
+    openPicker();
+    const search = screen.getByRole("combobox", {
+      name: "Search CSS properties",
+    });
+    const scrolled: Element[] = [];
+    const scroll = window.Element.prototype.scrollIntoView;
+    window.Element.prototype.scrollIntoView = function into(): void {
+      scrolled.push(this as Element);
+    };
+    try {
+      // Up from the first wraps to the last, past the list's first screen.
+      fireEvent.keyDown(search, { key: "ArrowUp" });
+      const options = screen.getAllByRole("option");
+      const last = options.at(-1);
+      expect(last?.getAttribute("aria-selected")).toBe("true");
+      expect(scrolled.at(-1)).toBe(last);
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      expect(scrolled.at(-1)).toBe(options[0]);
+    } finally {
+      window.Element.prototype.scrollIntoView = scroll;
+    }
+  });
+
   it("narrows by what is typed, and picks with the keyboard", () => {
     mount();
     openPicker();

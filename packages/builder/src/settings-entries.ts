@@ -437,13 +437,17 @@ export function styleEntries(
   inspection: BlockInspection | null,
   shortcuts?: { node: BlockNode | undefined; at: ShortcutAt },
   parent?: ParentArrangement,
-  flow?: PlainFlow
+  flow?: PlainFlow,
+  arranges?: boolean
 ): SettingEntry[] {
   const props = inspection?.sections.styleProps ?? [];
   // Arranged as the tab draws them, so a search finds a row where it is
   // drawn, and nothing it doesn't draw.
   // The block's own shortcuts are drawn only where it is edited itself.
-  const arranged = arrangeCssProperties(sections, shortcuts?.node?.type);
+  const arranged = arrangeCssProperties(sections, {
+    blockType: shortcuts?.node?.type,
+    arranges,
+  });
   return [
     ...arranged.sections.flatMap(section => {
       const own = props.find(each => each.key === section.key)?.rows ?? [];
