@@ -25,6 +25,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -147,28 +148,35 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         returnFocus: () => HTMLElement | null;
       }) => React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        {/*
-         * The top bar is rendered for the same reason the children are: the
-         * breakpoint manager lives there, and a stub that dropped the slot
-         * would leave its assertions passing on absence.
-         */}
-        {/* The real shell renders the host's Settings on every pass, open
+      // Inside a tooltip provider, as the real shell renders everything: the
+      // top bar's controls, the device buttons among them, carry tooltips.
+      <TooltipProvider>
+        <div>
+          {/*
+           * The top bar is rendered for the same reason the children are: the
+           * breakpoint manager lives there, and a stub that dropped the slot
+           * would leave its assertions passing on absence.
+           */}
+          {/* The real shell renders the host's Settings on every pass, open
             or not, which is where the breakpoint manager now lives. */}
-        {renderSettings?.({
-          open: false,
-          onOpenChange: () => {},
-          returnFocus: () => null,
-        })}
-        {topBar}
-        {topBarCenter}
-        {topBarEnd}
-        {inspector}
-        {shownPanel === null
-          ? null
-          : renderPanel?.("design", { current: shownPanel, choose: () => {} })}
-        {children}
-      </div>
+          {renderSettings?.({
+            open: false,
+            onOpenChange: () => {},
+            returnFocus: () => null,
+          })}
+          {topBar}
+          {topBarCenter}
+          {topBarEnd}
+          {inspector}
+          {shownPanel === null
+            ? null
+            : renderPanel?.("design", {
+                current: shownPanel,
+                choose: () => {},
+              })}
+          {children}
+        </div>
+      </TooltipProvider>
     ),
     BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
