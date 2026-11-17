@@ -31,6 +31,7 @@ import {
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  SINGLE_SHOWN_ON_SECTION_COMPONENT,
   OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
@@ -54,6 +55,7 @@ import { lazyPart, withEditorStylesheet } from "./lazy-part";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
+import type { ShownOnSection as ShownOnSectionPart } from "./shown-on/ShownOnSection";
 import type { TemplateAddressField as TemplateAddressFieldPart } from "./TemplateAddressField";
 import type { TemplateCollectionField as TemplateCollectionFieldPart } from "./TemplateCollectionField";
 import type { TemplateDeleteAction as TemplateDeleteActionPart } from "./TemplateDeleteAction";
@@ -96,6 +98,9 @@ const DeleteComponentReplacement: typeof DeleteComponentReplacementPart =
   );
 const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
   import("./EntryDesignSection").then(m => m.EntryDesignSection)
+);
+const ShownOnSection: typeof ShownOnSectionPart = lazyPart(() =>
+  import("./shown-on/ShownOnSection").then(m => m.ShownOnSection)
 );
 const PageBuilderOverview: typeof PageBuilderOverviewPart = lazyPart(() =>
   import("./overview/PageBuilderOverview").then(m => m.PageBuilderOverview)
@@ -177,6 +182,8 @@ const COMPONENTS = {
   // An entry's own design: the Design section of every entry's side panel,
   // a template's own designs, and the delete that says what it means.
   [ENTRY_DESIGN_SECTION_COMPONENT]: EntryDesignSection,
+  // Where the builder shows a Single's values, in every Single's side panel.
+  [SINGLE_SHOWN_ON_SECTION_COMPONENT]: ShownOnSection,
   [TEMPLATE_OWN_DESIGNS_COMPONENT]: TemplateOwnDesigns,
   [TEMPLATE_DESIGN_DETAILS_COMPONENT]: TemplateDesignDetails,
   [TEMPLATE_DELETE_COMPONENT]: TemplateDeleteAction,
@@ -207,6 +214,7 @@ export {
   PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
+  ShownOnSection,
   TemplateAddressField,
   TemplateCollectionField,
   TemplateDeleteAction,

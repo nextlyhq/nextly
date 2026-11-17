@@ -3,27 +3,34 @@
  * document it runs, and what each committed write's document is judged
  * again with), and the routes for a collection loop's menus, the named
  * queries, a list's entries, the canvas's bound props, the binding picker,
- * an unbind's plan and the report itself.
+ * an unbind's plan, the report itself, and where the builder shows each
+ * Single's values, from the index the report's sweep keeps beside it.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import type { PluginRoute, PluginRouteIdentity } from "@nextlyhq/plugin-sdk";
+import type {
+  PluginRoute,
+  PluginRouteContext,
+  PluginRouteIdentity,
+} from "@nextlyhq/plugin-sdk";
 
 import { bindingFieldsRoute } from "../binding-fields-route";
 import { schemaFingerprint } from "../bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB } from "../bindings-report/job";
 import { layoutRegionsOf } from "../bindings-report/layout-regions";
 import {
+  mayReadSingle,
   readableAsCaller,
   readableSingles,
   visibleBindings,
 } from "../bindings-report/readable";
-import { bindingsToFixRoute } from "../bindings-report/route";
+import { bindingsToFixRoute, singleLabelsOf } from "../bindings-report/route";
 import {
   registerBindingReportOnWrite,
   runFullCheck,
   type BindingReportDeps,
 } from "../bindings-report/scan";
 import { bindingReportStore } from "../bindings-report/store";
+import { bindingUsesReader } from "../bindings-report/uses-store";
 import { canvasBindingsRoute } from "../canvas-bindings-route";
 import { canvasSourcesChangedRoute } from "../canvas-sources-changed-route";
 import { COMPONENTS_SLUG } from "../collections/components";
@@ -39,6 +46,8 @@ import {
 import { listEntriesRoute } from "../list-entries-route";
 import { loopCollectionsRoute } from "../loop-collections-route";
 import { namedQueriesRoute } from "../named-queries";
+import { draftPlacesShown } from "../shown-on-drafts";
+import { shownOnRoute } from "../shown-on-route";
 import { unbindPlanRoute } from "../unbind-plan-route";
 
 import type { InitContext } from "./install-context";
@@ -275,8 +284,26 @@ export function routesForBindings(
   readonly bindingFields: PluginRoute;
   readonly unbindPlan: PluginRoute;
   readonly bindingsToFix: PluginRoute;
+  readonly shownOn: PluginRoute;
 } {
   const { opts, state, namedQueryDeclarations, requireTemplateGuard } = def;
+  // A read starts a check when the schema may have changed, at most once a
+  // minute, and never waits for it.
+  const refresh = (routeCtx: PluginRouteContext): void => {
+    const now = Date.now();
+    if (now - state.bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
+    state.bindingsRefreshedAt = now;
+    routeCtx.services.jobs
+      .runSweepNow(BINDINGS_REPORT_JOB, {
+        maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+      })
+      .catch((error: unknown) =>
+        state.bindingReportCtx?.logger.warn(
+          "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
+          { error }
+        )
+      );
+  };
   return {
     // A collection loop's menus: the collections the author may read,
     // the plugin's own stores left out, with each one's sortable fields.
@@ -312,23 +339,7 @@ export function routesForBindings(
     bindingsToFix: bindingsToFixRoute({
       store: bindingReportDeps.store,
       readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
-      // A read starts a check when the schema may have changed, at most
-      // once a minute, and never waits for it.
-      refresh: routeCtx => {
-        const now = Date.now();
-        if (now - state.bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
-        state.bindingsRefreshedAt = now;
-        routeCtx.services.jobs
-          .runSweepNow(BINDINGS_REPORT_JOB, {
-            maxDurationMs: BINDINGS_REFRESH_RUN_MS,
-          })
-          .catch((error: unknown) =>
-            state.bindingReportCtx?.logger.warn(
-              "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
-              { error }
-            )
-          );
-      },
+      refresh,
       // Where a Layout region's binding is edited, and the language the
       // builder edits, for each row's way into the editor.
       componentStore: () =>
@@ -338,6 +349,33 @@ export function routesForBindings(
       defaultLocale: () =>
         state.bindingReportCtx?.config.localization?.defaultLocale,
       readableSingles: (routeCtx, slugs) => readableSingles(routeCtx, slugs),
+      blocks: def.blocks,
+    }),
+    // Where the builder shows one Single's values, for its side panel: from
+    // the index the report's sweep keeps, each place listed only where the
+    // caller may read it, and the rest counted.
+    shownOn: shownOnRoute({
+      uses: () =>
+        state.bindingReportCtx === null
+          ? null
+          : bindingUsesReader(state.bindingReportCtx.db),
+      readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
+      mayReadSingle: (routeCtx, slug) => mayReadSingle(routeCtx, slug),
+      // A place only in a working draft, where core's read of the document
+      // as the caller shows it.
+      draftPlacesShown: (routeCtx, document, single) =>
+        draftPlacesShown(
+          routeCtx,
+          document,
+          single,
+          (opts.limits ?? DEFAULT_LIMITS).maxNodes
+        ),
+      // Until the index has been filled once, a read starts the check that
+      // fills it, as the report's read does.
+      refresh,
+      singleLabels: (routeCtx, slugs) => singleLabelsOf(routeCtx, slugs),
+      defaultLocale: () =>
+        state.bindingReportCtx?.config.localization?.defaultLocale,
       blocks: def.blocks,
     }),
   };

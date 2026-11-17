@@ -86,6 +86,28 @@ default language. A document's draft is checked as well, so a binding broken onl
 draft is listed before that draft is published. Until the first check of every document
 finishes, the list says it hasn't checked yet rather than that every binding fits.
 
+### Where a Single's values are shown
+
+A Single's side panel has a **Shown on (from the builder)** section. It lists each page,
+header & footer set and component where the builder shows one of the Single's values,
+with the block it's in: **Home, Hero section**. Each row opens that document in the editor
+with the block selected. A block takes its name from Layers: the name you gave it, or its
+block's name.
+
+- A binding inside a component is listed once, on the component, not on every page that
+  places it.
+- Bindings in a draft count, so a binding you haven't published yet is listed.
+- You see only the places you're allowed to open. The rest are counted: **and 2 you can't
+  open**.
+- The section shows 10 rows. **and N more** opens the full list.
+- The list knows only documents made with the builder. Code that reads the Single
+  directly isn't listed, and the section says so.
+
+The list comes from an index of every builder document's bindings to Singles. It's kept
+by the same check as **Bindings to fix**, on every save and whenever a field or a block
+changes. After you upgrade and run `nextly migrate`, the section says **Still checking
+pages…** until the first check of every document finishes. That takes a jobs pass or two.
+
 ### Publishing a page whose parts aren't published
 
 A page, the components it places and its header & footer set are published separately. When you
