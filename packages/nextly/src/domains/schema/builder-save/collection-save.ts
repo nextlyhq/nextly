@@ -1189,6 +1189,8 @@ async function generateFor(
     appended?: { up: AddedStatements; down: AddedStatements };
     /** Columns the save drops whose values its moves copied first (`movesOf`). */
     valueMoves?: GenerateArgs["valueMoves"];
+    /** Columns the save adds that its moves fill last (`movesOf`). */
+    refilledColumns?: GenerateArgs["refilledColumns"];
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
     existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
@@ -1253,6 +1255,9 @@ async function generateFor(
     ...(args.valueMoves === undefined || args.valueMoves.length === 0
       ? {}
       : { valueMoves: args.valueMoves }),
+    ...(args.refilledColumns === undefined || args.refilledColumns.length === 0
+      ? {}
+      : { refilledColumns: args.refilledColumns }),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -1318,6 +1323,7 @@ const NO_MOVES: EntityMoves = {
   up: { first: [], last: [] },
   down: { first: [], last: [] },
   movedColumns: [],
+  refilledColumns: [],
 };
 
 /**
@@ -1332,6 +1338,7 @@ async function movesOf(
 ): Promise<{
   appended: { up: AddedStatements; down: AddedStatements };
   valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
+  refilledColumns: NonNullable<GenerateArgs["refilledColumns"]>;
 }> {
   const moves = plannedMovesOf(deps, save, table);
   // The header names each dropped column as the move it is, with what the group does not carry.
@@ -1345,6 +1352,7 @@ async function movesOf(
         sentences.get(moved.column) ??
         `moved into the group ${moved.into}; its values are copied there first`,
     })),
+    refilledColumns: moves.refilledColumns,
   };
 }
 
@@ -1380,13 +1388,41 @@ function plannedMovesOf(
   ) {
     return NO_MOVES;
   }
-  return planEntityMoves({
+  const planned = planEntityMoves({
     before: (save.previous.fields ?? []) as FieldDefinition[],
     after: (save.entity.fields ?? []) as FieldDefinition[],
     moves: save.moves,
     localized: save.entity.localized === true,
     table,
     dialect: deps.adapter.getCapabilities().dialect,
+  });
+  refuseDeletesBeforeRefill(save, planned);
+  return planned;
+}
+
+/**
+ * Refuses deleting the entries without a value in a column a move fills from its group: the
+ * file runs that delete before the values arrive, when every entry is without one. A fill is
+ * kept: it runs first, and the copy then writes over it each value the group held.
+ */
+function refuseDeletesBeforeRefill(
+  save: CollectionSave,
+  planned: EntityMoves
+): void {
+  const refilled = new Set(planned.refilledColumns.map(c => c.column));
+  const deleting = (save.resolutions ?? []).find(
+    r =>
+      r.kind === "delete_nonconforming" && refilled.has(toSnakeCase(r.column))
+  );
+  if (deleting === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: deleting.column,
+        code: "FIELD_MOVE_REFUSED",
+        message: `${deleting.column} takes its values from the group it moves out of, so no entries are deleted for it in the same save. Give the entries without a value one, or move it as optional.`,
+      },
+    ],
   });
 }
 

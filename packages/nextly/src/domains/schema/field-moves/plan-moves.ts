@@ -46,6 +46,11 @@ export interface EntityMoves {
   down: Placed;
   /** Each column the save drops because its field moved into a group, and the group it went to. */
   movedColumns: { table: string; column: string; into: string }[];
+  /**
+   * Each column the save adds because its field moved out of a group, which the file's last
+   * statements fill from the group: added without NOT NULL, and made required once they have.
+   */
+  refilledColumns: { table: string; column: string }[];
 }
 
 /** The refusal of a move, as the save reports it. */
@@ -220,6 +225,7 @@ export function planEntityMoves(args: {
     up: { first: [], last: [] },
     down: { first: [], last: [] },
     movedColumns: [],
+    refilledColumns: [],
   };
   const columns = {
     before: rowColumns(args.before),
@@ -242,6 +248,12 @@ export function planEntityMoves(args: {
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
+    }
+    if (move.from.kind === "json" && move.to.kind === "column") {
+      result.refilledColumns.push({
+        table: args.table,
+        column: move.to.column,
+      });
     }
     if (move.from.kind === "column" && move.to.kind === "json") {
       result.movedColumns.push({

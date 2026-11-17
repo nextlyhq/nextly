@@ -365,6 +365,12 @@ export interface GenerateArgs {
    */
   valueMoves?: readonly { table: string; column: string; reason: string }[];
   /**
+   * Columns the file adds whose values its appended statements bring last (a field moved out of a
+   * group): added without NOT NULL, and made required, as the newest snapshot has them, once the
+   * values are in.
+   */
+  refilledColumns?: readonly { table: string; column: string }[];
+  /**
    * Foreign keys a table this file creates is declared with, by table: a
    * Schema Builder collection's relationship keys, which the column mapping
    * does not describe. Rendered into the table's CREATE, as the Builder
@@ -1092,6 +1098,8 @@ export async function generateMigration(
   //     copies the default language's values in. That file applies the settings after the copy.
   const heldSettings = fieldLeavesPlans.map(({ held }) => held);
   operations = withSettingsHeldBack(operations, heldSettings);
+  // A column a move fills from its group is added nullable; it is made required after the fill.
+  operations = restoredNullable(operations, args.refilledColumns ?? []);
 
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
   // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
@@ -1158,6 +1166,11 @@ export async function generateMigration(
   //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set([
     ...operations.map(operationTableName),
+    // The caller's statements change the entity it scoped the file to, though no operation names
+    // its table: a field's values moved between two of its groups.
+    ...(addsStatements(args.appendedStatements)
+      ? (args.scope?.tables ?? [])
+      : []),
     // A renamed field group's parent changes with it, though no statement names that table.
     ...groupRenames.parentTables,
   ]);
@@ -1179,7 +1192,11 @@ export async function generateMigration(
   // A column whose field moved into a group comes back nullable on the way down, its values
   // copied back from the group last: it is made required again once they are in.
   downSqlStatements.push(
-    ...movedBackRequired(args.valueMoves, args.dialect, previousSnapshot)
+    ...requiredOnceRefilled(args.valueMoves, args.dialect, previousSnapshot)
+  );
+  // Each column a move out of a group added is made required once the group's values are in.
+  sqlStatements.push(
+    ...requiredOnceRefilled(args.refilledColumns, args.dialect, desiredSnapshot)
   );
 
   // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
@@ -3024,25 +3041,26 @@ function restoredNullable(
 }
 
 /**
- * The DOWN's statements making each column a move into a group dropped required again, as the
- * previous snapshot had it, once its values are copied back from the group (`requiredAgain`).
+ * The statements making each of `refilled` required, as `snapshot` has it, once a move's values
+ * are in (`requiredAgain`): on the way up a column a move out of a group added, against the newest
+ * snapshot; on the way down one a move into a group dropped, against the previous one.
  */
-function movedBackRequired(
-  moves: GenerateArgs["valueMoves"],
+function requiredOnceRefilled(
+  refilled: readonly { table: string; column: string }[] | undefined,
   dialect: SupportedDialect,
-  previousSnapshot: NextlySchemaSnapshot
+  snapshot: NextlySchemaSnapshot
 ): string[] {
   const byTable = new Map<string, string[]>();
-  for (const { table, column } of moves ?? []) {
+  for (const { table, column } of refilled ?? []) {
     byTable.set(table, [...(byTable.get(table) ?? []), column]);
   }
   return [...byTable].flatMap(([table, columns]) =>
     requiredAgain(
       table,
       columns,
-      previousSnapshot.tables.find(t => t.name === table),
+      snapshot.tables.find(t => t.name === table),
       dialect,
-      previousSnapshot
+      snapshot
     )
   );
 }

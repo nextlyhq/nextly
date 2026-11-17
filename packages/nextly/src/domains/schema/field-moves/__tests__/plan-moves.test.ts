@@ -279,6 +279,7 @@ describe("planEntityMoves", () => {
       up: { first: [], last: [] },
       down: { first: [], last: [] },
       movedColumns: [],
+      refilledColumns: [],
     });
   });
 });
