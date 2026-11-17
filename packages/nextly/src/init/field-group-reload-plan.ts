@@ -23,15 +23,6 @@ import {
   type RegistryReadAdapter,
 } from "../domains/field-groups/services/field-group-stored-tables";
 
-// The registry reading lives with the field-group services, so a domain path can use it too; it
-// is re-exported here for the reload's existing callers.
-export {
-  readStoredFieldGroupTables,
-  storedOrNewTableName,
-  type RegistryReadAdapter,
-  type StoredFieldGroupTables,
-} from "../domains/field-groups/services/field-group-stored-tables";
-
 /** A field group as the config declares it, reduced to what a reload reads. */
 export interface FieldGroupDef {
   slug?: string;
