@@ -76,7 +76,10 @@ export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
+  FORM_HONEYPOT_FIELD,
   FORM_METHODS,
+  formFields,
+  type FormField,
   type FormFieldSpec,
   type FormFieldType,
   type FormMethod,
