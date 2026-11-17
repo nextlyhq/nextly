@@ -388,3 +388,15 @@ describe("rows and columns set apart", () => {
     expect(rowNames()).toContain("Between columns");
   });
 });
+
+describe("a Grid's content spread", () => {
+  it("keeps its raw row, which Grid's plain controls don't draw", () => {
+    mount({ base: { base: { display: "grid", justifyContent: "center" } } });
+    expect(marked("Arrange", "Grid")).toBe("true");
+    expect(
+      document.querySelector(
+        '[data-section="layout"] [data-property="justifyContent"]'
+      )
+    ).not.toBeNull();
+  });
+});

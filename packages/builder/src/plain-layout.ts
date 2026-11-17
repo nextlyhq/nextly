@@ -77,6 +77,26 @@ export interface PlainFlow {
   readonly rtl: boolean;
 }
 
+/**
+ * What a target's own values put in force at a device, widest first: at an
+ * interaction state, its Normal values beneath that state's own, as the
+ * page's styles apply them. A shared style edited on its own is read so.
+ */
+export function ownCascade(
+  order: readonly string[],
+  own: (device: string) => LayoutValues,
+  normal: (device: string) => LayoutValues
+): (device: string) => LayoutValues {
+  return device => {
+    const merged: Partial<Record<LayoutProperty, string>> = {};
+    for (const each of order) {
+      Object.assign(merged, normal(each), own(each));
+      if (each === device) break;
+    }
+    return merged;
+  };
+}
+
 /** Horizontal lines, left to right: what is assumed where nothing is measured. */
 const LTR: PlainFlow = { writingMode: "horizontal-tb", rtl: false };
 
@@ -542,19 +562,23 @@ export function planAlign(
       { device: editing, property: "flexDirection", value: "column" }
     );
   }
+  // While a Row spreads its blocks, the axis Spread holds is its: a point
+  // places them on the other axis alone.
+  const spreading = current.mode === "row" && current.spread !== "packed";
+  const write = (property: LayoutProperty, place: 0 | 1 | 2 | undefined) =>
+    spreading && property === "justifyContent"
+      ? []
+      : [
+          settled(
+            tiers,
+            editing,
+            property,
+            place === undefined ? null : (PLACE_KEYWORDS[place] ?? "start")
+          ),
+        ];
   writes.push(
-    settled(
-      tiers,
-      editing,
-      axes.inline,
-      places === undefined ? null : (PLACE_KEYWORDS[places.inline] ?? "start")
-    ),
-    settled(
-      tiers,
-      editing,
-      axes.block,
-      places === undefined ? null : (PLACE_KEYWORDS[places.block] ?? "start")
-    )
+    ...write(axes.inline, places?.inline),
+    ...write(axes.block, places?.block)
   );
   return writes;
 }
@@ -603,7 +627,11 @@ export function planReverse(
   ];
   // Turned on at a wider device, it holds at the stacked one too.
   const stackOn = current.mode === "row" ? current.stackOn : undefined;
-  if (!column && stackOn !== undefined && stackOn !== editing) {
+  if (
+    !column &&
+    stackOn !== undefined &&
+    tiers.order.indexOf(stackOn) > tiers.order.indexOf(editing)
+  ) {
     writes.push({
       device: stackOn,
       property: "flexDirection",
@@ -624,15 +652,18 @@ export function planWrap(
 
 /** The writes a Grid's columns make at the edited device. */
 export function planColumns(
+  tiers: LayoutTiers,
   editing: string,
-  columns: GridColumns
+  columns: GridColumns | undefined
 ): LayoutWrite[] {
+  // None given is Auto: cleared, or undone where a wider device sets one.
   return [
-    {
-      device: editing,
-      property: "gridTemplateColumns",
-      value: columnsTemplate(columns),
-    },
+    settled(
+      tiers,
+      editing,
+      "gridTemplateColumns",
+      columns === undefined ? null : columnsTemplate(columns)
+    ),
   ];
 }
 

@@ -43,8 +43,8 @@ import {
 import { fieldStyles } from "./style-field-target";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
 import {
-  ARRANGED_PROPERTIES,
   ArrangeFields,
+  arrangedAway,
   SPACE_PROPERTIES,
   useArrangeReading,
   type ArrangeReading,
@@ -305,10 +305,9 @@ function arrangedSection(
   if (reading.arrange.mode === "custom") {
     return { listed: properties, arrange: { reading, spacing: [] } };
   }
+  const { mode } = reading.arrange;
   return {
-    listed: properties.filter(
-      property => !ARRANGED_PROPERTIES.has(property.property)
-    ),
+    listed: properties.filter(property => !arrangedAway(property, mode)),
     arrange: {
       reading,
       spacing: properties.filter(property =>

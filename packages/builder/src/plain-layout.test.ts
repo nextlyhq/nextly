@@ -13,6 +13,7 @@ import {
   planSpread,
   planStackOn,
   planWrap,
+  ownCascade,
   readArrange,
   unusedSettings,
   type AlignPoint,
@@ -216,8 +217,10 @@ describe("a Row's own rows", () => {
 describe("a Grid", () => {
   it("reads a column count per device back", () => {
     const block = new Block({ display: "grid" });
-    block.apply(planColumns("base", { kind: "count", count: 3 }));
-    block.apply(planColumns("sm", { kind: "count", count: 1 }));
+    block.apply(
+      planColumns(block.tiers(), "base", { kind: "count", count: 3 })
+    );
+    block.apply(planColumns(block.tiers(), "sm", { kind: "count", count: 1 }));
     expect(block.read("base")).toMatchObject({
       columns: { kind: "count", count: 3 },
     });
@@ -228,7 +231,9 @@ describe("a Grid", () => {
 
   it("reads As many as fit back, with its minimum width", () => {
     const block = new Block({ display: "grid" });
-    block.apply(planColumns("base", { kind: "fit", min: "12rem" }));
+    block.apply(
+      planColumns(block.tiers(), "base", { kind: "fit", min: "12rem" })
+    );
     expect(block.read()).toMatchObject({
       columns: { kind: "fit", min: "12rem" },
     });
@@ -337,5 +342,89 @@ describe("a point on screen in another writing direction", () => {
       justifyContent: "start",
       alignItems: "start",
     });
+  });
+});
+
+describe("a Row spreading its blocks", () => {
+  it("keeps its Spread when a point is chosen, placing the other axis", () => {
+    const block = new Block({
+      display: "flex",
+      justifyContent: "space-between",
+    });
+    block.apply(planAlign(block.tiers(), "base", { x: "right", y: "bottom" }));
+    expect(block.own.base).toMatchObject({
+      justifyContent: "space-between",
+      alignItems: "end",
+    });
+    expect(block.read()).toMatchObject({ spread: "between" });
+  });
+
+  it("keeps it on a stacked device too, where it runs down the column", () => {
+    const block = new Block({ display: "flex" });
+    block.apply(planStackOn(block.tiers(), "sm"));
+    block.own.sm.justifyContent = "space-around";
+    block.apply(planAlign(block.tiers(), "sm", { x: "right", y: "top" }));
+    expect(block.own.sm).toMatchObject({
+      justifyContent: "space-around",
+      alignItems: "end",
+    });
+  });
+});
+
+describe("a Grid's columns emptied", () => {
+  it("clears its own template, back to Auto", () => {
+    const block = new Block({ display: "grid" });
+    block.apply(
+      planColumns(block.tiers(), "base", { kind: "count", count: 3 })
+    );
+    block.apply(planColumns(block.tiers(), "base", undefined));
+    expect(block.own.base.gridTemplateColumns).toBeUndefined();
+    expect(block.read()).toMatchObject({ mode: "grid", columns: undefined });
+  });
+
+  it("undoes a wider device's template at a narrower one", () => {
+    const block = new Block({ display: "grid" });
+    block.apply(
+      planColumns(block.tiers(), "base", { kind: "count", count: 3 })
+    );
+    block.apply(planColumns(block.tiers(), "sm", undefined));
+    expect(block.own.sm.gridTemplateColumns).toBe("none");
+    expect(block.read("sm")).toMatchObject({
+      mode: "grid",
+      columns: undefined,
+    });
+  });
+});
+
+describe("Reverse order beside a narrower Row", () => {
+  it("leaves a wider stacked device alone when reversed at a narrower one", () => {
+    const block = new Block({ display: "flex" });
+    block.apply(planStackOn(block.tiers(), "md"));
+    block.own.sm.flexDirection = "row";
+    block.apply(planReverse(block.tiers(), "sm", true));
+    expect(block.own.md.flexDirection).toBe("column");
+    expect(block.own.sm.flexDirection).toBe("row-reverse");
+  });
+});
+
+describe("a shared style read at an interaction state", () => {
+  it("puts its Normal values beneath the state's own", () => {
+    const normal: Record<string, LayoutValues> = {
+      base: { display: "flex" },
+      md: {},
+      sm: {},
+    };
+    const hover: Record<string, LayoutValues> = { base: {}, md: {}, sm: {} };
+    const inForce = ownCascade(
+      ORDER,
+      device => hover[device] ?? {},
+      device => normal[device] ?? {}
+    );
+    const tiers: LayoutTiers = {
+      order: ORDER,
+      own: device => hover[device] ?? {},
+      inForce,
+    };
+    expect(readArrange(tiers, "base")).toMatchObject({ mode: "row" });
   });
 });

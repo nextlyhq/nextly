@@ -29,6 +29,7 @@ import type { EditorState } from "./editor-state";
 import {
   LAYOUT_CSS_NAMES,
   LAYOUT_PROPERTIES,
+  ownCascade,
   planAlign,
   planArrange,
   planColumns,
@@ -48,6 +49,7 @@ import {
   type LayoutProperty,
   type LayoutTiers,
   type LayoutValues,
+  type GridColumns,
   type LayoutWrite,
   type PlainFlow,
   type PlainArrange,
@@ -108,21 +110,6 @@ function ownAt(
   return values;
 }
 
-/** What the target's own values put in force at a device, widest first. */
-function ownInForce(
-  order: readonly string[],
-  own: (device: string) => LayoutValues
-): (device: string) => LayoutValues {
-  return device => {
-    const merged: Partial<Record<LayoutProperty, string>> = {};
-    for (const each of order) {
-      Object.assign(merged, own(each));
-      if (each === device) break;
-    }
-    return merged;
-  };
-}
-
 /** What the cascade applies to the block at a device, property by property. */
 function appliedInForce(applied: CascadeAt): (device: string) => LayoutValues {
   return device => {
@@ -153,7 +140,7 @@ function layoutTiers(
   const inForce =
     block && cascade.applied !== undefined
       ? appliedInForce(cascade.applied)
-      : ownInForce(order, own);
+      : ownCascade(order, own, device => ownAt(styles, "base", device));
   return {
     order,
     own,
@@ -173,8 +160,63 @@ function flowOf(orientation: SideOrientation | undefined): PlainFlow {
   };
 }
 
+/** The properties each arrangement draws in plain words. */
+const DRAWN_BY: Readonly<
+  Record<"stack" | "row" | "grid", ReadonlySet<string>>
+> = {
+  stack: new Set([
+    "display",
+    "flexDirection",
+    "justifyContent",
+    "alignItems",
+    "gap",
+    "rowGap",
+    "columnGap",
+  ]),
+  row: new Set([
+    "display",
+    "flexDirection",
+    "flexWrap",
+    "justifyContent",
+    "alignItems",
+    "gap",
+    "rowGap",
+    "columnGap",
+  ]),
+  grid: new Set([
+    "display",
+    "gridTemplateColumns",
+    "gridTemplateRows",
+    "justifyItems",
+    "alignItems",
+    "gap",
+    "rowGap",
+    "columnGap",
+  ]),
+};
+
+/**
+ * Whether a layout property's raw row is left out under the arrangement in
+ * force: drawn there in plain words, or holding nothing. One it doesn't draw
+ * that holds a value still in effect (a Grid's `justify-content`) stays a raw
+ * row, so no value in force is out of reach; one that no longer applies is
+ * said in the "aren't used" line instead.
+ */
+export function arrangedAway(
+  property: {
+    readonly property: string;
+    readonly set: boolean;
+    readonly applies: boolean;
+  },
+  mode: "stack" | "row" | "grid"
+): boolean {
+  if (!ARRANGED_PROPERTIES.has(property.property)) return false;
+  if (DRAWN_BY[mode].has(property.property)) return true;
+  return !(property.set && property.applies);
+}
+
 /** The properties Arrange draws in plain words, out of the raw rows. */
-export const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
+const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
   "display",
   "flexDirection",
   "flexWrap",
@@ -744,6 +786,7 @@ function GridRows({
           onChoose={kind =>
             apply(
               planColumns(
+                tiers,
                 editing,
                 kind === "fit"
                   ? { kind: "fit", min: "12rem" }
@@ -768,14 +811,9 @@ function GridRows({
           }
           placeholder={fit ? "12rem" : "Auto"}
           onCommit={text => {
-            if (fit) {
-              if (text.trim() !== "")
-                apply(planColumns(editing, { kind: "fit", min: text.trim() }));
-              return;
-            }
-            const count = Number.parseInt(text, 10);
-            if (Number.isInteger(count) && count > 0) {
-              apply(planColumns(editing, { kind: "count", count }));
+            const columns = columnsTyped(text, fit);
+            if (columns !== "refused") {
+              apply(planColumns(tiers, editing, columns));
             }
           }}
         />
@@ -788,6 +826,23 @@ function GridRows({
       {space}
     </>
   );
+}
+
+/**
+ * The columns a typed value asks for: a minimum width or a count, nothing
+ * (Auto) when emptied, or `"refused"` for a count that isn't a whole number.
+ */
+function columnsTyped(
+  text: string,
+  fit: boolean
+): GridColumns | undefined | "refused" {
+  const typed = text.trim();
+  if (typed === "") return undefined;
+  if (fit) return { kind: "fit", min: typed };
+  const count = Number.parseInt(typed, 10);
+  return Number.isInteger(count) && count > 0
+    ? { kind: "count", count }
+    : "refused";
 }
 
 /** A Grid's rows: a number, or empty for Auto. */
