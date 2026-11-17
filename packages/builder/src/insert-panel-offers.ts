@@ -27,7 +27,7 @@ import {
   placementWording,
   refusalWording,
   type RefusalWording,
-} from "./drag-refusal";
+} from "./canvas/drag-refusal";
 import type { EditorState } from "./editor-state";
 import {
   entryContentRefusal,

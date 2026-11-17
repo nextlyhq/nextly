@@ -22,7 +22,7 @@ import {
   type RepairStep,
 } from "@nextlyhq/blocks-engine";
 
-import type { RefusalWording } from "./drag-refusal";
+import type { RefusalWording } from "./canvas/drag-refusal";
 import { blockLabel } from "./inserter";
 import { layerLabel } from "./layers";
 

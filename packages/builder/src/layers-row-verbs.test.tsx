@@ -33,7 +33,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { useEditorState, type EditorState } from "./editor-state";
-import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
+import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
 import { rowKeyAction, toggleOnDeviceOp } from "./layer-row-actions";
 import { LayerRowMenu } from "./layer-row-menu";
 import { LayersPanel } from "./layers-panel";

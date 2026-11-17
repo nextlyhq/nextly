@@ -29,9 +29,9 @@ import { detectApplePlatform } from "@nextlyhq/ui";
 import { ChevronRight } from "lucide-react";
 import * as React from "react";
 
+import { firstInlineProp } from "../canvas/inline-target";
 import type { EditorState } from "../editor-state";
 import { EDITOR_WORDS } from "../editor-words";
-import { firstInlineProp } from "../inline-target";
 import { keyHint } from "../key-hint";
 import { pathTo, type ComponentTitleOf } from "../layers";
 

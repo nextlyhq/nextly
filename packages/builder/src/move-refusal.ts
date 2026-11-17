@@ -40,8 +40,8 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import { canPlaceIn, findNode } from "@nextlyhq/blocks-engine";
 
-import { placementWording, type RefusalWording } from "./drag-refusal";
-import { placementSources } from "./drop-targets";
+import { placementWording, type RefusalWording } from "./canvas/drag-refusal";
+import { placementSources } from "./canvas/drop-targets";
 import { layerLabel } from "./layers";
 import type { OpPosition } from "./op-vocabulary";
 

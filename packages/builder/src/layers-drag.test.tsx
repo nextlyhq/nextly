@@ -63,7 +63,7 @@ import {
   LAYERS_TOUCH_HOLD_MS,
   LAYERS_TOUCH_TOLERANCE_PX,
 } from "./layers-drag";
-import { HoveredBlockProvider, useHoveredBlock } from "./hovered-block";
+import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
 import { LayersPanel } from "./layers-panel";
 
 const ROW = 28;
