@@ -42,6 +42,7 @@ import { recordWriteEvent } from "../content-events/write-event";
 import { partExemptFields, stillApproved } from "./approval-digest";
 import { partStage, pendingPartsOn } from "./implicit-stage";
 import { documentTableOn, shownContentOn } from "./part-versions";
+import { PUBLISH_WITHOUT_REVIEW } from "./permissions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import {
   ensureReviewStateEventKinds,
@@ -58,9 +59,6 @@ import {
 import { recordStageChanged } from "./stage-changed";
 import { allowsPublish, staleRefusal } from "./steps";
 import { releasePartPins } from "./workflow-pins";
-
-/** The permission's action, seeded per attached collection and Single. */
-const WITHOUT_REVIEW_ACTION = "publish-without-review";
 
 /**
  * The review part a publish part is judged as: a language, or null for the shared part. A document
@@ -156,7 +154,7 @@ async function bypassOf(
         ? { kind: "allowed", reason }
         : {
             kind: "refused",
-            message: `Publishing without review needs the permission "${WITHOUT_REVIEW_ACTION}-${question.scope.slug}".`,
+            message: `Publishing without review needs the permission "${PUBLISH_WITHOUT_REVIEW}-${question.scope.slug}".`,
           };
     case "api-key":
       // An emergency publish is a person's act, and a key may act for an agent.
@@ -299,7 +297,7 @@ function holdsWithoutReview(
   actor: Awaited<ReturnType<typeof actorForUser>>,
   slug: string
 ): boolean {
-  return decidePermission(actor, WITHOUT_REVIEW_ACTION, slug).allowed;
+  return decidePermission(actor, PUBLISH_WITHOUT_REVIEW, slug).allowed;
 }
 
 /**
