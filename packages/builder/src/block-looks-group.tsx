@@ -293,6 +293,23 @@ function opening(
   };
 }
 
+/**
+ * Why a style can't be removed for what the open page holds, or `undefined`:
+ * a block on it wears the style, unsaved and so in no document the removal
+ * reads, or the page has more blocks than could be read to tell.
+ */
+function pageUseRefusal(
+  row: BlockLookRow,
+  blocks: BlocksOnThisPage | undefined
+): string | undefined {
+  if (blocks === undefined || !blocks.complete) {
+    return `${row.name} can't be removed: this page has more blocks than could be read to check it isn't used.`;
+  }
+  if (blocks.count === 0) return undefined;
+  const them = blocks.count === 1 ? "1 block" : `${blocks.count} blocks`;
+  return `${row.name} is used on ${them} on this page. Take it off them first.`;
+}
+
 /** The menu's actions for one row, through the host's writes. */
 function menuActionsOf(
   row: BlockLookRow,
@@ -314,7 +331,12 @@ function menuActionsOf(
       run(actions && opening(() => actions.duplicate(row.id), edit)),
     onHidden: hidden =>
       run(actions && (() => actions.setHidden(row.id, hidden))),
-    onRemove: () => run(actions && (() => actions.remove(row.id))),
+    onRemove: () =>
+      run(
+        actions &&
+          (async () =>
+            pageUseRefusal(row, panel.blocksOf(row)) ?? actions.remove(row.id))
+      ),
   };
 }
 

@@ -16,6 +16,7 @@ import {
   isDefaultLook,
   isLook,
   MAX_NAMED_CLASS_NAME_LENGTH,
+  MAX_TOKEN_LABEL_LENGTH,
   newId,
   starredLooksOf,
   tokenLabelIssue,
@@ -155,6 +156,20 @@ function ownStyleOf(
   );
 }
 
+/**
+ * A class name no style in the library has: the one given, or, where a long
+ * name was cut to the same one, that one cut further with `-2`, `-3`… on it.
+ */
+function unusedSlug(library: readonly NamedClass[], slug: string): string {
+  const taken = new Set(library.map(entry => entry.slug));
+  if (!taken.has(slug)) return slug;
+  for (let count = 2; ; count += 1) {
+    const end = `-${count}`;
+    const next = `${slug.slice(0, MAX_NAMED_CLASS_NAME_LENGTH - end.length).replace(/-+$/, "")}${end}`;
+    if (!taken.has(next)) return next;
+  }
+}
+
 /** A style the site made, for a block type, with the styles given. */
 function siteStyle(
   library: readonly NamedClass[],
@@ -165,7 +180,7 @@ function siteStyle(
 ): NamedClass {
   return {
     id: mintId(),
-    slug: blockStyleSlug(blockType, label),
+    slug: unusedSlug(library, blockStyleSlug(blockType, label)),
     label,
     orderIndex: nextOrderIndex(library),
     blockType,
@@ -202,19 +217,32 @@ export function newBlockStylePlan(
   return { ok: true, classes: [...library, entry], id: entry.id };
 }
 
-/** The first "<name> copy", "<name> copy 2"… no style of the type is named. */
+/** The most copies of one style a copy's name counts to. */
+const MAX_COPIES = 999;
+
+/**
+ * The first "<name> copy", "<name> copy 2"… no style of the type is named,
+ * the name cut so the longest of them is still a name a style may have; or
+ * `undefined` once every count is taken. Its class name is made free apart,
+ * so two copies of a long name cut to one class name both have one.
+ */
 function copyName(
   library: readonly NamedClass[],
   blockType: string,
-  name: string,
-  blockTitle: string
-): string {
-  for (let count = 1; ; count += 1) {
-    const candidate = count === 1 ? `${name} copy` : `${name} copy ${count}`;
-    if (nameRefusal(library, blockType, candidate, blockTitle) === undefined) {
+  name: string
+): string | undefined {
+  const room = MAX_TOKEN_LABEL_LENGTH - ` copy ${MAX_COPIES}`.length;
+  const base = name.slice(0, room).trimEnd();
+  for (let count = 1; count <= MAX_COPIES; count += 1) {
+    const candidate = count === 1 ? `${base} copy` : `${base} copy ${count}`;
+    if (
+      labelRefusal(blockType, candidate) === undefined &&
+      !nameHeld(library, blockType, candidate, undefined)
+    ) {
       return candidate;
     }
   }
+  return undefined;
 }
 
 /**
@@ -231,12 +259,13 @@ export function duplicateBlockStylePlan(
   const source = wornStyleOf(library, id);
   if (source === undefined) return { ok: false, reason: BLOCK_STYLE_GONE };
   const blockType = source.blockType as string;
-  const label = copyName(
-    library,
-    blockType,
-    sharedStyleName(source),
-    blockTitle
-  );
+  const label = copyName(library, blockType, sharedStyleName(source));
+  if (label === undefined) {
+    return {
+      ok: false,
+      reason: `${blockTitle} has as many copies of “${sharedStyleName(source)}” as a name can count. Rename one first.`,
+    };
+  }
   const entry = siteStyle(library, blockType, label, source.styles, mintId);
   return { ok: true, classes: [...library, entry], id: entry.id };
 }

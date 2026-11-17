@@ -324,13 +324,48 @@ describe("a block style's ⋯ menu", () => {
     const refusal =
       "Nothing was removed. Ghost is used on 2 documents: Home and About.";
     const actions = actionsOf({ remove: vi.fn(async () => refusal) });
-    const { section } = draw(LIBRARY, { actions });
+    const { section } = draw(LIBRARY, {
+      actions,
+      // Nothing on the open page wears it, so the route is asked.
+      blocksOf: () => ({ count: 0, complete: true }),
+    });
     await menuOf(section, "Ghost");
     fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
     expect((await within(section).findByRole("alert")).textContent).toBe(
       refusal
     );
     expect(actions.remove).toHaveBeenCalledWith(GHOST.id);
+  });
+});
+
+describe("removing a block style the open page uses", () => {
+  it("is refused before the route is asked, the page's unsaved blocks counted", async () => {
+    const actions = actionsOf();
+    const { section } = draw(LIBRARY, {
+      actions,
+      blocksOf: row =>
+        row.id === GHOST.id ? { count: 2, complete: true } : undefined,
+    });
+    await menuOf(section, "Ghost");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    expect((await within(section).findByRole("alert")).textContent).toBe(
+      "Ghost is used on 2 blocks on this page. Take it off them first."
+    );
+    expect(actions.remove).not.toHaveBeenCalled();
+  });
+
+  it("is refused while the page couldn't be read in full", async () => {
+    const actions = actionsOf();
+    const { section } = draw(LIBRARY, {
+      actions,
+      blocksOf: () => ({ count: 0, complete: false }),
+    });
+    await menuOf(section, "Ghost");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    expect((await within(section).findByRole("alert")).textContent).toBe(
+      "Ghost can't be removed: this page has more blocks than could be read to check it isn't used."
+    );
+    expect(actions.remove).not.toHaveBeenCalled();
   });
 });
 

@@ -148,6 +148,51 @@ describe("a duplicated block style", () => {
     expect(again.classes.at(-1)?.label).toBe("Outline copy 2");
   });
 
+  it("fits a long name's copy within a name's length, each copy with a class name of its own", () => {
+    const long: NamedClass = {
+      ...outline,
+      id: "long",
+      slug: "button-long",
+      label: "L".repeat(80),
+    };
+    const first = duplicateBlockStylePlan(
+      [long],
+      long.id,
+      "Button",
+      () => "c1"
+    );
+    if (!first.ok) throw new Error(first.reason);
+    const copy = first.classes.at(-1);
+    expect(copy?.label?.length).toBeLessThanOrEqual(80);
+    expect(copy?.label).toMatch(/^L+ copy$/);
+    const second = duplicateBlockStylePlan(
+      first.classes,
+      long.id,
+      "Button",
+      () => "c2"
+    );
+    if (!second.ok) throw new Error(second.reason);
+    expect(second.classes.at(-1)?.label).toMatch(/^L+ copy 2$/);
+    const slugs = second.classes.map(entry => entry.slug);
+    expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  it("is refused, rather than counting on, once every copy's name is taken", () => {
+    const copies: NamedClass[] = Array.from({ length: 999 }, (_, at) => ({
+      ...outline,
+      id: `copy-${at + 1}`,
+      slug: `button-outline-copy-${at + 1}`,
+      label: at === 0 ? "Outline copy" : `Outline copy ${at + 1}`,
+    }));
+    expect(
+      duplicateBlockStylePlan([outline, ...copies], outline.id, "Button", mint)
+    ).toEqual({
+      ok: false,
+      reason:
+        "Button has as many copies of “Outline” as a name can count. Rename one first.",
+    });
+  });
+
   it("is refused for a style no longer on the site, or a block's own style", () => {
     const gone = {
       ok: false,
