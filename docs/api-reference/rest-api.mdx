@@ -1034,6 +1034,24 @@ Relationship population depth. `0` returns only IDs; `1+` populates referenced d
 ?depth=2   # populate one level deeper
 ```
 
+### stored
+
+On a read of one collection entry, `?stored=1` adds `_stored`: the same entry as a read
+with `depth=0` in the same `locale`, `fallback-locale`, `fallback`, `draft` and `status`
+returns it, with every relationship and upload as its stored id. The options that shape
+only the populated read (`select`, `translation-status`, `source-locales`, `translations`
+and the rich text formats) do not apply to it. It is the read an editor needs beside a
+populated one: a populated read leaves out a related document the caller may not read, or
+one that no longer exists, and `_stored` still names it.
+
+```
+GET /admin/api/collections/posts/entries/abc-123?depth=2&stored=1
+```
+
+Both reads are made as the caller, with the same access rules and hooks as two separate
+requests. If either fails, the request fails: a refusal (`403`) or a missing entry (`404`)
+is returned first, from either read.
+
 ### select
 
 Whitelist of fields to include. Two spellings, both accepted:

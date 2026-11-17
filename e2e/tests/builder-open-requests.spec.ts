@@ -6,7 +6,8 @@
  * arrive in one start-up request rather than one request each, each one
  * answered there, and no route is asked twice for the same thing: the open
  * document's "bindings to fix" is read once, and the whole report only when
- * its list is opened.
+ * its list is opened. The document itself is read once: its populated read
+ * carries the read of it as stored, which the editor needs beside it.
  *
  * Counted from the moment the builder's address is opened until its canvas
  * draws the page and the reads it started have settled. The document's lock
@@ -116,6 +117,14 @@ test("the builder asks each question once as it opens", async ({ page }) => {
     (path, at) => pluginPaths.indexOf(path) !== at
   );
   expect(twice, "plugin routes asked more than once").toEqual([]);
+  // The document read once, the read of it as stored carried in that answer.
+  const entryPath = `${PAGES}/${id}`;
+  const entryReads = sent.filter(line => {
+    const [method, url = ""] = line.split(" ");
+    return method === "GET" && url.split("?")[0] === entryPath;
+  });
+  expect(entryReads, "the document's reads").toHaveLength(1);
+  expect(entryReads[0]).toContain("stored=1");
   // And no request repeated, for any route.
   const repeated = sent.filter((line, at) => sent.indexOf(line) !== at);
   expect(repeated, "requests sent twice").toEqual([]);
