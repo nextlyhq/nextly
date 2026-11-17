@@ -311,6 +311,9 @@ function GapControl({
     }
   });
   const hold = (event: React.PointerEvent<HTMLButtonElement>): void => {
+    // A finger has no hover to come near with: a touch screen keeps a roomy
+    // "+" shown and pressable all over, and the stylesheet decides which.
+    if (event.nativeEvent.pointerType === "touch") return;
     const target = event.currentTarget;
     // Both in the editor window's coordinates, which the chrome is drawn at.
     const box = boxInFrameViewport(target);

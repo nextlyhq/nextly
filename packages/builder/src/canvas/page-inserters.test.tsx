@@ -13,6 +13,7 @@
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -675,6 +676,22 @@ describe("the + between the selected block's children", () => {
       BOXES["box-b"] = [350, 120, 300, 160];
       BOXES["box-c"] = [700, 120, 300, 160];
     }
+  });
+
+  it("keeps a touch screen's + pressable wherever on it a finger lands", async () => {
+    // A tap far from the line, on a roomy "+" a touch screen keeps shown: it
+    // must not let go, or the "+" stays drawn and takes no further tap.
+    mount(ROW, { selectedId: "pricing" });
+    await act(async () => undefined);
+    const button = gapButtons()[0];
+    if (button === undefined) throw new Error("no gap");
+    const touch = createEvent.pointerMove(button, {
+      clientX: 500,
+      clientY: 390,
+    });
+    Object.defineProperty(touch, "pointerType", { value: "touch" });
+    fireEvent(button, touch);
+    expect(button.style.pointerEvents).not.toBe("none");
   });
 
   it("offers no children's gaps with nothing selected", async () => {
