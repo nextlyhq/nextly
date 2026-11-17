@@ -604,8 +604,10 @@ export async function runFullCheck(
   const state = await store.fullCheck();
   if (state.usesPending && !settled.unread && state.checking === null) {
     // Every document a complete check could not read has been judged since.
-    await store.setFullCheck({ ...state, usesPending: false });
+    // The mark first: a pass that stops between the two writes leaves the
+    // pending flag to set it again, never a check with no mark to follow.
     await store.markUsesFilled();
+    await store.setFullCheck({ ...state, usesPending: false });
   }
   if (state.checked === fingerprint && state.checking === null) {
     return "current";
@@ -637,6 +639,12 @@ export async function runFullCheck(
   // Every document still on the site was judged since the check started, so a
   // row older than that is a document no longer there.
   await store.dropCheckedBefore(startedAt);
+  // Every document has had its uses written once: a Single's panel stops
+  // saying it is still checking pages. One that could not be read is
+  // marked, and the pass that next reads it whole fills the index. The mark
+  // goes first, so a pass stopping after it only checks every document
+  // again, rather than leaving a complete check with no mark.
+  if (!unread) await store.markUsesFilled();
   await store.setFullCheck({
     checked: fingerprint,
     completedAt: new Date(),
@@ -645,9 +653,5 @@ export async function runFullCheck(
     startedAt: null,
     usesPending: unread,
   });
-  // Every document has had its uses written once: a Single's panel stops
-  // saying it is still checking pages. One that could not be read is
-  // marked, and the pass that next reads it whole fills the index.
-  if (!unread) await store.markUsesFilled();
   return "complete";
 }

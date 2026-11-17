@@ -112,6 +112,8 @@ interface Found {
   inDefault: boolean;
   /** Whether a use of it is in the published value, not only the draft. */
   published: boolean;
+  /** The languages its draft uses are in; `""` for a value in no one language. */
+  readonly draftLocales: Set<string>;
 }
 
 /** The query: `all=1` for every place. */
@@ -131,9 +133,17 @@ function placesOf(
     const inDefault = use.locale === undefined || use.locale === defaultLocale;
     const published = use.version === "published";
     const held = byKey.get(key);
+    const locale = use.version === "draft" ? (use.locale ?? "") : undefined;
     if (held === undefined) {
-      byKey.set(key, { key, first: use, inDefault, published });
+      byKey.set(key, {
+        key,
+        first: use,
+        inDefault,
+        published,
+        draftLocales: new Set(locale === undefined ? [] : [locale]),
+      });
     } else {
+      if (locale !== undefined) held.draftLocales.add(locale);
       held.inDefault ||= inDefault;
       // Named as the published value names it, which every reader may see.
       if (published && !held.published) held.first = use;
@@ -202,15 +212,16 @@ function byTitle(a: ShownOnPlace, b: ShownOnPlace): number {
 }
 
 /**
- * How many documents one answer reads as the caller, for the places found
- * only in their working drafts; the places of any further one are counted.
+ * How many reads of documents, one per document and language, one answer
+ * makes as the caller for the places found only in their working drafts;
+ * the places of any further one are counted.
  */
 const DRAFT_READS_MAX = 20;
 
 /**
  * The places found only in a working draft that the caller's own read of
  * each document shows, by place key: asked of readable documents only, one
- * read each, at most {@link DRAFT_READS_MAX} of them.
+ * read per document and language, at most {@link DRAFT_READS_MAX} of them.
  */
 async function draftsShown(
   ctx: PluginRouteContext,
@@ -219,23 +230,31 @@ async function draftsShown(
   readable: ReadonlyMap<string, ReadableDocument>,
   deps: Pick<ShownOnDeps, "draftPlacesShown">
 ): Promise<ReadonlySet<string>> {
-  const byDocument = new Map<string, { use: StoredUse; fields: Set<string> }>();
+  // One read per document and language, each in the language its draft
+  // uses were indexed in.
+  const reads = new Map<
+    string,
+    { use: StoredUse; locale: string; fields: Set<string> }
+  >();
   for (const place of places) {
     const { documentKey, blocksField } = place.first;
     if (place.published || !readable.has(documentKey)) continue;
-    const held = byDocument.get(documentKey);
-    if (held === undefined) {
-      if (byDocument.size >= DRAFT_READS_MAX) continue;
-      byDocument.set(documentKey, {
-        use: place.first,
-        fields: new Set([blocksField]),
-      });
-    } else {
-      held.fields.add(blocksField);
+    for (const locale of place.draftLocales) {
+      const at = `${documentKey}\u0000${locale}`;
+      const held = reads.get(at);
+      if (held !== undefined) {
+        held.fields.add(blocksField);
+      } else if (reads.size < DRAFT_READS_MAX) {
+        reads.set(at, {
+          use: place.first,
+          locale,
+          fields: new Set([blocksField]),
+        });
+      }
     }
   }
   const shown = new Set<string>();
-  for (const [documentKey, { use, fields }] of byDocument) {
+  for (const { use, locale, fields } of reads.values()) {
     const found = await deps.draftPlacesShown(
       ctx,
       {
@@ -243,10 +262,11 @@ async function draftsShown(
         slug: use.slug,
         ...(use.documentId === undefined ? {} : { documentId: use.documentId }),
         fields: [...fields],
+        ...(locale === "" ? {} : { locale }),
       },
       single
     );
-    for (const within of found) shown.add(`${documentKey}\u0000${within}`);
+    for (const within of found) shown.add(`${use.documentKey}\u0000${within}`);
   }
   return shown;
 }

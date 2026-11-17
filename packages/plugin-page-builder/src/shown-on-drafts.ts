@@ -25,6 +25,8 @@ export interface DraftDocument {
   readonly documentId?: string;
   /** The blocks fields those places are in, as dotted paths. */
   readonly fields: readonly string[];
+  /** The language of the values they are in, where stored per language. */
+  readonly locale?: string;
 }
 
 /** The value at a dotted path, or `undefined`. */
@@ -44,6 +46,8 @@ async function readAsCaller(
 ): Promise<unknown> {
   const as = await readingAsUser(ctx);
   const nextly = requireNextly();
+  const inLocale =
+    document.locale === undefined ? {} : { locale: document.locale };
   try {
     if (document.kind === "single") {
       return await nextly.findSingle({
@@ -51,6 +55,7 @@ async function readAsCaller(
         createIfMissing: false,
         depth: 0,
         draft: true,
+        ...inLocale,
         ...as,
       });
     }
@@ -60,6 +65,7 @@ async function readAsCaller(
       depth: 0,
       draft: true,
       status: "all",
+      ...inLocale,
       ...as,
     } as never);
   } catch (error) {

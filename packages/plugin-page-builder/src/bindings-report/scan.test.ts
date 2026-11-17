@@ -44,6 +44,7 @@ function memoryStore() {
   };
   let tokens = 0;
   let filled = 0;
+  let failMark = 0;
   const uses = new Map<string, readonly DocumentUse[]>();
   const store: BindingReportStore = {
     record: async (document, found, used) => {
@@ -125,10 +126,24 @@ function memoryStore() {
       }
     },
     markUsesFilled: async () => {
+      if (failMark > 0) {
+        failMark -= 1;
+        throw new Error("options table unavailable");
+      }
       filled += 1;
     },
   };
-  return { store, rows, uses, filled: () => filled, check: () => check };
+  return {
+    store,
+    rows,
+    uses,
+    filled: () => filled,
+    check: () => check,
+    /** Make the next `n` writes of the filled mark fail. */
+    failMarks: (n: number) => {
+      failMark = n;
+    },
+  };
 }
 
 const POSTS: readonly BindingFieldShape[] = [{ name: "title", type: "text" }];
@@ -586,5 +601,17 @@ describe("the check of every document", () => {
     expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
     expect(memory.filled()).toBe(1);
     expect(memory.check().usesPending).toBe(false);
+  });
+
+  it("leaves the check to run again when the filled mark could not be written", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const using = deps(memory.store, pages.reading);
+    memory.failMarks(1);
+    await expect(runFullCheck(pages.walk, using, LATER())).rejects.toThrow();
+    // Not recorded as complete: the next pass checks again, and marks it.
+    expect(memory.check().checked).toBeNull();
+    expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
+    expect(memory.filled()).toBe(1);
   });
 });

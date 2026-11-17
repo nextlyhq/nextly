@@ -81,14 +81,17 @@ function depsFor(fixture: Fixture) {
     },
     mayReadSingle: async () => fixture.singleReadable !== false,
     draftPlacesShown: async (_ctx, document) => {
-      draftReads.push(document.documentId ?? document.slug);
+      draftReads.push(
+        `${document.documentId ?? document.slug}${document.locale === undefined ? "" : `@${document.locale}`}`
+      );
       if (fixture.editor === false) return new Set<string>();
       return new Set(
         fixture.uses
           .filter(
             entry =>
               entry.version === "draft" &&
-              entry.documentId === document.documentId
+              entry.documentId === document.documentId &&
+              entry.locale === document.locale
           )
           .map(entry => `${entry.blocksField}\u0000${entry.nodeId}`)
       );
@@ -214,6 +217,18 @@ describe("readShownOn", () => {
     expect(draftReads).toEqual(["fresh"]);
     expect(answer.places).toHaveLength(4);
     expect(answer.hidden).toBe(1);
+  });
+
+  it("reads a draft-only place in the language it was indexed in", async () => {
+    const { deps, draftReads } = depsFor({
+      defaultLocale: "en",
+      uses: [use("home", "hero", { version: "draft", locale: "fr" })],
+    });
+    const answer = await readShownOn("homepage", false, ctx, deps);
+    expect(draftReads).toEqual(["home@fr"]);
+    expect(answer.places).toEqual([
+      expect.objectContaining({ nodeId: "hero", inAnotherLanguage: true }),
+    ]);
   });
 
   it("lists only the places the reader may open, and counts the others as a number", async () => {

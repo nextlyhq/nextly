@@ -194,7 +194,7 @@ function LoadFailed({ onRetry }: { onRetry: () => void }): JSX.Element {
 }
 
 /** The section's body, for one answer. */
-export function ShownOnBody({
+function ShownOnBody({
   answer,
   onMore,
 }: {
