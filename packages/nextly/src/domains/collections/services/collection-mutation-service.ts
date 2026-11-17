@@ -16672,7 +16672,25 @@ export class CollectionMutationService extends BaseService {
         },
         gateCollection
       );
-      if (earlySave) {
+      // A caller who may not make the move an edit naming a status makes is told only that, by the
+      // move's own guard below: the gate's answer names a workflow's stages and approvals, so it
+      // is not asked. A status alone was judged above, by the move's own gate. Matched against a
+      // list of its own, since the guard below keeps the filters it is judged by.
+      const moveRefused =
+        earlySave?.status === "published" &&
+        gate === "update" &&
+        params.overrideAccess !== true &&
+        (await this.refusalOfMove([], {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          operation: "publish",
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          authenticatedScope: params.authenticatedScope,
+          schema,
+          locale: params.locale,
+        })) !== null;
+      if (earlySave && !moveRefused) {
         await refuseStatusSaveEarly(
           earlySave,
           await this.livePartsOn(this.adapter, {
@@ -17150,25 +17168,16 @@ export class CollectionMutationService extends BaseService {
           // An edit that also moves the status: the transition's own gate,
           // whose filter the entry is matched against as the edit's is. A
           // write changing the status alone was judged by that gate already.
-          const transitionParams: FilteredWriteCheck["params"] = {
+          const permissionDenied = await this.refusalOfMove(writeFilters, {
             collectionName: params.collectionName,
-            operation: transitionOp,
             entryId: params.entryId,
+            operation: transitionOp,
             user: accessUser,
             overrideAccess: params.overrideAccess,
-            routeAuthorized: false,
             authenticatedScope: params.authenticatedScope,
-          };
-          const access =
-            await this.accessService.checkCollectionWrite(transitionParams);
-          const permissionDenied =
-            access.denied ??
-            (await this.addWriteFilter(writeFilters, {
-              schema,
-              access,
-              params: transitionParams,
-              locale: params.locale,
-            }));
+            schema,
+            locale: params.locale,
+          });
           if (permissionDenied) {
             transitionGuard = {
               op: transitionOp,
@@ -17514,19 +17523,22 @@ export class CollectionMutationService extends BaseService {
           },
           gateCollection
         );
-        const settleGate = lockedSave
-          ? await judgeStatusSave(
-              tx,
-              lockedSave,
-              await this.livePartsOn(tx, {
-                collectionName: params.collectionName,
-                entryId: params.entryId,
-                mainStatus: (preUpdateRow as { status?: unknown } | undefined)
-                  ?.status,
-                companion: gateCompanion,
-              })
-            )
-          : undefined;
+        // Not asked where the caller may not make the move: its guard refuses the save below, and
+        // the gate's answer is not theirs to read.
+        const settleGate =
+          lockedSave && !transitionGuard?.permissionDenied
+            ? await judgeStatusSave(
+                tx,
+                lockedSave,
+                await this.livePartsOn(tx, {
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  mainStatus: (preUpdateRow as { status?: unknown } | undefined)
+                    ?.status,
+                  companion: gateCompanion,
+                })
+              )
+            : undefined;
         // A conditional write is judged here, under the lock and after the
         // access it owes, against the value as committed now; a refused one
         // writes nothing.
@@ -20789,6 +20801,45 @@ export class CollectionMutationService extends BaseService {
       });
     }
     return judged.refusal;
+  }
+
+  /**
+   * Why the caller may not make the lifecycle move `operation` on this entry, as an edit that also
+   * names a status is judged: the move's permission and rule, then the entry matched against the
+   * rule's filter, which joins `checks` where it holds. Null where nothing refuses it.
+   */
+  private async refusalOfMove(
+    checks: FilteredWriteCheck[],
+    args: {
+      collectionName: string;
+      entryId: string;
+      operation: "publish" | "unpublish";
+      user: FilteredWriteCheck["params"]["user"];
+      overrideAccess: FilteredWriteCheck["params"]["overrideAccess"];
+      authenticatedScope: FilteredWriteCheck["params"]["authenticatedScope"];
+      schema: FilteredTransactionWrite["schema"];
+      locale: string | undefined;
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const params: FilteredWriteCheck["params"] = {
+      collectionName: args.collectionName,
+      operation: args.operation,
+      entryId: args.entryId,
+      user: args.user,
+      overrideAccess: args.overrideAccess,
+      routeAuthorized: false,
+      authenticatedScope: args.authenticatedScope,
+    };
+    const access = await this.accessService.checkCollectionWrite(params);
+    return (
+      access.denied ??
+      (await this.addWriteFilter(checks, {
+        schema: args.schema,
+        access,
+        params,
+        locale: args.locale,
+      }))
+    );
   }
 
   /**

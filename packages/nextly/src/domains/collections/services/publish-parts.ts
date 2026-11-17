@@ -422,9 +422,12 @@ async function refusalsOf(
 ): Promise<Issue[]> {
   const untranslated = untranslatedIssues(judged);
   if (untranslated.length > 0) return untranslated;
+  // A caller refused a part the request moves is told that alone: the gate is not asked, since
+  // its answer names a workflow's stages and approvals, and nothing else of the entry is judged.
+  const access = [...languageIssues(judged), ...sharedIssues(judged)];
+  if (access.some(issue => issue.code === "FORBIDDEN")) return access;
   return [
-    ...languageIssues(judged),
-    ...sharedIssues(judged),
+    ...access,
     ...(await gateIssues(judged, engines)),
     ...stillLiveIssues(judged),
     ...sharedEditIssues(judged),
