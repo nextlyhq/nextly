@@ -143,8 +143,12 @@ function SearchNote({ search }: { search: MenuSearch }): JSX.Element {
   );
 }
 
-/** One option's row: its face, and a check on the current choice. */
-function OptionRow({
+/**
+ * One option's row: its face, and a check on the current choice. Shared with
+ * the starter's "Use a component ▾" menu, so a choice with a picture reads
+ * the same in both.
+ */
+export function OptionRow({
   option,
   current,
   picture,

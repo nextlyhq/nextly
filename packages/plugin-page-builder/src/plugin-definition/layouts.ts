@@ -12,6 +12,7 @@ import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
 import { makeDefaultRoute } from "../default-layout/make-default-route";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "../default-layout/settings-single";
+import { layoutAreaRoutes } from "../layout-area-route";
 import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { layoutCountsRoute } from "../layout-counts-route";
@@ -61,6 +62,7 @@ export function routesForLayouts(def: Definition): {
   readonly layoutChoices: PluginRoute;
   readonly layoutCounts: PluginRoute;
   readonly layoutWrites: PluginRoute[];
+  readonly layoutArea: PluginRoute[];
 } {
   const { opts } = def;
   return {
@@ -88,5 +90,11 @@ export function routesForLayouts(def: Definition): {
     // A set's rename and copy from the builder's Pages panel, each gated by
     // the set write it makes and written as the caller.
     layoutWrites: layoutWriteRoutes(),
+    // The components marked for an area, and the write putting one in a
+    // set's area: the builder's "Use a component" menu on the starter.
+    layoutArea: layoutAreaRoutes(
+      componentStoreOf(opts),
+      () => opts.limits ?? DEFAULT_LIMITS
+    ),
   };
 }

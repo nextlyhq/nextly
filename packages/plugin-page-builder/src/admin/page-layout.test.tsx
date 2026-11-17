@@ -868,6 +868,7 @@ describe("the regions the editor draws from the choice", () => {
       {
         area: "header",
         componentId: "h",
+        setId: "main",
         setTitle: "Main",
         starter: false,
       },
@@ -920,6 +921,8 @@ describe("the regions the editor draws from the choice", () => {
       ["Starter footer, from the Landing header & footer", "Starter footer"],
     ]);
     expect(cards.map(card => card.starter)).toEqual([true, true]);
+    // The set the starter is replaced in: the one the page is drawn inside.
+    expect(cards.map(card => card.setId)).toEqual(["landing", "landing"]);
   });
 
   it("calls a starter someone has published a change to a header like any other", () => {
