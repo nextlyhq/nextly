@@ -666,6 +666,15 @@ describe("a block style's states and devices, in the style editor", () => {
       )
     ).toBeTruthy();
     expect(screen.queryByText(/You are editing the Hover look/)).toBeNull();
+    // Back on the first look, it opens at Normal again, not the Hover it
+    // was left at.
+    view.rerender(<Host writeStyles={vi.fn()} library={[ghost, other]} />);
+    expect(
+      within(screen.getByRole("group", { name: "Editing Ghost" })).getByRole(
+        "button",
+        { name: /^State: Normal/ }
+      )
+    ).toBeTruthy();
   });
 
   it("writes a hover colour set while Hover is chosen under :hover on the page", async () => {

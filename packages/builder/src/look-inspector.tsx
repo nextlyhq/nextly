@@ -160,8 +160,10 @@ function editedDevice(
 }
 
 /**
- * Which state the look editor edits, held per look: a look opened afresh, or
- * another one chosen, starts at Normal.
+ * Which state the look editor edits, for the look open now: a look opened
+ * afresh, another one chosen, or one returned to starts at Normal. The
+ * choice is replaced as soon as another look is open, during that render,
+ * so a look left at Hover never comes back at Hover.
  */
 function useLookState(
   look: LookKey
@@ -171,6 +173,7 @@ function useLookState(
     readonly key: string;
     readonly state: StyleState;
   }>({ key, state: "base" });
+  if (chosen.key !== key) setChosen({ key, state: "base" });
   const choose = React.useCallback(
     (state: StyleState) => setChosen({ key, state }),
     [key]
