@@ -179,6 +179,17 @@ export function inSentence(label: string): string {
 }
 
 /**
+ * A collection template named inside a sentence: "the Blog post template",
+ * or "the Post template" where its title already ends in the word, as the
+ * title a new template is given does, so no sentence says it twice.
+ */
+function theTemplate(title: string): string {
+  return /\btemplate$/i.test(title.trim())
+    ? `the ${title}`
+    : `the ${title} template`;
+}
+
+/**
  * When an own design was last edited, as its row says it: "today",
  * "yesterday", or the date. `null` when the row does not say.
  */
@@ -194,6 +205,11 @@ export function editedWhen(updatedAt: string | null, now: Date): string | null {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(at);
 }
 
+/** A sentence's first word, capitalized. */
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 /** The words every surface of an own design says, in one place. */
 export const OWN_DESIGN_WORDS = {
   pill: "Own design",
@@ -202,7 +218,7 @@ export const OWN_DESIGN_WORDS = {
   unpublishedExplained: (template: string | null): string =>
     template === null
       ? "Not published yet: visitors don't see it"
-      : `Not published yet: visitors see the ${template} template`,
+      : `Not published yet: visitors see ${theTemplate(template)}`,
   give: (singular: string): string =>
     `Give this ${inSentence(singular)} its own design`,
   giving: "Creating its own design…",
@@ -215,17 +231,17 @@ export const OWN_DESIGN_WORDS = {
   everyUses: (singular: string, plural: string): string =>
     `Every ${inSentence(singular)} uses it. Edit the template to change all ${inSentence(plural)}.`,
   preview: "Preview",
-  openTemplate: (template: string): string => `Open the ${template} template`,
+  openTemplate: (template: string): string => `Open ${theTemplate(template)}`,
   edit: "Edit design",
   remove: "Remove own design…",
   unpublishedWarning: (template: string | null): string =>
     template === null
       ? "Visitors don't see this design until you publish it."
-      : `Visitors still see the ${template} template until you publish this design.`,
+      : `Visitors still see ${theTemplate(template)} until you publish this design.`,
   publishedSays: (singular: string, template: string | null): string =>
     template === null
       ? `Visitors see this ${inSentence(singular)}'s own design.`
-      : `Visitors see this ${inSentence(singular)}'s own design. Changes to the ${template} template don't reach it.`,
+      : `Visitors see this ${inSentence(singular)}'s own design. Changes to ${theTemplate(template)} don't reach it.`,
   goesWithEntry: (singular: string): string =>
     `Deleting this ${inSentence(singular)} deletes its own design too.`,
   /** The Design card's heading while no published template draws the entry. */
@@ -237,7 +253,7 @@ export const OWN_DESIGN_WORDS = {
   ): string =>
     template === null
       ? `${plural} have no collection template yet, so this ${inSentence(singular)} isn't shown as a page on the site.`
-      : `The ${template} template isn't published yet, so this ${inSentence(singular)} isn't shown as a page on the site.`,
+      : `${capitalized(theTemplate(template))} isn't published yet, so this ${inSentence(singular)} isn't shown as a page on the site.`,
   createTemplate: (plural: string): string =>
     `Create a collection template for ${inSentence(plural)}`,
   creatingTemplate: "Creating the template…",
@@ -250,7 +266,7 @@ export const OWN_DESIGN_WORDS = {
   ): string =>
     template === null
       ? `"${title}" won't be shown as a page until ${plural} have a published template. The own design and its history are deleted.`
-      : `"${title}" will be shown with the ${template} template again. The own design and its history are deleted.`,
+      : `"${title}" will be shown with ${theTemplate(template)} again. The own design and its history are deleted.`,
   keep: "Keep it",
   removeConfirm: "Remove own design",
   removing: "Removing…",

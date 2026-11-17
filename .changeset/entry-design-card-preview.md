@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-An entry drawn by a collection template now shows a Design card in its side panel: "Design: <template name>", that every entry of its collection uses it, with Preview and "Give this <entry> its own design". Preview opens the entry's preview beside the form and folds the panel, as the document bar's Preview does; `useDocumentPreview()` gains an experimental `openBeside` for that. The no-template and own-design states keep their actions with plainer words.
+An entry drawn by a collection template now shows a Design card in its side panel: "Design: <template name>", that every entry of its collection uses it, with Preview and "Give this <entry> its own design". Preview opens the entry's preview beside the form and folds the panel, as the document bar's Preview does; `useDocumentPreview()` gains an experimental `openBeside` for that. The no-template and own-design states keep their actions with plainer words, and a template whose title already ends in "template" is no longer called "the Post template template".
