@@ -36,7 +36,6 @@ import {
 } from "@playwright/test";
 
 import {
-  glyphPoint,
   layerRow,
   openLayers,
   pressSave,
@@ -147,6 +146,34 @@ async function clickBlock(page: Page, id: string): Promise<void> {
   await page.mouse.click(box.x + box.width - 8, box.y + box.height / 2);
 }
 
+/**
+ * Select a page block by clicking it, clicking again until the canvas marks
+ * it selected: a first click can land while the canvas is still settling.
+ */
+async function selectBlock(page: Page, id: string): Promise<void> {
+  await expect(async () => {
+    await clickBlock(page, id);
+    expect(await selection(page)).toEqual([id]);
+  }).toPass({ timeout: 20_000 });
+}
+
+/**
+ * Open a page block's text for typing from the keyboard: select it, then
+ * Enter, the keyboard's way in. Steadier than a double-click, whose second
+ * press can land on the toolbar the first one drew.
+ */
+async function editText(page: Page, id: string): Promise<Locator> {
+  await selectBlock(page, id);
+  await page.keyboard.press("Enter");
+  const text = fieldOf(page, id, "text");
+  await expect(text).toHaveAttribute(
+    "contenteditable",
+    /^(true|plaintext-only)$/,
+    { timeout: 30_000 }
+  );
+  return text;
+}
+
 /** A page block's inline field for `prop`. */
 function fieldOf(page: Page, id: string, prop: string): Locator {
   return pageBlock(page, id)
@@ -217,8 +244,7 @@ test.describe("copying, cutting and pasting blocks", () => {
   }) => {
     await openBuilder(page, await createPage(page.request));
 
-    await clickBlock(page, HEADING);
-    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await selectBlock(page, HEADING);
     await page.keyboard.press("Control+c");
 
     await selectInLayers(page, PRICING);
@@ -242,8 +268,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
-    await clickBlock(page, HEADING);
-    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await selectBlock(page, HEADING);
     await page.keyboard.press("Control+c");
     await page.keyboard.press("Control+v");
     await expect.poll(() => childrenOf(page, HERO)).toHaveLength(2);
@@ -272,8 +297,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     context,
   }) => {
     await openBuilder(page, await createPage(page.request));
-    await clickBlock(page, HEADING);
-    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await selectBlock(page, HEADING);
     await page.keyboard.press("Control+c");
 
     const other = await context.newPage();
@@ -300,7 +324,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openBuilder(page, await createPage(page.request));
 
-    await clickBlock(page, HEADING);
+    await selectBlock(page, HEADING);
     await blockMenu(page).click();
     await page.getByRole("menuitem", { name: "Copy", exact: true }).click();
 
@@ -319,23 +343,11 @@ test.describe("copying, cutting and pasting blocks", () => {
   }) => {
     await openBuilder(page, await createPage(page.request));
     // Blocks on the clipboard: a paste the editor took for blocks would add one.
-    await clickBlock(page, HEADING);
-    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await selectBlock(page, HEADING);
     await page.keyboard.press("Control+c");
-    // Cleared, so the block's toolbar is not drawn over the words to press.
-    await page.keyboard.press("Escape");
-    await page.keyboard.press("Escape");
-    await expect.poll(() => selection(page)).toEqual([]);
     const before = await pageIds(page, HERO);
 
-    const text = fieldOf(page, HEADING, "text");
-    const point = await glyphPoint(page, text, 0.5);
-    await page.mouse.dblclick(point.x, point.y);
-    await expect(text).toHaveAttribute(
-      "contenteditable",
-      /^(true|plaintext-only)$/,
-      { timeout: 30_000 }
-    );
+    const text = await editText(page, HEADING);
     // A caret, with nothing highlighted, so only the text rule keeps the key.
     await page.keyboard.press("End");
     await page.keyboard.press("Control+v");
@@ -351,15 +363,9 @@ test.describe("copying, cutting and pasting blocks", () => {
     await openBuilder(page, await createPage(page.request));
     const before = await pageIds(page, HERO);
 
-    const text = fieldOf(page, HEADING, "text");
-    const point = await glyphPoint(page, text, 0.5);
-    await page.mouse.dblclick(point.x, point.y);
-    await expect(text).toHaveAttribute(
-      "contenteditable",
-      /^(true|plaintext-only)$/,
-      { timeout: 30_000 }
-    );
-    // Entering selects the whole field.
+    const text = await editText(page, HEADING);
+    // The whole of the words, highlighted inside the text being edited.
+    await page.keyboard.press("Control+a");
     await page.keyboard.press("Control+c");
     await page.keyboard.press("End");
     await page.keyboard.press("Control+v");
@@ -374,8 +380,7 @@ test.describe("copying, cutting and pasting blocks", () => {
     page,
   }) => {
     await openBuilder(page, await createPage(page.request));
-    await clickBlock(page, HEADING);
-    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await selectBlock(page, HEADING);
     const before = await pageIds(page, HERO);
 
     const words = page.getByLabel("Text", { exact: true });
