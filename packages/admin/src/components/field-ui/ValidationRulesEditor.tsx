@@ -35,7 +35,7 @@ import { Input, Label } from "@nextlyhq/ui";
 import type { FieldValidationRule } from "nextly/field-catalog";
 import { useId, type JSX } from "react";
 
-import { ValidationNumberField } from "./ValidationNumberField";
+import { ValidationBoundField } from "./ValidationNumberField";
 
 /**
  * The rules this editor draws, and what each admits.
@@ -80,6 +80,47 @@ const NUMERIC_RULES = {
 >;
 
 type NumericRule = keyof typeof NUMERIC_RULES;
+
+/** The upper bound of a lower one's pair, which it may not exceed. */
+const UPPER_OF: Partial<Record<NumericRule, NumericRule>> = {
+  minLength: "maxLength",
+  minRows: "maxRows",
+  min: "max",
+};
+
+/**
+ * Why a bound as it stands cannot be kept, said under it the moment it is
+ * typed, or `null`.
+ *
+ * The panel has no Apply — an edit is in the draft as soon as it is made — so
+ * this is where a bad bound is caught, rather than at the collection's save:
+ * a lower bound above its upper one was refused only there (core's
+ * `validation.minLength must be <= validation.maxLength`), and an upper count
+ * of 0 was never refused at all, quietly read downstream as "no limit" by the
+ * column and the entry form alike, so a field said to hold nothing held
+ * anything. A count that is not a whole number of zero or more can still be
+ * typed past the input's own `min` and `step`, so it is judged here too.
+ */
+function boundProblem(
+  rule: NumericRule,
+  value: ValidationRuleValues
+): string | null {
+  const bound = value[rule];
+  if (bound === undefined) return null;
+  const { label, counts } = NUMERIC_RULES[rule];
+  if (counts && (!Number.isInteger(bound) || bound < 0)) {
+    return "Use a whole number, 0 or more.";
+  }
+  if (counts && bound === 0 && (rule === "maxLength" || rule === "maxRows")) {
+    return `${label} must be at least 1.`;
+  }
+  const upperRule = UPPER_OF[rule];
+  const upper = upperRule === undefined ? undefined : value[upperRule];
+  if (upperRule !== undefined && upper !== undefined && bound > upper) {
+    return `${label} can't be more than ${NUMERIC_RULES[upperRule].label.toLowerCase()}.`;
+  }
+  return null;
+}
 
 /**
  * Numeric rules drawn side by side, in the order presented.
@@ -200,12 +241,13 @@ export function ValidationRulesEditor({
           {[lo, hi]
             .filter(rule => permits.has(rule))
             .map(rule => (
-              <ValidationNumberField
+              <ValidationBoundField
                 key={rule}
                 label={NUMERIC_RULES[rule].label}
                 description={NUMERIC_RULES[rule].description}
                 counts={NUMERIC_RULES[rule].counts}
                 value={value[rule]}
+                problem={boundProblem(rule, value)}
                 disabled={disabled}
                 onChange={(n: number | undefined) => onChange({ [rule]: n })}
               />
