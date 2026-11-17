@@ -264,16 +264,23 @@ test.describe("a block locked in Layers", () => {
     await openBuilder(page, id);
     await openLayers(page);
 
-    // Inside the locked block a copy would change what it holds, so the bar
-    // says so before anything is tried.
+    // Inside the locked block a copy would change what it holds: pressing
+    // Duplicate says why and copies nothing.
     await clickBlock(page, TITLE);
     await expect.poll(() => selection(page)).toEqual([TITLE]);
-    const inside = await toolbarButton(page, "Duplicate");
-    await expect(inside).toHaveAttribute("aria-disabled", "true");
-    await expect(inside).toHaveAttribute(
-      "title",
-      "Hero is locked. Unlock it to add blocks to it."
-    );
+    const layers = page
+      .getByRole("tree", { name: "Layers" })
+      .getByRole("treeitem");
+    const rows = await layers.count();
+    expect(rows).toBeGreaterThan(0);
+    await (await toolbarButton(page, "Duplicate")).click();
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: "Hero is locked. Unlock it to add blocks to it." })
+    ).toHaveCount(1);
+    await expect(layers).toHaveCount(rows);
+    await expect.poll(() => selection(page)).toEqual([TITLE]);
 
     // The locked block itself copies, and the copy keeps its lock.
     await selectBlock(page, HERO);
@@ -393,12 +400,17 @@ test.describe("a block locked in Layers", () => {
 
     await selectBlock(page, HERO);
     await unlockFromCard(page, "Hero");
+    // Still locked on the saved page: pressing Delete says why and removes
+    // nothing.
     const remove = await toolbarButton(page, "Delete");
-    await expect(remove).toHaveAttribute("aria-disabled", "true");
-    await expect(remove).toHaveAttribute(
-      "title",
-      "Save first: this block is still locked on the saved page. Save, then delete it."
-    );
+    await remove.click();
+    await expect(
+      page.getByRole("status").filter({
+        hasText:
+          "Save first: this block is still locked on the saved page. Save, then delete it.",
+      })
+    ).toHaveCount(1);
+    await expect(await block(page, HERO)).toHaveCount(1);
 
     expect(await saveDraft(page)).toBe(1);
     await expect(remove).not.toHaveAttribute("aria-disabled", "true");
