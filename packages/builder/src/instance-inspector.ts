@@ -37,8 +37,8 @@ import {
   type ResolvedBlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import type { RefusalWording } from "./canvas/drag-refusal";
 import { composedHolds, composedHoldWording } from "./component-holds";
-import type { RefusalWording } from "./drag-refusal";
 import type { SavedComponent } from "./inserter";
 import { lockSourceOf, type BlockIdentity, type LockView } from "./inspector";
 import { refusalAnnouncement } from "./move-refusal";

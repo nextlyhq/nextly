@@ -93,7 +93,7 @@ export {
  * has to measure, and the one they get wrong: documenting the recipe as
  * `clientLeft`/`clientTop` left three call sites short by the padding.
  */
-export { frameInsetOf } from "./geometry-dom";
+export { frameInsetOf } from "./canvas/geometry-dom";
 
 /**
  * @experimental Node kinds and focus, read the same way in every realm.
@@ -219,7 +219,7 @@ export {
   type DropResolution,
   type DropTarget,
   type RectSource,
-} from "./drop-targets";
+} from "./canvas/drop-targets";
 export {
   blockAllowedAt,
   registryBlockSource,
@@ -260,7 +260,7 @@ export {
   type PendingTarget,
   type TargetId,
   type TargetSwitchState,
-} from "./target-switch";
+} from "./canvas/target-switch";
 
 /**
  * @experimental The document as a structure: the layers tree, the path to a
@@ -289,7 +289,7 @@ export { blockLabel } from "./inserter";
  * caller names. The one way the editor scrolls to a block it was asked to
  * show, whichever surface asked.
  */
-export { revealNode } from "./reveal-node";
+export { revealNode } from "./canvas/reveal-node";
 /**
  * A binding as a person reads it on this platform ("⌘K" on a Mac, "Ctrl+K"
  * elsewhere), for a host drawing a shortcut hint beside its own control.
@@ -420,7 +420,7 @@ export {
   steppedZoom,
   writeZoom,
   type CanvasZoom,
-} from "./canvas-zoom";
+} from "./canvas/canvas-zoom";
 
 /**
  * @experimental The device an author edits at once the device they chose is
@@ -429,7 +429,7 @@ export {
  * Pure, so it is on this entry beside the zoom model: a host keeps the set it
  * last drew with and asks this when a new one arrives.
  */
-export { fallbackBreakpoint } from "./canvas-width";
+export { fallbackBreakpoint } from "./canvas/canvas-width";
 
 export {
   BLOCK_GROUP,
@@ -466,7 +466,7 @@ export {
   isTextEntry,
   modalIsOpen,
   type EscapeOutcome,
-} from "./canvas-escape";
+} from "./canvas/canvas-escape";
 
 /**
  * @experimental What the floating toolbar offers, and where it sits.
@@ -486,7 +486,7 @@ export {
   type ToolbarActionId,
   type ToolbarPlacement,
   type ToolbarSize,
-} from "./toolbar-actions";
+} from "./canvas/toolbar-actions";
 
 /**
  * @experimental The style controls SDK: what a property offers, and how a

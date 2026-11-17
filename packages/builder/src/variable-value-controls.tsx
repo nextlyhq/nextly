@@ -332,6 +332,8 @@ function SizeField({
   // Putting back what the field stored is how an author answers a refusal.
   const restore = (event: React.SyntheticEvent): void => {
     const field = event.target;
+    // Asked by node kind, never `instanceof`: the canvas is a frame, and a
+    // constructor from this window answers false for an element from another.
     if (refusedBy === undefined || !isInput(field)) return;
     if (restoresStored(field.value, value)) onCommit(value);
   };

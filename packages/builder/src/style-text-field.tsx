@@ -18,10 +18,10 @@ import {
 import { Input } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { commitOnEnter } from "./commit-on-enter";
 import { isElement } from "./dom-kind";
 import { useUnsetHint } from "./inherited-value";
-import { useCanvasTokenMode } from "./prefers-dark";
 import { fieldStep, scrubModifiersOf } from "./scrub-gesture";
 import { CompactSides, fieldDescribedBy } from "./spacing-box";
 import type { StyleControl, StyleControlKind } from "./style-controls";

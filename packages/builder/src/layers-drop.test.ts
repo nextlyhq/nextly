@@ -19,7 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { placementSources } from "./drop-targets";
+import { placementSources } from "./canvas/drop-targets";
 import { holdsBlocks } from "./keyboard-move";
 import {
   LAYERS_DEPTH_PX,

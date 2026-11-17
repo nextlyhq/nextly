@@ -19,7 +19,7 @@ import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import type { CardVerbs } from "./block-card";
-import type { CanvasPassage } from "./canvas-passage";
+import type { CanvasPassage } from "./canvas/canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import type { ComponentVariantsHost } from "./component-variants";
 import type { ContentServices } from "./content-controls";
