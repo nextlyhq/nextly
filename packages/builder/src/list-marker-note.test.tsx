@@ -40,6 +40,8 @@ beforeAll(() =>
           },
         },
         supports: { list: true },
+        // A slot, so a locked List can hold one: the lock a block inherits.
+        slots: { children: {} },
         render: () => null,
       },
     ] as never,
@@ -128,11 +130,11 @@ describe("Custom marker under List as", () => {
 
 describe("the note in the block panel", () => {
   /** A List selected in the panel, with the styles it stores. */
-  function drawn(node: BlockNode) {
+  function drawn(node: BlockNode, nodes: BlockNode[] = [node]) {
     const document = {
       formatVersion: 1,
       kind: "page",
-      nodes: [node],
+      nodes,
     } as BlockDocument;
     const apply = vi.fn(() => document);
     render(
@@ -171,5 +173,34 @@ describe("the note in the block panel", () => {
       screen.getByRole("button", { name: "Clear the custom marker" })
     );
     expect(apply).toHaveBeenCalledWith(planClearMarker(node));
+  });
+
+  const clear = () =>
+    screen.getByRole("button", {
+      name: "Clear the custom marker",
+    }) as HTMLButtonElement;
+
+  it("holds Clear on a List locked in Layers, as its other style controls are", () => {
+    const node = {
+      ...list({ base: { base: { listStyleType: "square" } } }),
+      locked: true,
+    };
+    drawn(node);
+    expect(clear().disabled).toBe(true);
+  });
+
+  it("holds Clear on a List inside a block locked in Layers", () => {
+    const node = list({ base: { base: { listStyleType: "square" } } });
+    const holder = {
+      id: "hero",
+      type: "core/list",
+      version: 1,
+      props: {},
+      name: "Hero",
+      locked: true,
+      slots: { children: [node] },
+    } as BlockNode;
+    drawn(node, [holder]);
+    expect(clear().disabled).toBe(true);
   });
 });

@@ -331,11 +331,14 @@ export function ContentFields({
       ))
     );
     // Under a List's "List as": whether a marker of its own overrides it.
+    // Held as "List as" is: a design prop may be set exactly where the
+    // block's styles may change, so the same lock check (Layers, a block it
+    // sits inside, a content-only area) holds the Clear that writes them.
     const marker =
       prop.name === "kind" ? (
         <ListMarkerNote
           node={findNode(document.nodes, inspection.nodeId)}
-          disabled={prop.readOnly}
+          disabled={!writable(prop.name)}
           onApply={onApply}
         />
       ) : null;
