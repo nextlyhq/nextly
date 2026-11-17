@@ -10,6 +10,7 @@ import type {
   BlockNode,
   ComponentLookup,
   NestingSource,
+  OpPosition,
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
@@ -161,6 +162,13 @@ export interface InsertPanelProps {
    * Pricing"), even where the rule would put a block inside the selection.
    */
   after?: string;
+  /**
+   * Any other place the author chose, by position: the page's top level from
+   * an empty page's start area, or before the first block of a container.
+   * Every block goes there; it is judged against the page as it is now, and
+   * the host keeps it only while nothing that could move it has happened.
+   */
+  at?: OpPosition;
   /**
    * Draws a preview of an entry for the popover beside the panel, when the
    * host has one (a block's example, rendered). Answering nothing falls back
