@@ -54,8 +54,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  BUILT_IN_NAME_FIELDS,
   resolveSiteStyle,
   siteStyleOf,
+  withBuiltInNames,
   type SiteStyleData,
 } from "./site-style";
 
@@ -141,6 +143,7 @@ function isStoredTokenShape(entry: unknown): entry is {
   description?: string;
   extensions?: Readonly<Record<string, unknown>>;
   unreadExtension?: Readonly<Record<string, unknown>>;
+  fluid?: { small: number; large: number };
 } {
   return (
     isPlainRecord(entry) &&
@@ -161,7 +164,24 @@ function isStoredTokenShape(entry: unknown): entry is {
     optionalString(entry.id) &&
     optionalString(entry.label) &&
     optionalRecord(entry.extensions) &&
-    optionalRecord(entry.unreadExtension)
+    optionalRecord(entry.unreadExtension) &&
+    (entry.fluid === undefined || isFluidSizes(entry.fluid))
+  );
+}
+
+/**
+ * A fluid size's two sizes as stored: two positive, finite numbers of px.
+ * Anything else would make the size again from nonsense when the site's
+ * fluid range changes.
+ */
+function isFluidSizes(
+  value: unknown
+): value is { small: number; large: number } {
+  return (
+    isPlainRecord(value) &&
+    [value.small, value.large].every(
+      size => typeof size === "number" && Number.isFinite(size) && size > 0
+    )
   );
 }
 
@@ -192,7 +212,7 @@ export function checkStoredTokens(
   raw.tokens.forEach((entry: unknown, index) => {
     if (!isStoredTokenShape(entry)) {
       issues.push(
-        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, and extensions must be an object.`
+        `tokens[${index}] is not a token: it needs a string name, a kind (${TOKEN_KINDS.join(", ")}), and values with a light string (dark optional). An id, when present, must be a string, extensions must be an object, and a fluid size's two sizes must be positive numbers of px.`
       );
       return;
     }
@@ -232,6 +252,12 @@ export function checkStoredTokens(
       ...(entry.unreadExtension === undefined
         ? {}
         : { unreadExtension: entry.unreadExtension }),
+      // The sizes a fluid size was made from, named here for the same
+      // reason: left out, a save would lose them and the size would stop
+      // following the site's fluid range.
+      ...(entry.fluid === undefined
+        ? {}
+        : { fluid: { small: entry.fluid.small, large: entry.fluid.large } }),
     });
   });
 
@@ -860,9 +886,13 @@ export function checkStoredClasses(
       issues.push(`classes[${index}] repeats the id "${entry.id}".`);
       return;
     }
+    // Judged as it merges: an override of a built-in that leaves out its
+    // name fields takes the code's, so its own-style mark is the code's too.
+    const named =
+      withBuiltInNames(policy.defaults?.classes, [entry])?.[0] ?? entry;
     // A block's own look is never written as a class and claims no slug, as
     // the engine's claim rules have it, so a style may share its name.
-    const claimsSlug = !isDefaultLook(entry);
+    const claimsSlug = !isDefaultLook(named);
     if (claimsSlug && slugs.has(entry.slug)) {
       issues.push(`classes[${index}] repeats the slug "${entry.slug}".`);
       return;
@@ -875,7 +905,7 @@ export function checkStoredClasses(
     if (!budget.truncated) {
       issues.push(...classValueIssues(entry, index, policy, budget));
     }
-    issues.push(...blockStyleMarkIssues(entry, index));
+    issues.push(...blockStyleMarkIssues(named, index));
     issues.push(...builtInRenameIssues(entry, index, policy));
     classes.push(withUsableMarks(entry, index, issues));
   });
@@ -917,6 +947,14 @@ function blockStyleMarkIssues(entry: NamedClass, index: number): string[] {
  * supplies in code) that renames it: its name, its slug, its block type and
  * whether it is the block's own style stay as the code states them, so a
  * block style is only ever renamed where its name is written.
+ *
+ * The name alone may be left out, as an edit of a built-in's styles and an
+ * export taken back into a site with the same built-ins store it: it only
+ * names the style, and the merge gives it the code's. The slug, the block
+ * type and the own-style mark decide what the entry IS (whether it claims
+ * a slug, whether it may carry ★), and every reader of the stored row reads
+ * them, many without the code's defaults; so they are stated, as the code
+ * states them.
  */
 function builtInRenameIssues(
   entry: NamedClass,
@@ -925,11 +963,11 @@ function builtInRenameIssues(
 ): string[] {
   const code = policy.defaults?.classes?.find(each => each.id === entry.id);
   if (code === undefined || !isLook(code)) return [];
-  const same =
-    entry.label === code.label &&
-    entry.slug === code.slug &&
-    entry.blockType === code.blockType &&
-    entry.isDefault === code.isDefault;
+  const same = BUILT_IN_NAME_FIELDS.every(
+    field =>
+      entry[field] === code[field] ||
+      (field === "label" && entry.label === undefined)
+  );
   return same
     ? []
     : [

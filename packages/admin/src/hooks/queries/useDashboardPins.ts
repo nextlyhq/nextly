@@ -4,8 +4,8 @@
  * across devices.
  *
  * The server decides what a reader is shown (a pin they may no longer read is
- * left out of the titled list and named apart, by its target alone) and
- * refuses a pin past the limit; this hook only reads that answer and writes
+ * left out of the titled list and only counted, never named) and refuses a
+ * pin past the limit; this hook only reads that answer and writes
  * the reader's choices, then reads the answer again.
  */
 import {
@@ -42,12 +42,16 @@ export interface ShownPin {
   pinnedAt: string;
 }
 
-/** The reader's pins: those they may read, and those they no longer may. */
+/** The reader's pins: those they may read, and how many they no longer may. */
 interface ReaderPins {
   /** Newest first, titled. */
   shown: ShownPin[];
-  /** Pins of documents they may no longer read, by what each names alone. */
-  unreadable: PinTarget[];
+  /**
+   * How many of their pins name documents they may no longer read. A count
+   * alone: the server names none of them, and removes them itself
+   * ({@link useRemoveUnreadablePins}).
+   */
+  unreadableCount: number;
 }
 
 /** What a shown pin names, as a pin or an unpin sends it. */
@@ -71,8 +75,9 @@ function pinNames(pin: ShownPin, target: PinTarget): boolean {
 }
 
 /**
- * The reader's pins they may read, newest first, and those they may no
- * longer read. An answer without `unreadable` (a server before it) has none.
+ * The reader's pins they may read, newest first, and how many they may no
+ * longer read. An answer without `unreadableCount` (a server before it)
+ * counts none.
  */
 export function useDashboardPins() {
   return useQuery({
@@ -80,9 +85,12 @@ export function useDashboardPins() {
     queryFn: async (): Promise<ReaderPins> => {
       const answer = await protectedApi.get<{
         items: ShownPin[];
-        unreadable?: PinTarget[];
+        unreadableCount?: number;
       }>(PINS_PATH);
-      return { shown: answer.items, unreadable: answer.unreadable ?? [] };
+      return {
+        shown: answer.items,
+        unreadableCount: answer.unreadableCount ?? 0,
+      };
     },
   });
 }
@@ -116,30 +124,20 @@ export function useSetPinned(): UseMutationResult<
 }
 
 /**
- * Remove several pins at once (the pins a reader may no longer open), one
- * unpin each, then, once all of them have settled, read the pins again
- * whatever came of them.
+ * Remove every pin the reader may no longer open, in one request that names
+ * none of them: the server finds them, asking again per pin whether the
+ * reader may read it, and removes the reader's own alone. Once it has
+ * answered, either way, the pins are read again; a failure is the caller's
+ * to say.
  */
-export function useRemovePins(): UseMutationResult<
+export function useRemoveUnreadablePins(): UseMutationResult<
   unknown,
   Error,
-  readonly PinTarget[]
+  void
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    // Every unpin settles before the pins are read again, so a read never
-    // lands while some are still on their way; then one that failed fails
-    // the whole removal, for the caller to say so.
-    mutationFn: async targets => {
-      const settled = await Promise.allSettled(
-        targets.map(target => protectedApi.delete(PINS_PATH, target))
-      );
-      const failed = settled.find(
-        (each): each is PromiseRejectedResult => each.status === "rejected"
-      );
-      if (failed !== undefined) throw failed.reason;
-      return settled;
-    },
+    mutationFn: () => protectedApi.delete(`${PINS_PATH}?unreadable=1`),
     onSettled: () => invalidatePins(queryClient),
   });
 }

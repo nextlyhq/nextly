@@ -55,8 +55,8 @@ const PLAYING = `.${CANVAS_ROOT_CLASS} .nx-pb-page [${APPEAR_PLAYING_ATTRIBUTE}]
  * unset, which is what lets the animation run, as on the published page.
  *
  * The timeline is set over the block's own, which its compiled rule sets at
- * whatever weight its selector has, hence `!important`; it holds only while
- * the block plays.
+ * whatever weight its selector has, hence the important flag; it holds only
+ * while the block plays.
  *
  * @internal
  */

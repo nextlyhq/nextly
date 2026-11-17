@@ -15,7 +15,12 @@ import { test } from "./support/test";
 
 test.describe.configure({ lock: [LOCK.homepage] });
 
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 const recent = (page: Page): Locator =>
   page.getByRole("group", { name: "Recent colours" });
@@ -83,7 +88,10 @@ test("the colour picker takes any notation, and Recent colours outlast a reload"
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   // A fresh author's list, whatever an earlier run left on this browser.
   await page.evaluate(() => {
     for (const key of Object.keys(localStorage)) {

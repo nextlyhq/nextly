@@ -53,6 +53,16 @@ const SOURCES: readonly BindingFieldSource[] = [
   },
 ];
 
+/**
+ * What a block holds beyond its example, where its example draws only part
+ * of its controls: an Image placed with no picture shows the library side of
+ * its Source, and its address field (with its own bind button) only once it
+ * holds an address.
+ */
+const HOLDING: Readonly<Record<string, Record<string, unknown>>> = {
+  "core/image": { src: "https://cdn.example/a.png" },
+};
+
 /** The block alone on a page, as its example fills it over its defaults. */
 function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
   const document = {
@@ -66,6 +76,7 @@ function drawn(block: (typeof coreBlocks)[number]): BlockDocument {
         props: {
           ...(block.defaultProps as Record<string, unknown>),
           ...(block.example?.props as Record<string, unknown> | undefined),
+          ...HOLDING[block.name],
         },
       },
     ],

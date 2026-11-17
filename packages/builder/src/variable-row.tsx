@@ -26,23 +26,18 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import {
-  Braces,
-  Bold,
-  Hash,
-  Ruler,
-  SquareRoundCorner,
-  Timer,
-  Type,
-} from "lucide-react";
+import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
+import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
 import { markOf } from "./design-group-toggle";
+import { fluidRange, pxAtWidth } from "./fluid-size";
 import { colourHexOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
   lengthFamilyOf,
   relabelToken,
+  variableGroupOf,
   variableLabelIssue,
   type VariableEntry,
 } from "./tokens-studio";
@@ -562,9 +557,22 @@ function RowLead({
       </span>
     );
   }
-  // A radius draws a corner, so it is told from a spacing step at a glance.
-  const radius = lengthFamilyOf(entry.row) === "radius";
-  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
+  // A radius draws a square with that radius on its corners.
+  if (lengthFamilyOf(entry.row) === "radius") {
+    return (
+      <span
+        className="nx-vars__kind"
+        aria-hidden="true"
+        data-variable-icon="radius"
+      >
+        <span
+          className="nx-vars__radius"
+          style={{ borderRadius: valueFor(token, mode) }}
+        />
+      </span>
+    );
+  }
+  const Icon = KIND_ICONS[kind];
   return (
     <span
       className="nx-vars__kind"
@@ -633,18 +641,54 @@ function RowTail({
   // A colour's one swatch says its values; nothing follows its name.
   if (token === undefined || entry.row.kind === "color") return null;
   const own = valueFor(token, mode);
-  const words = chipText(entry, own);
-  return (
+  const words = tailWords(entry, own);
+  const chip = (
     <span
       className="nx-vars__chip"
       aria-hidden="true"
-      // The whole value on hover when the chip says it in fewer words, as
-      // "Fluid" does; the row's name says it to a screen reader already.
+      // The whole value on hover when the chip says it in other words, as
+      // "Fluid · 16–20px" does; the row's name says it to a screen reader.
       title={words === chipText(entry, own, "raw") ? undefined : own}
     >
       {words}
     </span>
   );
+  if (
+    variableGroupOf(entry.row) !== "spacing" ||
+    entry.row.kind !== "dimension"
+  ) {
+    return chip;
+  }
+  // A spacing draws a bar as long as it is at the desktop width.
+  const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
+  return (
+    <span className="nx-vars__tail" aria-hidden="true">
+      {px === undefined ? null : (
+        <span
+          className="nx-vars__bar"
+          style={{ width: `${String(Math.round(px))}px` }}
+        />
+      )}
+      {chip}
+    </span>
+  );
+}
+
+/**
+ * What the value chip says: a fluid length's range ("Fluid · 16–20px"),
+ * the content width in px, as the block panel's Boxed option measures it,
+ * or the value in the picker's words.
+ */
+function tailWords(entry: VariableEntry, own: string): string {
+  const range = fluidRange(own);
+  if (range !== undefined && entry.lineHeight === undefined) {
+    return `Fluid · ${String(Math.round(range.minPx))}–${String(Math.round(range.maxPx))}px`;
+  }
+  if (variableGroupOf(entry.row) === "content") {
+    const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
+    if (px !== undefined) return `${String(Math.round(px))}px`;
+  }
+  return chipText(entry, own);
 }
 
 /**

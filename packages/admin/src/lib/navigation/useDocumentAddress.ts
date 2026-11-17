@@ -16,6 +16,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 import {
+  createDialogOf,
   documentAddress,
   rowWaysIn,
   viewsToOpenIn,
@@ -48,6 +49,19 @@ export type WaysInOf = (
   options?: OpenOptions
 ) => WayIn[];
 
+/**
+ * The document views the admin's metadata publishes, enabled plugins' only:
+ * read through a hook so whatever reads the rule is drawn again when they
+ * arrive. Every reading of the rule takes its views from here.
+ */
+export function usePublishedDocumentViews(): readonly RegisteredDocumentView[] {
+  const { plugins } = useBranding();
+  return useMemo(
+    () => (plugins ?? []).flatMap(plugin => plugin.documentViews ?? []),
+    [plugins]
+  );
+}
+
 /** One of the rule's readings of a document, from what the admin holds. */
 type RuleReading<T> = (
   document: OpenedDocument,
@@ -65,13 +79,7 @@ function useRuleReading<T>(
   // The default language whenever the site names one, multilingual or not: on
   // a one-language site a saved row still names it, and it is the default.
   const { defaultLocale } = useLocalization();
-  // The views the admin's metadata publishes, enabled plugins' only: read
-  // here so a link is drawn again when they arrive.
-  const { plugins } = useBranding();
-  const views = useMemo(
-    () => (plugins ?? []).flatMap(plugin => plugin.documentViews ?? []),
-    [plugins]
-  );
+  const views = usePublishedDocumentViews();
   const bySlug = useMemo(
     () =>
       new Map<string, OpenableCollection>(
@@ -115,4 +123,12 @@ export function useRowWaysIn(): WaysInOf {
 /** The views a document open as its form may be opened in, worded by each view. */
 export function useViewsToOpenIn(): WaysInOf {
   return useRuleReading(viewsToOpenIn);
+}
+
+/** The create dialog "+ New" opens on a collection, for the signed-in reader. */
+export function useCreateDialogOf(): (
+  document: OpenedDocument,
+  options?: OpenOptions
+) => string | undefined {
+  return useRuleReading(createDialogOf);
 }

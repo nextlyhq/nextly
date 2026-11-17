@@ -102,17 +102,17 @@ describe("the add rows", () => {
     render(<Host />);
     expect(addRows("colours")).toEqual(["Add colour"]);
     expect(addRows("type")).toEqual(["Add type size"]);
-    expect(addRows("spacing")).toEqual([
-      "Add spacing",
-      "Add radius",
-      "Add shadow",
-    ]);
+    expect(addRows("spacing")).toEqual(["Add spacing"]);
+    expect(addRows("radius")).toEqual(["Add radius"]);
+    expect(addRows("shadows")).toEqual(["Add shadow"]);
     expect(addRows("fonts")).toEqual(["Add font", "Add font weight"]);
     expect(addRows("other")).toEqual(["Add value"]);
     for (const id of [
       "colours",
       "type",
       "spacing",
+      "radius",
+      "shadows",
       "fonts",
       "other",
     ] as const) {
@@ -162,7 +162,7 @@ describe("the add rows", () => {
   it("adds a radius from its own row", async () => {
     render(<Host />);
     fireEvent.click(
-      within(group("spacing")).getByRole("button", { name: "Add radius" })
+      within(group("radius")).getByRole("button", { name: "Add radius" })
     );
     expect(
       await screen.findByRole("dialog", { name: "Edit New radius" })

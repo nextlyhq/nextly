@@ -109,6 +109,7 @@ import type { AdminPlacement } from "./admin-placement";
 import type {
   PluginContributions,
   PluginStoredValue,
+  PluginStoredValuesTarget,
   PluginStoredValueTarget,
 } from "./contributions";
 import { getCoreVersion } from "./core-version";
@@ -504,6 +505,18 @@ export interface InTransactionContext<T = Record<string, unknown>>
     fieldType: string,
     target: PluginStoredValueTarget
   ): Promise<PluginStoredValue>;
+  /**
+   * Read one stored field of several entries of one collection, on the
+   * write's transaction, by the rules of {@link readStored}: what it answers
+   * for each id, keyed by id, in one query for the rows and one for their
+   * working drafts. An id that names no stored entry is absent from the map.
+   *
+   * @experimental
+   */
+  readStoredOf(
+    fieldType: string,
+    target: PluginStoredValuesTarget
+  ): Promise<ReadonlyMap<string, PluginStoredValue>>;
   /**
    * The paths of the written document's fields of a type this plugin
    * contributes, as its schema stands in this transaction: at the top level
@@ -2609,6 +2622,7 @@ export function createPluginContext(
               transaction,
               transactionKey,
               readStored: read.readStored,
+              readStoredOf: read.readStoredOf,
               fieldPaths: read.fieldPaths,
             });
           } catch (error) {
@@ -2705,6 +2719,11 @@ export function createPluginContext(
         target: PluginStoredValueTarget
       ): Promise<PluginStoredValue> =>
         tracked(open(fieldType).then(reads => reads.read(fieldType, target))),
+      readStoredOf: (
+        fieldType: string,
+        target: PluginStoredValuesTarget
+      ): Promise<ReadonlyMap<string, PluginStoredValue>> =>
+        tracked(open(fieldType).then(reads => reads.readOf(fieldType, target))),
       fieldPaths: (fieldType: string): Promise<readonly string[]> =>
         tracked(
           open(fieldType).then(reads =>
