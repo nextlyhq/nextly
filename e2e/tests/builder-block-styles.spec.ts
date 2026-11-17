@@ -28,7 +28,9 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
   clickBlock,
   emptyHomepage,
+  layerRow,
   openEditorWith,
+  openLayers,
   pressSave,
   selection,
 } from "./canvas/editor-driver";
@@ -39,10 +41,7 @@ import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import { countEveryPage, writeHeaders } from "./support/usage-count";
 
-test.describe.configure({
-  mode: "serial",
-  lock: [LOCK.homepage, LOCK.siteStyle],
-});
+test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const SITE_STYLE = "/admin/api/singles/site-style";
 const HOMEPAGE = "/admin/api/singles/homepage";
@@ -166,18 +165,31 @@ async function chooseFromMenu(
 
 /** The Look tiles of the selected block, in the Style tab. */
 async function lookTiles(page: Page, id: string) {
-  await clickBlock(page, id);
-  await page.getByRole("tab", { name: "Style" }).click();
+  // Chosen from Layers, which names each block: a press on a small inline
+  // button can land on chrome drawn over it, or start a drag.
+  await openLayers(page);
+  await layerRow(page, id).locator(`[data-nx-layer="${id}"]`).click();
+  await expect.poll(() => selection(page)).toEqual([id]);
+  await page
+    .getByTestId("inspector")
+    .getByRole("tab", { name: "Style", exact: true })
+    .click();
   const tiles = page.getByRole("radiogroup", { name: "Look" });
   await expect(tiles).toBeVisible();
   return tiles;
 }
 
-/** A tile's name, its tags ("Hidden") and all. */
+/** Each tile's name, without its tags ("Default", "Hidden"). */
 const tileNames = (tiles: ReturnType<Page["getByRole"]>) =>
   tiles
     .getByRole("radio")
-    .evaluateAll(radios => radios.map(radio => radio.textContent ?? ""));
+    .evaluateAll(radios =>
+      radios.map(
+        radio =>
+          radio.querySelector(".nx-look-tile__name")?.firstChild?.textContent ??
+          ""
+      )
+    );
 
 test.describe("block styles in the Styles tab", () => {
   test.describe.configure({ timeout: 180_000 });
@@ -344,13 +356,27 @@ test.describe("block styles in the Styles tab", () => {
   }) => {
     await openEditorWith(
       page,
-      [button("bs-plain", "Plain"), button("bs-text", "Texted", [TEXT_ID])],
+      [
+        button("bs-plain", "Plain"),
+        // Apart, so one button's floating toolbar never covers the other.
+        {
+          id: "bs-gap",
+          type: "core/text",
+          version: 1,
+          props: { text: "Between the buttons" },
+        },
+        button("bs-text", "Texted", [TEXT_ID]),
+      ],
       "bs-plain"
     );
-    // The control: before it is hidden, the plain button is offered Text.
+    // The controls: before it is hidden, the plain button is offered Text,
+    // and the button wearing it shows it chosen.
     expect(await tileNames(await lookTiles(page, "bs-plain"))).toContain(
       "Text"
     );
+    await expect(
+      (await lookTiles(page, "bs-text")).getByRole("radio", { name: /^Text/ })
+    ).toHaveAttribute("aria-checked", "true");
 
     await openStyles(page);
     // A built-in style is never renamed or removed.
@@ -494,11 +520,11 @@ test.describe("block styles in the Styles tab", () => {
     await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(styleRow(page, "Keyed")).toBeFocused();
 
-    // Remove it from the menu: ArrowUp lands on the last item, Remove.
+    // Remove it from the menu: End lands on the last item, Remove.
     await tabTo(/^Keyed(,|$)/);
     await page.keyboard.press("Shift+F10");
     await expect(page.getByRole("menu")).toBeVisible();
-    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("End");
     await expect(
       page.getByRole("menuitem", { name: "Remove", exact: true })
     ).toBeFocused();
