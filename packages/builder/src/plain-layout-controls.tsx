@@ -82,6 +82,23 @@ function deviceOrder(breakpoints: BreakpointSet | undefined): string[] {
   return [BASE_BREAKPOINT, ...offeredTiers(breakpoints).map(tier => tier.id)];
 }
 
+/**
+ * Every viewport tier in the order the page's styles are written, widest
+ * first and, of two at one width, the later after: a target's own values are
+ * read through all of them, though the switcher offers one of each width.
+ */
+function compiledOrder(breakpoints: BreakpointSet | undefined): string[] {
+  const tiers = (breakpoints?.viewport ?? [])
+    .map((tier, index) => ({ tier, index }))
+    .filter(({ tier }) => tier.maxWidth !== undefined)
+    .sort(
+      (a, b) =>
+        (b.tier.maxWidth ?? 0) - (a.tier.maxWidth ?? 0) || a.index - b.index
+    )
+    .map(({ tier }) => tier.id);
+  return [BASE_BREAKPOINT, ...tiers];
+}
+
 /** The edited target's styles: the block's, or the shared style's. */
 function stylesOf(
   target: StyleTarget,
@@ -145,9 +162,9 @@ function layoutTiers(
   const inForce =
     block && cascade.applied !== undefined
       ? appliedInForce(cascade.applied)
-      : ownCascade(order, own, normal);
+      : ownCascade(compiledOrder(surroundings.breakpoints), own, normal);
   const beneath = beneathOf({
-    order,
+    order: compiledOrder(surroundings.breakpoints),
     normal,
     atState: surroundings.state !== "base",
     cascade: block ? cascade.beneath : undefined,

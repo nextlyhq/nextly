@@ -171,6 +171,14 @@ export interface LayoutWrite {
 
 const COLUMN_DIRECTIONS = new Set(["column", "column-reverse"]);
 
+/** The directions a Row or Stack reads: across or down, either way. */
+const PLAIN_DIRECTIONS: ReadonlySet<string> = new Set([
+  "row",
+  "row-reverse",
+  "column",
+  "column-reverse",
+]);
+
 /** The wraps Wrap onto new lines says: on, or off. */
 const PLAIN_WRAPS: ReadonlySet<string> = new Set(["wrap", "nowrap"]);
 const ROW_DIRECTIONS = new Set(["row", "row-reverse"]);
@@ -431,6 +439,10 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   // A column below a Row is that Row stacked; any other column is a Stack.
   const stacked = column && stackIndex !== -1 && index >= stackIndex;
   if (column && !stacked) return readStack(values, tiers.flow);
+  // A direction with no plain reading (`inherit`) is the raw rows' too.
+  if (!PLAIN_DIRECTIONS.has(values.flexDirection ?? "row")) {
+    return { mode: "custom" };
+  }
   // Wrapping in reverse has no plain word: the raw rows hold it.
   if (!PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")) return { mode: "custom" };
   const align = readAlign(values, column ? "column" : "row", tiers.flow);
@@ -595,6 +607,7 @@ export function planStackOn(
     );
   }
   if (device === null) writes.push(...narrowerColumns(tiers, current));
+  if (device !== null) writes.push(...narrowerRows(tiers, device));
   if (device !== null) {
     const reversed =
       tiers.inForce(device).flexDirection === "row-reverse" ||
@@ -606,6 +619,26 @@ export function planStackOn(
     });
   }
   return writes;
+}
+
+/**
+ * Stack on a device also stacks the narrower ones that hold a row of their
+ * own (a Reverse order turned off there), keeping each one's order: a row
+ * becomes a column, a reversed row a reversed column.
+ */
+function narrowerRows(tiers: LayoutTiers, from: string): LayoutWrite[] {
+  return tiers.order
+    .slice(tiers.order.indexOf(from) + 1)
+    .flatMap((device): LayoutWrite[] => {
+      const own = tiers.own(device).flexDirection;
+      if (own === "row") {
+        return [{ device, property: "flexDirection", value: "column" }];
+      }
+      if (own === "row-reverse") {
+        return [{ device, property: "flexDirection", value: "column-reverse" }];
+      }
+      return [];
+    });
 }
 
 /**
@@ -880,6 +913,10 @@ export function planPlain(tiers: LayoutTiers, editing: string): LayoutWrite[] {
     ...(PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")
       ? []
       : (["flexWrap"] as const)),
+    ...(display !== undefined &&
+    !PLAIN_DIRECTIONS.has(values.flexDirection ?? "row")
+      ? (["flexDirection"] as const)
+      : []),
   ];
   return [
     settled(tiers, editing, "display", display ?? null),

@@ -600,3 +600,24 @@ describe("a fitted minimum width with commas of its own", () => {
     });
   });
 });
+
+describe("Stack on with a narrower row of its own", () => {
+  it("stacks the narrower device too, keeping its order", () => {
+    const block = new Block({ display: "flex", flexDirection: "row-reverse" });
+    block.own.sm.flexDirection = "row";
+    block.apply(planStackOn(block.tiers(), "md"));
+    expect(block.own.md.flexDirection).toBe("column-reverse");
+    expect(block.own.sm.flexDirection).toBe("column");
+    expect(block.read("sm")).toMatchObject({ mode: "row", stacked: true });
+  });
+});
+
+describe("a flex direction with no plain reading", () => {
+  it("reads as Custom, and plain controls take it away", () => {
+    const block = new Block({ display: "flex", flexDirection: "inherit" });
+    expect(block.read()).toEqual({ mode: "custom" });
+    block.apply(planPlain(block.tiers(), "base"));
+    expect(block.own.base.flexDirection).toBeUndefined();
+    expect(block.read()).toMatchObject({ mode: "row" });
+  });
+});
