@@ -768,27 +768,50 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * `row` with the translated values `writeLocale` holds, read now on the
-   * pool: the Single as a hook is handed it, in the language its write is
-   * for. The row itself is not changed; as it is where the Single keeps no
+   * The translated values `writeLocale` holds for the Single `id`, each
+   * translatable field by its name, one the language has no value for as
+   * `undefined`: laid over the Single's row they make the document a hook is
+   * handed, in the language its write is for. Empty where the Single keeps no
    * translations.
+   *
+   * Given the write's transaction `tx`, read on it: the values that write
+   * left, and none a later write commits before its after-hooks run. The
+   * readiness verdict is then the one remembered, never resolved, since
+   * resolving would query and a query against a missing table aborts a
+   * PostgreSQL transaction; the read of the same Single before the write
+   * resolved it. Without `tx`, read on the pool.
    */
-  private async inLanguageWritten<R extends Record<string, unknown>>(
-    row: R,
+  private async translationIn(
+    id: unknown,
     companion: CompanionSchema | null,
-    writeLocale: string | undefined
-  ): Promise<R> {
-    if (!companion || writeLocale === undefined) return row;
-    const copy = { ...row };
+    writeLocale: string | undefined,
+    tx?: { getDrizzle<T = unknown>(): T }
+  ): Promise<Record<string, unknown>> {
+    if (!companion || writeLocale === undefined) return {};
+    const row: Record<string, unknown> = { id };
     await populateCompanionFields({
-      db: this.adapter.getDrizzle(),
+      db: (tx ?? this.adapter).getDrizzle<
+        Parameters<typeof populateCompanionFields>[0]["db"]
+      >(),
       companionTable: companion.table,
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness:
+        tx === undefined
+          ? await resolveCompanionSchemaReadiness(this.adapter, companion)
+          : cachedCompanionReadiness(
+              this.adapter,
+              companion.companionTableName
+            ),
       localizedFields: companion.localizedFields,
-      rows: [copy],
+      rows: [row],
       localeChain: [writeLocale],
     });
-    return copy;
+    // A field the read filled is set on `row`, its value `undefined` where the
+    // language holds none; nothing is set where there was nothing to read.
+    const values: Record<string, unknown> = {};
+    for (const field of companion.localizedFields) {
+      if (field.name in row) values[field.name] = row[field.name];
+    }
+    return values;
   }
 
   private translationsOf(
@@ -2857,11 +2880,10 @@ export class SingleMutationService extends BaseService {
       // by the same functions, as a publish of every language runs.
       // The Single as its hooks are handed it: in the language this write is
       // for, its translated values included, rather than its own row alone.
-      const hookOriginal = await this.inLanguageWritten(
-        existingDeserialized,
-        companion,
-        writeLocale
-      );
+      const hookOriginal = {
+        ...existingDeserialized,
+        ...(await this.translationIn(existingDoc.id, companion, writeLocale)),
+      };
       const beforeCall: SingleBeforeHookCall = {
         slug,
         id: existingDoc.id,
@@ -3447,6 +3469,13 @@ export class SingleMutationService extends BaseService {
           )
         : false;
       let updatedRows: SingleDocument[];
+      // The translated values in the language written as this save left
+      // them, read at the end of its transaction, on it, by the attempt that
+      // commits: what the after-hooks are handed over the saved Single. Read
+      // after the commit instead, a failed read would fail a save already
+      // durable, and a later save committed in between would be handed to
+      // this one's hooks as its own.
+      let writtenTranslation: Record<string, unknown> = {};
       // Verify every localized field group in this payload can actually be written
       // BEFORE the transaction opens. Inside it the probes would borrow a second
       // connection while the transaction holds one, which on a small pool means
@@ -6076,6 +6105,20 @@ export class SingleMutationService extends BaseService {
             user: options.user,
             context: sharedContext,
           });
+          // After the in-transaction phase, whose writes go through this `tx`
+          // too, so the after-hooks see what the transaction commits; read
+          // only where there are after-hooks to hand it to.
+          writtenTranslation = this.hookRegistry.hasHooks(
+            "afterUpdate",
+            hookCollection
+          )
+            ? await this.translationIn(
+                existingDoc.id,
+                companion,
+                writeLocale,
+                tx
+              )
+            : {};
 
           // What the gate's verdict started is finished on this transaction, now the save is
           // written and before it commits; a gate that finds what it judged has changed throws,
@@ -6242,12 +6285,9 @@ export class SingleMutationService extends BaseService {
             this.hookRegistry,
             {
               slug,
-              // As it now stands in the language written.
-              data: await this.inLanguageWritten(
-                committed,
-                companion,
-                writeLocale
-              ),
+              // As this save left it in the language written, its
+              // translated values read in the save's transaction.
+              data: { ...committed, ...writtenTranslation },
               originalData: hookOriginal,
               user: options.user ?? undefined,
               context: sharedContext,

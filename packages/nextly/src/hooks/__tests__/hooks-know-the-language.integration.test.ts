@@ -676,6 +676,72 @@ describe.each(getConfiguredTestDialects())(
       90_000
     );
 
+    // A held after-hook is handed the document as its own write left it, its
+    // translated values read in that write's transaction: a later update of
+    // the same language, committed before the hook runs, is not what it
+    // sees. Two updates in one enclosing transaction hold both writes'
+    // after-hooks until it commits, after the second; SQLite only, as above.
+    it.skipIf(dialect !== "sqlite")(
+      "hands an update's held after-hooks the document its own write left",
+      async () => {
+        const t = await boot(dialect);
+        const id = await publishedInBoth(t);
+        await t.adapter.transaction(async () => {
+          for (const title of ["Puerto 2", "Puerto 3"]) {
+            const updated = await t.nextly.update({
+              collection: POSTS,
+              id,
+              locale: "es",
+              data: { title, _overwrite: true },
+            });
+            expect(updated.item).toBeDefined();
+          }
+        });
+        expect(toldBy("posts:afterChange").map(e => e.data)).toEqual([
+          { title: "Puerto 2", body: "Cuerpo" },
+          { title: "Puerto 3", body: "Cuerpo" },
+        ]);
+      },
+      90_000
+    );
+
+    // The same of a Single's update.
+    it.skipIf(dialect !== "sqlite")(
+      "hands a Single's held after-hooks the document its own write left",
+      async () => {
+        const t = await boot(dialect);
+        const singles = t.getService("singleEntryService") as unknown as {
+          update(
+            slug: string,
+            data: Record<string, unknown>,
+            options: Record<string, unknown>
+          ): Promise<{ success: boolean }>;
+        };
+        const saved = await singles.update(
+          SITE,
+          { title: "Sitio", body: "Cuerpo", _overwrite: true },
+          { locale: "es", overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        told.length = 0;
+        await t.adapter.transaction(async () => {
+          for (const title of ["Sitio 2", "Sitio 3"]) {
+            const updated = await singles.update(
+              SITE,
+              { title, _overwrite: true },
+              { locale: "es", overrideAccess: true }
+            );
+            expect(updated.success, JSON.stringify(updated)).toBe(true);
+          }
+        });
+        expect(toldBy("site:afterChange").map(e => e.data)).toEqual([
+          { title: "Sitio 2", body: "Cuerpo" },
+          { title: "Sitio 3", body: "Cuerpo" },
+        ]);
+      },
+      90_000
+    );
+
     it("tells an update's hooks in a caller's transaction whether it moves the shared part", async () => {
       const t = await boot(dialect);
       const id = await publishedInBoth(t);

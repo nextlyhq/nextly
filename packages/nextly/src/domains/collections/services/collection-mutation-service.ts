@@ -16237,32 +16237,55 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * `row` with the translated values `locale` holds (the default language
-   * where none is named), read now on the pool: the document a hook is
-   * handed, in the language its write is for. The row itself is not
-   * changed. As it is where the site keeps no languages or the collection no
-   * translations.
+   * The translated values `locale` holds for entry `id` (the default language
+   * where none is named), each translatable field by its name, one the
+   * language has no value for as `undefined`: laid over the entry's row they
+   * make the document a hook is handed, in the language its write is for.
+   * Empty where the site keeps no languages or the collection no translations.
+   *
+   * Given the write's transaction `tx`, read on it: the values that write
+   * left, and none a later write commits before its after-hooks run. The
+   * readiness verdict is then the one remembered, never resolved, since
+   * resolving would query and a query against a missing table aborts a
+   * PostgreSQL transaction; the read of the same entry before the write
+   * resolved it. Without `tx`, read on the pool.
    */
-  private async inLanguageWritten<R extends Record<string, unknown>>(
+  private async translationIn(
     collectionName: string,
-    row: R,
-    locale: string | undefined
-  ): Promise<R> {
+    id: unknown,
+    locale: string | undefined,
+    tx?: { getDrizzle<T = unknown>(): T }
+  ): Promise<Record<string, unknown>> {
     const language = locale ?? this.localization?.defaultLocale;
-    if (language === undefined) return row;
-    const companion =
-      await this.fileManager.loadCompanionSchema(collectionName);
-    if (!companion) return row;
-    const copy = { ...row };
+    if (language === undefined) return {};
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx?.getDrizzle()
+    );
+    if (!companion) return {};
+    const executor: unknown = tx === undefined ? this.db : tx.getDrizzle();
+    const row: Record<string, unknown> = { id };
     await populateCompanionFields({
-      db: this.db as never,
+      db: executor as Parameters<typeof populateCompanionFields>[0]["db"],
       companionTable: companion.table,
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness:
+        tx === undefined
+          ? await resolveCompanionSchemaReadiness(this.adapter, companion)
+          : cachedCompanionReadiness(
+              this.adapter,
+              companion.companionTableName
+            ),
       localizedFields: companion.localizedFields,
-      rows: [copy],
+      rows: [row],
       localeChain: [language],
     });
-    return copy;
+    // A field the read filled is set on `row`, its value `undefined` where the
+    // language holds none; nothing is set where there was nothing to read.
+    const values: Record<string, unknown> = {};
+    for (const field of companion.localizedFields) {
+      if (field.name in row) values[field.name] = row[field.name];
+    }
+    return values;
   }
 
   /** Whether an update of `body` in `locale` moves the collection's shared part. */
@@ -16719,11 +16742,14 @@ export class CollectionMutationService extends BaseService {
       // hooks before validation, which can modify the incoming data.
       // The entry as its hooks are handed it: in the language this write is
       // for, its translated values included, rather than the main row alone.
-      const hookOriginal = await this.inLanguageWritten(
-        params.collectionName,
-        existingEntry as Record<string, unknown>,
-        params.locale
-      );
+      const hookOriginal: Record<string, unknown> = {
+        ...(existingEntry as Record<string, unknown>),
+        ...(await this.translationIn(
+          params.collectionName,
+          (existingEntry as { id?: unknown }).id,
+          params.locale
+        )),
+      };
       let finalData = await this.beforeUpdateHooks({
         collectionName: params.collectionName,
         entryId: params.entryId,
@@ -17379,6 +17405,13 @@ export class CollectionMutationService extends BaseService {
       // instead, and the public revalidation and reaction event are skipped
       // because the live document a visitor sees did not change.
       let workingDraftDocument: Record<string, unknown> | undefined;
+      // The translated values in the language written as this write left
+      // them, read at the end of its transaction, on it, by the attempt that
+      // commits: what the after-hooks are handed over the committed row. Read
+      // after the commit instead, a failed read would fail an update already
+      // durable, and a later write committed in between would be handed to
+      // this one's hooks as its own. Empty for a held draft, handed as it is.
+      let writtenTranslation: Record<string, unknown> = {};
       // The prior working draft (shaped like a read), set only when a later
       // status-less save accumulates onto an existing draft, so the afterUpdate
       // hooks diff against it rather than the unchanged published row.
@@ -19051,6 +19084,16 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
+        // After the in-transaction phase, whose writes go through this `tx`
+        // too, so the after-hooks see what the transaction commits.
+        writtenTranslation = workingDraftDocument
+          ? {}
+          : await this.translationIn(
+              params.collectionName,
+              params.entryId,
+              params.locale,
+              tx
+            );
         // What the gate's verdict started is finished on this transaction, now the save is
         // written and before it commits; a gate that finds what it judged has changed throws, and
         // the save rolls back.
@@ -19161,20 +19204,20 @@ export class CollectionMutationService extends BaseService {
           );
         }
 
+        // The entry as this write left it in the language written, its
+        // translated values (read in the write's transaction) included; a
+        // held draft as it is. One document for the code-registered and the
+        // stored after-hooks alike.
+        const afterData = workingDraftDocument
+          ? committed
+          : { ...committed, ...writtenTranslation };
+
         // Execute afterUpdate hooks (code-registered)
         // Hooks run after database update completes (for side effects)
         const afterContext = this.hookService.buildHookContext({
           collection: params.collectionName,
           operation: "update" as const,
-          // The entry as it now stands in the language written, its
-          // translated values included; a held draft as it is.
-          data: workingDraftDocument
-            ? committed
-            : await this.inLanguageWritten(
-                params.collectionName,
-                committed,
-                params.locale
-              ),
+          data: afterData,
           // On a repeat status-less save `responseSource` is the accumulated draft,
           // so diff it against the prior draft rather than the unchanged published
           // row; otherwise a hook reports an earlier save's fields as changing again.
@@ -19198,7 +19241,7 @@ export class CollectionMutationService extends BaseService {
           this.hookService.buildPrebuiltHookContext({
             collection: params.collectionName,
             operation: "update",
-            data: committed,
+            data: afterData,
             queryDatabase: this.queryDatabaseFn,
             user: params.user,
             sharedContext,
