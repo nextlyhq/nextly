@@ -124,6 +124,7 @@ import { publishCallerOf } from "../../collections/services/publish-gate";
 import {
   judgeStatusSave,
   refuseStatusSaveEarly,
+  sharedDraftPendingOn,
   type StatusSave,
   WITHOUT_REVIEW_KEY,
   withoutReviewOfBody,
@@ -205,6 +206,7 @@ import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { NO_PART, partOfRewrittenField } from "../../versions/changed-parts";
+import type { VersionsDbApi } from "../../versions/db-api";
 import {
   bumpDocumentRevision,
   documentVersionOn,
@@ -786,6 +788,8 @@ export class SingleMutationService extends BaseService {
       locale: string | undefined;
       everyLanguage: boolean;
       withoutReview: { reason: string } | undefined;
+      /** Whether a pending shared draft goes live with the language this save publishes. */
+      sharedDraftPending: boolean;
       options: UpdateSingleOptions;
     }
   ): StatusSave | null {
@@ -809,7 +813,27 @@ export class SingleMutationService extends BaseService {
       ...(save.withoutReview === undefined
         ? {}
         : { withoutReview: save.withoutReview }),
+      sharedDraftPending: save.sharedDraftPending,
     };
+  }
+
+  /**
+   * Whether a save that publishes this Single also puts a pending shared draft live: only where
+   * its languages keep a status of their own and its parts are kept apart, read on `reader`.
+   */
+  private async publishedSaveCarriesSharedDraft(
+    reader: VersionsDbApi,
+    singleMeta: DynamicSingleRecord,
+    entryId: string,
+    status: unknown
+  ): Promise<boolean> {
+    if (status !== "published" || !draftsKeptByPart()) return false;
+    if (this.translationsOf(singleMeta)?.hasStatus !== true) return false;
+    return sharedDraftPendingOn(reader, {
+      scopeKind: "single",
+      scopeSlug: singleMeta.slug,
+      entryId,
+    });
   }
 
   /**
@@ -2594,6 +2618,16 @@ export class SingleMutationService extends BaseService {
         companion && this.localization
           ? resolveRequestedLocale(this.localization, options.locale)
           : undefined;
+      // The translations table this save reads and writes, named as soon as it is known: a table
+      // dropped after its `ready` verdict was remembered is then answered as not ready wherever the
+      // save first meets it, the publish gate's read of what is live before any hook included.
+      // `companion` is null when the Single isn't localized, so no table is named for it.
+      if (companion) {
+        translations = {
+          table: companion.companionTableName,
+          locale: writeLocale,
+        };
+      }
       // Probe the companion `_locales` table's existence on the POOLED adapter
       // BEFORE the write transaction opens. Two reasons it must be here and not
       // inside the transaction: with a single-connection pool the transaction
@@ -2728,6 +2762,12 @@ export class SingleMutationService extends BaseService {
         locale: options.locale,
         everyLanguage: sweepAllLocales,
         withoutReview,
+        sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+          this.adapter,
+          singleMeta,
+          existingDoc.id,
+          data.status
+        ),
         options,
       });
       if (earlySave) {
@@ -2868,16 +2908,6 @@ export class SingleMutationService extends BaseService {
         user: options.user,
       });
 
-      // i18n: build the companion schema + write-locale context up front so validation is
-      // language-aware and the split/upsert below reuse it. `companion` is null when the single
-      // isn't localized (unchanged path) — gate on THIS single's `localized` flag so a
-      // non-localized single in a localized app doesn't route to a companion never created.
-      if (companion) {
-        translations = {
-          table: companion.companionTableName,
-          locale: writeLocale,
-        };
-      }
       // The locale this write's content belongs to. `writeLocale` covers the
       // Single's own translations; when it has none, embedded components may
       // still be localized. Those were written at the requested locale, or at
@@ -3641,6 +3671,12 @@ export class SingleMutationService extends BaseService {
             locale: options.locale,
             everyLanguage: sweepAllLocales,
             withoutReview,
+            sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+              tx,
+              singleMeta,
+              existingDoc.id,
+              finalStatus
+            ),
             options,
           });
           const settleGate = lockedSave

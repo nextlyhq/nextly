@@ -84,6 +84,7 @@ import {
   type PartsState,
   publishValueIssues,
 } from "../../collections/services/publish-parts";
+import { refusePublishEarly } from "../../collections/services/save-door-gate";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
   partsMovesRecord,
@@ -145,8 +146,8 @@ import {
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
-import { draftSlotParts } from "../../versions/part-drafts";
 import {
+  draftSlotParts,
   draftsKeptByPart,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
@@ -557,6 +558,39 @@ export class SinglePublishAllService extends BaseService {
         askedLanguages
       );
       if (denied) return denied;
+
+      // The publish gate's early answer, before any hook runs: a publish the gate holds back runs
+      // none, whichever door it came through. A publish of chosen parts (`partsMove`) asked it
+      // already with the rest of its request. The verdict under the row lock follows either way.
+      if (options.partsMove === undefined) {
+        const statuses =
+          plan.companion && plan.companionPublishable
+            ? await this.readPriorCompanionStatuses(
+                this.adapter,
+                plan.companion,
+                plan.existingDoc.id,
+                plan.slug
+              )
+            : new Map<string, string | null>();
+        await refusePublishEarly({
+          scope: { kind: "single", slug: plan.slug },
+          entryId: plan.existingDoc.id,
+          direction: "publish",
+          parts: this.gatePartsOf(plan),
+          live: {
+            languages: [...statuses]
+              .filter(([, status]) => status === "published")
+              .map(([locale]) => locale),
+            shared:
+              (plan.existingDoc as { status?: unknown }).status === "published",
+          },
+          caller: publishCallerOf(options),
+          ...(options.actor === undefined ? {} : { actor: options.actor }),
+          ...(options.withoutReview === undefined
+            ? {}
+            : { withoutReview: options.withoutReview }),
+        });
+      }
 
       // The hooks a status change of one language runs before it writes, run
       // once for the publish of every language: after the caller is known to
@@ -1293,6 +1327,22 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * The parts a publish moves, as the publish gate is told them early and under the lock: every
+   * language the site has where it moves them all, the chosen ones otherwise, and the shared part
+   * where it moves.
+   */
+  private gatePartsOf(plan: PublishPlan): PublishPart[] {
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
+    return [
+      ...(plan.parts === undefined ? configured : [...plan.parts.locales]).map(
+        locale => ({ kind: "language" as const, locale })
+      ),
+      ...(movesShared(plan.parts) ? [{ kind: "shared" as const }] : []),
+    ];
+  }
+
+  /**
    * The publish gate's verdict on a publish, asked on `tx` after the Single's row is locked, with
    * the parts live before the move as the lock read them; a collection entry's publish asks it
    * the same way. A part it holds back refuses the whole move, every refusal named, kept in
@@ -1308,21 +1358,11 @@ export class SinglePublishAllService extends BaseService {
       refused: { denied?: SingleResult<PublishAllSingleResult> };
     }
   ): Promise<PublishGateVerdict> {
-    const configured =
-      this.localization?.locales.map(locale => locale.code) ?? [];
-    // The parts the request moves, as its early question named them: every language the site
-    // has where it chose them all, and the shared part where it moves.
-    const parts: PublishPart[] = [
-      ...(plan.parts === undefined ? configured : [...plan.parts.locales]).map(
-        locale => ({ kind: "language" as const, locale })
-      ),
-      ...(movesShared(plan.parts) ? [{ kind: "shared" as const }] : []),
-    ];
     const verdict = await publishGate().judge(tx, {
       scope: { kind: "single", slug: plan.slug },
       entryId: plan.existingDoc.id,
       direction: "publish",
-      parts,
+      parts: this.gatePartsOf(plan),
       live: {
         languages: [...under.priorCompanionStatuses]
           .filter(([, status]) => status === "published")

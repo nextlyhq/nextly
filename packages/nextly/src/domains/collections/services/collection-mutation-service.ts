@@ -315,6 +315,7 @@ import {
   partsTogether,
   type ChangedParts,
 } from "../../versions/changed-parts";
+import type { VersionsDbApi } from "../../versions/db-api";
 import {
   bumpDocumentRevision,
   changerColumns,
@@ -532,7 +533,9 @@ import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
 import {
   judgeStatusSave,
+  refusePublishEarly,
   refuseStatusSaveEarly,
+  sharedDraftPendingOn,
   type StatusSave,
   WITHOUT_REVIEW_KEY,
   withoutReviewOfBody,
@@ -8701,6 +8704,8 @@ export class CollectionMutationService extends BaseService {
                 locale: params.locale,
                 everyLanguage: false,
                 withoutReview,
+                // A new entry has no drafts.
+                sharedDraftPending: false,
               },
               collection
             )
@@ -9207,6 +9212,8 @@ export class CollectionMutationService extends BaseService {
                   locale: params.locale,
                   everyLanguage: false,
                   withoutReview,
+                  // A new entry has no drafts.
+                  sharedDraftPending: false,
                 },
                 collection
               )
@@ -10887,6 +10894,41 @@ export class CollectionMutationService extends BaseService {
       // make it, and before anything is written, so a plugin's guard refuses
       // this as it refuses that. A refusal thrown here is answered by the
       // catch below with the hook's own status and message.
+      // What the publish gate is told of this move: its direction, and the parts it puts live or
+      // takes down. Languages only where the collection keeps a status per language: an
+      // untranslated one moves its shared part alone, whatever languages the site has.
+      const gateDirection =
+        direction.nextStatus === "published" ? "publish" : "unpublish";
+      const gateParts: PublishPart[] = [
+        ...(companionPublishable ? (this.localization?.locales ?? []) : [])
+          .map(language => language.code)
+          .filter(locale => movesLanguage(params.parts, locale))
+          .map(locale => ({ kind: "language" as const, locale })),
+        ...(movesShared(params.parts) ? [{ kind: "shared" as const }] : []),
+      ];
+      // The gate's early answer, asked before the move runs any hook: a publish the gate holds
+      // back runs none, whichever door it came through. A move made for a publish of chosen parts
+      // was asked already, with the rest of that request. Its verdict under the row lock follows.
+      if (gateDirection === "publish" && params.gateAskedEarly !== true) {
+        await refusePublishEarly({
+          scope: { kind: "collection", slug: params.collectionName },
+          entryId: params.entryId,
+          direction: gateDirection,
+          parts: gateParts,
+          live: await this.livePartsOn(this.adapter, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            mainStatus: (existingEntry as { status?: unknown }).status,
+            companion: companionPublishable ? companion : null,
+          }),
+          caller: publishCallerOf(params),
+          ...(params.actor === undefined ? {} : { actor: params.actor }),
+          ...(params.withoutReview === undefined
+            ? {}
+            : { withoutReview: params.withoutReview }),
+        });
+      }
+
       const hooks = await this.lifecycleBeforeHooks(direction, {
         params,
         existingEntry: existingEntry as Record<string, unknown>,
@@ -11218,17 +11260,6 @@ export class CollectionMutationService extends BaseService {
         // early answer came before the transaction, and this is the one the move keeps to. It is
         // told the parts this move puts live or takes down, and what was live as this lock reads
         // it. A part held back refuses the whole move, before anything is written.
-        const gateDirection =
-          direction.nextStatus === "published" ? "publish" : "unpublish";
-        // Languages only where the collection keeps a status per language: an untranslated one
-        // moves its shared part alone, whatever languages the site has.
-        const gateParts: PublishPart[] = [
-          ...(companionPublishable ? (this.localization?.locales ?? []) : [])
-            .map(language => language.code)
-            .filter(locale => movesLanguage(params.parts, locale))
-            .map(locale => ({ kind: "language" as const, locale })),
-          ...(movesShared(params.parts) ? [{ kind: "shared" as const }] : []),
-        ];
         // Unpublishing is never gated: only a publish asks the gate, and only it is settled.
         const gateVerdict =
           gateDirection !== "publish"
@@ -12554,6 +12585,8 @@ export class CollectionMutationService extends BaseService {
       locale: string | undefined;
       everyLanguage: boolean;
       withoutReview: { reason: string } | undefined;
+      /** Whether a pending shared draft goes live with the save, as its caller read it. */
+      sharedDraftPending: boolean;
     },
     /** The collection, as its caller resolved it before any row lock: never read here. */
     collection: unknown
@@ -12575,7 +12608,29 @@ export class CollectionMutationService extends BaseService {
       ...(save.withoutReview === undefined
         ? {}
         : { withoutReview: save.withoutReview }),
+      sharedDraftPending: save.sharedDraftPending,
     };
+  }
+
+  /**
+   * Whether a save that publishes this entry also puts a pending shared draft live: only where
+   * the entry is translated and keeps its parts apart, read on `reader`.
+   */
+  private async publishedSaveCarriesSharedDraft(
+    reader: VersionsDbApi,
+    collectionName: string,
+    entryId: string,
+    status: unknown,
+    collection: unknown
+  ): Promise<boolean> {
+    if (status !== "published" || !draftsKeptByPart()) return false;
+    if ((collection as { localized?: boolean }).localized !== true)
+      return false;
+    return sharedDraftPendingOn(reader, {
+      scopeKind: "collection",
+      scopeSlug: collectionName,
+      entryId,
+    });
   }
 
   /**
@@ -16378,6 +16433,13 @@ export class CollectionMutationService extends BaseService {
           locale: params.locale,
           everyLanguage: sweepAllLocales,
           withoutReview,
+          sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+            this.adapter,
+            params.collectionName,
+            params.entryId,
+            body.status,
+            gateCollection
+          ),
         },
         gateCollection
       );
@@ -17199,6 +17261,13 @@ export class CollectionMutationService extends BaseService {
             locale: params.locale,
             everyLanguage: sweepAllLocales,
             withoutReview,
+            sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+              tx,
+              params.collectionName,
+              params.entryId,
+              intendedStatus,
+              gateCollection
+            ),
           },
           gateCollection
         );
@@ -22564,6 +22633,8 @@ export class CollectionMutationService extends BaseService {
           locale: undefined,
           everyLanguage: false,
           withoutReview,
+          // A write on a handed transaction promotes no pending draft.
+          sharedDraftPending: false,
         },
         collection
       );

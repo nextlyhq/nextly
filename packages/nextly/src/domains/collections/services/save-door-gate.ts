@@ -19,9 +19,16 @@ import { z } from "zod";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ValidationPublicData } from "../../../errors/public-data";
+import type { VersionsDbApi } from "../../versions/db-api";
+import { SHARED_DRAFT_SLOT } from "../../versions/part-drafts";
+import {
+  type VersionRef,
+  VersionsRepository,
+} from "../../versions/versions-repository";
 
 import type {
   PublishCaller,
+  PublishGateQuestion,
   PublishGateRefusal,
   PublishGateVerdict,
   PublishPart,
@@ -47,6 +54,11 @@ export interface StatusSave {
   caller: PublishCaller;
   actor?: RequestActor;
   withoutReview?: { reason: string };
+  /**
+   * Whether the document keeps its parts apart and holds a pending shared draft: a save that
+   * publishes one language then puts the shared draft live too, so the shared part moves with it.
+   */
+  sharedDraftPending?: boolean;
 }
 
 /** The parts a status save moves, and which way. */
@@ -65,7 +77,8 @@ export function partsOfStatusSave(save: StatusSave): {
   const movesShared =
     save.everyLanguage ||
     save.locale === undefined ||
-    save.locale === save.defaultLocale;
+    save.locale === save.defaultLocale ||
+    (direction === "publish" && save.sharedDraftPending === true);
   return {
     direction,
     parts: [
@@ -84,6 +97,34 @@ function refusalOf(refusals: readonly PublishGateRefusal[]): NextlyError {
         : { path: part.locale, code, locale: part.locale, message }
   );
   return NextlyError.validation({ errors });
+}
+
+/**
+ * The gate's early answer to a move, asked before the move runs any hook or writes anything:
+ * throws the refusal where a part is held back. An unpublish is never gated.
+ */
+export async function refusePublishEarly(
+  question: PublishGateQuestion
+): Promise<void> {
+  if (question.direction !== "publish") return;
+  const refusals = await publishGate().refusals(question);
+  if (refusals.length > 0) throw refusalOf(refusals);
+}
+
+/**
+ * Whether a document holds a pending shared draft, as `reader` reads it: on the pool for an early
+ * answer, on a write's transaction under its row lock for the verdict.
+ */
+export async function sharedDraftPendingOn(
+  reader: VersionsDbApi,
+  ref: VersionRef
+): Promise<boolean> {
+  return (
+    (await new VersionsRepository(reader).findWorkingDraft(
+      ref,
+      SHARED_DRAFT_SLOT
+    )) !== undefined
+  );
 }
 
 /** What the gate is asked of a status save, given what was live as it was read. */
@@ -114,11 +155,7 @@ export async function refuseStatusSaveEarly(
   save: StatusSave,
   live: { languages: readonly string[]; shared: boolean }
 ): Promise<void> {
-  const question = questionOf(save, live);
-  // Unpublishing is never gated.
-  if (question.direction !== "publish") return;
-  const refusals = await publishGate().refusals(question);
-  if (refusals.length > 0) throw refusalOf(refusals);
+  await refusePublishEarly(questionOf(save, live));
 }
 
 /**

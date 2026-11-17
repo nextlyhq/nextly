@@ -185,6 +185,8 @@ type EveryLanguageLifecycleParams = {
   actor?: RequestActor;
   /** A publish made without review, with the caller's reason, told to the publish gate. */
   withoutReview?: { reason: string };
+  /** Set by the publish of chosen parts, which asked the publish gate's early answer already. */
+  gateAskedEarly?: boolean;
 };
 
 /**
@@ -1190,7 +1192,13 @@ export class CollectionEntryService extends BaseService {
         : { withoutReview: params.withoutReview }),
       // The transition of every language, told which parts it moves.
       move: (direction, parts, describe) => {
-        const scoped = parts === undefined ? params : { ...params, parts };
+        // The gate's early answer was asked above, with the rest of the request: the move asks
+        // only its verdict under the lock.
+        const scoped = {
+          ...params,
+          ...(parts === undefined ? {} : { parts }),
+          gateAskedEarly: true,
+        };
         if (describe) return this.previewPublishAllLocales(scoped);
         // The value rules were judged above, with the rest of the request.
         return direction === "publish"

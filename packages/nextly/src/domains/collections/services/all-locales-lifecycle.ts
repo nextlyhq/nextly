@@ -134,6 +134,12 @@ export interface AllLocalesLifecycleParams {
    * the publish gate, never stored by the move. A release never asks for it.
    */
   withoutReview?: { reason: string };
+  /**
+   * Set by the publish of chosen parts, which asked the publish gate's early answer with the rest
+   * of its request: the move then asks only its verdict under the lock. Every other door leaves it
+   * unset, and the move asks the early answer itself, before any hook runs.
+   */
+  gateAskedEarly?: boolean;
 }
 
 /**
