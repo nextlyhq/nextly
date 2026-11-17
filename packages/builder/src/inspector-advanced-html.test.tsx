@@ -267,6 +267,18 @@ describe("CSS classes", () => {
     expect(within(html).queryByRole("alert")).toBeNull();
   });
 
+  it("drops a refused save's message once the field is put back as stored", () => {
+    const html = advancedOf("hero");
+    refuseWrites = 1;
+    typeClasses(html, "promo");
+    expect(within(html).getByRole("alert")).toBeTruthy();
+    // Cleared back to what the block holds: nothing is pending, so nothing
+    // failed.
+    typeClasses(html, "");
+    expect(within(html).queryByRole("alert")).toBeNull();
+    expect(stored("hero")).not.toHaveProperty("cssClasses");
+  });
+
   it("shows what an undo puts back", async () => {
     const html = advancedOf("hero");
     typeClasses(html, "promo");

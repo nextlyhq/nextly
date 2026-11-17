@@ -633,7 +633,11 @@ function CssClassesField({
   commit.current = (): void => {
     const text = latest.current;
     setFinished(true);
-    if (text === loaded.current) return;
+    // Back to what was saved: nothing is pending, so no save failed either.
+    if (text === loaded.current) {
+      setRefusal(undefined);
+      return;
+    }
     const next = checkCssClassNames(text).valid.join(" ");
     if (next === (stored ?? "")) {
       loaded.current = text;
