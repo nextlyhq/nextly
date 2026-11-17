@@ -92,16 +92,19 @@ export function useFirstSeen(
 /**
  * The scale that fits the composed width into the box, kept current as the
  * box resizes. Zero width means "not laid out", never "zero wide", so it
- * scales by one there (see the module's documentation).
+ * scales by one there (see the module's documentation). Not `active`, it
+ * measures nothing and watches nothing: a box with no drawing has nothing to
+ * scale.
  */
 export function useWidthScale(
   frame: RefObject<HTMLElement | null>,
-  renderWidth: number
+  renderWidth: number,
+  active = true
 ): number {
   const [scale, setScale] = useState(1);
   useLayoutEffect(() => {
     const element = frame.current;
-    if (!element) return;
+    if (!active || !element) return;
     const measure = (): void => {
       const width = element.clientWidth;
       setScale(width > 0 ? width / renderWidth : 1);
@@ -112,7 +115,7 @@ export function useWidthScale(
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [frame, renderWidth]);
+  }, [frame, renderWidth, active]);
   return scale;
 }
 

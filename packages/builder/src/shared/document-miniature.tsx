@@ -158,6 +158,48 @@ function stateOf(
   return failed ? "failed" : "drawn";
 }
 
+/**
+ * The documents as first handed in, for as long as the host hands the same
+ * ones: a host building `[document]` inline hands a new list on every render
+ * of its own (each keystroke in a panel's search), and the drawing below is
+ * memoised on the list.
+ */
+function useSameDocuments(
+  documents: readonly BlockDocument[]
+): readonly BlockDocument[] {
+  const [held, setHeld] = React.useState(documents);
+  if (held === documents) return held;
+  const same =
+    held.length === documents.length &&
+    held.every((document, index) => document === documents[index]);
+  if (same) return held;
+  // Derived state, set while rendering as React allows for it: the next
+  // render holds the new list.
+  setHeld(documents);
+  return documents;
+}
+
+/**
+ * The device's colour scheme, for the ground of a picture with no previewed
+ * mode: the canvas's frame follows the device then, and so does the site's
+ * dark sheet, so a picture grounded in the admin's own scheme would put a
+ * light page on a dark ground. Undefined until read after mount (a server
+ * render has no device), or while a mode is previewed, when nothing listens.
+ */
+function useDeviceScheme(listen: boolean): TokenMode | undefined {
+  const [scheme, setScheme] = React.useState<TokenMode | undefined>(undefined);
+  React.useEffect(() => {
+    // Asked by callability: jsdom has the property without the function.
+    if (!listen || typeof globalThis.matchMedia !== "function") return;
+    const query = globalThis.matchMedia("(prefers-color-scheme: dark)");
+    const read = (): void => setScheme(query.matches ? "dark" : "light");
+    read();
+    query.addEventListener("change", read);
+    return () => query.removeEventListener("change", read);
+  }, [listen]);
+  return listen ? scheme : undefined;
+}
+
 /** The documents, one above the other, held apart from the scale. */
 function useDrawnDocuments(
   documents: readonly BlockDocument[],
@@ -204,10 +246,26 @@ export function DocumentMiniature({
 }: DocumentMiniatureProps): React.JSX.Element {
   const frame = React.useRef<HTMLSpanElement>(null);
   const scaled = React.useRef<HTMLDivElement>(null);
-  const [broken, setBroken] = React.useState(false);
-  const broke = React.useCallback(() => setBroken(true), []);
-  const state = stateOf(documents, failed || broken);
-  const first = documents[0];
+  const drawnDocuments = useSameDocuments(documents);
+  /*
+   * A placeholder found in the drawing, for the inputs it was drawn with: new
+   * documents or a new rendering (a component's definition read after the
+   * panel opened) are drawn again rather than kept as the icon.
+   */
+  const [brokenFor, setBrokenFor] = React.useState<{
+    documents: readonly BlockDocument[];
+    render: MiniatureRender;
+  } | null>(null);
+  const broke = React.useCallback(
+    () => setBrokenFor({ documents: drawnDocuments, render }),
+    [drawnDocuments, render]
+  );
+  const broken =
+    brokenFor !== null &&
+    brokenFor.documents === drawnDocuments &&
+    brokenFor.render === render;
+  const state = stateOf(drawnDocuments, failed || broken);
+  const first = drawnDocuments[0];
   const seen = useFirstSeen(
     frame,
     first !== undefined && session.seen.has(first)
@@ -216,9 +274,13 @@ export function DocumentMiniature({
     if (seen && first !== undefined) session.seen.add(first);
   }, [seen, first, session]);
   const drawn = seen && state === "drawn";
-  const scale = useWidthScale(frame, renderWidth);
+  // Measured only once there is a drawing to scale, so a list of tiles not
+  // yet on screen costs no observer and no second render each.
+  const scale = useWidthScale(frame, renderWidth, drawn);
   const composed = useDrawnLayout(scaled, drawn, broke);
-  const pages = useDrawnDocuments(documents, render, session);
+  const pages = useDrawnDocuments(drawnDocuments, render, session);
+  const device = useDeviceScheme(mode === undefined);
+  const scheme = mode ?? device;
   const boxHeight = frame.current?.clientHeight ?? 0;
   // A document shorter than the box sits in its middle; a taller one is
   // shown from its top.
@@ -230,9 +292,9 @@ export function DocumentMiniature({
       className="nx-picture"
       data-state={state}
       data-drawn={drawn ? "true" : undefined}
-      // The previewed scheme for the whole box, so the ground around a short
-      // document is the page's own and not the admin's.
-      style={mode === undefined ? undefined : { colorScheme: mode }}
+      // The previewed scheme for the whole box, else the device's, so the
+      // ground around a short document is the page's own and not the admin's.
+      style={scheme === undefined ? undefined : { colorScheme: scheme }}
       aria-hidden="true"
     >
       {state === "empty" ? <EmptyFrameIcon /> : null}

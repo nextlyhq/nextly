@@ -335,4 +335,23 @@ describe("a picture's frame", () => {
       expect(ruleBody(CHROME, prelude)).not.toMatch(/var\(--nx-/);
     }
   });
+
+  it("starts the drawn page from a plain page's text, not the tile's it sits in", () => {
+    // The tile centres its label in small type; the canvas's frame starts from
+    // a document's defaults, so the picture's page has to as well, or a
+    // left-aligned heading draws centred and unsized text draws small.
+    const page = ruleBody(CHROME, /^\.nx-picture__page\s*\{/m);
+    for (const reset of [
+      /text-align:\s*start/,
+      /font-size:\s*medium/,
+      /font-weight:\s*normal/,
+      /font-style:\s*normal/,
+      /line-height:\s*normal/,
+      /letter-spacing:\s*normal/,
+      /text-transform:\s*none/,
+      /white-space:\s*normal/,
+    ]) {
+      expect(page).toMatch(reset);
+    }
+  });
 });

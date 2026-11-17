@@ -14,7 +14,13 @@
  *   throw while drawing and a block the renderer left a placeholder for show
  *   the type icon and no page.
  * - The previewed mode is stated on the drawn page as the site's theme marker,
- *   both ways; with no mode none is stated.
+ *   both ways; with no mode none is stated, and the ground takes the device's
+ *   scheme, as the canvas's does, rather than the admin's.
+ * - A host handing the same documents in a new list (every panel re-render)
+ *   does not draw them again: a picture that did would rerun the renderer for
+ *   every tile on each keystroke in the panel's search.
+ * - A picture that could not be drawn is drawn once what it lacked arrives (a
+ *   component's definition read after the panel opened).
  *
  * @module document-miniature.test
  */
@@ -269,5 +275,103 @@ describe("a picture of documents", () => {
         .querySelector(".nx-picture__page")
         ?.hasAttribute(DARK_MODE_ATTRIBUTE)
     ).toBe(false);
+  });
+
+  it("takes the device's scheme for its ground when none is previewed", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      (query: string) =>
+        ({
+          matches: query === "(prefers-color-scheme: dark)",
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList
+    );
+    const { container } = render(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={RENDER}
+        session={createMiniatureSession()}
+      />
+    );
+    expect(
+      container.querySelector<HTMLElement>(".nx-picture")?.style.colorScheme
+    ).toBe("dark");
+    // The scheme only: the page still draws in its own mode.
+    expect(
+      container
+        .querySelector(".nx-picture__page")
+        ?.hasAttribute(DARK_MODE_ATTRIBUTE)
+    ).toBe(false);
+  });
+
+  it("does not draw the same documents again when handed them in a new list", () => {
+    let draws = 0;
+    const counting: MiniatureRender = {
+      blocks: {
+        get: type =>
+          type === "acme/text"
+            ? ({
+                ...BLOCKS["acme/text"],
+                render: ({ props }: { props: { text?: string } }) => {
+                  draws += 1;
+                  return createElement(
+                    "p",
+                    { "data-testid": "drawn" },
+                    props.text ?? ""
+                  );
+                },
+              } as never)
+            : undefined,
+      },
+      siteStyles: false,
+    };
+    const session = createMiniatureSession();
+    const { rerender } = render(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={counting}
+        session={session}
+      />
+    );
+    const before = draws;
+    expect(before).toBeGreaterThan(0);
+    rerender(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={counting}
+        session={session}
+      />
+    );
+    expect(draws).toBe(before);
+  });
+
+  it("draws a picture that could not be drawn once what it lacked arrives", () => {
+    const lacking: MiniatureRender = {
+      blocks: { get: () => undefined },
+      siteStyles: false,
+    };
+    const session = createMiniatureSession();
+    const { container, rerender } = render(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={lacking}
+        session={session}
+      />
+    );
+    expect(
+      container.querySelector(".nx-picture")?.getAttribute("data-state")
+    ).toBe("failed");
+    rerender(
+      <DocumentMiniature
+        documents={[HEADER]}
+        render={RENDER}
+        session={session}
+      />
+    );
+    expect(
+      container.querySelector(".nx-picture")?.getAttribute("data-state")
+    ).toBe("drawn");
+    expect(texts(container)).toEqual(["Header"]);
   });
 });

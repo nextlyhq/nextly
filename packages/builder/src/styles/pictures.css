@@ -32,10 +32,24 @@
   background: Canvas;
 }
 
-/* The drawn page, which states the previewed scheme for the ground above. */
+/*
+ * The drawn page, which states the previewed scheme for the ground above. It
+ * starts from a plain page's text, as the canvas's frame does, and not from
+ * the tile around it, which centres its label in small type: the site's own
+ * rules set what a section's text looks like from there.
+ */
 .nx-picture__page {
   background: Canvas;
   color: CanvasText;
+  text-align: start;
+  font-size: medium;
+  font-weight: normal;
+  font-style: normal;
+  line-height: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-transform: none;
+  white-space: normal;
 }
 
 /* The icons stay their own colour in forced colours, on the system canvas. */
