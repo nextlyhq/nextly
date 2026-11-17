@@ -39,6 +39,7 @@ import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../email/provider-activity";
 import { EMAIL_TEMPLATE_ACTIVITY_COLLECTION } from "../email/template-activity";
 import { PLUGIN_SETTINGS_ACTIVITY_COLLECTION } from "../plugins/settings-activity";
 import { RELEASE_ACTIVITY_COLLECTION } from "../releases/release-activity";
+import { WORKFLOW_SETTINGS_ACTIVITY_COLLECTION } from "../workflows/settings-activity";
 
 /**
  * Every non-content `activity_log.collection` a production writer emits.
@@ -54,4 +55,7 @@ export const SETTINGS_ACTIVITY_NAMESPACES = [
   // Renamed and deleted releases. Read under `read-content-releases`, the
   // permission the release list itself asks.
   RELEASE_ACTIVITY_COLLECTION,
+  // A workflow's settings and the grants of its steps, by workflow slug. No seeded grant reads
+  // `workflows`, so the feed shows them to the super-admin alone.
+  WORKFLOW_SETTINGS_ACTIVITY_COLLECTION,
 ] as const;
