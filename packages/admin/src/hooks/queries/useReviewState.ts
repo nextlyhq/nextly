@@ -17,6 +17,7 @@
 import {
   useMutation,
   useQuery,
+  useQueryClient,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -33,6 +34,7 @@ import type {
   AssignmentPayload,
   ReviewStateAnswer,
   TakeStepPayload,
+  WorkflowDocumentRef,
 } from "@admin/types/workflows";
 
 export const reviewKeys = {
@@ -50,6 +52,20 @@ export const reviewKeys = {
 };
 
 /**
+ * The document as the routes name it. Nothing is asked or written before the
+ * document exists, so a missing one here is a caller's mistake, refused
+ * rather than sent as a request the route would refuse.
+ */
+function namedDocument(
+  document: ReleaseDocumentRef | undefined
+): WorkflowDocumentRef {
+  if (document === undefined) {
+    throw new Error("The document is not saved yet.");
+  }
+  return workflowDocument(document);
+}
+
+/**
  * The review state of one document, or nothing asked before it exists.
  * Asked again on return to the tab: a colleague's step moves it, and no
  * write in this browser would tell this one.
@@ -62,8 +78,7 @@ export function useReviewState(
       document === undefined
         ? (["workflow-review", "none"] as const)
         : reviewKeys.document(document),
-    queryFn: () =>
-      fetchReviewState(workflowDocument(document as ReleaseDocumentRef)),
+    queryFn: () => fetchReviewState(namedDocument(document)),
     enabled: document !== undefined,
     refetchOnWindowFocus: true,
   });
@@ -76,14 +91,21 @@ export type StepRequest = Omit<TakeStepPayload, "document">;
 export function useTakeStep(
   document: ReleaseDocumentRef | undefined
 ): UseMutationResult<WorkflowMutationResponse, Error, StepRequest> {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (request: StepRequest) =>
       takeWorkflowStep({
-        document: workflowDocument(document as ReleaseDocumentRef),
+        document: namedDocument(document),
         ...request,
       }),
     // Read again whether it moved or was refused: a refusal for a stale
     // revision means the state on screen is not the one stored.
+    onSettled: () =>
+      document === undefined
+        ? undefined
+        : queryClient.invalidateQueries({
+            queryKey: reviewKeys.document(document),
+          }),
   });
 }
 
@@ -94,13 +116,20 @@ export type AssignRequest = Omit<AssignmentPayload, "document">;
 export function useAssignPart(
   document: ReleaseDocumentRef | undefined
 ): UseMutationResult<WorkflowMutationResponse, Error, AssignRequest> {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (request: AssignRequest) =>
       assignWorkflowParts([
         {
-          document: workflowDocument(document as ReleaseDocumentRef),
+          document: namedDocument(document),
           ...request,
         },
       ]),
+    onSettled: () =>
+      document === undefined
+        ? undefined
+        : queryClient.invalidateQueries({
+            queryKey: reviewKeys.document(document),
+          }),
   });
 }

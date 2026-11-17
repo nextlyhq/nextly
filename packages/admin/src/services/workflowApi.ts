@@ -11,6 +11,7 @@
  */
 
 import { fetcher } from "../lib/api/fetcher";
+import { validationIssues } from "../lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "../types/releases";
 import type {
   AssignmentPayload,
@@ -52,12 +53,23 @@ function reviewStateQuery(document: WorkflowDocumentRef): string {
 export async function fetchReviewState(
   document: WorkflowDocumentRef
 ): Promise<ReviewStateAnswer> {
-  const review = await fetcher<DocumentReview>(
-    `/workflows/review-state${reviewStateQuery(document)}`,
-    {},
-    true
-  );
-  return { attached: true, review };
+  try {
+    const review = await fetcher<DocumentReview>(
+      `/workflows/review-state${reviewStateQuery(document)}`,
+      {},
+      true
+    );
+    return { attached: true, review };
+  } catch (reason) {
+    if (
+      validationIssues(reason).some(
+        issue => issue.code === WORKFLOW_NOT_ATTACHED
+      )
+    ) {
+      return { attached: false };
+    }
+    throw reason;
+  }
 }
 
 /** The mutation envelope the workflow writes answer with. */
