@@ -288,14 +288,14 @@ describe("the shared settings in Advanced", () => {
     choose("Advanced");
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
-    // The tab's own section headings, in order; a control's own title (Show
+    // The tab's own section headers, in order; a control's own title (Show
     // when names itself) is not one.
     expect(
       [
         ...advanced.querySelectorAll(
-          ":scope > .nx-inspector__group > .nx-inspector__heading"
+          "[data-section] > h3 .nx-style-inspector__section-label"
         ),
-      ].map(heading => heading.textContent)
+      ].map(label => label.firstChild?.textContent)
     ).toEqual(["Visibility", "HTML"]);
     const html = within(advanced).getByRole("region", { name: "HTML" });
     expect(within(html).getByLabelText("CSS id")).toBeTruthy();

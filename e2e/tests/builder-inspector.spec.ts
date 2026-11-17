@@ -361,19 +361,12 @@ test.describe("the inspector", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
-    // A heading: no Layout, Typography's common controls first.
+    // A heading: no Layout, Text's common controls first.
     await select(page, HEADING);
     await page.getByRole("tab", { name: "Style" }).click();
     await expect
       .poll(() => sectionLabels(page))
-      .toEqual([
-        "Spacing",
-        "Size",
-        "Position",
-        "Typography",
-        "Border",
-        "Effects",
-      ]);
+      .toEqual(["Spacing", "Size", "Position", "Text", "Border", "Effects"]);
     expect(await shownProperties(page, "typography")).toEqual([
       "fontFamily",
       "fontWeight",
@@ -382,9 +375,7 @@ test.describe("the inspector", () => {
       "color",
       "textAlign",
     ]);
-    expect(await moreProperties(page, "Typography")).toContain(
-      "Letter spacing"
-    );
+    expect(await moreProperties(page, "Text")).toContain("Letter spacing");
 
     // An image: the media fit controls show at once in Size.
     await select(page, IMAGE);

@@ -185,9 +185,9 @@ test.describe("blocks a plugin contributes", () => {
     await value.press("Tab");
 
     await page.getByRole("tab", { name: "Style" }).click();
-    // Colour sits in Typography, its first and only section here.
+    // Colour sits in Text, its first and only section here.
     const color = page
-      .getByRole("region", { name: /^Typography/ })
+      .getByRole("region", { name: /^Text(\s?has changes)?$/ })
       .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");

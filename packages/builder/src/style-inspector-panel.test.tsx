@@ -48,6 +48,15 @@ import { keywordLabel } from "./style-keyword-labels";
 import type { SharedStylesHost } from "./style-target";
 import type { StylePolicy } from "./style-values";
 
+/**
+ * Open a section of the panel unless it is open already: sections fold on
+ * their own, and one holding a value, or the first, starts open.
+ */
+function openSection(name: RegExp): void {
+  const header = screen.getByRole("button", { name });
+  if (header.getAttribute("aria-expanded") !== "true") fireEvent.click(header);
+}
+
 afterEach(() => {
   cleanup();
   clearBlocks();
@@ -580,7 +589,7 @@ describe("the shared style target", () => {
     fireEvent.change(side, { target: { value: "12px" } });
     fireEvent.blur(side);
     // The second edit is made before the first has been stored and read back.
-    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    openSection(/^Effects/);
     const opacity = screen.getByRole("textbox", { name: "Opacity" });
     fireEvent.change(opacity, { target: { value: "80" } });
     fireEvent.blur(opacity);
@@ -627,7 +636,7 @@ describe("the shared style target", () => {
         }),
     });
     fireEvent.click(chip("Card"));
-    fireEvent.click(screen.getByRole("button", { name: /^Effects/ }));
+    openSection(/^Effects/);
     fireEvent.click(
       screen.getByRole("button", { name: "Move Opacity to Card" })
     );
@@ -1122,21 +1131,38 @@ describe("the shared style target", () => {
 });
 
 describe("sections", () => {
-  it("opens one section at a time", () => {
+  it("opens the first section and folds each on its own", () => {
     mount({ spacing: true, effects: true });
 
     // The first section is open and the second is not, without either being
-    // clicked: an accordion that opened nothing would show a block's style
+    // clicked: a panel that opened nothing would show a block's style
     // surface as a column of headings.
     const spacing = screen.getByRole("button", { name: /Spacing/ });
     const effects = screen.getByRole("button", { name: /Effects/ });
     expect(spacing.getAttribute("aria-expanded")).toBe("true");
     expect(effects.getAttribute("aria-expanded")).toBe("false");
 
+    // Opening one leaves the other as it was: both can be open together.
     fireEvent.click(effects);
+    expect(spacing.getAttribute("aria-expanded")).toBe("true");
+    expect(effects.getAttribute("aria-expanded")).toBe("true");
 
+    // And closing one leaves the other open.
+    fireEvent.click(spacing);
     expect(spacing.getAttribute("aria-expanded")).toBe("false");
     expect(effects.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("opens a section that holds a value, whatever its place", () => {
+    const styles = {
+      base: { [BASE_BREAKPOINT]: { opacity: 0.5 } },
+    } as NodeStyles;
+    mount({ spacing: true, effects: true }, styles);
+    expect(
+      screen
+        .getByRole("button", { name: /Effects/ })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
   });
 
   it("marks each section that holds values, in words as well as a dot", () => {
@@ -1149,8 +1175,8 @@ describe("sections", () => {
     // which sections they have touched without opening each one.
     const spacing = screen.getByRole("button", { name: /Spacing/ });
     const effects = screen.getByRole("button", { name: /Effects/ });
-    expect(spacing.textContent).toContain("has values");
-    expect(effects.textContent).not.toContain("has values");
+    expect(spacing.textContent).toContain("has changes");
+    expect(effects.textContent).not.toContain("has changes");
   });
 
   it("draws a section's dot beside its name, in a heading the panel styles as its own", () => {
@@ -1560,7 +1586,7 @@ describe("controls", () => {
     } as NodeStyles;
     const editor = mount({ spacing: true, typography: false }, styles);
 
-    fireEvent.click(screen.getByRole("button", { name: /Typography/ }));
+    openSection(/^Text(has changes)?$/);
     const fontSize = fieldsOf("fontSize");
 
     expect(fontSize.queryByRole("textbox")).toBeNull();
@@ -5024,7 +5050,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
     );
     // Behind Typography's More until it holds a value.
-    if (stored === undefined) reveal("typography", "Font style");
+    if (stored === undefined) reveal("text", "Font style");
     return editor;
   };
 
@@ -5114,7 +5140,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
-    reveal("typography", "Font style");
+    reveal("text", "Font style");
 
     // The positive control, BEFORE the refusal. Without it an implementation
     // that marks every button invalid unconditionally passes — and that
@@ -5163,7 +5189,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
         <StyleInspectorPanel editor={editor} />
       </form>
     );
-    reveal("typography", "Font style");
+    reveal("text", "Font style");
 
     fireEvent.click(optionButton("italic"));
 

@@ -16,6 +16,8 @@ import {
 import { CanvasFrameShortcuts } from "./canvas-frame-context";
 import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { HoveredBlockProvider } from "./hovered-block";
+import type { SectionFolds } from "./panel-folds";
+import { PanelFoldsContext, type PanelFolds } from "./panel-folds-context";
 import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import { usePreferences } from "./shell-preferences";
 import type { BuilderShellProps } from "./shell-props";
@@ -37,6 +39,9 @@ export type {
   PanelView,
   SettingsDialogState,
 } from "./shell-props";
+
+/** No section folded, shared so its identity is stable. */
+const NO_FOLDS: SectionFolds = {};
 
 /**
  * The editor shell: rail, one switched panel, canvas, inspector, bars.
@@ -359,6 +364,20 @@ export function BuilderShell({
   // into.
   const own = useNoticeQueue();
   const notices = supplied ?? own;
+  // The block panel's section folds, kept with the other preferences and lent
+  // to the inspector, which is rendered below as a prop.
+  const sectionFolds = preferences.sectionFolds ?? NO_FOLDS;
+  const panelFolds = React.useMemo<PanelFolds>(
+    () => ({
+      folds: sectionFolds,
+      change: next =>
+        update(current => ({
+          ...current,
+          sectionFolds: next(current.sectionFolds ?? NO_FOLDS),
+        })),
+    }),
+    [sectionFolds, update]
+  );
 
   return (
     <ShellProviders>
@@ -560,22 +579,24 @@ export function BuilderShell({
                   <SettingsRequestContext.Provider
                     value={props.openSettingsRequest}
                   >
-                    <ShellRegions
-                      appliedScale={appliedScale}
-                      onZoomPick={onZoomPick}
-                      {...props}
-                      preferences={preferences}
-                      update={update}
-                      active={shellFits}
-                      loadCount={loadCount}
-                      /*
-                       * The caller's `className` stops here: the measuring wrapper
-                       * above carries it. Passing it on would apply the host's grid
-                       * area, height or border a second time, on a box nested inside
-                       * the one already carrying it.
-                       */
-                      className={undefined}
-                    />
+                    <PanelFoldsContext.Provider value={panelFolds}>
+                      <ShellRegions
+                        appliedScale={appliedScale}
+                        onZoomPick={onZoomPick}
+                        {...props}
+                        preferences={preferences}
+                        update={update}
+                        active={shellFits}
+                        loadCount={loadCount}
+                        /*
+                         * The caller's `className` stops here: the measuring wrapper
+                         * above carries it. Passing it on would apply the host's grid
+                         * area, height or border a second time, on a box nested inside
+                         * the one already carrying it.
+                         */
+                        className={undefined}
+                      />
+                    </PanelFoldsContext.Provider>
                   </SettingsRequestContext.Provider>
                 </NoticeSinkProvider>
               </PortalProvider>

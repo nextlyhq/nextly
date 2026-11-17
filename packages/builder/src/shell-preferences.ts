@@ -7,6 +7,7 @@
 import * as React from "react";
 
 import type { CanvasZoom } from "./canvas-zoom";
+import type { SectionFolds } from "./panel-folds";
 import {
   DEFAULT_PREFERENCES,
   readPreferences,
@@ -163,12 +164,28 @@ const SCALAR_PREFERENCES = [
   "editingBreakpoint",
 ] as const satisfies readonly (keyof ShellPreferences)[];
 
+/** Whether two records of section folds say the same. */
+function sameFolds(
+  a: SectionFolds | undefined,
+  b: SectionFolds | undefined
+): boolean {
+  if (a === b) return true;
+  const left = a ?? {};
+  const right = b ?? {};
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every(key => left[key] === right[key])
+  );
+}
+
 function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
 ): boolean {
   if (SCALAR_PREFERENCES.some(key => a[key] !== b[key])) return false;
   if (!sameZoom(a.zoom, b.zoom)) return false;
+  if (!sameFolds(a.sectionFolds, b.sectionFolds)) return false;
   if (a.layouts === b.layouts) return true;
   const topologies = Object.keys(a.layouts);
   if (topologies.length !== Object.keys(b.layouts).length) return false;

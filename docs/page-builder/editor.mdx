@@ -147,6 +147,18 @@ other blocks. A block without it opens on its first tab, and the next block that
 opens on yours again. If the editor opens with a state such as Hover already chosen, it
 opens on Style.
 
+Each tab is a list of sections divided by lines. Click a section's name to fold it or open
+it; any number can be open at once. A dot beside a section's name means it holds a value
+for the block you're editing. Sections stay as you left them, for every block and the
+next time you open the editor. A section you've never folded opens if it holds a value or
+is the tab's first. **Expand all** and **Collapse all** in the panel's **⋯** menu fold
+every section of the tab you're on.
+
+The Style tab lists its sections in the same order for every block: Block style, Layout,
+Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, Icon and
+CSS properties, each shown only where the block offers it. Advanced lists Visibility, then
+HTML.
+
 ## Search
 
 **Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a
@@ -263,7 +275,7 @@ every file you add are fetched by your server, from `api.fontsource.org` and
 **Upload a font file.** Choose **+**, then **Upload a font file**: a `.woff2` or `.woff`
 file, its family, weight and style, and a confirmation that you may use it on the web.
 
-**In the inspector**, Style → Typography → **Font** offers only the site's font
+**In the inspector**, Style → Text → **Font** offers only the site's font
 variables, the fonts on this site and the system fonts. **Add or manage fonts…** opens
 this tab.
 

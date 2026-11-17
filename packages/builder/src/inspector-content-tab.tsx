@@ -30,11 +30,13 @@ import {
   propIsWritable,
   propPatch,
   type BlockInspection,
+  type EditableProp,
 } from "./inspector";
 import { ContentFields, listViewOf } from "./inspector-content-fields";
 import type { BlockInspectorResolver } from "./inspector-panel-types";
 import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
+import { PanelSections, rowsHoldValue } from "./panel-section";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -145,10 +147,10 @@ function ContentSurface({
   // A block's own inspector knows nothing of bindings visitors will not see,
   // so beside one, every such binding on the block is said above it.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
-  const generated = (
+  const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={inspection}
-      rows={contentRowsOf(inspection)}
+      rows={rows}
       onCommit={onCommit}
       services={services}
       reasonId={reasonId}
@@ -171,6 +173,23 @@ function ContentSurface({
       listView={listViewOf(editor, inspection.nodeId)}
     />
   );
+  // Each section the block places in Content, folding on its own; a block
+  // with none draws the fields' own note that there is nothing to set.
+  const sections = inspection.sections.content;
+  const generated =
+    sections.length === 0 ? (
+      fieldsFor(contentRowsOf(inspection))
+    ) : (
+      <PanelSections
+        tab="content"
+        sections={sections.map(section => ({
+          key: section.label,
+          label: section.label,
+          holdsValue: rowsHoldValue(section.rows),
+          body: fieldsFor(section.rows),
+        }))}
+      />
+    );
   const Custom =
     inspection.inspector === undefined
       ? undefined

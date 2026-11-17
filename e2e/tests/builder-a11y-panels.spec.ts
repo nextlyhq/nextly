@@ -147,9 +147,7 @@ const SURFACES: ReadonlyArray<{
       if ((await typography.getAttribute("data-state")) !== "open") {
         await typography.locator("button").first().click();
       }
-      await page
-        .getByRole("button", { name: "More typography properties" })
-        .click();
+      await page.getByRole("button", { name: "More text properties" }).click();
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },

@@ -490,7 +490,10 @@ describe("InspectorPanel block card", () => {
 
   it("titles the card by type alone when the block has no label", () => {
     mount();
-    expect(screen.getByRole("heading", { name: "Heading" })).toBeDefined();
+    // The card's title, a level above the Content section named after it.
+    expect(
+      screen.getByRole("heading", { name: "Heading", level: 2 })
+    ).toBeDefined();
   });
 
   it("renames from the menu, in one op through the store, on blur", async () => {

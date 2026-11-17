@@ -15,7 +15,9 @@
 
 import {
   BASE_BREAKPOINT,
+  findNode,
   type BlockDocument,
+  type BlockNode,
   type BreakpointId,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
@@ -42,9 +44,11 @@ import { ContentFields, listViewOf } from "./inspector-content-fields";
 import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { NeverQuote } from "./never-quote";
+import { PanelSections, rowsHoldValue } from "./panel-section";
 import { VisibleOn, type BreakpointsStatus } from "./visible-on";
 
 /** The Advanced section the builder's own HTML settings join. */
+const VISIBILITY_SECTION = "Visibility";
 const HTML_SECTION = "HTML";
 
 /**
@@ -92,8 +96,6 @@ function DrawnAdvancedTab({
     block.nodeId,
     lockViewOf(editor)
   );
-  const visibilityId = React.useId();
-  const htmlId = React.useId();
   // The block's own Advanced settings, by section: those in HTML are drawn
   // above the CSS id, the others in sections of their own after it.
   const own = block.sections.advanced;
@@ -119,114 +121,120 @@ function DrawnAdvancedTab({
     />
   );
 
-  return (
+  const visibility = (
     <>
-      <section
-        className="nx-inspector__group"
-        aria-labelledby={visibilityId}
-        data-advanced-section="visibility"
-      >
-        <h3 id={visibilityId} className="nx-inspector__heading">
-          Visibility
-        </h3>
-        {/* In a component's own view: whether each page may hide the block. */}
-        {fields === undefined ? null : (
-          <VisibilityExposeControl
-            binding={fields}
-            nodeId={block.nodeId}
-            blockName={block.label}
-          />
-        )}
-        {/* Which devices the block shows on. */}
-        <VisibleOn
-          editor={editor}
+      {/* In a component's own view: whether each page may hide the block. */}
+      {fields === undefined ? null : (
+        <VisibilityExposeControl
+          binding={fields}
           nodeId={block.nodeId}
-          breakpoints={breakpoints}
-          editing={breakpoint ?? BASE_BREAKPOINT}
-          status={breakpointsStatus}
-          heldBy={designLocked}
-          reasonId={reasonId}
+          blockName={block.label}
         />
-        {/* Whether the block shows at all, by the entry or list item it is
-            drawn with. Keyed by the block, so a row added and not yet
-            finished stays with the block it was added to rather than moving
-            to the next one. */}
-        <ShowWhen
-          key={block.nodeId}
-          editor={editor}
-          nodeId={block.nodeId}
-          services={services}
-          heldBy={designLocked}
-          reasonId={reasonId}
-        />
-        {/* Whether search engines may quote the block's text. Drawn only on a
-            Section or a Box. */}
-        <NeverQuote
-          editor={editor}
-          nodeId={block.nodeId}
-          heldBy={designLocked}
-          reasonId={reasonId}
-        />
-      </section>
-      <section
-        className="nx-inspector__group"
-        aria-labelledby={htmlId}
-        data-advanced-section="html"
-      >
-        <h3 id={htmlId} className="nx-inspector__heading">
-          {HTML_SECTION}
-        </h3>
-        {htmlRows.length === 0 ? null : fieldsFor(htmlRows)}
-        {/*
-          Held while the design is locked: every native control inside is
-          read-only at once and points at the reason in the card, and the
-          panel's own write path refuses what the save would.
-        */}
-        <HeldByLock
-          reasonId={designLocked === undefined ? undefined : reasonId}
-        >
-          <AdvancedPanel
-            // Keyed by node, so a half-typed attribute does not travel to the
-            // next block the way an uncommitted name would. The panel holds
-            // rows locally; without this an author would select another block
-            // and find this one's unsaved row waiting there.
-            key={`${block.nodeId}:advanced`}
-            nodeId={block.nodeId}
-            cssId={block.html.cssId}
-            attributes={block.html.attributes}
-            editor={editor}
-            active={onScreen}
-            blocks={blocks}
-          />
-        </HeldByLock>
-      </section>
-      {others.map(section => (
-        <OwnSection
-          key={`${block.nodeId}:${section.label}`}
-          label={section.label}
-        >
-          {fieldsFor(section.rows)}
-        </OwnSection>
-      ))}
+      )}
+      {/* Which devices the block shows on. */}
+      <VisibleOn
+        editor={editor}
+        nodeId={block.nodeId}
+        breakpoints={breakpoints}
+        editing={breakpoint ?? BASE_BREAKPOINT}
+        status={breakpointsStatus}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
+      {/* Whether the block shows at all, by the entry or list item it is
+          drawn with. Keyed by the block, so a row added and not yet
+          finished stays with the block it was added to rather than moving
+          to the next one. */}
+      <ShowWhen
+        key={block.nodeId}
+        editor={editor}
+        nodeId={block.nodeId}
+        services={services}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
+      {/* Whether search engines may quote the block's text. Drawn only on a
+          Section or a Box. */}
+      <NeverQuote
+        editor={editor}
+        nodeId={block.nodeId}
+        heldBy={designLocked}
+        reasonId={reasonId}
+      />
     </>
+  );
+  const html = (
+    <>
+      {htmlRows.length === 0 ? null : fieldsFor(htmlRows)}
+      {/*
+        Held while the design is locked: every native control inside is
+        read-only at once and points at the reason in the card, and the
+        panel's own write path refuses what the save would.
+      */}
+      <HeldByLock reasonId={designLocked === undefined ? undefined : reasonId}>
+        <AdvancedPanel
+          // Keyed by node, so a half-typed attribute does not travel to the
+          // next block the way an uncommitted name would. The panel holds
+          // rows locally; without this an author would select another block
+          // and find this one's unsaved row waiting there.
+          key={`${block.nodeId}:advanced`}
+          nodeId={block.nodeId}
+          cssId={block.html.cssId}
+          attributes={block.html.attributes}
+          editor={editor}
+          active={onScreen}
+          blocks={blocks}
+        />
+      </HeldByLock>
+    </>
+  );
+  const node = findNode(editor.document.nodes, block.nodeId);
+  // Visibility first, then HTML, then any section the block declares, for
+  // every block.
+  return (
+    <PanelSections
+      tab="advanced"
+      sections={[
+        {
+          key: "visibility",
+          label: VISIBILITY_SECTION,
+          holdsValue: visibilityHoldsValue(node),
+          body: visibility,
+        },
+        {
+          key: "html",
+          label: HTML_SECTION,
+          holdsValue:
+            block.html.cssId !== undefined ||
+            block.html.attributes !== undefined ||
+            rowsHoldValue(htmlRows),
+          body: html,
+        },
+        ...others.map(section => ({
+          key: `own:${section.label}`,
+          label: section.label,
+          holdsValue: rowsHoldValue(section.rows),
+          body: fieldsFor(section.rows),
+        })),
+      ]}
+    />
   );
 }
 
-/** One more Advanced section the block declares, under its own name. */
-function OwnSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  const id = React.useId();
+/**
+ * Whether the block's Visibility holds a value: a device it is hidden on, a
+ * condition it shows by, or the mark that keeps it out of search previews.
+ */
+function visibilityHoldsValue(node: BlockNode | undefined): boolean {
+  if (node === undefined) return false;
+  const { visibility } = node;
+  const devices = visibility?.devices;
+  const hidden =
+    devices !== undefined && Object.values(devices).some(shown => !shown);
+  const conditions = visibility?.conditions;
   return (
-    <section className="nx-inspector__group" aria-labelledby={id}>
-      <h3 id={id} className="nx-inspector__heading">
-        {label}
-      </h3>
-      {children}
-    </section>
+    hidden ||
+    (Array.isArray(conditions) && conditions.length > 0) ||
+    node.nosnippet === true
   );
 }
