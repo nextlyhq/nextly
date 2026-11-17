@@ -72,9 +72,19 @@ export function blocksTakeClipboardEvent(
   if (modalIsOpen(editorDocument)) return false;
   // A field, or a block's text being edited: the text's own copy and paste.
   if (isTextEntry(element)) return false;
-  // Text the author highlighted is what they meant to copy.
+  // Text the author highlighted is what they meant to copy or cut; a paste
+  // has nowhere to go in text that cannot be edited, so it is never held
+  // back by one. Not in Layers, whose rows select blocks: a shift-click
+  // there to select several can leave their labels highlighted.
   const highlighted = doc.getSelection();
-  if (highlighted !== null && !highlighted.isCollapsed) return false;
+  if (
+    event.type !== "paste" &&
+    highlighted !== null &&
+    !highlighted.isCollapsed &&
+    !inBlockTree(highlighted)
+  ) {
+    return false;
+  }
   // In the editor's document, only from within the editor itself, or with
   // nothing focused at all (a page just opened, before any click): a page
   // hosting the editor keeps its own copy and paste on its own controls.
@@ -85,6 +95,13 @@ export function blocksTakeClipboardEvent(
     );
   }
   return true;
+}
+
+/** Whether a highlight lies in a tree of blocks, such as Layers. */
+function inBlockTree(highlighted: Selection): boolean {
+  const anchor = highlighted.anchorNode;
+  const element = isElement(anchor) ? anchor : (anchor?.parentElement ?? null);
+  return element?.closest('[role="tree"]') != null;
 }
 
 /**

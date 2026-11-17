@@ -103,7 +103,13 @@ export function serializeCopiedBlocks(copied: CopiedBlocks): string {
 }
 
 /**
- * One block as the op layer would carry it. The op layer's own shape rule
+ * One block as the op layer would carry it.
+ *
+ * Any page can put text on the clipboard, so a paste claiming this site's
+ * origin is not proof it came from here. What protects the page is what
+ * protects every stored page: the op layer's shape rule here, the placement
+ * rules the planner asks, and the renderer, which draws a type it does not
+ * know as a placeholder and escapes what it draws. The op layer's own shape rule
  * decides, so a paste never accepts a block that rule would then refuse.
  */
 const pastedNode = z.custom<BlockNode>(
@@ -179,6 +185,12 @@ export interface PasteSources {
   readonly definitions?: readonly AnyBlockDefinition[];
   /** Each block type's regions, for pasting inside a container. */
   readonly slots?: SlotSource;
+  /**
+   * The editor's lock check, phrased: why a lock refuses these ops, or
+   * `null`. A place whose lock refuses the paste is passed over for the next
+   * one, as the Add panel passes over a locked place for a clicked tile.
+   */
+  readonly lockRefusal?: (ops: readonly BuilderOp[]) => string | null;
 }
 
 /** A paste, planned: the ops and the copies' ids, or why it is refused. */
@@ -226,19 +238,26 @@ export function planPaste(
   const planAt = (at: OpPosition) =>
     planPasteBlocks(document, blocks, at, sources.nesting, sources.components);
 
+  const locked = (ops: readonly BuilderOp[]) =>
+    sources.lockRefusal?.(ops) ?? null;
   const found = insertionFor(candidates, candidate => {
     const plan = planAt(candidate.at);
-    return plan.pageOps === undefined ? undefined : plan.pageOps;
+    if (plan.pageOps === undefined) return undefined;
+    return locked(plan.pageOps) === null ? plan.pageOps : undefined;
   });
   if (found === undefined) {
-    // Every place refused, so the first place's plan is a refusal; its
-    // reason is the one for where the paste was first meant to go.
+    // Every place refused, so the reason is the one for where the paste was
+    // first meant to go: the planner's, or the lock's there.
     const first = candidates[0];
     const plan = first === undefined ? undefined : planAt(first.at);
-    const refusal: PlanRefusal =
-      plan?.pageOps === undefined && plan !== undefined
-        ? plan
-        : { problem: "invalid-position" };
+    if (plan?.pageOps !== undefined) {
+      return {
+        refusal:
+          locked(plan.pageOps) ??
+          compositionRefusalReason({ problem: "destination-locked" }),
+      };
+    }
+    const refusal: PlanRefusal = plan ?? { problem: "invalid-position" };
     return { refusal: compositionRefusalReason(refusal) };
   }
   const ops = found.answer;

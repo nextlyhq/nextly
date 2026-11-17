@@ -154,6 +154,47 @@ describe("copying and pasting blocks", () => {
   });
 });
 
+describe("several blocks at once", () => {
+  it("cuts and pastes a run of blocks as one undo step each", () => {
+    const { result } = setUp(
+      page(
+        node("a", "core/heading"),
+        node("b", "core/heading"),
+        node("c", "core/heading")
+      )
+    );
+    const board = clipboard();
+    act(() => result.current.editor.select("a"));
+    act(() => result.current.editor.select("b", "toggle"));
+    act(() => {
+      result.current.verbs.cut(board.write);
+    });
+    expect(result.current.editor.document.nodes.map(each => each.id)).toEqual([
+      "c",
+    ]);
+    expect(result.current.editor.undoDepth).toBe(1);
+
+    act(() => result.current.editor.select(null));
+    act(() => {
+      result.current.verbs.pasteText(board.text());
+    });
+    const nodes = result.current.editor.document.nodes;
+    expect(nodes).toHaveLength(3);
+    expect(result.current.editor.selection.ids).toEqual([
+      nodes[1]?.id,
+      nodes[2]?.id,
+    ]);
+    // Two undo steps in all: the cut, then the paste.
+    expect(result.current.editor.undoDepth).toBe(2);
+    act(() => {
+      void result.current.editor.undo();
+    });
+    expect(result.current.editor.document.nodes.map(each => each.id)).toEqual([
+      "c",
+    ]);
+  });
+});
+
 describe("cutting blocks", () => {
   it("copies then removes, as one undo step", () => {
     const { result } = setUp(
@@ -253,6 +294,37 @@ describe("which clipboard events are the blocks'", () => {
     const { event } = clipboardEvent("copy");
     Object.defineProperty(event, "target", { value: words });
     expect(blocksTakeClipboardEvent(event, document)).toBe(false);
+    document.getSelection()?.removeAllRanges();
+  });
+
+  it("takes a copy over row labels highlighted in Layers, whose rows select blocks", () => {
+    const tree = document.createElement("div");
+    tree.setAttribute("role", "tree");
+    const row = document.createElement("span");
+    row.textContent = "Heading";
+    tree.append(row);
+    chrome().append(tree);
+    const range = document.createRange();
+    range.selectNodeContents(row);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    const { event } = clipboardEvent("copy");
+    Object.defineProperty(event, "target", { value: row });
+    expect(blocksTakeClipboardEvent(event, document)).toBe(true);
+    document.getSelection()?.removeAllRanges();
+  });
+
+  it("takes a paste over highlighted text that cannot be edited", () => {
+    const words = document.createElement("p");
+    words.textContent = "Some words";
+    chrome().append(words);
+    const range = document.createRange();
+    range.selectNodeContents(words);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+    const { event } = clipboardEvent("paste");
+    Object.defineProperty(event, "target", { value: words });
+    expect(blocksTakeClipboardEvent(event, document)).toBe(true);
     document.getSelection()?.removeAllRanges();
   });
 

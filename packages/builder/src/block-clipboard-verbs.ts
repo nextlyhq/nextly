@@ -142,19 +142,17 @@ export function useBlockClipboardVerbs({
           nesting,
           ...(components === undefined ? {} : { components }),
           slots: registrySlotSource(),
+          lockRefusal: ops => lockSentence(editorNow, ops),
         }
       );
       if (plan.refusal !== undefined) {
         notify(plan.refusal);
         return true;
       }
-      const locked = lockSentence(editorNow, plan.ops);
-      if (locked !== null) {
-        notify(locked);
-        return true;
-      }
-      // The editor's apply judges room, placement and locks once more, and
-      // tells the author itself when it refuses.
+      // The editor's apply judges room, placement and locks once more. It
+      // tells the author itself when a composition, placement or Layers lock
+      // refuses; a cap on the page's size it refuses without a word, as it
+      // does for every other edit.
       const applied = editorNow.applyAll(plan.ops);
       if (applied === null) return true;
       // The copies are selected, as a duplicate's are, through the grammar a

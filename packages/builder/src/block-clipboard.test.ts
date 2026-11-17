@@ -180,6 +180,40 @@ describe("where pasted blocks land", () => {
     expect(inside.map(block => block.id)).toEqual(["h", newIds[0]]);
   });
 
+  it("puts a content block right after a selected block that holds none", () => {
+    const { document, newIds } = copyAndPaste(hero(), ["h"], hero(), "h");
+    const inside = document.nodes[0]?.slots?.children ?? [];
+    expect(inside.map(block => block.id)).toEqual(["h", newIds[0]]);
+  });
+
+  it("passes over a place a lock refuses, for the next place, as a clicked tile does", () => {
+    const copied = copyOfSelection(hero(), ["h"], SITE)?.blocks ?? [];
+    // A lock refusing anything put inside the Hero: the Heading goes after it.
+    const plan = planPaste(hero(), "hero", copied, {
+      ...sources,
+      lockRefusal: ops =>
+        ops.some(op => op.kind === "insert" && op.at.parentId === "hero")
+          ? "Hero is locked."
+          : null,
+    });
+    if (plan.refusal !== undefined) throw new Error(plan.refusal);
+    const after = applyOps(hero(), [...plan.ops]).document;
+    expect(after.nodes.map(block => block.id)).toEqual([
+      "hero",
+      plan.newIds[0],
+      "box",
+    ]);
+  });
+
+  it("refuses with the lock's words when every place is locked", () => {
+    const copied = copyOfSelection(hero(), ["h"], SITE)?.blocks ?? [];
+    const plan = planPaste(hero(), null, copied, {
+      ...sources,
+      lockRefusal: () => "The page is locked.",
+    });
+    expect(plan.refusal).toBe("The page is locked.");
+  });
+
   it("goes at the end of the page with nothing selected", () => {
     const { document, newIds } = copyAndPaste(hero(), ["h"], hero(), null);
     expect(document.nodes.at(-1)?.id).toBe(newIds[0]);

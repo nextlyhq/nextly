@@ -17,8 +17,9 @@
  *   keys.
  * - ⌘C and ⌘V in a heading's text being edited on the canvas, and in the
  *   panel's text field, copy and paste the TEXT: the words double and no
- *   block is added. Keys taken for blocks there would add a block and leave
- *   the words alone.
+ *   block is added; ⌘X in the field cuts the words, not the block. With
+ *   blocks on the clipboard, ⌘V at a caret in the heading still adds no
+ *   block. Keys taken for blocks there would add or remove a block.
  *
  * "Control" stands for the editor's "mod" key: the suite's browser reports a
  * Windows user agent, so the editor reads "mod" as Control.
@@ -219,6 +220,36 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.getByRole("menuitem", { name: "Paste", exact: true }).click();
 
     await expect.poll(() => childrenOf(page, PRICING)).toHaveLength(1);
+    const [copy] = await childrenOf(page, PRICING);
+    expect(copy).not.toBe(HEADING);
+    await expect(canvasBlock(page, copy ?? "")).toHaveText("Welcome");
+  });
+
+  test("⌘V in a heading's text on the canvas goes to the text even with blocks copied", async ({
+    page,
+  }) => {
+    await openBuilder(page, await createPage(page.request));
+    // Blocks on the clipboard: a paste the editor took for blocks would add one.
+    await clickBlock(page, HEADING);
+    await expect.poll(() => selection(page)).toEqual([HEADING]);
+    await page.keyboard.press("Control+c");
+    const before = await structure(page);
+
+    const text = await field(page, HEADING, "text");
+    const point = await glyphPoint(page, text, 0.5);
+    await page.mouse.dblclick(point.x, point.y);
+    await expect(text).toHaveAttribute(
+      "contenteditable",
+      /^(true|plaintext-only)$/,
+      { timeout: 30_000 }
+    );
+    // A caret, with nothing highlighted, so only the text rule keeps the key.
+    await page.keyboard.press("End");
+    await page.keyboard.press("Control+v");
+    await page.keyboard.press("Escape");
+
+    await expect(text).not.toHaveAttribute("contenteditable", /.+/);
+    expect(await structure(page)).toEqual(before);
   });
 
   test("⌘C and ⌘V in a heading's text on the canvas copy and paste the text, not the block", async ({
@@ -262,6 +293,12 @@ test.describe("copying, cutting and pasting blocks", () => {
     await page.keyboard.press("Control+v");
 
     await expect(words).toHaveValue("WelcomeWelcome");
+    expect(await structure(page)).toEqual(before);
+
+    // ⌘X cuts the words, not the block.
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Control+x");
+    await expect(words).toHaveValue("");
     expect(await structure(page)).toEqual(before);
   });
 });

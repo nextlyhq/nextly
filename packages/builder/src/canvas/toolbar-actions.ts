@@ -752,6 +752,21 @@ function manyBlockActions(
   const deleteLock = ids
     .map(id => ({ id, locked: lockBlockingDelete(document, id) }))
     .find(held => held.locked !== undefined);
+  const deleteItem: ToolbarAction =
+    deleteLock?.locked === undefined
+      ? heldByLock(
+          { id: "delete", label: "Delete", enabled: true },
+          ask,
+          opsOf(selectionDeletion(document, ids))
+        )
+      : {
+          id: "delete",
+          label: "Delete",
+          enabled: false,
+          // ONE lock refuses the whole delete, because the group is applied
+          // atomically and there is no half-done delete to fall back to.
+          reason: lockedBy(deleteLock.locked, deleteLock.id, "delete"),
+        };
 
   return [
     {
@@ -769,28 +784,11 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
-    ...clipboardActions(
-      deleteLock?.locked === undefined
-        ? undefined
-        : lockedBy(deleteLock.locked, deleteLock.id, "delete")
-    ),
+    ...clipboardActions(deleteItem),
     saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask, planned),
-    deleteLock?.locked === undefined
-      ? heldByLock(
-          { id: "delete", label: "Delete", enabled: true },
-          ask,
-          opsOf(selectionDeletion(document, ids))
-        )
-      : {
-          id: "delete",
-          label: "Delete",
-          enabled: false,
-          // ONE lock refuses the whole delete, because the group is applied
-          // atomically and there is no half-done delete to fall back to.
-          reason: lockedBy(deleteLock.locked, deleteLock.id, "delete"),
-        },
+    deleteItem,
   ];
 }
 
@@ -896,6 +894,27 @@ export function toolbarActions(
   // a press does cannot disagree.
   const duplication = selectionDuplication(document, [selectedId]);
   const deletion = blockDeletion(document, selectedId);
+  const deleteItem: ToolbarAction =
+    deleteLock === undefined
+      ? heldByLock(
+          { id: "delete", label: "Delete", enabled: deletion !== null },
+          lockRefusalFor,
+          deletion === null
+            ? undefined
+            : [
+                {
+                  kind: "remove",
+                  id: deletion.id,
+                  dropSlotIfEmpty: deletion.dropSlotIfEmpty,
+                },
+              ]
+        )
+      : {
+          id: "delete",
+          label: "Delete",
+          enabled: false,
+          reason: lockedBy(deleteLock, selectedId, "delete"),
+        };
 
   return [
     {
@@ -933,11 +952,7 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
-    ...clipboardActions(
-      deleteLock === undefined
-        ? undefined
-        : lockedBy(deleteLock, selectedId, "delete")
-    ),
+    ...clipboardActions(deleteItem),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),
@@ -949,26 +964,7 @@ export function toolbarActions(
       lockRefusalFor,
       planned
     ),
-    deleteLock === undefined
-      ? heldByLock(
-          { id: "delete", label: "Delete", enabled: deletion !== null },
-          lockRefusalFor,
-          deletion === null
-            ? undefined
-            : [
-                {
-                  kind: "remove",
-                  id: deletion.id,
-                  dropSlotIfEmpty: deletion.dropSlotIfEmpty,
-                },
-              ]
-        )
-      : {
-          id: "delete",
-          label: "Delete",
-          enabled: false,
-          reason: lockedBy(deleteLock, selectedId, "delete"),
-        },
+    deleteItem,
   ];
 }
 
@@ -1230,23 +1226,16 @@ export function depthMoveActions(
  * Copy, Cut and Paste, kept in the menu so the bar stays one short row.
  *
  * Copy is always offered: copying changes nothing on the page, so no lock
- * stands in its way. Cut removes what it copies, so it is dimmed by the lock
- * that dims Delete, in Delete's words. Paste is always offered, since what
- * the clipboard holds is read only when it is pressed; a paste the page
- * refuses says why then.
+ * stands in its way. Cut removes what it copies, so it is Delete's item under
+ * another name: offered, or dimmed with the reason, exactly where Delete is,
+ * by every lock Delete asks. Paste is always offered, since what the
+ * clipboard holds is read only when it is pressed; a paste the page refuses
+ * says why then.
  */
-function clipboardActions(cutLock: string | undefined): ToolbarAction[] {
+function clipboardActions(deleteItem: ToolbarAction): ToolbarAction[] {
   return [
     { id: "copy", label: "Copy", enabled: true, inMenu: true },
-    cutLock === undefined
-      ? { id: "cut", label: "Cut", enabled: true, inMenu: true }
-      : {
-          id: "cut",
-          label: "Cut",
-          enabled: false,
-          reason: cutLock,
-          inMenu: true,
-        },
+    { ...deleteItem, id: "cut", label: "Cut", inMenu: true },
     { id: "paste", label: "Paste", enabled: true, inMenu: true },
   ];
 }
