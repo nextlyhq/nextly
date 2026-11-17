@@ -8,15 +8,18 @@
  *
  * @module hooks/__tests__/hooks-know-the-language.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../config";
+import { DynamicCollectionRegistryService } from "../../domains/dynamic-collections/services/dynamic-collection-registry-service";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import type { Logger } from "../../services/shared";
+import { auditFields } from "../prebuilt";
 
 const POSTS = "hkl_posts";
 const SITE = "hkl_site";
@@ -24,6 +27,14 @@ const SITE = "hkl_site";
 const DRAFTED = "hkl_drafted";
 /** A Single whose saves to a published document wait as pending changes. */
 const DRAFTED_SITE = "hkl_drafted_site";
+/** A `beforeChange` hook sets the shared `code` on a save that names `title` "adds code". */
+const MOVED = "hkl_moved";
+/** Its `afterChange` reads a post through the Direct API (`readDuringWrite`). */
+const READER = "hkl_reader";
+/** No lifecycle: its `status` is a translated field like any other. */
+const STATES = "hkl_states";
+/** Its first `beforeChange` hook adds a language to the list it is handed. */
+const MUTATING = "hkl_mutating";
 
 /** What one hook was told. */
 interface Told {
@@ -104,8 +115,13 @@ const fieldHook = (scope: string, phase: "beforeChange" | "afterRead") => ({
   ],
 });
 
+/** What READER's `afterChange` does inside the write; nothing unless a case sets it. */
+let readDuringWrite: (() => Promise<unknown>) | undefined;
+
 let current: TestNextly | undefined;
 afterEach(async () => {
+  vi.restoreAllMocks();
+  readDuringWrite = undefined;
   await current?.destroy();
   current = undefined;
   told.length = 0;
@@ -140,6 +156,60 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         versions: { drafts: true },
         hooks: everyHook("drafted"),
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: MOVED,
+        localized: true,
+        status: true,
+        hooks: {
+          beforeChange: [
+            (context: { data?: Record<string, unknown> }) => {
+              record("moved:beforeChange")(context);
+              if (context.data?.title === "adds code") {
+                return { ...context.data, code: "set by a hook" };
+              }
+              return context.data;
+            },
+          ],
+          afterChange: [record("moved:afterChange")],
+        },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "code", localized: false }),
+        ],
+      }),
+      defineCollection({
+        slug: READER,
+        localized: true,
+        hooks: {
+          afterChange: [
+            async () => {
+              await readDuringWrite?.();
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: STATES,
+        localized: true,
+        hooks: { beforeChange: [record("states:beforeChange")] },
+        fields: [text({ name: "title" }), text({ name: "status" })],
+      }),
+      defineCollection({
+        slug: MUTATING,
+        localized: true,
+        hooks: {
+          beforeChange: [
+            (context: { locales?: unknown }) => {
+              if (Array.isArray(context.locales)) {
+                (context.locales as string[]).push("zz");
+              }
+            },
+            record("mutating:beforeChange"),
+          ],
+        },
         fields: [text({ name: "title" })],
       }),
     ],
@@ -836,6 +906,135 @@ describe.each(getConfiguredTestDialects())(
           toldBy(hook).map(e => e.shared),
           hook
         ).toEqual([false, true]);
+      }
+    }, 90_000);
+
+    // The before-hooks are told what the save sent; the hooks after the write
+    // what it wrote, a value a `beforeChange` hook added included.
+    it("tells an update's after-hooks the shared part its persisted payload moves", async () => {
+      const t = await boot(dialect);
+      const id = String(
+        (
+          await t.nextly.create({
+            collection: MOVED,
+            locale: "en",
+            data: { title: "Harbour" },
+          })
+        ).item.id
+      );
+      told.length = 0;
+      await t.nextly.update({
+        collection: MOVED,
+        id,
+        locale: "es",
+        data: { title: "adds code", _overwrite: true },
+      });
+      expect(toldBy("moved:beforeChange")).toEqual([
+        expect.objectContaining({ locale: "es", shared: false }),
+      ]);
+      expect(toldBy("moved:afterChange")).toEqual([
+        expect.objectContaining({ locale: "es", shared: true }),
+      ]);
+    }, 90_000);
+
+    // A read made inside a write's hook moves nothing, so its hooks are told
+    // nothing of the shared part, whatever the write around it moves.
+    it("tells a read inside a write's hook nothing of the shared part", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      readDuringWrite = () =>
+        t.nextly.findByID({ collection: POSTS, id, locale: "es" });
+      await t.nextly.create({
+        collection: READER,
+        locale: "en",
+        data: { title: "Reader" },
+      });
+      const reads = toldBy("posts:").filter(e => e.hook.includes("Read"));
+      expect(reads.map(entry => entry.hook)).toEqual(
+        expect.arrayContaining(["posts:beforeRead", "posts:afterRead"])
+      );
+      for (const entry of reads) {
+        expect(entry.shared, entry.hook).toBeUndefined();
+      }
+    }, 90_000);
+
+    // Without a lifecycle, a field named `status` is an ordinary translated
+    // field: setting it in Spanish leaves the shared part alone.
+    it("tells an update of a translated field named status that it leaves the shared part", async () => {
+      const t = await boot(dialect);
+      const id = String(
+        (
+          await t.nextly.create({
+            collection: STATES,
+            locale: "en",
+            data: { title: "Harbour", status: "open" },
+          })
+        ).item.id
+      );
+      told.length = 0;
+      await t.nextly.update({
+        collection: STATES,
+        id,
+        locale: "es",
+        data: { status: "abierto", _overwrite: true },
+      });
+      expect(toldBy("states:beforeChange")).toEqual([
+        expect.objectContaining({ locale: "es", shared: false }),
+      ]);
+    }, 90_000);
+
+    // Each hook is handed a list of its own: one that changes it changes
+    // nothing another hook is told.
+    it("hands each hook a list of languages of its own", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: MUTATING,
+        locale: "es",
+        data: { title: "Puerto" },
+      });
+      expect(toldBy("mutating:beforeChange")).toEqual([
+        expect.objectContaining({ locale: "es", locales: ["es"] }),
+      ]);
+    }, 90_000);
+
+    // A hook configured in the admin is told the language facts a hook
+    // registered in code is told.
+    it("tells a stored hook the language and the shared part", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      // Configured as the admin configures one: on the collection's row.
+      const registry = new DynamicCollectionRegistryService(
+        t.adapter,
+        t.getService("logger") as Logger
+      );
+      await registry.updateCollectionMetadata(POSTS, {
+        hooks: [
+          {
+            hookId: auditFields.id,
+            hookType: auditFields.hookType,
+            enabled: true,
+            order: 0,
+            config: {
+              createdByField: "createdBy",
+              updatedByField: "updatedBy",
+            },
+          },
+        ],
+      });
+      const stored = vi.spyOn(auditFields, "execute");
+      await t.nextly.update({
+        collection: POSTS,
+        id,
+        locale: "es",
+        data: { title: "Puerto 2", _overwrite: true },
+      });
+      expect(stored).toHaveBeenCalled();
+      for (const [, context] of stored.mock.calls) {
+        expect(context).toMatchObject({
+          locale: "es",
+          locales: ["es"],
+          shared: false,
+        });
       }
     }, 90_000);
   }

@@ -32,7 +32,7 @@ import {
   type RecordSingleActivityInput,
 } from "../audit/record-activity";
 
-import { buildEnvelope } from "./envelope";
+import { buildEnvelope, sanitizedChange } from "./envelope";
 import {
   recordEvent,
   recordEventInTx,
@@ -104,6 +104,24 @@ export interface RecordMutationEventArgs {
    * its own; the envelope keeps `statusChange`, which receivers already read.
    */
   publication?: PublicationFacts;
+}
+
+/**
+ * The fields an event about a change of `previous` into `data` names as
+ * changed, the sensitive ones of `fields` left out: what the outbox envelope
+ * names (`buildEnvelope`), for a write's in-process collection event, which
+ * is announced whether or not the outbox records the change.
+ */
+export function eventChangedFields(args: {
+  data: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  fields: readonly SensitiveFieldSource[];
+}): string[] {
+  return sanitizedChange({
+    data: args.data,
+    previous: args.previous ?? null,
+    sensitiveFields: sensitiveFieldPaths(args.fields),
+  }).changedFields;
 }
 
 /**

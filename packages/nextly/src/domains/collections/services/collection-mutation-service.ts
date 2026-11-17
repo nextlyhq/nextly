@@ -88,6 +88,7 @@ import { getEventBus } from "../../../events/event-bus";
 // same way.
 import {
   eventLanguage,
+  settleWriteParts,
   WHOLE_DOCUMENT,
   withWriteParts,
   writeMovesSharedPart,
@@ -478,10 +479,10 @@ import {
   type VersionRow,
 } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
-import { computeChangedFields } from "../../webhooks/envelope";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import {
+  eventChangedFields,
   recordEntryActivity,
   recordMutationEvent,
 } from "../../webhooks/record-mutation-event";
@@ -3023,6 +3024,8 @@ export class CollectionMutationService extends BaseService {
     revalidationIntent: RevalidationIntent | undefined;
     /** The created document in read shape, as the outbox event carries it. */
     document: Record<string, unknown>;
+    /** The fields the outbox event names as changed (`eventChangedFields`). */
+    changedFields: string[];
   }> {
     const entryId = args.entry.id as string;
 
@@ -3184,6 +3187,12 @@ export class CollectionMutationService extends BaseService {
     return {
       eventRecorded,
       document: createdDocument,
+      // From the same document and the same sanitizing as the outbox event,
+      // for the in-process event the caller announces at its commit.
+      changedFields: eventChangedFields({
+        data: createdDocument,
+        fields: eventFields,
+      }),
       revalidationIntent: buildEntryRevalidationIntent(
         args.collectionName,
         readRevalidateConfig(args.collection),
@@ -9600,8 +9609,12 @@ export class CollectionMutationService extends BaseService {
         // the entry and is never recorded for a write that later rolls back.
         const createdDocument = assembleDocument(documentParts);
         // The fields the outbox event names as changed, from the same
-        // document, for the in-process event announced once this commits.
-        createdChangedFields = computeChangedFields(null, createdDocument);
+        // document and the same sanitizing, for the in-process event
+        // announced once this commits.
+        createdChangedFields = eventChangedFields({
+          data: createdDocument,
+          fields: webhookFields,
+        });
         recorded = await recordMutationEvent(tx, {
           type: "entry.created",
           resource: {
@@ -12047,12 +12060,14 @@ export class CollectionMutationService extends BaseService {
           ? "published"
           : (priorLanguageStatuses.find(status => status !== "published") ??
             null);
-        // The fields the outbox event names as changed, for the in-process
-        // event announced once this commits.
-        publishChangedFields = computeChangedFields(
-          previousDocument,
-          publishedDocument
-        );
+        // The fields the outbox event names as changed, sanitized as it
+        // sanitizes them, for the in-process event announced once this
+        // commits.
+        publishChangedFields = eventChangedFields({
+          data: publishedDocument,
+          previous: previousDocument,
+          fields: publishEventFields,
+        });
         const baseRecorded = await recordMutationEvent(tx, {
           type: "entry.updated",
           resource: {
@@ -16295,11 +16310,29 @@ export class CollectionMutationService extends BaseService {
     locale: string | undefined,
     executor?: Parameters<DynamicCollectionService["getCollection"]>[1]
   ): Promise<WriteParts> {
-    const collection = await this.releaseCollection(collectionName, executor);
+    return this.writePartsFor(
+      await this.releaseCollection(collectionName, executor),
+      body,
+      locale
+    );
+  }
+
+  /**
+   * What an update of `body` in `locale` moves of `collection`: asked of the
+   * body as sent before the hooks run (`writePartsOf`), and of the payload as
+   * persisted once they have (`settleWriteParts`). The whole document where
+   * the collection is gone.
+   */
+  private writePartsFor(
+    collection: object | null,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): WriteParts {
     if (collection === null) return { shared: true };
     return {
       shared: writeMovesSharedPart(
         {
+          hasLifecycle: hasLifecycle(collection),
           fields: collectionFields(collection),
           localized: (collection as { localized?: unknown }).localized === true,
           publishesPerLanguage: publishesPerLanguage(collection),
@@ -16935,6 +16968,12 @@ export class CollectionMutationService extends BaseService {
       // the transition classification and the write, so the write payload and the
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
+      // The payload is final: the hooks after the write and its events are
+      // told what it moves, a field a hook added or the rules took out
+      // included, where the hooks before it were told what the body sent.
+      settleWriteParts(
+        this.writePartsFor(collection as object, finalData, params.locale)
+      );
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or
@@ -18744,12 +18783,13 @@ export class CollectionMutationService extends BaseService {
             );
             if (!storeAsWorkingDraft) {
               // The fields the outbox event names as changed, from the same
-              // two documents, for the in-process event announced once this
-              // commits.
-              updatedChangedFields = computeChangedFields(
-                previousDocument,
-                workingDraftDocument ?? updatedDocument
-              );
+              // two documents and the same sanitizing, for the in-process
+              // event announced once this commits.
+              updatedChangedFields = eventChangedFields({
+                data: workingDraftDocument ?? updatedDocument,
+                previous: previousDocument,
+                fields: webhookFields,
+              });
               recorded = await recordMutationEvent(tx, {
                 type: "entry.updated",
                 resource: {
@@ -21353,9 +21393,13 @@ export class CollectionMutationService extends BaseService {
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
         // so a receiver knows which translation the payload represents.
-        // The fields the outbox event names, from the same document, for the
-        // in-process event announced once this commits.
-        deletedChangedFields = computeChangedFields(null, deletedDocument);
+        // The fields the outbox event names, from the same document and the
+        // same sanitizing, for the in-process event announced once this
+        // commits.
+        deletedChangedFields = eventChangedFields({
+          data: deletedDocument,
+          fields: webhookFields,
+        });
         recorded = await recordMutationEvent(tx, {
           type: "entry.deleted",
           resource: {
@@ -22124,7 +22168,8 @@ export class CollectionMutationService extends BaseService {
         "created",
         params.collectionName,
         entry as Record<string, unknown>,
-        params.user
+        params.user,
+        createEffects.changedFields
       );
 
       // Execute afterCreate hooks (unless skipped)
@@ -22340,13 +22385,15 @@ export class CollectionMutationService extends BaseService {
     action: CollectionEventAction,
     collectionName: string,
     row: Record<string, unknown>,
-    user: unknown
+    user: unknown,
+    /** The fields the write's outbox event names as changed (`eventChangedFields`). */
+    changedFields: readonly string[]
   ): Promise<void> {
     const committed = detachedForListeners(row);
     const by = detachedForListeners(user);
     // The languages read now, inside the write, rather than when the caller's
     // transaction commits, which may happen outside the write's languages.
-    const facts = collectionEventFacts();
+    const facts = collectionEventFacts(changedFields);
     return this.afterCommit(() =>
       deliverCollectionEvent(action, collectionName, committed, by, facts)
     );
@@ -22837,6 +22884,11 @@ export class CollectionMutationService extends BaseService {
       // the transition classification and the write, so the write payload and the
       // gate agree even when a hook set the undefined.
       stripUndefinedStatus(finalData);
+      // The payload is final, as on updateEntry: what it moves is told to the
+      // hooks after the write and its events. It writes the default language.
+      settleWriteParts(
+        this.writePartsFor(collection as object, finalData, undefined)
+      );
 
       // A row its own gate judged as a publish or an unpublish in place of
       // update that a hook made an edit, naming a field or dropping the
@@ -23950,7 +24002,14 @@ export class CollectionMutationService extends BaseService {
           "updated",
           params.collectionName,
           updated as Record<string, unknown>,
-          params.user
+          params.user,
+          // From the same two documents and the same sanitizing as the
+          // outbox event recorded above.
+          eventChangedFields({
+            data: updatedDocument,
+            previous: previousDocument,
+            fields: eventFields,
+          })
         );
       }
 
@@ -24472,6 +24531,11 @@ export class CollectionMutationService extends BaseService {
       // single-delete path. Resolve component schemas on this transaction's
       // connection to avoid taking a second pooled connection. `locale` is set
       // only for a localized collection.
+      const deleteEventFields = await this.webhookFieldTreeIfRecording(
+        params.collectionName,
+        snapshotFields,
+        tx.getDrizzle()
+      );
       const deleteRecorded = await recordMutationEvent(tx, {
         type: "entry.deleted",
         resource: {
@@ -24482,11 +24546,7 @@ export class CollectionMutationService extends BaseService {
         },
         data: deletedDocument,
         previous: null,
-        fields: await this.webhookFieldTreeIfRecording(
-          params.collectionName,
-          snapshotFields,
-          tx.getDrizzle()
-        ),
+        fields: deleteEventFields,
         actor: actorForWrite(params.actor, params.user),
       });
       // Last of the write itself, still inside the window whose failure is
@@ -24514,7 +24574,9 @@ export class CollectionMutationService extends BaseService {
         "deleted",
         params.collectionName,
         entry,
-        params.user
+        params.user,
+        // From the document and the sanitizing the outbox event used.
+        eventChangedFields({ data: deletedDocument, fields: deleteEventFields })
       );
 
       // The tags this delete invalidates, collected by the batch caller and

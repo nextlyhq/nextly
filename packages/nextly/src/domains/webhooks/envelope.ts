@@ -110,6 +110,35 @@ export function computeChangedFields(
   return changed.sort();
 }
 
+/**
+ * A change as an event may carry it: `data` and `previous` without the
+ * sensitive field paths, and the fields that differ between them. The one
+ * computation of the fields an event names as changed, so the outbox
+ * envelope and the in-process collection event cannot name different ones,
+ * and a stripped field is never named.
+ */
+export function sanitizedChange(input: {
+  data: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  sensitiveFields?: readonly string[];
+}): {
+  data: Record<string, unknown>;
+  previous: Record<string, unknown> | null;
+  changedFields: string[];
+} {
+  const sensitiveFields = input.sensitiveFields ?? [];
+  const data = stripSensitive(input.data, sensitiveFields);
+  const previous =
+    input.previous == null
+      ? null
+      : stripSensitive(input.previous, sensitiveFields);
+  return {
+    data,
+    previous,
+    changedFields: computeChangedFields(previous, data),
+  };
+}
+
 /** Input to {@link buildEnvelope}. All identity/time values are caller-supplied. */
 export interface BuildEnvelopeInput {
   /** ULID; caller-generated so the envelope stays deterministic. */
@@ -151,12 +180,7 @@ export interface BuildEnvelopeInput {
  * and a stripped field never leaks (not even as a name).
  */
 export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
-  const sensitiveFields = input.sensitiveFields ?? [];
-  const data = stripSensitive(input.data, sensitiveFields);
-  const previous =
-    input.previous == null
-      ? null
-      : stripSensitive(input.previous, sensitiveFields);
+  const { data, previous, changedFields } = sanitizedChange(input);
 
   const envelope: WebhookEvent = {
     id: input.id,
@@ -166,7 +190,7 @@ export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
     resource: input.resource,
     data,
     previous,
-    changedFields: computeChangedFields(previous, data),
+    changedFields,
   };
 
   // Only attach optional identity fields when present, so the serialized

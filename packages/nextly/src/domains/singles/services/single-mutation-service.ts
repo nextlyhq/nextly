@@ -39,6 +39,7 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
+  settleWriteParts,
   type SharedPartOf,
   withWriteParts,
   writeMovesSharedPart,
@@ -2394,21 +2395,37 @@ export class SingleMutationService extends BaseService {
       slug,
       this.logger
     );
-    const shared =
+    return withWriteParts(
+      { shared: this.movesSharedPart(meta, data, rawOptions.locale) },
+      () => this.updateInParts(slug, data, rawOptions)
+    );
+  }
+
+  /**
+   * Whether an update of `body` in `locale` moves the Single's shared part:
+   * asked of the body as sent before the hooks run (`update`), and of the
+   * payload as persisted once they have (`settleWriteParts`). The whole
+   * document where the Single is gone.
+   */
+  private movesSharedPart(
+    meta: DynamicSingleRecord | null | undefined,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): boolean {
+    return (
       meta === null ||
       meta === undefined ||
       writeMovesSharedPart(
         {
+          hasLifecycle: hasLifecycle(meta),
           fields: (meta.fields ?? []) as unknown as SharedPartOf["fields"],
           localized: meta.localized === true,
           publishesPerLanguage: publishesPerLanguage(meta),
           defaultLocale: this.localization?.defaultLocale,
         },
-        data,
-        rawOptions.locale
-      );
-    return withWriteParts({ shared }, () =>
-      this.updateInParts(slug, data, rawOptions)
+        body,
+        locale
+      )
     );
   }
 
@@ -3170,6 +3187,12 @@ export class SingleMutationService extends BaseService {
       // would be sanitized to SQL NULL and silently unpublish a published Single
       // without the gate.
       stripUndefinedStatus(currentData);
+      // The payload is final: the hooks after the write and its events are
+      // told what it moves, where the hooks before it were told what the body
+      // sent.
+      settleWriteParts({
+        shared: this.movesSharedPart(singleMeta, currentData, options.locale),
+      });
 
       // A status-only write was judged by its publish or unpublish gate in
       // place of update. A hook that made it an edit, naming a field or

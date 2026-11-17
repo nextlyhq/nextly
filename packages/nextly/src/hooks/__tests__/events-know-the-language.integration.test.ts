@@ -75,6 +75,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "title" }),
           // Shared: one value for every language.
           text({ name: "code", localized: false }),
+          // Hidden: stripped from what an event says, its name included.
+          text({ name: "secret", localized: false, admin: { hidden: true } }),
         ],
       }),
     ],
@@ -112,8 +114,40 @@ const handlerOf = (t: TestNextly) =>
       publishAllLocales(
         params: Record<string, unknown>
       ): Promise<{ success: boolean }>;
+      createEntryInTransaction(
+        tx: unknown,
+        params: Record<string, unknown>,
+        body: Record<string, unknown>
+      ): Promise<{ success: boolean; data?: unknown }>;
+      updateEntryInTransaction(
+        tx: unknown,
+        params: Record<string, unknown>,
+        body: Record<string, unknown>
+      ): Promise<{ success: boolean }>;
+      deleteEntryInTransaction(
+        tx: unknown,
+        params: Record<string, unknown>
+      ): Promise<{ success: boolean }>;
+      updateEntries(
+        params: Record<string, unknown>,
+        entries: { id: string; data: Record<string, unknown> }[]
+      ): Promise<{ successful: number }>;
     };
   };
+
+/** Every `collection.<POSTS>.*` event heard from now until the case ends, in order. */
+function listen(): Record<string, unknown>[] {
+  const heard: Record<string, unknown>[] = [];
+  for (const action of ["created", "updated", "deleted"]) {
+    const name = `collection.${POSTS}.${action}`;
+    const handler = (event: EventEnvelope) => {
+      heard.push({ action, ...parsed(event.payload) });
+    };
+    getEventBus().on(name, handler);
+    listening.push([name, handler]);
+  }
+  return heard;
+}
 
 /** A stored JSON value as an object, from text or a decoded column. */
 const parsed = (value: unknown): Record<string, unknown> =>
@@ -300,6 +334,86 @@ describe.each(getConfiguredTestDialects())(
       const gone = heard.find(e => e.action === "deleted");
       expect(gone?.locale).toBeUndefined();
       expect(gone).toMatchObject({ locales: ["en", "es"] });
+    }, 90_000);
+
+    // A write made in a caller's transaction, one by one or in a batch, tells
+    // a listener the fields it changed, as a write in its own transaction does.
+    it("tells an in-process listener the fields a write in a caller's transaction changed", async () => {
+      const t = await boot(dialect);
+      const id = await inBoth(t, "published");
+      const entries = handlerOf(t).getEntryService();
+      const heard = listen();
+
+      const created = await t.adapter.transaction(tx =>
+        entries.createEntryInTransaction(
+          tx,
+          { collectionName: POSTS, locale: "en", ...asActor },
+          { title: "Lighthouse", code: "l" }
+        )
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const createdId = String((created.data as { id: unknown }).id);
+      const updated = await t.adapter.transaction(tx =>
+        entries.updateEntryInTransaction(
+          tx,
+          { collectionName: POSTS, entryId: id, locale: "es", ...asActor },
+          { title: "Puerto 2", _overwrite: true }
+        )
+      );
+      expect(updated.success, JSON.stringify(updated)).toBe(true);
+      const batch = await entries.updateEntries(
+        { collectionName: POSTS, locale: "en", ...asActor },
+        [{ id: createdId, data: { code: "m", _overwrite: true } }]
+      );
+      expect(batch.successful, JSON.stringify(batch)).toBe(1);
+      const deleted = await t.adapter.transaction(tx =>
+        entries.deleteEntryInTransaction(tx, {
+          collectionName: POSTS,
+          entryId: createdId,
+          ...asActor,
+        })
+      );
+      expect(deleted.success, JSON.stringify(deleted)).toBe(true);
+
+      expect(heard.map(e => e.action)).toEqual([
+        "created",
+        "updated",
+        "updated",
+        "deleted",
+      ]);
+      expect(heard[0]?.changedFields).toEqual(
+        expect.arrayContaining(["title", "code"])
+      );
+      expect(heard[1]?.changedFields).toContain("title");
+      expect(heard[1]?.changedFields).not.toContain("code");
+      expect(heard[2]?.changedFields).toContain("code");
+      expect(heard[2]?.changedFields).not.toContain("title");
+      expect(heard[3]?.changedFields).toEqual(
+        expect.arrayContaining(["title", "code"])
+      );
+    }, 90_000);
+
+    // The fields an event names as changed are named from what the event may
+    // carry: a hidden field is left out of the listener's list, as it is left
+    // out of the outbox envelope's.
+    it("names no hidden field as changed, to a listener or in the outbox", async () => {
+      const t = await boot(dialect);
+      const id = await inBoth(t, "published");
+      const heard = listen();
+      const mark = await markOf(t);
+      const saved = await handlerOf(t).updateEntry(
+        { collectionName: POSTS, entryId: id, locale: "es", ...asActor },
+        { title: "Puerto 2", secret: "hush", _overwrite: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      const { events } = await recordedSince(t, mark);
+      const outbox = events.find(e => e.type === "entry.updated");
+      expect(outbox, JSON.stringify(events)).toBeDefined();
+      const listened = heard.find(e => e.action === "updated");
+      expect(listened?.changedFields).toEqual(outbox?.changedFields);
+      expect(listened?.changedFields).toContain("title");
+      expect(listened?.changedFields).not.toContain("secret");
     }, 90_000);
   }
 );
