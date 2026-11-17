@@ -5,7 +5,9 @@
  * removal's runs table (schema 4), from one with it but before the table
  * keeping what each removal took out (schema 5), from one with both but
  * before a run could mark the removal it undoes (schema 7), and from one
- * whose starts put the lock's row in place (schema 10).
+ * whose starts put the lock's row in place (schema 10), and from one before
+ * the index of where documents bind a Single (schema 10, with the lock's
+ * module).
  *
  * The install is made the way a site at that release made it: a scratch
  * project configured with this plugin as that release shipped it (its first
@@ -22,7 +24,9 @@
  * new module is recorded applied once, and migrating again does nothing. On
  * PostgreSQL and MySQL the options table then holds the graph lock's row,
  * once, and the one a start of the earlier release put there is kept as it
- * was; SQLite keeps none.
+ * was; SQLite keeps none. The index's table is there after every upgrade,
+ * its module's down step (`nextly migrate:down --plugin`) drops it and only
+ * it, and migrating again puts it back.
  *
  * The database is one of the test's own on Postgres and MySQL (created beside
  * the integration database and dropped after), and a scratch file on SQLite,
@@ -47,6 +51,7 @@ import { describe, expect, it } from "vitest";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { migrations } from "../schema/migrations";
 import {
+  bindingUses,
   breakpointRemovalFragments,
   breakpointRemovals,
   SCHEMA_PREFIX,
@@ -66,6 +71,7 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REMOVALS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovals.name}`;
 const FRAGMENTS_TABLE = `${SCHEMA_PREFIX}__${breakpointRemovalFragments.name}`;
 const OPTIONS_TABLE = `${SCHEMA_PREFIX}__${siteOptions.name}`;
+const USES_TABLE = `${SCHEMA_PREFIX}__${bindingUses.name}`;
 
 /** How many modules ship before the one named `suffix`. */
 function shippedBefore(suffix: string): number {
@@ -92,6 +98,10 @@ const RELEASES = [
     release: "whose starts put the graph lock's row in place (schema 10)",
     shipped: shippedBefore("_seed_composition_graph_lock"),
     startedLockRow: true,
+  },
+  {
+    release: "before the index of where documents bind a Single (schema 10)",
+    shipped: shippedBefore("_create_binding_uses_table"),
   },
 ];
 
@@ -332,6 +342,7 @@ describe.each(getConfiguredTestDialects())(
           adapter = opened.adapter;
           expect(await adapter.tableExists(REMOVALS_TABLE)).toBe(true);
           expect(await adapter.tableExists(FRAGMENTS_TABLE)).toBe(true);
+          expect(await adapter.tableExists(USES_TABLE)).toBe(true);
           // One open run at a time: a second open row is refused, and any
           // number of closed ones are kept.
           const row = (id: string, openKey: string | null) => ({
@@ -451,5 +462,63 @@ describe.each(getConfiguredTestDialects())(
       },
       300_000
     );
+
+    it("drops the index of where documents bind a Single with its down step, and only it, and puts it back", async () => {
+      const folder = mkdtempSync(join(tmpdir(), "pb-down-db-"));
+      const database = await scratchDatabase(dialect, folder);
+      const site = project(database);
+      let opened: Awaited<ReturnType<typeof openAdapter>> | undefined;
+      try {
+        await site.nextly(undefined, "migrate:create", "initial");
+        await site.nextly(undefined, "migrate");
+        opened = await openAdapter(database);
+        expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
+        await rowsOn(dialect, opened.adapter).insert(OPTIONS_TABLE, {
+          id: "kept-option",
+          name: "down-probe",
+          value: "kept",
+        });
+        await opened.close();
+        opened = undefined;
+
+        await site.nextly(
+          undefined,
+          "migrate:down",
+          "--plugin",
+          PAGE_BUILDER_PLUGIN_NAME,
+          "--step",
+          "1",
+          "--accept-data-loss"
+        );
+        opened = await openAdapter(database);
+        expect(await opened.adapter.tableExists(USES_TABLE)).toBe(false);
+        // The modules before it, and what they hold, are untouched.
+        expect(
+          await rowsOn(dialect, opened.adapter).column(
+            OPTIONS_TABLE,
+            "kept-option",
+            "value"
+          )
+        ).toBe("kept");
+        const last = migrations[migrations.length - 1]?.name ?? "";
+        expect(last).toMatch(/_create_binding_uses_table$/);
+        const down = await ledger(site.nextly);
+        expect(
+          down.find(entry => entry.filename === ledgerName(last))?.status
+        ).not.toBe("applied");
+        await opened.close();
+        opened = undefined;
+
+        const again = await site.nextly(undefined, "migrate");
+        expect(again.stdout).toContain("Plugin migrations: 1 applied");
+        opened = await openAdapter(database);
+        expect(await opened.adapter.tableExists(USES_TABLE)).toBe(true);
+      } finally {
+        await opened?.close();
+        site.close();
+        await database.drop();
+        rmSync(folder, { recursive: true, force: true });
+      }
+    }, 300_000);
   }
 );
