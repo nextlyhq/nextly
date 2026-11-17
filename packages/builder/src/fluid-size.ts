@@ -53,7 +53,9 @@ export function pxAtWidth(value: string, width: number): number | undefined {
   if (min === undefined || preferred === undefined || max === undefined) {
     return undefined;
   }
-  return Math.min(max, Math.max(min, preferred));
+  // As CSS works it out: the minimum wins where it is larger than the
+  // maximum, so `clamp(32px, 2vw, 16px)` is 32px.
+  return Math.max(min, Math.min(preferred, max));
 }
 
 /** A fluid length's range, from its clamp's bounds; `undefined` otherwise. */
