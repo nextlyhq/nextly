@@ -126,7 +126,22 @@ export function OpenPicker({
 
   const ids = usePickerIds();
   const input = React.useRef<HTMLInputElement | null>(null);
+  // Focus stays in the search, so the list does not follow the highlight by
+  // itself: a choice the keyboard or a new search highlights is brought into
+  // view, as little as it takes, once it is drawn. A fresh object per request
+  // so a key that leaves the highlight where it is still shows it. A pointer
+  // highlight asks for nothing: the choice under the pointer is in view.
+  const [revealed, setRevealed] = React.useState<{ at: number } | null>(null);
+  React.useLayoutEffect(() => {
+    if (revealed === null) return;
+    input.current?.ownerDocument
+      .getElementById(ids.choice(revealed.at))
+      ?.scrollIntoView({ block: "nearest" });
+  }, [revealed, ids]);
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    // An input method composing text owns Enter and the arrows: they pick and
+    // confirm its characters, not a block.
+    if (composing(event.nativeEvent)) return;
     const moved = movedHighlight(
       choices.layout,
       index,
@@ -137,8 +152,12 @@ export function OpenPicker({
     // The picker's own keys, kept from the editor's shortcuts beneath it.
     event.preventDefault();
     event.stopPropagation();
-    if (moved !== undefined) setHighlighted(moved);
-    else choose(index);
+    if (moved === undefined) {
+      choose(index);
+      return;
+    }
+    setHighlighted(moved);
+    setRevealed({ at: moved });
   };
 
   return (
@@ -165,6 +184,9 @@ export function OpenPicker({
         onCloseAutoFocus={event => event.preventDefault()}
         onEscapeKeyDown={event => {
           event.preventDefault();
+          // An input method's Escape cancels what it was composing, and the
+          // search the author is typing stays open.
+          if (composing(event)) return;
           finish({ kind: "dismissed", returnFocus: true });
         }}
         // Leaving by Tab goes where the author went: focus stays there.
@@ -196,6 +218,7 @@ export function OpenPicker({
             onChange={event => {
               setQuery(event.target.value);
               setHighlighted(0);
+              setRevealed({ at: 0 });
             }}
             onKeyDown={onKeyDown}
           />
@@ -236,6 +259,14 @@ export function OpenPicker({
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * Whether a key belongs to an input method composing text: `isComposing`,
+ * or the legacy 229 key code some browsers send instead.
+ */
+function composing(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229;
 }
 
 /** The grid or the list, and what it says when it holds nothing. */

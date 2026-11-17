@@ -365,6 +365,52 @@ describe("the in-place picker", () => {
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
+  it("leaves Enter, the arrows and Escape to an input method while it composes", () => {
+    const editor = editorOn(null);
+    openPicker({ target: between, editor });
+    fireEvent.keyDown(search(), { key: "Enter", isComposing: true });
+    expect(editor.apply).not.toHaveBeenCalled();
+    fireEvent.keyDown(search(), { key: "Enter", keyCode: 229 });
+    fireEvent.keyDown(search(), { key: "ArrowRight", isComposing: true });
+    fireEvent.keyDown(search(), { key: "Escape", isComposing: true });
+    fireEvent.keyDown(search(), { key: "Escape", keyCode: 229 });
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("gridcell", { name: "Heading" })
+        .getAttribute("aria-selected")
+    ).toBe("true");
+  });
+
+  it("scrolls the choice the keyboard highlights into view", () => {
+    const scrolled: Element[] = [];
+    const spy = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this);
+      });
+    try {
+      openPicker({ target: between, editor: editorOn(null) });
+      fireEvent.change(search(), { target: { value: "e" } });
+      fireEvent.keyDown(search(), { key: "End" });
+      const options = within(screen.getByRole("listbox")).getAllByRole(
+        "option"
+      );
+      expect(scrolled.at(-1)).toBe(options.at(-1));
+      expect(spy).toHaveBeenLastCalledWith({ block: "nearest" });
+      // A new search highlights its first result, wherever the list was.
+      fireEvent.change(search(), { target: { value: "o" } });
+      const first = within(screen.getByRole("listbox")).getAllByRole(
+        "option"
+      )[0];
+      expect(first?.getAttribute("aria-selected")).toBe("true");
+      expect(scrolled.at(-1)).toBe(first);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("hands its target to Browse all and closes", () => {
     const onBrowseAll = vi.fn();
     openPicker({ target: between, editor: editorOn(null), onBrowseAll });
