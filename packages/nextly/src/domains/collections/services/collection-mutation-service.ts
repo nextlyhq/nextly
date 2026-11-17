@@ -4836,6 +4836,22 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
+  /**
+   * How a publish of `collection` promotes pending changes, or null where it promotes none: a
+   * collection with no lifecycle or that keeps no working drafts. A context with no
+   * `promoteRestoreCtx` is one whose schema the split no longer covers, which promotes none
+   * either. One answer for the publish and for what is read before it.
+   */
+  private async publishPromotionContext(
+    collection: unknown,
+    collectionName: string
+  ): Promise<ReleaseWriteContext | null> {
+    const hasMainStatus = (collection as { status?: boolean }).status === true;
+    return hasMainStatus && this.keepsWorkingDrafts(collection)
+      ? this.releaseWriteContext(collection, collectionName, "published")
+      : null;
+  }
+
   /** Whether the collection keeps working drafts at all. */
   private keepsWorkingDrafts(collection: unknown): boolean {
     return (
@@ -10564,14 +10580,12 @@ export class CollectionMutationService extends BaseService {
     // Null where nothing can be promoted: an unpublish, a collection with no
     // lifecycle or that keeps no working drafts, or one whose schema the
     // split no longer covers.
-    const promotionContext =
-      publishes && hasMainStatus && this.keepsWorkingDrafts(publishCollection)
-        ? await this.releaseWriteContext(
-            publishCollection,
-            params.collectionName,
-            "published"
-          )
-        : null;
+    const promotionContext = publishes
+      ? await this.publishPromotionContext(
+          publishCollection,
+          params.collectionName
+        )
+      : null;
     const promotion =
       promotionContext?.promoteRestoreCtx != null
         ? {
@@ -10918,14 +10932,17 @@ export class CollectionMutationService extends BaseService {
       // catch below with the hook's own status and message.
       // What the publish gate is told of this move: its direction, and the parts it puts live or
       // takes down. Languages only where the collection keeps a status per language: an
-      // untranslated one moves its shared part alone, whatever languages the site has.
+      // untranslated one moves its shared part alone, whatever languages the site has. The
+      // languages are those the move tells (`languagesPublishMoves`), read on the pool for the
+      // early answer and on the transaction for the verdict, so a language the move leaves alone
+      // (holding nothing, or live with no change) is never judged.
       const gateDirection =
         direction.nextStatus === "published" ? "publish" : "unpublish";
-      const gateParts: PublishPart[] = [
-        ...(companionPublishable ? (this.localization?.locales ?? []) : [])
-          .map(language => language.code)
-          .filter(locale => movesLanguage(params.parts, locale))
-          .map(locale => ({ kind: "language" as const, locale })),
+      const gatePartsOf = (languages: readonly string[]): PublishPart[] => [
+        ...(companionPublishable ? languages : []).map(locale => ({
+          kind: "language" as const,
+          locale,
+        })),
         ...(movesShared(params.parts) ? [{ kind: "shared" as const }] : []),
       ];
       // The gate's early answer, asked before the move runs any hook: a publish the gate holds
@@ -10936,7 +10953,18 @@ export class CollectionMutationService extends BaseService {
           scope: { kind: "collection", slug: params.collectionName },
           entryId: params.entryId,
           direction: gateDirection,
-          parts: gateParts,
+          parts: gatePartsOf(
+            companionPublishable
+              ? await this.languagesPublishMovesOn(this.adapter, {
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  companion,
+                  pendingFrom: promotion ? draftRef : null,
+                  parts: params.parts,
+                  mainStatus: (existingEntry as { status?: unknown }).status,
+                })
+              : []
+          ),
           live: await this.livePartsOn(this.adapter, {
             collectionName: params.collectionName,
             entryId: params.entryId,
@@ -11278,6 +11306,18 @@ export class CollectionMutationService extends BaseService {
           }
         }
 
+        // The languages this publish tells (`languagesTold`), within the parts it moves, read
+        // under the lock. Every pending change is promoted or the publish is refused, so the
+        // languages promoted are those holding one. The gate below judges exactly these.
+        const told = publishes
+          ? this.languagesPublishMoves({
+              prior: priorCompanionStatuses,
+              pending,
+              mainStatus: lockedRow.status,
+              parts: params.parts,
+            })
+          : [];
+
         // The publish gate's verdict, asked on this transaction once the entry is locked: the
         // early answer came before the transaction, and this is the one the move keeps to. It is
         // told the parts this move puts live or takes down, and what was live as this lock reads
@@ -11290,7 +11330,7 @@ export class CollectionMutationService extends BaseService {
                 scope: { kind: "collection", slug: params.collectionName },
                 entryId: params.entryId,
                 direction: gateDirection,
-                parts: gateParts,
+                parts: gatePartsOf(told.map(language => language.locale)),
                 live: {
                   languages: [...priorCompanionStatuses]
                     .filter(([, status]) => status === "published")
@@ -11324,24 +11364,6 @@ export class CollectionMutationService extends BaseService {
         // Each language's pending change as the write lands it, judged
         // before anything is written.
         const promotions: PendingPromotion[] = [];
-        // The languages this publish tells (`languagesTold`). Every pending
-        // change is promoted or the publish is refused, so the languages
-        // promoted are those holding one.
-        const promotedLocales = new Set(
-          pending.flatMap(change =>
-            change.locale === null ? [] : [change.locale]
-          )
-        );
-        // Only the chosen languages are told, where a publish chooses some.
-        const told = publishes
-          ? languagesTold({
-              configured: configuredLocales,
-              defaultLocale: defaultLocale ?? "",
-              prior: priorCompanionStatuses,
-              promoted: promotedLocales,
-              mainStatus: lockedRow.status,
-            }).filter(language => movesLanguage(params.parts, language.locale))
-          : [];
         // Each told language, and each pending change's, as stored before
         // anything is written, in one read for them all, once the shared
         // values refuse nothing: what a change's promotion is judged
@@ -12590,6 +12612,69 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The languages a publish of every language tells (`languagesTold`), within `parts`: each one
+   * that goes live, and each already live whose pending change goes live. A language holding
+   * nothing, or live with no change, is not among them, since the move leaves it as it is. The
+   * transition derives what it writes and records from this, and the publish gate is asked of
+   * exactly these languages, so the gate judges no language the move does not move.
+   */
+  private languagesPublishMoves(args: {
+    /** Each stored translation's status before the publish. */
+    prior: ReadonlyMap<string, string | null>;
+    /** The pending changes the publish promotes; one under no language is the shared part's. */
+    pending: readonly Pick<PendingChange, "locale">[];
+    /** The entry's own status before the publish, on its main row. */
+    mainStatus: unknown;
+    parts: LifecycleParts | undefined;
+  }): ReturnType<typeof languagesTold> {
+    return languagesTold({
+      configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      prior: args.prior,
+      promoted: new Set(
+        args.pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+      mainStatus: args.mainStatus,
+    }).filter(language => movesLanguage(args.parts, language.locale));
+  }
+
+  /**
+   * {@link languagesPublishMoves} as `reader` reads its inputs: on the pool, for the publish
+   * gate's early answer, which the transition's verdict under the row lock repeats on what it
+   * locked. Only the language codes.
+   */
+  private async languagesPublishMovesOn(
+    reader: DrizzleAdapter,
+    args: {
+      collectionName: string;
+      entryId: string;
+      /** The entry's translations table, where it keeps a status per language; else null. */
+      companion: CompanionSchema | null;
+      /** Where the pending changes the publish promotes are kept; null where it promotes none. */
+      pendingFrom: VersionRef | null;
+      parts: LifecycleParts | undefined;
+      mainStatus: unknown;
+    }
+  ): Promise<string[]> {
+    const prior = await this.priorCompanionStatusesOnTx(reader, {
+      companion: args.companion,
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+    });
+    const pending = args.pendingFrom
+      ? await pendingChangesInSaveOrder(reader, args.pendingFrom)
+      : [];
+    return this.languagesPublishMoves({
+      prior,
+      pending,
+      mainStatus: args.mainStatus,
+      parts: args.parts,
+    }).map(language => language.locale);
+  }
+
+  /**
    * The publish gate's view of a save that names a lifecycle status, or null where it names none
    * or the collection has no lifecycle: which parts it moves follows from its status and language.
    */
@@ -13469,6 +13554,8 @@ export class CollectionMutationService extends BaseService {
       /** The languages whose refusal is asked, or every language the site has. */
       locales: readonly string[] | "all";
       shared: boolean;
+      /** Whether the request names every language rather than choosing some. */
+      everyLanguage?: boolean;
     }
   ): Promise<
     | { answer: CollectionServiceResult }
@@ -13476,6 +13563,7 @@ export class CollectionMutationService extends BaseService {
         state: PartsState;
         languageRefusals: Map<string, string>;
         sharedRefusal: string | null;
+        everyLanguageMoves?: string[];
       }
   > {
     const toUpdate = await this.entryToUpdate({ ...params, gate: null });
@@ -13522,13 +13610,64 @@ export class CollectionMutationService extends BaseService {
           refusalNow
         )
       : null;
+    // A publish of every language moves only the languages the transition tells, so the publish
+    // gate's early answer is asked of those, read as the transition's own early answer reads
+    // them; the transition's verdict under the row lock judges the same set.
+    const everyLanguageMoves =
+      ask.action === "publish" && ask.everyLanguage === true
+        ? await this.everyLanguagePublishMoves(
+            params,
+            collection,
+            existingEntry as { status?: unknown }
+          )
+        : undefined;
     return {
       state,
       languageRefusals,
       sharedRefusal: sharedRefused
         ? (sharedRefused.message ?? "Refused.")
         : null,
+      ...(everyLanguageMoves === undefined ? {} : { everyLanguageMoves }),
     };
+  }
+
+  /**
+   * The languages a publish of every language of an entry moves, read on the pool from the
+   * collection's translations and pending changes as the transition resolves them before its
+   * transaction: none where the collection keeps no status per language.
+   */
+  private async everyLanguagePublishMoves(
+    params: AllLocalesLifecycleParams,
+    collection: unknown,
+    entry: { status?: unknown }
+  ): Promise<string[]> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    const publishable =
+      !!companion &&
+      companion.hasStatus &&
+      (await isCompanionReady(this.adapter, companion.companionTableName));
+    if (!publishable) return [];
+    const promotion = await this.publishPromotionContext(
+      collection,
+      params.collectionName
+    );
+    return this.languagesPublishMovesOn(this.adapter, {
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+      companion,
+      pendingFrom:
+        promotion?.promoteRestoreCtx != null
+          ? {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: params.entryId,
+            }
+          : null,
+      parts: undefined,
+      mainStatus: entry.status,
+    });
   }
 
   /**

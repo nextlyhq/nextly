@@ -113,6 +113,12 @@ export interface PartsReads {
   languageRefusals: ReadonlyMap<string, string>;
   /** Why the caller may not move the shared part, when asked about it, or null. */
   sharedRefusal: string | null;
+  /**
+   * For a publish of every language, the languages it moves: those that go live, and those
+   * already live whose pending change goes live. Absent where the reads do not say, and every
+   * configured language is asked about instead.
+   */
+  everyLanguageMoves?: readonly string[];
 }
 
 /** What a request is carried out with, bound to the entry and the caller. */
@@ -125,6 +131,8 @@ export interface PublishPartsEngines {
     /** The languages whose refusal is asked, or every language the site has. */
     locales: readonly string[] | "all";
     shared: boolean;
+    /** Whether the request names every language rather than choosing some. */
+    everyLanguage: boolean;
   }): Promise<PartsReads | CollectionServiceResult>;
   gate: PublishGate;
   /** The entry's collection and who asks, for the gate. */
@@ -299,9 +307,15 @@ async function gateIssues(
   // Unpublishing is never gated: what holds a publish back does not keep a part live.
   if (judged.direction !== "publish") return [];
   // Languages only where the entry keeps them: an untranslated one moves its shared part alone,
-  // whatever languages the site has.
+  // whatever languages the site has. A publish of every language is asked only of the languages
+  // it moves, where the reads name them: one holding nothing, or live with no change, stays as it
+  // is, and the transition's verdict under the row lock judges the same set.
+  const languages =
+    judged.everyLanguage && judged.reads.everyLanguageMoves !== undefined
+      ? judged.reads.everyLanguageMoves
+      : judged.chosen;
   const parts: PublishPart[] = [
-    ...(judged.reads.state.translated ? judged.chosen : []).map(locale => ({
+    ...(judged.reads.state.translated ? languages : []).map(locale => ({
       kind: "language" as const,
       locale,
     })),
@@ -605,6 +619,7 @@ export async function publishParts(
   const reads = await engines.reads({
     locales: askedForAccess,
     shared: !everyLanguage,
+    everyLanguage,
   });
   if ("success" in reads) return reads;
   const { state } = reads;
