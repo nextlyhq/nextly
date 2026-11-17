@@ -748,10 +748,9 @@ describe("the add menu and the rest of the editor", () => {
     // A modal menu marks everything outside it aria-hidden while those
     // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
     render(<Hosted tokens={SITE} />);
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "Add spacing, radius or shadow" }),
-      { key: "Enter" }
-    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "Add value" }), {
+      key: "Enter",
+    });
     await screen.findByRole("menu");
 
     expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
@@ -1615,12 +1614,10 @@ describe("a Design tab's view of the variables", () => {
   function Folding({
     search,
     groups,
-    onSearch,
     initiallyFolded = [],
   }: {
     search?: string;
     groups?: readonly VariableGroup[];
-    onSearch?: (query: string) => void;
     initiallyFolded?: readonly string[];
   }): React.JSX.Element {
     const [folded, setFolded] = React.useState<ReadonlySet<string>>(
@@ -1631,7 +1628,6 @@ describe("a Design tab's view of the variables", () => {
         tokens={SITE}
         {...(search === undefined ? {} : { search })}
         {...(groups === undefined ? {} : { groups })}
-        {...(onSearch === undefined ? {} : { onSearch })}
         folds={{
           folded,
           onFold: (group, fold) =>
@@ -1691,10 +1687,10 @@ describe("a Design tab's view of the variables", () => {
     // a worded line at the end of the tab meanwhile.
     render(<Folding groups={["spacing", "other"]} />);
     expect(screen.queryByRole("button", { name: /^Other values/ })).toBeNull();
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Add another variable" }),
-      { button: 0, ctrlKey: false }
-    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add value" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
     // The group appears with its first variable, its editor open (which
     // hides the rest of the page from the accessibility tree).
@@ -1704,35 +1700,37 @@ describe("a Design tab's view of the variables", () => {
     ).toBeTruthy();
   });
 
-  it("opens a folded group for what is added to it", async () => {
+  it("folds a group's add row away with its rows, and brings it back on opening", () => {
     render(<Folding />);
     const toggle = screen.getByRole("button", { name: "Colours, 2" });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    expect(
-      screen
-        .getByRole("button", { name: "Colours, 3", hidden: true })
-        .getAttribute("aria-expanded")
-    ).toBe("true");
+    expect(screen.queryByRole("button", { name: "Add colour" })).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Add colour" })).toBeTruthy();
   });
 
-  it("empties the host's search when a variable is added, so its row is drawn", () => {
-    const onSearch = vi.fn();
-    render(<Folding search="brand" onSearch={onSearch} />);
+  it("keeps the host's search when a variable is added, its row held in view", async () => {
+    render(<Folding search="brand" />);
     fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
-    expect(onSearch).toHaveBeenCalledWith("");
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    // Still narrowed: Text, which the search hides, is not drawn.
+    expect(
+      document.querySelector('[data-variable-key="color.text"]')
+    ).toBeNull();
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).not.toBeNull();
   });
 
   it("opens a hidden group the author had folded, for its first variable", async () => {
     render(
       <Folding groups={["spacing", "other"]} initiallyFolded={["other"]} />
     );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Add another variable" }),
-      { button: 0, ctrlKey: false }
-    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add value" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
     expect(await screen.findByRole("dialog")).toBeTruthy();
     expect(

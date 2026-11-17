@@ -77,6 +77,12 @@ import {
  */
 const READS = new WeakMap<PageBindings, PageReadReport>();
 
+/**
+ * The change check's mark each answer carried, taken before its sources were
+ * read; kept beside the answer as its reads are.
+ */
+const STAMPS = new WeakMap<PageBindings, string>();
+
 /** What reading these bindings cost, when the route said; none for none read. */
 export function bindingReadsOf(
   bindings: PageBindings
@@ -377,8 +383,27 @@ function useWatchedSources(
     asked,
     userId,
     undefined,
-    firstReadsInOf(request, bound)
+    firstReadsInOf(request, bound),
+    firstMarkOf(request, asked, bound)
   );
+}
+
+/**
+ * The change check's first mark, from the answer the canvas first drew
+ * with: only where the check asks about exactly the sources that answer
+ * marked. A list whose collection a binding names is asked about too, which
+ * the answer's mark did not cover, so there the check takes its own.
+ */
+function firstMarkOf(
+  request: CanvasBindingsRequest | undefined,
+  asked: CanvasSourcesChangedRequest | undefined,
+  bound: PageBindings | undefined
+): string | undefined {
+  if (request === undefined || asked === undefined || bound === undefined) {
+    return undefined;
+  }
+  const marked = JSON.stringify(sourcesChangedAskOf(request));
+  return marked === JSON.stringify(asked) ? STAMPS.get(bound) : undefined;
 }
 
 /** The entry an ask is made for, as the route takes it. */
@@ -491,6 +516,7 @@ export function canvasBindingsFor(
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);
+    if (typeof answer.stamp === "string") STAMPS.set(bindings, answer.stamp);
     return bindings;
   });
   KEPT.set(key, { read: reading });

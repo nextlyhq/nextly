@@ -65,6 +65,11 @@ export interface VariableRowProps {
   onRemoved: () => void;
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
+  /**
+   * Just added and shown though the search does not match it, until its
+   * editor closes: marked "New", so its place in a narrowed list is clear.
+   */
+  marked?: boolean;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
@@ -88,6 +93,7 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
+  marked = false,
   usage,
   reach,
 }: VariableRowProps): React.JSX.Element {
@@ -133,7 +139,14 @@ export function VariableRow({
                     // The visible name first, then the values the swatch
                     // shows, so a screen reader hears both and speech input
                     // still matches.
-                    aria-label={`${shown}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
+                    aria-label={rowLabel({
+                      entry,
+                      token,
+                      tokens,
+                      mode,
+                      reach,
+                      marked,
+                    })}
                     data-kind={entry.row.kind}
                     // Drawn as chosen while its editor is open. Its own mark:
                     // the row's tooltip sets `data-state` too, over the
@@ -141,18 +154,12 @@ export function VariableRow({
                     data-open={markOf(open)}
                     onKeyDown={onKeyDown}
                   >
-                    <RowLead
+                    <RowFace
                       entry={entry}
                       token={token}
                       tokens={tokens}
                       mode={mode}
-                    />
-                    <RowName entry={entry} />
-                    <RowTail
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
+                      marked={marked}
                     />
                   </button>
                 </PopoverTrigger>
@@ -245,6 +252,61 @@ function rowKeys(
     if (menu) on.menu();
     else on.rename();
   };
+}
+
+/**
+ * The row's name as a screen reader hears it: the visible name, "new" while
+ * it is marked so, the values the swatch shows, and how widely it is used.
+ */
+function rowLabel({
+  entry,
+  token,
+  tokens,
+  mode,
+  reach,
+  marked,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  reach: VariableReach | undefined;
+  marked: boolean;
+}): string {
+  const fresh = marked ? ", new" : "";
+  return `${shownName(entry)}${fresh}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
+}
+
+/**
+ * What the row draws: its preview, its name, and its value, or "New" in
+ * the value's place while the editor beside it shows the value.
+ */
+function RowFace({
+  entry,
+  token,
+  tokens,
+  mode,
+  marked,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  marked: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
+      <RowName entry={entry} />
+      {marked ? (
+        <span className="nx-vars__new" aria-hidden="true">
+          New
+        </span>
+      ) : (
+        <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
+      )}
+    </>
+  );
 }
 
 /** The row's name, and its kind where another row shares the name. */

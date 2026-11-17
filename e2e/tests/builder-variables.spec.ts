@@ -529,12 +529,14 @@ function canvasValue(page: Page, property: string): Promise<string> {
     );
 }
 
-/** The "+" labels of the Variables groups, every way to add a variable. */
+/** The add rows the Variables lists end with, every way to add a variable. */
 const ADD_LABELS = [
   "Add colour",
   "Add type size",
-  "Add spacing, radius or shadow",
-  "Add another variable",
+  "Add spacing",
+  "Add radius",
+  "Add shadow",
+  "Add value",
 ];
 
 /**

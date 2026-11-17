@@ -54,24 +54,46 @@ export const STARTED_READ_HANDOFF_MS = 2_000;
 /** The start-up answers, by the path each read's own route answers at. */
 type Answers = Readonly<Record<string, BuilderStartupAnswer>>;
 
-/** Ask the start-up route for `reads`, each by its own route's path. */
-export type AskStartup = (reads: readonly string[]) => Promise<Answers>;
+/** What the start-up route answered, and for whom, when it says. */
+export interface StartupReply {
+  readonly reads: Answers;
+  /** The signed-in person it was read for; `null` for nobody. */
+  readonly readFor?: string | null;
+}
 
-async function askRoute(reads: readonly string[]): Promise<Answers> {
+/** Ask the start-up route for `reads`, each by its own route's path. */
+export type AskStartup = (reads: readonly string[]) => Promise<StartupReply>;
+
+async function askRoute(reads: readonly string[]): Promise<StartupReply> {
   const body = await readPluginRoute<BuilderStartupResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: builderStartupPath(reads),
   });
-  return body?.reads ?? {};
+  return {
+    reads: body?.reads ?? {},
+    readFor: typeof body?.readFor === "string" ? body.readFor : null,
+  };
 }
 
 /** One start-up request, for one person. */
 interface Started {
-  readonly userId: string;
-  readonly key: string;
+  /**
+   * Whom it was read for; `null` for one sent as the admin loaded, before
+   * anyone asked, until the editor that opens first claims it.
+   */
+  userId: string | null;
+  /** The reads it names, sorted, as one string. */
+  readonly readsKey: string;
   readonly reads: ReadonlySet<string>;
-  readonly answers: Promise<Answers | undefined>;
+  answers: Promise<Answers | undefined>;
   readonly taken: Set<string>;
+  /** Sent before anyone asked: it goes only to the person the route names. */
+  readonly early: boolean;
+  /**
+   * Whom the route says it read for, once it answered: the session's person
+   * as the request was made. `undefined` where it did not say.
+   */
+  readFor?: string | null;
   /** What it answered, once it has; `null` when the request failed. */
   settled?: Answers | null;
   settledAt?: number;
@@ -92,6 +114,18 @@ function handsOff(entry: Started, now: number): boolean {
     entry.settledAt === undefined ||
     now - entry.settledAt <= STARTED_READ_HANDOFF_MS
   );
+}
+
+/**
+ * Whether `entry`'s answers may go to the person it is held for: the one the
+ * route read them for. One sent before anyone asked goes to nobody the route
+ * did not name, so a person who signed in after it was sent, in place of
+ * the one it was read for, reads their own routes.
+ */
+function forItsPerson(entry: Started): boolean {
+  if (entry.userId === null) return false;
+  if (entry.readFor !== undefined) return entry.readFor === entry.userId;
+  return !entry.early;
 }
 
 /** Whether a start-up answer is its route's answer, with a body to take. */
@@ -116,25 +150,74 @@ export function startBuilderReads(
     forgetStartedReads();
     return;
   }
-  const key = JSON.stringify([userId, [...reads].sort()]);
-  if (started?.key === key && handsOff(started, now())) return;
+  const readsKey = JSON.stringify([...reads].sort());
+  if (started?.readsKey === readsKey && handsOff(started, now())) {
+    // Sent as the admin loaded, for whoever opens the builder first: this
+    // editor, unless it answered already for someone else.
+    if (
+      started.userId === null &&
+      (started.settled === undefined || started.readFor === userId)
+    ) {
+      started.userId = userId;
+      changed();
+    }
+    if (started.userId === userId) return;
+  }
+  started = startedFor(userId, reads, readsKey, ask, now);
+  changed();
+}
+
+/**
+ * Send the builder's start-up read for `reads` as the admin loads, at an
+ * address that opens the builder, before any editor asks: the first editor to
+ * open with the same reads, while it still hands its answers out, takes it as
+ * its own (`startBuilderReads`). Nothing is handed out before that.
+ */
+export function startEarlyBuilderReads(
+  reads: readonly string[],
+  ask: AskStartup = askRoute,
+  now: () => number = Date.now
+): void {
+  if (reads.length === 0 || started !== undefined) return;
+  started = startedFor(
+    null,
+    reads,
+    JSON.stringify([...reads].sort()),
+    ask,
+    now
+  );
+  changed();
+}
+
+/** A start-up request for `reads`, sent now. */
+function startedFor(
+  userId: string | null,
+  reads: readonly string[],
+  readsKey: string,
+  ask: AskStartup,
+  now: () => number
+): Started {
   const entry: Started = {
     userId,
-    key,
+    readsKey,
     reads: new Set(reads),
     taken: new Set(),
-    answers: ask(reads).then(
-      answers => answers,
-      () => undefined
-    ),
+    early: userId === null,
+    answers: Promise.resolve(undefined),
   };
+  entry.answers = ask(reads).then(
+    reply => {
+      entry.readFor = reply.readFor;
+      return reply.reads;
+    },
+    () => undefined
+  );
   void entry.answers.then(answers => {
     entry.settled = answers ?? null;
     entry.settledAt = now();
     if (started === entry) changed();
   });
-  started = entry;
-  changed();
+  return entry;
 }
 
 /** Drop the start-up answers: another person signed in, or nobody is. */
@@ -152,6 +235,10 @@ function handingOut(
 ): Started | undefined {
   const entry = started;
   if (entry === undefined || !entry.reads.has(path)) return undefined;
+  // Not yet claimed by an editor: whom it was read for is not known.
+  if (entry.userId === null) return undefined;
+  // Answered for someone else: nothing of it is handed out.
+  if (entry.settled !== undefined && !forItsPerson(entry)) return undefined;
   if (userId !== undefined && userId !== entry.userId) return undefined;
   return handsOff(entry, now) ? entry : undefined;
 }
@@ -176,7 +263,8 @@ export function readStarted<T>(
     once: true,
   });
   return entry.answers.then(answers => {
-    const answer = answers?.[path];
+    // Checked as it arrives too: it may have been claimed while on its way.
+    const answer = forItsPerson(entry) ? answers?.[path] : undefined;
     return answered(answer) ? (answer?.body as T) : read();
   });
 }
