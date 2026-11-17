@@ -1,0 +1,211 @@
+/**
+ * A Single's Schema Builder dialog save fills the row the Single already holds, as its PATCH road
+ * does, on every dialect.
+ *
+ * A Single has one row. A field the dialog adds to it takes, in that row, the default the field
+ * states (`singleRowFillValue`, the one value both roads use): an optional field's default lands
+ * there instead of NULL, and a required field with a stated default fills the row instead of being
+ * refused. A required field stating no default is still asked about, the person's own answer wins
+ * over the default, a field renamed onto keeps its value, and a unique field is filled too, since
+ * one row cannot repeat a value.
+ *
+ * Every save runs under `NODE_ENV=development`, where a Builder save applies its change at once, in
+ * a project directory of its own, where the save writes its migration file.
+ */
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import {
+  createTestNextly,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+
+type Field = Record<string, unknown> & { name?: string; type: string };
+
+const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
+const TABLE = "single_sdf_home";
+const BODY: Field = { name: "body", type: "text" };
+
+describeEachDialect(
+  "a Single's dialog save fills the row it holds",
+  dialect => {
+    let t: TestNextly;
+    let basePath: string;
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-single-fill-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "sdf_home", label: "Home", fields: [BODY] }
+      );
+      // The row the Single holds, with a value the saves below must keep.
+      await t.singles.update("sdf_home", { body: "kept", _overwrite: true });
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    async function query<T>(sql: string): Promise<T[]> {
+      return (
+        t.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<T>(sql);
+    }
+
+    /** The Single's one row, as the table holds it. */
+    async function row(): Promise<Record<string, unknown>> {
+      const rows = await query<Record<string, unknown>>(
+        `SELECT * FROM ${q(TABLE)}`
+      );
+      expect(rows).toHaveLength(1);
+      return rows[0]!;
+    }
+
+    /** Whether the table's `column` takes NULL. */
+    async function nullable(column: string): Promise<boolean> {
+      const [found] = await query<{ nullable: unknown }>(
+        dialect === "sqlite"
+          ? `SELECT CASE WHEN "notnull" = 0 THEN 'YES' ELSE 'NO' END AS nullable FROM pragma_table_info('${TABLE}') WHERE name = '${column}'`
+          : dialect === "mysql"
+            ? `SELECT IS_NULLABLE AS nullable FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME = '${column}'`
+            : `SELECT is_nullable AS nullable FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${TABLE}' AND column_name = '${column}'`
+      );
+      return String(found?.nullable) === "YES";
+    }
+
+    /** The Single's schema version, which the dialog sends with its save. */
+    async function version(): Promise<number> {
+      const [found] = await query<{ v: unknown }>(
+        `SELECT ${q("schema_version")} AS v FROM ${q("dynamic_singles")} WHERE ${q("slug")} = 'sdf_home'`
+      );
+      return Number(found?.v ?? 1);
+    }
+
+    /** The dialog's save of `fields`, with its answers. */
+    async function save(
+      fields: Field[],
+      answers: Record<string, unknown> = {}
+    ): Promise<unknown> {
+      return dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "sdf_home" },
+        {
+          fields,
+          confirmed: true,
+          schemaVersion: await version(),
+          ...answers,
+        }
+      );
+    }
+
+    /** Every migration file the saves wrote, with what it holds. */
+    async function migrationText(): Promise<string> {
+      const dir = join(basePath, "migrations");
+      const files = (await readdir(dir)).filter(f => f.endsWith(".sql"));
+      return (
+        await Promise.all(files.map(f => readFile(join(dir, f), "utf-8")))
+      ).join("\n");
+    }
+
+    it("gives an optional field's default to the row, and keeps the field optional", async () => {
+      await save([
+        BODY,
+        { name: "subtitle", type: "text", defaultValue: "Hello" },
+      ]);
+      const saved = await row();
+      expect(saved.subtitle).toBe("Hello");
+      expect(saved.body).toBe("kept");
+      expect(await nullable("subtitle")).toBe(true);
+      // The file a fresh database replays fills the row as this one was filled.
+      expect(await migrationText()).toMatch(/UPDATE[\s\S]*subtitle/i);
+    });
+
+    it("fills the row for a required field stating a default, instead of refusing it", async () => {
+      await save([
+        BODY,
+        {
+          name: "tagline",
+          type: "text",
+          required: true,
+          defaultValue: "Draft",
+        },
+      ]);
+      expect((await row()).tagline).toBe("Draft");
+      expect(await nullable("tagline")).toBe(false);
+    });
+
+    it("still asks about a required field stating no default", async () => {
+      await expect(
+        save([BODY, { name: "tagline", type: "text", required: true }])
+      ).rejects.toBeDefined();
+      expect(Object.keys(await row())).not.toContain("tagline");
+    });
+
+    it("fills the row with the person's own answer over the field's default", async () => {
+      await save(
+        [
+          BODY,
+          {
+            name: "tagline",
+            type: "text",
+            required: true,
+            defaultValue: "Draft",
+          },
+        ],
+        {
+          resolutions: {
+            tagline: { action: "provide_default", value: "Mine" },
+          },
+        }
+      );
+      expect((await row()).tagline).toBe("Mine");
+    });
+
+    it("fills a unique field's default, which one row cannot repeat", async () => {
+      await save([
+        BODY,
+        { name: "code", type: "text", unique: true, defaultValue: "U1" },
+      ]);
+      expect((await row()).code).toBe("U1");
+    });
+
+    it("keeps the value of a field renamed onto, rather than filling it", async () => {
+      await save([{ name: "headline", type: "text", defaultValue: "New" }], {
+        renameResolutions: [
+          {
+            tableName: TABLE,
+            fromColumn: "body",
+            toColumn: "headline",
+            choice: "rename",
+          },
+        ],
+      });
+      expect((await row()).headline).toBe("kept");
+    });
+  }
+);
