@@ -16412,7 +16412,7 @@ export class CollectionMutationService extends BaseService {
       // its name: refused here, with access judged and before any hook, rather than left to fail
       // in the database. The keys a read adds are taken off, so a document sent back as it was
       // read still saves.
-      body = writableBodyOf(body, "collection", fields);
+      body = writableBodyOf(body, "collection", fields, tableName);
       // A save that names a status changes what readers see, so the publish gate is asked of it
       // as a publish of chosen parts is: its early answer here, before any hook runs, and its
       // verdict under the row lock below.

@@ -50,23 +50,16 @@ describe("collection entry unpublish-all route", () => {
     }
   });
 
-  it("matches a trailing segment exactly as publish-all does", () => {
-    // Both branches test `additionalParams[0]` with no length check, so a
-    // trailing segment is IGNORED rather than refused: `.../unpublish-all/de`
-    // takes down every language, not `de`.
-    //
-    // Asserted as PARITY rather than as strictness, deliberately. The looseness
-    // is the publish branch's existing behaviour and predates this route; making
-    // only the takedown strict would be the worse outcome, because the two would
-    // then disagree about what the same URL shape means. Recorded as a
-    // pre-existing observation rather than fixed here — tightening publish-all
-    // is a behaviour change to a shipped route and belongs in its own change.
+  it("refuses a trailing segment, as publish-all does", () => {
+    // Every language moves at once, so a trailing segment names nothing either route can act on:
+    // `.../unpublish-all/de` is refused rather than read as taking every language down. Both
+    // routes refuse it alike, so the same URL shape means the same thing to each.
     expect(
       parseRestRoute([...ENTRY, "unpublish-all", "de"], "POST").method
-    ).toBe("unpublishAllLocales");
-    expect(parseRestRoute([...ENTRY, "publish-all", "de"], "POST").method).toBe(
-      "publishAllLocales"
-    );
+    ).not.toBe("unpublishAllLocales");
+    expect(
+      parseRestRoute([...ENTRY, "publish-all", "de"], "POST").method
+    ).not.toBe("publishAllLocales");
   });
 
   it("does not shadow publish-all, and is not shadowed by it", () => {

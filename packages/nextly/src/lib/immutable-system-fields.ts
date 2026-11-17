@@ -337,9 +337,17 @@ function undeclaredWriteKeys(
 export function writableBodyOf(
   data: Record<string, unknown>,
   entity: WritableEntityKind,
-  fields: unknown
+  fields: unknown,
+  /** The SQL table the body is written to, whose schema-hook columns it may name. */
+  tableName: string
 ): Record<string, unknown> {
-  const keys = undeclaredWriteKeys(data, entity, fields);
+  // A column a schema hook contributed to the table is a known key, not an unknown one: a body
+  // that carries it is accepted and the column left unwritten, as the row strip leaves it
+  // (`stripImmutableSystemFields`, by the same predicate). Any other key is still refused.
+  const isContributed = hiddenColumnMatcher(tableName);
+  const keys = undeclaredWriteKeys(data, entity, fields).filter(
+    key => !isContributed(key)
+  );
   if (keys.length > 0) {
     const kind = entity === "single" ? "Single" : "collection";
     throw NextlyError.validation({
@@ -350,8 +358,10 @@ export function writableBodyOf(
       })),
     });
   }
-  if (!Object.keys(data).some(key => NOT_STORED_KEYS.has(key))) return data;
+  const notStored = (key: string) =>
+    NOT_STORED_KEYS.has(key) || isContributed(key);
+  if (!Object.keys(data).some(notStored)) return data;
   return Object.fromEntries(
-    Object.entries(data).filter(([key]) => !NOT_STORED_KEYS.has(key))
+    Object.entries(data).filter(([key]) => !notStored(key))
   );
 }

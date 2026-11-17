@@ -2586,7 +2586,12 @@ export class SingleMutationService extends BaseService {
       // its name, on the Single's row or a language's: refused here, with access judged and
       // before any hook, rather than written or left to fail in the database. The keys a read
       // adds are taken off, so a document sent back as it was read still saves.
-      data = writableBodyOf(data, "single", singleMeta.fields);
+      data = writableBodyOf(
+        data,
+        "single",
+        singleMeta.fields,
+        singleMeta.tableName
+      );
 
       // 2. Resolve the document to write against. When the Single has never been
       // written, build its default in memory but DO NOT persist it yet. The

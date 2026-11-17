@@ -317,5 +317,32 @@ describe("a column contributed to a collection whose table is named by dbName", 
       expect(payload.title).toBe("Updated");
       expectNoContributedColumn(payload);
     });
+
+    it("still refuses a key that is no field beside a contributed one, writing nothing", async () => {
+      selectData.rows = [storedRow()];
+
+      const refused = await service
+        .updateEntry(
+          { collectionName: SLUG, entryId: "entry-1", overrideAccess: true },
+          {
+            title: "Updated",
+            searchVector: "a",
+            notAField: "x",
+            _overwrite: true,
+          }
+        )
+        .then(
+          result => JSON.stringify(result),
+          (error: unknown) =>
+            JSON.stringify(
+              (error as { publicData?: unknown }).publicData ?? String(error)
+            )
+        );
+
+      expect(refused).toMatch(/UNKNOWN_FIELD/);
+      expect(refused).toMatch(/notAField/);
+      expect(refused).not.toMatch(/searchVector/);
+      expect(txUpdate).not.toHaveBeenCalled();
+    });
   });
 });

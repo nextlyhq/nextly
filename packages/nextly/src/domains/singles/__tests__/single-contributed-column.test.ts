@@ -165,6 +165,35 @@ describe("a column a schema hook contributed to a Single's table", () => {
     expect(payload).not.toHaveProperty("searchVector");
   });
 
+  it("still refuses a key that is no field beside a contributed one, writing nothing", async () => {
+    const { service, adapter } = createService();
+    adapter.selectOne.mockResolvedValue({ id: "doc-1", siteName: "Old" });
+
+    const refused = await service
+      .update(
+        "site-settings",
+        {
+          siteName: "New",
+          searchVector: "a",
+          notAField: "x",
+          _overwrite: true,
+        },
+        { overrideAccess: true }
+      )
+      .then(
+        result => JSON.stringify(result),
+        (error: unknown) =>
+          JSON.stringify(
+            (error as { publicData?: unknown }).publicData ?? String(error)
+          )
+      );
+
+    expect(refused).toMatch(/UNKNOWN_FIELD/);
+    expect(refused).toMatch(/notAField/);
+    expect(refused).not.toMatch(/searchVector/);
+    expect(adapter.update).not.toHaveBeenCalled();
+  });
+
   it("is not written when a stored pending change carries it", () => {
     // A pending change is promoted into the live row by a later publish, so
     // it is a write payload too, and one saved before this rule may hold it.
