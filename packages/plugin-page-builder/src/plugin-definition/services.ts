@@ -8,6 +8,7 @@ import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import {
   SITE_BLOCKS_SERVICE,
   SITE_NAMED_QUERIES_SERVICE,
+  SITE_PAGE_DATA_LIMIT_SERVICE,
 } from "@nextlyhq/blocks-react";
 import type { PluginContributions } from "@nextlyhq/plugin-sdk";
 
@@ -50,7 +51,7 @@ import {
 import type { BindingReportParts } from "./bindings";
 import type { BreakpointRemovalParts } from "./breakpoints";
 import type { retiredReader } from "./components";
-import { componentStoreOf } from "./options";
+import { componentStoreOf, pageDataLimitOf } from "./options";
 import type { Definition } from "./state";
 
 /** The services other code reaches through `ctx.services.plugins`. */
@@ -82,6 +83,16 @@ export function pluginServices(
     [SITE_NAMED_QUERIES_SERVICE.service]: () => ({
       definitionOf: (name: string) => def.state.namedQueries.definitionOf(name),
     }),
+    // And its page data limit, which a route given no `maxQueries` renders
+    // under, as the editor's meter counts against it. Offered only when set:
+    // with none, the route takes its own default.
+    ...(pageDataLimitOf(opts) === undefined
+      ? {}
+      : {
+          [SITE_PAGE_DATA_LIMIT_SERVICE.service]: () => ({
+            maxQueries: pageDataLimitOf(opts),
+          }),
+        }),
     // The index-wide facts behind "used on N pages", bound to the
     // installation. Offered as a service because answering needs the
     // installed context — which collections the registry holds, which

@@ -55,7 +55,6 @@ import {
 import {
   createQueryBudget,
   createStandaloneContext,
-  DEFAULT_MAX_QUERIES,
   type ListBaseReader,
   type NamedQueryFailure,
   type NamedQueryHost,
@@ -83,6 +82,9 @@ import {
   type ListEntriesResponse,
 } from "./list-entries-contract";
 import type { TemplateGuardSetup } from "./templates/template-guard";
+
+/** The most reads a run may be allowed: far past any page's limit. */
+const MOST_READS = 100_000;
 
 /** A field name a list may name: no paths, operators or quoting. */
 const FIELD = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -221,7 +223,9 @@ const ListEntriesNamedBody = z
             message: "A node's id has no control characters.",
           })
           .optional(),
-        allowance: z.number().int().min(0).max(DEFAULT_MAX_QUERIES).optional(),
+        // What the canvas's draw has left of the page's limit, which a
+        // site may raise past the default (`pageBuilder({ maxQueries })`).
+        allowance: z.number().int().min(0).max(MOST_READS).optional(),
       })
       .strict(),
   })
