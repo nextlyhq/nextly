@@ -307,6 +307,56 @@ describe("an empty Gallery on the canvas", () => {
   });
 });
 
+describe("files dropped on an Image waiting for a picture inside a Gallery", () => {
+  const EMPTY_PICTURE =
+    '<div data-nx-node="g" data-nx-slots=""><div data-nx-node="p1" data-nx-image-empty="empty"></div></div>';
+  const waiting: BlockNode = {
+    id: "p1",
+    type: "core/image",
+    version: 1,
+    props: {},
+  };
+
+  it("adds several to the gallery when dropped on the Image's plate, as on a picture", async () => {
+    let next = 0;
+    const upload = vi.fn<Upload>(() => {
+      next += 1;
+      return Promise.resolve({ id: `m${String(next)}` });
+    });
+    const { applyAll, apply } = mount(
+      page(gallery([waiting])),
+      EMPTY_PICTURE,
+      upload
+    );
+    const plate = screen.getByRole("group", { name: "Image" });
+    await act(async () => {
+      plate.dispatchEvent(fileDrag("drop", [PNG("a.png"), PNG("b.png")]));
+    });
+    await waitFor(() => expect(applyAll).toHaveBeenCalledTimes(1));
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(added(applyAll)).toEqual([
+      { mediaId: "m1", type: "core/image", index: 1, parent: "g" },
+      { mediaId: "m2", type: "core/image", index: 2, parent: "g" },
+    ]);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("fills the Image with one file dropped on its plate", async () => {
+    const upload = vi.fn<Upload>(() => Promise.resolve({ id: "m5" }));
+    const { applyAll, apply } = mount(
+      page(gallery([waiting])),
+      EMPTY_PICTURE,
+      upload
+    );
+    const plate = screen.getByRole("group", { name: "Image" });
+    await act(async () => {
+      plate.dispatchEvent(fileDrag("drop", [PNG()]));
+    });
+    await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    expect(applyAll).not.toHaveBeenCalled();
+  });
+});
+
 describe("files dropped on a Gallery with pictures", () => {
   it("adds several after the pictures it holds, when dropped on one of them", async () => {
     let next = 0;

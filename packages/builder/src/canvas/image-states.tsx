@@ -362,6 +362,32 @@ export function ImageStates({
     [choose, galleryWritable, setFor, upload]
   );
 
+  /**
+   * Where files handed over for a block land, the one decision every drop
+   * and chooser asks (`fileLanding`): a gallery's, or several over one of
+   * its pictures, go to the gallery; one over an Image fills or replaces it.
+   */
+  const landingOf = React.useCallback(
+    (nodeId: string, count: number) =>
+      fileLanding(latest.current.editor.document, nodeId, count, {
+        image: writable,
+        gallery: galleryWritable,
+      }),
+    [galleryWritable, writable]
+  );
+
+  /** Take files handed over for a block, where `landingOf` sends them. */
+  const takeFor = React.useCallback(
+    (nodeId: string, files: FileList | readonly File[] | null) => {
+      const count = files === null ? 0 : files.length;
+      const landing = landingOf(nodeId, count);
+      if (landing === null) return;
+      if (landing.kind === "gallery") takeMany(landing.nodeId, files);
+      else take(landing.nodeId, files);
+    },
+    [landingOf, take, takeMany]
+  );
+
   /** Check a typed link, and store it once it loads as a picture. */
   const tryLink = React.useCallback(
     (nodeId: string, typed: string) => {
@@ -437,10 +463,7 @@ export function ImageStates({
       if (owner === null || owner.hasAttribute(INSTANCE_ATTRIBUTE)) return null;
       const nodeId = nodeAddressOf(owner);
       if (nodeId === null) return null;
-      return fileLanding(latest.current.editor.document, nodeId, count, {
-        image: writable,
-        gallery: galleryWritable,
-      });
+      return landingOf(nodeId, count);
     };
     const over = (event: DragEvent): void => {
       if (!carriesFiles(event.dataTransfer)) return;
@@ -462,8 +485,7 @@ export function ImageStates({
       setDropTarget(null);
       if (landing === null) return;
       event.preventDefault();
-      if (landing.kind === "gallery") takeMany(landing.nodeId, files);
-      else take(landing.nodeId, files);
+      takeFor(landing.nodeId, files);
     };
     const away = (event: DragEvent): void => {
       const next = event.relatedTarget;
@@ -481,15 +503,7 @@ export function ImageStates({
       root.removeEventListener("dragleave", away);
       root.ownerDocument.removeEventListener("dragend", ended);
     };
-  }, [
-    take,
-    takeMany,
-    upload,
-    writable,
-    galleryWritable,
-    canvasFrame,
-    editor.document,
-  ]);
+  }, [takeFor, landingOf, upload, canvasFrame, editor.document]);
 
   const selectImage = (nodeId: string, mode?: SelectionMode): void => {
     if (mode === undefined) editor.select(nodeId);
@@ -525,11 +539,9 @@ export function ImageStates({
           canUpload={upload !== undefined}
           canPick={Picker !== undefined}
           onSelect={mode => selectImage(plate.nodeId, mode)}
-          onFiles={files =>
-            isGalleryPlate(plate, editor.document)
-              ? takeMany(plate.nodeId, files)
-              : take(plate.nodeId, files)
-          }
+          // Routed as a drop on the page is: several files on a gallery's
+          // picture, empty or not, go to the gallery.
+          onFiles={files => takeFor(plate.nodeId, files)}
           onHeld={held =>
             setDropTarget(current =>
               held ? plate.nodeId : current === plate.nodeId ? null : current
