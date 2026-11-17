@@ -116,6 +116,8 @@ export function eventLanguage(): HookLanguage | undefined {
 /** `context` with what a hook called now is told about languages. */
 export function withHookLanguage<C extends object>(
   context: C
-): C & HookLanguage {
-  return { ...context, ...hookLanguage() };
+): C & Partial<HookLanguage> {
+  // A site without languages tells a hook nothing of them, so its context
+  // keeps the shape it had: the same answer an event gives (`eventLanguage`).
+  return { ...context, ...(eventLanguage() ?? {}) };
 }
