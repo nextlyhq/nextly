@@ -5540,6 +5540,18 @@ async function sealEveryPlugin(
 }
 
 /**
+ * What a plugin's failed start tells the operator: a boot failure reaches them
+ * through the log, and a NextlyError keeps what to change in `logMessage`,
+ * behind its generic public text.
+ */
+function operatorMessageOf(error: unknown): string {
+  if (NextlyError.is(error) && error.logMessage !== undefined) {
+    return error.logMessage;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * Initializes plugins that provide an `init()` method. Runs after all
  * services are registered so plugins can access the full service graph
  * via the PluginContext. Calls are awaited sequentially to preserve
@@ -5886,7 +5898,7 @@ async function initializePlugins(
         );
         logger.info?.(`Plugin "${plugin.name}" initialized`);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = operatorMessageOf(error);
         // A plugin that cannot finish starting has not started — and nothing
         // that DID start may survive the boot that is now failing. See
         // `destroyInitializedPlugins` for why this loop runs here rather than

@@ -218,6 +218,62 @@ describe("BuilderPageLayout", () => {
     ).toBeDisabled();
   });
 
+  // An unsaved entity's address being moved: a save then would create it under
+  // the address it is leaving, so Save waits and the page says why.
+  it("holds Save, saying why, while the page holds it", () => {
+    const { unmount } = renderLayout({ unsavedCount: 2 });
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(
+      screen.queryByText("Save waits while the new address is checked.")
+    ).not.toBeInTheDocument();
+    unmount();
+
+    renderLayout({
+      unsavedCount: 2,
+      saveHeld: "Save waits while the new address is checked.",
+    });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      screen.getByText("Save waits while the new address is checked.")
+    ).toBeVisible();
+  });
+
+  // A status region inserted with its message already in it is not reliably
+  // announced, so the hold's region is there before the hold and only its text
+  // changes.
+  it("keeps the hold's status mounted, so its reason is announced when it arrives", () => {
+    const { rerender, props } = renderLayout({ unsavedCount: 2 });
+    const status = screen.getByTestId("save-held-status");
+    expect(status).toHaveTextContent("");
+
+    rerender(
+      <BuilderPageLayout
+        {...props}
+        saveHeld="Save waits while the new address is checked."
+      />
+    );
+    expect(screen.getByTestId("save-held-status")).toBe(status);
+    expect(status).toHaveTextContent(
+      "Save waits while the new address is checked."
+    );
+  });
+
+  // The toolbar's row is full on a phone: there the reason is announced and
+  // carried by Save itself rather than set beside it, where it would push the
+  // row past the screen's edge.
+  it("keeps the hold's reason out of a phone's toolbar row, on Save instead", () => {
+    renderLayout({
+      unsavedCount: 2,
+      saveHeld: "Save waits while the new address is checked.",
+    });
+    const status = screen.getByTestId("save-held-status");
+    expect(status).toHaveClass("sr-only", "sm:not-sr-only");
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute(
+      "title",
+      "Save waits while the new address is checked."
+    );
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.
