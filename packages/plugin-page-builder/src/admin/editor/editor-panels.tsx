@@ -49,10 +49,12 @@ import {
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
 import {
+  DesignFonts,
   DesignGroup,
   DesignPanel,
   DesignReveal,
   ReportStylesMatches,
+  SITE_FONTS_GROUP,
   type DesignView,
 } from "./design-panel";
 import {
@@ -741,33 +743,43 @@ export function editorPanelRenderer({
                 )}
                 styleContext={classSummaryContext}
               />
-              <TokensStudio
-                merged={offerableTokens(
+              <DesignFonts
+                faces={offerableFaces(
                   canvasSiteStyle,
                   siteStylePending,
                   siteStyleError
                 )}
-                supplied={configSiteStyle?.tokens}
-                pending={siteStylePending}
-                // The class surface's library, the one the Shared styles tab
-                // lists, so a style using a variable says what it sets.
-                {...(classes.library === undefined
-                  ? {}
-                  : { classes: classes.library })}
-                // A shared style using a variable opens in its own tab; a
-                // block look, which that tab does not list, in the inspector.
-                opens={{
-                  sharedStyles: () => view.choose("styles"),
-                  ...(lookEditing === undefined
-                    ? {}
-                    : { look: lookEditing.edit }),
-                }}
-                // The switch in the panel's header picks the mode the canvas is
-                // drawn in, held by the editor so it outlasts the panel.
-                preview={previewMode}
+                fromCode={configSiteStyle?.fonts ?? []}
+                onManageFonts={() => view.choose("type")}
               >
-                {designTabs}
-              </TokensStudio>
+                <TokensStudio
+                  merged={offerableTokens(
+                    canvasSiteStyle,
+                    siteStylePending,
+                    siteStyleError
+                  )}
+                  supplied={configSiteStyle?.tokens}
+                  pending={siteStylePending}
+                  // The class surface's library, the one the Shared styles tab
+                  // lists, so a style using a variable says what it sets.
+                  {...(classes.library === undefined
+                    ? {}
+                    : { classes: classes.library })}
+                  // A shared style using a variable opens in its own tab; a
+                  // block look, which that tab does not list, in the inspector.
+                  opens={{
+                    sharedStyles: () => view.choose("styles"),
+                    ...(lookEditing === undefined
+                      ? {}
+                      : { look: lookEditing.edit }),
+                  }}
+                  // The switch in the panel's header picks the mode the canvas is
+                  // drawn in, held by the editor so it outlasts the panel.
+                  preview={previewMode}
+                >
+                  {designTabs}
+                </TokensStudio>
+              </DesignFonts>
             </>
           )}
           tabs={{
@@ -777,7 +789,7 @@ export function editorPanelRenderer({
             type: () => (
               <>
                 <DesignGroup
-                  id="site-fonts"
+                  id={SITE_FONTS_GROUP}
                   heading={EDITOR_WORDS.fonts}
                   count={
                     offerableFaces(

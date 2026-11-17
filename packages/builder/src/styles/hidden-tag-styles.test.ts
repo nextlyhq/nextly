@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import { chromeStylesheetSource } from "./chrome-stylesheet";
 
 /**
  * Where a hidden block's tag is drawn, asserted against the sheet that draws
