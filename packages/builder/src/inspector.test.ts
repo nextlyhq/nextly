@@ -875,3 +875,53 @@ describe("which choices a block's inspector offers", () => {
     expect(type?.offered).toBe(false);
   });
 });
+
+describe("a prop that applies only to some values of another", () => {
+  /** A list-like block: its kind, bulleted by default, and where it starts. */
+  function withList(props: Record<string, unknown>) {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/list",
+          editor: { label: "List" },
+          props: {
+            kind: { type: "select", options: ["unordered", "ordered"] },
+            start: { type: "number", onlyWhen: { kind: ["ordered"] } },
+          },
+          defaultProps: { kind: "unordered" },
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    return documentOf([
+      { id: "l", type: "acme/list", version: 1, props } as BlockNode,
+    ]);
+  }
+  const offeredStart = (document: BlockDocument) =>
+    inspectSelection(document, "l")?.props.find(prop => prop.name === "start")
+      ?.offered;
+
+  it("is offered while the other holds one of its values", () => {
+    expect(offeredStart(withList({ kind: "ordered" }))).toBe(true);
+  });
+
+  it("is left out while the other holds another value", () => {
+    expect(offeredStart(withList({ kind: "unordered" }))).toBe(false);
+  });
+
+  it("reads the block's default while nothing is stored", () => {
+    // A new list is bulleted, so it offers no number to start at.
+    expect(offeredStart(withList({}))).toBe(false);
+  });
+
+  it("is left out, its value kept, on a list stored with a start", () => {
+    const document = withList({ kind: "unordered", start: 4 });
+    const start = inspectSelection(document, "l")?.props.find(
+      prop => prop.name === "start"
+    );
+    expect(start?.offered).toBe(false);
+    expect(start?.value).toBe(4);
+  });
+});

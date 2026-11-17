@@ -119,9 +119,14 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
       type: "select",
       options: [...HEADING_LEVELS],
     },
-    // The shared link: a page on this site or an address, and "Open in a new
-    // tab". The stored names are the ones the heading always used.
-    ...LINK_PROPS,
+    // The shared link, in its own Content › Link section as a Box's is: a
+    // page, an entry or an address, and "Open in a new tab". The stored names
+    // are the ones the heading always used; the relationship is in Advanced.
+    href: { ...LINK_PROPS.href, section: "Link" },
+    entryCollection: { ...LINK_PROPS.entryCollection, section: "Link" },
+    entryId: { ...LINK_PROPS.entryId, section: "Link" },
+    target: { ...LINK_PROPS.target, section: "Link" },
+    rel: LINK_PROPS.rel,
   },
   defaultProps: { text: "", level: "h2" },
   // No `seo` offer: a heading never sets the page's title. The browser tab and

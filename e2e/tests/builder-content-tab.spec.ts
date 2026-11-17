@@ -218,7 +218,7 @@ const CASES: readonly Case[] = [
     props: { content: RICH_TEXT },
     edit: {
       kind: "richText",
-      label: "Content",
+      label: "Text",
       prop: "content",
       text: " More.",
     },
@@ -226,10 +226,11 @@ const CASES: readonly Case[] = [
   {
     type: "core/list",
     label: "List",
-    props: { kind: "unordered", items: ["First", "Second"] },
+    // Numbered, since only a numbered list offers the number it starts at.
+    props: { kind: "ordered", items: ["First", "Second"] },
     edit: {
       kind: "type",
-      label: "Start number",
+      label: "Start at",
       prop: "start",
       value: "3",
       stored: 3,
