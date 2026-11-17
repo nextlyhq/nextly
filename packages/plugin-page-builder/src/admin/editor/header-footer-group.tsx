@@ -35,7 +35,7 @@ import { PAGE_BUILDER_PLUGIN_NAME } from "../../library-contract";
 import { useSetPictures } from "../header-footer-pictures";
 
 /** The group's key in the panel's fold memory. */
-export const HEADER_FOOTER_GROUP = "header-footer";
+const HEADER_FOOTER_GROUP = "header-footer";
 
 /** How many pages show a set, said as an author reads it. */
 function pagesNote(count: LayoutPageCount | undefined): string {
@@ -50,7 +50,7 @@ function pagesNote(count: LayoutPageCount | undefined): string {
  * A set's note: the site default named first, how many pages show it, then
  * its state where it is not plainly published.
  */
-export function setNote(
+function setNote(
   set: Pick<LayoutChoice, "id" | "published" | "draftChangesNotLive">,
   defaultLayout: string | null,
   count: LayoutPageCount | undefined

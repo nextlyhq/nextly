@@ -57,7 +57,6 @@ const kept = new Map<string, string>();
 
 // The Header & footer group reads its own routes; it is tested on its own.
 vi.mock("./header-footer-group", () => ({
-  HEADER_FOOTER_GROUP: "header-footer",
   HeaderFooterGroup: () => (
     <section aria-label="Header & footer">
       <button type="button" aria-label="Header & footer, 2" />
