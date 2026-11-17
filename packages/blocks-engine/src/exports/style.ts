@@ -341,6 +341,9 @@ export {
   isLook,
   isUsableNamedClass,
   ownLooksRead,
+  // Which style is each block type's ★ default, as the compiler reads it.
+  // `@experimental` until the Styles tab that moves ★ settles.
+  starredLooksOf,
   LOOK_CLASS_PREFIX,
   namedClassName,
   orderedNamedClasses,
