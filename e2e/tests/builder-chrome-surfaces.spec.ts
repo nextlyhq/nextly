@@ -28,7 +28,7 @@ import { test } from "./support/test";
 test.describe.configure({ lock: [LOCK.homepage] });
 
 const HOMEPAGE = "/admin/api/singles/homepage";
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 const BLOCK_ID = "surfaces-text";
 
 async function openBuilder(

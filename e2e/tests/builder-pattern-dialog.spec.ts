@@ -31,7 +31,7 @@ test.describe.configure({ lock: [LOCK.homepage] });
  * literal because this suite imports no product code. Its source is
  * `PageBuilderCard`.
  */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 

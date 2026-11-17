@@ -758,7 +758,13 @@ function main(base = root) {
 
   // Every basename in the repository, so a bare reference can be told from a
   // stale one. Read once rather than per file.
-  const tracked = execFileSync("git", ["ls-files"], { cwd: base, encoding: "utf8" })
+  // The listing outgrew the 1 MiB a spawn may print by default, so it is
+  // given the room every other whole-repository listing here takes.
+  const tracked = execFileSync("git", ["ls-files"], {
+    cwd: base,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
     .split("\n")
     .filter(Boolean);
   const basenames = new Set(tracked.map(path => path.split("/").pop()));

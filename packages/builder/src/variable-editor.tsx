@@ -44,6 +44,7 @@ import {
   ColourContrast,
   ModeIcon,
   UsageLine,
+  VariableDescription,
 } from "./variable-popup-parts";
 import {
   partsOf,
@@ -161,6 +162,10 @@ export function VariableEditor({
           isNew={isNew}
         />
       </div>
+      <VariableDescription
+        token={token}
+        supplied={suppliedOf(row.identity)}
+      />
       {token === undefined ? null : (
         <Values
           entry={entry}

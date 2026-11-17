@@ -282,6 +282,11 @@ export interface PluginMetadata {
        * document bar offer, as in "Open in builder". Present when declared.
        */
       openLabel?: string;
+      /**
+       * The component "+ New" opens over the list of a collection whose
+       * entries open in this view. Present when declared.
+       */
+      createDialog?: string;
     } & (
       | { slug: string }
       /**
