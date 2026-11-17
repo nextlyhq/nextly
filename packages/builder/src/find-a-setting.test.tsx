@@ -181,18 +181,18 @@ describe("Find a setting", () => {
     openTab("Style");
     type("nofollow");
     expect(shownPanel().textContent).toContain("No setting matches here.");
-    // A Button's Link relationship is drawn with its link, in Content.
+    // A Button's Link relationship is an HTML detail, in Advanced.
     fireEvent.click(
-      within(shownPanel()).getByRole("button", { name: "1 in Content" })
+      within(shownPanel()).getByRole("button", { name: "1 in Advanced" })
     );
-    expect(tab("Content").getAttribute("data-state")).toBe("active");
+    expect(tab("Advanced").getAttribute("data-state")).toBe("active");
     expect(shownPanel().textContent).not.toContain("No setting matches");
-    // The link it is drawn with shows; the rest of Content doesn't.
-    expect(screen.getByLabelText("Label").closest("[hidden]")).not.toBeNull();
+    // The match shows; the rest of Advanced doesn't.
     const kept = [...shownPanel().querySelectorAll(".nx-setting")].filter(
       slot => !slot.hasAttribute("hidden") && slot.childElementCount > 0
     );
     expect(kept).toHaveLength(1);
+    expect(kept[0]?.textContent).toContain("Link relationship");
   });
 
   it("says when no tab has a match", () => {
@@ -288,7 +288,7 @@ describe("Only changed", () => {
     fireEvent.click(toggle());
     expect(screen.getByLabelText("Label")).toBeDefined();
     expect(
-      screen.queryByLabelText("Accessible label")?.closest("[hidden]")
+      screen.queryByLabelText("Screen reader label")?.closest("[hidden]")
     ).not.toBeNull();
   });
 

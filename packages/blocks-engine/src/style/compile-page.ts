@@ -99,6 +99,7 @@ import {
 import { OVERLAY_PREFIX, OVERLAY_RESET } from "./overlay";
 import { partRouting } from "./part-routing";
 import { type CssRule, serializeRules } from "./serialize";
+import { SITE_TEXT_ROOT } from "./site-text";
 import type { StyleTraceEntry } from "./style-trace";
 import { newStyleIssueBudget } from "./validate-style-value";
 import { newWarningAllowance, pushBoundedWarning } from "./warning-allowance";
@@ -231,6 +232,32 @@ export function compilePageCss(
   const trace: StyleTraceEntry[] | undefined =
     ctx.trace === true ? [] : undefined;
 
+  // The element tier's root: Site text's Body row, on the page root itself so
+  // every block inherits it. On the single root class, so the page's own
+  // values below, on the doubled one, outrank it on the same element; first,
+  // so the trace records it before the page as the cascade ranks them.
+  const elements = ctx.elementBases ?? {};
+  if (Object.hasOwn(elements, SITE_TEXT_ROOT)) {
+    rules.push(
+      ...envelopeRules(
+        elements[SITE_TEXT_ROOT],
+        defaultsAnchor,
+        pointer("/elementBases", SITE_TEXT_ROOT),
+        contexts,
+        tokenPrefix,
+        warnings,
+        budget,
+        warningAllowance,
+        {
+          origin: { kind: "element", tag: SITE_TEXT_ROOT },
+          previewStates,
+          trace,
+          mayFetchUrl,
+        }
+      )
+    );
+  }
+
   // Page-scoped values, on the root every other selector is anchored to. First
   // because it is the outermost element: what it sets is what everything inside
   // inherits before any block has said anything.
@@ -254,7 +281,6 @@ export function compilePageCss(
   // as, and a caller naming anything else is not describing this document's
   // typography. An allow-list rather than a grammar, because the set is small,
   // known, and has no reason to grow without someone deciding it should.
-  const elements = ctx.elementBases ?? {};
   for (const tag of TYPOGRAPHIC_ELEMENTS) {
     if (!Object.hasOwn(elements, tag)) continue;
     rules.push(
