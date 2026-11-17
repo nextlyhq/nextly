@@ -226,12 +226,14 @@ async function handWritten(args: {
   base: PluginMigration;
   /** The plugin's tables once the module has run. */
   after: Tables;
+  /** The plugin it belongs to, where that is not the one under test. */
+  owner?: { name: string; prefix: string };
   statements: (q: (name: string) => string) => {
     up: string[];
     down: string[];
   };
 }): Promise<PluginMigration> {
-  const after = await tablesByDialect(args.after);
+  const after = await tablesByDialect(args.after, args.owner);
   const perDialect = <T>(of: (dialect: Dialect) => T) =>
     Object.fromEntries(ALL.map(dialect => [dialect, of(dialect)])) as Record<
       Dialect,
@@ -269,8 +271,10 @@ interface Modules {
   addsColumn: Shipped;
   /** `addsColumn`'s module, then one dropping `mc__notes.summary`. */
   addsThenDrops: Shipped;
-  /** The other plugin's only module, which creates `ha__things`. */
+  /** The other plugin's first module, which creates `ha__things`. */
   other: PluginMigration;
+  /** The other plugin's second module, which removes rows from `ha__things`. */
+  otherRemovesRows: PluginMigration;
 }
 
 async function buildModules(): Promise<Modules> {
@@ -304,6 +308,16 @@ async function buildModules(): Promise<Modules> {
   if (!other) throw new Error("no module generated for the other plugin");
   return {
     other: other.module,
+    otherRemovesRows: await handWritten({
+      name: "remove_old_things",
+      base: other.module,
+      after: [things],
+      owner: OTHER,
+      statements: q => ({
+        up: [`DELETE FROM ${q(OTHER_TABLE)} WHERE ${q("id")} = 't-old'`],
+        down: [],
+      }),
+    }),
     base,
     dropsColumn: {
       tables: [notesWithoutSummary, replies],
@@ -789,26 +803,24 @@ describe.each(getConfiguredTestDialects())(
       }, 180_000);
     });
 
+    /** The other plugin as a release ships it, listed before the one under test. */
+    const otherWith = (migrations: PluginMigration[]) =>
+      definePlugin({
+        name: OTHER.name,
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        schemaVersion: migrations.length,
+        contributes: {
+          schema: { prefix: OTHER.prefix, tables: [things], migrations },
+        },
+      });
+
     it("installs no plugin listed before the one whose module an install of every plugin refuses", async () => {
       const { module } = shipped.dropsColumn;
       const consent = `${NOTES}.summary`;
       ship(shipped.dropsColumn);
       // Listed first, so its install comes before the refused plugin's.
-      run.before = [
-        definePlugin({
-          name: OTHER.name,
-          version: "1.0.0",
-          nextly: ">=0.0.0",
-          schemaVersion: 1,
-          contributes: {
-            schema: {
-              prefix: OTHER.prefix,
-              tables: [things],
-              migrations: [shipped.other],
-            },
-          },
-        }),
-      ];
+      run.before = [otherWith([shipped.other])];
 
       expectRefusal(await installAll(undefined), {
         module,
@@ -830,6 +842,66 @@ describe.each(getConfiguredTestDialects())(
           key(module),
         ].sort()
       );
+    }, 180_000);
+
+    it("names every plugin's deleting module in the one refusal of an install of every plugin, with the one consent", async () => {
+      const { module } = shipped.dropsColumn;
+      const otherKey = qualifiedFilename(
+        OTHER.name,
+        shipped.otherRemovesRows.name
+      );
+      // The other plugin installed at its first module, with a row its next
+      // module removes.
+      run.before = [otherWith([shipped.other])];
+      await runPluginInstall(OTHER.name, {}, context);
+      await adapter().executeQuery(
+        `INSERT INTO ${q(OTHER_TABLE)} (${q("id")}) VALUES ('t-old'), ('t-new')`
+      );
+      run.before = [otherWith([shipped.other, shipped.otherRemovesRows])];
+      ship(shipped.dropsColumn);
+      const both = `${OTHER_TABLE},${NOTES}.summary`;
+      const unchanged = async () => {
+        expect(await ids(OTHER_TABLE)).toEqual(["t-new", "t-old"]);
+        expect(await noteValues("summary")).toEqual(["kept", "kept"]);
+        expect(await appliedKeys()).toEqual(
+          [
+            qualifiedFilename(OTHER.name, shipped.other.name),
+            key(shipped.base),
+          ].sort()
+        );
+      };
+
+      const refusal = await installAll(undefined);
+      expectRefusal(refusal, {
+        module,
+        deletion: `${NOTES}.summary`,
+        consent: both,
+        flag: true,
+      });
+      expect(refusal).toContain(otherKey);
+      expect(refusal).toContain(OTHER_TABLE);
+      expect(
+        issued.filter(statement => /DELETE\s+FROM/i.test(statement))
+      ).toEqual([]);
+      await unchanged();
+
+      // Consent for the first plugin's deletion alone: its module does not
+      // run while the second plugin's deletion is left out.
+      const partial = await installAll(OTHER_TABLE);
+      expectRefusal(partial, {
+        module,
+        deletion: `${NOTES}.summary`,
+        consent: both,
+        flag: true,
+      });
+      expect(
+        issued.filter(statement => /DELETE\s+FROM/i.test(statement))
+      ).toEqual([]);
+      await unchanged();
+
+      expect(await installAll(both)).toBeUndefined();
+      expect(await ids(OTHER_TABLE)).toEqual(["t-new"]);
+      expect(await noteValues("summary")).toBeUndefined();
     }, 180_000);
 
     it("refuses migrate:down over a module whose DOWN drops a column, keeping its values, and rolls it back with consent naming the column", async () => {

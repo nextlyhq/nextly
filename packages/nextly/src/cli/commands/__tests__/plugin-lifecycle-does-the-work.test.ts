@@ -18,6 +18,7 @@ import { describe, expect, it, vi, beforeAll } from "vitest";
 import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
   previewPluginInstall,
+  previewPluginInstallAll,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
@@ -309,21 +310,74 @@ describe("an install of every plugin over pending modules that delete data", () 
     expect(d.applyMigrations).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a plugin whose modules cannot be read yet to its own turn", async () => {
-    const { NextlyError } = await import("../../../errors/nextly-error");
+  it("refuses before installing any, and asks nobody, when a later plugin cannot be installed", async () => {
+    // The second plugin requires one that is configured after it and not
+    // installed, so its own install would refuse it.
+    const required: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/hx",
+      declaredModules: ["0001_hx"],
+    };
+    const askToDelete = vi.fn(async () => true);
+    const d = everyInstall({
+      plugins: [plugin, { ...second, requires: [required.name] }, required],
+      interactive: true,
+      askToDelete,
+      readLifecycle: vi.fn(
+        async () => new Map([[plugin.name, { state: "installed" as const }]])
+      ),
+    });
+    await expect(runPluginInstallAllCommand(d)).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(required.name),
+    });
+    expect(askToDelete).not.toHaveBeenCalled();
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("reads a plugin as installable once the plugins before it in the run are installed", async () => {
+    // The control for the refusal above: the required plugin comes first.
+    const required: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/hx",
+      declaredModules: ["0001_hx"],
+    };
+    const applied = new Set<string>();
+    const lifecycle = new Map([[plugin.name, { state: "installed" as const }]]);
+    const d = everyInstall({
+      plugins: [required, { ...second, requires: [required.name] }],
+      installDeletions: vi.fn(async () => []),
+      readAppliedModules: vi.fn(async () => applied),
+      readLifecycle: vi.fn(async () => lifecycle),
+      // Each install leaves its module applied and itself recorded.
+      applyMigrations: vi.fn(async (installed: LifecyclePlugin) => {
+        for (const module of installed.declaredModules) {
+          applied.add(`plugin:${installed.name}/${module}`);
+        }
+        lifecycle.set(installed.name, { state: "installed" as const });
+      }),
+    });
+    await runPluginInstallAllCommand(d);
+    expect(d.applyMigrations).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses before installing any when a later plugin's modules cannot be read", async () => {
+    const unreadable = new Error("the modules could not be read");
     const installDeletions = vi.fn(async (asked: LifecyclePlugin) => {
-      if (asked.name === second.name) {
-        throw NextlyError.invalidInput({ message: "not readable yet" });
-      }
+      if (asked.name === second.name) throw unreadable;
       return [];
     });
     const d = everyInstall({ installDeletions });
-    await expect(runPluginInstallAllCommand(d)).rejects.toMatchObject({
-      publicMessage: "not readable yet",
-    });
-    // The first plugin was installed before the second's own refusal.
-    expect(d.applyMigrations).toHaveBeenCalledTimes(1);
-    expect(d.applyMigrations).toHaveBeenCalledWith(plugin);
+    await expect(runPluginInstallAllCommand(d)).rejects.toBe(unreadable);
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("names in a dry run the one consent that covers every plugin's deletions", async () => {
+    const plan = await previewPluginInstallAll(everyInstall());
+    expect(
+      (plan.notes ?? []).filter(note => note.includes("--accept-data-loss"))
+    ).toEqual([
+      expect.stringContaining("--accept-data-loss=fx__notes,gx__notes"),
+    ]);
   });
 });
 
