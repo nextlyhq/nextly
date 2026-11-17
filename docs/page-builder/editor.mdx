@@ -456,6 +456,31 @@ and nothing changes. If an Image's file is deleted from the media library, the b
 
 An Image with no picture draws nothing on the published page.
 
+## Bold, italic and links in a Text
+
+A Text is one paragraph of words, edited where it is shown: double-click it on the
+canvas, or select it and press <kbd>Enter</kbd>. Select some words and a small bar
+appears just above them:
+
+- **B** makes them bold and **I** italic. <kbd>Ctrl</kbd>+<kbd>B</kbd> and
+  <kbd>Ctrl</kbd>+<kbd>I</kbd> do the same.
+- **Link** (or <kbd>Ctrl</kbd>+<kbd>K</kbd>) asks for the address, with **Open in a new
+  tab**. An address that would run a script is refused. With a link selected, **Remove
+  link** takes it off.
+
+<kbd>Alt</kbd>+<kbd>F10</kbd> moves to the bar from the keyboard, the arrow keys
+move along it, and <kbd>Escape</kbd> goes back to the words.
+
+A Text stays one paragraph: <kbd>Enter</kbd> (and <kbd>Shift</kbd>+<kbd>Enter</kbd>)
+starts a new line in it. Paste a passage with headings or lists and the words stay
+while the rest goes, with the note "Text keeps words, bold, italic and links. Use Rich
+text for headings and lists". Headings, lists and quotes belong in a **Rich text**
+block.
+
+The Text's field in the inspector edits the same words, and the canvas shows them as you
+type. A Text bound to a field takes a text field's words as one plain paragraph; a
+rich-text field isn't offered for it.
+
 ## Pages
 
 **Pages** in the rail lists the site's pages, grouped by the kind of page when the
@@ -973,6 +998,9 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd>                                 | While editing a Text, make the selected words bold or italic                                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                                | While editing a Text, link the selected words                                                                                     |
+| <kbd>Alt</kbd>+<kbd>F10</kbd>                                                               | While editing a Text, move to the formatting bar                                                                                  |
 | <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |

@@ -31,6 +31,12 @@ export interface BlockListProp {
   readonly label: string;
   /** The prop's schema type, e.g. "string", "select", "boolean". */
   readonly type: string;
+  /**
+   * Present, and `true`, for a prop whose value is one paragraph of words
+   * with bold, italic, links and line breaks (a Text's): stored as editor
+   * content, though its type says text and a string is read as its words.
+   */
+  readonly oneParagraph?: true;
 }
 
 /** One registered block the field accepts. */

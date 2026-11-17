@@ -70,6 +70,8 @@
 @import "./layers.css";
 
 @import "./block-toolbar.css";
+/* The floating format bar over words being edited, and its paste notice. */
+@import "./format-bar.css";
 
 @import "./variables.css";
 

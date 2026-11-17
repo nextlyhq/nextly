@@ -203,12 +203,13 @@ const CASES: readonly Case[] = [
     type: "core/text",
     label: "Text",
     props: { text: "A paragraph of text." },
+    // One paragraph of words with bold, italic and links, edited with the
+    // shared rich-text editor held to that, and stored as editor content.
     edit: {
-      kind: "type",
+      kind: "richText",
       label: "Text",
       prop: "text",
-      value: "An edited paragraph.",
-      stored: "An edited paragraph.",
+      text: " Edited.",
     },
   },
   {
