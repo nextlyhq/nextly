@@ -7,7 +7,11 @@
  *
  * @module layout-choices-contract
  */
-import type { BlockDocument, LayoutRegion } from "@nextlyhq/blocks-engine";
+import type {
+  BlockDocument,
+  LayoutRegion,
+  RegionArea,
+} from "@nextlyhq/blocks-engine";
 
 import type { FencedLayoutState } from "./layout-removal/words";
 
@@ -32,6 +36,14 @@ export const LAYOUT_CHOICES_LOCALE_PARAM = "locale";
  */
 export const LAYOUT_CHOICES_SEARCH_PARAM = "q";
 
+/**
+ * The query parameter asking for every listed set's picture: the PUBLISHED
+ * definitions of each listed set's regions, not only of the two a page can be
+ * drawn inside. Asked by the header & footer menu once it opens, so the
+ * canvas's own read stays as small as the two sets it draws.
+ */
+export const LAYOUT_CHOICES_PICTURES_PARAM = "pictures";
+
 /** The longest Layout id the route accepts, as an entry id is bounded. */
 export const LAYOUT_ID_MAX = 200;
 
@@ -49,7 +61,7 @@ export const LAYOUT_SEARCH_MAX = 200;
  */
 export function layoutChoicesPath(
   selected: string | null,
-  options: { locale?: string | null; search?: string } = {}
+  options: { locale?: string | null; search?: string; pictures?: boolean } = {}
 ): string {
   const query = new URLSearchParams();
   if (selected !== null && selected !== "") {
@@ -59,6 +71,7 @@ export function layoutChoicesPath(
   if (locale !== "") query.set(LAYOUT_CHOICES_LOCALE_PARAM, locale);
   const search = options.search?.trim() ?? "";
   if (search !== "") query.set(LAYOUT_CHOICES_SEARCH_PARAM, search);
+  if (options.pictures === true) query.set(LAYOUT_CHOICES_PICTURES_PARAM, "1");
   const text = query.toString();
   return text === ""
     ? LAYOUT_CHOICES_ROUTE_PATH
@@ -119,12 +132,13 @@ export interface LayoutChoice {
    */
   readonly regions: readonly LayoutRegion[];
   /**
-   * Whether the set holds no header and no footer: its published areas name
-   * no component, or, for a set never published, its own areas name none.
-   * Choosing one would be the same as "No header or footer", so the picker
-   * offers it only to a page that already names it.
+   * The areas the set fills, header first: its published areas, or, for a set
+   * never published, its own. None for a set that holds no header and no
+   * footer, which would mean the same as "No header or footer", so the menu
+   * offers it only to a page that already names it; one or both, as the
+   * menu's note says ("Header only", "Footer only", "Header and footer").
    */
-  readonly isEmpty: boolean;
+  readonly areasFilled: readonly RegionArea[];
   /**
    * Where the Layout stands with Remove Layout, when it is behind its fence:
    * being removed now, or unpublished by it and not published since. A page
@@ -194,7 +208,9 @@ export interface LayoutChoicesResponse {
      * The PUBLISHED definitions the regions of the selected Layout and the
      * default reach, nested components included, by id: what the canvas draws
      * them from, read as the caller. Only those two can be drawn, so only
-     * theirs are sent, which bounds the answer whatever the list holds.
+     * theirs are sent, which bounds the answer whatever the list holds; asked
+     * for pictures, every listed published set's too, under the renderer's
+     * own bounds.
      */
     readonly regionDefinitions: Readonly<Record<string, BlockDocument>>;
   };

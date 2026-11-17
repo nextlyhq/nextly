@@ -48,6 +48,7 @@ import {
 } from "./default-layout/store";
 import {
   LAYOUT_CHOICES_LOCALE_PARAM,
+  LAYOUT_CHOICES_PICTURES_PARAM,
   LAYOUT_CHOICES_ROUTE_PATH,
   LAYOUT_CHOICES_SEARCH_PARAM,
   LAYOUT_CHOICES_SELECTED_PARAM,
@@ -113,6 +114,11 @@ export interface LayoutChoicesRequest {
   readonly locale?: string | undefined;
   /** Text Layout titles must contain, to reach those past the list's bound. */
   readonly search?: string | undefined;
+  /**
+   * Whether every listed set's picture is asked for: the definitions of each
+   * listed published set's regions, not only the two a page is drawn inside.
+   */
+  readonly pictures?: boolean;
   /**
    * The starter header and footer the site was seeded with, as recorded.
    * Absent, no region is told it shows the starter.
@@ -236,7 +242,10 @@ export async function readLayoutChoices(
     ...new Set(focused.flatMap(item => item.regions.map(r => r.componentId))),
   ];
   // Only the Layouts a page can be drawn inside: the canvas draws no other,
-  // and every other Layout's graph would only grow the answer.
+  // and every other Layout's graph would only grow the answer. The menu's
+  // pictures draw every listed set, so asked for them, every one's is sent,
+  // the two the page is drawn inside first. An unpublished set lists no
+  // regions, so nothing of it is read.
   const regionDefinitions = await publishedDefinitions(
     nextly,
     {
@@ -244,7 +253,14 @@ export async function readLayoutChoices(
       field: request.store.field,
       locale: request.locale,
     },
-    focused.flatMap(item => item.regions),
+    [
+      ...focused.flatMap(item => item.regions),
+      ...(request.pictures === true
+        ? items
+            .filter(item => !focus.includes(item.id))
+            .flatMap(item => item.regions)
+        : []),
+    ],
     { reading: asUser, limits: request.limits }
   );
   const reachable = reachableComponents(
@@ -416,7 +432,7 @@ function choiceOf(row: Row): LayoutChoice | null {
     published,
     draftChangesNotLive: false,
     regions: published ? stored : [],
-    isEmpty: stored.length === 0,
+    areasFilled: stored.map(region => region.area),
   };
 }
 
@@ -513,7 +529,8 @@ const optionalText = (max: number) =>
 
 /**
  * The query the choices route accepts: the selected Layout, the language
- * being edited, and a title search. Every one is optional.
+ * being edited, a title search, and whether every set's picture is asked
+ * for. Every one is optional.
  */
 const choicesQuery = z.object({
   [LAYOUT_CHOICES_SELECTED_PARAM]: z
@@ -524,6 +541,9 @@ const choicesQuery = z.object({
     .optional(),
   [LAYOUT_CHOICES_LOCALE_PARAM]: optionalText(LAYOUT_LOCALE_MAX),
   [LAYOUT_CHOICES_SEARCH_PARAM]: optionalText(LAYOUT_SEARCH_MAX),
+  // "1" or nothing: the one value the admin sends, so a typo is refused
+  // rather than read as "no pictures".
+  [LAYOUT_CHOICES_PICTURES_PARAM]: z.literal("1").optional(),
 });
 
 /** What the request asks, as the route reads it. */
@@ -531,6 +551,7 @@ export interface LayoutChoicesQuery {
   readonly selected: string | null;
   readonly locale: string | undefined;
   readonly search: string | undefined;
+  readonly pictures: boolean;
 }
 
 /**
@@ -544,6 +565,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
       LAYOUT_CHOICES_SELECTED_PARAM,
       LAYOUT_CHOICES_LOCALE_PARAM,
       LAYOUT_CHOICES_SEARCH_PARAM,
+      LAYOUT_CHOICES_PICTURES_PARAM,
     ],
     choicesQuery,
     "header & footer choices route"
@@ -552,6 +574,7 @@ export function parseChoicesQuery(url: string | URL): LayoutChoicesQuery {
     selected: query[LAYOUT_CHOICES_SELECTED_PARAM] ?? null,
     locale: query[LAYOUT_CHOICES_LOCALE_PARAM],
     search: query[LAYOUT_CHOICES_SEARCH_PARAM],
+    pictures: query[LAYOUT_CHOICES_PICTURES_PARAM] === "1",
   };
 }
 
