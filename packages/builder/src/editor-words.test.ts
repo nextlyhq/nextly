@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { panelLabel } from "./editor-rail";
+import { panelLabel } from "./shell/editor-rail";
 import { EDITOR_WORDS } from "./editor-words";
 import { inspectorTabLabels } from "./inspector-panel";
 import { LEFT_PANELS } from "./shell-state";

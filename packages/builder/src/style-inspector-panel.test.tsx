@@ -35,7 +35,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
 import { applyOps, type BuilderOp } from "./ops";
-import { NoticeSinkProvider } from "./builder-notices";
+import { NoticeSinkProvider } from "./shell/builder-notices";
 import { FocalFrame } from "./focal-frame";
 import { InspectorPanel } from "./inspector-panel";
 import {

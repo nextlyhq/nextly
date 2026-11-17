@@ -27,7 +27,6 @@ import {
   SQUARE_CORNERS,
   type CornerRadii,
 } from "./border-radii";
-import { deviceLabel } from "./breakpoint-switcher";
 import {
   CANVAS_ROOT_CLASS,
   CONDITIONED_ATTRIBUTE,
@@ -69,6 +68,7 @@ import {
 import { useHoveredBlock } from "./hovered-block";
 import { UNNAMED_COMPONENT } from "./layers";
 import { LOOK_REACH_ATTRIBUTE } from "./look-reach";
+import { deviceLabel } from "./shell/breakpoint-switcher";
 import {
   TOOLBAR_GAP_PX,
   toolbarPlacement,
