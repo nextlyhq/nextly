@@ -23,6 +23,7 @@ import { withRegisteredLooks } from "../core-looks";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "../library-route";
 import { previewViewportsFromSiteStyle } from "../preview-viewports";
 import type { PublishReadinessSetup } from "../publish-readiness";
+import type { SiteHeaderFooter } from "../site-header-footer";
 import type { PageBuilderSiteCodeOptions } from "../site-code/route";
 import type {
   PageBuilderFontOptions,
@@ -401,6 +402,20 @@ export interface PageBuilderOptions {
   canvasPath?: string;
 
   /**
+   * Who draws the site's header and footer.
+   *
+   * - `"page-builder"` (the default): the header & footer sets authors build
+   *   in the page builder, drawn around each page by a page route given the
+   *   `layouts` option.
+   * - `"code"`: the site's own code, around its page route. Set this on a
+   *   site whose layout already draws its header and footer, so the page
+   *   builder leaves them to it.
+   *
+   * Read once at boot. Any other value is refused then, naming the option.
+   */
+  siteHeaderFooter?: SiteHeaderFooter;
+
+  /**
    * The viewport widths the pages preview offers.
    *
    * Defaults to **this site's own breakpoints**, read from the `site-style`
@@ -528,6 +543,13 @@ export function adminClientConfig(
     // The canvas route's path, which the editor loads its frame from. A path,
     // never a secret: the route serves an empty page.
     ...(canvasPath === undefined ? {} : { canvasPath }),
+    // Who draws the site's header and footer, for the editor's notice when the
+    // canvas shows both the site's own and a set's. Written as the host
+    // stated it, after `pageBuilder` refused anything else; absent is the
+    // default.
+    ...(opts.siteHeaderFooter === undefined
+      ? {}
+      : { siteHeaderFooter: opts.siteHeaderFooter }),
     // The RESOLVED defaults tier rather than the raw option, so the canvas and
     // the validator read one answer. Plain data: tokens, fonts, classes and
     // breakpoints all serialize, and none of it is secret — a published page

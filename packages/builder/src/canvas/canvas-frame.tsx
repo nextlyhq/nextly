@@ -154,6 +154,21 @@ export interface SiteFrameSource extends FrameSourceReading {
 export type CanvasFrameFallback = "other-origin" | "not-served" | "not-ready";
 
 /**
+ * Where the site's own layout draws around the page on a page the site
+ * serves: something with a box before the page, as a header is, and after it,
+ * as a footer is. Read from where each part sits in the site's page against
+ * the canvas's mount point, so it holds whatever the site's markup calls it.
+ *
+ * @experimental Settles with the editor's notices about the site's layout.
+ */
+export interface SiteChromeDrawn {
+  /** The layout draws something before the page. */
+  readonly before: boolean;
+  /** The layout draws something after the page. */
+  readonly after: boolean;
+}
+
+/**
  * How long a page the site serves has to say it is ready, once loaded.
  *
  * Generous, because a site's first page in development compiles on request;
@@ -267,6 +282,15 @@ export interface CanvasFrameProps {
    * which the author is looking at.
    */
   onSourceFallback?: (reason: CanvasFrameFallback | null) => void;
+  /**
+   * Told where the site's own layout draws around the page whenever that
+   * changes: as the site's page arrives, as its layout draws a part later or
+   * takes one away, and with nothing drawn once the frame is gone. Never told
+   * on the editor's blank page, which has no layout of its own.
+   *
+   * @experimental Settles with the editor's notices about the site's layout.
+   */
+  onSiteChrome?: (drawn: SiteChromeDrawn) => void;
   className?: string;
 }
 
@@ -307,6 +331,7 @@ function FramedCanvas({
   children,
   source = SRCDOC_FRAME_SOURCE,
   onSourceFallback,
+  onSiteChrome,
   className,
   ...rest
 }: CanvasFrameProps): React.JSX.Element {
@@ -324,6 +349,7 @@ function FramedCanvas({
   const { shown, pending, refuse } = useShownSource(source, onSourceFallback);
   const { page, mountPoint } = useFramePage(frame, shown, refuse);
   const siteChrome = useSiteChrome(page, mountPoint);
+  useReportedSiteChrome(siteChrome, mountPoint, onSiteChrome);
 
   const region = useRegionSize(stage);
   const { height, scale } = frameLayout(width, statedHeight, region, zoom);
@@ -946,6 +972,75 @@ function useSiteChrome(
     };
   }, [page, mountPoint]);
   return chrome;
+}
+
+/** Nothing drawn around the page: the state before any site page arrives. */
+const NOTHING_DRAWN: SiteChromeDrawn = { before: false, after: false };
+
+/**
+ * Where `elements`, the site's layout around `mountPoint`, draw: only a part
+ * with a box counts, so a script or an empty announcer is no header, and a
+ * part before the mount point in the page is before the page.
+ */
+function siteChromeDrawn(
+  elements: readonly Element[],
+  mountPoint: HTMLElement
+): SiteChromeDrawn {
+  let before = false;
+  let after = false;
+  for (const element of elements) {
+    const box = element.getBoundingClientRect();
+    if (box.width === 0 || box.height === 0) continue;
+    // The constant from the node itself, which belongs to the frame's realm.
+    const precedes =
+      (mountPoint.compareDocumentPosition(element) &
+        mountPoint.DOCUMENT_POSITION_PRECEDING) !==
+      0;
+    if (precedes) before = true;
+    else after = true;
+  }
+  return { before, after };
+}
+
+/**
+ * Tell the host where the site's layout draws around the page, each time
+ * that changes: as its parts arrive or leave, and as one gains or loses its
+ * box (a part the site's stylesheet hides until its script runs), and that
+ * nothing is drawn once the frame is gone.
+ */
+function useReportedSiteChrome(
+  elements: readonly Element[],
+  mountPoint: HTMLElement | null,
+  onSiteChrome: CanvasFrameProps["onSiteChrome"]
+): void {
+  const latest = React.useRef(onSiteChrome);
+  React.useEffect(() => {
+    latest.current = onSiteChrome;
+  }, [onSiteChrome]);
+  const told = React.useRef<SiteChromeDrawn>(NOTHING_DRAWN);
+  const tell = React.useCallback((drawn: SiteChromeDrawn) => {
+    if (
+      drawn.before === told.current.before &&
+      drawn.after === told.current.after
+    ) {
+      return;
+    }
+    told.current = drawn;
+    latest.current?.(drawn);
+  }, []);
+  React.useEffect(() => {
+    if (mountPoint === null) return undefined;
+    const read = (): void => tell(siteChromeDrawn(elements, mountPoint));
+    read();
+    // From the frame's window, the realm of the elements it observes.
+    const Resizes = mountPoint.ownerDocument.defaultView?.ResizeObserver;
+    const sizes = Resizes === undefined ? null : new Resizes(read);
+    for (const element of elements) sizes?.observe(element);
+    return () => sizes?.disconnect();
+  }, [elements, mountPoint, tell]);
+  // Nothing is drawn once the frame is gone, so a host is never left holding
+  // a layout no frame shows.
+  React.useEffect(() => () => tell(NOTHING_DRAWN), [tell]);
 }
 
 /**

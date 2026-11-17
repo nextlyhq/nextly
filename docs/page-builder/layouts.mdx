@@ -347,3 +347,37 @@ pass the new names, or the route reads the old ones:
 `pageBuilderLayouts({ layoutsCollection: "frames", settingsSingle: "site-settings" })`.
 For a route that reads through its own Nextly instance, pass that reader as
 `nextly`. The option is not offered on a Single's route.
+
+## A site that draws its header and footer in code
+
+Some sites already draw their header and footer in their own layout, around the page
+route, and never pass it the `layouts` option above. [rext.ai](https://rext.ai) and
+[nextlyhq.com](https://nextlyhq.com) both work this way. Tell the plugin so, with its
+`siteHeaderFooter` option, and the page builder leaves headers and footers to your code:
+
+```ts title="nextly.config.ts"
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  plugins: [
+    pageBuilder({
+      siteHeaderFooter: "code",
+    }),
+  ],
+});
+```
+
+| Value | Who draws the header and footer |
+| --- | --- |
+| `"page-builder"` (the default) | The header & footer sets authors build, drawn by a page route given the `layouts` option. |
+| `"code"` | Your site's own layout, around its page route. |
+
+The option is read when the server starts, and any other value stops it with an
+error that names the option.
+
+When the editor's canvas shows your site's own header or footer around the page
+(through the [canvas route](/docs/page-builder#draw-the-canvas-in-your-sites-layout))
+and a header & footer set draws one too, the editor says so once a session, above the
+canvas: visitors may see two. Either set `siteHeaderFooter: "code"`, or remove the
+header from your site's layout and let the sets draw it.
