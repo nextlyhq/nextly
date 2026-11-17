@@ -393,7 +393,8 @@ describe("the page drawn again while the editor around it re-renders", () => {
     act(() => editor().select("block-3"));
     resetCounts();
     hostRenders = 0;
-    for (const name of ["Style", "Content", "Style", "Content"]) {
+    // Every tab the block has: it declares no settings, so no Content.
+    for (const name of ["Style", "Advanced", "Style", "Advanced"]) {
       fireEvent.mouseDown(view.getByRole("tab", { name }));
       // The control: the tab opened.
       expect(

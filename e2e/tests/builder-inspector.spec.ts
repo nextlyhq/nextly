@@ -1,14 +1,14 @@
 /**
  * The inspector's anatomy, in the real editor.
  *
- * - Selecting a heading shows its card (icon, type, description, menu), two
+ * - Selecting a heading shows its card (icon, type, description, menu), three
  *   tabs, and on Style a bar naming the target, the device and the state; the
  *   bar follows a change of state.
  * - The Style tab orders its sections Layout to Effects and places each
  *   property as the placement table says, for a section, a heading and an
  *   image: the common controls show, the rest wait behind "+ More".
- * - A block stored with a CSS id and attributes reopens with them under
- *   Content → Advanced, and an edit there survives a save and a reload.
+ * - A block stored with a CSS id and attributes reopens with them on the
+ *   Advanced tab, and an edit there survives a save and a reload.
  * - Locking from the card's menu makes every control read-only and says so;
  *   Unlock from the same menu gives them back.
  * - With the inspector open on each tab, axe finds nothing at WCAG 2.2 AA.
@@ -313,7 +313,7 @@ async function axe(page: Page): Promise<unknown[]> {
 test.describe("the inspector", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("shows the card, two tabs, and a bar that follows the state and device", async ({
+  test("shows the card, three tabs, and a bar that follows the state and device", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -329,7 +329,7 @@ test.describe("the inspector", () => {
     ).toBeVisible();
 
     const tabs = page.locator(".nx-inspector").getByRole("tab");
-    await expect(tabs).toHaveText(["Content", "Style"]);
+    await expect(tabs).toHaveText(["Content", "Style", "Advanced"]);
 
     await page.getByRole("tab", { name: "Style" }).click();
     const bar = page.getByRole("region", { name: "What you're editing" });
@@ -415,14 +415,14 @@ test.describe("the inspector", () => {
     expect(await sectionLabels(page)).not.toContain("Advanced");
   });
 
-  test("keeps a stored CSS id and attributes under Content → Advanced, through a save and reload", async ({
+  test("keeps a stored CSS id and attributes on the Advanced tab, through a save and reload", async ({
     page,
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
     await select(page, HEADING);
 
-    await page.getByText("Advanced", { exact: true }).click();
+    await page.getByRole("tab", { name: "Advanced" }).click();
     const cssId = page.getByRole("textbox", { name: "CSS id" });
     await expect(cssId).toHaveValue("intro");
     await expect(
@@ -451,7 +451,7 @@ test.describe("the inspector", () => {
       timeout: 60_000,
     });
     await select(page, HEADING);
-    await page.getByText("Advanced", { exact: true }).click();
+    await page.getByRole("tab", { name: "Advanced" }).click();
     await expect(page.getByRole("textbox", { name: "CSS id" })).toHaveValue(
       "intro-two"
     );
@@ -468,18 +468,24 @@ test.describe("the inspector", () => {
 
     // Offered on a container, not on a heading.
     await select(page, HEADING);
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    // The control: the Advanced tab is on screen, so the switch's absence
+    // is the heading's, not a hidden tab's.
+    await expect(page.getByRole("textbox", { name: "CSS id" })).toBeVisible();
     await expect(
       page.getByRole("switch", { name: "Never quote this" })
     ).toHaveCount(0);
 
+    // The tab stays Advanced as the selection moves to the section.
     await select(page, SECTION);
     const never = page.getByRole("switch", { name: "Never quote this" });
     await expect(never).toHaveAttribute("aria-checked", "false");
-    // After Visible on and Show when, before Advanced: each is measured, so
-    // the switch drawn above Show when, or Show when missing, fails here.
+    // After Visible on and Show when, before the CSS id: each is measured,
+    // so the switch drawn above Show when, or Show when missing, fails here.
     const order = await page
+      .getByRole("tabpanel", { name: "Advanced" })
       .locator(
-        "[data-visible-on], .nx-show-when, [data-never-quote], .nx-inspector__advanced"
+        "[data-visible-on], .nx-show-when, [data-never-quote], #nx-block-css-id"
       )
       .evaluateAll(elements =>
         elements.map(element =>
@@ -489,15 +495,10 @@ test.describe("the inspector", () => {
               ? "show-when"
               : element.hasAttribute("data-never-quote")
                 ? "never-quote"
-                : "advanced"
+                : "css-id"
         )
       );
-    expect(order).toEqual([
-      "visible-on",
-      "show-when",
-      "never-quote",
-      "advanced",
-    ]);
+    expect(order).toEqual(["visible-on", "show-when", "never-quote", "css-id"]);
 
     await never.click();
     await expect(page.getByText("On: marked")).toBeVisible();
@@ -524,6 +525,7 @@ test.describe("the inspector", () => {
       timeout: 60_000,
     });
     await select(page, SECTION);
+    await page.getByRole("tab", { name: "Advanced" }).click();
     await expect(
       page.getByRole("switch", { name: "Never quote this" })
     ).toHaveAttribute("aria-checked", "true");
@@ -666,9 +668,9 @@ test.describe("the inspector", () => {
     await select(page, HEADING);
 
     expect(await axe(page), "Content").toEqual([]);
-    await page.getByText("Advanced", { exact: true }).click();
-    expect(await axe(page), "Content with Advanced open").toEqual([]);
     await page.getByRole("tab", { name: "Style" }).click();
     expect(await axe(page), "Style").toEqual([]);
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    expect(await axe(page), "Advanced").toEqual([]);
   });
 });
