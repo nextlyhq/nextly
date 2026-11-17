@@ -1220,6 +1220,11 @@ export interface VariableUsage {
    * way. Absent from an older server.
    */
   readonly variables?: readonly string[];
+  /**
+   * The Site text rows using it (`link`, `h2`), by reference or through
+   * `var()`. Absent from an older server.
+   */
+  readonly siteText?: readonly string[];
   /** False makes `documents` and `byKind` floors: "at least". */
   readonly complete: boolean;
 }

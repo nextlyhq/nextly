@@ -92,6 +92,10 @@ describe("whether a variable is used, for the usage filter", () => {
     expect(usageState(reach(0, ["card"]))).toBe("used");
   });
 
+  it("is used where a Site text row uses it", () => {
+    expect(usageState({ ...reach(0), siteText: ["link"] })).toBe("used");
+  });
+
   it("is used where another variable names it through var()", () => {
     expect(usageState({ ...reach(0), variables: ["shadow.lift"] })).toBe(
       "used"

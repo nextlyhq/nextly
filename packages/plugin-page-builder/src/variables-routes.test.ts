@@ -242,6 +242,7 @@ describe("how widely variables are used", () => {
           sharedStyles: ["c-card", "c-hero"],
           blockDefaults: [],
           variables: [],
+          siteText: [],
           complete: true,
         },
         "color.brand": {
@@ -251,6 +252,7 @@ describe("how widely variables are used", () => {
           // In type order, whatever order the registry lists them in.
           blockDefaults: ["acme/button", "acme/card"],
           variables: [],
+          siteText: [],
           complete: true,
         },
         "color.unused": {
@@ -259,6 +261,7 @@ describe("how widely variables are used", () => {
           sharedStyles: [],
           blockDefaults: [],
           variables: [],
+          siteText: [],
           complete: true,
         },
       },
@@ -1774,5 +1777,24 @@ describe("a variable named through var(), as a shadow names its colour", () => {
     );
     expect(answer.variables["t-accent"]?.variables).toEqual(["t-lift"]);
     expect(answer.variables["t-lift"]?.variables).toEqual([]);
+  });
+
+  it("names the Site text rows using a colour, by reference or through var()", async () => {
+    const { source } = usageOf(WHOLE, {});
+    const site: SiteTokenSet = {
+      ...siteWith([accent]),
+      siteText: {
+        link: { color: { $token: "t-accent" } },
+        caption: { color: "var(--site-t-accent)" },
+      },
+    };
+    const answer = await readVariableUsage(
+      usageRequest("t-accent"),
+      holding("read-site_style"),
+      source,
+      async () => ({ classes: [], variables: site }),
+      NO_BLOCKS
+    );
+    expect(answer.variables["t-accent"]?.siteText).toEqual(["link", "caption"]);
   });
 });

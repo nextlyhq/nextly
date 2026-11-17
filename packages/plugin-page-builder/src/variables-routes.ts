@@ -122,7 +122,7 @@ import {
   type NamedVariable,
   type VariablesInUseCheck,
 } from "./site-style-storage";
-import { siteTextReasons } from "./site-text-uses";
+import { siteTextReasons, siteTextRowsUsing } from "./site-text-uses";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import {
@@ -527,6 +527,8 @@ export async function readVariableUsage(
   // The variables whose own values name each one through `var()`: the
   // relation a removal is refused by, so the filter and the refusal agree.
   const naming = variablesUsing(site.variables, asked);
+  // The Site text rows using each, by the reading a removal is refused by.
+  const rowsUsing = siteTextRowsUsing(site.variables);
   // Built from entries, so an identity like `__proto__` is an own key.
   const variables: Record<string, VariableUsage> = Object.fromEntries(
     ids.map(id => [
@@ -539,6 +541,7 @@ export async function readVariableUsage(
         // In type order already, as the walk reads the registry.
         blockDefaults: (defaults.get(id) ?? []).map(block => block.type),
         variables: (naming.get(id) ?? []).map(variable => variable.id),
+        siteText: rowsUsing(id),
       },
     ])
   );

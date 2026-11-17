@@ -55,6 +55,8 @@ export interface VariableReach {
    * host does not say.
    */
   readonly variables?: readonly string[];
+  /** The Site text rows using it (`link`, `h2`). Absent where not said. */
+  readonly siteText?: readonly string[];
   /** False makes `documents`, and so the places, a floor: "at least". */
   readonly complete: boolean;
 }
@@ -254,7 +256,7 @@ export function variableRemoval(
  * site's documents are all counted, since an absence proves nothing before.
  *
  * Used means something the site stores names it: a document, a shared or
- * block style, or another variable through `var()`. A block type's own
+ * block style, a Site text row, or another variable through `var()`. A block type's own
  * built-in look does not count: a built-in colour only a core block uses is
  * one the site never chose.
  */
@@ -262,7 +264,8 @@ export type UsageState = "used" | "unused" | "counting";
 
 export function usageState(reach: VariableReach | undefined): UsageState {
   if (reach === undefined) return "counting";
-  const named = (reach.variables?.length ?? 0) > 0;
+  const named =
+    (reach.variables?.length ?? 0) > 0 || (reach.siteText?.length ?? 0) > 0;
   if (named || reach.documents > 0 || reach.sharedStyles.length > 0) {
     return "used";
   }
