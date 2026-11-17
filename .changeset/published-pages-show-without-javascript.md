@@ -36,3 +36,5 @@ A published page's content is now in the HTML it's sent, so it shows with JavaSc
 - Under Cache Components a public page is built whole, so a read still waiting when the build stops (an unregistered cached read, or a block that reads the request) now fails the build rather than leaving a part to fill at request time.
 - The access-enforced routes (`createBlocksPage`, `createSinglePage`, `createContentPage`) still render beneath a boundary under Cache Components, so their pages still need JavaScript there; without Cache Components their response now waits for every block.
 - In development, a public route with no `draft` hook reads the preview cookie, for its warning, only on a draft-mode request.
+- A redirect on a public page (a list's `…/page/1`) is answered beneath a boundary, so a browser without JavaScript still follows it.
+- Nextly's incremental cache handler judges a page Next.js stores with no read of its key first (the background render of a path no build listed) as begun at the start of its fill window, so a page drawn before a write that landed while it rendered is not kept: the first visit after a publish shows the new version.
