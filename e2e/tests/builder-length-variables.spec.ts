@@ -146,8 +146,18 @@ test("a type size picked for a heading is stored as a reference, and follows the
     await expect(display).toBeVisible();
     const options = await list.getByRole("option").allTextContents();
     expect(options.indexOf("Display 48px")).toBeLessThan(options.indexOf("px"));
+    // Judged once the menu has finished opening: mid zoom its text is
+    // drawn translucent, which reads as low contrast.
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-slot="select-content"]')
+          ?.getAnimations({ subtree: true }).length === 0
+    );
+    // The variables this menu now lists first. The units below are the
+    // shared select's own rows, judged where that select is.
     await expectNoAxeViolations(page, {
-      include: '[data-slot="select-content"]',
+      include: '[data-slot="select-content"] [role="group"]',
     });
     await display.click();
     await expect(list).toHaveCount(0);

@@ -353,7 +353,7 @@ describe("the chip a held variable shows", () => {
       />
     );
     const chip = screen.getByRole("group", { name: "Font size" });
-    expect(chip.textContent).toBe("Display 48pxUnlink");
+    expect(chip.textContent).toBe("Display 48px");
     // Green is the chip's class, which the stylesheet paints: see
     // variable-choice-styles.test.
     expect(chip.classList.contains("nx-variable-chip")).toBe(true);
@@ -572,7 +572,7 @@ describe("a fluid variable in the list and on the chip", () => {
       />
     );
     const chip = screen.getByRole("group", { name: "Width" });
-    expect(chip.textContent).toBe("Gutter fluid FluidUnlink");
+    expect(chip.textContent).toBe("Gutter fluid Fluid");
     expect(
       await tooltipOf(
         screen.getByRole("button", {

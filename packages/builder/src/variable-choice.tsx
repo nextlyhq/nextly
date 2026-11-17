@@ -46,7 +46,7 @@ import {
   SelectSeparator,
   TooltipProvider,
 } from "@nextlyhq/ui";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Unlink2 } from "lucide-react";
 import * as React from "react";
 
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
@@ -536,6 +536,10 @@ function VariableRow({ entry }: { entry: VariableEntry }): React.JSX.Element {
  * field shows now as a plain one, in one step, and the field stops following
  * the variable. Named by the field, since several fields can hold one
  * variable and a column of buttons named for it could not be told apart.
+ *
+ * An icon, its word in its tooltip and its name: a field's column is too
+ * narrow for the variable's name, its value and a word beside them, and the
+ * name is what the author reads first.
  */
 export function UnlinkButton({
   label,
@@ -549,22 +553,26 @@ export function UnlinkButton({
   "onClick" | "type"
 >): React.JSX.Element {
   return (
-    <button
-      {...rest}
-      type="button"
-      className="nx-variable-unlink"
-      onClick={onUnlink}
-      aria-label={`Unlink ${label}`}
-    >
-      Unlink
-    </button>
+    <TooltipProvider delayDuration={300}>
+      <ChromeTooltip content="Unlink">
+        <button
+          {...rest}
+          type="button"
+          className="nx-variable-unlink"
+          onClick={onUnlink}
+          aria-label={`Unlink ${label}`}
+        >
+          <Unlink2 aria-hidden="true" size={14} />
+        </button>
+      </ChromeTooltip>
+    </TooltipProvider>
   );
 }
 
 /**
  * The variable a field holds, shown in place of its typed value: a green chip
  * with the variable's name, which opens the list to choose another, its value,
- * and "Unlink".
+ * and Unlink.
  *
  * A variable the site no longer defines shows the identity the document holds
  * rather than an empty space, and offers no Unlink: there is no value to keep.
@@ -645,18 +653,36 @@ export function VariableChip({
  *
  * Wrap the control alone, never a list it opens: focus inside the list would
  * reach the tooltip through React's tree and open it over the list.
+ *
+ * Opened by the pointer and by keyboard focus, not by focus a script moves
+ * after a pick made with the mouse (the field turning into its chip): shown
+ * then, the tooltip covered the field just changed, and took the Escape that
+ * leaves the panel. Whether focus is the keyboard's is the browser's own
+ * `:focus-visible`.
  */
 export function VariableTipped({
   tip,
   children,
 }: {
   tip: string | undefined;
-  children: React.ReactElement;
+  children: React.ReactElement<React.HTMLAttributes<HTMLElement>>;
 }): React.JSX.Element {
+  const [quiet, setQuiet] = React.useState(false);
+  const own = children.props;
+  const trigger = React.cloneElement(children, {
+    onFocus: event => {
+      own.onFocus?.(event);
+      setQuiet(!event.currentTarget.matches(":focus-visible"));
+    },
+    onPointerEnter: event => {
+      own.onPointerEnter?.(event);
+      setQuiet(false);
+    },
+  });
   return (
     <TooltipProvider delayDuration={300}>
-      <ChromeTooltip content={tip} disabled={tip === undefined}>
-        {children}
+      <ChromeTooltip content={tip} disabled={tip === undefined || quiet}>
+        {trigger}
       </ChromeTooltip>
     </TooltipProvider>
   );

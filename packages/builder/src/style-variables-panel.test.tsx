@@ -366,7 +366,7 @@ describe("a field holding a variable", () => {
     expect(fontSize.queryByRole("textbox")).toBeNull();
     const chip = fontSize.getByRole("group", { name: "Font size" });
     expect(chip.classList.contains("nx-variable-chip")).toBe(true);
-    expect(chip.textContent).toBe("Display 48pxUnlink");
+    expect(chip.textContent).toBe("Display 48px");
     // The name the author gave it, never the code path it is stored under;
     // the whole of what it is in the name's tooltip, never a title.
     expect(fontSize.queryByText(/font-size\.display/)).toBeNull();
@@ -524,7 +524,11 @@ describe("where focus goes as a field changes shape", () => {
         })
       )
     );
-    expect(chip.textContent).toBe("Display 48pxUnlink");
+    expect(chip.textContent).toBe("Display 48px");
+    // Focus a script moved after a mouse pick opens no tooltip over the
+    // field just changed: it would take the Escape that leaves the panel.
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("lands on the typed field, holding the value, once Unlink keeps it", async () => {
@@ -650,7 +654,7 @@ describe("the mode a field's variables are read in", () => {
       const chip = fieldsOf("fontSize").getByRole("group", {
         name: "Font size",
       });
-      await waitFor(() => expect(chip.textContent).toBe("Mode 24pxUnlink"));
+      await waitFor(() => expect(chip.textContent).toBe("Mode 24px"));
       fireEvent.click(
         screen.getByRole("button", { name: "Variables for Font size: Mode" })
       );
@@ -728,7 +732,7 @@ describe("a held variable whose name another shares", () => {
     const chip = fieldsOf("fontSize").getByRole("group", {
       name: "Font size",
     });
-    expect(chip.textContent).toBe("Big (font-size.hero) 48pxUnlink");
+    expect(chip.textContent).toBe("Big (font-size.hero) 48px");
     expect(
       within(chip).getByRole("button", {
         name: "Unlink Font size",
