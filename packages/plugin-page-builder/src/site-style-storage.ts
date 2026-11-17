@@ -126,7 +126,7 @@ export function refuseBreakpointsOutsideSettings(hook: {
 }
 
 /** What any other write that changes the site's CSS variable prefix is told. */
-export const PREFIX_OUTSIDE_SETTINGS =
+const PREFIX_OUTSIDE_SETTINGS =
   "The CSS variable prefix is changed in Settings → Site.";
 
 /**

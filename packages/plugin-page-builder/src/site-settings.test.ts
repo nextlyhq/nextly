@@ -331,6 +331,8 @@ describe("what the Site tab reads", () => {
       defaultLayout: "main",
       breakpoints: SET,
       layouts: LAYOUTS,
+      // Nothing sets a prefix here, so the pages are written under --site-.
+      prefix: { current: "--site-" },
     });
     // Published only, from the RESOLVED Layouts collection.
     expect(data.finds[0]).toMatchObject({
@@ -356,6 +358,7 @@ describe("what the Site tab reads", () => {
         defaultLayout: "bare",
         breakpoints: SET,
         layouts: [{ id: "bare", title: "No header or footer" }],
+        prefix: { current: "--site-" },
       });
     }
   });

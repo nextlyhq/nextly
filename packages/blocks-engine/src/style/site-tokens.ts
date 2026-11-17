@@ -527,7 +527,7 @@ const PREFIX_REFUSALS = {
   "--nx-": "--nx- is kept for the admin's own styles. Choose another prefix.",
   "--tw-": "--tw- is used by Tailwind. Choose another prefix.",
   shape:
-    "A prefix starts with two dashes and uses only lowercase letters, numbers and dashes, like --brand-.",
+    "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-.",
 } as const;
 
 function tokenIssue(

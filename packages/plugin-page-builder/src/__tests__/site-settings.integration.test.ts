@@ -42,10 +42,12 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      options: Parameters<typeof pageBuilder>[0] = {}
+    ): Promise<TestNextly> {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(options)],
         seedPublic: true,
       });
       // The site's first user is its owner, granted everything. Made first, so
@@ -307,6 +309,111 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(answer.status).toBe(200);
       expect(await storedTokens(t)).toMatchObject({ prefix: "--brand-" });
+    });
+
+    it("writes nothing when the prefix sent is the one the site already uses", async () => {
+      const t = await boot();
+      const cookie = await holding(t, "manage-page-builder-site");
+      const answer = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--site-",
+      });
+      expect(answer.status).toBe(200);
+      expect(await storedTokens(t)).toBeNull();
+    });
+
+    it("shows a prefix the host sets in code, which a saved prefix replaces", async () => {
+      const t = await boot({
+        siteStyle: { tokens: { tokens: [], prefix: "--acme-" } },
+      });
+      const cookie = await holding(t, "manage-page-builder-site");
+      const read = async () =>
+        (await call("GET", plugin("site", "settings"), cookie)).body.prefix;
+      expect(await read()).toEqual({ current: "--acme-", code: "--acme-" });
+
+      const saved = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--brand-",
+      });
+      expect(saved.status).toBe(200);
+      expect(await read()).toEqual({
+        current: "--brand-",
+        code: "--acme-",
+        stored: "--brand-",
+      });
+
+      // The code's own prefix clears the saved one, so the code decides again.
+      await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--acme-",
+      });
+      expect(await read()).toEqual({ current: "--acme-", code: "--acme-" });
+      expect(await storedTokens(t)).not.toHaveProperty("prefix");
+    });
+
+    it("lets server code acting as nobody change the prefix", async () => {
+      const t = await boot();
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: { tokens: { tokens: [], prefix: "--brand-" }, _overwrite: true },
+        overrideAccess: true,
+      });
+      expect(await storedTokens(t)).toMatchObject({ prefix: "--brand-" });
+    });
+
+    it("counts what names a variable through the current prefix before a change", async () => {
+      const t = await boot();
+      const shadow = "0 1px 2px var(--site-color-brand)";
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: {
+            tokens: [
+              {
+                name: "color.brand",
+                kind: "color",
+                values: { light: "#123456" },
+              },
+              {
+                name: "shadow.card",
+                kind: "shadow",
+                values: { light: shadow },
+              },
+            ],
+          },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Shadowed",
+          slug: "shadowed",
+          status: "published",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "n1",
+                type: "core/text",
+                version: 1,
+                props: { text: "Hi" },
+                styles: { base: { base: { boxShadow: shadow } } },
+              },
+            ],
+          },
+        },
+        overrideAccess: true,
+      });
+      const cookie = await holding(t, "manage-page-builder-site");
+      const dry = await call("POST", plugin("site", "css-prefix"), cookie, {
+        prefix: "--brand-",
+        dryRun: true,
+      });
+      expect(dry.status).toBe(200);
+      // The shadow variable and the page: each names the brand colour through
+      // `var(--site-color-brand)`, which a new prefix leaves pointing at nothing.
+      expect(dry.body.item).toMatchObject({ oldPrefixUses: 2 });
+      expect(await storedTokens(t)).not.toHaveProperty("prefix");
     });
 
     it("tells the Site tab what each role may change", async () => {

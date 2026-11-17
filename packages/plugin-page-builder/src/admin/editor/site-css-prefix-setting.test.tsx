@@ -89,7 +89,7 @@ describe("the CSS variable prefix setting", () => {
     ["--tw-", "--tw- is used by Tailwind. Choose another prefix."],
     [
       "brand",
-      "A prefix starts with two dashes and uses only lowercase letters, numbers and dashes, like --brand-.",
+      "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-.",
     ],
   ])("refuses %s with the reason, and sends nothing", async (typed, reason) => {
     const user = userEvent.setup();
@@ -116,6 +116,17 @@ describe("the CSS variable prefix setting", () => {
         "Your site's own CSS that uses --acme- names must change too."
       )
     ).toBeTruthy();
+  });
+
+  it("says why a prefix the site's code sets isn't used, when the engine refuses it", () => {
+    draw({ current: "--site-", code: "--nx-" });
+    expect(field().value).toBe("--site-");
+    expect(
+      screen.getByText(
+        "Your site's code sets --nx-, which can't be used: --nx- is kept for the admin's own styles. Choose another prefix."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/A prefix saved here replaces it/)).toBeNull();
   });
 
   it("asks before a change, and changes it once confirmed", async () => {

@@ -145,7 +145,15 @@ test.afterEach(async ({ page }) => {
   const { tokens } = found;
   found = null;
   await setPrefix(page.request, "--site-");
-  await writeTokens(page.request, tokens);
+  // The variables go back without their prefix, which the site style refuses
+  // to change outside Settings; a prefix they held goes back through it.
+  const held =
+    typeof tokens === "object" && tokens !== null
+      ? (tokens as Record<string, unknown>)
+      : null;
+  const { prefix, ...rest } = held ?? {};
+  await writeTokens(page.request, held === null ? tokens : rest);
+  if (typeof prefix === "string") await setPrefix(page.request, prefix);
 });
 
 test("the prefix changes to --brand- in Settings, and the canvas and the published page follow it looking the same", async ({
@@ -191,7 +199,7 @@ test("the prefix changes to --brand- in Settings, and the canvas and the publish
     ["--tw-", "--tw- is used by Tailwind. Choose another prefix."],
     [
       "brand",
-      "A prefix starts with two dashes and uses only lowercase letters, numbers and dashes, like --brand-.",
+      "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-.",
     ],
   ] as const) {
     await field.fill(typed);

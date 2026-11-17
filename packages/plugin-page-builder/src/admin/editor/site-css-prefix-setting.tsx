@@ -72,7 +72,7 @@ type Step =
   | { kind: "failed"; message: string };
 
 /** The note under the field: what a change asks of the site's own CSS. */
-export function ownCssNote(current: string): string {
+function ownCssNote(current: string): string {
   return `Your site's own CSS that uses ${current} names must change too.`;
 }
 
@@ -81,7 +81,7 @@ export function ownCssNote(current: string): string {
  * the old prefix, or nothing when none does. A count the usage index could
  * not finish is a lower bound, and says so.
  */
-export function shadowsNote(uses: number, complete: boolean): string | null {
+function shadowsNote(uses: number, complete: boolean): string | null {
   if (uses === 0) return null;
   const count = complete ? `${uses}` : `At least ${uses}`;
   const shadows =
@@ -89,6 +89,18 @@ export function shadowsNote(uses: number, complete: boolean): string | null {
       ? "shadow uses a colour variable"
       : "shadows use a colour variable";
   return `${count} ${shadows} through the old prefix. They lose that colour until you pick it again.`;
+}
+
+/**
+ * What the section says of a prefix the site's code sets: that a prefix
+ * saved here replaces it, or, where the engine refuses it, why the pages are
+ * written under another, in the engine's own words.
+ */
+function codeNote(code: string): string {
+  const { refusal } = resolveTokenPrefix(code);
+  return refusal === undefined
+    ? `Your site's code sets ${code}. A prefix saved here replaces it.`
+    : `Your site's code sets ${code}, which can't be used: ${refusal}`;
 }
 
 /** The message a refused request carries, else a plain fallback. */
@@ -239,7 +251,7 @@ export function SiteCssPrefixSetting({
         </p>
         {prefix.code === undefined ? null : (
           <p className="text-sm text-muted-foreground">
-            {`Your site's code sets ${prefix.code}. A prefix saved here replaces it.`}
+            {codeNote(prefix.code)}
           </p>
         )}
         <StepWords step={step} />

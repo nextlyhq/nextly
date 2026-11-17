@@ -21,11 +21,11 @@ import type { CompositionSetup } from "../fields/blocks-composition";
 import type { HostAddress } from "../host-rewrite/contract";
 import type { RewriteInstall } from "../host-rewrite/service";
 import { siteBreakpointUndoRoute } from "../site-breakpoint-undo";
+import { siteCssPrefixRoute } from "../site-css-prefix";
 import {
   siteBreakpointRemovalRoute,
   siteBreakpointRemovalStatusRoute,
   siteBreakpointsRoute,
-  siteCssPrefixRoute,
   siteSettingsRoute,
   type BreakpointCascade,
   type BreakpointRemoval,

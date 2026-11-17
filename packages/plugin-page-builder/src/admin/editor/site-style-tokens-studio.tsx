@@ -143,16 +143,23 @@ export function TokensStudio({
    * anything, so it answers for an edit the panel has not been re-rendered
    * with yet.
    */
-  const currentTokens = (): SiteTokenSet | undefined => shownNow() ?? editable;
+  const currentTokens = (): SiteTokenSet | undefined =>
+    withReadPrefix(shownNow(), editable);
   const header = useVariablesHeader({
     onChange: commit,
     currentTokens,
     readOnly: !mayChange,
     preview,
   });
-  useReportVariableMatches(edits ?? editable);
+  // Memoised, so a set whose prefix was replaced is the same object until
+  // the edits or the read change, as `edits ?? editable` was.
+  const shown = useMemo(
+    () => withReadPrefix(edits, editable),
+    [edits, editable]
+  );
+  useReportVariableMatches(shown);
   const studio: TokensPanelProps = {
-    tokens: edits ?? editable,
+    tokens: shown,
     supplied: baseline,
     issue,
     ...optionalNotice(notice),
@@ -211,6 +218,23 @@ function InHeaderSlot({
   children: React.ReactNode;
 }): React.JSX.Element | null {
   return slot === null ? null : createPortal(children, slot);
+}
+
+/**
+ * The studio's own copy of the variables, with the site's CSS variable prefix
+ * as the site style was last read. The prefix is changed in Settings, never in
+ * Design, so a copy made before a change must not keep the old one: every
+ * code name would read it, a colour picked into a shadow would be written
+ * under it, and the next save would carry it back.
+ */
+function withReadPrefix(
+  edits: SiteTokenSet | null,
+  read: SiteTokenSet | undefined
+): SiteTokenSet | undefined {
+  if (edits === null) return read;
+  if (edits.prefix === read?.prefix) return edits;
+  const { prefix: _kept, ...rest } = edits;
+  return read?.prefix === undefined ? rest : { ...rest, prefix: read.prefix };
 }
 
 /**

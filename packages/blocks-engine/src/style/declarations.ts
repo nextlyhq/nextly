@@ -161,7 +161,11 @@ const RESERVED_TOKEN_PREFIXES = ["--nx-", "--tw-"] as const;
  * own. A prefix that merely forgets the leading `--` is a quieter failure with
  * the same shape: every token reference it builds is nonsense the browser drops.
  */
-const TOKEN_PREFIX_RE = /^--[a-z0-9-]*$/;
+// At least one letter or digit after the leading dashes, and a closing dash:
+// a bare `--` writes names such as `--color-brand`, which are Tailwind's own
+// theme variables, and a prefix with no closing dash runs into every name
+// (`--brandcolor-brand`).
+const TOKEN_PREFIX_RE = /^--[a-z0-9][a-z0-9-]*-$/;
 
 /**
  * The longest custom-property prefix this engine will write.
@@ -220,7 +224,7 @@ export function safeTokenPrefix(prefix: unknown): {
   ) {
     return {
       prefix: DEFAULT_TOKEN_PREFIX,
-      warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--" and holds only lowercase letters, digits and dashes.`,
+      warning: `"${describeValue(prefix)}" is not a custom-property prefix, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. A prefix starts with "--", holds only lowercase letters, digits and dashes, and ends with a dash.`,
     };
   }
   // Refused here rather than where the tokens are written, because a prefix

@@ -6,7 +6,7 @@
 import type { NamedClass, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { oldPrefixUses } from "./site-settings";
+import { oldPrefixUses } from "./site-css-prefix";
 import { siteCssPrefix, type SiteStyleData } from "./site-style";
 import type { DocumentsUsing } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";

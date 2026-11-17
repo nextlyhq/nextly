@@ -32,16 +32,26 @@ describe("resolveTokenPrefix's reason for a refusal", () => {
     );
   });
 
-  it.each(["brand", "brand-", "--Brand-", "--brand_", "--brand -", ""])(
-    "says what a prefix looks like for %j",
-    bad => {
-      const result = resolveTokenPrefix(bad);
-      expect(result.prefix).toBe("--site-");
-      expect(result.refusal).toBe(
-        "A prefix starts with two dashes and uses only lowercase letters, numbers and dashes, like --brand-."
-      );
-    }
-  );
+  it.each([
+    "brand",
+    "brand-",
+    "--Brand-",
+    "--brand_",
+    "--brand -",
+    "",
+    // Nothing between the dashes: `--color-brand` and the like are
+    // Tailwind's own theme names.
+    "--",
+    "---",
+    // No closing dash, which would run the prefix into every name.
+    "--brand",
+  ])("says what a prefix looks like for %j", bad => {
+    const result = resolveTokenPrefix(bad);
+    expect(result.prefix).toBe("--site-");
+    expect(result.refusal).toBe(
+      "A prefix starts with two dashes, uses only lowercase letters, numbers and dashes, and ends with a dash, like --brand-."
+    );
+  });
 
   it("refuses an over-long prefix with the same plain reason", () => {
     expect(resolveTokenPrefix(`--${"a".repeat(80)}-`).refusal).toContain(
