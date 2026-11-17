@@ -826,6 +826,9 @@ describe("the blocks entry", () => {
       "CORE_CATEGORIES",
       "CORE_PALETTE_ORDER",
       "FORM_FIELD_TYPES",
+      // Added deliberately: what a file field says and the receiver answers
+      // a post to a form with one, worded once.
+      "FORM_FILE_NEEDS_SCRIPT",
       // Added deliberately: the spam trap's name, which the page builder's
       // receiver reads, so the form and its receiver name it once.
       "FORM_HONEYPOT_FIELD",

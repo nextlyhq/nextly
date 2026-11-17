@@ -33,6 +33,7 @@
  */
 import type { BlockNode } from "@nextlyhq/blocks-engine";
 import {
+  FORM_FILE_NEEDS_SCRIPT,
   FORM_HONEYPOT_FIELD,
   FORM_POST_FIELDS as BLOCK_POST_FIELDS,
   formFieldDrawings,
@@ -210,6 +211,9 @@ async function sendForm(send: {
     chosen
   );
   if (outcome.kind === "block-page") return blockPage();
+  if (outcome.kind === "needs-script") {
+    return plain(422, FORM_FILE_NEEDS_SCRIPT);
+  }
   return outcome.kind === "page"
     ? redirect(outcome.href, null, "sent")
     : answer(outcome.kind);
@@ -493,7 +497,8 @@ function pickedForm(node: BlockNode): PickedForm | null {
 type ProviderOutcome =
   | { readonly kind: FormOutcome }
   | { readonly kind: "page"; readonly href: string }
-  | { readonly kind: "block-page" };
+  | { readonly kind: "block-page" }
+  | { readonly kind: "needs-script" };
 
 /**
  * Hand a post to the provider of a form the block picked. The provider's
@@ -524,6 +529,11 @@ async function sendToProvider(
       };
     }
     description = described;
+    // A plain form post through the page builder carries no file, and the
+    // file is never dropped without a word: such a form is refused here.
+    if (description.fields.some(field => field.kind === "file")) {
+      return { kind: "needs-script" };
+    }
     result = await provider.accept(picked.ref, {
       answers: describedAnswers(description.fields, answers),
       ...(locale === undefined ? {} : { locale }),

@@ -27,6 +27,14 @@ const FORM_OUTCOMES = ["sent", "invalid", "closed", "error"] as const;
 /** One of {@link FORM_OUTCOMES}. */
 type FormOutcome = (typeof FORM_OUTCOMES)[number];
 
+/**
+ * What a file field says, and what the receiver answers a post to a form
+ * with one: a plain form post through the page builder carries no file, so
+ * a file is never dropped without a word. One sentence for both.
+ */
+export const FORM_FILE_NEEDS_SCRIPT =
+  "This form needs JavaScript to send a file.";
+
 /** The words shown when a send is accepted and nothing else was chosen. */
 export const FORM_SENT_MESSAGE = "Thanks, we got your message.";
 
@@ -103,11 +111,13 @@ function labelWords(
   );
 }
 
-/** The ids a control is described by: its help and its error slot. */
+/** The ids a control is described by: its help, a file's note and its error slot. */
 function describedBy(field: FormFieldDrawing, id: string): string {
-  return field.help === undefined || field.help === ""
-    ? `${id}-error`
-    : `${id}-help ${id}-error`;
+  return [
+    ...(field.help === undefined || field.help === "" ? [] : [`${id}-help`]),
+    ...(field.kind === "file" ? [`${id}-file`] : []),
+    `${id}-error`,
+  ].join(" ");
 }
 
 /** The help line and the error slot every field ends with. */
@@ -122,6 +132,11 @@ function fieldEnd(
           {field.help}
         </p>
       )}
+      {field.kind === "file" ? (
+        <p id={`${id}-file`} className={partClass("help")}>
+          {FORM_FILE_NEEDS_SCRIPT}
+        </p>
+      ) : null}
       {/*
         Empty and hidden: a provider's own script, sending without a reload,
         writes the reason it refused this field here and shows it. Named by the

@@ -188,6 +188,24 @@ describe("a provider's form on a published page", () => {
     expect(when).not.toContain("data-nx-owned");
   });
 
+  it("says beside a file field that sending a file needs JavaScript", async () => {
+    const out = await page(
+      formsAnswering(() => Promise.resolve(CONTACT)),
+      PICKED
+    );
+    const file = out.match(/<input[^>]*name="brief"[^>]*>/)?.[0] ?? "";
+    const ids = /aria-describedby="([^"]+)"/.exec(file)?.[1]?.split(" ") ?? [];
+    // Its own note, read with the control, and the error slot after it.
+    expect(ids).toHaveLength(2);
+    expect(out).toMatch(
+      new RegExp(
+        `<p id="${ids[0]}"[^>]*>This form needs JavaScript to send a file\\.</p>`
+      )
+    );
+    // Only beside a file field.
+    expect(out.match(/needs JavaScript to send a file/g)).toHaveLength(1);
+  });
+
   it("posts to the receiver as the simple form does", async () => {
     const out = await page(
       formsAnswering(() => Promise.resolve(CONTACT)),

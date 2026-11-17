@@ -76,6 +76,7 @@ export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
+  FORM_FILE_NEEDS_SCRIPT,
   FORM_HONEYPOT_FIELD,
   FORM_POST_FIELDS,
   FORM_SENT_MESSAGE,

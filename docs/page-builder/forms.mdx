@@ -51,6 +51,9 @@ their place.
   form shows the message in every item's.
 - The receiver's address assumes Nextly's handler is mounted at `/admin/api`, as a
   scaffolded project mounts it.
+- A plain form post through the page builder carries no file. A provider's form with a file
+  field says "This form needs JavaScript to send a file." beside the field, and the route
+  refuses a post to it with that sentence rather than sending it on without the file.
 
 ## The receiving route
 

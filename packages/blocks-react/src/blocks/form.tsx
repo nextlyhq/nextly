@@ -63,7 +63,11 @@ export {
   type FormFieldType,
 } from "./form-fields";
 export { FORM_BASE_STYLES } from "./form-parts";
-export { FORM_REFUSALS, FORM_SENT_MESSAGE } from "./form-draw";
+export {
+  FORM_FILE_NEEDS_SCRIPT,
+  FORM_REFUSALS,
+  FORM_SENT_MESSAGE,
+} from "./form-draw";
 
 /**
  * What a visitor sees once a send is accepted: the form's own setting (a

@@ -926,3 +926,33 @@ describe("the language a page was sent from", () => {
     });
   });
 });
+
+describe("a provider's form that takes a file", () => {
+  it("is refused plainly, never sent on without its file", async () => {
+    const withFile = fakeProvider({
+      describe: async () => ({
+        ref: "contact",
+        title: "Contact",
+        fields: [
+          { name: "email", label: "Email", kind: "email" },
+          { name: "cv", label: "CV", kind: "file" },
+        ],
+        submitText: "Send",
+        afterSending: { kind: "message", message: "Thanks." },
+        encoding: "multipart",
+      }),
+      accept: vi.fn(async () => ({ kind: "sent" as const })),
+    });
+    const { deps, providers } = parts(
+      simpleForm({ props: { form: { provider: "acme", ref: "contact" } } })
+    );
+    providers.set("acme", withFile);
+    const response = await receiveFormPost(post({ email: "a@b.co" }), deps);
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toBe(
+      "This form needs JavaScript to send a file."
+    );
+    expect(withFile.accept).not.toHaveBeenCalled();
+  });
+});
