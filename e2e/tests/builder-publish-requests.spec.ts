@@ -1,7 +1,9 @@
 /**
  * What saving and publishing from the builder asks of the server: one write,
  * at most one read of the entry afterwards, and no media reads, with the
- * canvas left as drawn when the read matches what is on screen.
+ * canvas left as drawn when the read matches what is on screen. And what it
+ * does before sending: no walk of the whole document, since each edit was
+ * judged as it was made and the save route judges what it stores.
  *
  * Counted from the press of the top bar's primary button until the editor
  * says the page is saved and the requests it started have settled. The
@@ -12,7 +14,12 @@
  *
  * @module tests/builder-publish-requests.spec
  */
-import { expect, type Page, type Request } from "@playwright/test";
+import {
+  expect,
+  type CDPSession,
+  type Page,
+  type Request,
+} from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { canvasBlock, canvasFrame } from "./support/canvas-frame";
@@ -139,6 +146,28 @@ function settling(page: Page): () => Promise<void> {
       .toBe(true);
 }
 
+/**
+ * How many times the engine's whole-document survey ran since the last ask,
+ * read from the browser's own call counts. Asking resets them. The survey
+ * keeps its name only in a development build, which is where this suite runs.
+ */
+async function surveysSince(cdp: CDPSession): Promise<number> {
+  const { result } = (await cdp.send("Profiler.takePreciseCoverage")) as {
+    result: {
+      functions: { functionName: string; ranges: { count: number }[] }[];
+    }[];
+  };
+  let count = 0;
+  for (const script of result) {
+    for (const fn of script.functions) {
+      if (fn.functionName === "surveyDocument") {
+        count += fn.ranges[0]?.count ?? 0;
+      }
+    }
+  }
+  return count;
+}
+
 /** Change the lead's text through the sidebar, and leave the field. */
 async function editLead(page: Page, text: string): Promise<void> {
   await canvasBlock(page, LEAD).click();
@@ -206,6 +235,12 @@ for (const status of ["published", "draft"] as const) {
     const { id, imageFile } = await seed(page, status);
     const { sent, imageFetches, start } = apiRequests(page, imageFile);
     const settled = settling(page);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Profiler.enable");
+    await cdp.send("Profiler.startPreciseCoverage", {
+      callCount: true,
+      detailed: false,
+    });
     await gotoAdmin(page, `/collections/pages/${id}/builder?field=content`);
     await expect(canvasBlock(page, LEAD)).toBeVisible({ timeout: 60_000 });
     // The picture is the block's own root, or inside it.
@@ -219,6 +254,18 @@ for (const status of ["published", "draft"] as const) {
     await editLead(page, "A page published once");
     await settled();
     const changes = await watchCanvas(page);
+    await surveysSince(cdp);
+    // Read as the write leaves: what the press did before sending it.
+    let beforeSending: Promise<number> | undefined;
+    page.on("request", request => {
+      if (
+        beforeSending === undefined &&
+        request.method() === "PATCH" &&
+        new URL(request.url()).pathname === `${PAGES}/${id}`
+      ) {
+        beforeSending = surveysSince(cdp);
+      }
+    });
     start();
     await barAction(page, status === "published" ? "publish" : "save").click();
     await expectSaved(page, status);
@@ -243,6 +290,17 @@ for (const status of ["published", "draft"] as const) {
     );
     expect(media, "media reads").toEqual([]);
     expect(imageFetches, "the image fetched again").toEqual([]);
+    // No whole-document check between the press and the write: the editor
+    // judged each edit as it was made, and the save route judges what enters.
+    expect(beforeSending, "the write was seen leaving").toBeDefined();
+    expect(await beforeSending, "whole-document surveys before sending").toBe(
+      0
+    );
+    // The control: the counter sees the survey the save's own move of the
+    // stored copy runs, so a count of none is not a counter seeing nothing.
+    expect(await surveysSince(cdp), "surveys after the write").toBeGreaterThan(
+      0
+    );
     // The read matches what is shown: the canvas keeps its drawn blocks.
     expect(await changes(), "canvas elements replaced").toBe(0);
   });
