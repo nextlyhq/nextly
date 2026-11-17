@@ -35,6 +35,7 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { COLUMNS_ROW } from "./columns-layout";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
@@ -526,16 +527,37 @@ export function advancedRowsOf(
  * style, which any block can carry, and Advanced always holds the settings
  * the builder draws for every block (where it shows, when, its CSS id and its
  * attributes). Content is there when the block declares a setting placed in
- * it, or names its own inspector to draw it. Judged by what the block
- * declares rather than by which settings show right now, so a setting a
- * condition hides does not make the tab come and go under the author.
+ * it, names its own inspector to draw it, or is a core block whose Content
+ * section the builder draws ({@link builderContentSectionOf}). Judged by
+ * what the block declares rather than by which settings show right now, so
+ * a setting a condition hides does not make the tab come and go under the
+ * author.
  */
 export function inspectorTabsOf(
-  inspection: Pick<BlockInspection, "sections" | "inspector">
+  inspection: Pick<BlockInspection, "sections" | "inspector" | "blockName">
 ): readonly InspectorTab[] {
   const holdsContent =
-    inspection.inspector !== undefined || contentRowsOf(inspection).length > 0;
+    inspection.inspector !== undefined ||
+    contentRowsOf(inspection).length > 0 ||
+    builderContentSectionOf(inspection.blockName) !== undefined;
   return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
+}
+
+/**
+ * The Content sections the builder draws itself for a core block, by block:
+ * Columns' layout, which writes the row's styles and adds or removes its
+ * columns, so it is no prop a generated field could draw. Content, because
+ * how many columns a row holds is its structure.
+ */
+const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, string>> = {
+  [COLUMNS_ROW]: "Columns",
+};
+
+/** The Content section the builder draws for a block, if it draws one. */
+function builderContentSectionOf(blockName: string): string | undefined {
+  return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
+    ? BUILDER_CONTENT_SECTIONS[blockName]
+    : undefined;
 }
 
 /** What a Style section is called, by its key, as the Style tab names it. */

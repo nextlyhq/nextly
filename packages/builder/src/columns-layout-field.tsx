@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * A Columns row's layout: tiles that set its columns at the edited device,
- * where it stacks, and whether it stacks reversed.
+ * A Columns row's layout, in its Content tab: tiles that set how many
+ * columns it holds and how wide, where it stacks, and whether it stacks
+ * reversed.
  *
  * Every choice is one step of the history, its Style values and any empty
  * columns it adds or removes together. What each writes is in
@@ -36,42 +37,46 @@ import type { EditorState } from "./editor-state";
 import { arrowTo, SegmentChoices } from "./segment-choices";
 import { readStyleValue } from "./style-values";
 
+/** Where a row stacks, each choice saying every device it applies on. */
 const STACK_LABELS: Readonly<Record<StackOn, string>> = {
-  tablet: "Tablet",
-  mobile: "Mobile",
   never: "Never",
+  tablet: "Tablet and mobile",
+  mobile: "Mobile",
 };
 
-/** A tile's glyph: its tracks as bars, Auto's with a dashed track that wraps. */
+/** A tile's picture: its columns as bars, at their widths. */
 function Glyph({ layout }: { layout: ColumnsLayout }): React.JSX.Element {
   return (
     <span className="nx-columns-layout__glyph" aria-hidden="true">
       {layout.tracks.map((width, index) => (
         <i key={index} style={{ flexGrow: width }} />
       ))}
-      {layout.key === "auto" ? (
-        <i className="nx-columns-layout__wraps" />
-      ) : null}
     </span>
   );
 }
 
 /** What the row's widths are, said under the tiles. */
-function hintFor(current: string): string {
-  if (current === "custom") return "A layout of its own, written as CSS below.";
-  if (current === "auto") return "Equal columns that wrap when narrow.";
-  return "Columns at these widths on this device.";
+function hintFor(current: string, set: boolean): string {
+  if (current === "custom") return "A layout of its own, set in Style.";
+  if (current === "none") return "Pick how many columns, and how wide.";
+  return set
+    ? "Columns at these widths."
+    : "Equal columns that wrap when narrow.";
+}
+
+/** How many columns the row holds now. */
+function countOf(row: Row): number {
+  return row.slots?.children?.length ?? 0;
 }
 
 /** Why the pointed tile is held, if one is. */
 function heldReason(
   row: Parameters<typeof planLayout>[0],
   pointed: string | undefined,
-  at: Parameters<typeof planLayout>[2],
-  inherited: string | undefined
+  at: Parameters<typeof planLayout>[2]
 ): string | undefined {
   if (pointed === undefined) return undefined;
-  const plan = planLayout(row, pointed, at, inherited);
+  const plan = planLayout(row, pointed, at);
   return plan.ok ? undefined : plan.reason;
 }
 
@@ -101,21 +106,20 @@ function WidthTiles({
     path: [],
   });
   // What the canvas draws here: set here, or reaching it from a wider device.
-  const current = layoutOf(stored ?? inherited, defaultTemplate(row));
-  const plans = COLUMNS_LAYOUTS.map(layout =>
-    planLayout(
-      row,
-      layout.key,
-      at,
-      stored === undefined ? inherited : undefined
-    )
+  const current = layoutOf(
+    stored ?? inherited,
+    defaultTemplate(row),
+    countOf(row)
   );
+  const plans = COLUMNS_LAYOUTS.map(layout => planLayout(row, layout.key, at));
   const allowed = plans.map(plan => plan.ok);
   const stop = Math.max(
     0,
     COLUMNS_LAYOUTS.findIndex(layout => layout.key === current)
   );
   const choose = (index: number) => {
+    // The chosen tile again changes nothing.
+    if (COLUMNS_LAYOUTS[index]?.key === current) return;
     const plan = plans[index];
     if (plan?.ok === true && plan.ops.length > 0)
       editor.applyAll([...plan.ops]);
@@ -137,11 +141,6 @@ function WidthTiles({
             aria-checked={layout.key === current}
             aria-label={layout.label}
             tabIndex={index === stop ? 0 : -1}
-            title={
-              layout.key === "auto"
-                ? "Equal columns that wrap when narrow"
-                : undefined
-            }
             {...(layout.key === current &&
             stored === undefined &&
             inherited !== undefined
@@ -203,11 +202,15 @@ export function ColumnsLayoutControl({
   });
   // Only while nothing is set here: a value set here is the one in force.
   const inherited = stored === undefined ? reaching : undefined;
-  const current = layoutOf(stored ?? inherited, defaultTemplate(row));
+  const current = layoutOf(
+    stored ?? inherited,
+    defaultTemplate(row),
+    countOf(row)
+  );
   const tiers = stackTiers(breakpoints);
   const reached = reachedStacks(tiers, applied);
   const stack = stackOf(row, tiers, state, reached);
-  const options = (["tablet", "mobile", "never"] as const).filter(
+  const options = (["never", "tablet", "mobile"] as const).filter(
     on => on === "never" || tiers[on] !== undefined
   );
   const restack = (on: StackOn, reversed: boolean) => {
@@ -218,7 +221,7 @@ export function ColumnsLayoutControl({
     <div className="nx-columns-layout" data-control="columns-layout">
       <div className="nx-inspector__field nx-columns-layout__layout">
         <span className="nx-inspector__field-name" id={labelId}>
-          Widths
+          Layout
         </span>
         <WidthTiles
           row={row}
@@ -231,7 +234,8 @@ export function ColumnsLayoutControl({
         />
       </div>
       <p id={hintId} className="nx-inspector__note" aria-live="polite">
-        {heldReason(row, pointed, at, inherited) ?? hintFor(current)}
+        {heldReason(row, pointed, at) ??
+          hintFor(current, stored !== undefined || inherited !== undefined)}
       </p>
       {options.length > 1 ? (
         <>

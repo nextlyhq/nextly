@@ -14,6 +14,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  COLUMNS_LAYOUTS,
   layoutOf,
   planLayout,
   planStack,
@@ -102,22 +103,49 @@ const text: BlockNode = {
 
 const at = { state: "base", breakpoint: "base" } as const;
 
+describe("the layouts", () => {
+  it("are the six tiles, in plain words, each with the tracks it writes", () => {
+    expect(
+      COLUMNS_LAYOUTS.map(({ label, template }) => [label, template])
+    ).toEqual([
+      ["2 equal", "1fr 1fr"],
+      ["3 equal", "repeat(3, 1fr)"],
+      ["4 equal", "repeat(4, 1fr)"],
+      ["Wide left", "2fr 1fr"],
+      ["Wide right", "1fr 2fr"],
+      ["Wide middle", "1fr 2fr 1fr"],
+    ]);
+  });
+});
+
 describe("layoutOf", () => {
+  const byDefault = "repeat(auto-fit, minmax(min(240px, 100%), 1fr))";
+
   it("names a stored template by its tile, and anything else as custom", () => {
-    expect(layoutOf(undefined)).toBe("auto");
-    expect(layoutOf("1fr 1fr")).toBe("50-50");
-    expect(layoutOf("1fr 2fr")).toBe("33-67");
-    expect(layoutOf("2fr 1fr")).toBe("67-33");
-    expect(layoutOf("1fr 3fr")).toBe("25-75");
-    expect(layoutOf("repeat(3, 1fr)")).toBe("3");
-    expect(layoutOf("repeat(4, 1fr)")).toBe("4");
-    expect(layoutOf("repeat(5, 1fr)")).toBe("custom");
+    expect(layoutOf("1fr 1fr", byDefault, 2)).toBe("2");
+    expect(layoutOf("1fr 2fr", byDefault, 2)).toBe("wide-right");
+    expect(layoutOf("2fr 1fr", byDefault, 2)).toBe("wide-left");
+    expect(layoutOf("1fr 2fr 1fr", byDefault, 3)).toBe("wide-middle");
+    expect(layoutOf("repeat(3, 1fr)", byDefault, 3)).toBe("3");
+    expect(layoutOf("repeat(4, 1fr)", byDefault, 4)).toBe("4");
+    // A template stored before the six tiles keeps its meaning: its own.
+    expect(layoutOf("1fr 3fr", byDefault, 2)).toBe("custom");
+    expect(layoutOf("repeat(5, 1fr)", byDefault, 5)).toBe("custom");
+  });
+
+  it("reads the block's own equal columns as the tile of as many", () => {
+    // A row placed and left as it came: two equal columns, as Skip keeps.
+    expect(layoutOf(undefined, byDefault, 2)).toBe("2");
+    expect(layoutOf(byDefault, byDefault, 3)).toBe("3");
+    // No tile lays out one column, or five: none is chosen.
+    expect(layoutOf(undefined, byDefault, 1)).toBe("none");
+    expect(layoutOf(undefined, byDefault, 5)).toBe("none");
   });
 });
 
 describe("planLayout", () => {
-  it("writes the template at the edited device", () => {
-    const plan = planLayout(row([column("a"), column("b")]), "33-67", at);
+  it("writes the template at the row's own base values", () => {
+    const plan = planLayout(row([column("a"), column("b")]), "wide-right", at);
     expect(plan.ok).toBe(true);
     if (!plan.ok) return;
     expect(plan.ops).toHaveLength(1);
@@ -126,33 +154,14 @@ describe("planLayout", () => {
     );
   });
 
-  it("clears the template for Auto, back to the block's own wrapping columns", () => {
-    const plan = planLayout(
-      row([column("a"), column("b")], {
-        base: { base: { gridTemplateColumns: "1fr 2fr" } },
-      }),
-      "auto",
-      at
-    );
+  it("adds the third column Wide middle lays out, in the same step", () => {
+    const plan = planLayout(row([column("a"), column("b")]), "wide-middle", at);
     expect(plan.ok).toBe(true);
     if (!plan.ok) return;
-    // One op, which applied leaves the row with no template of its own.
-    expect(plan.ops).toHaveLength(1);
-    const after = plan.ops.reduce(
-      (document, op) => applyOp(document, op).document,
-      {
-        formatVersion: 1,
-        kind: "page",
-        nodes: [
-          row([column("a"), column("b")], {
-            base: { base: { gridTemplateColumns: "1fr 2fr" } },
-          }),
-        ],
-      } as unknown as BlockDocument
+    expect(JSON.stringify(plan.ops[0])).toContain(
+      '"gridTemplateColumns":"1fr 2fr 1fr"'
     );
-    expect(JSON.stringify(after.nodes[0]?.styles ?? {})).not.toContain(
-      "gridTemplateColumns"
-    );
+    expect(plan.ops.filter(op => op.kind === "insert")).toHaveLength(1);
   });
 
   it("adds empty columns for a layout with more tracks, in the same step", () => {
@@ -174,7 +183,7 @@ describe("planLayout", () => {
   it("removes only empty columns for a layout with fewer tracks", () => {
     const plan = planLayout(
       row([column("a", [text]), column("b"), column("c")]),
-      "50-50",
+      "2",
       at
     );
     expect(plan.ok).toBe(true);
@@ -189,7 +198,7 @@ describe("planLayout", () => {
   it("refuses to remove a column that holds content, and says why", () => {
     const plan = planLayout(
       row([column("a", [text]), column("b", [text]), column("c", [text])]),
-      "50-50",
+      "2",
       at
     );
     expect(plan.ok).toBe(false);
@@ -255,7 +264,7 @@ describe("round one: what counts, what is kept", () => {
     };
     const plan = planLayout(
       row([column("a", [text]), styled, column("c")]),
-      "50-50",
+      "2",
       at
     );
     expect(plan.ok).toBe(true);
@@ -270,7 +279,7 @@ describe("round one: what counts, what is kept", () => {
     expect(held.ok).toBe(true);
     const fewer = planLayout(
       row([column("a", [text]), styled, column("c", [text])]),
-      "50-50",
+      "2",
       at
     );
     expect(fewer.ok).toBe(false);
@@ -330,7 +339,7 @@ describe("round two: defaults and the devices offered", () => {
         column("b", [text]),
         defaulted("c", { as: "div", contained: false }),
       ]),
-      "50-50",
+      "2",
       at
     );
     expect(plan.ok).toBe(true);
@@ -354,7 +363,7 @@ describe("round two: defaults and the devices offered", () => {
           { ...column("b"), ...extra } as BlockNode,
           column("c"),
         ]),
-        "50-50",
+        "2",
         at
       );
       expect(plan.ok, JSON.stringify(extra)).toBe(true);
@@ -377,7 +386,7 @@ describe("round two: defaults and the devices offered", () => {
           { ...column("c"), ...extra } as BlockNode,
           column("d", [text]),
         ]),
-        "50-50",
+        "2",
         at
       );
       expect(fewer.ok, JSON.stringify(extra)).toBe(false);
@@ -431,7 +440,7 @@ describe("round two: defaults and the devices offered", () => {
         column("b", [text]),
         defaulted("c", { as: "section", contained: false }),
       ]),
-      "50-50",
+      "2",
       at
     );
     expect(plan.ok).toBe(false);
@@ -454,19 +463,5 @@ describe("round two: defaults and the devices offered", () => {
     expect(tiers.managed?.map(tier => tier.id)).toEqual(
       expect.arrayContaining(["tab-a", "tab-b", "sm"])
     );
-  });
-});
-
-describe("an inherited layout", () => {
-  const wide = row([column("a"), column("b")], {
-    base: { base: { gridTemplateColumns: "1fr 2fr" } },
-  });
-  const mobile = { state: "base", breakpoint: "sm" } as const;
-
-  it("is overridden by Auto with the block's own template, not by clearing nothing", () => {
-    const plan = planLayout(wide, "auto", mobile, "1fr 2fr");
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) return;
-    expect(JSON.stringify(plan.ops)).toContain('"sm":{"gridTemplateColumns":');
   });
 });

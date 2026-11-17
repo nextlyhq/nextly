@@ -509,6 +509,8 @@ interface LinkControlProps {
    * block's default has nothing stored, so clearing it would change nothing.
    */
   readonly clearable: boolean;
+  /** The id of the words under the row that explain the link, if it has any. */
+  readonly describedBy?: string | undefined;
 }
 
 /** The link combobox: an empty trigger or the chosen link's chip, and the list. */
@@ -522,6 +524,7 @@ function LinkControl({
   onPick,
   onClear,
   clearable,
+  describedBy,
 }: LinkControlProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState("");
@@ -563,6 +566,7 @@ function LinkControl({
               aria-haspopup="listbox"
               aria-expanded={open}
               aria-label={triggerLabel(label, words)}
+              aria-describedby={describedBy}
               // Coming back to a link whose lookup failed asks again, once.
               onFocus={retry}
               onKeyDown={event => {
@@ -1075,6 +1079,30 @@ function bindOptions(
   };
 }
 
+/** The link's hint under it, read as its description, where it has one. */
+function LinkHint({
+  id,
+  hint,
+}: {
+  id: string | undefined;
+  hint: string | undefined;
+}): React.JSX.Element | null {
+  if (id === undefined || hint === undefined) return null;
+  return (
+    <p className="nx-inspector__note" id={id}>
+      {hint}
+    </p>
+  );
+}
+
+/** The words a block gives its link to explain it, as any prop's hint. */
+function linkHintOf(
+  linkProp: { readonly schema: { readonly hint?: unknown } } | undefined
+): string | undefined {
+  const hint = linkProp?.schema.hint;
+  return typeof hint === "string" && hint !== "" ? hint : undefined;
+}
+
 /**
  * A block's link group, drawn where its link prop sits: the link, and under
  * a set link its new-tab switch and its Link options. The link's address
@@ -1094,6 +1122,7 @@ export function LinkGroupField({
 }: LinkGroupFieldProps): React.JSX.Element {
   const id = React.useId();
   const tabId = React.useId();
+  const ownHintId = React.useId();
   // Each prop as it applies: what is stored, else the block's default, so a
   // block that declares a default link reads as linked, and its target and
   // rel show what applies, as every other control shows a default.
@@ -1103,6 +1132,8 @@ export function LinkGroupField({
   const linkProp = props.find(prop => prop.name === group.link);
   const label =
     linkProp === undefined ? "Link" : propLabel(linkProp.name, linkProp.schema);
+  const hint = linkHintOf(linkProp);
+  const hintId = hint === undefined ? undefined : ownHintId;
   const value = linkValueOf(group, values);
   const bound = bindingsOfBlock(document, nodeId);
   const linkBound = isLinkBound(group, bound);
@@ -1141,6 +1172,7 @@ export function LinkGroupField({
               disabled={!destinationWritable}
               find={services?.findLinkTargets}
               clearable={clearable}
+              describedBy={hintId}
               onPick={pick => {
                 const changes = pickChanges(group, pick);
                 if (changes !== undefined && destinationWritable) {
@@ -1162,6 +1194,7 @@ export function LinkGroupField({
                 );
               }}
             />
+            <LinkHint id={hintId} hint={hint} />
           </div>
         </HeldByLock>,
         bindOptions(group, destination, writable, bound)

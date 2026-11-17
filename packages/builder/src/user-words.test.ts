@@ -99,8 +99,8 @@ function brokenRules(texts: readonly string[]): string[] {
  * Texts that match a rule but name something else, by file. Each says why.
  */
 const ALLOWED: Readonly<Record<string, readonly string[]>> = {
-  // A Columns block's arrangement of its columns.
-  "columns-layout-field.tsx": ["A layout of its own, written as CSS below."],
+  // A Columns block's arrangement of its columns, its Layout in Content.
+  "columns-layout-field.tsx": ["Layout", "A layout of its own, set in Style."],
   "columns-layout.ts": ["Not a layout."],
   // The Style tab's Layout section, where a container's Content width is.
   "core-block-placement.fixture.ts": ["Layout"],

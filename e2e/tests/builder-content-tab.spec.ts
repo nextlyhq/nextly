@@ -275,7 +275,7 @@ const CASES: readonly Case[] = [
     slots: true,
     edit: {
       kind: "type",
-      label: "Number of items",
+      label: "How many",
       prop: "limit",
       value: "5",
       stored: 5,

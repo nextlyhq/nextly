@@ -230,7 +230,7 @@ export interface EditorState {
   undoDepth: number;
   /**
    * The collection lists the canvas draws in their empty state rather than
-   * their entries, by id: what "Canvas shows: When empty" chose, so an author
+   * their entries, by id: what "Preview the empty message" chose, so an author
    * can design what visitors see when nothing matches. Editor state only,
    * never stored, and not a step of the history.
    * @experimental
