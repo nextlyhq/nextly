@@ -18,6 +18,8 @@ import type {
 } from "./content-services";
 import { ContentServicesContext } from "./content-services";
 import { InheritedValue } from "./inherited-value";
+import { BLOCK_TARGET, StyleTargetContext } from "./style-field-surroundings";
+import type { StyleTarget } from "./style-target";
 
 afterEach(cleanup);
 
@@ -341,5 +343,57 @@ describe("an upload finishing after the field was drawn again", () => {
       expect(second).toHaveBeenCalledWith("https://cdn.example.com/hero.jpg")
     );
     expect(first).not.toHaveBeenCalled();
+  });
+});
+
+describe("an upload finishing after the style being edited changed", () => {
+  it("is not written into the style now being edited, and says so", async () => {
+    // Started on the block; finished while one of its shared styles is open.
+    // Written there, it would change every block wearing that style.
+    let finish: (media: PickedMedia) => void = () => {};
+    const uploadMedia = vi.fn(
+      () =>
+        new Promise<PickedMedia>(resolve => {
+          finish = resolve;
+        })
+    );
+    const onBlock = vi.fn<Commit>(() => "applied");
+    const onShared = vi.fn<Commit>(() => "applied");
+    const shared = {
+      kind: "shared",
+      worn: [],
+      style: { id: "s1", name: "Card" },
+      readOnly: undefined,
+      write: async () => undefined,
+    } as unknown as StyleTarget;
+    const field = (target: StyleTarget, onCommit: Commit) => (
+      <StyleTargetContext.Provider value={target}>
+        <ContentServicesContext.Provider
+          value={{ uploadMedia } as unknown as ContentServices}
+        >
+          <BackgroundImageField
+            id="bg-image"
+            labelledBy="label"
+            stored={undefined}
+            actionName="Set Image"
+            describedBy={undefined}
+            onCommit={onCommit}
+          />
+        </ContentServicesContext.Provider>
+      </StyleTargetContext.Provider>
+    );
+    const { rerender } = render(field(BLOCK_TARGET, onBlock));
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(["x"], "a.jpg", { type: "image/jpeg" })] },
+    });
+    rerender(field(shared, onShared));
+    finish(PICKED);
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /^The upload finished after you switched/
+    );
+    expect(onShared).not.toHaveBeenCalled();
+    expect(onBlock).not.toHaveBeenCalled();
   });
 });

@@ -31,6 +31,8 @@ import { useFieldDescription } from "./css-hint";
 import { refusedBy } from "./focal-point-field";
 import { InheritedValue } from "./inherited-value";
 import { MediaChoice } from "./media-controls";
+import { StyleTargetContext } from "./style-field-surroundings";
+import { targetKey } from "./style-field-target";
 
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
@@ -79,8 +81,14 @@ function useImageWrites(
   // finishing later must not write through the one it started with, whose
   // page may since have changed (another style set meanwhile).
   const commitNow = React.useRef(onCommit);
+  // What the field edits now: the block, or one of its shared styles. An
+  // upload belongs to the one it started on, and is dropped if the author
+  // has since moved to another, rather than written there.
+  const target = targetKey(React.useContext(StyleTargetContext));
+  const targetNow = React.useRef(target);
   React.useEffect(() => {
     commitNow.current = onCommit;
+    targetNow.current = target;
   });
 
   // A picked or uploaded file is written by its address; one without an
@@ -104,11 +112,19 @@ function useImageWrites(
       return;
     }
     const ticket = ++writes.current;
+    const startedOn = targetNow.current;
     setIssue(null);
     setUploading(true);
     try {
       const media = await uploadMedia(chosen.file);
-      if (ticket === writes.current) writePicked(media);
+      if (ticket !== writes.current) return;
+      if (targetNow.current !== startedOn) {
+        setIssue(
+          "The upload finished after you switched to another style, so it wasn't used here. Choose it again."
+        );
+        return;
+      }
+      writePicked(media);
     } catch (error) {
       if (ticket === writes.current) setIssue(failureWords(error));
     } finally {
