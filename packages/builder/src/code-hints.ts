@@ -116,6 +116,22 @@ export function sizeShortcutWrites(sizes: {
   };
 }
 
+/** What an Icon's Size shortcut writes: its font size alone, Medium clearing it. */
+export function iconSizeShortcutWrites(sizes: {
+  readonly small: string;
+  readonly large: string;
+}): {
+  readonly small: string;
+  readonly medium: string;
+  readonly large: string;
+} {
+  return {
+    small: declarationsText([{ property: "font-size", value: sizes.small }]),
+    medium: declarationsText([{ property: "font-size" }]),
+    large: declarationsText([{ property: "font-size", value: sizes.large }]),
+  };
+}
+
 /** What a Button's Full width shortcut writes. */
 export const FULL_WIDTH_WRITES: string = declarationsText([
   { property: "width", value: "100%" },
