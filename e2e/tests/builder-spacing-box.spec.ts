@@ -284,36 +284,51 @@ test("at the narrowest panel a long value or variable ends in an ellipsis, whole
     .getByRole("radio", { name: /^Section padding \(top and bottom\)/ })
     .click();
   await page.keyboard.press("Escape");
-  await page
-    .locator(".nx-inspector")
-    .evaluate(element => element.style.setProperty("width", "280px"));
 
-  for (const [side, whole] of [
+  const sides = [
     ["Margin top", "1000px"],
     ["Padding top", "Section padding (top and bottom)"],
-  ] as const) {
-    const text = sideText(box, side);
-    // Never cut mid-character: either it fits, or it ends in an ellipsis.
-    const cut = await text.evaluate(element => ({
-      overflows: element.scrollWidth > element.clientWidth,
-      ellipsis: getComputedStyle(element).textOverflow === "ellipsis",
-    }));
-    expect(cut.ellipsis).toBe(true);
-    // The side's name, then the whole value (the dot's words, such as "Set
-    // here", may come between).
-    await expect(sideField(box, side)).toHaveAccessibleName(
-      new RegExp(`^${side} .*${whole.replace(/[()]/g, "\\$&")}$`)
-    );
-    if (cut.overflows) {
-      await sideField(box, side).hover();
-      await expect(page.getByRole("tooltip")).toHaveText(whole);
-      await page.mouse.move(0, 0);
+  ] as const;
+  /** Each side whole, or cut with an ellipsis and whole in its name and tooltip. */
+  async function neverClipped(): Promise<void> {
+    for (const [side, whole] of sides) {
+      const cut = await sideText(box, side).evaluate(element => ({
+        overflows: element.scrollWidth > element.clientWidth,
+        ellipsis: getComputedStyle(element).textOverflow === "ellipsis",
+      }));
+      // Never cut mid-character: either it fits, or it ends in an ellipsis.
+      expect(cut.ellipsis).toBe(true);
+      // The side's name, then the whole value (the dot's words, such as
+      // "Set here", may come between).
+      await expect(sideField(box, side)).toHaveAccessibleName(
+        new RegExp(`^${side} .*${whole.replace(/[()]/g, "\\$&")}$`)
+      );
+      if (cut.overflows) {
+        await sideField(box, side).hover();
+        await expect(page.getByRole("tooltip")).toHaveText(whole);
+        await page.mouse.move(0, 0);
+      }
     }
   }
-  // The long name does not fit at this width: the case the tooltip is for.
+
+  // At the narrowest the shell allows, the box is still drawn, and the long
+  // name does not fit its side: the case the ellipsis and tooltip are for.
+  const divider = page.getByRole("separator", { name: "Canvas and inspector" });
+  await divider.focus();
+  await page.keyboard.press("End");
+  expect(await drawnAsBox(page)).toBe(true);
   expect(
     await sideText(box, "Padding top").evaluate(
       element => element.scrollWidth > element.clientWidth
     )
   ).toBe(true);
+  await neverClipped();
+
+  // At 280px the box gives way to rows, each side the rail's width: still
+  // nothing cut mid-character.
+  await page
+    .locator(".nx-inspector")
+    .evaluate(element => element.style.setProperty("width", "280px"));
+  await expect.poll(() => drawnAsBox(page)).toBe(false);
+  await neverClipped();
 });
