@@ -1,10 +1,12 @@
 /**
  * A Columns row's layout tiles and stacking, in the real editor.
  *
- * - A tile writes the row's columns: 33 / 67 lays two columns at one to two.
+ * - A tile writes the row's columns: Wide right lays two columns at one to
+ *   two.
  * - A tile that would remove a column holding content is held, with why.
- * - Stack on Tablet, reversed, lays the row out as a reversed column at the
- *   site's tablet width and below, and is stored on the row alone.
+ * - Stack on Tablet and mobile, reversed, lays the row out as a reversed
+ *   column at the site's tablet width and below, and is stored on the row
+ *   alone.
  *
  * Each test makes its own page. The site's devices are stored for the file,
  * so it holds the site-style lock.
@@ -111,7 +113,7 @@ async function openRow(page: Page, id: string): Promise<void> {
     .click({ position: { x: 6, y: 6 } });
   await expect(page.locator("[data-block-card]")).toBeVisible();
   await page.getByRole("tab", { name: "Style" }).click();
-  await expect(page.getByRole("radiogroup", { name: "Widths" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Layout" })).toBeVisible();
 }
 
 async function storedRow(page: Page, id: string) {
@@ -133,11 +135,10 @@ test.describe("a Columns row's layout", () => {
       column("b", true),
     ]);
     await openRow(page, id);
-    await page.getByRole("radio", { name: "33 / 67" }).click();
-    await expect(page.getByRole("radio", { name: "33 / 67" })).toHaveAttribute(
-      "aria-checked",
-      "true"
-    );
+    await page.getByRole("radio", { name: "Wide right" }).click();
+    await expect(
+      page.getByRole("radio", { name: "Wide right" })
+    ).toHaveAttribute("aria-checked", "true");
 
     const tracks = await canvasFrame(page)
       .locator(`.nx-canvas [data-nx-node="${ROW}"]`)
@@ -160,7 +161,7 @@ test.describe("a Columns row's layout", () => {
       column("c", true),
     ]);
     await openRow(page, id);
-    const tile = page.getByRole("radio", { name: "50 / 50" });
+    const tile = page.getByRole("radio", { name: "2 equal" });
     await expect(tile).toHaveAttribute("aria-disabled", "true");
     await tile.hover();
     await expect(tile).toHaveAccessibleDescription(
@@ -168,7 +169,7 @@ test.describe("a Columns row's layout", () => {
     );
   });
 
-  test("stacks at Tablet and below, reversed, written on the row alone", async ({
+  test("stacks on tablets and phones, reversed, written on the row alone", async ({
     page,
   }) => {
     await storeSiteBreakpoints(page.request, DEVICES);
@@ -180,7 +181,7 @@ test.describe("a Columns row's layout", () => {
       await openRow(page, id);
       await page
         .getByRole("radiogroup", { name: "Stack on" })
-        .getByRole("radio", { name: "Tablet" })
+        .getByRole("radio", { name: "Tablet and mobile" })
         .click();
       await page.getByRole("switch", { name: "Reverse when stacked" }).click();
       await expect(

@@ -7,7 +7,6 @@
  * @module columns-layout-field.test
  */
 import {
-  BASE_BREAKPOINT,
   clearBlocks,
   registerBlocks,
   type BlockDocument,
@@ -125,8 +124,6 @@ function mount(columns: BlockNode[], styles?: BlockNode["styles"]) {
     <ColumnsLayoutControl
       editor={editor}
       nodeId="row"
-      state="base"
-      breakpoint={BASE_BREAKPOINT}
       breakpoints={BREAKPOINTS}
     />
   );
@@ -169,6 +166,30 @@ describe("a Columns row's layout", () => {
       '"base":{"base":{"gridTemplateColumns":"repeat(3, 1fr)"}}'
     );
     expect(ops.filter(op => op.kind === "insert")).toHaveLength(1);
+  });
+
+  it("writes the row's own base values, beside a template set for one device", () => {
+    // A template stored at Mobile, as the Style tab once wrote one: the tile
+    // still writes the row's own layout, and leaves Mobile's as it was.
+    const editor = mount([column("a"), column("b")], {
+      base: { sm: { gridTemplateColumns: "1fr 2fr" } },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "3 equal" }));
+    const written = JSON.stringify(editor.applyAll.mock.calls[0]?.[0]);
+    expect(written).toContain(
+      '"base":{"gridTemplateColumns":"repeat(3, 1fr)"}'
+    );
+    expect(written).toContain('"sm":{"gridTemplateColumns":"1fr 2fr"}');
+  });
+
+  it("gives back a column a row reading 3 equal has lost, writing no template", () => {
+    const editor = mount([column("a"), column("b")], {
+      base: { base: { gridTemplateColumns: "repeat(3, 1fr)" } },
+    });
+    expect(checked("3 equal")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "3 equal" }));
+    const ops = editor.applyAll.mock.calls[0]?.[0] as { kind: string }[];
+    expect(ops.map(op => op.kind)).toEqual(["insert"]);
   });
 
   it("writes nothing for the tile already chosen", () => {

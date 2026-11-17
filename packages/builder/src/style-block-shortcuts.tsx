@@ -6,11 +6,6 @@
  *
  * @module style-block-shortcuts
  */
-import {
-  isStyleLeaf,
-  STYLE_CATALOG,
-  type StyleLeaf,
-} from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { reachingBeneath } from "./block-shortcuts";
@@ -21,7 +16,6 @@ import {
 import { COLUMNS_ROW } from "./columns-layout";
 import { ColumnsLayoutControl } from "./columns-layout-field";
 import {
-  type ProvenanceOf,
   StyleTargetContext,
   TokenPrefixContext,
   type StyleFieldSurroundings,
@@ -50,10 +44,7 @@ export function ColumnsLayoutFields({
     <ColumnsLayoutControl
       editor={surroundings.editor}
       nodeId={surroundings.nodeId}
-      state={surroundings.state}
-      breakpoint={surroundings.breakpoint}
       breakpoints={surroundings.breakpoints}
-      inherited={reachingLayout(surroundings.provenanceOf)}
       applied={applied}
     />
   );
@@ -120,25 +111,4 @@ function shortcutWhere(
       })
     ),
   };
-}
-
-/** The catalog's leaf for a row's column template, which the trace records. */
-const TEMPLATE_LEAF: StyleLeaf | undefined = (() => {
-  const shape = STYLE_CATALOG.find(
-    entry => entry.property === "gridTemplateColumns"
-  )?.shape;
-  return shape !== undefined && isStyleLeaf(shape) ? shape : undefined;
-})();
-
-/**
- * The column template reaching the row from elsewhere (a wider device, a
- * shared style it wears, another state), as the cascade the dots read
- * answers it: one reading of the cascade, never a second walk of it.
- */
-function reachingLayout(provenanceOf: ProvenanceOf): string | undefined {
-  const answer =
-    TEMPLATE_LEAF === undefined ? undefined : provenanceOf(TEMPLATE_LEAF);
-  return answer?.provenance.kind === "inherited"
-    ? answer.provenance.entry.value
-    : undefined;
 }

@@ -1097,7 +1097,7 @@ function LinkHint({
 
 /** The words a block gives its link to explain it, as any prop's hint. */
 function linkHintOf(
-  linkProp: { readonly schema: { readonly hint?: unknown } } | undefined
+  linkProp: Pick<EditableProp, "schema"> | undefined
 ): string | undefined {
   const hint = linkProp?.schema.hint;
   return typeof hint === "string" && hint !== "" ? hint : undefined;

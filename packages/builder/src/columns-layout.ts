@@ -246,7 +246,13 @@ function isEmpty(column: BlockNode): boolean {
 }
 
 export type LayoutPlan =
-  | { readonly ok: true; readonly ops: readonly BuilderOp[] }
+  | {
+      readonly ok: true;
+      /** Everything the tile writes: its template, then its columns. */
+      readonly ops: readonly BuilderOp[];
+      /** Only the empty columns it adds or removes to match its count. */
+      readonly columnOps: readonly BuilderOp[];
+    }
   | { readonly ok: false; readonly reason: string };
 
 /** Ops adding empty columns at the row's end until it holds `count`. */
@@ -311,9 +317,11 @@ export function planLayout(
       value: layout.template ?? null,
     },
   ]);
+  const columnOps = [...added, ...removed];
   return {
     ok: true,
-    ops: [...(style === null ? [] : [style]), ...added, ...removed],
+    ops: [...(style === null ? [] : [style]), ...columnOps],
+    columnOps,
   };
 }
 

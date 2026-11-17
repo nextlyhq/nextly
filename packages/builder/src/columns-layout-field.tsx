@@ -12,10 +12,9 @@
  * @module columns-layout-field
  */
 import {
+  BASE_BREAKPOINT,
   findNode,
-  type BreakpointId,
   type BreakpointSet,
-  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
@@ -82,47 +81,45 @@ function heldReason(
 
 type Row = NonNullable<ReturnType<typeof findNode>>;
 
+/**
+ * Where every choice here writes: the row's own base values, whatever device,
+ * state or shared style the Style tab is editing, since how many columns a
+ * row holds is its structure. Stacking still names the devices it applies on.
+ */
+const ROW_OWN = { state: "base", breakpoint: BASE_BREAKPOINT } as const;
+
 /** The width tiles: one tab stop, arrows choosing, a held tile saying why. */
 function WidthTiles({
   row,
-  at,
-  inherited,
+  current,
   labelId,
   hintId,
   onPoint,
   editor,
 }: {
   row: Row;
-  at: { state: StyleState; breakpoint: BreakpointId };
-  inherited: string | undefined;
+  current: string;
   labelId: string;
   hintId: string;
   onPoint: (key: string | undefined) => void;
   editor: EditorState;
 }): React.JSX.Element {
-  const stored = readStyleValue(row.styles, {
-    ...at,
-    property: "gridTemplateColumns",
-    path: [],
-  });
-  // What the canvas draws here: set here, or reaching it from a wider device.
-  const current = layoutOf(
-    stored ?? inherited,
-    defaultTemplate(row),
-    countOf(row)
+  const plans = COLUMNS_LAYOUTS.map(layout =>
+    planLayout(row, layout.key, ROW_OWN)
   );
-  const plans = COLUMNS_LAYOUTS.map(layout => planLayout(row, layout.key, at));
   const allowed = plans.map(plan => plan.ok);
   const stop = Math.max(
     0,
     COLUMNS_LAYOUTS.findIndex(layout => layout.key === current)
   );
   const choose = (index: number) => {
-    // The chosen tile again changes nothing.
-    if (COLUMNS_LAYOUTS[index]?.key === current) return;
     const plan = plans[index];
-    if (plan?.ok === true && plan.ops.length > 0)
-      editor.applyAll([...plan.ops]);
+    if (plan?.ok !== true) return;
+    // The chosen tile again writes no template, only the columns it still
+    // needs: a row reading "3 equal" with a column deleted gets it back.
+    const ops =
+      COLUMNS_LAYOUTS[index]?.key === current ? plan.columnOps : plan.ops;
+    if (ops.length > 0) editor.applyAll([...ops]);
   };
   return (
     <div
@@ -141,11 +138,6 @@ function WidthTiles({
             aria-checked={layout.key === current}
             aria-label={layout.label}
             tabIndex={index === stop ? 0 : -1}
-            {...(layout.key === current &&
-            stored === undefined &&
-            inherited !== undefined
-              ? { "data-inherited": "" }
-              : {})}
             // Held, not disabled: still reachable, so its reason can be read;
             // the hint under the tiles says it, as its description.
             {...(held
@@ -171,19 +163,12 @@ function WidthTiles({
 export function ColumnsLayoutControl({
   editor,
   nodeId,
-  state,
-  breakpoint,
   breakpoints,
-  inherited: reaching,
   applied,
 }: {
   editor: EditorState;
   nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
   breakpoints: BreakpointSet | undefined;
-  /** The template reaching the row from elsewhere, as the cascade answers it. */
-  inherited?: string | undefined;
   /** What the cascade applies to the row at a tier, for a stack from elsewhere. */
   applied?: AppliedAt | undefined;
 }): React.JSX.Element | null {
@@ -194,27 +179,24 @@ export function ColumnsLayoutControl({
   const [pointed, setPointed] = React.useState<string | undefined>(undefined);
   const row = findNode(editor.document.nodes, nodeId);
   if (row === undefined) return null;
-  const at = { state, breakpoint };
   const stored = readStyleValue(row.styles, {
-    ...at,
+    ...ROW_OWN,
     property: "gridTemplateColumns",
     path: [],
   });
-  // Only while nothing is set here: a value set here is the one in force.
-  const inherited = stored === undefined ? reaching : undefined;
-  const current = layoutOf(
-    stored ?? inherited,
-    defaultTemplate(row),
-    countOf(row)
-  );
+  const current = layoutOf(stored, defaultTemplate(row), countOf(row));
   const tiers = stackTiers(breakpoints);
   const reached = reachedStacks(tiers, applied);
-  const stack = stackOf(row, tiers, state, reached);
+  const stack = stackOf(row, tiers, ROW_OWN.state, reached);
   const options = (["never", "tablet", "mobile"] as const).filter(
     on => on === "never" || tiers[on] !== undefined
   );
   const restack = (on: StackOn, reversed: boolean) => {
-    const op = planStack(row, on, reversed, { tiers, state, reached });
+    const op = planStack(row, on, reversed, {
+      tiers,
+      state: ROW_OWN.state,
+      reached,
+    });
     if (op !== null) editor.apply(op);
   };
   return (
@@ -225,8 +207,7 @@ export function ColumnsLayoutControl({
         </span>
         <WidthTiles
           row={row}
-          at={at}
-          inherited={inherited}
+          current={current}
           labelId={labelId}
           hintId={hintId}
           onPoint={setPointed}
@@ -234,8 +215,8 @@ export function ColumnsLayoutControl({
         />
       </div>
       <p id={hintId} className="nx-inspector__note" aria-live="polite">
-        {heldReason(row, pointed, at) ??
-          hintFor(current, stored !== undefined || inherited !== undefined)}
+        {heldReason(row, pointed, ROW_OWN) ??
+          hintFor(current, stored !== undefined)}
       </p>
       {options.length > 1 ? (
         <>

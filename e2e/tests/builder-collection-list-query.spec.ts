@@ -227,7 +227,9 @@ test("builds a filtered, sorted list in the editor and shows it to a visitor", a
   const list = (await canvasRoot(page)).locator(`[data-nx-node="${LIST}"]`);
   await expect(list).toHaveAttribute("data-nx-list-empty-because", "chosen");
   await expect(list.locator("h3")).toHaveText(["Nothing yet"]);
-  await inspector.getByRole("radio", { name: "Entries" }).click();
+  await inspector
+    .getByRole("switch", { name: "Preview the empty message" })
+    .click();
   await expect
     .poll(() => canvasTitles(page), { timeout: 30_000 })
     .toEqual([`${mark} Draft`, `${mark} Birch`]);
