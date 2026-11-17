@@ -251,7 +251,7 @@ function CanvasHost({
                 <PageInserters
                   document={state.document}
                   selectedId={state.selectedId}
-                  onStart={() => undefined}
+                  start={{ onStart: () => undefined }}
                   onAddAfter={() => undefined}
                 />
               ),

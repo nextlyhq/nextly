@@ -205,4 +205,10 @@ export interface InsertPanelProps {
   summoned?: number;
   /** Told each count the panel has answered, so the host asks no more. */
   onSummoned?: (count: number) => void;
+  /**
+   * The tab a press asks for, with its count: "Insert a saved section" on an
+   * empty page opens the Saved sections tab. Absent, the panel keeps the tab
+   * it is on.
+   */
+  summonedTab?: "blocks" | "sections";
 }
