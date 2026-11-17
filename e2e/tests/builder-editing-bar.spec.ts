@@ -108,8 +108,17 @@ test.describe("the editing bar", () => {
   });
   test.afterEach(async ({ page }) => {
     // Off the homepage first: a shared style still in use cannot be removed.
-    await emptyHomepage(page);
-    await storeClasses(page, before);
+    // The library is restored even when that fails, and neither failure
+    // hides the other.
+    const failures: unknown[] = [];
+    await emptyHomepage(page).catch((error: unknown) => failures.push(error));
+    await storeClasses(page, before).catch((error: unknown) =>
+      failures.push(error)
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "the editing bar spec's cleanup");
+    }
   });
 
   test("keeps one line and its height through edits; a shared target adds its line", async ({
