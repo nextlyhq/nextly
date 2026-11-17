@@ -75,14 +75,36 @@ afterwards, the same way a page is told.
 ## The default header & footer set
 
 Your site always has exactly one default header & footer set. On a new site the plugin creates a
-published header & footer set called **Site layout**, with no areas filled in, and makes it the
-default. Fill in its areas, or make another header & footer set the default. A site set up on an
-earlier version keeps the name it was given then, **Default (site)**; the plugin never
-renames it.
+published header & footer set called **Main** and makes it the default. Main holds a plain
+**Starter header** and **Starter footer**, two published components (one used as the header, one
+as the footer), so the first page anyone opens already looks like a website:
 
-If you already have a header & footer set called "Site layout", or one at the address `site-layout`,
-the plugin never takes it over. It gives its own header & footer set the next free name or address
-instead, such as "Site layout 2" or `site-layout-2`.
+- the header shows the site's name from site settings (**Your site name** until you set one),
+  linking to the home page, links to up to five of your pages (oldest first), and a **Contact us**
+  button linking to `/contact`;
+- the footer shows the site's name, a **Pages** column with links to up to four pages, and
+  `© <current year> <site name>`.
+
+The starter header and footer are built only from core blocks, and their colours and spacing come
+from your design variables, so they follow your site's light and dark colours. Edit them like any
+component, or replace them. In the builder it is tagged **Starter header · edit or replace** and **Starter
+footer** until you publish a change to them. The **Contact us** button goes to your site's 404 page
+until you add a `/contact` page or change its link.
+
+The starter header and footer are created once, on a new site only. A site that already had a
+default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,
+the new set is empty. A site that draws its header and footer in code
+(`pageBuilder({ siteHeaderFooter: "code" })`) gets an empty Main and no starter header and footer.
+So does a site that keeps its components in a collection of its own
+(`componentReadiness.collection`): the plugin writes nothing into a collection it doesn't own.
+
+A site set up on an earlier version keeps the name it was given then, such as **Site layout** or
+**Default (site)**; the plugin never renames it.
+
+If you already have a header & footer set called "Main", or one at the address `main`, the plugin
+never takes it over. It gives its own header & footer set the next free name or address instead,
+such as "Main 2" or `main-2`. The starter header and footer do the same with "Starter header 2" and
+`starter-header-2`.
 
 ### Make another header & footer set the default
 
@@ -117,8 +139,8 @@ the API with access checks turned off.
 
 If the default disappears another way, such as an import that skips hooks, the plugin
 repairs it. A background job checks the default every time the jobs runner runs, and
-points the default back at the header & footer set the plugin created (**Site layout**), creating it
-again if needed.
+points the default back at the header & footer set the plugin created (**Main**), creating it
+again, empty, if needed.
 
 ### Components a header & footer set uses are protected
 

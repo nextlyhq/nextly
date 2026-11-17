@@ -71,7 +71,7 @@ const STATUS_WRITES_ALLOWED: Record<string, string> = {
     "the Singles engine's unpublish of chosen parts: the Single's own status",
   "domains/singles/services/single-publish-all.ts#commitUnpublish -> _status":
     "the same, each language's status",
-  "domains/singles/services/single-mutation-service.ts#update -> _status":
+  "domains/singles/services/single-mutation-service.ts#updateInParts -> _status":
     "a Single's save to every language (`*`) naming a status, judged by the publish gate; its routing through the service's status writes is a follow-up",
   // A `status` that is no entry's publishing state: another table's own column of that name.
   "domains/dynamic-collections/services/dynamic-collection-registry-service.ts#registerCollection -> status":

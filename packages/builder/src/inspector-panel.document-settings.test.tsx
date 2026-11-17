@@ -99,7 +99,9 @@ describe("the right panel with nothing selected", () => {
     mount("page", hostView);
     const view = hostRegion();
     expect(view).not.toBeNull();
-    expect(within(view!).getByText("Nothing of the builder's own")).toBeTruthy();
+    expect(
+      within(view!).getByText("Nothing of the builder's own")
+    ).toBeTruthy();
     expect(screen.queryByText("Select a block to edit it.")).toBeNull();
     expect(screen.queryByRole("tab")).toBeNull();
   });
@@ -122,7 +124,9 @@ describe("the right panel with nothing selected", () => {
     const view = hostRegion();
     expect(view).not.toBeNull();
     expect(within(view!).getByRole("region", { name: "Fields" })).toBeTruthy();
-    expect(within(view!).queryByText("Nothing of the builder's own")).toBeNull();
+    expect(
+      within(view!).queryByText("Nothing of the builder's own")
+    ).toBeNull();
     // One frame, not a frame inside a frame.
     expect(document.querySelectorAll(".nx-inspector")).toHaveLength(1);
   });
