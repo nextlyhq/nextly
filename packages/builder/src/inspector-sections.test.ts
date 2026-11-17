@@ -22,19 +22,27 @@ const placed = INSPECTOR_SECTIONS.flatMap(section =>
 );
 
 describe("the placement table", () => {
-  it("orders the sections Icon, Layout, Spacing, Size, Position, Typography, Background, Border, Effects", () => {
-    // Icon first, shown only by a block offering it: an Accordion.
+  it("orders the sections the same way for every block, with plain names", () => {
     expect(INSPECTOR_SECTIONS.map(section => section.label)).toEqual([
-      "Icon",
+      "Block style",
       "Layout",
+      "Inside its parent",
       "Spacing",
       "Size",
       "Position",
-      "Typography",
+      "Text",
       "Background",
       "Border",
       "Effects",
+      "Icon",
+      "CSS properties",
     ]);
+  });
+
+  it("calls no section Typography", () => {
+    expect(INSPECTOR_SECTIONS.map(section => section.label)).not.toContain(
+      "Typography"
+    );
   });
 
   it("names no style section Advanced", () => {

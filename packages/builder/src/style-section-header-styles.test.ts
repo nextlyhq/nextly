@@ -517,13 +517,13 @@ describe("a style row's reset", () => {
 });
 
 describe("a tab's sections", () => {
-  it("divides each from the one before it by the builder's own line", () => {
-    const divided = ruleBody(".nx-inspector__group + .nx-inspector__group");
-    expect(divided).toContain(
-      "border-block-start: 1px solid var(--nx-builder-border)"
-    );
-    // The first section draws no line of its own under the tab list.
-    expect(ruleBody(".nx-inspector__group")).not.toContain("border");
+  it("frames every tab's sections by one panel token, none by default", () => {
+    // Content, Advanced and Style sections alike, so cards around sections
+    // can be tried on the real panel by changing one value.
+    expect(
+      ruleBody(".nx-panel-section, .nx-style-inspector [data-section]")
+    ).toContain("box-shadow: var(--nx-builder-section-frame)");
+    expect(FLAT).toContain("--nx-builder-section-frame: none;");
   });
 
   it("no longer folds an Advanced section into Content", () => {

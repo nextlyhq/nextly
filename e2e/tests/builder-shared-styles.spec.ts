@@ -103,11 +103,13 @@ const bar = (page: Page) =>
 const chip = (page: Page, name: string) =>
   bar(page).getByRole("button", { name, exact: true });
 
-/** Select a block and open the inspector's Style tab with Typography open. */
+/** Select a block and open the inspector's Style tab with Text open. */
 async function styleOf(page: Page, id: string): Promise<void> {
   await clickBlock(page, id);
   await page.getByRole("tab", { name: "Style" }).click();
-  const section = page.getByRole("button", { name: "Typography", exact: true });
+  const section = page
+    .getByTestId("inspector")
+    .getByRole("button", { name: /^Text(\s?has changes)?$/ });
   if ((await section.getAttribute("aria-expanded")) !== "true") {
     await section.click();
   }
@@ -134,12 +136,12 @@ async function groundsOf(page: Page, dark: boolean): Promise<[string, string]> {
 }
 
 /**
- * The Typography section's Colour field. Its name carries where its value
+ * The Text section's Colour field. Its name carries where its value
  * comes from ("Colour From Card"), so it is matched by its start.
  */
 const colourField = (page: Page) =>
   page
-    .getByRole("region", { name: /^Typography/ })
+    .getByRole("region", { name: /^Text(\s?has changes)?$/ })
     .getByRole("textbox", { name: /^Colour( |$)/ });
 
 test.describe("shared styles on a block", () => {
@@ -277,7 +279,7 @@ test.describe("shared styles on a block", () => {
     await styleOf(page, A);
 
     // Only Colour holds a value in this test, so the section is its scope.
-    const field = page.getByRole("region", { name: /^Typography/ });
+    const field = page.getByRole("region", { name: /^Text(\s?has changes)?$/ });
     await expect(field.getByRole("img", { name: "From Card" })).toBeVisible();
 
     // Overridden on this block.
