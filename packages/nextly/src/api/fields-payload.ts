@@ -149,6 +149,65 @@ export function assertValidFieldsPayload(
       }
     });
   }
+  assertOptionValuesDistinct(fields);
+}
+
+/**
+ * Refuses a select or radio, at any depth, whose options repeat a value: the stored value could
+ * not tell the two apart. Values are compared exactly as stored, so two that differ only in letter
+ * case are two values. Judged here, on the save, and not in the field schema, which also reads a
+ * definition already stored: one that holds a repeat still loads, and re-saving it is refused until
+ * one value is changed.
+ */
+export function assertOptionValuesDistinct(fields: unknown): void {
+  const errors: Array<{ path: string; code: string; message: string }> = [];
+  const walk = (list: unknown, at: string): void => {
+    if (!Array.isArray(list)) return;
+    for (const field of list) {
+      if (typeof field !== "object" || field === null) continue;
+      const {
+        name,
+        type,
+        options,
+        fields: inner,
+      } = field as {
+        name?: unknown;
+        type?: unknown;
+        options?: unknown;
+        fields?: unknown;
+      };
+      const path = typeof name === "string" ? `${at}${name}` : at;
+      const repeated =
+        type === "select" || type === "radio"
+          ? firstRepeatedValue(options)
+          : undefined;
+      if (repeated !== undefined) {
+        errors.push({
+          path: `${path}.options`,
+          code: "DUPLICATE",
+          message: `Field "${String(name)}" has two options with the value "${repeated}"`,
+        });
+      }
+      // Only the container types hold nested fields: a plugin type may keep a `fields` option of
+      // its own as private configuration, which is no field list to judge.
+      if (type === "group" || type === "repeater") walk(inner, `${path}.`);
+    }
+  };
+  walk(fields, "");
+  if (errors.length > 0) throw NextlyError.validation({ errors });
+}
+
+/** The first option value `options` holds twice, compared exactly as stored, or undefined. */
+function firstRepeatedValue(options: unknown): string | undefined {
+  if (!Array.isArray(options)) return undefined;
+  const seen = new Set<string>();
+  for (const option of options) {
+    const value = (option as { value?: unknown } | null)?.value;
+    if (typeof value !== "string") continue;
+    if (seen.has(value)) return value;
+    seen.add(value);
+  }
+  return undefined;
 }
 
 /**

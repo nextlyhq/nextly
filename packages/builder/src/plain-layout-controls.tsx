@@ -284,7 +284,23 @@ function arrangesLayout(blockType: string | undefined): boolean {
  * The writes made, as one step: an op through the block's write path, or
  * one change to the shared style being edited.
  */
-function useApply(
+/** The layout properties the catalog stores as numbers: a flex share. */
+const NUMBER_PROPERTIES: ReadonlySet<string> = new Set([
+  "flexGrow",
+  "flexShrink",
+]);
+
+/** A planned value as the catalog stores it: a number where it is one. */
+function storedForm(
+  property: string,
+  value: string | null
+): string | number | null {
+  if (value === null || !NUMBER_PROPERTIES.has(property)) return value;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : value;
+}
+
+export function useApply(
   surroundings: StyleFieldSurroundings,
   target: StyleTarget
 ): (writes: readonly LayoutWrite[]) => void {
@@ -298,7 +314,7 @@ function useApply(
         property: write.property,
         path: [] as string[],
       },
-      value: write.value,
+      value: storedForm(write.property, write.value),
     }));
     if (target.kind === "shared") {
       if (target.readOnly !== undefined) return;
@@ -391,6 +407,20 @@ export interface ArrangeReading {
  * drawn: a block with no layout (its section offers no Display) and Columns,
  * whose tiles are its own.
  */
+/**
+ * What is in force and stored at each device for the edited target, read
+ * through the cascade the panel lends: Arrange's reading, and the one
+ * "Inside its parent" sizes the block by.
+ */
+export function useLayoutTiers(
+  surroundings: StyleFieldSurroundings
+): LayoutTiers {
+  const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
+  const beneath = React.useContext(BeneathAtTier);
+  return layoutTiers(surroundings, target, { applied, beneath });
+}
+
 export function useArrangeReading(
   surroundings: StyleFieldSurroundings,
   offersDisplay: boolean
@@ -919,7 +949,7 @@ function GridRowsCount({
 }
 
 /** A text field committed on blur and on Enter, as every field here is. */
-function DraftInput({
+export function DraftInput({
   id,
   value,
   placeholder,

@@ -79,9 +79,17 @@ vi.mock("./entry-block-resolver", async () => {
 });
 
 const CONFIG = {};
+// The admin's media read, which the picture resolves images through: one
+// function for every call, as the admin's own hook keeps it.
+const READ_MEDIA = vi.fn(async (id: string) =>
+  id === "m1"
+    ? { url: "/media/m1.png", altText: "Site logo", width: 64, height: 64 }
+    : null
+);
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   usePluginClientConfig: () => CONFIG,
+  useMediaResolver: () => READ_MEDIA,
 }));
 
 vi.mock("./site-style-client", () => ({
@@ -104,7 +112,7 @@ vi.mock("./component-library-client", () => ({
   useComponentLibrary: () => LIBRARY,
 }));
 
-import { PageMiniature } from "./PageMiniature";
+import { PageMiniature, type MiniatureRegion } from "./PageMiniature";
 import { useRestingPageRender } from "./use-resting-page-render";
 
 afterEach(cleanup);
@@ -126,7 +134,13 @@ function pageWith(text: string): BlockDocument {
 }
 
 /** The entry form, reduced: a Title field beside the blocks field's preview. */
-function EntryForm({ document }: { document: BlockDocument }): JSX.Element {
+function EntryForm({
+  document,
+  regions,
+}: {
+  document: BlockDocument;
+  regions?: readonly MiniatureRegion[];
+}): JSX.Element {
   const [title, setTitle] = useState("");
   const resting = useRestingPageRender("page-builder", document);
   return (
@@ -140,6 +154,7 @@ function EntryForm({ document }: { document: BlockDocument }): JSX.Element {
         document={document}
         siteStyles={resting.siteStyles}
         render={resting.render}
+        {...(regions === undefined ? {} : { regions })}
       />
     </>
   );
@@ -167,6 +182,26 @@ describe("the entry page's preview of the page", () => {
       fireEvent.change(title, { target: { value } });
     }
     // The control: the field took the keystrokes, so the form re-rendered.
+    expect((title as HTMLInputElement).value).toBe("Abc");
+    expect(counted.draws).toBe(0);
+  });
+
+  it("draws nothing again inside its header & footer set while another field changes", async () => {
+    // The regions as the field holds them: one answer while the set chosen
+    // is the same, as the page's Layout read gives it.
+    const regions: readonly MiniatureRegion[] = [
+      { area: "header", document: pageWith("Site header") },
+    ];
+    await act(async () => {
+      render(<EntryForm document={pageWith("Hello")} regions={regions} />);
+    });
+    // The control: the header is drawn, so the regions reach the picture.
+    expect(screen.getByText("Site header")).toBeTruthy();
+    counted.draws = 0;
+    const title = screen.getByLabelText("Title");
+    for (const value of ["A", "Ab", "Abc"]) {
+      fireEvent.change(title, { target: { value } });
+    }
     expect((title as HTMLInputElement).value).toBe("Abc");
     expect(counted.draws).toBe(0);
   });
@@ -208,5 +243,37 @@ describe("the entry page's preview of the page", () => {
     expect(counted.draws).toBe(1);
     expect(screen.getByRole("img", { name: "Logo", hidden: true })).toBe(logo);
     expect(counted.lateRuns).toBe(runs);
+  });
+});
+
+describe("the entry page's preview resolving images", () => {
+  /** Hands the test the render inputs the entry form draws with. */
+  function Probe({
+    onRender,
+  }: {
+    onRender: (
+      render: ReturnType<typeof useRestingPageRender>["render"]
+    ) => void;
+  }): null {
+    onRender(useRestingPageRender("page-builder", pageWith("Hello")).render);
+    return null;
+  }
+
+  it("resolves a media id through the admin's media read, as the canvas does", async () => {
+    let inputs: ReturnType<typeof useRestingPageRender>["render"] | undefined;
+    await act(async () => {
+      render(<Probe onRender={value => (inputs = value)} />);
+    });
+
+    // Without a context of its own the renderer's stand-in answers nothing,
+    // and the picture draws no image the page holds.
+    const resolved = await inputs?.context?.resolveMedia("m1");
+    expect(READ_MEDIA).toHaveBeenCalledWith("m1");
+    expect(resolved).toEqual({
+      url: "/media/m1.png",
+      alt: "Site logo",
+      width: 64,
+      height: 64,
+    });
   });
 });

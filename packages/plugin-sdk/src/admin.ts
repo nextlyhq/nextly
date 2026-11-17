@@ -72,6 +72,14 @@ export type { DocumentLockGates } from "@nextlyhq/admin/kit/document";
 export type { DocumentViewProps } from "@nextlyhq/admin/kit/core";
 
 /**
+ * What a document view's create dialog receives (@experimental): the
+ * collection "+ New" was pressed on and `close(createdId?)`, which opens the
+ * new entry where its collection opens entries, or leaves the list as it was.
+ * Republished rather than restated, as the view's props are.
+ */
+export type { DocumentCreateDialogProps } from "@nextlyhq/admin/kit/core";
+
+/**
  * What the components a plugin puts on a collection's document screen
  * receive (@experimental), declared under `contributes.admin.views[slug]`
  * (see `PluginDocumentActionOverride` and `PluginPanelSection`):

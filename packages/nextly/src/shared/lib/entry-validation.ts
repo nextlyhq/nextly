@@ -42,6 +42,7 @@ import type {
   PluginFieldType,
   PluginFieldWrite,
   PluginStoredValue,
+  PluginStoredValuesTarget,
   PluginStoredValueTarget,
 } from "../../plugins/contributions";
 import { addressableFields } from "../addressable-fields";
@@ -236,6 +237,11 @@ export interface EntryWriteContext {
     allowedType: string,
     target: PluginStoredValueTarget
   ): Promise<PluginStoredValue>;
+  /** One field of several entries, by the rules of {@link readStored}. */
+  readStoredOf(
+    allowedType: string,
+    target: PluginStoredValuesTarget
+  ): Promise<ReadonlyMap<string, PluginStoredValue>>;
 }
 
 /**
@@ -258,21 +264,22 @@ function fieldWriteFor(
   type: string
 ): PluginFieldWrite {
   const locale = writtenLanguage(write);
+  // A read that names no language reads the one the write is judged in, so
+  // every stored value a validator compares with is the same language's.
+  const inWriteLanguage = <T extends { readonly locale?: string }>(
+    target: T
+  ): T =>
+    target.locale === undefined && locale !== undefined
+      ? { ...target, locale }
+      : target;
   return {
     kind: write.kind,
     slug: write.slug,
     ...(write.id === undefined ? {} : { id: write.id }),
     ...(locale === undefined ? {} : { locale }),
     inTransaction: write.inTransaction,
-    // A read that names no language reads the one the write is judged in, so
-    // every stored value a validator compares with is the same language's.
-    readStored: target =>
-      write.readStored(
-        type,
-        target.locale === undefined && locale !== undefined
-          ? { ...target, locale }
-          : target
-      ),
+    readStored: target => write.readStored(type, inWriteLanguage(target)),
+    readStoredOf: target => write.readStoredOf(type, inWriteLanguage(target)),
   };
 }
 

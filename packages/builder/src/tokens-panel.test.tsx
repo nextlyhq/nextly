@@ -114,7 +114,9 @@ describe("the rows", () => {
     expect(headings).toEqual([
       "Colours",
       "Type scale",
-      "Spacing, radius & shadows",
+      "Spacing",
+      "Radius",
+      "Shadows",
     ]);
   });
 
@@ -126,9 +128,7 @@ describe("the rows", () => {
       spacing: { mode: "classic", onChange: () => undefined },
     };
     render(<Hosted tokens={SITE} {...stale} />);
-    const spacing = screen.getByRole("region", {
-      name: "Spacing, radius & shadows",
-    });
+    const spacing = screen.getByRole("region", { name: "Spacing" });
     expect(screen.queryByText("Space between blocks")).toBeNull();
     expect(screen.queryByRole("radiogroup")).toBeNull();
     expect(screen.queryByText(/classic/i)).toBeNull();
@@ -270,7 +270,7 @@ describe("the rows", () => {
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.section-y",
+              name: "space.hero",
               kind: "dimension",
               values: { light: fluid },
             },
@@ -278,32 +278,32 @@ describe("the rows", () => {
         }}
       />
     );
-    const section = row(/^Section y/);
+    const section = row(/^Hero/);
     const chip = section.querySelector(".nx-vars__chip");
-    expect(chip?.textContent).toBe("Fluid");
+    expect(chip?.textContent).toBe("Fluid · 16–32px");
     expect(chip?.getAttribute("title")).toBe(fluid);
-    expect(section.getAttribute("aria-label")).toBe(`Section y, ${fluid}`);
+    expect(section.getAttribute("aria-label")).toBe(`Hero, ${fluid}`);
     // A fixed length still reads as itself, with no hover to add.
     const fixed = row(/^Space 4/).querySelector(".nx-vars__chip");
     expect(fixed?.textContent).toBe("1rem");
     expect(fixed?.getAttribute("title")).toBeNull();
   });
 
-  it("tells apart two rows shown under one name by their kind, and only those", () => {
-    // `space.card` and `radius.card` both read "Card": side by side, nothing
-    // said which was which.
+  it("lists a spacing and a radius of one name in their own groups, each under its plain name", () => {
+    // `space.tile` and `radius.tile` both read "Tile": each sits under its
+    // own heading, so the heading tells them apart and the name stays plain.
     render(
       <Hosted
         tokens={{
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.card",
+              name: "space.tile",
               kind: "dimension",
               values: { light: "24px" },
             },
             {
-              name: "radius.card",
+              name: "radius.tile",
               kind: "dimension",
               values: { light: "12px" },
             },
@@ -311,34 +311,14 @@ describe("the rows", () => {
         }}
       />
     );
-    const spacing = row(/^Card · spacing/);
-    const radius = row(/^Card · radius/);
-    expect(spacing.getAttribute("aria-label")).toBe("Card · spacing, 24px");
-    expect(radius.getAttribute("aria-label")).toBe("Card · radius, 12px");
-    // The kind is muted beside the name, not part of it.
-    expect(radius.querySelector(".nx-vars__name")?.textContent).toBe(
-      "Card · radius"
-    );
-    expect(radius.querySelector(".nx-vars__name-kind")?.textContent).toBe(
-      " · radius"
-    );
-    // A name only one row has stays as it is.
-    expect(row(/^Space 4/).getAttribute("aria-label")).toBe("Space 4, 1rem");
-    // Each draws its kind's icon, so the two differ at a glance too.
-    expect(
-      radius
-        .querySelector("[data-variable-icon]")
-        ?.getAttribute("data-variable-icon")
-    ).toBe("radius");
-    expect(
-      spacing
-        .querySelector("[data-variable-icon]")
-        ?.getAttribute("data-variable-icon")
-    ).toBe("spacing");
+    const spacing = within(screen.getByRole("region", { name: "Spacing" }));
+    const radius = within(screen.getByRole("region", { name: "Radius" }));
+    expect(spacing.getByRole("button", { name: /^Tile, 24px$/ })).toBeDefined();
+    expect(radius.getByRole("button", { name: /^Tile, 12px$/ })).toBeDefined();
   });
 
   it("names the code name when two rows of one name are of one kind too", () => {
-    // `space.card` and `spacing.card` are both spacing steps called "Card":
+    // `space.tile` and `spacing.tile` are both spacing steps called "Tile":
     // the kind cannot tell them apart, the code name can.
     render(
       <Hosted
@@ -346,12 +326,12 @@ describe("the rows", () => {
           tokens: [
             ...SITE.tokens,
             {
-              name: "space.card",
+              name: "space.tile",
               kind: "dimension",
               values: { light: "24px" },
             },
             {
-              name: "spacing.card",
+              name: "spacing.tile",
               kind: "dimension",
               values: { light: "32px" },
             },
@@ -359,11 +339,11 @@ describe("the rows", () => {
         }}
       />
     );
-    expect(row(/^Card · space\.card,/).getAttribute("aria-label")).toBe(
-      "Card · space.card, 24px"
+    expect(row(/^Tile · space\.tile,/).getAttribute("aria-label")).toBe(
+      "Tile · space.tile, 24px"
     );
-    expect(row(/^Card · spacing\.card,/).getAttribute("aria-label")).toBe(
-      "Card · spacing.card, 32px"
+    expect(row(/^Tile · spacing\.tile,/).getAttribute("aria-label")).toBe(
+      "Tile · spacing.tile, 32px"
     );
   });
 
@@ -500,7 +480,7 @@ describe("the editor beside the panel", () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(within(editor).getByLabelText("Name"))
     );
-    expect(within(editor).getByText("color.brand")).toBeDefined();
+    expect(within(editor).getByText("--site-color-brand")).toBeDefined();
     escape();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(row(/^Brand/));
@@ -593,7 +573,7 @@ describe("the editor beside the panel", () => {
     enter(within(editor).getByLabelText("Dark"), "#e7e9ee");
     expect(darkOf()).toBe("#e7e9ee");
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Use light value" })
+      within(editor).getByRole("button", { name: "Remove dark value" })
     );
     expect(darkOf()).toBeUndefined();
   });
@@ -748,10 +728,9 @@ describe("the add menu and the rest of the editor", () => {
     // A modal menu marks everything outside it aria-hidden while those
     // controls stay focusable (axe: aria-hidden-focus). Nothing is hidden.
     render(<Hosted tokens={SITE} />);
-    fireEvent.keyDown(
-      screen.getByRole("button", { name: "Add spacing, radius or shadow" }),
-      { key: "Enter" }
-    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "Add value" }), {
+      key: "Enter",
+    });
     await screen.findByRole("menu");
 
     expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
@@ -816,32 +795,42 @@ describe("import and export", () => {
   });
 });
 
-describe("dark values for every kind", () => {
-  it("gives a spacing variable Light, then Dark that can be added, changed and cleared", async () => {
+describe("dark values where they make sense", () => {
+  it("gives a spacing variable Light only, with no dark value to add", async () => {
+    render(<Hosted tokens={SITE} />);
+    const editor = await openEditor(/^Space 4/);
+    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
+    expect(within(editor).queryByText("Same as light")).toBeNull();
+    expect(
+      within(editor).queryByRole("button", { name: /^Add dark value/ })
+    ).toBeNull();
+    expect(within(editor).queryByLabelText("Dark")).toBeNull();
+  });
+
+  it("shows a spacing variable's dark value from an import, changes it, and removes it", async () => {
     const onChange = vi.fn();
-    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const imported: SiteTokenSet = {
+      tokens: SITE.tokens.map(token =>
+        token.name === "space.4"
+          ? { ...token, values: { light: "1rem", dark: "1.5rem" } }
+          : token
+      ),
+    };
+    render(<Hosted tokens={imported} onChange={onChange} />);
     const editor = await openEditor(/^Space 4/);
     const darkOf = () =>
       (onChange.mock.calls.at(-1)?.[0] as SiteTokenSet).tokens[4]?.values.dark;
-    expect(sizeShown(within(editor).getByLabelText("Light"))).toBe("1rem");
-    expect(within(editor).getByText("Same as light")).toBeDefined();
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "Add dark value" })
-    );
-    expect(darkOf()).toBe("1rem");
     enter(within(editor).getByLabelText("Dark"), "2rem");
     expect(darkOf()).toBe("2rem");
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Use light value" })
+      within(editor).getByRole("button", { name: "Remove dark value" })
     );
     expect(darkOf()).toBeUndefined();
   });
 
-  it("lays a type size out as one pair: two Light values, one action for both darks", async () => {
-    const onChange = vi.fn();
-    render(<Hosted tokens={SITE} onChange={onChange} />);
+  it("lays a type size out as one pair: two Light values, and no dark value to add", async () => {
+    render(<Hosted tokens={SITE} />);
     const editor = await openEditor(/^Body/);
-    const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     expect(sizeShown(within(editor).getByLabelText("Size, light"))).toBe(
       "16px"
     );
@@ -849,21 +838,31 @@ describe("dark values for every kind", () => {
       "value",
       "26px"
     );
-    // One line and one action for the pair while neither has a dark value.
-    expect(within(editor).getAllByText("Same as light")).toHaveLength(1);
+    expect(within(editor).queryByText("Same as light")).toBeNull();
     expect(
-      within(editor).queryAllByRole("button", { name: /^Add dark value/ })
-    ).toHaveLength(1);
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "Add dark values" })
-    );
-    expect(saved().tokens[2]?.values).toEqual({ light: "16px", dark: "16px" });
-    expect(saved().tokens[3]?.values).toEqual({ light: "26px", dark: "26px" });
+      within(editor).queryByRole("button", { name: /^Add dark value/ })
+    ).toBeNull();
+  });
+
+  it("keeps a type size's dark values from an import, with one action that removes both", async () => {
+    const onChange = vi.fn();
+    const imported: SiteTokenSet = {
+      tokens: SITE.tokens.map(token =>
+        token.name === "font-size.body"
+          ? { ...token, values: { light: "16px", dark: "18px" } }
+          : token.name === "line-height.body"
+            ? { ...token, values: { light: "26px", dark: "28px" } }
+            : token
+      ),
+    };
+    render(<Hosted tokens={imported} onChange={onChange} />);
+    const editor = await openEditor(/^Body/);
+    const saved = () => onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
     enter(within(editor).getByLabelText("Line height, dark"), "30px");
     expect(saved().tokens[3]?.values).toEqual({ light: "26px", dark: "30px" });
     expect(within(editor).getByLabelText("Size, dark")).toBeDefined();
     fireEvent.click(
-      within(editor).getByRole("button", { name: "Use light values" })
+      within(editor).getByRole("button", { name: "Remove dark value" })
     );
     expect(saved().tokens[2]?.values).toEqual({ light: "16px" });
     expect(saved().tokens[3]?.values).toEqual({ light: "26px" });
@@ -892,14 +891,11 @@ describe("a type size's line height", () => {
     const editor = await openEditor(/^Body/);
     enter(within(editor).getByLabelText("Line height, light"), "1.4");
     expect(
-      within(editor).getByText(
-        "Dark now follows the light value; set a dark value again if you need one."
-      )
+      within(editor).getByText("Dark now follows the light value.")
     ).toBeDefined();
   });
 
-  const FOLLOWS =
-    "Dark now follows the light value; set a dark value again if you need one.";
+  const FOLLOWS = "Dark now follows the light value.";
   const BOTH: SiteTokenSet = {
     tokens: [
       { name: "font-size.body", kind: "dimension", values: { light: "16px" } },
@@ -910,17 +906,6 @@ describe("a type size's line height", () => {
       },
     ],
   };
-
-  it("drops the dark-follows note when Add dark values sets dark again", async () => {
-    render(<Hosted tokens={BOTH} />);
-    const editor = await openEditor(/^Body/);
-    enter(within(editor).getByLabelText("Line height, light"), "1.4");
-    expect(within(editor).getByText(FOLLOWS)).toBeDefined();
-    fireEvent.click(
-      within(editor).getByRole("button", { name: "Add dark values" })
-    );
-    expect(within(editor).queryByText(FOLLOWS)).toBeNull();
-  });
 
   it("drops the dark-follows note when Reset puts the code's values back", async () => {
     render(<Hosted tokens={BOTH} supplied={BOTH} />);
@@ -1615,12 +1600,10 @@ describe("a Design tab's view of the variables", () => {
   function Folding({
     search,
     groups,
-    onSearch,
     initiallyFolded = [],
   }: {
     search?: string;
     groups?: readonly VariableGroup[];
-    onSearch?: (query: string) => void;
     initiallyFolded?: readonly string[];
   }): React.JSX.Element {
     const [folded, setFolded] = React.useState<ReadonlySet<string>>(
@@ -1631,7 +1614,6 @@ describe("a Design tab's view of the variables", () => {
         tokens={SITE}
         {...(search === undefined ? {} : { search })}
         {...(groups === undefined ? {} : { groups })}
-        {...(onSearch === undefined ? {} : { onSearch })}
         folds={{
           folded,
           onFold: (group, fold) =>
@@ -1691,10 +1673,10 @@ describe("a Design tab's view of the variables", () => {
     // a worded line at the end of the tab meanwhile.
     render(<Folding groups={["spacing", "other"]} />);
     expect(screen.queryByRole("button", { name: /^Other values/ })).toBeNull();
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Add another variable" }),
-      { button: 0, ctrlKey: false }
-    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add value" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
     // The group appears with its first variable, its editor open (which
     // hides the rest of the page from the accessibility tree).
@@ -1704,35 +1686,37 @@ describe("a Design tab's view of the variables", () => {
     ).toBeTruthy();
   });
 
-  it("opens a folded group for what is added to it", async () => {
+  it("folds a group's add row away with its rows, and brings it back on opening", () => {
     render(<Folding />);
     const toggle = screen.getByRole("button", { name: "Colours, 2" });
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    expect(
-      screen
-        .getByRole("button", { name: "Colours, 3", hidden: true })
-        .getAttribute("aria-expanded")
-    ).toBe("true");
+    expect(screen.queryByRole("button", { name: "Add colour" })).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Add colour" })).toBeTruthy();
   });
 
-  it("empties the host's search when a variable is added, so its row is drawn", () => {
-    const onSearch = vi.fn();
-    render(<Folding search="brand" onSearch={onSearch} />);
+  it("keeps the host's search when a variable is added, its row held in view", async () => {
+    render(<Folding search="brand" />);
     fireEvent.click(screen.getByRole("button", { name: "Add colour" }));
-    expect(onSearch).toHaveBeenCalledWith("");
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    // Still narrowed: Text, which the search hides, is not drawn.
+    expect(
+      document.querySelector('[data-variable-key="color.text"]')
+    ).toBeNull();
+    expect(
+      document.querySelector('[data-variable-key="color.new-colour"]')
+    ).not.toBeNull();
   });
 
   it("opens a hidden group the author had folded, for its first variable", async () => {
     render(
       <Folding groups={["spacing", "other"]} initiallyFolded={["other"]} />
     );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Add another variable" }),
-      { button: 0, ctrlKey: false }
-    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add value" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Size" }));
     expect(await screen.findByRole("dialog")).toBeTruthy();
     expect(
