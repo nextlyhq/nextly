@@ -33,6 +33,8 @@ describeEachDialect(
     let services: PluginContext["services"] | undefined;
     // How many times the "hooked" collection's hooks ran.
     const hookCalls = { count: 0 };
+    // How many times the "flipping" collection's after-hooks ran.
+    const afterCalls = { count: 0 };
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -83,6 +85,31 @@ describeEachDialect(
               beforeChange: [
                 () => {
                   hookCalls.count += 1;
+                },
+              ],
+            },
+          }),
+          // A hook of the site's own turns every create into a publish; its after-hooks count calls.
+          defineCollection({
+            slug: "flipping",
+            status: true,
+            fields: [text({ name: "title" })],
+            hooks: {
+              beforeChange: [
+                context => {
+                  (context.data as Record<string, unknown>).status =
+                    "published";
+                  return context.data;
+                },
+              ],
+              afterChange: [
+                () => {
+                  afterCalls.count += 1;
+                },
+              ],
+              afterOperation: [
+                () => {
+                  afterCalls.count += 1;
                 },
               ],
             },
@@ -433,6 +460,36 @@ describeEachDialect(
       expect(refusal).toMatch(/NOT_APPROVED/);
       expect(hookCalls.count).toBe(0);
       expect(rows).toHaveLength(0);
+    });
+
+    // A hook of the site's own that turns a create into a publish runs before the gate can know it
+    // is one (a stated limit), but the gate's verdict on the create's transaction still holds it
+    // back: nothing is stored, no after-hook runs, and nothing is recorded or emitted.
+    it("holds back a create a hook turned into a publish, storing and emitting nothing", async () => {
+      await boot();
+      afterCalls.count = 0;
+      heldUnlessWithoutReview();
+      const eventsBefore = await t!.adapter.executeQuery<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${q("nextly_content_events")} WHERE ${q("subject_slug")} = 'flipping'`
+      );
+
+      const refusal = await refusalOf(
+        t!.nextly.create({
+          collection: "flipping",
+          data: { title: "A draft, as sent", status: "draft" },
+        } as never)
+      );
+      const rows = await t!.adapter.executeQuery<{ id: string }>(
+        `SELECT ${q("id")} AS id FROM ${q("dc_flipping")}`
+      );
+      const eventsAfter = await t!.adapter.executeQuery<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${q("nextly_content_events")} WHERE ${q("subject_slug")} = 'flipping'`
+      );
+
+      expect(refusal).toMatch(/NOT_APPROVED/);
+      expect(rows).toHaveLength(0);
+      expect(afterCalls.count).toBe(0);
+      expect(Number(eventsAfter[0]?.n)).toBe(Number(eventsBefore[0]?.n));
     });
 
     // Unpublishing is never gated: a save that takes an entry down is not held back.
