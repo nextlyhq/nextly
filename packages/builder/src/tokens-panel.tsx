@@ -74,6 +74,7 @@ import {
 } from "./tokens-studio";
 import { ADDS, AddButton, EmptyGroup } from "./variable-adds";
 import { VariableEditor } from "./variable-editor";
+import { CloseVariableEditor } from "./variable-value-controls";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 import {
   combinedReach,
@@ -1146,6 +1147,7 @@ function VariableRow({
 }): React.JSX.Element {
   const token = tokens.tokens[entry.row.at];
   const reach = rowReach(entry, usage);
+  const handOff = useHandOff(onOpenChange);
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
@@ -1196,20 +1198,45 @@ function VariableRow({
           collisionPadding={8}
           className="nx-vars-editor"
           aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
+          onCloseAutoFocus={handOff.onCloseAutoFocus}
         >
-          <VariableEditor
-            entry={entry}
-            tokens={tokens}
-            suppliedOf={suppliedOf}
-            readOnly={readOnly}
-            onChange={onChange}
-            onRemoved={onRemoved}
-            {...(usage === undefined ? {} : { usage })}
-          />
+          <CloseVariableEditor.Provider value={handOff.close}>
+            <VariableEditor
+              entry={entry}
+              tokens={tokens}
+              suppliedOf={suppliedOf}
+              readOnly={readOnly}
+              onChange={onChange}
+              onRemoved={onRemoved}
+              {...(usage === undefined ? {} : { usage })}
+            />
+          </CloseVariableEditor.Provider>
         </PopoverContent>
       </Popover>
     </li>
   );
+}
+
+/**
+ * Closing a row's editor for a control that sends the author elsewhere: the
+ * editor closes without handing focus back to the row, which would take it
+ * from the place the author was sent to.
+ */
+function useHandOff(onOpenChange: (open: boolean) => void): {
+  close: () => void;
+  onCloseAutoFocus: (event: Event) => void;
+} {
+  const handingOff = React.useRef(false);
+  const close = React.useCallback(() => {
+    handingOff.current = true;
+    onOpenChange(false);
+  }, [onOpenChange]);
+  const onCloseAutoFocus = React.useCallback((event: Event) => {
+    if (!handingOff.current) return;
+    handingOff.current = false;
+    event.preventDefault();
+  }, []);
+  return { close, onCloseAutoFocus };
 }
 
 /**

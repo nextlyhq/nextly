@@ -74,6 +74,15 @@ export function variableCss(
 }
 
 /**
+ * Closes the variable's editor for a control that sends the author elsewhere
+ * in the panel, such as a font's "Manage fonts…", without handing focus back
+ * to the row: the place the author is sent to takes it. Absent outside an
+ * editor.
+ */
+export const CloseVariableEditor: React.Context<(() => void) | undefined> =
+  React.createContext<(() => void) | undefined>(undefined);
+
+/**
  * What a field shows: the author's typing, until the stored value changes
  * underneath it (a reset, a refused save, an undo), which replaces it.
  *
@@ -503,7 +512,7 @@ function FontValue({
       />
     );
   }
-  const manage = fonts?.onManageFonts;
+  const manage = useManageFonts(fonts?.onManageFonts);
   return (
     <div className="nx-vars-editor__field">
       <span className="nx-vars-editor__label" id={`${id}-label`}>
@@ -523,6 +532,21 @@ function FontValue({
       />
     </div>
   );
+}
+
+/**
+ * The way to the site's fonts from a font variable: the variable's editor
+ * closes first, since it is a dialog over the panel the author is sent to.
+ */
+function useManageFonts(
+  manage: (() => void) | undefined
+): (() => void) | undefined {
+  const close = React.useContext(CloseVariableEditor);
+  if (manage === undefined) return undefined;
+  return () => {
+    close?.();
+    manage();
+  };
 }
 
 /**

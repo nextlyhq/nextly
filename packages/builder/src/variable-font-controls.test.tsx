@@ -16,6 +16,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
@@ -128,6 +129,27 @@ describe("a font variable", () => {
       screen.getByRole("button", { name: "Manage fonts…", hidden: true })
     );
     expect(onManageFonts).toHaveBeenCalled();
+  });
+
+  it("closes the variable's editor on its way to the site's fonts, leaving focus to where it goes", async () => {
+    const onManageFonts = vi.fn();
+    render(
+      <Hosted
+        tokens={SITE}
+        fonts={{ faces: INTER, fromCode: [], onManageFonts }}
+      />
+    );
+    const row = screen.getByRole("button", { name: /^Heading/ });
+    const editor = await openEditor(/^Heading/);
+    fireEvent.click(within(editor).getByRole("button", { name: /^Font, / }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Manage fonts…", hidden: true })
+    );
+    expect(onManageFonts).toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Not handed back to the row: the host moves it to the fonts.
+    await new Promise(resolve => window.setTimeout(resolve, 20));
+    expect(document.activeElement).not.toBe(row);
   });
 
   it("stores the family chosen", async () => {
