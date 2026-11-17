@@ -306,6 +306,59 @@ describe.each(getConfiguredTestDialects())(
       }).toEqual(before);
     });
 
+    it("refuses a field type change that would clear a value before writing anything, naming the field and the row", async () => {
+      // "abc" is no number. Refused before the definition or any file is written, so a deploy never
+      // receives a change this database refused.
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("body")]),
+        change: "create",
+      });
+      await adapter.executeQuery(
+        `INSERT INTO dc_posts (id, title, body, slug, created_at, updated_at) VALUES ('p1', 'A post', 'abc', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')`
+      );
+      const before = {
+        files: migrationFiles(),
+        snapshots: snapshotFiles(),
+        definition: definition(),
+        columns: await columns(),
+      };
+
+      const refused = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("body")]),
+        entity: posts([text("content", { type: "number" })]),
+        change: "update",
+        renamedFields: [{ from: "body", to: "content" }],
+      }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "fields.content",
+              code: "TYPE_CHANGE_LOSES_VALUES",
+              message: expect.stringContaining(
+                "Collection 'posts': field 'content' cannot change from text to number"
+              ) as unknown,
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(refused)).toContain("id p1");
+      expect(JSON.stringify(refused)).not.toContain("abc");
+      expect({
+        files: migrationFiles(),
+        snapshots: snapshotFiles(),
+        definition: definition(),
+        columns: await columns(),
+      }).toEqual(before);
+    });
+
     it("outside development writes the definition, file and snapshot, and runs nothing", async () => {
       const result = await writeCollectionSave(deps({ applies: false }), {
         slug: "posts",

@@ -115,6 +115,11 @@ import {
 import { loadUiSchema } from "../ui-schema/loader";
 import { uiToMinimal } from "../ui-schema/merge";
 import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
+import {
+  entityLabel,
+  perLanguageBefore,
+  refuseFieldTypeChanges,
+} from "../value-conversion/type-change/field-type-changes";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -164,6 +169,19 @@ export interface CollectionSave {
    * (`previewCollectionSave`): a save converts no column it was not shown to.
    */
   acknowledgedConversions?: readonly string[];
+  /**
+   * The fields, by name, whose type change the person consented to clearing values for, where a
+   * value cannot be read as the new type. A lossy type change of any other field is refused, naming
+   * its rows (`refuseFieldTypeChanges`). A separate list from `acknowledgedConversions`, which
+   * answers a column brought up to date, not a field's type changed.
+   */
+  acknowledgedTypeChanges?: readonly string[];
+  /**
+   * The registry row's migration status before the save, where the caller read the row: a field
+   * type change while the definition still awaits its migration is refused, since the columns do
+   * not hold what the definition says yet. Absent, the history checks are what stand for it.
+   */
+  migrationStatus?: string | null;
   /**
    * The statements that take the collection's many-to-many junction tables
    * from before the save to after it, and back
@@ -416,6 +434,9 @@ async function writeSave(
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
+  // Each field whose type the save changes is judged over the values its column holds, before any
+  // file is written: a blocked change, or a lossy one not consented to, refuses the save.
+  await refuseSaveTypeChanges(deps, save, plan.table);
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
@@ -435,6 +456,42 @@ async function writeSave(
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
+}
+
+/**
+ * Refuse the save's blocked and unconsented lossy field type changes, judged
+ * over the values the entity's table holds (`refuseFieldTypeChanges`). A
+ * create or a delete changes no field's type.
+ */
+async function refuseSaveTypeChanges(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<void> {
+  if (save.previous === null || save.entity === null) return;
+  const kind = kindOf(save);
+  const previous = namedFields(save.previous) as unknown as FieldDefinition[];
+  await refuseFieldTypeChanges(
+    deps.adapter.getDrizzle(),
+    deps.adapter.getCapabilities().dialect,
+    {
+      label: entityLabel(kind.kind, save.slug),
+      table,
+      ...perLanguageBefore(save.previous, table, previous),
+      previous,
+      next: namedFields(save.entity) as unknown as FieldDefinition[],
+      ...(save.renamedFields !== undefined && save.renamedFields.length > 0
+        ? {
+            renamed: new Map(save.renamedFields.map(r => [r.from, r.to])),
+          }
+        : {}),
+      ...(save.migrationStatus !== undefined
+        ? { migrationStatus: save.migrationStatus }
+        : {}),
+      builtBy: kind.builtBy,
+      acknowledged: new Set(save.acknowledgedTypeChanges ?? []),
+    }
+  );
 }
 
 /**
