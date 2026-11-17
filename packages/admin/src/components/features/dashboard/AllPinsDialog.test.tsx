@@ -150,6 +150,51 @@ describe("View all pins", () => {
     ).toBeInTheDocument();
   });
 
+  it("reads the pins again only once every removal has finished, one failing early", async () => {
+    const user = userEvent.setup();
+    answer({
+      items: [],
+      unreadable: [
+        { targetType: "single", targetSlug: "first" },
+        { targetType: "single", targetSlug: "second" },
+      ],
+    });
+    let finishSecond: () => void = () => {};
+    del.mockImplementation(
+      async (_path: string, target: { targetSlug: string }) => {
+        if (target.targetSlug === "first") throw new Error("offline");
+        await new Promise<void>(resolve => (finishSecond = resolve));
+        return { message: "Unpinned.", unpinned: true };
+      }
+    );
+    const pinReads = () =>
+      get.mock.calls.filter(([path]) => path === "/dashboard/pins").length;
+    render(
+      <>
+        <Toaster />
+        <AllPinsHost />
+      </>
+    );
+    openAllPins();
+    const notice = await screen.findByTestId("all-pins-unreadable");
+    const before = pinReads();
+    await user.click(
+      within(notice).getByRole("button", { name: "Remove them" })
+    );
+    await waitFor(() => expect(del).toHaveBeenCalledTimes(2));
+    // The first failed at once; the second is still on its way.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(pinReads()).toBe(before);
+    expect(
+      within(notice).getByRole("button", { name: "Remove them" })
+    ).toBeDisabled();
+    finishSecond();
+    await waitFor(() => expect(pinReads()).toBe(before + 1));
+    expect(
+      await screen.findByText("Some pins could not be removed. Try again.")
+    ).toBeInTheDocument();
+  });
+
   it("says one pin in the singular", () => {
     expect(unreadableText(1)).toBe("1 pin you can no longer open");
     expect(unreadableText(3)).toBe("3 pins you can no longer open");

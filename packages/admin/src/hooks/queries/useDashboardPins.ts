@@ -117,7 +117,8 @@ export function useSetPinned(): UseMutationResult<
 
 /**
  * Remove several pins at once (the pins a reader may no longer open), one
- * unpin each, then read the pins again whatever came of them.
+ * unpin each, then, once all of them have settled, read the pins again
+ * whatever came of them.
  */
 export function useRemovePins(): UseMutationResult<
   unknown,
@@ -126,10 +127,19 @@ export function useRemovePins(): UseMutationResult<
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: targets =>
-      Promise.all(
+    // Every unpin settles before the pins are read again, so a read never
+    // lands while some are still on their way; then one that failed fails
+    // the whole removal, for the caller to say so.
+    mutationFn: async targets => {
+      const settled = await Promise.allSettled(
         targets.map(target => protectedApi.delete(PINS_PATH, target))
-      ),
+      );
+      const failed = settled.find(
+        (each): each is PromiseRejectedResult => each.status === "rejected"
+      );
+      if (failed !== undefined) throw failed.reason;
+      return settled;
+    },
     onSettled: () => invalidatePins(queryClient),
   });
 }
