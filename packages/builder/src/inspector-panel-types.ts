@@ -107,6 +107,14 @@ export interface InspectorPanelProps {
    */
   fonts?: StyleInspectorPanelProps["fonts"];
   /**
+   * Opens the Design panel's Block styles at a block type, from the Style
+   * tab's "Edit block styles". Absent, the Block style section offers no way
+   * there.
+   *
+   * @experimental Settles with the Design panel's Block styles.
+   */
+  onEditBlockStyles?: (blockType: string) => void;
+  /**
    * The editor whose selected block this edits.
    *
    * The whole state rather than a document and an `apply` separately: a patch is

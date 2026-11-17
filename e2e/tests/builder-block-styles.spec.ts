@@ -164,7 +164,7 @@ async function chooseFromMenu(
   await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
-/** The Look tiles of the selected block, in the Style tab. */
+/** The Block style tiles of the selected block, in the Style tab. */
 async function lookTiles(page: Page, id: string) {
   // Chosen from Layers, which names each block: a press on a small inline
   // button can land on chrome drawn over it, or start a drag.
@@ -175,7 +175,7 @@ async function lookTiles(page: Page, id: string) {
     .getByTestId("inspector")
     .getByRole("tab", { name: "Style", exact: true })
     .click();
-  const tiles = page.getByRole("radiogroup", { name: "Look" });
+  const tiles = page.getByRole("radiogroup", { name: "Block style" });
   await expect(tiles).toBeVisible();
   return tiles;
 }
@@ -264,7 +264,7 @@ test.describe("block styles in the Styles tab", () => {
     });
     expect(ghost?.starred).toBeUndefined();
 
-    // A button wears it, picked from its Look tiles, and keeps it once saved.
+    // A button wears it, picked from its Block style tiles, and keeps it once saved.
     const tiles = await lookTiles(page, "bs-plain");
     await tiles.getByRole("radio", { name: /^Ghost/ }).click();
     await expect(tiles.getByRole("radio", { name: /^Ghost/ })).toHaveAttribute(

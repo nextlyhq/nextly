@@ -125,6 +125,7 @@ export function StyleTab({
   | "sharedStyles"
   | "verbs"
   | "fonts"
+  | "onEditBlockStyles"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
@@ -161,6 +162,9 @@ export function StyleTab({
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}
         verbs={shared.verbs}
+        // "Edit block styles", under the Block style tiles, where the host
+        // can open Design.
+        onEditBlockStyles={shared.onEditBlockStyles}
         {...barPlace(breakpoints, breakpoint)}
         breakpoints={breakpoints}
         state={state}
