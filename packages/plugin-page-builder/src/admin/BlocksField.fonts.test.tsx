@@ -361,8 +361,9 @@ describe("the fonts panel reaching an author", () => {
       )
     );
     expect(scroll).toHaveBeenCalled();
-    // No panel is asked for: the variables are in the tab already open.
-    expect(screen.getByTestId("request").textContent).toBe("");
+    // No panel is asked for: the variables are in the tab already open. The
+    // one request is the empty page's own, opening Add when the editor did.
+    expect(screen.getByTestId("request").textContent).toBe("add:");
   });
 
   it("draws a read still in flight as loading rather than as a site with no fonts", async () => {

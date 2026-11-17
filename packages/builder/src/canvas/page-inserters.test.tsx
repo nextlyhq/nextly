@@ -298,16 +298,16 @@ describe("an empty page", () => {
     expect(area?.style.top).toBe("152px");
     // The body is held open by the area and its room above and below, in
     // the page's own pixels (jsdom draws the area 0px tall).
-    expect(root.style.getPropertyValue("--nx-start-room")).toBe("64px");
+    expect(root.style.getPropertyValue("--nx-canvas-start-room")).toBe("64px");
   });
 
   it("lets go of the body once the page has a block", async () => {
     const view = mount(page([]));
     await act(async () => undefined);
     const root = document.querySelector<HTMLElement>(".nx-canvas");
-    expect(root?.style.getPropertyValue("--nx-start-room")).not.toBe("");
+    expect(root?.style.getPropertyValue("--nx-canvas-start-room")).not.toBe("");
     view.unmount();
-    expect(root?.style.getPropertyValue("--nx-start-room")).toBe("");
+    expect(root?.style.getPropertyValue("--nx-canvas-start-room")).toBe("");
   });
 
   it("stays while a block is dragged, drawn as where it drops", async () => {

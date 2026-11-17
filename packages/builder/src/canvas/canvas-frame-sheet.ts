@@ -231,8 +231,8 @@ ${EMPTY_CONTAINER_SELECTOR} {
    in the page's own pixels, and it is added above the Layout's footer, or
    below the header where there is no footer. Unset, it adds nothing, and a
    published page never has it. */
-${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-start-room, 0px); }
-${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-start-room, 0px); }
+${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }
+${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }
 
 /* The cursor says what a press does: grab a block, place a caret in text being
    edited, and while dragging, whether the block can land. */

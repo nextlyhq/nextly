@@ -416,7 +416,7 @@ test("the published empty page draws no start area", async ({ page }) => {
   // Nothing holds an empty body open for visitors.
   expect(
     await page.evaluate(
-      () => document.querySelector("[style*='--nx-start-room']") !== null
+      () => document.querySelector("[style*='--nx-canvas-start-room']") !== null
     )
   ).toBe(false);
 });

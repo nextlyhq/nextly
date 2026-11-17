@@ -17,7 +17,7 @@
  * The start area is placed near the top of the body instead, centred across
  * the page, and the body is held open for it in the editor alone: the canvas
  * root is given the area's height in the page's own pixels
- * (`--nx-start-room`), which the frame's sheet adds above the footer. The
+ * (`--nx-canvas-start-room`), which the frame's sheet adds above the footer. The
  * published page has no such rule, so it draws nothing there.
  *
  * Like the rest of the canvas's add controls, this only REPORTS what was
@@ -59,7 +59,7 @@ export interface StarterPage {
 const START_ROOM_PX = 32;
 
 /** The custom property the frame's sheet holds the empty body open by. */
-export const START_ROOM_PROPERTY = "--nx-start-room";
+const START_ROOM_PROPERTY = "--nx-canvas-start-room";
 
 /** The Layout's header drawn on this canvas, or `null`. */
 function headerOf(root: HTMLElement): Element | null {
@@ -137,7 +137,7 @@ function letGo(root: HTMLElement | null): void {
 }
 
 /** What the start area is handed. */
-export interface StartAreaProps {
+interface StartAreaProps {
   readonly document: BlockDocument;
   /** The page's title, which a page's heading names. */
   readonly title?: string | undefined;

@@ -184,10 +184,10 @@ describe("an empty page's body is held open in the editor alone", () => {
     // blocks; unset, both rules add nothing.
     const css = collapsed(SHEET);
     expect(css).toContain(
-      '.nx-canvas > [data-nx-region="footer"] { margin-block-start: var(--nx-start-room, 0px); }'
+      '.nx-canvas > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }'
     );
     expect(css).toContain(
-      '.nx-canvas:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-start-room, 0px); }'
+      '.nx-canvas:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }'
     );
   });
 });
