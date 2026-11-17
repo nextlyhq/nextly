@@ -109,8 +109,14 @@ describe("a Spacer's Height presets", () => {
     mount("core/spacer");
     const names = within(presets())
       .getAllByRole("radio")
-      .map(radio => radio.textContent);
-    expect(names).toEqual(["Sm 8px", "Md 16px", "Xl 64px"]);
+      .map(radio => radio.textContent ?? "");
+    // The site's own beside the builder's defaults, as a spacing side's
+    // popover lists them: in size order, a radius never among them.
+    const at = (name: string) => names.indexOf(name);
+    expect(at("Sm 8px")).toBeGreaterThanOrEqual(0);
+    expect(at("Sm 8px")).toBeLessThan(at("Md 16px"));
+    expect(at("Md 16px")).toBeLessThan(at("Xl 64px"));
+    expect(names.some(name => name.startsWith("Pill"))).toBe(false);
   });
 
   it("writes the chosen variable as the height at the edited device", () => {
@@ -135,8 +141,9 @@ describe("a Spacer's Height presets", () => {
 
   it("is held on a Spacer locked in Layers", () => {
     mount("core/spacer", { locked: true });
+    // Held by the section's fieldset, as the section's other fields are.
     for (const radio of within(presets()).getAllByRole("radio")) {
-      expect((radio as HTMLButtonElement).disabled).toBe(true);
+      expect(radio.matches(":disabled")).toBe(true);
     }
   });
 
