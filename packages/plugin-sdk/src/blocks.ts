@@ -10,9 +10,10 @@
  * The engine is a real dependency of this package rather than an optional peer,
  * because the types below are built on top of its own: they have to resolve for
  * an author who installed only the SDK, and under a strict `node_modules`
- * layout the page builder's copy is not reachable from their package. The
- * engine's registry is pinned to `globalThis`, so even a duplicated install
- * still reads and writes the one registry the page builder consumes.
+ * layout the page builder's copy is not reachable from their package. Nothing
+ * here reads or writes a registry: a plugin's blocks reach a site through the
+ * page builder (`contributes.declarations`, or its `blocks` service), which
+ * holds that site's registry.
  *
  * What an author writes is declared here rather than re-exported. `defineBlock`
  * and `BlockSupports` are this module's own so that `BlockSupportKeys` can be

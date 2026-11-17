@@ -201,10 +201,10 @@ test.describe("a block locked in Layers", () => {
 
     // A click still selects the locked block, so it can be unlocked.
     await selectBlock(page, HERO);
-    // The note, the toolbar and the refusal are chrome, drawn over the canvas
-    // in the admin's document rather than in the page.
+    // The toolbar's Unlock, the toolbar and the refusal are chrome, drawn
+    // over the canvas in the admin's document rather than in the page.
     const scope = canvasLayer(page);
-    await expect(scope.locator("[data-lock-note]")).toHaveText("Locked");
+    await expect(await toolbarButton(page, "Unlock")).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Actions for Hero" })
     ).toBeVisible();
@@ -213,7 +213,7 @@ test.describe("a block locked in Layers", () => {
     await clickBlock(page, TITLE);
     await expect.poll(() => selection(page)).toEqual([TITLE]);
     await expect(scope.locator("[data-lock-note]")).toHaveText(
-      "Locked by Hero"
+      "Locked by Hero · Select it"
     );
     for (const verb of ["Move up", "Move down", "Delete"]) {
       const button = await toolbarButton(page, verb);

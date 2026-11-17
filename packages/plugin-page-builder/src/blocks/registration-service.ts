@@ -7,18 +7,19 @@
  * service the contribution channel, reached through the cross-plugin namespace
  * every plugin already has.
  *
- * Registering through here rather than by importing the engine's `registerBlocks`
- * is what makes the timing safe. The engine's registry is cleared and rebuilt on
- * every boot, so a direct call can land before the rebuild and lose the blocks
- * with no error. Resolving this service cannot: services are recorded in boot
+ * Registering through here is what puts the blocks in this site's registry,
+ * the one the page builder holds and hands to its routes: the engine's own
+ * `registerBlocks` fills only the calling bundle's registry, which no server
+ * route reads. It is also what makes the timing safe. The site's registry is
+ * cleared and rebuilt on every boot, so a write outside this service could
+ * land before the rebuild and lose the blocks with no error. Resolving this service cannot: services are recorded in boot
  * pass 1 and `init` runs in pass 2, so a contributor calling from `init` is
  * guaranteed to reach a live registry whatever order the plugins load in.
  *
  * **Declared blocks reach the editor; blocks registered here do not.** A
- * registered block is known to `@nextlyhq/blocks-engine` in the server
- * process: validation stops calling its type unknown, and `PageRenderer` from
- * `@nextlyhq/blocks-react`, which resolves through the same registry, draws it
- * on the published site. The editor runs in the admin's browser bundle, whose
+ * registered block is known to this site on the server: validation stops
+ * calling its type unknown, and the site's routes, which read the same
+ * registry, draw it on the published site. The editor runs in the admin's browser bundle, whose
  * registry is a separate copy, and it receives only blocks a plugin DECLARED
  * (`contributes.declarations`) with an `editorEntry` the app's generated
  * component map imports. A block registered through this service from `init`
@@ -29,13 +30,11 @@
  * @module blocks/registration-service
  */
 
-import {
-  allBlocks,
-  clearBlocks,
-  registerBlocks,
-  registerSupport,
-  type AnyBlockDefinition,
-  type SupportDefinition,
+import type {
+  AnyBlockDefinition,
+  BlockRegistry,
+  BlockRegistryReader,
+  SupportDefinition,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
@@ -136,18 +135,43 @@ interface BlockRegistrationBackend {
  * Closing it needs core to re-run `init` on reload, and clearing without that
  * would empty the registry with nothing left to repopulate it.
  */
-export function createBlockRegistrationService(): BlockRegistrationBackend {
-  clearBlocks();
-  editorVisible.clear();
+export function createBlockRegistrationService(
+  registry: BlockRegistry
+): BlockRegistrationBackend {
+  registry.clear();
+  editorVisible.set(registry, new Set<string>());
+  lastStarted = registry;
   return {
-    registerSupport,
+    registerSupport: support => registry.registerSupport(support),
     register(definitions, source) {
       const list = Array.isArray(definitions) ? definitions : [definitions];
       // Nothing to do rather than an error: a plugin whose block list is
       // configuration-dependent may legitimately contribute none.
       if (list.length === 0) return;
-      registerBlocks(list, { source });
+      registry.register(list, { source });
     },
+  };
+}
+
+/**
+ * A site's registry as its readers take it: lookups only, never a write. What
+ * the page builder offers its routes, so nothing reached through it can add
+ * or drop another site's blocks.
+ */
+export function registryReader(
+  registry: BlockRegistryReader
+): BlockRegistryReader {
+  return {
+    get: name => registry.get(name),
+    has: name => registry.has(name),
+    all: () => registry.all(),
+    sourceOf: name => registry.sourceOf(name),
+    support: key => registry.support(key),
+    supports: () => registry.supports(),
+    lookup: () => registry.lookup(),
+    nestingSource: () => registry.nestingSource(),
+    blockSource: () => registry.blockSource(),
+    migrationSource: () => registry.migrationSource(),
   };
 }
 
@@ -263,14 +287,20 @@ function isBlockRegistrationBackend(
  * Attributed to the page builder itself, because that is the package a reader
  * would have to go and change.
  */
-export function registerCoreBlocks(ctx: PluginContext): void {
+export function registerCoreBlocks(
+  ctx: PluginContext,
+  registry: BlockRegistryReader
+): void {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
   if (!isBlockRegistrationBackend(service)) return;
   service.register(coreBlocks, PAGE_BUILDER_PLUGIN);
-  for (const block of coreBlocks) editorVisible.add(block.name);
+  drawnByEditor(registry, coreBlocks);
 }
 
-export function registerDeclaredBlocks(ctx: PluginContext): void {
+export function registerDeclaredBlocks(
+  ctx: PluginContext,
+  registry: BlockRegistryReader
+): void {
   const service = ctx.services.plugins[PAGE_BUILDER_PLUGIN]?.[BLOCK_SERVICE];
   if (!isBlockRegistrationBackend(service)) return;
   const declarations = collectDeclarations(
@@ -287,13 +317,14 @@ export function registerDeclaredBlocks(ctx: PluginContext): void {
     for (const support of supports) service.registerSupport(support);
   }
   for (const declaration of declarations) {
-    registerDeclaration(service, declaration);
+    registerDeclaration(service, registry, declaration);
   }
 }
 
 /** One plugin's declared blocks, registered, and noted when the editor draws them. */
 function registerDeclaration(
   service: BlockRegistrationBackend,
+  registry: BlockRegistryReader,
   declaration: Parameters<typeof blocksIn>[0]
 ): void {
   const { blocks, error } = blocksIn(declaration);
@@ -306,24 +337,94 @@ function registerDeclaration(
   if (blocks.length > 0) service.register(blocks, declaration.source);
   // Drawn by the editor only when the declaration names the module that
   // exports them to it; without one the blocks reach the server alone.
-  if (entry.editorEntry !== undefined) {
-    for (const block of blocks) editorVisible.add(block.name);
-  }
+  if (entry.editorEntry !== undefined) drawnByEditor(registry, blocks);
 }
 
 /**
- * The names of the blocks the editor can draw: the core set, and those a
- * plugin declares with an `editorEntry`. A block registered in code, or
- * declared without an entry, reaches the server only. Cleared with the
- * registry at boot.
+ * The names of the blocks the editor can draw, per site registry: the core
+ * set, and those a plugin declares with an `editorEntry`. A block registered
+ * in code, or declared without an entry, reaches the server only. Started
+ * afresh with the registry at boot.
  */
-const editorVisible = new Set<string>();
+const editorVisible = new WeakMap<BlockRegistryReader, Set<string>>();
 
 /**
- * The registered blocks the editor can draw, for anything the server derives
- * from what an author can reach there (the relation targets a search may
- * read, for one), rather than from the whole server registry.
+ * Whether `registry` was started by a boot in this module copy: its
+ * registration service has run here. A production build bundles the plugin
+ * into each route, and a route's copy of a page builder never starts; what it
+ * holds is then read through the instance instead.
  */
-export function editorVisibleBlocks(): AnyBlockDefinition[] {
-  return allBlocks().filter(block => editorVisible.has(block.name));
+export function hasStarted(registry: BlockRegistryReader): boolean {
+  return editorVisible.has(registry);
+}
+
+/**
+ * The registry the last boot in this module copy started. What a page
+ * builder that never started here reads instead of its own empty one: a dev
+ * server's config reload evaluates the config again, making new page builder
+ * definitions, but runs no `init`, so their registries stay empty while the
+ * started one holds the site's blocks.
+ */
+let lastStarted: BlockRegistry | undefined;
+
+/**
+ * `own` where it started in this module copy, else the registry the last
+ * boot here started, else `undefined` (none started here).
+ */
+export function runningRegistry(
+  own: BlockRegistryReader
+): BlockRegistryReader | undefined {
+  return hasStarted(own) ? own : lastStarted;
+}
+
+/**
+ * A reader of {@link runningRegistry} for `own`, chosen on each lookup.
+ * Refused, never answered empty, while nothing has started here: an empty
+ * registry silently refuses nothing.
+ */
+export function runningBlocks(own: BlockRegistryReader): BlockRegistryReader {
+  const current = (): BlockRegistryReader => {
+    const running = runningRegistry(own);
+    if (running !== undefined) return running;
+    throw new Error(
+      "[page-builder] this page builder's site has not started, so it has no blocks to read yet."
+    );
+  };
+  return {
+    get: name => current().get(name),
+    has: name => current().has(name),
+    all: () => current().all(),
+    sourceOf: name => current().sourceOf(name),
+    support: key => current().support(key),
+    supports: () => current().supports(),
+    lookup: () => current().lookup(),
+    nestingSource: () => current().nestingSource(),
+    blockSource: () => current().blockSource(),
+    migrationSource: () => current().migrationSource(),
+  };
+}
+
+/**
+ * Note blocks the editor draws, for {@link editorVisibleBlocks}. Kept to the
+ * page builder's own registration, not offered on the service other plugins
+ * reach: only a declaration with an `editorEntry` makes a block drawable.
+ */
+function drawnByEditor(
+  registry: BlockRegistryReader,
+  blocks: readonly AnyBlockDefinition[]
+): void {
+  const drawn = editorVisible.get(registry);
+  for (const block of blocks) drawn?.add(block.name);
+}
+
+/**
+ * The site's registered blocks the editor can draw, for anything the server
+ * derives from what an author can reach there (the relation targets a search
+ * may read, for one), rather than from the whole server registry.
+ */
+export function editorVisibleBlocks(
+  registry: BlockRegistryReader
+): AnyBlockDefinition[] {
+  const drawn = editorVisible.get(registry);
+  return registry.all().filter(block => drawn?.has(block.name) === true);
 }

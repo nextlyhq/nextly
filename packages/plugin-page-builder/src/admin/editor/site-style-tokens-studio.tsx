@@ -594,13 +594,20 @@ function useReportVariableMatches(tokens: SiteTokenSet | undefined): void {
  * The style the tab opens as it mounts, sent from the Variables tab, read
  * once and then taken from the studio, so the tab chosen again later opens
  * on its list.
+ *
+ * The Design search is cleared for the trip: kept from the tab the author
+ * came from, it matched the variable, and could hide the style they were
+ * sent to.
  */
 export function useStyleToOpen(): string | undefined {
   const toOpen = useContext(SharedStyleToOpen);
   const [initial] = useState(toOpen.id);
   const { taken } = toOpen;
+  const { setSearch } = useDesignBrowse();
   useEffect(() => {
-    if (initial !== undefined) taken();
-  }, [initial, taken]);
+    if (initial === undefined) return;
+    setSearch("");
+    taken();
+  }, [initial, taken, setSearch]);
   return initial;
 }

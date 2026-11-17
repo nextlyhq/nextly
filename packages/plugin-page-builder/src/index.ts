@@ -32,6 +32,7 @@
 import "./settings-place-contract";
 
 export { namedQueriesOf, pageBuilder } from "./plugin";
+export { blocksOf } from "./plugin";
 /**
  * The route option that sizes a page's images to where they are drawn:
  * `imageCopies: pageBuilderImageCopies(reader)`, where the route's site

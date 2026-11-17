@@ -24,6 +24,7 @@ import {
   tokenIdentity,
   usableNamedClasses,
   type BlockDocument,
+  type BlockRegistryReader,
   type BreakpointSet,
   type NamedClass,
   type SiteToken,
@@ -75,6 +76,7 @@ import {
   collectStyleReferences,
   emptyReferences,
   imageExposureIds,
+  registryMediaProps,
   type TransferReferences,
 } from "./transfer-references";
 
@@ -108,6 +110,8 @@ export interface ExportRouteSetup {
   /** The site style the plugin's config declares, under the stored one. */
   readonly defaults?: SiteStyleData;
   readonly reads?: (ctx: CompositionRouteContext) => ExportReads;
+  /** The site's block registry, which says which props hold media. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /** The context an export handler runs with. */
@@ -117,7 +121,7 @@ type ExportContext = CompositionRouteContext;
 async function exportItem(
   kind: TransferKind,
   ctx: ExportContext,
-  setup: ExportRouteSetup = {}
+  setup: ExportRouteSetup
 ): Promise<Response> {
   requirePluginStore(ctx, setup);
   const reads = setup.reads?.(ctx) ?? directReads(ctx, setup);
@@ -143,6 +147,7 @@ async function exportItem(
   ];
   for (const document of documents) {
     collectDocumentReferences(document, references, {
+      mediaProps: type => registryMediaProps(setup.blocks, type),
       imageExposures: componentId => images.get(componentId) ?? new Set(),
     });
   }
@@ -574,7 +579,7 @@ function directReads(ctx: ExportContext, setup: ExportRouteSetup): ExportReads {
 }
 
 /** The three export route declarations, one per kind of item. */
-export function exportRoutes(setup: ExportRouteSetup = {}): {
+export function exportRoutes(setup: ExportRouteSetup): {
   method: "POST";
   path: string;
   requiredPermission: (scope: PluginRoutePermissionScope) => string;

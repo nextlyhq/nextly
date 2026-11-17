@@ -6,7 +6,7 @@
  * half: `save-as` stores the selection as a published component and leaves
  * the page alone; `convert` also replaces the selection with a placement of
  * it. The engine's planners decide what is stored and what the page becomes,
- * against the server's block registry, which knows every block a plugin
+ * against the site's block registry, which knows every block a plugin
  * declared.
  *
  * ## Two ways to apply a convert
@@ -50,8 +50,8 @@ import {
   DEFAULT_LIMITS,
   planConvertToComponent,
   planSaveAsComponent,
-  registryNestingSource,
   type BlockDocument,
+  type BlockRegistryReader,
   type BuilderOp,
   type ComponentDocument,
   type ComponentExposure,
@@ -182,6 +182,8 @@ export interface ComponentFromSelectionReads {
 /** Where the route stores components, and what it reads and reconciles. */
 export interface ComponentFromSelectionSetup extends CompositionRouteSetup {
   readonly reads?: ComponentFromSelectionReads;
+  /** The site's block registry, whose nesting rules the planners follow. */
+  readonly blocks: BlockRegistryReader;
 }
 
 /**
@@ -190,7 +192,7 @@ export interface ComponentFromSelectionSetup extends CompositionRouteSetup {
 export async function componentFromSelection(
   req: Request,
   ctx: ComponentFromSelectionContext,
-  setup: ComponentFromSelectionSetup = {}
+  setup: ComponentFromSelectionSetup
 ): Promise<Response> {
   requirePluginStore(ctx, setup);
   const by = await actingCaller(ctx, [
@@ -221,6 +223,7 @@ export async function componentFromSelection(
       componentId,
       exposure: body.exposure ?? {},
       limits,
+      blocks: setup.blocks,
       ...(components === undefined ? {} : { components }),
     });
 
@@ -312,10 +315,11 @@ function plannedAction(args: {
   componentId: string;
   exposure: ComponentExposure;
   limits: DocumentLimits;
+  blocks: BlockRegistryReader;
   components?: ComponentLookup;
 }): Planned | PlanRefusal {
   const target = { collection: args.collection, fields: {} };
-  const nesting = registryNestingSource();
+  const nesting = args.blocks.nestingSource();
   const result: PlanResult<object> =
     args.action === "save-as"
       ? planSaveAsComponent(
@@ -583,7 +587,7 @@ function directReads(store: {
  * handler asks the rest (see the module docblock).
  */
 export function componentFromSelectionRoute(
-  setup: ComponentFromSelectionSetup = {}
+  setup: ComponentFromSelectionSetup
 ): {
   method: "POST";
   path: string;
