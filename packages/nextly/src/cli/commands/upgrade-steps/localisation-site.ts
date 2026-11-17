@@ -10,6 +10,7 @@ import {
   declaredLaidOutEntities,
   readLayoutScanEntities,
 } from "../../../di/layout-scan-entities";
+import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
 import {
   IMPLICIT_LANGUAGE,
   localizationFromStoredLanguages,
@@ -26,10 +27,26 @@ export interface SiteLanguages {
 }
 
 /**
- * The site's languages as a running site reads them: those its configuration declares, else
- * those kept in Settings, else the one implicit language a site that declares none serves.
+ * The site's languages as a running site reads them, each code in its standard form
+ * (`standardLanguageCode`), which every row is stored under once the codes are converted.
  */
 export async function siteLanguages(
+  context: UpgradeStepContext
+): Promise<SiteLanguages> {
+  const configured = await configuredLanguages(context);
+  const standard = (code: string) => standardLanguageCode(code) ?? code;
+  return {
+    codes: [...new Set(configured.codes.map(standard))],
+    defaultLocale: standard(configured.defaultLocale),
+  };
+}
+
+/**
+ * The site's languages as its configuration writes them: those it declares, else those kept in
+ * Settings, else the one implicit language a site that declares none serves. Only the step that
+ * converts codes reads them as written.
+ */
+export async function configuredLanguages(
   context: UpgradeStepContext
 ): Promise<SiteLanguages> {
   const declared = context.site?.localization;

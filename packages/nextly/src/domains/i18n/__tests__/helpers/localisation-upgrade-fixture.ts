@@ -99,6 +99,21 @@ export const SITE = {
   localization: { locales: [...LANGUAGES], defaultLocale: "en" },
 } as const;
 
+/** A site as the fixture boots it: its entities and its languages. */
+export interface FixtureSite {
+  collections: typeof COLLECTIONS;
+  singles: typeof SINGLES;
+  localization: { locales: readonly string[]; defaultLocale: string };
+}
+
+/** The fixture's site with other languages: an installation from before codes were checked. */
+export function siteWithLanguages(
+  locales: readonly string[],
+  defaultLocale: string
+): FixtureSite {
+  return { ...SITE, localization: { locales, defaultLocale } };
+}
+
 /** The database both boots of a case connect to. */
 export interface UpgradeDatabase {
   dialect: TestDialect;
@@ -157,17 +172,18 @@ export async function openUpgradeDatabase(
  */
 export async function bootSite(
   database: UpgradeDatabase,
-  layout: "legacy" | "upgraded"
+  layout: "legacy" | "upgraded",
+  site: FixtureSite = SITE
 ): Promise<TestNextly> {
   clearServices();
   _resetPerLanguageStorage();
   return createTestNextly({
     adapter: database.adapter as never,
-    collections: [...SITE.collections],
-    singles: [...SITE.singles],
+    collections: [...site.collections],
+    singles: [...site.singles],
     localization: {
-      locales: [...SITE.localization.locales],
-      defaultLocale: SITE.localization.defaultLocale,
+      locales: [...site.localization.locales],
+      defaultLocale: site.localization.defaultLocale,
     },
     perLanguageStorage: layout === "upgraded",
   });

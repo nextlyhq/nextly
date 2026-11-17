@@ -288,6 +288,8 @@ const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
   // confirmed.
   "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
   "NEXTLY_UPGRADE_IN_PROGRESS",
+  // `upgrade`'s localisation steps: two configured language codes that become one.
+  "NEXTLY_LANGUAGE_CODES_COLLIDE",
   // `migrate:resolve`'s checks: the file, its snapshot, the live schema
   // against it, and the ledger's state for the mode asked for.
   "NEXTLY_MIGRATION_RESOLVE_PRECONDITION",

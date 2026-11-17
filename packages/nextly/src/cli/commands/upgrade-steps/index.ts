@@ -37,6 +37,17 @@ const zonedDatesStep: UpgradeStep = {
     (await import("./zoned-dates")).convertZonedDates(context),
 };
 
+/** Bringing each configured language code's rows into its standard form. */
+const localisationCodesStep: UpgradeStep = {
+  title: "convert language codes to their standard form",
+  pending: async context =>
+    (await import("./localisation-codes")).codesToConvert(context),
+  run: async context =>
+    (await import("./localisation-codes")).convertLanguageCodes(context),
+  report: async context =>
+    (await import("./localisation-codes")).codesReport(context),
+};
+
 /** Storing every entity's translatable values per language. */
 const localisationValuesStep: UpgradeStep = {
   title: "store translatable values per language",
@@ -65,6 +76,7 @@ export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   versionPasswordsStep,
   retiredManageStep,
   zonedDatesStep,
+  localisationCodesStep,
   localisationValuesStep,
   localisationDraftsStep,
 ];

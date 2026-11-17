@@ -300,6 +300,10 @@ export const NEXTLY_ERROR_STATUS = {
   // implicit English alone, and its translations in other languages would read as gone. 500 for the
   // same reason: the remedy is the server's configuration.
   NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
+  // `nextly upgrade` found two configured language codes that become one code once in their
+  // standard form (`pt_BR` beside `pt-BR`): it changes nothing until the developer keeps one. 500
+  // for the same reason: the remedy is the site's configuration.
+  NEXTLY_LANGUAGE_CODES_COLLIDE: 500,
   // `db.postgres.schema` names a schema holding no installation while another
   // schema of the database holds one: the setting moved on an existing site.
   // 500 for the same reason as the mismatch above: a boot-time refusal of the
