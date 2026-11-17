@@ -231,7 +231,12 @@ describe("the relation control", () => {
     register();
     mount({}, {});
     expect(screen.getByText("Entries can't be searched here.")).toBeDefined();
-    expect(screen.queryByRole("searchbox")).toBeNull();
+    // The relation control's own; the panel's "Find a setting" is another.
+    expect(
+      screen
+        .queryAllByRole("searchbox")
+        .filter(box => box.getAttribute("aria-label") !== "Find a setting")
+    ).toEqual([]);
   });
 
   it("says when the prop names no collection", () => {

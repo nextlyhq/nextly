@@ -18,6 +18,8 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useSettingsMatch } from "./settings-filter";
+
 import { columnsContentSection } from "./columns-layout-field";
 import {
   PropExposeControl,
@@ -203,6 +205,7 @@ function ContentSurface({
   // A block's own inspector knows nothing of bindings visitors will not see,
   // so beside one, every such binding on the block is said above it.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
+  const filterOn = useSettingsMatch().active;
   const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={inspection}
@@ -251,7 +254,9 @@ function ContentSurface({
     inspection.inspector === undefined
       ? undefined
       : inspectors?.(inspection.inspector);
-  if (Custom === undefined) return generated;
+  // While the panel is filtered, the generated fields are drawn, which the
+  // filter can hide row by row; the block's own inspector knows nothing of it.
+  if (Custom === undefined || filterOn) return generated;
   return (
     <>
       <VisitorUnreadableNote

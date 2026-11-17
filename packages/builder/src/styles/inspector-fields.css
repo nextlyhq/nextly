@@ -1075,3 +1075,146 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 0;
 }
+
+/*
+ * "Find a setting" and "Only changed", under the tabs on every tab: the field
+ * takes the row, the toggle keeps its words, and both fit at 280px.
+ */
+.nx-settings-search {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  margin-block: 0.5rem;
+}
+
+.nx-settings-search__field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+
+.nx-settings-search__icon {
+  position: absolute;
+  inset-inline-start: 0.5rem;
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+.nx-settings-search__input {
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: var(--nx-builder-control-height);
+  padding-block: 0;
+  padding-inline: 1.75rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-settings-search__input::placeholder {
+  color: var(--nx-muted-foreground);
+}
+
+/* The browser's own clear button would sit beside ours. */
+.nx-settings-search__input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.nx-settings-search__input:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -1px;
+}
+
+.nx-settings-search__clear {
+  position: absolute;
+  inset-inline-end: 0.125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-settings-search__clear:hover {
+  color: var(--nx-foreground);
+}
+
+.nx-settings-search__clear:focus-visible,
+.nx-settings-search__toggle:focus-visible,
+.nx-settings-note__link:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-settings-search__toggle {
+  flex: none;
+  block-size: var(--nx-builder-control-height);
+  padding-inline: 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.nx-settings-search__toggle[aria-pressed="true"] {
+  border-color: var(--nx-foreground);
+  background: var(--nx-foreground);
+  color: var(--nx-background);
+}
+
+/* What a tab says while the filter keeps nothing on it, with its links. */
+.nx-settings-note {
+  margin: 0.25rem 0 0.5rem;
+  color: var(--nx-muted-foreground);
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-settings-note__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/*
+ * A tab's match count, set over the label's end so it arriving or going
+ * moves no tab and no control.
+ */
+.nx-inspector__tab-count {
+  position: absolute;
+  inset-block-start: 0.125rem;
+  inset-inline-start: 100%;
+  margin-inline-start: 0.125rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--nx-muted-foreground);
+  pointer-events: none;
+}
+
+/* A setting the filter may hide: drawn as its own row, hidden when it must. */
+.nx-setting {
+  display: contents;
+}
+
+.nx-setting[hidden] {
+  display: none;
+}
