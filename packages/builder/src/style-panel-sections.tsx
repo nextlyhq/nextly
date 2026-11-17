@@ -207,6 +207,9 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
     );
   }, sameClosedSection);
 
+/** The spacing box's properties, which the filter keeps it by. */
+const SPACING_IDS: readonly string[] = ["margin", "padding"];
+
 /** The block's settings Content width draws, which the filter keeps it by. */
 const CONTENT_WIDTH_IDS: readonly string[] = ["contained", "contentWidth"];
 
@@ -227,10 +230,16 @@ function shownProperties(
   more: readonly InspectedStyleProperty[];
 } {
   if (match.active) {
+    // Every row drawn before stays mounted, hidden where the filter keeps
+    // nothing of it, so an unsaved or refused value outlives the search; a
+    // kept one from "+ More" is drawn too.
     const kept = match.kept.get("style");
     return {
       shown: section.properties.filter(
-        property => kept?.has(property.property) === true
+        property =>
+          property.common ||
+          isRevealed(property.property) ||
+          kept?.has(property.property) === true
       ),
       more: [],
     };
@@ -353,14 +362,20 @@ function SectionFields({
           </SettingSlot>
         ) : null}
         {rings === undefined ? null : (
-          <SpacingBox
-            margin={rings.margin}
-            padding={rings.padding}
-            surroundings={surroundings}
-          />
+          <SettingSlot tab="style" ids={SPACING_IDS}>
+            <SpacingBox
+              margin={rings.margin}
+              padding={rings.padding}
+              surroundings={surroundings}
+            />
+          </SettingSlot>
         )}
         {(rings?.rest ?? shown).map(property => (
-          <React.Fragment key={`${surroundings.nodeId}:${property.property}`}>
+          <SettingSlot
+            key={`${surroundings.nodeId}:${property.property}`}
+            tab="style"
+            ids={[property.property]}
+          >
             {property.property === "minHeight" ? (
               <BlockPresetsOver surroundings={surroundings} />
             ) : null}
@@ -369,7 +384,7 @@ function SectionFields({
               namesSection={property.property === sectionKey}
               {...surroundings}
             />
-          </React.Fragment>
+          </SettingSlot>
         ))}
         {shown.length === 0 ? (
           <p className="nx-inspector__note">

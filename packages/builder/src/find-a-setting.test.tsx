@@ -349,3 +349,30 @@ describe("the panel's menu while filtered", () => {
     expect(openSections()).toEqual(before);
   });
 });
+
+describe("Style while filtered", () => {
+  it("finds a keyword choice by its words", () => {
+    mount();
+    openTab("Style");
+    type("sticky");
+    expect(shownProperties()).toContain("position");
+  });
+
+  it("keeps a refused value a field holds through a search and its clearing", () => {
+    mount();
+    openTab("Style");
+    const size = shownPanel().querySelector<HTMLElement>(
+      '[data-section="size"] [data-slot="accordion-trigger"]'
+    )!;
+    if (size.getAttribute("aria-expanded") !== "true") fireEvent.click(size);
+    const width = () =>
+      shownPanel().querySelector<HTMLInputElement>(
+        '[data-property="width"] input'
+      )!;
+    fireEvent.change(width(), { target: { value: "wide" } });
+    fireEvent.blur(width());
+    type("height");
+    type("");
+    expect(width().value).toBe("wide");
+  });
+});

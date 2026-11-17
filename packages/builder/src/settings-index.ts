@@ -63,7 +63,8 @@ const SYNONYMS: readonly (readonly string[])[] = [
   ["colour", "color"],
   ["corners", "radius", "rounded"],
   ["z-index", "layer order", "stacking"],
-  ["nofollow", "link relationship", "rel"],
+  // Not "rel" alone: it is the start of "Relative", Position's choice.
+  ["nofollow", "link relationship"],
   ["hide", "hide on", "visible on"],
   ["padding", "spacing"],
   ["margin", "spacing"],

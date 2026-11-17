@@ -25,6 +25,7 @@ import {
   SIZE_LABELS,
 } from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
+import { keywordLabel } from "./style-keyword-labels";
 import { COLUMNS_ROW, stackOf, stackTiers } from "./columns-layout";
 import {
   advancedRowsBySection,
@@ -297,6 +298,26 @@ function cssOf(property: StyleSection["properties"][number]): string[] {
 }
 
 /**
+ * A Style property's choices, in the words its controls draw them with
+ * (Position's "Sticky"), so a choice is found by its name.
+ */
+function optionsOf(property: StyleSection["properties"][number]): string[] {
+  const labels = new Set<string>();
+  for (const control of property.controls) {
+    const leaf = control.leaf as {
+      readonly kind: string;
+      readonly cssProperty?: string;
+      readonly values?: readonly string[];
+    };
+    if (leaf.kind !== "keyword" || leaf.cssProperty === undefined) continue;
+    for (const keyword of leaf.values ?? []) {
+      labels.add(keywordLabel(leaf.cssProperty, keyword));
+    }
+  }
+  return [...labels];
+}
+
+/**
  * The Style tab's settings: each section's properties, and the block's own
  * settings it draws there (Content width, a Section's Height), under the
  * section that draws them.
@@ -317,6 +338,7 @@ export function styleEntries(
       ...section.properties.map(property => ({
         id: property.property,
         label: property.label,
+        options: optionsOf(property),
         css: cssOf(property),
         set: property.set,
       })),
