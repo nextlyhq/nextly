@@ -100,6 +100,7 @@ import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
+import type { PlainFlow } from "./plain-layout";
 import {
   advancedEntries,
   contentEntries,
@@ -126,9 +127,8 @@ import {
   type StoredStyles,
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
+import { inspectStyle } from "./style-inspector";
 import { breakpointLabel } from "./style-provenance-indicators";
-import type { PlainFlow } from "./plain-layout";
-import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -323,6 +323,9 @@ export function InspectorPanel({
         library={panel.classLibrary ?? []}
         canvasRoot={panel.canvasRoot}
         state={editedStyleState(panel.styleState)}
+        // The binding itself too, so the look's bar offers the State switch
+        // a block's Style tab offers.
+        styleState={panel.styleState}
         policy={panel.policy}
         breakpoint={panel.breakpoint}
         cascade={panel.cascade}
