@@ -654,10 +654,11 @@ function sectionLinks(
 }
 
 /**
- * @param props - the document, the site's sheet and its readiness, and the way in
- * @returns the entry screen's view of the page, in place of the blocks field
+ * The card for a page that holds blocks: its picture, the bar with the fold
+ * over its sections and the way in, what is said about the way in, and the
+ * sections themselves while the fold is open.
  */
-export function PageBuilderCard({
+function BuiltPage({
   document,
   siteStyles,
   styleState,
@@ -668,47 +669,19 @@ export function PageBuilderCard({
   href,
   saveAndOpen,
   onNavigate,
-  note,
+  sections,
+  hrefFor,
+  inPicture,
+  said,
   after,
-}: PageBuilderCardProps): JSX.Element {
-  const sections = useMemo(
-    // The same resolver and inputs the picture draws with, so the list names
-    // exactly the sections drawn above it.
-    () =>
-      pageSections(document, entryBlockResolver(), render, components.titleOf),
-    [document, render, components.titleOf]
-  );
+}: Omit<PageBuilderCardProps, "note"> & {
+  sections: readonly PageSection[];
+  hrefFor: ((section: PageSection) => string) | undefined;
+  inPicture: MiniatureSection[] | undefined;
+  said: string | undefined;
+}): JSX.Element {
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const listId = useId();
-
-  const anotherLanguage = showsAnotherLanguage(useDocumentLocale());
-  // Held across renders that change none of its inputs: the preview keys its
-  // whole page render on the sections it is handed, so a fresh array from
-  // every render of the form around this card would redo that render each time.
-  const { hrefFor, inPicture } = useMemo(
-    () => sectionLinks(sections, canEdit, href, anotherLanguage),
-    [sections, canEdit, href, anotherLanguage]
-  );
-  // Only an author who may edit is told about the way in.
-  const said = canEdit ? note : undefined;
-
-  // Empty means nothing stored, not nothing drawn: a page whose only sections
-  // are gated by a condition still holds a page, and inviting the author to
-  // build one would be wrong.
-  if (documentNodes(document).length === 0) {
-    return (
-      <WithAfter after={after}>
-        <EmptyPage
-          canEdit={canEdit}
-          href={href}
-          saveAndOpen={saveAndOpen}
-          onNavigate={onNavigate}
-          said={said}
-        />
-      </WithAfter>
-    );
-  }
-
   return (
     // `min-w-0` because the form lays fields out as grid items, whose default
     // minimum is their content's: without it the view grows to the widest
@@ -757,5 +730,79 @@ export function PageBuilderCard({
       </div>
       {after}
     </div>
+  );
+}
+
+/**
+ * @param props - the document, the site's sheet and its readiness, and the way in
+ * @returns the entry screen's view of the page, in place of the blocks field
+ */
+export function PageBuilderCard({
+  document,
+  siteStyles,
+  styleState,
+  components,
+  render,
+  regions,
+  canEdit,
+  href,
+  saveAndOpen,
+  onNavigate,
+  note,
+  after,
+}: PageBuilderCardProps): JSX.Element {
+  const sections = useMemo(
+    // The same resolver and inputs the picture draws with, so the list names
+    // exactly the sections drawn above it.
+    () =>
+      pageSections(document, entryBlockResolver(), render, components.titleOf),
+    [document, render, components.titleOf]
+  );
+  const anotherLanguage = showsAnotherLanguage(useDocumentLocale());
+  // Held across renders that change none of its inputs: the preview keys its
+  // whole page render on the sections it is handed, so a fresh array from
+  // every render of the form around this card would redo that render each time.
+  const { hrefFor, inPicture } = useMemo(
+    () => sectionLinks(sections, canEdit, href, anotherLanguage),
+    [sections, canEdit, href, anotherLanguage]
+  );
+  // Only an author who may edit is told about the way in.
+  const said = canEdit ? note : undefined;
+
+  // Empty means nothing stored, not nothing drawn: a page whose only sections
+  // are gated by a condition still holds a page, and inviting the author to
+  // build one would be wrong.
+  if (documentNodes(document).length === 0) {
+    return (
+      <WithAfter after={after}>
+        <EmptyPage
+          canEdit={canEdit}
+          href={href}
+          saveAndOpen={saveAndOpen}
+          onNavigate={onNavigate}
+          said={said}
+        />
+      </WithAfter>
+    );
+  }
+
+  return (
+    <BuiltPage
+      document={document}
+      siteStyles={siteStyles}
+      styleState={styleState}
+      components={components}
+      render={render}
+      regions={regions}
+      canEdit={canEdit}
+      href={href}
+      saveAndOpen={saveAndOpen}
+      onNavigate={onNavigate}
+      sections={sections}
+      hrefFor={hrefFor}
+      inPicture={inPicture}
+      said={said}
+      after={after}
+    />
   );
 }

@@ -348,6 +348,9 @@ function frameSize(
   };
 }
 
+/** Every part a page can be drawn with, in the order they are drawn. */
+const PART_ORDER: readonly PagePart[] = ["header", "page", "footer"];
+
 /** A region to draw, with how it treats the site sheet. */
 interface DrawnRegion {
   region: MiniatureRegion;
@@ -373,14 +376,13 @@ function drawnParts(
   render: PageRenderInputs,
   siteStyles: PageRendererProps["siteStyles"]
 ): DrawnParts | undefined {
-  const header = regions?.find(region => region.area === "header");
-  const footer = regions?.find(region => region.area === "footer");
-  if (header === undefined && footer === undefined) return undefined;
-  const parts: PagePart[] = [
-    ...(header === undefined ? [] : (["header"] as const)),
-    "page",
-    ...(footer === undefined ? [] : (["footer"] as const)),
-  ];
+  const regionOf = (area: RegionArea) =>
+    regions?.find(region => region.area === area);
+  // Header, page, footer: the order the page is drawn in, of the parts it has.
+  const parts = PART_ORDER.filter(
+    part => part === "page" || regionOf(part) !== undefined
+  );
+  if (parts.length === 1) return undefined;
   const sheets = layoutPartSheets({
     parts,
     styleContext: render.styleContext,
@@ -388,12 +390,14 @@ function drawnParts(
   });
   const sheetFor = (part: PagePart): PartSheet =>
     sheets[parts.indexOf(part)] ?? {};
-  const drawn = (region: MiniatureRegion | undefined) =>
-    region === undefined ? undefined : { region, sheet: sheetFor(region.area) };
+  const drawn = (area: RegionArea): DrawnRegion | undefined => {
+    const region = regionOf(area);
+    return region === undefined ? undefined : { region, sheet: sheetFor(area) };
+  };
   return {
     page: sheetFor("page"),
-    header: drawn(header),
-    footer: drawn(footer),
+    header: drawn("header"),
+    footer: drawn("footer"),
   };
 }
 
@@ -444,51 +448,33 @@ function useSteadyContext(
 }
 
 /**
- * @param props - the document, the site's sheet, the width to compose at, and
- *   the sections a person may open
- * @returns a scaled, inert rendering of the page, with a link over each section
+ * The page drawn, between the regions of its header & footer set where it
+ * has them, as one element.
+ *
+ * Held apart from the measured scale, which changes on every frame of a
+ * resize. Rebuilt inline, each observer callback would rerun the whole render
+ * beneath it — sanitisation, migration, every block, and the stylesheet
+ * compile — for a page whose content did not change and whose wrapper only
+ * needed a new transform. On a large document that is visible jank, and it
+ * re-enters any asynchronous block resolver the page has. The canvas holds its
+ * page the same way and for the same reason.
  */
-export function PageMiniature({
+function useDrawnPage({
   document,
   siteStyles,
   render,
-  renderWidth = DEFAULT_RENDER_WIDTH,
-  maxHeight = DEFAULT_MAX_HEIGHT,
   sections,
-  onNavigate,
   regions,
-}: PageMiniatureProps): JSX.Element {
-  const frame = useRef<HTMLDivElement>(null);
-  const pageBox = useRef<HTMLDivElement>(null);
-  const scaled = useRef<HTMLDivElement>(null);
-  const seen = useFirstSeen(frame);
-  const scale = useWidthScale(frame, renderWidth);
-  const { composedHeight, boxes } = usePageLayout(
-    seen,
-    scale,
-    scaled,
-    pageBox,
-    sections
-  );
-
+}: Pick<
+  PageMiniatureProps,
+  "document" | "siteStyles" | "render" | "sections" | "regions"
+>): JSX.Element {
   const context = useSteadyContext(render.context);
   const parts = useMemo(
     () => drawnParts(regions, render, siteStyles),
     [regions, render, siteStyles]
   );
-
-  /*
-   * Held apart from the measured scale, which changes on every frame of a
-   * resize.
-   *
-   * Rebuilt inline, each observer callback would rerun the whole render beneath
-   * it — sanitisation, migration, every block, and the stylesheet compile — for
-   * a page whose content did not change and whose wrapper only needed a new
-   * transform. On a large document that is visible jank, and it re-enters any
-   * asynchronous block resolver the page has. The canvas holds its page the
-   * same way and for the same reason.
-   */
-  const page = useMemo(
+  return useMemo(
     () => (
       <>
         <RegionPicture
@@ -525,6 +511,43 @@ export function PageMiniature({
     ),
     [render, context, document, siteStyles, sections, parts]
   );
+}
+
+/**
+ * @param props - the document, the site's sheet, the width to compose at, and
+ *   the sections a person may open
+ * @returns a scaled, inert rendering of the page, with a link over each section
+ */
+export function PageMiniature({
+  document,
+  siteStyles,
+  render,
+  renderWidth = DEFAULT_RENDER_WIDTH,
+  maxHeight = DEFAULT_MAX_HEIGHT,
+  sections,
+  onNavigate,
+  regions,
+}: PageMiniatureProps): JSX.Element {
+  const frame = useRef<HTMLDivElement>(null);
+  const pageBox = useRef<HTMLDivElement>(null);
+  const scaled = useRef<HTMLDivElement>(null);
+  const seen = useFirstSeen(frame);
+  const scale = useWidthScale(frame, renderWidth);
+  const { composedHeight, boxes } = usePageLayout(
+    seen,
+    scale,
+    scaled,
+    pageBox,
+    sections
+  );
+
+  const page = useDrawnPage({
+    document,
+    siteStyles,
+    render,
+    sections,
+    regions,
+  });
 
   const size = frameSize(composedHeight * scale, maxHeight);
 
