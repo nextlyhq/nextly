@@ -25,6 +25,7 @@ import {
 import type { CollectionService } from "../../../collections/services/collection-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { SOURCE_FINGERPRINT_MOVED } from "../../../../schemas/translation-provenance";
+import { teardownEntityI18n } from "../../migration/teardown-entity-i18n";
 import { valueFingerprint } from "../record-provenance";
 
 let t: TestNextly | undefined;
@@ -854,6 +855,40 @@ describe.each(getConfiguredTestDialects())(
       expect((await save(id, "en", { title: "[1,2]" })).success).toBe(true);
       expect(await titleFingerprint()).toBe(valueFingerprint("[1,2]"));
       expect(valueFingerprint("[1,2]")).not.toBe(valueFingerprint("[1, 2]"));
+    });
+    it("forgets an entity's records when its localization is torn down with it", async () => {
+      // Deleting a collection or a Single tears its localization down (`teardownEntityI18n`, on
+      // every delete path). Its records go with it, by kind and slug, and no other entity's do:
+      // left behind, a later entity of that kind and slug would read a predecessor's origins.
+      await boot(dialect);
+      const post = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi" },
+      })) as unknown as { item: { id: string } };
+      expect((await save(post.item.id, "es", { title: "Hola" })).success).toBe(
+        true
+      );
+      const event = (await t!.nextly.create({
+        collection: "events",
+        locale: "en",
+        data: { meta: { a: 1 } },
+      })) as unknown as { item: { id: string } };
+      expect(Object.keys(await rowsOf(post.item.id))).toEqual(
+        expect.arrayContaining(["en", "es"])
+      );
+
+      const result = await teardownEntityI18n({
+        adapter: t!.adapter as never,
+        slug: "posts",
+        kind: "collection",
+        tableName: "dc_posts",
+      });
+      expect(result.provenanceRowsPurged).toBe(2);
+      expect(await rowsOf(post.item.id)).toEqual({});
+      expect(
+        (await rowsOf(event.item.id, { kind: "collection", slug: "events" })).en
+      ).toHaveLength(1);
     });
   }
 );
