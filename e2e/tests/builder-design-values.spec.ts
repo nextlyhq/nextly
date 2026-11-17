@@ -9,6 +9,8 @@
  * - "Use 20px" under a line height of 20 saves 20px.
  * - A font variable is chosen from the picker, never typed, and a weight by
  *   name, each saved as the value the site's stylesheet reads.
+ * - A duration keeps its number when its unit changes, and a custom value
+ *   that would load a file is refused where it is typed.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -39,6 +41,8 @@ const TOKENS = [
     values: { light: "Georgia, serif" },
   },
   { name: "weight.strong", kind: "fontWeight", values: { light: "700" } },
+  { name: "duration.fast", kind: "duration", values: { light: "200ms" } },
+  { name: "custom.grid", kind: "custom", values: { light: "repeat(3, 1fr)" } },
 ];
 
 async function storedTokens(page: Page): Promise<unknown> {
@@ -200,6 +204,39 @@ test("a font variable is picked from the site's and the system's fonts, and a we
     await editor.getByLabel("Light", { exact: true }).click();
     await page.getByRole("option", { name: /^Regular 400/ }).click();
     await expect.poll(() => storedValue(page, "weight.strong")).toBe("400");
+  } finally {
+    await seed(page, before);
+  }
+});
+
+test("a duration changes unit keeping its number, and a custom value that would load a file is refused in its field", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, { tokens: TOKENS });
+    await openEditorWith(page, NODES, "values-text");
+    await openDesign(page, "Spacing");
+    const panel = page.getByRole("region", { name: "Design panel" });
+    const editor = page.locator(".nx-vars-editor");
+
+    await panel.getByRole("button", { name: /^Fast/ }).click();
+    await expect(editor.getByLabel("Light", { exact: true })).toHaveValue("200");
+    await editor.getByLabel("Unit for Light").click();
+    await page.getByRole("option", { name: "s", exact: true }).click();
+    await expect.poll(() => storedValue(page, "duration.fast")).toBe("200s");
+    await page.keyboard.press("Escape");
+    await expect(editor).toBeHidden();
+
+    await panel.getByRole("button", { name: /^Custom grid/ }).click();
+    const light = editor.getByLabel("Light", { exact: true });
+    await light.fill("url(https://elsewhere.example/a.png)");
+    await light.press("Enter");
+    await expect(light).toHaveAttribute("aria-invalid", "true");
+    await expect(editor.getByText(/would load a file/)).toBeVisible();
+    // Nothing reached the site style.
+    expect(await storedValue(page, "custom.grid")).toBe("repeat(3, 1fr)");
   } finally {
     await seed(page, before);
   }
