@@ -1161,6 +1161,15 @@ function inlineLevel(tiers: LayoutTiers, editing: string): boolean {
 }
 
 /**
+ * Whether a flowing block's automatic width is its content's: an inline-level
+ * box's is, and so is any block's where lines run down the screen, the width
+ * being its block size there.
+ */
+function contentSized(tiers: LayoutTiers, editing: string): boolean {
+  return inlineLevel(tiers, editing) || vertical(tiers.flow ?? LTR);
+}
+
+/**
  * The writes a size's choice makes at the edited device, by the role it
  * plays in the parent's arrangement there. Defaults are written only where a
  * wider device's value would stay in force under the one chosen.
@@ -1177,7 +1186,7 @@ export function planChildSize(
   if (role === null) return [];
   // In flow an inline-level block (a Button) is as wide as its content at
   // an automatic width: Fill gives it the line's.
-  if (role === "flow" && choice === "fill" && inlineLevel(tiers, editing)) {
+  if (role === "flow" && choice === "fill" && contentSized(tiers, editing)) {
     return childWrites(tiers, editing, { [SIZE_OF[axis].size]: "100%" }, size);
   }
   return childWrites(tiers, editing, roleWrites(role, axis)[choice], size);
@@ -1203,16 +1212,35 @@ function atStart(value: string | undefined): boolean {
   return value === "start" || value === "flex-start" || value === "self-start";
 }
 
-/** A size across the parent's axis: set, at the start, or stretched. */
+/**
+ * A size across the parent's axis: set, at the start, or stretched. An
+ * automatic self-alignment takes the parent's for its items: under one that
+ * doesn't stretch (centred, at the end) the block is neither filled nor at
+ * its start, so it reads as Custom.
+ */
 function crossSize(
   size: string | undefined,
-  self: string | undefined
+  ownSelf: string | undefined,
+  items?: string
 ): ChildSize {
+  const self = automaticSelf(ownSelf) ? itemsSelf(items) : ownSelf;
   // A self-alignment no choice writes (centred, at the end) is Custom, so
   // its row stays drawn to say it, whatever the size.
   if (!atStart(self) && !stretched(self)) return { choice: "custom" };
   if (!automatic(size)) return { choice: "fixed", size: size ?? "" };
   return atStart(self) ? { choice: "fit" } : { choice: "fill" };
+}
+
+/** Whether a self-alignment defers to the parent's for its items. */
+function automaticSelf(value: string | undefined): boolean {
+  return value === undefined || value === "auto";
+}
+
+/** The parent's alignment for its items, as a self-alignment reads it. */
+function itemsSelf(items: string | undefined): string | undefined {
+  return items === undefined || items === "normal" || items === "legacy"
+    ? undefined
+    : items;
 }
 
 /** A basis of nothing, as Fill writes it and as it may be spelled. */
@@ -1258,7 +1286,8 @@ export function readChildSize(
   tiers: LayoutTiers,
   editing: string,
   parent: ParentArrangement,
-  axis: ChildAxis
+  axis: ChildAxis,
+  items?: ParentItems
 ): ChildSize {
   const role = roleOf(parent, axis, tiers.flow);
   const values = tiers.inForce(editing);
@@ -1267,15 +1296,21 @@ export function readChildSize(
     case null:
       return { choice: "custom" };
     case "flow":
-      return flowSize(size, inlineLevel(tiers, editing));
+      return flowSize(size, contentSized(tiers, editing));
     case "main":
       return mainSize(size, values);
     case "cross":
     case "block":
-      return crossSize(size, values.alignSelf);
+      return crossSize(size, values.alignSelf, items?.alignItems);
     case "inline":
-      return crossSize(size, values.justifySelf);
+      return crossSize(size, values.justifySelf, items?.justifyItems);
   }
+}
+
+/** The alignment a parent gives its items, which its children defer to. */
+export interface ParentItems {
+  readonly alignItems?: string | undefined;
+  readonly justifyItems?: string | undefined;
 }
 
 /** The writes a Width choice makes: {@link planChildSize} for the width. */

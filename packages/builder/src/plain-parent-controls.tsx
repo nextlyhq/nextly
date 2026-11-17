@@ -25,19 +25,47 @@ import {
   type LayoutTiers,
   type LayoutWrite,
   type ParentArrangement,
+  type ParentItems,
 } from "./plain-layout";
 import { DraftInput, useApply, useLayoutTiers } from "./plain-layout-controls";
 import { SegmentChoices } from "./segment-choices";
+import type { ParentLayout } from "./style-inspector";
 import { SettingSlot } from "./settings-filter";
 import {
   StyleTargetContext,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
 
-/** How the selected block's parent arranges it, lent by the Style panel. */
-export const ParentArrangementContext: React.Context<
-  ParentArrangement | undefined
-> = React.createContext<ParentArrangement | undefined>(undefined);
+/** How the selected block's parent lays it out, lent by the Style panel. */
+export const ParentArrangementContext: React.Context<ParentLayout | undefined> =
+  React.createContext<ParentLayout | undefined>(undefined);
+
+/** What sizing a block in its parent reads by, where it is offered. */
+interface ParentSizing {
+  readonly parent: ParentArrangement;
+  readonly tiers: LayoutTiers;
+  readonly items: ParentItems;
+}
+
+/**
+ * The parent's arrangement, the block's values, and the alignment the parent
+ * gives its items. The flow is the canvas's measured one: a writing mode
+ * isn't a style a block stores, so a block's runs as its parent's does.
+ * None where the parent isn't known or a shared style is edited.
+ */
+function useParentSizing(
+  surroundings: StyleFieldSurroundings
+): ParentSizing | undefined {
+  const layout = React.useContext(ParentArrangementContext);
+  const target = React.useContext(StyleTargetContext);
+  const tiers = useLayoutTiers(surroundings);
+  if (layout === undefined || target.kind === "shared") return undefined;
+  return {
+    parent: layout.arrangement,
+    tiers,
+    items: { alignItems: layout.alignItems, justifyItems: layout.justifyItems },
+  };
+}
 
 /** The ids the settings search knows Width and Height by. */
 export const CHILD_SIZE_IDS = {
@@ -86,17 +114,17 @@ export function InsideParentFields({
 }: {
   surroundings: StyleFieldSurroundings;
 }): React.JSX.Element | null {
-  const parent = React.useContext(ParentArrangementContext);
+  const sizing = useParentSizing(surroundings);
   const target = React.useContext(StyleTargetContext);
-  const tiers = useLayoutTiers(surroundings);
   const apply = useApply(surroundings, target);
-  if (parent === undefined || target.kind === "shared") return null;
+  if (sizing === undefined) return null;
+  const { parent, tiers, items } = sizing;
   const editing = surroundings.breakpoint;
-  const width = axisOf(tiers, editing, parent, "width");
+  const width = axisOf(tiers, editing, parent, "width", items);
   // A Row or a Grid sizes its blocks across too; a column's height is its
   // blocks' own, set in Size.
   const height = offersChildAxis(parent, "height", tiers.flow)
-    ? axisOf(tiers, editing, parent, "height")
+    ? axisOf(tiers, editing, parent, "height", items)
     : undefined;
   return (
     <div className="nx-inside-parent" data-control="inside-parent">
@@ -117,13 +145,14 @@ function axisOf(
   tiers: LayoutTiers,
   editing: string,
   parent: ParentArrangement,
-  axis: ChildAxis
+  axis: ChildAxis,
+  items: ParentItems
 ): Axis {
   const width = axis === "width";
   return {
     name: width ? "Width" : "Height",
     lines: width ? WIDTH_LINES : HEIGHT_LINES,
-    size: readChildSize(tiers, editing, parent, axis),
+    size: readChildSize(tiers, editing, parent, axis, items),
     start: width ? STARTING_SIZE.width : STARTING_SIZE.height,
     plan: (choice, size) =>
       planChildSize(tiers, editing, parent, axis, choice, size),
@@ -198,15 +227,16 @@ function AxisRow({
 export function useDrawnChildRows(
   surroundings: StyleFieldSurroundings
 ): ReadonlySet<string> {
-  const parent = React.useContext(ParentArrangementContext);
-  const target = React.useContext(StyleTargetContext);
-  const tiers = useLayoutTiers(surroundings);
-  if (parent === undefined || target.kind === "shared") return NONE;
+  const sizing = useParentSizing(surroundings);
+  if (sizing === undefined) return NONE;
+  const { parent, tiers, items } = sizing;
   const editing = surroundings.breakpoint;
   const drawn = new Set<string>();
   for (const axis of ["width", "height"] as const) {
     if (!offersChildAxis(parent, axis, tiers.flow)) continue;
-    if (readChildSize(tiers, editing, parent, axis).choice === "custom") {
+    if (
+      readChildSize(tiers, editing, parent, axis, items).choice === "custom"
+    ) {
       continue;
     }
     for (const row of childAxisRows(parent, axis, tiers.flow)) drawn.add(row);

@@ -216,6 +216,8 @@ export interface StyleInspection {
    * what "Inside its parent" offers; absent where the parent isn't known.
    */
   readonly parent?: ParentArrangement;
+  /** The parent's way of laying the block out, beside its arrangement. */
+  readonly parentLayout?: ParentLayout;
   /**
    * The `object-fit` keyword in force here, lowercased, or `undefined` when
    * nothing sets one: what decides what the focal point says it does.
@@ -331,10 +333,11 @@ export function inspectStyle(
     }
   }
 
-  const parent = laidOutBy(document, node, at, options, {
+  const parentLayout = laidOutBy(document, node, at, options, {
     position: context.position,
     sized: offered.has("width"),
   });
+  const parent = parentLayout?.arrangement;
   return {
     nodeId: node.id,
     state,
@@ -342,6 +345,7 @@ export function inspectStyle(
     sections,
     ...(objectFit === undefined ? {} : { objectFit }),
     ...(parent === undefined ? {} : { parent }),
+    ...(parentLayout === undefined ? {} : { parentLayout }),
   };
 }
 
@@ -407,9 +411,9 @@ function laidOutBy(
   at: ReadAt,
   options: StyleInspectionOptions | undefined,
   block: { readonly position: string | undefined; readonly sized: boolean }
-): ParentArrangement | undefined {
+): ParentLayout | undefined {
   if (!block.sized || OUT_OF_FLOW.has(block.position ?? "")) return undefined;
-  return parentArrangementOf(document, node, at, options);
+  return parentLayoutOf(document, node, at, options);
 }
 
 /** The positions that take a block out of its parent's layout. */
@@ -491,18 +495,36 @@ function parentDisplayOf(
  * `undefined` where the parent isn't known (a shared style, a component's
  * top level) or arranges another way (a table).
  */
-function parentArrangementOf(
+function parentLayoutOf(
   document: BlockDocument,
   node: BlockNode,
   at: ReadAt,
   options: StyleInspectionOptions | undefined
-): ParentArrangement | undefined {
+): ParentLayout | undefined {
   const box = parentBoxOf(document, node, at, options);
   if (box === undefined) return undefined;
-  return arrangementOf(
+  const arrangement = arrangementOf(
     keywordIdentity(box.read("display", "display")) ?? IN_FLOW,
     keywordIdentity(box.read("flex-direction", "flexDirection"))
   );
+  if (arrangement === undefined) return undefined;
+  const keyword = (cssProperty: string, property: string) =>
+    keywordIdentity(box.read(cssProperty, property));
+  return {
+    arrangement,
+    alignItems: keyword("align-items", "alignItems"),
+    justifyItems: keyword("justify-items", "justifyItems"),
+  };
+}
+
+/**
+ * How the block's parent lays it out: its arrangement, and the alignment it
+ * gives its items, which a child's automatic self-alignment defers to.
+ */
+export interface ParentLayout {
+  readonly arrangement: ParentArrangement;
+  readonly alignItems: string | undefined;
+  readonly justifyItems: string | undefined;
 }
 
 /** The arrangement a display and a direction lay a box's children out in. */

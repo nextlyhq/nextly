@@ -20,6 +20,7 @@ import {
   planPlain,
   readArrange,
   readChildHeight,
+  readChildSize,
   readChildWidth,
   type ChildFit,
   type ParentArrangement,
@@ -835,5 +836,32 @@ describe("Inside its parent with a self-alignment no choice writes", () => {
     expect(readChildWidth(block.tiers(), "base", "grid")).toEqual({
       choice: "custom",
     });
+  });
+});
+
+describe("Inside its parent: vertical flow and a parent's Align", () => {
+  it("fits an automatic width in vertical flow, and fills it with 100%", () => {
+    const block = new Block();
+    block.flow = { writingMode: "vertical-rl", rtl: false };
+    expect(readChildWidth(block.tiers(), "base", "flow")).toEqual({
+      choice: "fit",
+    });
+    block.apply(planChildWidth(block.tiers(), "base", "flow", "fill"));
+    expect(block.own.base.width).toBe("100%");
+  });
+
+  it("reads an automatic size under a parent Align that doesn't stretch as Custom", () => {
+    const block = new Block();
+    expect(
+      readChildSize(block.tiers(), "base", "column", "width", {
+        alignItems: "center",
+      })
+    ).toEqual({ choice: "custom" });
+    // Under one that stretches it is Fill, as before.
+    expect(
+      readChildSize(block.tiers(), "base", "column", "width", {
+        alignItems: "stretch",
+      })
+    ).toEqual({ choice: "fill" });
   });
 });
