@@ -360,11 +360,14 @@ describe("an image's shadow", () => {
 
   it("is not clipped by the link or the enlarge button around the picture", async () => {
     const rules = await rulesFor({ whenClicked: "enlarge" }, {});
-    const clipped = rules.filter(
-      rule =>
-        /nx-bp-core--image--(link|enlarge)$/.test(rule.selector) &&
-        /overflow:\s*hidden/.test(rule.body)
+    // The wrapper parts' own rules, as the parts tier writes them
+    // (`:where(.part)`): present, so the check below reads real rules.
+    const wrappers = rules.filter(rule =>
+      /nx-bp-core--image--(link|enlarge)\)?$/.test(rule.selector)
     );
-    expect(clipped).toEqual([]);
+    expect(wrappers.length).toBeGreaterThan(0);
+    expect(
+      wrappers.filter(rule => /overflow:\s*hidden/.test(rule.body))
+    ).toEqual([]);
   });
 });
