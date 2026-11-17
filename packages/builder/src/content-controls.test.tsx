@@ -248,6 +248,21 @@ describe("what an author reads", () => {
     ).toBe("div");
   });
 
+  it("names an option's code once, where its words already say it in other capitals", () => {
+    // "Section section": a case-sensitive check printed the words and the tag.
+    registerWorded();
+    const document = documentOf();
+    (document.nodes[0] as BlockNode).props = { tag: "section" };
+    const { getByRole } = render(
+      <InspectorPanel editor={editorFor(document)} />
+    );
+    const closed = getByRole("combobox", { name: "HTML tag" });
+    expect(closed.textContent).toBe("Section");
+    fireEvent.click(closed);
+    const option = getByRole("option", { name: /^Section/ });
+    expect(option.textContent).toBe("Section");
+  });
+
   it("puts an on/off prop's label in the label column and its switch in the control column", () => {
     // The switch drawn before its label broke the column every other row
     // keeps: label on the left, control on the right.

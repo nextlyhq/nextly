@@ -135,17 +135,34 @@ returns you to the entry with that row's **Open Page Builder** focused.
 
 The inspector edits the selected block in up to three tabs, in this order:
 
-| Tab      | What it holds                                                                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                |
-| Style    | How the block looks.                                                                                                                                   |
-| Advanced | Where and when it shows (**Visible on**, **Show when**, and **Never quote this** on a Section or a Box), then its HTML: its **CSS id** and attributes. |
+| Tab      | What it holds                                                                                                                                                                                                                |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                                                                                      |
+| Style    | How the block looks.                                                                                                                                                                                                         |
+| Advanced | Where and when it shows (**Visible on**, **Show when**, and **Keep out of search previews** on every container), then its HTML: its **HTML tag** where it has a choice, **Anchor (ID)**, **CSS classes** and **Attributes**. |
 
-A tab with nothing in it for the selected block isn't shown: a Spacer, which says
-nothing, has only Style and Advanced. The tab you choose stays chosen as you select
-other blocks. A block without it opens on its first tab, and the next block that has it
-opens on yours again. If the editor opens with a state such as Hover already chosen, it
-opens on Style.
+A tab with nothing in it for the selected block isn't shown: a Spacer or a Section,
+which say nothing themselves, have only Style and Advanced. The tab you choose stays
+chosen as you select other blocks. A block without it opens on its first tab, and the
+next block that has it opens on yours again. If the editor opens with a state such as
+Hover already chosen, it opens on Style.
+
+In Advanced:
+
+- **Show when** reads "Always shown" until you add a condition. Inside a Collection
+  list it also names whose fields the conditions read, such as "Each post in the list".
+- **Keep out of search previews** marks the block's element `data-nosnippet`, so Google
+  doesn't quote its text under the page's link or in AI Overviews. Google reads the mark
+  on `<section>` and `<div>` only, and the panel says so when the tag is another one.
+- **HTML tag** lists each tag once, with a plain name and what it means: "Section — a
+  themed part of the page `<section>`".
+- **Anchor (ID)** lets a link jump to the block: `#your-id`.
+- **CSS classes** takes names separated by spaces, added to the block's element beside
+  the classes Nextly generates. A name that starts with a digit, `.`, `#` or `nx-`, or
+  holds a character a class can't, is refused under the field with the reason, and the
+  other names are kept.
+- **+ Add attribute** adds a `data-`, `aria-` or other open attribute. A class goes in
+  CSS classes, not here.
 
 ## Search
 
