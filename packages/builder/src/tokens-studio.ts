@@ -42,6 +42,7 @@ import {
   tokenDisplayLabel,
   tokenKindExample,
   tokenLabelIssue,
+  MAX_TOKEN_LABEL_LENGTH,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   tokenNamingProblem,
@@ -1190,8 +1191,8 @@ export function labelNewVariable(
 
 /**
  * The set with a copy of one variable right below it, and where the copy
- * landed: the same values, labelled "<label> copy", under a free code name
- * made from that label. A type size's line height is copied beside it, under
+ * landed: the same values, labelled "<label> copy" ("<label> copy 2" when
+ * that is taken), under a free code name made from that label. A type size's line height is copied beside it, under
  * the same words, which is what pairs them.
  *
  * The copy has no `id`, as a new variable has none: nothing references it
@@ -1204,7 +1205,7 @@ export function duplicateVariable(
 ): { tokens: SiteTokenSet; at: number } {
   const token = tokens.tokens[at];
   if (token === undefined) return { tokens, at };
-  const copyLabel = `${label} copy`;
+  const copyLabel = copyLabelFor(tokens, label);
   const dot = token.name.indexOf(".");
   const prefix = dot === -1 ? token.name : token.name.slice(0, dot);
   const partner = token.name.startsWith(SIZE_PREFIX)
@@ -1230,6 +1231,22 @@ export function duplicateVariable(
   const next = [...tokens.tokens];
   next.splice(at + 1, 0, ...copies);
   return { tokens: { ...tokens, tokens: next }, at: at + 1 };
+}
+
+/**
+ * The first free name for a copy: "<label> copy", then "copy 2", "copy 3"…,
+ * the label shortened where the suffix would take it past the longest
+ * label the engine stores, so the copy is saved as it is.
+ */
+function copyLabelFor(tokens: SiteTokenSet, label: string): string {
+  for (let n = 1; ; n += 1) {
+    const suffix = n === 1 ? " copy" : ` copy ${String(n)}`;
+    const room = MAX_TOKEN_LABEL_LENGTH - suffix.length;
+    const candidate = `${label.slice(0, room).trimEnd()}${suffix}`;
+    if (variableLabelIssue(tokens, -1, candidate) === undefined) {
+      return candidate;
+    }
+  }
 }
 
 /** A token without its frozen identity, as a copy starts. */
