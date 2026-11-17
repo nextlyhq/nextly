@@ -32,7 +32,13 @@
  *
  * @module site-style-merge
  */
-import { isPlainRecord, isTokenRef } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  isPlainRecord,
+  isTokenRef,
+  type FluidRangeWidths,
+} from "@nextlyhq/blocks-engine";
 
 import { faceIdentity } from "./site-style";
 import { storedVariableIdentity } from "./site-style-storage";
@@ -473,7 +479,43 @@ function mergedTokenSet(
     prefer,
     conflicts
   );
-  return { ...ownRecordOf(settings), tokens };
+  const merged = ownRecordOf(settings);
+  // A size made with Fluid… is written from its two sizes and the range, and
+  // the merge keeps each of the three on its own: one author's range beside
+  // another's sizes. Written again from what was kept, the stored value is
+  // the one "Fluid…" shows.
+  const range = fluidRangeIn(merged.fluidRange);
+  return {
+    ...merged,
+    tokens: tokens.map(token => withFluidValue(token, range)),
+  };
+}
+
+/** A stored fluid range, or the default where none, or none readable, is set. */
+function fluidRangeIn(value: unknown): FluidRangeWidths {
+  return isPlainRecord(value) &&
+    typeof value.min === "number" &&
+    typeof value.max === "number" &&
+    value.min < value.max
+    ? { min: value.min, max: value.max }
+    : DEFAULT_FLUID_RANGE;
+}
+
+/** A token with its light value written from its two sizes, where it has them. */
+function withFluidValue(token: unknown, range: FluidRangeWidths): unknown {
+  if (!isPlainRecord(token) || !isPlainRecord(token.values)) return token;
+  const { fluid } = token;
+  if (
+    !isPlainRecord(fluid) ||
+    typeof fluid.small !== "number" ||
+    typeof fluid.large !== "number"
+  ) {
+    return token;
+  }
+  const light = fluidValue({ small: fluid.small, large: fluid.large }, range);
+  return token.values.light === light
+    ? token
+    : { ...token, values: { ...token.values, light } };
 }
 
 /**
