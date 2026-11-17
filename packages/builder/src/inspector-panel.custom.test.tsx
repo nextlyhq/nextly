@@ -164,7 +164,7 @@ describe("a block's own inspector", () => {
     expect(screen.queryByLabelText("Title")).toBeNull();
     // What every block keeps.
     expect(screen.getByRole("tab", { name: "Style" })).toBeTruthy();
-    expect(screen.getByText("Advanced", { selector: "summary" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Advanced" })).toBeTruthy();
     expect(document.querySelector("[data-block-card]")).not.toBeNull();
     expect(document.getElementById("nx-block-css-id")).not.toBeNull();
     expect(given?.node.id).toBe("hero");

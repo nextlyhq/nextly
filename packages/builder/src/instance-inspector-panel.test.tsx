@@ -33,7 +33,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import type { SavedComponent } from "./inserter";
+import type { SavedComponent } from "./panels/add/inserter";
 import type { ContentServices, MediaPickerProps } from "./content-controls";
 import { InspectorPanel } from "./inspector-panel";
 import type { SharedBlockVerbs } from "./keyboard-actions";

@@ -293,6 +293,7 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
+import { entryDetails } from "./entry-details";
 
 /**
  * A collection's declared top-level fields.
@@ -5434,6 +5435,13 @@ export class CollectionQueryService extends BaseService {
     sourceLocales?: boolean;
     /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
     translations?: "all";
+    /**
+     * Attach `_details`: where the site serves the entry, and who made and
+     * changed it (`entryDetails`). Who is personal data, so the route asks
+     * for it only for a signed-in admin user; it is attached only once this
+     * read has been granted.
+     */
+    details?: boolean;
     /** Arbitrary data passed to hooks via context */
     context?: Record<string, unknown>;
     /** The HTTP request behind this operation, when one produced it. */
@@ -6213,6 +6221,15 @@ export class CollectionQueryService extends BaseService {
       // language's editor read says whether there is one.
       if (sharedChangesPending !== undefined) {
         finalData._sharedChangesPending = sharedChangesPending;
+      }
+      // After every gate above: only a read already granted is told where
+      // the entry is served and who made and changed it.
+      if (params.details) {
+        finalData._details = await entryDetails({
+          type: { kind: "collection", slug: params.collectionName },
+          entry: finalData,
+          locale: params.locale,
+        });
       }
 
       return {

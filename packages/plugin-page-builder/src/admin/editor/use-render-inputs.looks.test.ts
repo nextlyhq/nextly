@@ -19,7 +19,12 @@
  *
  * @module admin/editor/use-render-inputs.looks.test
  */
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import {
+  clearBlocks,
+  createBlockRegistry,
+  registerBlocks,
+  type BlockRegistryReader,
+} from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -88,11 +93,15 @@ const HOST_DEFAULTS: SiteStyleData = {
  * The client config the plugin publishes, once init has registered every
  * block and refreshed the code tier, as the admin hands it to the editor.
  */
-function publishedClientConfig(): Record<string, unknown> {
+function publishedClientConfig(
+  site: BlockRegistryReader
+): Record<string, unknown> {
   return JSON.parse(
     JSON.stringify({
       siteStyle: {
-        classes: resolveSiteStyle(withRegisteredLooks(HOST_DEFAULTS)).classes,
+        classes: resolveSiteStyle(
+          withRegisteredLooks(HOST_DEFAULTS, site.all())
+        ).classes,
       },
     })
   ) as Record<string, unknown>;
@@ -108,16 +117,21 @@ afterEach(() => {
 
 describe("the looks the canvas draws with", () => {
   it("are the published page's looks, whole and in order, other plugins' among them", async () => {
+    // The same blocks in the editor's registry and in the site's.
     registerBlocks(coreBlocks, { source: "page-builder" });
     registerBlocks([acmeHero], { source: "acme" });
+    const site = createBlockRegistry();
+    site.register(coreBlocks, { source: "page-builder" });
+    site.register([acmeHero], { source: "acme" });
     const nothingStored: SiteStyleReader = { findSingle: async () => null };
     const published = await loadSiteStyle({
       nextly: nothingStored,
       defaults: HOST_DEFAULTS,
+      blocks: site,
     });
 
     const { result } = renderHook(() =>
-      useSiteStyleInputs(publishedClientConfig())
+      useSiteStyleInputs(publishedClientConfig(site))
     );
     const canvas = result.current.canvasSiteStyle;
 
@@ -135,6 +149,8 @@ describe("the looks the canvas draws with", () => {
 
   it("are the published page's looks where the site stored its own edit of one", async () => {
     registerBlocks(coreBlocks, { source: "page-builder" });
+    const site = createBlockRegistry();
+    site.register(coreBlocks, { source: "page-builder" });
     stored = {
       classes: [
         {
@@ -149,10 +165,11 @@ describe("the looks the canvas draws with", () => {
     const published = await loadSiteStyle({
       nextly: { findSingle: async () => stored },
       defaults: HOST_DEFAULTS,
+      blocks: site,
     });
 
     const { result } = renderHook(() =>
-      useSiteStyleInputs(publishedClientConfig())
+      useSiteStyleInputs(publishedClientConfig(site))
     );
 
     expect(looksOf(result.current.canvasSiteStyle)).toEqual(looksOf(published));

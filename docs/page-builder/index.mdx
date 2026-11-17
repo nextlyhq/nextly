@@ -105,8 +105,8 @@ builder opens.
 
 The Page Builder has its own item in the admin's rail, right after **Forms** (after
 **Media** on a site without the form builder). Its panel lists the libraries pages are
-built from, each with how many you can see: **Patterns**, **Components**, **Layouts** and
-**Templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
+built from, each with how many you can see: **Saved sections**, **Components**, **Header & footer** and
+**Collection templates**. Under **Checks**, **Bindings to fix** shows a badge while any binding
 needs fixing.
 
 Clicking the item opens the **Page Builder** overview
@@ -147,8 +147,6 @@ anything it is drawn from, refreshes it.
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
 import type {
@@ -185,7 +183,6 @@ const route = createPublicBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   styleContext: {
     breakpoints: {
       viewport: [
@@ -215,6 +212,87 @@ export default route.ContentPage;
   least a `base` breakpoint.
 </Callout>
 
+The route draws the blocks your site registered, the core set and every block a plugin adds,
+custom ones included, with nothing passed: it reads them from the page builder of the site the
+process serves. A visitor reaching a page before anyone has opened the admin sees the same
+blocks. To draw a page with a set of your own, pass it as `blocks`
+(`createBlockResolver([...coreBlocks, myBlock])` from `@nextlyhq/blocks-react`); a resolver
+passed there is always the one used.
+
+### Images sized to where they appear
+
+<Callout type="info">
+  The `imageCopies` route option and `pageBuilderImageCopies()` are
+  **experimental**: their names and shape may change before they are marked
+  stable.
+</Callout>
+
+Add `media.copiesOf` to the route's reader and `imageCopies` to the route above, and a
+visitor downloads each image at about the size it is drawn, not at its upload size:
+
+```tsx
+// src/app/(frontend)/[...slug]/page.tsx
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
+import { pageBuilderImageCopies } from "@nextlyhq/plugin-page-builder";
+import { getNextly } from "nextly";
+import type { NextlyContentReader } from "nextly/runtime";
+
+import nextlyConfig from "../../../../nextly.config";
+
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+const instance = () => getNextly({ config: nextlyConfig });
+
+// The reader above, whose media now also answers for an image's copies.
+const reader: NextlyContentReader & {
+  media: Pick<NextlyInstance["media"], "findByID" | "copiesOf">;
+} = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+    copiesOf: async args => (await instance()).media.copiesOf(args),
+  },
+};
+
+const route = createPublicBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  // Your route's other options stay as they are, its `styleContext` among them.
+  imageCopies: pageBuilderImageCopies(reader),
+});
+```
+
+The copies are the resized versions your site's media already keeps, from 96 to 1920
+pixels wide and never wider than the upload. With the option set:
+
+- **An Image block from the media library offers its copies with `srcset` and `sizes`.** How wide it is drawn on
+  each device comes from your breakpoints: the whole width at the top of the page,
+  shared out across a row of Columns, and narrowed by a width or maximum width the block
+  sets for itself on every device. No copy more than twice the widest of those is sent.
+- **The page's first block loads first.** The images in the first top-level block load at
+  once and with high priority. Every other image keeps its lazy loading.
+- **The first section's background image is sized and found early.** Where the first
+  top-level block sets a background image once, for every device and in its resting
+  state, at a size the box sets (`cover`, `contain` or a length), each device draws a
+  copy about twice its width. The page's `<head>` preloads
+  each copy for the viewports it is drawn at, so the browser starts on it before the
+  stylesheet arrives.
+- **Each image's copies are looked up once,** then kept until the image or its copies
+  change.
+
+The original is drawn as it always was when:
+
+- the route has no `imageCopies`;
+- the image is given by its address rather than picked from the media library, so its
+  width and height are not known; or your storage keeps no resized copies;
+- the upload is narrower than the smallest copy, or the lookup fails;
+- for the background, its address is not the media route's (`/api/media/<id>/raw`), so
+  no media item is named by it; it is drawn at the image's own size (no size, or
+  `auto`), which a narrower copy would shrink; or it changes by device or on hover, it
+  is layered with a gradient, or the block has custom CSS.
+
 ### One process, several sites
 
 A page reads everything through the `nextly` it is given: its entry, the lists and Singles it
@@ -222,6 +300,19 @@ shows, and the site settings, the site's name, address, logo and the time zone i
 filters use. A process serving several sites, each through an instance of its own, gives each
 route its own `nextly`, and each page shows its own site. Only a route given no `nextly` reads the
 process's registered instance.
+
+Bind each of those routes to its site's blocks too, with `blocks: blocksOf(builder)` from
+`@nextlyhq/plugin-page-builder`, where `builder` is that site's `pageBuilder()`. A route given
+no `blocks` reads the blocks of the process's registered instance. The same goes for
+`loadSiteStyle`, which takes the same `blocks`. One limit remains: a plugin that adds blocks in
+code from its `init` (`blockRegistry(ctx).register`) reaches the page builder whose site started
+last, because a process keeps one set of plugin services. Blocks a plugin declares under
+`contributes.declarations` reach each site's own page builder. And while two sites run at once,
+a save is judged by the field rules of the site that started last, for the same reason: a
+process keeps one set of field types. In a production build each route holds its own copy of
+the plugin, which never starts, so `blocksOf(builder)` and `namedQueriesOf(builder)` read the
+started site's through the instance there; on a process running two sites at once, that is the
+site that started last.
 
 Give each of those routes its own `cacheScope` too, such as the site's id. Every public read a
 route makes, its site settings among them, is cached under it, and two routes over different
@@ -338,8 +429,6 @@ published page would never show them. Styles a page already held there still sav
 
 ```tsx
 // src/app/(frontend)/[...slug]/page.tsx, serving the breakpoints the editor saved
-import { createBlockResolver } from "@nextlyhq/blocks-react";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
@@ -374,7 +463,6 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["pages"],
   field: "content",
   nextly: reader,
-  blocks: createBlockResolver(coreBlocks),
   siteStyles: {
     read: () => loadSiteStyle({ nextly: reader }),
     // Named so that saving the site style refreshes cached pages.
@@ -607,7 +695,7 @@ deleted has no address left, so none of its entries is served, own design or not
 #### Collections made in the Schema Builder
 
 A collection made in the Schema Builder has no code to declare its address in, so
-its template stores it. Open **Templates** in the Page Builder's panel, open the
+its template stores it. Open **Collection templates** in the Page Builder's panel, open the
 collection's template and set its **Address**; once the template is published its
 entries are served there, with no restart. The same rules apply as to an address
 declared in code, and an address declared in code wins over a stored one. When you
@@ -692,7 +780,7 @@ One list on a page can be split into pages, so the page's address names one list
 The save is refused, naming the reason, for a second list split into pages on the same
 page, a list split into pages inside another list (it repeats once per outer entry, with no
 address of its own), a list of related entries (they have no count of pages), and a list in
-a component or a Layout region (each shows on many pages). A list on a Single's page shows
+a component or a header & footer set region (each shows on many pages). A list on a Single's page shows
 its first page only, since a Single's route serves no later pages.
 
 The loop reads through the route's **public reader**, which every blocks route binds to each

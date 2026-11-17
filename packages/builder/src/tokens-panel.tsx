@@ -37,24 +37,12 @@ import {
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Input,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
+import { Button, Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import {
   Braces,
   Bold,
   Hash,
-  Plus,
   Ruler,
-  Search,
   SquareRoundCorner,
   Timer,
   Type,
@@ -62,20 +50,29 @@ import {
 import * as React from "react";
 import { createPortal } from "react-dom";
 
+import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import {
+  GroupToggle,
+  OwnSearch,
+  ViewBody,
+  markOf,
+  useListedGroups,
+  useViewSearch,
+} from "./design-group-toggle";
 import { isHTMLElement } from "./dom-kind";
 import { ShowMore, withOpenRow } from "./panel-actions";
-import { useCanvasTokenModeAt } from "./prefers-dark";
 import { colourHexOf, colourPairOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
   addVariable,
   labelNewVariable,
   lengthFamilyOf,
-  variableGroups,
+  searchVariableGroups,
   type NewVariable,
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
+import { ADDS, AddButton, EmptyGroup } from "./variable-adds";
 import { VariableEditor } from "./variable-editor";
 import { ColourPair, swatchStyle } from "./variable-swatch";
 import {
@@ -181,6 +178,36 @@ export interface TokensPanelProps {
    * @experimental Settles with the Variables tab's usage.
    */
   classes?: readonly NamedClass[];
+  /**
+   * The variable groups this view lists, in this order: one Design tab's.
+   * Absent: every group.
+   */
+  groups?: readonly VariableGroup[];
+  /**
+   * A search the host keeps across several views, as the Design panel keeps
+   * one across its tabs. Given, this view lists what it matches and draws no
+   * search box of its own.
+   */
+  search?: string;
+  /**
+   * The way to change the host's search: emptied when a variable is added,
+   * so its row and editor are drawn.
+   */
+  onSearch?: (query: string) => void;
+  /** The host's search field, where focus goes once a variable is removed. */
+  searchRef?: React.RefObject<HTMLInputElement | null>;
+  /** Which groups are folded, and the way to fold one. Absent: none fold. */
+  folds?: GroupFolds;
+}
+
+/**
+ * Which of the Design panel's groups the author folded, by group id, and
+ * the way to fold or open one. The host keeps it, so a group stays folded
+ * for that author across reloads.
+ */
+export interface GroupFolds {
+  readonly folded: ReadonlySet<string>;
+  readonly onFold: (group: string, folded: boolean) => void;
 }
 
 /** The Design panel's header controls, and the preview mode they choose. */
@@ -302,21 +329,23 @@ function VariablesView({
   placed: boolean;
 }): React.JSX.Element {
   const { mode } = header;
-  const [query, setQuery] = React.useState("");
+  const { query, needle, searching, setQuery, clear, own } = useViewSearch(
+    hosted.search,
+    hosted.onSearch
+  );
   const { root, openKey, toggle, add, forget, commitFrom } = useOpenVariable({
     tokens,
     onChange,
     currentTokens,
-    onAdded: () => setQuery(""),
+    onAdded: clear,
     onSettle,
   });
-  const search = React.useRef<HTMLInputElement>(null);
+  const ownSearch = React.useRef<HTMLInputElement>(null);
+  // Where focus goes once a variable is removed: the host's search where it
+  // keeps one, else the view's own.
+  const search = hosted.searchRef ?? ownSearch;
 
-  const groups = React.useMemo(
-    () => (tokens === undefined ? [] : variableGroups(tokens, mode)),
-    [tokens, mode]
-  );
-  const needle = query.trim().toLowerCase();
+  const groups = useListedGroups(tokens, mode, hosted.groups);
   const shown = searched(groups, needle);
   const usage = useUsageOfRows(hosted, groups, issue);
 
@@ -330,48 +359,101 @@ function VariablesView({
     <div
       className="nx-vars"
       ref={root}
-      data-read-only={readOnly ? "" : undefined}
+      data-read-only={markOf(readOnly)}
       onInput={onActivity}
     >
-      {placed ? (
-        <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
-      ) : null}
-      <div className="nx-vars__search">
-        <Search aria-hidden="true" size={16} />
-        <Input
-          ref={search}
-          type="search"
-          aria-label="Search variables"
-          placeholder="Search variables"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-        />
-      </div>
-      <div className="nx-vars__body">
-        <PanelNotes readOnly={readOnly} issue={issue} notice={hosted.notice} />
-        {placed ? header.overlays : null}
+      <PlacedControls placed={placed} slot={headerActions} header={header} />
+      <OwnSearch ref={ownSearch} shown={own} query={query} onQuery={setQuery} />
+      <ViewBody
+        adds={
+          <HiddenGroupAdds
+            groups={groups}
+            searching={searching}
+            readOnly={readOnly}
+            folds={hosted.folds}
+            onAdd={add}
+          />
+        }
+        notes={
+          <PanelNotes
+            readOnly={readOnly}
+            issue={issue}
+            notice={hosted.notice}
+          />
+        }
+        overlays={placedOverlays(placed, header)}
+      >
         <VariableGroups
           shown={shown}
-          searching={needle !== ""}
+          searching={searching}
+          folds={hosted.folds}
           onAdd={add}
-          rows={{
+          rows={rowsHostOf({
             tokens,
             mode,
             readOnly,
             openKey,
-            suppliedOf: identity => suppliedFor(supplied, identity),
+            supplied,
             toggle,
             commitFrom,
             usage,
-            onRemoved: key => {
-              forget(key);
-              search.current?.focus();
-            },
-          }}
+            forget,
+            search,
+          })}
         />
-      </div>
+      </ViewBody>
     </div>
   );
+}
+
+/** What an import or export reported, drawn by the view placed to draw it. */
+function placedOverlays(
+  placed: boolean,
+  header: VariablesHeader
+): React.JSX.Element | undefined {
+  return placed ? header.overlays : undefined;
+}
+
+/** The header's controls, drawn by the view that is placed to draw them. */
+function PlacedControls({
+  placed,
+  slot,
+  header,
+}: {
+  placed: boolean;
+  slot: HTMLElement | null | undefined;
+  header: VariablesHeader;
+}): React.JSX.Element | null {
+  return placed ? (
+    <HeaderControls slot={slot}>{header.controls}</HeaderControls>
+  ) : null;
+}
+
+/**
+ * What the view's rows are drawn from: the view's state, with a variable
+ * removed putting focus back on the search, the place a removed row's
+ * focus has to go.
+ */
+function rowsHostOf({
+  supplied,
+  forget,
+  search,
+  ...rows
+}: Omit<RowsHost, "suppliedOf" | "onRemoved"> & {
+  supplied: SiteTokenSet | undefined;
+  forget: (key: string) => void;
+  search: React.RefObject<HTMLInputElement | null>;
+}): RowsHost {
+  return {
+    ...rows,
+    suppliedOf: identity => suppliedFor(supplied, identity),
+    onRemoved: key => {
+      forget(key);
+      // After the removed row's editor has closed: closing hands focus back
+      // to its trigger, which went with the row, and would leave it nowhere.
+      window.setTimeout(() => search.current?.focus(), 0);
+    },
+  };
 }
 
 /** What every row of the view is drawn from, and what its editor reports to. */
@@ -394,6 +476,7 @@ interface RowsHost {
 function VariableGroups({
   shown,
   searching,
+  folds,
   onAdd,
   rows,
 }: {
@@ -403,6 +486,7 @@ function VariableGroups({
     readonly entries: readonly VariableEntry[];
   }[];
   searching: boolean;
+  folds: GroupFolds | undefined;
   onAdd: (what: NewVariable) => void;
   rows: RowsHost;
 }): React.JSX.Element {
@@ -418,6 +502,7 @@ function VariableGroups({
             heading={group.heading}
             entries={group.entries}
             searching={searching}
+            folds={folds}
             readOnly={rows.readOnly}
             openKey={rows.openKey}
             onAdd={onAdd}
@@ -758,25 +843,73 @@ function namedAfterLabel(
   return { tokens: named, key: tokenIdentity(renamed) };
 }
 
-/** The groups narrowed to a search; Other only when it has rows. */
+/**
+ * The adds of the groups hidden while they hold nothing, as a worded line at
+ * the end of the view: hidden, their own "+" would go with them, and the
+ * first variable of such a group could not be made.
+ */
+function HiddenGroupAdds({
+  groups,
+  searching,
+  readOnly,
+  folds,
+  onAdd,
+}: {
+  groups: readonly { group: VariableGroup; entries: readonly unknown[] }[];
+  searching: boolean;
+  readOnly: boolean;
+  folds: GroupFolds | undefined;
+  onAdd: (what: NewVariable) => void;
+}): React.JSX.Element | null {
+  const hidden = groups.filter(
+    group => SHOWN_WHEN_FILLED.has(group.group) && group.entries.length === 0
+  );
+  if (readOnly || searching || hidden.length === 0) return null;
+  return (
+    <p className="nx-vars__hidden-adds">
+      {hidden.map(group => (
+        <AddButton
+          key={group.group}
+          adds={ADDS[group.group]}
+          onAdd={what => {
+            openFold(folds, group.group);
+            onAdd(what);
+          }}
+          worded
+        />
+      ))}
+    </p>
+  );
+}
+
+/**
+ * Opens a group the author folded, for a variable about to be added to it,
+ * so its row and editor are drawn: the stored fold, which a search only
+ * sets aside and would bring back once the add clears it.
+ */
+function openFold(folds: GroupFolds | undefined, group: VariableGroup): void {
+  if (folds?.folded.has(group) === true) folds.onFold(group, false);
+}
+
+/** The groups that list only what they hold, hidden while they hold none. */
+const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
+  "fonts",
+  "other",
+]);
+
+/**
+ * The groups narrowed to a search, through the one search rule; with no
+ * search, "Fonts and weights" and "Other values" only when they have rows.
+ */
 function searched<
   G extends { group: VariableGroup; entries: readonly VariableEntry[] },
 >(groups: readonly G[], needle: string): G[] {
   if (needle === "") {
     return groups.filter(
-      group => group.group !== "other" || group.entries.length > 0
+      group => !SHOWN_WHEN_FILLED.has(group.group) || group.entries.length > 0
     );
   }
-  return groups
-    .map(group => ({
-      ...group,
-      // The name shown, only: the code name is hidden, so a match on it
-      // would list a row with nothing in it matching what was typed.
-      entries: group.entries.filter(entry =>
-        entry.label.toLowerCase().includes(needle)
-      ),
-    }))
-    .filter(group => group.entries.length > 0);
+  return searchVariableGroups(groups, needle);
 }
 
 /**
@@ -822,52 +955,13 @@ function PreviewSwitch({
   );
 }
 
-/** What each group's "+" offers: one variable, or a short menu of kinds. */
-const ADDS: Readonly<
-  Record<
-    VariableGroup,
-    { label: string; empty: string; options: readonly [NewVariable, string][] }
-  >
-> = {
-  colours: {
-    label: "Add colour",
-    empty: "No colours yet.",
-    options: [["colour", "Colour"]],
-  },
-  type: {
-    label: "Add type size",
-    empty: "No type sizes yet.",
-    options: [["type size", "Type size"]],
-  },
-  spacing: {
-    label: "Add spacing, radius or shadow",
-    empty: "No spacing, radii or shadows yet.",
-    options: [
-      ["spacing", "Spacing"],
-      ["radius", "Radius"],
-      ["shadow", "Shadow"],
-    ],
-  },
-  other: {
-    label: "Add another variable",
-    empty: "",
-    options: [
-      ["dimension", "Size"],
-      ["fontFamily", "Font"],
-      ["fontWeight", "Font weight"],
-      ["number", "Number"],
-      ["duration", "Duration"],
-      ["custom", "Custom value"],
-    ],
-  },
-};
-
 /** One group: its heading, its "+", and its rows, a page at a time. */
 function Group({
   group,
   heading,
   entries,
   searching,
+  folds,
   readOnly,
   openKey,
   onAdd,
@@ -877,6 +971,8 @@ function Group({
   heading: string;
   entries: readonly VariableEntry[];
   searching: boolean;
+  /** Present: the heading folds the group, and shows how many it holds. */
+  folds: GroupFolds | undefined;
   readOnly: boolean;
   /** The row whose editor is open, which is drawn even past the page. */
   openKey: string | null;
@@ -884,22 +980,27 @@ function Group({
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
-  const [pages, setPages] = React.useState(1);
-  // A variable is added at the end of its group, so in a group longer than a
-  // page its row would not mount and the editor opened for it would have
-  // nothing to open beside.
-  const shown = withOpenRow(
-    entries,
-    pages * PAGE_SIZE,
-    entry => entry.row.key === openKey
-  );
-  const hidden = entries.length - shown.length;
-  const adds = ADDS[group];
+  // A search opens every group it matches in and folds none; the folds come
+  // back as they were once it is cleared.
+  const folded = folds !== undefined && !searching && folds.folded.has(group);
   return (
-    <section className="nx-vars__group" aria-labelledby={id}>
+    <section
+      className="nx-vars__group"
+      aria-labelledby={id}
+      // Which group this is, for a host bringing one into view.
+      data-group={group}
+      data-folded={folded ? "" : undefined}
+    >
       <div className="nx-vars__group-head">
         <h3 className="nx-vars__group-name" id={id}>
-          {heading}
+          <GroupHeading
+            group={group}
+            heading={heading}
+            count={entries.length}
+            folds={folds}
+            folded={folded}
+            searching={searching}
+          />
         </h3>
         {/* The two small swatches on a colour row are its light and dark
             values; this names those columns for sight. Each row's accessible
@@ -911,13 +1012,93 @@ function Group({
         ) : null}
         {/* An empty type scale offers its add in the line below instead. */}
         {readOnly || (group === "type" && entries.length === 0) ? null : (
-          <AddButton adds={adds} onAdd={onAdd} />
+          <AddButton
+            adds={ADDS[group]}
+            // A folded group opens for what is added to it, so the new row
+            // and its editor are drawn.
+            onAdd={what => {
+              openFold(folds, group);
+              onAdd(what);
+            }}
+          />
         )}
       </div>
+      {folded ? null : (
+        <GroupRows
+          group={group}
+          entries={entries}
+          searching={searching}
+          readOnly={readOnly}
+          openKey={openKey}
+          onAdd={onAdd}
+        >
+          {children}
+        </GroupRows>
+      )}
+    </section>
+  );
+}
+
+/** A group's name, or, where the group folds, the button that folds it. */
+function GroupHeading({
+  group,
+  heading,
+  count,
+  folds,
+  folded,
+  searching,
+}: {
+  group: VariableGroup;
+  heading: string;
+  count: number;
+  folds: GroupFolds | undefined;
+  folded: boolean;
+  searching: boolean;
+}): React.JSX.Element {
+  if (folds === undefined) return <>{heading}</>;
+  return (
+    <GroupToggle
+      heading={heading}
+      count={count}
+      open={!folded}
+      onToggle={searching ? undefined : () => folds.onFold(group, !folded)}
+    />
+  );
+}
+
+/** An open group's rows, a page at a time, or its one empty line. */
+function GroupRows({
+  group,
+  entries,
+  searching,
+  readOnly,
+  openKey,
+  onAdd,
+  children,
+}: {
+  group: VariableGroup;
+  entries: readonly VariableEntry[];
+  searching: boolean;
+  readOnly: boolean;
+  openKey: string | null;
+  onAdd: (what: NewVariable) => void;
+  children: (entry: VariableEntry) => React.ReactNode;
+}): React.JSX.Element {
+  const [pages, setPages] = React.useState(1);
+  // A variable is added at the end of its group, so in a group longer than a
+  // page its row would not mount and the editor opened for it would have
+  // nothing to open beside.
+  const shown = withOpenRow(
+    entries,
+    pages * PAGE_SIZE,
+    entry => entry.row.key === openKey
+  );
+  return (
+    <>
       {entries.length === 0 && !searching ? (
         <EmptyGroup
           group={group}
-          text={adds.empty}
+          text={ADDS[group].empty}
           readOnly={readOnly}
           onAdd={onAdd}
         />
@@ -925,87 +1106,11 @@ function Group({
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}
       <ShowMore
-        hidden={hidden}
+        hidden={entries.length - shown.length}
         pageSize={PAGE_SIZE}
         onMore={() => setPages(count => count + 1)}
       />
-    </section>
-  );
-}
-
-/** An empty group's one line; an empty type scale offers its add here. */
-function EmptyGroup({
-  group,
-  text,
-  readOnly,
-  onAdd,
-}: {
-  group: VariableGroup;
-  text: string;
-  readOnly: boolean;
-  onAdd: (what: NewVariable) => void;
-}): React.JSX.Element {
-  return (
-    <p className="nx-vars__empty">
-      {text}
-      {group === "type" && !readOnly ? (
-        <button
-          type="button"
-          className="nx-vars__link"
-          onClick={() => onAdd("type size")}
-        >
-          Add type size
-        </button>
-      ) : null}
-    </p>
-  );
-}
-
-/** A group's "+": a button for one kind, a menu for several. */
-function AddButton({
-  adds,
-  onAdd,
-}: {
-  adds: (typeof ADDS)[VariableGroup];
-  onAdd: (what: NewVariable) => void;
-}): React.JSX.Element {
-  const icon = <Plus aria-hidden="true" size={14} />;
-  const [only] = adds.options;
-  if (adds.options.length === 1 && only !== undefined) {
-    return (
-      <button
-        type="button"
-        className="nx-vars__icon-button nx-vars__add"
-        aria-label={adds.label}
-        title={adds.label}
-        onClick={() => onAdd(only[0])}
-      >
-        {icon}
-      </button>
-    );
-  }
-  return (
-    // Not modal: a modal menu marks the editor around it aria-hidden while
-    // its controls stay focusable (axe: aria-hidden-focus).
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="nx-vars__icon-button nx-vars__add"
-          aria-label={adds.label}
-          title={adds.label}
-        >
-          {icon}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="nx-vars__menu">
-        {adds.options.map(([what, label]) => (
-          <DropdownMenuItem key={what} onSelect={() => onAdd(what)}>
-            {label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    </>
   );
 }
 
@@ -1044,7 +1149,7 @@ function VariableRow({
   return (
     <li>
       <Popover open={open} onOpenChange={onOpenChange} modal>
-        <CountTip reach={reach}>
+        <CountTip reach={reach} quiet={open}>
           <PopoverTrigger asChild>
             <button
               type="button"
@@ -1059,6 +1164,7 @@ function VariableRow({
               // Drawn as chosen while its editor is open. Its own mark: the
               // row's tooltip sets `data-state` too, over the popover's.
               data-open={open ? "" : undefined}
+              onKeyDown={renameOnF2(readOnly, onOpenChange)}
             >
               <RowLead
                 entry={entry}
@@ -1104,6 +1210,23 @@ function VariableRow({
       </Popover>
     </li>
   );
+}
+
+/**
+ * F2 on a row opens its editor to rename it, as F2 renames in a file list.
+ * The editor's focus scope selects the name on opening, so typing replaces
+ * it. Nothing on a read-only row, which has no name to change.
+ */
+function renameOnF2(
+  readOnly: boolean,
+  onOpenChange: (open: boolean) => void
+): ((event: React.KeyboardEvent) => void) | undefined {
+  if (readOnly) return undefined;
+  return event => {
+    if (event.key !== "F2") return;
+    event.preventDefault();
+    onOpenChange(true);
+  };
 }
 
 /** The row's count in words, after its name and values, once it is read. */

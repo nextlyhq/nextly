@@ -30,7 +30,10 @@ import {
 import {
   bindingsFromWire,
   listCollections,
+  listCollectionsWhere,
+  pageBindingRun,
   READ_KINDS,
+  registeredBlocks,
   type NamedQueryLookup,
   type PageBindings,
   type PageReadReport,
@@ -47,6 +50,7 @@ import {
   CANVAS_BINDINGS_ROUTE_PATH,
   conditionsToWire,
   demandToWire,
+  isSourceSlug,
   sourcesChangedAskOf,
   type CanvasBindingsRequest,
   type CanvasBindingsResponse,
@@ -288,11 +292,19 @@ function sourcesCheckAskOf(
   drawn: readonly BlockDocument[],
   identity: DocumentIdentity | null,
   namedQueries: NamedQueryLookup | undefined,
-  locale: string | undefined
+  locale: string | undefined,
+  bound: PageBindings | undefined
 ): CanvasSourcesChangedRequest | undefined {
-  if (request !== undefined) return sourcesChangedAskOf(request);
+  const drawnLists = boundListCollections(drawn, namedQueries, locale, bound);
+  if (request !== undefined) {
+    const asked = sourcesChangedAskOf(request);
+    const lists = [...new Set([...asked.lists, ...drawnLists])].sort();
+    return lists.length === asked.lists.length ? asked : { ...asked, lists };
+  }
   if (identity === null) return undefined;
-  const lists = [...listCollections(drawn, namedQueries)].sort();
+  const lists = [
+    ...new Set([...listCollections(drawn, namedQueries), ...drawnLists]),
+  ].sort();
   if (lists.length === 0) return undefined;
   return {
     source: requestSourceOf(identity),
@@ -303,20 +315,52 @@ function sourcesCheckAskOf(
 }
 
 /**
+ * The collections the page's lists draw once their bindings are filled by
+ * the answer the canvas drew with: a list whose collection is bound draws
+ * the one its binding names, not the fallback stored beside it. None until
+ * an answer is in.
+ */
+function boundListCollections(
+  drawn: readonly BlockDocument[],
+  namedQueries: NamedQueryLookup | undefined,
+  locale: string | undefined,
+  bound: PageBindings | undefined
+): readonly string[] {
+  if (bound === undefined) return [];
+  const run = pageBindingRun(bound, locale, registeredBlocks());
+  // A bound value that names no collection (free text in the bound field)
+  // draws nothing, and is not asked about.
+  return [...listCollectionsWhere(drawn, () => true, run, namedQueries)].filter(
+    isSourceSlug
+  );
+}
+
+/**
  * Keep what the canvas reads in step with saves made elsewhere, through the
  * editor's change check, for the sources {@link sourcesCheckAskOf} names.
  */
 function useWatchedSources(
-  request: CanvasBindingsRequest | undefined,
-  drawn: readonly BlockDocument[],
-  identity: DocumentIdentity | null,
-  namedQueries: NamedQueryLookup | undefined,
-  locale: string | undefined,
-  userId: string | null
+  watched: {
+    readonly request: CanvasBindingsRequest | undefined;
+    /** The ask as text, which the answer below was read for. */
+    readonly key: string;
+    readonly drawn: readonly BlockDocument[];
+    readonly identity: DocumentIdentity | null;
+    readonly namedQueries: NamedQueryLookup | undefined;
+    readonly locale: string | undefined;
+  },
+  userId: string | null,
+  answer: { readonly key: string; readonly bindings: PageBindings } | null
 ): void {
+  const { request, key, drawn, identity, namedQueries, locale } = watched;
+  // This ask's own answer only: another ask's could fill a bound list with
+  // a collection the page no longer draws.
+  const bound =
+    answer !== null && answer.key === key ? answer.bindings : undefined;
   const asked = useMemo(
-    () => sourcesCheckAskOf(request, drawn, identity, namedQueries, locale),
-    [request, drawn, identity, namedQueries, locale]
+    () =>
+      sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
+    [request, drawn, identity, namedQueries, locale, bound]
   );
   useCanvasSourceCheck(asked, userId);
 }
@@ -512,9 +556,6 @@ export function useCanvasBindings(
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);
-  // Saves made elsewhere to what this reads: asked once a minute at most
-  // while the builder is in sight, so a kept answer never outlives its data.
-  useWatchedSources(request, drawn, identity, namedQueries, locale, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;
@@ -525,6 +566,15 @@ export function useCanvasBindings(
   // The ask that failed last, so its failure is told rather than taken for
   // an answer on its way.
   const [failed, setFailed] = useState<string | null>(null);
+  // Saves made elsewhere to what this reads: asked once a minute at most
+  // while the builder is in sight, so a kept answer never outlives its data.
+  // With this ask's answer, so a list whose collection is bound is watched
+  // under the collection it draws.
+  useWatchedSources(
+    { request, key, drawn, identity, namedQueries, locale },
+    userId,
+    answer
+  );
   // Bumped when the sources the canvas reads have changed, so the same ask is
   // made again: a source can change while what the page asks stays the same
   // (a saved title, an updated Single).

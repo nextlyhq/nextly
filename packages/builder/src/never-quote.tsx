@@ -1,16 +1,18 @@
 "use client";
 
 /**
- * "Never quote this" in the Content tab: one switch that marks a Section or
- * a Box so its root element carries `data-nosnippet`, which keeps its text
- * out of search snippets, Google's AI Overviews and AI Mode among them,
+ * "Keep out of search previews" in the Advanced tab: one switch that marks a
+ * container so its root element carries `data-nosnippet`, which keeps its
+ * text out of search snippets, Google's AI Overviews and AI Mode among them,
  * while visitors still see it. A Page Builder setting about the block's own
  * HTML, so it works with or without an SEO plugin.
  *
- * Google reads the mark on `span`, `div` and `section` elements only
+ * Offered on every container: a block that holds other blocks and renders a
+ * root element of the tag its author picks. Google reads the mark on `span`,
+ * `div` and `section` elements only
  * (https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag),
- * so a block whose tag is another one says so rather than being wrapped in
- * an element the page did not ask for.
+ * so a container whose tag is another one says so rather than being wrapped
+ * in an element the page did not ask for.
  *
  * @module never-quote
  */
@@ -23,16 +25,24 @@ import * as React from "react";
 import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 
-/** The blocks the mark is offered on, and whether each may render a link. */
+/**
+ * The containers the mark is offered on, and whether each may render a link
+ * (an `<a>` root while linked).
+ */
 const MARKABLE: Readonly<Record<string, { linkable: boolean }>> = {
   "core/section": { linkable: false },
   "core/box": { linkable: true },
+  "core/card": { linkable: true },
+  "core/columns": { linkable: false },
+  "core/column": { linkable: false },
+  "core/accordion": { linkable: false },
+  "core/gallery": { linkable: false },
 };
 
 /** The tags Google reads `data-nosnippet` on that a container may render. */
 const READ_ON: ReadonlySet<string> = new Set(["section", "div"]);
 
-/** Whether the mark is offered on `node`: a Section or a Box. */
+/** Whether the mark is offered on `node`: a container. */
 function offersNeverQuote(node: Pick<BlockNode, "type">): boolean {
   return Object.hasOwn(MARKABLE, node.type);
 }
@@ -88,7 +98,7 @@ export function NeverQuote({
     >
       <div className="nx-never-quote__head">
         <h3 id={titleId} className="nx-list-query__title">
-          Never quote this
+          Keep out of search previews
         </h3>
         <Switch
           aria-labelledby={titleId}
@@ -99,7 +109,7 @@ export function NeverQuote({
         />
       </div>
       <p className="nx-inspector__note" id={`${id}-help`}>
-        Google won&apos;t show this section&apos;s text under the page&apos;s
+        Google won&apos;t show this block&apos;s text under the page&apos;s
         link, or use it as a direct source in AI Overviews and AI Mode. Visitors
         still see it.
       </p>

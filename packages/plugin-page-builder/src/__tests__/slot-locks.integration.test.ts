@@ -14,13 +14,10 @@ import {
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   expandSlotDefaults,
-  hasBlock,
   makeNode,
-  registerBlocks,
-  registryBlockSource,
-  registryNestingSource,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
+import { definePlugin } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -31,6 +28,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { blocks } from "../fields/blocksHelper";
+import { blockRegistry, blocksOf } from "../index";
 import { pageBuilder } from "../plugin";
 
 const base = {
@@ -50,13 +48,15 @@ const DRIFTING_DEFAULTS: Record<string, unknown> = {
 };
 
 /**
- * The blocks under test, registered once per process: the registry refuses a
- * name registered twice, and it outlives each booted instance.
+ * The blocks under test, registered into the site's registry as each site
+ * boots: the registry refuses a name registered twice in one boot.
  */
-function registerLockedBlocks(): void {
-  if (hasBlock("acme/sealed-card")) return;
-  registerBlocks(
-    [
+const lockedBlocks = definePlugin({
+  name: "acme",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init: ctx => {
+    blockRegistry(ctx).register([
       {
         ...base,
         name: "acme/headline",
@@ -108,10 +108,12 @@ function registerLockedBlocks(): void {
           },
         },
       },
-    ] as never,
-    { source: "acme" }
-  );
-}
+    ] as never);
+  },
+});
+
+/** The page builder of the site booted last, whose blocks are placed. */
+let builder: ReturnType<typeof pageBuilder>;
 
 /** A block as inserting it places it. */
 function placed(type: string): BlockNode {
@@ -119,7 +121,11 @@ function placed(type: string): BlockNode {
     type,
     1,
     {},
-    expandSlotDefaults(type, registryBlockSource(), registryNestingSource())
+    expandSlotDefaults(
+      type,
+      blocksOf(builder).blockSource(),
+      blocksOf(builder).nestingSource()
+    )
   );
 }
 
@@ -166,19 +172,15 @@ describe.each(getConfiguredTestDialects())(
       // The site defines the class a case applies, so a refusal there is the
       // lock's alone: a page save naming a class the site lacks is refused
       // for that reason too.
+      builder = pageBuilder({
+        siteStyle: {
+          classes: [{ id: "promo", slug: "promo", orderIndex: 0, styles: {} }],
+        },
+      });
       current = await createTestNextly({
         dialect,
-        plugins: [
-          pageBuilder({
-            siteStyle: {
-              classes: [
-                { id: "promo", slug: "promo", orderIndex: 0, styles: {} },
-              ],
-            },
-          }),
-        ],
+        plugins: [builder, lockedBlocks],
       });
-      registerLockedBlocks();
       return current;
     }
 
@@ -291,9 +293,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps what a language's own stored page holds, not another language's", async () => {
+      builder = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [builder, lockedBlocks],
         collections: [
           {
             slug: "articles",
@@ -306,7 +309,6 @@ describe.each(getConfiguredTestDialects())(
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
-      registerLockedBlocks();
       const t = current;
       // One card, edited in place as an editor edits it: a stored part is
       // matched through the block that holds it.
@@ -352,14 +354,14 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps what a Single's stored page holds", async () => {
+      builder = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [builder, lockedBlocks],
         singles: [
           { slug: "home", fields: [blocks({ name: "content" })] } as never,
         ],
       });
-      registerLockedBlocks();
       const t = current;
       const card = placed("acme/drifting-card");
       const save = (content: unknown) =>
@@ -386,9 +388,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps what a localized Single stores in the language saved, not another's", async () => {
+      builder = pageBuilder();
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [builder, lockedBlocks],
         singles: [
           {
             slug: "home",
@@ -398,7 +401,6 @@ describe.each(getConfiguredTestDialects())(
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
-      registerLockedBlocks();
       const t = current;
       const card = placed("acme/drifting-card");
       const withAlign = (align: string) => {

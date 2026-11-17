@@ -2,20 +2,15 @@
  * Blocks another plugin contributes, registered in the BROWSER's registry
  * when the editor mounts.
  *
- * The registry is the engine's real one, cleared between tests, and this
- * module is loaded afresh for each test, so what one test hands over never
- * reaches the next. Each property is asserted against the registry itself
+ * The registry is the engine's real one, the bundle's own, and this module
+ * and the engine are loaded afresh for each test, so what one test hands
+ * over never reaches the next. The engine is loaded with the module, as the
+ * bundle loads them together: a registry belongs to the engine module that
+ * made it. Each property is asserted against the registry itself
  * rather than against a call being made, because the editor reads the
  * registry and nothing else.
  */
-import {
-  clearBlocks,
-  getBlock,
-  getBlockSource,
-  getSupport,
-  registerBlocks,
-  type AnyBlockDefinition,
-} from "@nextlyhq/blocks-engine";
+import type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PLUGIN_SOURCE } from "./editor/stored-document";
@@ -23,15 +18,16 @@ import { PLUGIN_SOURCE } from "./editor/stored-document";
 type Module = typeof import("./contributed-blocks");
 
 let contributed: Module;
+let engine: typeof import("@nextlyhq/blocks-engine");
 
 beforeEach(async () => {
-  clearBlocks();
   vi.resetModules();
+  engine = await import("@nextlyhq/blocks-engine");
   contributed = await import("./contributed-blocks");
 });
 
 afterEach(() => {
-  clearBlocks();
+  engine.clearBlocks();
   vi.restoreAllMocks();
 });
 
@@ -62,9 +58,9 @@ describe("registering contributed blocks in the editor", () => {
 
     contributed.ensureEditorBlocksRegistered();
 
-    expect(getBlock("acme/hero")).toBeDefined();
-    expect(getBlockSource("acme/hero")).toBe(ENTRY);
-    expect(getBlock("core/text")).toBeDefined();
+    expect(engine.getBlock("acme/hero")).toBeDefined();
+    expect(engine.getBlockSource("acme/hero")).toBe(ENTRY);
+    expect(engine.getBlock("core/text")).toBeDefined();
   });
 
   it("is idempotent across remounts", () => {
@@ -80,7 +76,7 @@ describe("registering contributed blocks in the editor", () => {
     expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
     contributed.ensureEditorBlocksRegistered();
 
-    expect(getBlock("acme/hero")).toBe(hero);
+    expect(engine.getBlock("acme/hero")).toBe(hero);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -98,8 +94,8 @@ describe("registering contributed blocks in the editor", () => {
 
     contributed.ensureEditorBlocksRegistered();
 
-    expect(getSupport("tone")).toBeDefined();
-    expect(getBlock("acme/toned")).toBeDefined();
+    expect(engine.getSupport("tone")).toBeDefined();
+    expect(engine.getBlock("acme/toned")).toBeDefined();
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -112,10 +108,10 @@ describe("registering contributed blocks in the editor", () => {
 
     expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
 
-    expect(getBlock("core/text")).not.toBe(impostor);
-    expect(getBlockSource("core/text")).toBe(PLUGIN_SOURCE);
+    expect(engine.getBlock("core/text")).not.toBe(impostor);
+    expect(engine.getBlockSource("core/text")).toBe(PLUGIN_SOURCE);
     // The rest of the entry still arrives.
-    expect(getBlock("acme/hero")).toBeDefined();
+    expect(engine.getBlock("acme/hero")).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain('"core/text"');
   });
@@ -129,7 +125,7 @@ describe("registering contributed blocks in the editor", () => {
     expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
     contributed.ensureEditorBlocksRegistered();
 
-    expect(getBlock("core/text")).toBeDefined();
+    expect(engine.getBlock("core/text")).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain(ENTRY);
   });
@@ -146,7 +142,7 @@ describe("an entry replaced while the editor is open", () => {
     // A block another source put in the browser's registry, which a refresh
     // of this entry must not take away.
     const hosted = block("host/banner");
-    registerBlocks([hosted], { source: "host" });
+    engine.registerBlocks([hosted], { source: "host" });
 
     // The reloaded module: the same path, new objects, one block gone.
     const second = { ...block("acme/hero"), description: "The new hero." };
@@ -155,10 +151,10 @@ describe("an entry replaced while the editor is open", () => {
     });
     contributed.ensureEditorBlocksRegistered();
 
-    expect(getBlock("acme/hero")).toBe(second);
-    expect(getBlock("acme/old")).toBeUndefined();
-    expect(getBlock("host/banner")).toBe(hosted);
-    expect(getBlock("core/text")).toBeDefined();
+    expect(engine.getBlock("acme/hero")).toBe(second);
+    expect(engine.getBlock("acme/old")).toBeUndefined();
+    expect(engine.getBlock("host/banner")).toBe(hosted);
+    expect(engine.getBlock("core/text")).toBeDefined();
   });
 });
 
@@ -195,9 +191,9 @@ describe("an entry whose supports alone change on a reload", () => {
     const quiet = vi.spyOn(console, "warn").mockImplementation(() => {});
     contributed.ensureEditorBlocksRegistered();
 
-    expect(getSupport("tone")).toBe(extended);
-    expect(getBlock("acme/cool")).toBe(cool);
-    expect(getBlock("acme/warm")).toBe(warm);
+    expect(engine.getSupport("tone")).toBe(extended);
+    expect(engine.getBlock("acme/cool")).toBe(cool);
+    expect(engine.getBlock("acme/warm")).toBe(warm);
     expect(quiet).not.toHaveBeenCalled();
   });
 });
@@ -216,7 +212,7 @@ describe("an entry holding malformed elements", () => {
 
     expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
 
-    expect(getBlock("acme/hero")).toBeDefined();
+    expect(engine.getBlock("acme/hero")).toBeDefined();
     expect(warn).toHaveBeenCalled();
     expect(warn.mock.calls.every(call => String(call[0]).includes(ENTRY))).toBe(
       true
@@ -236,8 +232,8 @@ describe("an entry holding malformed elements", () => {
 
     expect(() => contributed.ensureEditorBlocksRegistered()).not.toThrow();
 
-    expect(getSupport("tone")).toBeDefined();
-    expect(getBlock("acme/toned")).toBeDefined();
+    expect(engine.getSupport("tone")).toBeDefined();
+    expect(engine.getBlock("acme/toned")).toBeDefined();
     expect(warn).toHaveBeenCalled();
     expect(warn.mock.calls.every(call => String(call[0]).includes(ENTRY))).toBe(
       true
@@ -295,7 +291,7 @@ describe("the entry screen's miniature", () => {
     const { entryBlockResolver } = await import("./entry-block-resolver");
 
     // The precondition: the registry has not been filled.
-    expect(getBlock("acme/hero")).toBeUndefined();
+    expect(engine.getBlock("acme/hero")).toBeUndefined();
     expect(entryBlockResolver().get("acme/hero")).toBe(hero);
   });
 });

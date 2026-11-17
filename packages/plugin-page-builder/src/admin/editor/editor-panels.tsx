@@ -11,10 +11,15 @@ import {
   CORE_CATEGORIES,
   CORE_PALETTE_ORDER,
 } from "@nextlyhq/blocks-react/blocks";
-import type { LeftPanel, SavedPattern } from "@nextlyhq/builder";
+import type {
+  LeftPanel,
+  PreferenceStore,
+  SavedPattern,
+} from "@nextlyhq/builder";
 import {
   type UseBuilderChecklistResult,
   ComponentsPanel,
+  EDITOR_WORDS,
   InsertPanel,
   LayersPanel,
   useBuilderChecklist,
@@ -43,8 +48,17 @@ import {
   useCanvasPreviewMode,
   type CanvasPreviewMode,
 } from "./canvas-preview-mode";
-import { DesignPanel } from "./design-panel";
-import { checklistStoreFor } from "./editor-preference-stores";
+import {
+  DesignGroup,
+  DesignPanel,
+  DesignReveal,
+  ReportStylesMatches,
+  type DesignView,
+} from "./design-panel";
+import {
+  checklistStoreFor,
+  designFoldsStoreFor,
+} from "./editor-preference-stores";
 import { useLookEditing, type LookEditingState } from "./look-editing";
 import {
   withoutSelf,
@@ -131,6 +145,8 @@ function InsertPanelWithLibrary({
   beginInsertDrag: React.ComponentProps<typeof InsertPanel>["beginInsertDrag"];
   /** The container to add inside, when its "+" asked for it. */
   inside?: string;
+  /** The block to add right after, when the "+" in the gap below it asked. */
+  after?: string;
   /** A canvas press still to answer, and where to say it was answered. */
   summoned: React.ComponentProps<typeof InsertPanel>["summoned"];
   onSummoned: React.ComponentProps<typeof InsertPanel>["onSummoned"];
@@ -271,14 +287,17 @@ type PanelRequests = {
   openPanelRequest:
     | { panel: LeftPanel; view?: string; count: number }
     | undefined;
-  requestPanel: (panel: LeftPanel, view?: string) => void;
+  requestPanel: RequestPanel;
   /**
-   * Open Add; given a container, add inside it (its empty-container "+"),
-   * which is never implied by selecting it.
+   * Open Add; given a place a "+" chose, add there whatever the block: inside
+   * a container (its empty-container "+"), or in the gap right after a block
+   * (the "+" between sections). Neither is what selecting the block implies.
    */
-  openInsertPanel: (inside?: string) => void;
+  openInsertPanel: (place?: InsertPlaceRequest) => void;
   /** The container the last "+" chose to add inside, if any. */
   insertInside: string | undefined;
+  /** The block the last gap's "+" chose to add right after, if any. */
+  insertAfter: string | undefined;
   /**
    * The count of canvas add presses Add has yet to answer, or `undefined`
    * when it has answered them all: each new one has the panel focus its
@@ -289,6 +308,27 @@ type PanelRequests = {
   /** Told by Add each press it has answered. */
   onAddSummoned: (count: number) => void;
 };
+
+/**
+ * Asks the shell for a panel, and for Design names one of its own tabs, so
+ * a request naming a tab Design does not have is refused when compiled
+ * rather than opening the first tab.
+ */
+interface RequestPanel {
+  (panel: LeftPanel): void;
+  (panel: "design", view?: DesignView): void;
+  (panel: Exclude<LeftPanel, "design">, view?: string): void;
+}
+
+/** A place a canvas "+" chose: inside a container, or right after a block. */
+type InsertPlaceRequest =
+  | { readonly inside: string }
+  | { readonly after: string };
+
+/** The block a place request is about, which it lasts while it is selected. */
+function requestedBlock(place: InsertPlaceRequest): string {
+  return "inside" in place ? place.inside : place.after;
+}
 
 /** Requests to open a panel from the canvas. */
 function usePanelRequests(selectedId: string | null): PanelRequests {
@@ -319,9 +359,9 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const [insideRequest, setInsideRequest] = useState<string | undefined>(
-    undefined
-  );
+  const [placeRequest, setPlaceRequest] = useState<
+    InsertPlaceRequest | undefined
+  >(undefined);
   /*
    * Canvas presses for Add, counted apart from the panel request: opening a
    * panel that is already open changes nothing the shell can show, so the
@@ -331,28 +371,36 @@ function usePanelRequests(selectedId: string | null): PanelRequests {
   const [addPresses, setAddPresses] = useState(0);
   const [answeredPress, setAnsweredPress] = useState(0);
   const openInsertPanel = useCallback(
-    (inside?: string): void => {
-      setInsideRequest(inside);
+    (place?: InsertPlaceRequest): void => {
+      setPlaceRequest(place);
       setAddPresses(count => count + 1);
       requestPanel("add");
     },
     [requestPanel]
   );
   /*
-   * A "+"'s choice lasts while its container stays selected. Selecting
-   * anything else, the block just added included, ends it, so selecting the
-   * container again later adds after it, as any selection does.
+   * A "+"'s choice lasts while its block stays selected. Selecting anything
+   * else, the block just added included, ends it, so selecting the block
+   * again later places as any selection does.
    */
-  if (insideRequest !== undefined && selectedId !== insideRequest) {
-    setInsideRequest(undefined);
+  const held =
+    placeRequest !== undefined && requestedBlock(placeRequest) === selectedId
+      ? placeRequest
+      : undefined;
+  if (placeRequest !== undefined && held === undefined) {
+    setPlaceRequest(undefined);
   }
-  const insertInside = insideRequest === selectedId ? insideRequest : undefined;
+  const insertInside =
+    held !== undefined && "inside" in held ? held.inside : undefined;
+  const insertAfter =
+    held !== undefined && "after" in held ? held.after : undefined;
 
   return {
     openPanelRequest,
     requestPanel,
     openInsertPanel,
     insertInside,
+    insertAfter,
     addSummon: addPresses > answeredPress ? addPresses : undefined,
     onAddSummoned: setAnsweredPress,
   };
@@ -405,6 +453,11 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     () => checklistStoreFor(mount.userId),
     [mount.userId]
   );
+  // The author's folded Design groups, kept under their own key.
+  const designFolds = useMemo(
+    () => designFoldsStoreFor(mount.userId),
+    [mount.userId]
+  );
   const identity = useDocumentIdentity();
   const checklist = useBuilderChecklist({
     document: editor.document,
@@ -437,6 +490,7 @@ export function useEditorPanels<TFieldValues extends FieldValues>(
     search: { open: searchOpen, setOpen: setSearchOpen },
     pages,
     checklist,
+    designFolds,
     // Settings is a dialog, not a panel: the entry's fields are drawn in its
     // "This page" tab.
     availablePanels: AVAILABLE_PANELS,
@@ -458,6 +512,8 @@ export type EditorPanels = OfferedLibrary &
   PanelRequests & {
     entryFields: ReactNode;
     checklist: UseBuilderChecklistResult;
+    /** Where the author's folded Design groups are kept, once they are known. */
+    designFolds: PreferenceStore | undefined;
     /** The page's Layout section for Settings, or null for another form. */
     pageLayout: ReactNode | null;
     /** The regions of the page's Layout, drawn locked around the page. */
@@ -502,8 +558,8 @@ export function editorPanelRenderer({
   classes,
   pageClassBlocks,
   classSummaryContext,
-  requestPanel,
   insertInside,
+  insertAfter,
   addSummon,
   onAddSummoned,
   pages,
@@ -514,6 +570,7 @@ export function editorPanelRenderer({
   documentDirty,
   lookEditing,
   previewMode,
+  designFolds,
 }: Pick<EditorMount, "editor" | "componentLibrary" | "componentVerbs"> & {
   /** The look edited on its own, which the Design panel's Block looks choose. */
   lookEditing?: LookEditingState;
@@ -557,11 +614,12 @@ export function editorPanelRenderer({
     EditorPanels,
     | "offered"
     | "offerablePatterns"
-    | "requestPanel"
     | "insertInside"
+    | "insertAfter"
     | "addSummon"
     | "onAddSummoned"
     | "pages"
+    | "designFolds"
   >): React.ComponentProps<typeof BuilderShell>["renderPanel"] {
   return (panel, view) => {
     /*
@@ -583,6 +641,8 @@ export function editorPanelRenderer({
           offerablePatterns={offerablePatterns}
           // Inside the container a "+" chose, while it is the selection.
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          // In the gap a "+" chose, while the block above it is selected.
+          {...(insertAfter === undefined ? {} : { after: insertAfter })}
           // A canvas press still to answer, whether Add opened for it or
           // was already open.
           summoned={addSummon}
@@ -613,6 +673,7 @@ export function editorPanelRenderer({
           }
           beginInsertDrag={drag.beginInsertDrag}
           {...(insertInside === undefined ? {} : { inside: insertInside })}
+          {...(insertAfter === undefined ? {} : { after: insertAfter })}
           // From the panel there is no placement, so Back returns to the
           // editor as the author left it.
           {...(componentView.onEditComponent === undefined
@@ -667,40 +728,103 @@ export function editorPanelRenderer({
       design: () => (
         <DesignPanel
           view={view}
+          {...(designFolds === undefined ? {} : { foldStore: designFolds })}
           // The studio surrounds every tab, so the header it draws stays the
           // same whichever is open.
           frame={designTabs => (
-            <TokensStudio
-              merged={offerableTokens(
-                canvasSiteStyle,
-                siteStylePending,
-                siteStyleError
-              )}
-              supplied={configSiteStyle?.tokens}
-              pending={siteStylePending}
-              // The class surface's library, the one the Shared styles tab
-              // lists, so a style using a variable says what it sets.
-              {...(classes.library === undefined
-                ? {}
-                : { classes: classes.library })}
-              // A shared style using a variable opens in its own tab; a
-              // block look, which that tab does not list, in the inspector.
-              opens={{
-                sharedStyles: () => view.choose("classes"),
-                ...(lookEditing === undefined
+            <>
+              {/* The Styles tab's matches, counted whichever tab is open. */}
+              <ReportStylesMatches
+                library={classes.library}
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+                styleContext={classSummaryContext}
+              />
+              <TokensStudio
+                merged={offerableTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                supplied={configSiteStyle?.tokens}
+                pending={siteStylePending}
+                // The class surface's library, the one the Shared styles tab
+                // lists, so a style using a variable says what it sets.
+                {...(classes.library === undefined
                   ? {}
-                  : { look: lookEditing.edit }),
-              }}
-              // The switch in the panel's header picks the mode the canvas is
-              // drawn in, held by the editor so it outlasts the panel.
-              preview={previewMode}
-            >
-              {designTabs}
-            </TokensStudio>
+                  : { classes: classes.library })}
+                // A shared style using a variable opens in its own tab; a
+                // block look, which that tab does not list, in the inspector.
+                opens={{
+                  sharedStyles: () => view.choose("styles"),
+                  ...(lookEditing === undefined
+                    ? {}
+                    : { look: lookEditing.edit }),
+                }}
+                // The switch in the panel's header picks the mode the canvas is
+                // drawn in, held by the editor so it outlasts the panel.
+                preview={previewMode}
+              >
+                {designTabs}
+              </TokensStudio>
+            </>
           )}
           tabs={{
-            variables: () => <VariablesTab />,
-            classes: () => (
+            colours: () => <VariablesTab tab="colours" />,
+            // Type: the site's fonts, then the type sizes and the font and
+            // weight variables.
+            type: () => (
+              <>
+                <DesignGroup
+                  id="site-fonts"
+                  heading={EDITOR_WORDS.fonts}
+                  count={
+                    offerableFaces(
+                      canvasSiteStyle,
+                      siteStylePending,
+                      siteStyleError
+                    )?.length
+                  }
+                >
+                  <DesignReveal>
+                    {reveal => (
+                      <FontsPanelWithUpload
+                        faces={offerableFaces(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        codeFaces={configSiteStyle?.fonts}
+                        tokens={renderedTokens(
+                          canvasSiteStyle,
+                          siteStylePending,
+                          siteStyleError
+                        )}
+                        absence={siteStyleError !== null ? "failed" : "pending"}
+                        /*
+                          The fix for a token naming a family this site does not provide
+                          is to edit that token, and editing belongs to the studio. This
+                          shell offers one, so the jump is wired: without the callback
+                          the panel suppresses the action and an author is left to find
+                          the right panel and the right row themselves.
+                        */
+                        // The font variables are in this same tab: their group
+                        // is opened and brought into view, rather than the tab
+                        // asked for again.
+                        onOpenTokens={() => reveal("fonts")}
+                        storedFaces={storedSiteStyle?.fonts}
+                        storedPending={siteStylePending}
+                        unreadableFonts={unreadableStoredFonts}
+                      />
+                    )}
+                  </DesignReveal>
+                </DesignGroup>
+                <VariablesTab tab="type" />
+              </>
+            ),
+            spacing: () => <VariablesTab tab="spacing" />,
+            styles: () => (
               <SharedStylesStudio
                 {...(lookEditing === undefined
                   ? {}
@@ -722,33 +846,6 @@ export function editorPanelRenderer({
                   siteStylePending,
                   siteStyleError
                 )}
-              />
-            ),
-            fonts: () => (
-              <FontsPanelWithUpload
-                faces={offerableFaces(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                codeFaces={configSiteStyle?.fonts}
-                tokens={renderedTokens(
-                  canvasSiteStyle,
-                  siteStylePending,
-                  siteStyleError
-                )}
-                absence={siteStyleError !== null ? "failed" : "pending"}
-                /*
-                      The fix for a token naming a family this site does not provide
-                      is to edit that token, and editing belongs to the studio. This
-                      shell offers one, so the jump is wired: without the callback
-                      the panel suppresses the action and an author is left to find
-                      the right panel and the right row themselves.
-                    */
-                onOpenTokens={() => requestPanel("design", "variables")}
-                storedFaces={storedSiteStyle?.fonts}
-                storedPending={siteStylePending}
-                unreadableFonts={unreadableStoredFonts}
               />
             ),
           }}

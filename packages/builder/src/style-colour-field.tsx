@@ -30,6 +30,12 @@ import { ChoiceList } from "./choice-list";
 import { isElement } from "./dom-kind";
 import { InheritedValue } from "./inherited-value";
 import {
+  RecentColoursStore,
+  rememberColour,
+  useRecentColours,
+} from "./recent-colours";
+import type { PreferenceStore } from "./shell-state";
+import {
   activeTokenMode,
   colourHexOf,
   variableFor,
@@ -296,6 +302,10 @@ export function ColourField({
   // Lifted out of the text field because two controls edit one value: a draft
   // private to the field would leave the swatch painting a superseded one.
   const { draft, setDraft, edited, reset } = useDraft(stored);
+  const commitColour = rememberingCommit(
+    onCommit,
+    React.useContext(RecentColoursStore)
+  );
 
   const reference = isTokenRef(stored) ? stored.$token : null;
   const mode = activeTokenMode(prefersDark);
@@ -313,11 +323,13 @@ export function ColourField({
    * dismisses the picker, and the close reads `pending.current` to decide what
    * the gesture produced — so clearing it first leaves that close with nothing
    * to write, and the discrete choice is the only edit. One rule expressed
-   * once: a second expression of it is what drifts.
+   * once: a second expression of it is what drifts. A recent colour is one
+   * such choice, and joins the front of Recent colours again; a variable or
+   * a clear is no colour of its own and is not remembered.
    */
   const commitInstead = (value: StyleValue | null): void => {
     pending.current = null;
-    onCommit(value);
+    settle(commitColour(value), reset);
   };
   /*
    * The picker closed, whichever outcome that close had.
@@ -343,15 +355,15 @@ export function ColourField({
     const unwritten = pending.current;
     pending.current = null;
     if (outcome === "superseded" || unwritten === null) return;
-    if (onCommit(unwritten) === "unchanged") reset();
+    settle(commitColour(unwritten), reset);
   };
   // The current writer, held so the teardown below depends on nothing. A
   // teardown listing `onCommit` would re-run its cleanup on every render that
   // gives the field a new callback — which is every render — and flush a
   // gesture the author is still making.
-  const write = React.useRef(onCommit);
+  const write = React.useRef(commitColour);
   React.useEffect(() => {
-    write.current = onCommit;
+    write.current = commitColour;
   });
   /*
    * Write an unfinished gesture when this field goes away, and do it NOW.
@@ -452,9 +464,10 @@ export function ColourField({
            * that has no way to hand a ref down here.
            */
           supersededBy={target => supersedes(target, id)}
-          // A variable is one discrete choice rather than a gesture, so it
-          // commits immediately, exactly as the select and toggle controls do.
-          onToken={identity => commitInstead({ $token: identity })}
+          // A variable, or a recent colour, is one discrete choice rather
+          // than a gesture, so it commits immediately, exactly as the select
+          // and toggle controls do.
+          onChoose={commitInstead}
         />
         {reference === null ? (
           // The SAME field every other text control uses, rather than one
@@ -474,7 +487,7 @@ export function ColourField({
             // The REFUSAL alone. `describes` also carries the contrast verdict,
             // which is supplementary text and never a complaint.
             invalid={describedBy !== undefined}
-            onCommit={onCommit}
+            onCommit={commitColour}
           />
         ) : (
           <TokenClear
@@ -492,7 +505,8 @@ export function ColourField({
 
 /**
  * The trigger, and the surface it opens onto: the site's colour variables
- * first, and a custom colour behind its own button at the end.
+ * first, then the author's Recent colours, and a custom colour behind its own
+ * button at the end.
  *
  * The variables lead because a variable carries a light and a dark value and a
  * colour written as a value carries one, which the visitor's dark mode cannot
@@ -522,7 +536,7 @@ function ColourPicker({
   onColour,
   onClosed,
   supersededBy,
-  onToken,
+  onChoose,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
   shown: string | undefined;
@@ -567,7 +581,11 @@ function ColourPicker({
    * this is bound.
    */
   supersededBy: (target: EventTarget | null) => boolean;
-  onToken: (identity: string) => void;
+  /**
+   * A discrete choice: a variable, as a reference to its identity, or a
+   * recent colour, as it is listed.
+   */
+  onChoose: (value: StyleValue) => void;
 }): React.JSX.Element {
   // Whether the dismissal in progress belongs to a control that writes for
   // itself. Read once by the close below and reset there, so it cannot leak
@@ -650,9 +668,14 @@ function ColourPicker({
           onPick={identity => {
             // One discrete choice, committed at once; the close that follows
             // has nothing left to write.
-            onToken(identity);
+            onChoose({ $token: identity });
             setOpen(false);
           }}
+        />
+        <RecentColourChoices
+          onPick={onChoose}
+          // One discrete choice, as a variable is: the picker closes.
+          onPicked={setOpen}
         />
         <CustomColour
           open={custom}
@@ -665,6 +688,83 @@ function ColourPicker({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * After a commit the document did not need, the field goes back to what it
+ * holds: a picker gesture or a choice that ends where it began leaves no
+ * draft behind for a later blur to write.
+ */
+function settle(outcome: CommitOutcome, reset: () => void): void {
+  if (outcome === "unchanged") reset();
+}
+
+/**
+ * A field's commit that also remembers the raw colour it wrote, or chose
+ * again, among the author's Recent colours; a refused value is not one, nor
+ * a variable or a clear.
+ */
+function rememberingCommit(
+  onCommit: (value: StyleValue | null) => CommitOutcome,
+  store: PreferenceStore | undefined
+): (value: StyleValue | null) => CommitOutcome {
+  return value => {
+    const outcome = onCommit(value);
+    if (outcome !== "refused") rememberColour(store, value);
+    return outcome;
+  };
+}
+
+/**
+ * Recent colours, between the variables and Custom colour: the last colours
+ * this author typed or picked, each a swatch named by its value. Shown while
+ * there are none too, saying what will appear, so the place is known.
+ */
+function RecentColourChoices({
+  onPick,
+  onPicked,
+}: {
+  onPick: (colour: string) => void;
+  /** Called with `false` once a colour is picked, to close the picker. */
+  onPicked: (open: false) => void;
+}): React.JSX.Element {
+  const headingId = React.useId();
+  const [colours] = useRecentColours();
+  return (
+    <div
+      className="nx-style-inspector__recent"
+      role="group"
+      aria-labelledby={headingId}
+    >
+      <p className="nx-style-inspector__recent-heading" id={headingId}>
+        Recent colours
+      </p>
+      {colours.length === 0 ? (
+        <p className="nx-vars__note nx-style-inspector__recent-none">
+          Colours you type or pick show here.
+        </p>
+      ) : (
+        <div className="nx-style-inspector__recent-list">
+          {colours.map(colour => (
+            <button
+              key={colour}
+              type="button"
+              className="nx-style-inspector__swatch"
+              aria-label={colour}
+              title={colour}
+              // A colour written as a value paints the same anywhere, so it
+              // is painted as it is listed; no variable is ever listed here.
+              style={{ "--nx-swatch": colour } as React.CSSProperties}
+              onClick={() => {
+                onPick(colour);
+                onPicked(false);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

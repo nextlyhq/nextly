@@ -1,14 +1,14 @@
 /**
  * The inspector's anatomy, in the real editor.
  *
- * - Selecting a heading shows its card (icon, type, description, menu), two
+ * - Selecting a heading shows its card (icon, type, description, menu), three
  *   tabs, and on Style a bar naming the target, the device and the state; the
  *   bar follows a change of state.
  * - The Style tab orders its sections Layout to Effects and places each
  *   property as the placement table says, for a section, a heading and an
  *   image: the common controls show, the rest wait behind "+ More".
- * - A block stored with a CSS id and attributes reopens with them under
- *   Content → Advanced, and an edit there survives a save and a reload.
+ * - A block stored with a CSS id and attributes reopens with them on the
+ *   Advanced tab, and an edit there survives a save and a reload.
  * - Locking from the card's menu makes every control read-only and says so;
  *   Unlock from the same menu gives them back.
  * - With the inspector open on each tab, axe finds nothing at WCAG 2.2 AA.
@@ -276,15 +276,19 @@ async function openSections(page: Page): Promise<string[]> {
     );
 }
 
-/** The Style tab on the section block, settled, with Layout open. */
+/**
+ * The Style tab on the section block, settled, with every section collapsed
+ * from the panel's options menu, since a section holding a value starts open:
+ * the headers then sit together in view, where a click can be aimed at one.
+ */
 async function sectionStyleTab(page: Page): Promise<void> {
   const id = await createPage(page.request);
   await openBuilder(page, id);
   await select(page, SECTION, "corner");
   await page.getByRole("tab", { name: "Style" }).click();
-  await expect
-    .poll(async () => (await openSections(page)).includes("layout"))
-    .toBe(true);
+  await page.getByRole("button", { name: "Panel options" }).click();
+  await page.getByRole("menuitem", { name: "Collapse all" }).click();
+  await expect.poll(async () => (await openSections(page)).length).toBe(0);
   // The tab's own opening motion done, so the first click starts the only one.
   await page.waitForFunction(
     () =>
@@ -313,7 +317,7 @@ async function axe(page: Page): Promise<unknown[]> {
 test.describe("the inspector", () => {
   test.describe.configure({ timeout: 180_000 });
 
-  test("shows the card, two tabs, and a bar that follows the state and device", async ({
+  test("shows the card, three tabs, and a bar that follows the state and device", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -329,7 +333,7 @@ test.describe("the inspector", () => {
     ).toBeVisible();
 
     const tabs = page.locator(".nx-inspector").getByRole("tab");
-    await expect(tabs).toHaveText(["Content", "Style"]);
+    await expect(tabs).toHaveText(["Content", "Style", "Advanced"]);
 
     await page.getByRole("tab", { name: "Style" }).click();
     const bar = page.getByRole("region", { name: "What you're editing" });
@@ -361,19 +365,12 @@ test.describe("the inspector", () => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
 
-    // A heading: no Layout, Typography's common controls first.
+    // A heading: no Layout, Text's common controls first.
     await select(page, HEADING);
     await page.getByRole("tab", { name: "Style" }).click();
     await expect
       .poll(() => sectionLabels(page))
-      .toEqual([
-        "Spacing",
-        "Size",
-        "Position",
-        "Typography",
-        "Border",
-        "Effects",
-      ]);
+      .toEqual(["Spacing", "Size", "Position", "Text", "Border", "Effects"]);
     expect(await shownProperties(page, "typography")).toEqual([
       "fontFamily",
       "fontWeight",
@@ -382,9 +379,7 @@ test.describe("the inspector", () => {
       "color",
       "textAlign",
     ]);
-    expect(await moreProperties(page, "Typography")).toContain(
-      "Letter spacing"
-    );
+    expect(await moreProperties(page, "Text")).toContain("Letter spacing");
 
     // An image: the media fit controls show at once in Size.
     await select(page, IMAGE);
@@ -415,15 +410,15 @@ test.describe("the inspector", () => {
     expect(await sectionLabels(page)).not.toContain("Advanced");
   });
 
-  test("keeps a stored CSS id and attributes under Content → Advanced, through a save and reload", async ({
+  test("keeps a stored anchor, CSS classes and attributes on the Advanced tab, through a save and reload", async ({
     page,
   }) => {
     const id = await createPage(page.request);
     await openBuilder(page, id);
     await select(page, HEADING);
 
-    await page.getByText("Advanced", { exact: true }).click();
-    const cssId = page.getByRole("textbox", { name: "CSS id" });
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    const cssId = page.getByRole("textbox", { name: "Anchor (ID)" });
     await expect(cssId).toHaveValue("intro");
     await expect(
       page.getByRole("textbox", { name: "Name of attribute 1" })
@@ -433,6 +428,20 @@ test.describe("the inspector", () => {
 
     await cssId.fill("intro-two");
     await cssId.press("Enter");
+    // The valid name is kept; each other one is refused under the field.
+    const classes = page.getByRole("textbox", { name: "CSS classes" });
+    await classes.fill("promo 2col nx-box");
+    await classes.press("Enter");
+    const refused = page.getByRole("list", { name: "Names not added" });
+    await expect(refused.getByRole("listitem")).toHaveText([
+      '"2col" starts with a digit, which a class name can\'t.',
+      '"nx-box" starts with "nx-", which Nextly keeps for its own classes.',
+    ]);
+    await expect(
+      canvasFrame(page)
+        .locator(`.nx-canvas [data-nx-node="${HEADING}"].promo`)
+        .first()
+    ).toBeAttached();
     await value.fill("hero-two");
     await value.press("Tab");
 
@@ -442,25 +451,28 @@ test.describe("the inspector", () => {
         const heading = (await storedNodes(page.request, id)).find(
           node => node.id === HEADING
         );
-        return [heading?.cssId, heading?.attributes];
+        return [heading?.cssId, heading?.cssClasses, heading?.attributes];
       })
-      .toEqual(["intro-two", { "data-track": "hero-two" }]);
+      .toEqual(["intro-two", "promo", { "data-track": "hero-two" }]);
 
     await page.reload();
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
       timeout: 60_000,
     });
     await select(page, HEADING);
-    await page.getByText("Advanced", { exact: true }).click();
-    await expect(page.getByRole("textbox", { name: "CSS id" })).toHaveValue(
-      "intro-two"
-    );
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Anchor (ID)" })
+    ).toHaveValue("intro-two");
+    await expect(
+      page.getByRole("textbox", { name: "CSS classes" })
+    ).toHaveValue("promo");
     await expect(
       page.getByRole("textbox", { name: "Value of attribute 1" })
     ).toHaveValue("hero-two");
   });
 
-  test("marks a section never to be quoted after Show when, through a save and reload", async ({
+  test("keeps a section out of search previews after Show when, through a save and reload", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -468,18 +480,28 @@ test.describe("the inspector", () => {
 
     // Offered on a container, not on a heading.
     await select(page, HEADING);
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    // The control: the Advanced tab is on screen, so the switch's absence
+    // is the heading's, not a hidden tab's.
     await expect(
-      page.getByRole("switch", { name: "Never quote this" })
+      page.getByRole("textbox", { name: "Anchor (ID)" })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("switch", { name: "Keep out of search previews" })
     ).toHaveCount(0);
 
+    // The tab stays Advanced as the selection moves to the section.
     await select(page, SECTION);
-    const never = page.getByRole("switch", { name: "Never quote this" });
+    const never = page.getByRole("switch", {
+      name: "Keep out of search previews",
+    });
     await expect(never).toHaveAttribute("aria-checked", "false");
-    // After Visible on and Show when, before Advanced: each is measured, so
-    // the switch drawn above Show when, or Show when missing, fails here.
+    // After Visible on and Show when, before the anchor: each is measured,
+    // so the switch drawn above Show when, or Show when missing, fails here.
     const order = await page
+      .getByRole("tabpanel", { name: "Advanced" })
       .locator(
-        "[data-visible-on], .nx-show-when, [data-never-quote], .nx-inspector__advanced"
+        "[data-visible-on], .nx-show-when, [data-never-quote], #nx-block-css-id"
       )
       .evaluateAll(elements =>
         elements.map(element =>
@@ -489,15 +511,10 @@ test.describe("the inspector", () => {
               ? "show-when"
               : element.hasAttribute("data-never-quote")
                 ? "never-quote"
-                : "advanced"
+                : "css-id"
         )
       );
-    expect(order).toEqual([
-      "visible-on",
-      "show-when",
-      "never-quote",
-      "advanced",
-    ]);
+    expect(order).toEqual(["visible-on", "show-when", "never-quote", "css-id"]);
 
     await never.click();
     await expect(page.getByText("On: marked")).toBeVisible();
@@ -524,8 +541,9 @@ test.describe("the inspector", () => {
       timeout: 60_000,
     });
     await select(page, SECTION);
+    await page.getByRole("tab", { name: "Advanced" }).click();
     await expect(
-      page.getByRole("switch", { name: "Never quote this" })
+      page.getByRole("switch", { name: "Keep out of search previews" })
     ).toHaveAttribute("aria-checked", "true");
   });
 
@@ -603,7 +621,7 @@ test.describe("the inspector", () => {
     const spacing = await sectionHeader(page, "spacing").boundingBox();
     if (spacing === null) throw new Error("the Spacing header has no box");
     // A mouse click, not a locator's: a locator waits for the motion to end,
-    // and the motion is what this is about. Spacing opens as Layout closes.
+    // and the motion is what this is about. Spacing opens, pushing Size down.
     await page.mouse.click(spacing.x + 20, spacing.y + spacing.height / 2);
     // Mid-motion: the 150ms opening and closing have started, not ended.
     await page.waitForTimeout(40);
@@ -666,9 +684,9 @@ test.describe("the inspector", () => {
     await select(page, HEADING);
 
     expect(await axe(page), "Content").toEqual([]);
-    await page.getByText("Advanced", { exact: true }).click();
-    expect(await axe(page), "Content with Advanced open").toEqual([]);
     await page.getByRole("tab", { name: "Style" }).click();
     expect(await axe(page), "Style").toEqual([]);
+    await page.getByRole("tab", { name: "Advanced" }).click();
+    expect(await axe(page), "Advanced").toEqual([]);
   });
 });

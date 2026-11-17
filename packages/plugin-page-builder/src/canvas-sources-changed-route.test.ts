@@ -6,7 +6,7 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
-import { sourcesChangedAskOf } from "./canvas-bindings-contract";
+import { isSourceSlug, sourcesChangedAskOf } from "./canvas-bindings-contract";
 import {
   NEWEST_MARKED,
   sourcesChangedStamp,
@@ -289,5 +289,21 @@ describe("the change check's ask", () => {
         demand: { ...request.demand, formatsDates: true },
       }).site
     ).toBe(true);
+  });
+});
+
+describe("a name the change check takes as a slug", () => {
+  it("is one the route accepts, and the editor asks about no other", () => {
+    for (const name of [
+      "posts",
+      "blog_posts",
+      "Blog-Posts-2",
+      "k".repeat(128),
+    ]) {
+      expect(isSourceSlug(name)).toBe(true);
+    }
+    for (const name of ["", "Product catalog", "posts!", "k".repeat(129)]) {
+      expect(isSourceSlug(name)).toBe(false);
+    }
   });
 });

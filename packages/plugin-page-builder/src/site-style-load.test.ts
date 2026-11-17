@@ -1,8 +1,4 @@
-import {
-  allBlocks,
-  clearBlocks,
-  registerBlocks,
-} from "@nextlyhq/blocks-engine";
+import { createBlockRegistry } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,6 +10,9 @@ import {
 import { resolveSiteStyle, type SiteStyleData } from "./site-style";
 import { loadSiteStyle } from "./site-style-load";
 import type { SiteStyleReader } from "./site-style-storage";
+
+/** The site's block registry these tests register into and load with. */
+const blocks = createBlockRegistry();
 
 /** A site that has stored nothing: its single reads as an empty document. */
 const nothingStored: SiteStyleReader = { findSingle: async () => null };
@@ -52,12 +51,12 @@ const idsOf = (style: { classes?: readonly { id: string }[] }): string[] =>
   (style.classes ?? []).map(entry => entry.id);
 
 afterEach(() => {
-  clearBlocks();
+  blocks.clear();
 });
 
 describe("the site style a published page loads", () => {
   it("holds every look the core blocks supply, with no defaults stated", async () => {
-    const style = await loadSiteStyle({ nextly: nothingStored });
+    const style = await loadSiteStyle({ nextly: nothingStored, blocks });
     expect(idsOf(style)).toEqual(expect.arrayContaining(CORE_LOOKS));
   });
 
@@ -65,6 +64,7 @@ describe("the site style a published page loads", () => {
     const card = { id: "c-card", slug: "card", orderIndex: 0, styles: {} };
     const style = await loadSiteStyle({
       nextly: nothingStored,
+      blocks,
       defaults: { classes: [card] },
     });
     expect(idsOf(style)).toEqual(
@@ -73,8 +73,8 @@ describe("the site style a published page loads", () => {
   });
 
   it("publishes to the editor the code tier init refreshed, other plugins' looks among them", async () => {
-    registerBlocks(coreBlocks, { source: "page-builder" });
-    registerBlocks([acmeHero], { source: "acme" });
+    blocks.register(coreBlocks, { source: "page-builder" });
+    blocks.register([acmeHero], { source: "acme" });
     const card = { id: "c-card", slug: "card", orderIndex: 0, styles: {} };
     const hostDefaults = { classes: [card] };
     // As the plugin runs it: one shared object, refreshed at init once every
@@ -84,14 +84,14 @@ describe("the site style a published page loads", () => {
       { siteStyle: hostDefaults },
       { configStyle, canvasPath: undefined, fontsOff: false }
     );
-    refreshCodeTier(configStyle, new Set(), hostDefaults);
+    refreshCodeTier(configStyle, new Set(), hostDefaults, blocks.all());
     const sent = JSON.parse(JSON.stringify(published.clientConfig)) as {
       siteStyle: SiteStyleData;
     };
     // The tier `use-render-inputs.looks.test` hands the editor's real hook,
     // whose looks it holds equal to the published page's.
     expect(sent.siteStyle.classes).toEqual(
-      resolveSiteStyle(withRegisteredLooks(hostDefaults)).classes
+      resolveSiteStyle(withRegisteredLooks(hostDefaults, blocks.all())).classes
     );
     expect(idsOf(sent.siteStyle)).toEqual(
       expect.arrayContaining([...CORE_LOOKS, "look:acme/hero:dark"])
@@ -103,12 +103,12 @@ describe("the site style a published page loads", () => {
     // plugins register their blocks as it starts.
     const bootingReader: SiteStyleReader = {
       findSingle: async () => {
-        registerBlocks([...coreBlocks, acmeHero], { source: "boot" });
+        blocks.register([...coreBlocks, acmeHero], { source: "boot" });
         return null;
       },
     };
-    expect(allBlocks()).toEqual([]);
-    const style = await loadSiteStyle({ nextly: bootingReader });
+    expect(blocks.all()).toEqual([]);
+    const style = await loadSiteStyle({ nextly: bootingReader, blocks });
     expect(idsOf(style)).toContain("look:acme/hero:dark");
   });
 
@@ -126,6 +126,7 @@ describe("the site style a published page loads", () => {
     };
     const style = await loadSiteStyle({
       nextly: { findSingle: async () => stored },
+      blocks,
     });
     const hero = style.classes?.filter(
       entry => entry.id === "look:core/section:hero"
