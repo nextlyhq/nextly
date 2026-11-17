@@ -250,7 +250,10 @@ function LinkField({
       <input
         ref={input}
         className={`${FORMAT_BAR_CLASS}__address`}
-        type="url"
+        // Text, not `url`: the browser's own check refuses an address on this
+        // site ("/about", "#team"), which a link may hold; the address is
+        // judged by the format's own rule (`isLinkableUrl`) when applied.
+        type="text"
         inputMode="url"
         aria-label={FORMAT_BAR_WORDS.address}
         placeholder={FORMAT_BAR_WORDS.addressHint}

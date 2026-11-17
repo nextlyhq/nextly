@@ -308,3 +308,15 @@ describe("oneParagraphWords", () => {
     expect(oneParagraphWords({ nope: true })).toBe("");
   });
 });
+
+describe("toOneParagraph: links nested very deep", () => {
+  it("flattens thousands of links inside links without running out of stack", () => {
+    let node: RichTextNode = text("deep words");
+    for (let i = 0; i < 5_000; i++) {
+      node = { type: "link", url: `/l${i}`, children: [node] };
+    }
+    const restricted = toOneParagraph(value([paragraph(node)]));
+    expect(restricted.dropped).toBe(true);
+    expect(richTextToPlainText(restricted.value)).toBe("deep words");
+  });
+});

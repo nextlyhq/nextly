@@ -553,20 +553,34 @@ function textLeafPieces(
 
 /**
  * A link's pieces: a link around its runs when its address is one this
- * format can hold, and its runs alone otherwise (or inside another link).
+ * format can hold, and its runs alone otherwise. Its runs are walked with
+ * links flattened, which is one level of walk however deep links nest.
  */
-function linkPieces(
-  node: RichTextNode,
-  walk: RestrictWalk,
-  inLink: boolean
-): ParagraphPiece[] {
-  const parts = inLink ? null : linkParts(node);
+function linkPieces(node: RichTextNode, walk: RestrictWalk): ParagraphPiece[] {
+  const parts = linkParts(node);
   const runs = inlinePieces(kidsOf(node), walk, true);
   if (parts === null) {
     walk.dropped = true;
     return runs;
   }
   return runs.length > 0 ? [{ kind: "link", ...parts, runs }] : [];
+}
+
+/**
+ * A link's pieces, or, inside another link, only its words: read on this
+ * walk's own stack rather than by a walk of its own, so links nested any
+ * depth cannot run the call stack out.
+ */
+function linkOrWords(
+  node: RichTextNode,
+  walk: RestrictWalk,
+  inLink: boolean,
+  stack: unknown[]
+): ParagraphPiece[] {
+  if (!inLink) return linkPieces(node, walk);
+  walk.dropped = true;
+  pushReversed(stack, kidsOf(node));
+  return [];
 }
 
 /**
@@ -589,7 +603,7 @@ function nodePieces(
   }
   if (node.type === "linebreak") return [{ kind: "break" }];
   if (node.type === "link" || node.type === "autolink") {
-    return linkPieces(node, walk, inLink);
+    return linkOrWords(node, walk, inLink, stack);
   }
   walk.dropped = true;
   if (typeof node.text === "string") return textPieces(node.text, 0);

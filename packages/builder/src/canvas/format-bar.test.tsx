@@ -175,6 +175,21 @@ describe("a link", () => {
     expect(formatBar.get().linking).toBe(false);
   });
 
+  it("takes an address on this site, which the browser's own URL check would refuse", () => {
+    const { session } = serve();
+    drawBar();
+    fireEvent.click(screen.getByRole("button", { name: "Link" }));
+    const address = screen.getByRole("textbox", {
+      name: FORMAT_BAR_WORDS.address,
+    }) as HTMLInputElement;
+    for (const relative of ["/about", "#team"]) {
+      fireEvent.change(address, { target: { value: relative } });
+      expect(address.checkValidity()).toBe(true);
+    }
+    fireEvent.submit(address);
+    expect(session.link).toHaveBeenCalledWith("#team", { newTab: false });
+  });
+
   it("takes a link off with Remove link", () => {
     const { session } = serve();
     act(() => {
