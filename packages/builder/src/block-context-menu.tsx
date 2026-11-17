@@ -121,13 +121,13 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { blockActionRunners } from "./builder-commands";
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { isElement } from "./dom-kind";
 import type { EditorState } from "./editor-state";
 import { useBlockActionsContext, type BlockActions } from "./keyboard-actions";
 import { useSelectionVerbs } from "./selection-actions";
+import { blockActionRunners } from "./shell/builder-commands";
 
 /**
  * The wrapper's style, hoisted so it is one object rather than one per render.

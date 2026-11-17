@@ -683,3 +683,21 @@ export function toggleShows(
   if (value === undefined) return true;
   return typeof value === "string" && options.includes(value);
 }
+
+/**
+ * Above this, a bare line height reads as pixels typed without their unit:
+ * `20` is twenty times the text size, which no text is set at, where `1.5`
+ * or `2` is an ordinary multiple.
+ */
+const LINE_HEIGHT_PIXELS_ABOVE = 4;
+
+/**
+ * The pixels a bare line height was probably meant as (`20` gives `20px`), or
+ * nothing for a multiple an author would choose, or for any value that
+ * already says its unit.
+ */
+export function lineHeightAsPixels(text: string): string | undefined {
+  const number = trimCssWhitespace(text);
+  if (!CSS_NUMBER.test(number)) return undefined;
+  return Number(number) > LINE_HEIGHT_PIXELS_ABOVE ? `${number}px` : undefined;
+}
