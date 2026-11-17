@@ -103,7 +103,7 @@ async function scanEditor(page: Page): Promise<Finding[]> {
  * because this suite is deliberately black box and imports no product code;
  * the source of both strings is `PageBuilderCard`.
  */
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
 
 /** Open a document and put its page builder on screen. */
 async function openEditor(page: Page): Promise<void> {

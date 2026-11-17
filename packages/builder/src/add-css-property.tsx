@@ -159,7 +159,7 @@ function CssPropertiesBody({
             />
           </SettingSlot>
         ))}
-        <FoundToAdd addable={addable} readOnly={readOnly} onAdd={add} />
+        <FoundToAdd addable={addable} onAdd={add} />
         {readOnly ? null : (
           <AddCssProperty addable={addable} onAdd={add} button={addButton} />
         )}
@@ -261,19 +261,18 @@ function PropertyNames({
 
 /**
  * While "Find a setting" is searching, the properties it found that the block
- * can use but hasn't added, each with "Add".
+ * can use but hasn't added, each with "Add": listed while the design is held
+ * too, as the tab's count says, with Add held by the section's fieldset.
  */
 function FoundToAdd({
   addable,
-  readOnly,
   onAdd,
 }: {
   addable: readonly CssPropertyRow[];
-  readOnly: boolean;
   onAdd: (id: string) => void;
 }): React.JSX.Element | null {
   const match = useSettingsMatch();
-  if (!match.active || readOnly) return null;
+  if (!match.active) return null;
   const kept = match.kept.get("style");
   const found = addable.filter(each => kept?.has(each.id) === true);
   if (found.length === 0) return null;

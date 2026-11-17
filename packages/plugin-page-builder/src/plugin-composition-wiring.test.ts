@@ -28,6 +28,7 @@ import {
   BLOCK_SERVICE,
   PAGE_BUILDER_PLUGIN,
 } from "./blocks/registration-service";
+import { readStoredOfVia } from "./__tests__/stored-reads-of";
 import { COMPONENTS_SLUG } from "./collections/components";
 import { pageBuilder } from "./plugin";
 
@@ -120,15 +121,17 @@ const places = (...ids: string[]) => ({
 
 /** A write of component `a` in `collection`, over a store where `b` places `a`. */
 function savingA(collection: string, field: string): PluginFieldValidateArgs {
+  const readStored: PluginFieldWrite["readStored"] = async target =>
+    "id" in target && target.collection === collection && target.id === "b"
+      ? { kind: "value", value: places("a") }
+      : { kind: "absent" };
   const write: PluginFieldWrite = {
     kind: "collection",
     slug: collection,
     id: "a",
     inTransaction: false,
-    readStored: async target =>
-      target.collection === collection && target.id === "b"
-        ? { kind: "value", value: places("a") }
-        : { kind: "absent" },
+    readStored,
+    readStoredOf: readStoredOfVia(readStored),
   };
   return {
     data: { [field]: places("b") },
@@ -216,6 +219,17 @@ describe("the plugin's blocks field judges composition once installed", () => {
     // Off is the setting for a renderer drawing components from its own
     // source. Composed against the store, this page would be refused: its
     // component's root is a column, which may only sit inside columns.
+    const columns: PluginFieldWrite["readStored"] = async target =>
+      "id" in target && target.id === "cols"
+        ? {
+            kind: "value",
+            value: {
+              formatVersion: DOCUMENT_FORMAT_VERSION,
+              kind: "component",
+              nodes: [{ id: "c", type: "acme/column", version: 1, props: {} }],
+            },
+          }
+        : { kind: "absent" };
     const page: PluginFieldValidateArgs = {
       data: {
         content: {
@@ -240,19 +254,8 @@ describe("the plugin's blocks field judges composition once installed", () => {
         slug: "pages",
         id: "p1",
         inTransaction: false,
-        readStored: async target =>
-          target.id === "cols"
-            ? {
-                kind: "value",
-                value: {
-                  formatVersion: DOCUMENT_FORMAT_VERSION,
-                  kind: "component",
-                  nodes: [
-                    { id: "c", type: "acme/column", version: 1, props: {} },
-                  ],
-                },
-              }
-            : { kind: "absent" },
+        readStored: columns,
+        readStoredOf: readStoredOfVia(columns),
       },
     };
 

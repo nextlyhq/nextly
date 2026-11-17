@@ -59,6 +59,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -222,6 +223,11 @@ export interface StyleInspection {
    */
   readonly sections: readonly StyleSection[];
   /**
+   * How the block's parent arranges it at the edited device, which decides
+   * what "Inside its parent" offers; absent where the parent isn't known.
+   */
+  readonly parent?: ParentArrangement;
+  /**
    * The `object-fit` keyword in force here, lowercased, or `undefined` when
    * nothing sets one: what decides what the focal point says it does.
    */
@@ -340,12 +346,17 @@ export function inspectStyle(
     }
   }
 
+  const parent = laidOutBy(document, node, at, options, {
+    position: context.position,
+    sized: offered.has("width"),
+  });
   return {
     nodeId: node.id,
     state,
     breakpoint,
     sections,
     ...(objectFit === undefined ? {} : { objectFit }),
+    ...(parent === undefined ? {} : { parent }),
   };
 }
 
@@ -414,6 +425,26 @@ function appliesContextOf(
   };
 }
 
+/**
+ * How the block's parent lays it out, for a block with a size of its own to
+ * set and in its parent's flow. One that no longer offers a size keeps what
+ * it stores as clear-only rows; one its position takes out of the flow isn't
+ * laid out by its parent at all.
+ */
+function laidOutBy(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined,
+  block: { readonly position: string | undefined; readonly sized: boolean }
+): ParentArrangement | undefined {
+  if (!block.sized || OUT_OF_FLOW.has(block.position ?? "")) return undefined;
+  return parentArrangementOf(document, node, at, options);
+}
+
+/** The positions that take a block out of its parent's layout. */
+const OUT_OF_FLOW: ReadonlySet<string> = new Set(["absolute", "fixed"]);
+
 /** A display that lays children out in flow, for a box nothing gives one. */
 const IN_FLOW = "block";
 
@@ -421,21 +452,30 @@ const IN_FLOW = "block";
 const PAGE_ROOTED: ReadonlySet<string> = new Set(["page", "template"]);
 
 /**
- * The display of the box that lays this block out: its parent's, or past a
- * `display: contents` parent, the nearest ancestor that draws a box.
- *
- * Read in the state the canvas puts the parent in: the edited one for a state
- * that reaches ancestors (hover, active), the base state otherwise. A top-level block of a page or a template sits in the page root,
- * laid out as the page's settings say; one of a component or a pattern goes
- * wherever it is placed, so its parent is not known. Nor is it for a shared
- * style or a look, which many blocks wear wherever each one sits.
+ * The box that lays this block out: its parent, or past a `display:
+ * contents` parent, the nearest ancestor that draws a box; read as the
+ * keywords in force on it. `inFlow` says a keyword it doesn't set is known to
+ * be the initial one (the cascade reached it), rather than unknown.
  */
-function parentDisplayOf(
+interface ParentBox {
+  readonly read: (cssProperty: string, property: string) => string | undefined;
+  readonly inFlow: boolean;
+}
+
+/**
+ * The block's parent box, read in the state the canvas puts the parent in:
+ * the edited one for a state that reaches ancestors (hover, active), the base
+ * state otherwise. A top-level block of a page or a template sits in the page
+ * root, laid out as the page's settings say; one of a component or a pattern
+ * goes wherever it is placed, so its parent is not known. Nor is it for a
+ * shared style or a look, which many blocks wear wherever each one sits.
+ */
+function parentBoxOf(
   document: BlockDocument,
   node: BlockNode,
   at: ReadAt,
   options: StyleInspectionOptions | undefined
-): string | undefined {
+): ParentBox | undefined {
   // The state the canvas forces up the chain while the child is edited in
   // one: hover and active reach every ancestor, the others only the block.
   const base: ReadAt = statePropagatesToAncestors(at.state)
@@ -446,29 +486,77 @@ function parentDisplayOf(
   if (options?.styles !== undefined) return undefined;
   // The page root lays out its top-level blocks as the page's own settings
   // say, which is in flow unless they give it a display.
-  const atRoot = PAGE_ROOTED.has(document.kind)
-    ? (cascadedKeyword(
-        document.settings?.styles,
-        { ...base, cascade: undefined },
-        "display",
-        "display"
-      ) ?? IN_FLOW)
+  const atRoot: ParentBox | undefined = PAGE_ROOTED.has(document.kind)
+    ? {
+        read: (cssProperty, property) =>
+          cascadedKeyword(
+            document.settings?.styles,
+            { ...base, cascade: undefined },
+            cssProperty,
+            property
+          ),
+        inFlow: true,
+      }
     : undefined;
   return at.cascade === undefined
-    ? storedParentDisplay(document.nodes, node.id, base, atRoot)
-    : cascadedParentDisplay(at.cascade, base, atRoot);
+    ? storedParentBox(document.nodes, node.id, base, atRoot)
+    : cascadedParentBox(at.cascade, base, atRoot);
+}
+
+/** The display of the box that lays this block out, as {@link parentBoxOf}. */
+function parentDisplayOf(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
+): string | undefined {
+  const box = parentBoxOf(document, node, at, options);
+  if (box === undefined) return undefined;
+  return box.read("display", "display") ?? (box.inFlow ? IN_FLOW : undefined);
 }
 
 /**
- * The parent's display through the cascade. The subject already names its
+ * How the block's parent arranges it at the edited device, by the display and
+ * direction in force on the parent there: a Row stacked here is a column.
+ * `undefined` where the parent isn't known (a shared style, a component's
+ * top level) or arranges another way (a table).
+ */
+function parentArrangementOf(
+  document: BlockDocument,
+  node: BlockNode,
+  at: ReadAt,
+  options: StyleInspectionOptions | undefined
+): ParentArrangement | undefined {
+  const box = parentBoxOf(document, node, at, options);
+  if (box === undefined) return undefined;
+  return arrangementOf(
+    keywordIdentity(box.read("display", "display")) ?? IN_FLOW,
+    keywordIdentity(box.read("flex-direction", "flexDirection"))
+  );
+}
+
+/** The arrangement a display and a direction lay a box's children out in. */
+function arrangementOf(
+  display: string,
+  direction: string | undefined
+): ParentArrangement | undefined {
+  if (display === "grid" || display === "inline-grid") return "grid";
+  if (display === "flex" || display === "inline-flex") {
+    return direction?.startsWith("column") === true ? "column" : "row";
+  }
+  return display === "block" || display === "flow-root" ? "flow" : undefined;
+}
+
+/**
+ * The parent box through the cascade. The subject already names its
  * ancestors, outermost first; one that does not say is not taken for a
  * top-level block.
  */
-function cascadedParentDisplay(
+function cascadedParentBox(
   cascade: NonNullable<StyleInspectionOptions["cascade"]>,
   base: ReadAt,
-  atRoot: string | undefined
-): string | undefined {
+  atRoot: ParentBox | undefined
+): ParentBox | undefined {
   const ancestors = cascade.subject.ancestors;
   if (ancestors === undefined) return undefined;
   for (let index = ancestors.length - 1; index >= 0; index -= 1) {
@@ -477,26 +565,31 @@ function cascadedParentDisplay(
       ancestors: ancestors.slice(0, index),
     };
     const at = { ...base, cascade: { trace: cascade.trace, subject } };
-    const display =
-      cascadedKeyword(undefined, at, "display", "display") ?? IN_FLOW;
-    if (keywordIdentity(display) !== "contents") return display;
+    const read = (cssProperty: string, property: string) =>
+      cascadedKeyword(undefined, at, cssProperty, property);
+    const display = read("display", "display") ?? IN_FLOW;
+    if (keywordIdentity(display) !== "contents") return { read, inFlow: true };
   }
   return atRoot;
 }
 
-/** The parent's display as the document stores it, guarded against a cycle. */
-function storedParentDisplay(
+/** The parent box as the document stores it, guarded against a cycle. */
+function storedParentBox(
   nodes: BlockDocument["nodes"],
   nodeId: string,
   base: ReadAt,
-  atRoot: string | undefined
-): string | undefined {
+  atRoot: ParentBox | undefined
+): ParentBox | undefined {
   const seen = new Set<string>([nodeId]);
   let parent = locateNode(nodes, nodeId)?.parent;
   while (parent !== undefined && !seen.has(parent.id)) {
     seen.add(parent.id);
-    const display = cascadedKeyword(parent.styles, base, "display", "display");
-    if (keywordIdentity(display) !== "contents") return display;
+    const styles = parent.styles;
+    const read = (cssProperty: string, property: string) =>
+      cascadedKeyword(styles, base, cssProperty, property);
+    if (keywordIdentity(read("display", "display")) !== "contents") {
+      return { read, inFlow: false };
+    }
     parent = locateNode(nodes, parent.id)?.parent;
   }
   // Out of parents: the page's own flow, unless the walk met a node twice.

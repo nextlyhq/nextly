@@ -24,11 +24,14 @@
 
 import {
   navigateTo,
+  useDocumentActions,
   useDocumentIdentity,
   useDocumentLocale,
   useFieldAddress,
+  type DocumentActionOutcome,
+  type DocumentIdentity,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useEffect, useMemo, useRef, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import {
   useController,
   type Control,
@@ -39,7 +42,9 @@ import {
 import { acceptedKinds } from "../fields/blocks-options";
 
 import {
+  claimOpenAfterSave,
   fieldBuilderAddress,
+  openBuilderAfterSave,
   type BuilderAddress,
 } from "./editor/builder-address";
 import {
@@ -47,8 +52,17 @@ import {
   claimBuilderReturn,
 } from "./editor/builder-return";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
-import { PageLayoutPicker, usePageLayoutAsk } from "./page-layout";
-import { PageBuilderCard } from "./PageBuilderCard";
+import {
+  PageLayoutPicker,
+  usePageLayoutAsk,
+  usePageLayoutRegions,
+} from "./page-layout";
+import {
+  PageBuilderCard,
+  SAVE_AND_OPEN_LABEL,
+  SAVE_DRAFT_AND_OPEN_LABEL,
+  type SaveAndOpen,
+} from "./PageBuilderCard";
 import { useFormPublishOffer } from "./publish-offer";
 import { useRestingPageRender } from "./use-resting-page-render";
 
@@ -139,7 +153,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   field: declaration,
 }: BlocksFieldProps<TFieldValues>): JSX.Element {
   const { field } = useController({ name, control });
-  const { address, returnedTo } = useBuilderWayIn(control, name);
+  const { address, returnedTo, saveAndOpen } = useBuilderWayIn(control, name);
 
   // What an empty document has to be for THIS field, asked of its declaration
   // as the editor's view asks it, so the card and the editor read one answer.
@@ -173,6 +187,10 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
     [field.value, kinds]
   );
   const resting = useRestingPageRender(PLUGIN_SOURCE, restingDocument);
+  // The header & footer set the page is drawn inside, from the same read and
+  // the same unsaved choice the canvas draws its regions from. None for a
+  // form that is not a page's.
+  const regions = usePageLayoutRegions(control, null).canvas;
 
   // Asked before a publish from the form, as the editor asks before its own:
   // the components and Layout this document needs that are not live.
@@ -192,6 +210,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
         styleState={resting.styleState}
         components={resting.components}
         render={resting.render}
+        regions={regions}
         // The gate is passed through rather than restated: `canEditBlocks`
         // answers it, and two readings of "may this author edit" is one more
         // than the question has.
@@ -200,7 +219,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
         // The page's Layout, chosen where its blocks are summarised. Draws
         // nothing for a form that is not a page's.
         after={<PageLayoutPicker control={control} disabled={!editable} />}
-        {...cardWayIn(address)}
+        {...cardWayIn(address, saveAndOpen)}
       />
       {publishOffer}
     </div>
@@ -218,6 +237,10 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
  * the rows are reordered, and the address names it by its saved id. A row not
  * saved yet has no address, and the card says why. Read together with the
  * return from the builder, which is asked by the same address.
+ *
+ * On an entry never saved, the way in is its first save and then the
+ * builder: asked here, and opened by this same field once the entry's form is
+ * drawn again at its own address.
  */
 function useBuilderWayIn<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>,
@@ -234,20 +257,137 @@ function useBuilderWayIn<TFieldValues extends FieldValues>(
     identity,
     "address" in fieldAddress ? fieldAddress.address : undefined
   );
-  return { address, returnedTo };
+  const saveAndOpen = useSaveAndOpen(identity, address, name);
+  useOpenAfterSave(identity, address, name);
+  return { address, returnedTo, saveAndOpen };
 }
 
 /**
- * The card's way in from the builder's address: its link, and the sentence
- * beneath it — why there is no link, or where the link leads. Kept out of the
- * render so the card is told one thing about its way in, in one place.
+ * The way in on an entry never saved: the form's own Save, run as the bar's
+ * control runs it (its validation, its lock, its before-save steps), then the
+ * builder once the save has given the entry an id. A refused save leaves the
+ * author on the form, which shows why, and asks for nothing.
+ *
+ * The draft's Save where the collection keeps drafts, so nothing is
+ * published; where it keeps none, the first save is the entry itself.
+ * Nothing where the form offers no save to this author.
  */
-function cardWayIn(address: BuilderAddress): {
+function useSaveAndOpen(
+  identity: DocumentIdentity | null,
+  address: BuilderAddress,
+  field: string
+): SaveAndOpen | undefined {
+  const actions = useDocumentActions();
+  const [saving, setSaving] = useState(false);
+  const [refusal, setRefusal] = useState<string>();
+  if (!("unsaved" in address) || identity?.kind !== "collection") {
+    return undefined;
+  }
+  const save = firstSaveOf(actions);
+  if (save === undefined) return undefined;
+  const collection = identity.slug;
+  return {
+    label: save.label,
+    saving,
+    ...(refusal === undefined ? {} : { refusal }),
+    run: () => {
+      if (saving) return;
+      setSaving(true);
+      setRefusal(undefined);
+      void save
+        .run()
+        .then(outcome => {
+          if (outcome.ok && outcome.item !== undefined) {
+            openBuilderAfterSave(collection, outcome.item.id, field);
+          }
+          setRefusal(unsaidRefusal(outcome));
+        })
+        .finally(() => setSaving(false));
+    },
+  };
+}
+
+/**
+ * Why a save was refused, where nothing else on the screen says it: the
+ * form shows its own validation errors, and an outcome marked reported has
+ * been said already. A save the author cancelled needs no words.
+ */
+function unsaidRefusal(outcome: DocumentActionOutcome): string | undefined {
+  if (outcome.ok || outcome.reported === true) return undefined;
+  if (outcome.reason === "invalid" || outcome.reason === "cancelled") {
+    return undefined;
+  }
+  return outcome.message;
+}
+
+/** The first save a new entry's form offers, with what the way in says. */
+function firstSaveOf(
+  actions: ReturnType<typeof useDocumentActions>
+): { label: string; run: () => Promise<DocumentActionOutcome> } | undefined {
+  if (actions === null) return undefined;
+  if (actions.saveWithoutPublishing !== undefined) {
+    return {
+      label: SAVE_DRAFT_AND_OPEN_LABEL,
+      run: actions.saveWithoutPublishing,
+    };
+  }
+  // A collection without drafts: its one Save makes the entry.
+  if (!actions.actions.some(action => action.id === "save")) return undefined;
+  return { label: SAVE_AND_OPEN_LABEL, run: () => actions.run("save") };
+}
+
+/**
+ * Opens the builder where this field was asked to, on an entry never saved,
+ * once the entry has been saved and its form drawn at its own address.
+ */
+function useOpenAfterSave(
+  identity: DocumentIdentity | null,
+  address: BuilderAddress,
+  field: string
+): void {
+  const href = "href" in address ? address.href : undefined;
+  const kind = identity?.kind;
+  const slug = identity?.slug;
+  const documentId =
+    identity?.kind === "collection" ? identity.documentId : undefined;
+  useEffect(() => {
+    if (href === undefined || kind !== "collection" || slug === undefined) {
+      return;
+    }
+    const saved = { kind, slug, documentId };
+    if (claimOpenAfterSave(saved, field)) navigateTo(href);
+  }, [href, kind, slug, documentId, field]);
+}
+
+/** Why an entry never saved has no way in where its editor offers no save. */
+const OPENS_ONCE_SAVED = "Opens in the builder once this entry is saved.";
+
+/**
+ * The card's way in from the builder's address: its link, or the save that
+ * gives an entry never saved one, and the sentence beneath it — why there is
+ * no link, or where the link leads. Kept out of the render so the card is told
+ * one thing about its way in, in one place.
+ */
+function cardWayIn(
+  address: BuilderAddress,
+  saveAndOpen: SaveAndOpen | undefined
+): {
   href: string | undefined;
+  saveAndOpen?: SaveAndOpen;
   note?: string;
 } {
   if ("unavailable" in address) {
     return { href: undefined, note: address.unavailable };
+  }
+  if ("unsaved" in address) {
+    // An editor offering no save of its own, such as a quick create inside
+    // another document's form: the entry opens in the builder once saved.
+    if (saveAndOpen === undefined) {
+      return { href: undefined, note: OPENS_ONCE_SAVED };
+    }
+    return saveAndOpen.refusal === undefined
+      ? { href: undefined, saveAndOpen }
+      : { href: undefined, saveAndOpen, note: saveAndOpen.refusal };
   }
   return address.note === undefined
     ? { href: address.href }

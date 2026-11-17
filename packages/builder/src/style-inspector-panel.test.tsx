@@ -194,9 +194,24 @@ function reveal(cssName: string): void {
 
 /** The fields of one property, scoped so two properties sharing a side name do not collide. */
 function fieldsOf(property: string) {
-  return within(
-    document.querySelector(`[data-property="${property}"]`) as HTMLElement
-  );
+  return within(propertyRow(property) as HTMLElement);
+}
+
+/**
+ * A property's row, its section opened first where it is closed: a block
+ * with a size opens "Inside its parent", the tab's first, before Size.
+ */
+function propertyRow(property: string): HTMLElement | null {
+  const row = () =>
+    document.querySelector<HTMLElement>(`[data-property="${property}"]`);
+  if (row() !== null) return row();
+  for (const header of document.querySelectorAll<HTMLElement>(
+    '[data-section] [data-slot="accordion-trigger"][aria-expanded="false"]'
+  )) {
+    fireEvent.click(header);
+    if (row() !== null) return row();
+  }
+  return row();
 }
 
 /**
@@ -5893,6 +5908,7 @@ describe("an image's focal point", () => {
     // Scale down is None or Contain, whichever is smaller: it sits too.
     for (const fit of ["cover", "contain", "none", "scale-down"]) {
       mountImage(fit);
+      openSection(/^Size/);
       expect(
         screen.getByRole("radiogroup", { name: "Focal point" })
       ).toBeDefined();
@@ -5907,6 +5923,7 @@ describe("an image's focal point", () => {
     // point says it does.
     for (const fit of ["fill", undefined]) {
       mountImage(fit);
+      openSection(/^Size/);
       expect(
         screen.getByRole("radiogroup", { name: "Focal point" })
       ).toBeDefined();
@@ -5942,8 +5959,15 @@ describe("an image's fit", () => {
       { dimensions: true },
       { base: { [BASE_BREAKPOINT]: { objectFit: "cover" } } }
     );
+    openSection(/^Size/);
     expect(screen.getByRole("radiogroup", { name: "Fit" })).toBeDefined();
-    expect(await hintOf("Fit")).toMatch(/^Object fit/);
+    // Size's own Fit, not Inside its parent's Fill / Fit / Fixed choice.
+    const row = document.querySelector<HTMLElement>(
+      '[data-property="objectFit"]'
+    )!;
+    fireEvent.pointerMove(row.querySelector(".nx-inspector__field")!);
+    const tip = await screen.findByRole("tooltip", {}, { timeout: 2000 });
+    expect(tip.textContent).toMatch(/^Object fit/);
   });
 });
 
@@ -6220,6 +6244,7 @@ describe("which elements count as media for the fit controls", () => {
         cascade={{ nodes: editor.document.nodes, entries: [] } as never}
       />
     );
+    openSection(/^Size/);
     const shown =
       document.querySelector('[data-property="objectFit"]') !== null;
     unmount();
@@ -6237,6 +6262,7 @@ describe("which elements count as media for the fit controls", () => {
   it("shows them before the canvas has said what the block draws", () => {
     register({ dimensions: true });
     render(<StyleInspectorPanel editor={editorFor(documentOf())} />);
+    openSection(/^Size/);
     expect(
       document.querySelector('[data-property="objectFit"]')
     ).not.toBeNull();

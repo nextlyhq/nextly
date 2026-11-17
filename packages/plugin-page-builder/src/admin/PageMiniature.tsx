@@ -41,14 +41,26 @@
  * is written there. What is this surface's own is the frame: as tall as the
  * page up to a cap, with a link over each section.
  *
+ * ## Inside its header and footer, as the canvas draws it
+ *
+ * A page drawn inside a header & footer set is shown between them, from the
+ * same published regions the canvas draws, each part compiled as the canvas
+ * and the published route compile it (`layoutPartSheets`). A visitor never
+ * sees the page without them, and the header's logo is as much the page's
+ * picture as an image in its body.
+ *
  * @module @nextlyhq/plugin-page-builder/admin/PageMiniature
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, DefinitionsById } from "@nextlyhq/blocks-engine";
 import {
   createStandaloneContext,
+  layoutPartSheets,
   NODE_ID_ATTRIBUTE,
   PageRenderer,
+  type PagePart,
   type PageRendererProps,
+  type PartSheet,
+  type RegionArea,
 } from "@nextlyhq/blocks-react";
 import {
   MINIATURE_RENDER_WIDTH,
@@ -109,6 +121,21 @@ export interface PageMiniatureProps {
   sections?: readonly MiniatureSection[];
   /** Moves to a section's address within the admin, keeping the form mounted. */
   onNavigate?: (href: string) => void;
+  /**
+   * The regions of the header & footer set the page is drawn inside, as the
+   * canvas is handed them. Absent or empty, the page is drawn alone.
+   */
+  regions?: readonly MiniatureRegion[];
+}
+
+/** A region of the page's header & footer set, as the canvas draws it. */
+export interface MiniatureRegion {
+  /** Drawn above the page for a header, below it for a footer. */
+  readonly area: RegionArea;
+  /** The region's own document: one instance of the component filling it. */
+  readonly document: BlockDocument;
+  /** The published definitions that document reaches. */
+  readonly definitions?: DefinitionsById;
 }
 
 /** One section a person may open from the preview. */
@@ -321,6 +348,92 @@ function frameSize(
   };
 }
 
+/** Every part a page can be drawn with, in the order they are drawn. */
+const PART_ORDER: readonly PagePart[] = ["header", "page", "footer"];
+
+/** A region to draw, with how it treats the site sheet. */
+interface DrawnRegion {
+  region: MiniatureRegion;
+  sheet: PartSheet;
+}
+
+/** The page and the regions around it, each with its site-sheet inputs. */
+interface DrawnParts {
+  page: PartSheet;
+  header: DrawnRegion | undefined;
+  footer: DrawnRegion | undefined;
+}
+
+/**
+ * The page and the regions around it, each with its site-sheet inputs, asked
+ * of `layoutPartSheets` as the canvas and the published route ask it: the
+ * first part drawn emits the site sheet and each part compiles under its own
+ * scope. `undefined` when there is no region to draw, so a page drawn alone
+ * is drawn exactly as before.
+ */
+function drawnParts(
+  regions: readonly MiniatureRegion[] | undefined,
+  render: PageRenderInputs,
+  siteStyles: PageRendererProps["siteStyles"]
+): DrawnParts | undefined {
+  const regionOf = (area: RegionArea) =>
+    regions?.find(region => region.area === area);
+  // Header, page, footer: the order the page is drawn in, of the parts it has.
+  const parts = PART_ORDER.filter(
+    part => part === "page" || regionOf(part) !== undefined
+  );
+  if (parts.length === 1) return undefined;
+  const sheets = layoutPartSheets({
+    parts,
+    styleContext: render.styleContext,
+    siteStyles,
+  });
+  const sheetFor = (part: PagePart): PartSheet =>
+    sheets[parts.indexOf(part)] ?? {};
+  const drawn = (area: RegionArea): DrawnRegion | undefined => {
+    const region = regionOf(area);
+    return region === undefined ? undefined : { region, sheet: sheetFor(area) };
+  };
+  return {
+    page: sheetFor("page"),
+    header: drawn("header"),
+    footer: drawn("footer"),
+  };
+}
+
+/**
+ * One region, drawn with the page's inputs, its own document and the
+ * definitions it reaches, under the page's context so what its async blocks
+ * drew (a logo) is kept between draws as the page's is. The page's own
+ * definitions are not the region's, and are never handed to it.
+ */
+function RegionPicture({
+  drawn,
+  render,
+  context,
+}: {
+  drawn: DrawnRegion | undefined;
+  render: PageRenderInputs;
+  context: NonNullable<PageRendererProps["context"]>;
+}): JSX.Element | null {
+  if (drawn === undefined) return null;
+  const { definitions: _pageDefinitions, ...shared } = render;
+  const { document, definitions } = drawn.region;
+  return (
+    <PageRenderer
+      {...shared}
+      context={context}
+      blocks={entryBlockResolver()}
+      {...drawn.sheet}
+      document={document}
+      {...(definitions === undefined || definitions.size === 0
+        ? {}
+        : { definitions })}
+      keepAsyncOutputs
+    />
+  );
+}
+
 /**
  * One page context for as long as the miniature is shown, unless the surface
  * hands its own. The renderer keeps each async block's output per context, so
@@ -332,6 +445,72 @@ function useSteadyContext(
 ): NonNullable<PageRendererProps["context"]> {
   const own = useMemo(() => createStandaloneContext(), []);
   return given ?? own;
+}
+
+/**
+ * The page drawn, between the regions of its header & footer set where it
+ * has them, as one element.
+ *
+ * Held apart from the measured scale, which changes on every frame of a
+ * resize. Rebuilt inline, each observer callback would rerun the whole render
+ * beneath it — sanitisation, migration, every block, and the stylesheet
+ * compile — for a page whose content did not change and whose wrapper only
+ * needed a new transform. On a large document that is visible jank, and it
+ * re-enters any asynchronous block resolver the page has. The canvas holds its
+ * page the same way and for the same reason.
+ */
+function useDrawnPage({
+  document,
+  siteStyles,
+  render,
+  sections,
+  regions,
+}: Pick<
+  PageMiniatureProps,
+  "document" | "siteStyles" | "render" | "sections" | "regions"
+>): JSX.Element {
+  const context = useSteadyContext(render.context);
+  const parts = useMemo(
+    () => drawnParts(regions, render, siteStyles),
+    [regions, render, siteStyles]
+  );
+  return useMemo(
+    () => (
+      <>
+        <RegionPicture
+          drawn={parts?.header}
+          render={render}
+          context={context}
+        />
+        <PageRenderer
+          // Spread rather than listed field by field: the bundle owns which
+          // inputs describe this site's rendering, and a surface restating them
+          // here would silently stop forwarding one it never heard of.
+          {...render}
+          context={context}
+          document={document}
+          blocks={entryBlockResolver()}
+          siteStyles={siteStyles}
+          // Each block's id on its root element, so the links over the page can
+          // find the section they stand for. Only where there are links to place.
+          nodeAttribute={sections !== undefined}
+          // What async blocks drew is kept between draws, as on the canvas: a
+          // content change draws only the blocks it changed. This is the
+          // admin's picture of the page, never the published page.
+          keepAsyncOutputs
+          // After the page's own inputs: inside a header & footer set the
+          // page takes the sheet its part is given, as on the canvas.
+          {...parts?.page}
+        />
+        <RegionPicture
+          drawn={parts?.footer}
+          render={render}
+          context={context}
+        />
+      </>
+    ),
+    [render, context, document, siteStyles, sections, parts]
+  );
 }
 
 /**
@@ -347,6 +526,7 @@ export function PageMiniature({
   maxHeight = DEFAULT_MAX_HEIGHT,
   sections,
   onNavigate,
+  regions,
 }: PageMiniatureProps): JSX.Element {
   const frame = useRef<HTMLDivElement>(null);
   const pageBox = useRef<HTMLDivElement>(null);
@@ -361,41 +541,13 @@ export function PageMiniature({
     sections
   );
 
-  const context = useSteadyContext(render.context);
-
-  /*
-   * Held apart from the measured scale, which changes on every frame of a
-   * resize.
-   *
-   * Rebuilt inline, each observer callback would rerun the whole render beneath
-   * it — sanitisation, migration, every block, and the stylesheet compile — for
-   * a page whose content did not change and whose wrapper only needed a new
-   * transform. On a large document that is visible jank, and it re-enters any
-   * asynchronous block resolver the page has. The canvas holds its page the
-   * same way and for the same reason.
-   */
-  const page = useMemo(
-    () => (
-      <PageRenderer
-        // Spread rather than listed field by field: the bundle owns which
-        // inputs describe this site's rendering, and a surface restating them
-        // here would silently stop forwarding one it never heard of.
-        {...render}
-        context={context}
-        document={document}
-        blocks={entryBlockResolver()}
-        siteStyles={siteStyles}
-        // Each block's id on its root element, so the links over the page can
-        // find the section they stand for. Only where there are links to place.
-        nodeAttribute={sections !== undefined}
-        // What async blocks drew is kept between draws, as on the canvas: a
-        // content change draws only the blocks it changed. This is the
-        // admin's picture of the page, never the published page.
-        keepAsyncOutputs
-      />
-    ),
-    [render, context, document, siteStyles, sections]
-  );
+  const page = useDrawnPage({
+    document,
+    siteStyles,
+    render,
+    sections,
+    regions,
+  });
 
   const size = frameSize(composedHeight * scale, maxHeight);
 
