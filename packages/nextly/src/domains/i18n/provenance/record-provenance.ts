@@ -592,6 +592,67 @@ function isBlankValue(value: unknown): boolean {
 }
 
 /**
+ * Moves one entity's records of a renamed translated field to its new name, on `db`: the field's
+ * own records, and each row's record in a field with a structure per language (`<field>#<row id>`).
+ * A record is kept by field name, so left under the old one every value of the renamed field would
+ * read as of unknown origin, and none could be found out of date. A row's record whose new path
+ * no longer fits the column is dropped, as recording skips one. Nothing is done until the table is
+ * there.
+ *
+ * @experimental
+ */
+export async function renameFieldProvenance(
+  db: ProvenanceDb & { tableExists(table: string): Promise<boolean> },
+  rename: {
+    scopeKind: ProvenanceScopeKind;
+    scopeSlug: string;
+    from: string;
+    to: string;
+  }
+): Promise<void> {
+  if (rename.from === rename.to) return;
+  if (!(await db.tableExists(TRANSLATION_PROVENANCE_TABLE))) return;
+  const scope: WhereCondition[] = [
+    { column: "scopeKind", op: "=", value: rename.scopeKind },
+    { column: "scopeSlug", op: "=", value: rename.scopeSlug },
+  ];
+  await db.updateCount(
+    TRANSLATION_PROVENANCE_TABLE,
+    { fieldPath: rename.to },
+    { and: [...scope, { column: "fieldPath", op: "=", value: rename.from }] }
+  );
+  // A row's path is the field's with the row id after it. LIKE narrows the read; the prefix is
+  // checked again here, since a field name may hold `_`, which LIKE takes as any character.
+  const prefix = `${rename.from}${ROW_PATH_SEPARATOR}`;
+  const rows = await db.select<{ id: string; fieldPath: string }>(
+    TRANSLATION_PROVENANCE_TABLE,
+    {
+      columns: ["id", "fieldPath"],
+      where: {
+        and: [
+          ...scope,
+          { column: "fieldPath", op: "LIKE", value: `${prefix}%` },
+        ],
+      },
+    }
+  );
+  for (const row of rows) {
+    if (!row.fieldPath.startsWith(prefix)) continue;
+    const moved = `${rename.to}${ROW_PATH_SEPARATOR}${row.fieldPath.slice(prefix.length)}`;
+    const where = { and: [{ column: "id", op: "=" as const, value: row.id }] };
+    if (moved.length > TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH) {
+      await db.delete(TRANSLATION_PROVENANCE_TABLE, where);
+      continue;
+    }
+    await db.updateCount(
+      TRANSLATION_PROVENANCE_TABLE,
+      { fieldPath: moved },
+      where
+    );
+  }
+}
+
+/**
  * Removes a language's working draft's provenance, on `db`, the discard's own transaction: the
  * draft is gone, and what it said about its values with it.
  *
