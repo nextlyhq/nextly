@@ -195,3 +195,20 @@ describe("where a ★ look's values come from, as the inspector asks", () => {
     ).toMatchObject({ kind: "class", id: secondary.id });
   });
 });
+
+describe("a ★ look's value problems", () => {
+  it("are reported once, by the look's own rule, and never spend the page's allowance", () => {
+    // More unknown properties than the compile reports at most: the ★ pass
+    // writes them again silently, and must not leave the look's own rule
+    // with nothing left to say them in.
+    const wrong = Object.fromEntries(
+      Array.from({ length: 60 }, (_, at) => [`notAProperty${at}`, "1px"])
+    );
+    const { warnings } = compile([
+      primary,
+      secondary,
+      { ...ghost, starred: true, styles: values(wrong) },
+    ]);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+});

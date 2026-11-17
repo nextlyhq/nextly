@@ -17,6 +17,7 @@ import {
   isTokenRef,
   resolveSiteTokens,
   scaledTokenText,
+  starredLooksOf,
   tokenIdentity,
   type NamedClass,
   type NodeStyles,
@@ -89,12 +90,27 @@ export function lookTiles(
   ownName: string | undefined,
   worn: string | null = null
 ): LookTile[] {
-  const looks = looksOfType(library, blockType).filter(
-    look => look.hidden !== true || look.id === worn
+  const all = looksOfType(library, blockType);
+  if (all.length === 0) return [];
+  // Picking no style gives the ★ style when one carries it, so that tile is
+  // named and drawn as the ★ style, which isn't offered a second time unless
+  // the block wears it by name.
+  const starred = starredLooksOf(usableSiteClasses(library)).get(blockType);
+  const looks = all.filter(
+    look =>
+      look.id === worn || (look.hidden !== true && look.id !== starred?.id)
   );
-  if (looks.length === 0) return [];
+  const none: LookTile =
+    starred === undefined
+      ? { id: null, name: ownName ?? "Default", styles: undefined, hidden: false }
+      : {
+          id: null,
+          name: sharedStyleName(starred),
+          styles: starred.styles,
+          hidden: false,
+        };
   return [
-    { id: null, name: ownName ?? "Default", styles: undefined, hidden: false },
+    none,
     ...looks.map(look => ({
       id: look.id,
       name: sharedStyleName(look),

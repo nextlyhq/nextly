@@ -635,7 +635,6 @@ export function compilePageCss(
       pageRoot,
       contexts,
       tokenPrefix,
-      warningAllowance,
       previewStates,
       trace,
       mayFetchUrl,
@@ -996,7 +995,6 @@ interface StarredLookCompile {
   readonly pageRoot: string;
   readonly contexts: ReturnType<typeof breakpointContexts>;
   readonly tokenPrefix: string;
-  readonly warningAllowance: ReturnType<typeof newWarningAllowance>;
   readonly previewStates: boolean;
   readonly trace: StyleTraceEntry[] | undefined;
   readonly mayFetchUrl: StyleCompileContext["mayFetchUrl"];
@@ -1083,9 +1081,11 @@ function starredLookRules(
         pointer("/classes", look.id),
         about.contexts,
         about.tokenPrefix,
+        // Silent, with an allowance of its own: what it finds is said by the
+        // look's own rule, which must still have the page's allowance to say it.
         [],
         newStyleIssueBudget(),
-        about.warningAllowance,
+        newWarningAllowance(),
         {
           // Which looks leave a block out, so a reader of the trace answers
           // which blocks this rule reaches as its selector does.

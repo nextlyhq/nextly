@@ -320,3 +320,22 @@ describe("a hidden block style's tile", () => {
     ]);
   });
 });
+
+describe("the tile for picking no style, once another style carries ★", () => {
+  const starred = { ...outline, starred: true as const };
+
+  it("is the ★ style, by its name and its look, and the ★ style isn't offered twice", () => {
+    const tiles = lookTiles([card, starred, secondary], "core/button", "Primary", null);
+    expect(tiles.map(tile => [tile.id, tile.name])).toEqual([
+      [null, "Outline"],
+      [secondary.id, "Secondary"],
+    ]);
+    expect(tiles[0]?.styles).toEqual(outline.styles);
+  });
+
+  it("is the block's own style while no style carries ★", () => {
+    expect(
+      lookTiles([card, outline, secondary], "core/button", "Primary", null)[0]
+    ).toMatchObject({ id: null, name: "Primary", styles: undefined });
+  });
+});
