@@ -174,6 +174,13 @@ export interface SiteTokenSet {
    * {@link DarkModeStrategy}.
    */
   darkMode?: DarkModeStrategy;
+  /**
+   * The page widths a size made with "Fluid…" grows across, in px: the
+   * smallest screen and the largest. 360 to 1280 where unset. Never
+   * emitted: each fluid size's value already holds it, and a change of it
+   * remakes those values.
+   */
+  fluidRange?: { readonly min: number; readonly max: number };
 }
 
 /**

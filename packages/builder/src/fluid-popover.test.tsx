@@ -133,8 +133,69 @@ describe("Fluid… on a size", () => {
     render(<Hosted tokens={SITE} readOnly />);
     fireEvent.click(screen.getByRole("button", { name: /^Gap,/ }));
     const editor = await screen.findByRole("dialog");
+    expect(within(editor).queryByRole("button", { name: "Fluid…" })).toBeNull();
+  });
+});
+
+describe("the site's fluid range", () => {
+  const made: SiteTokenSet = {
+    tokens: [
+      {
+        name: "font-size.lead",
+        kind: "dimension",
+        values: { light: fluidValue({ small: 16, large: 20 }, RANGE) },
+        fluid: { small: 16, large: 20 },
+      },
+      { name: "line-height.lead", kind: "number", values: { light: "1.4" } },
+    ],
+  };
+
+  /** Types a width into a field and leaves it. */
+  function enter(field: HTMLElement, value: string): void {
+    fireEvent.change(field, { target: { value } });
+    fireEvent.blur(field);
+  }
+
+  it("is set in the Type tab, and remakes the sizes made with Fluid…", () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted tokens={made} groups={["type", "fonts"]} onChange={onChange} />
+    );
+    const range = screen.getByRole("group", { name: "Fluid range" });
     expect(
-      within(editor).queryByRole("button", { name: "Fluid…" })
-    ).toBeNull();
+      (within(range).getByLabelText("Smallest screen") as HTMLInputElement)
+        .value
+    ).toBe("360");
+    enter(within(range).getByLabelText("Largest screen"), "1440");
+    const saved = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(saved.fluidRange).toEqual({ min: 360, max: 1440 });
+    expect(saved.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, { min: 360, max: 1440 })
+    );
+  });
+
+  it("is reached from Fluid… as Change range", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={made} onChange={onChange} />);
+    const fluid = await fluidFor(/^Lead,/);
+    fireEvent.click(
+      within(fluid).getByRole("button", { name: "Change range" })
+    );
+    const range = within(fluid).getByRole("group", { name: "Fluid range" });
+    enter(within(range).getByLabelText("Smallest screen"), "320");
+    const saved = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(saved.fluidRange).toEqual({ min: 320, max: 1280 });
+  });
+
+  it("refuses a range whose smallest screen is not the smaller, saying why", () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted tokens={made} groups={["type", "fonts"]} onChange={onChange} />
+    );
+    const range = screen.getByRole("group", { name: "Fluid range" });
+    const smallest = within(range).getByLabelText("Smallest screen");
+    enter(smallest, "1600");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(smallest.getAttribute("aria-invalid")).toBe("true");
   });
 });

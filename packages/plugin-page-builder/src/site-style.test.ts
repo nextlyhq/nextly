@@ -11,6 +11,7 @@ import {
   resolveSiteStyle,
   siteBreakpoints,
   siteSheet,
+  tokenOverrideOf,
   type SiteStyleData,
 } from "./site-style";
 
@@ -290,5 +291,29 @@ describe("removedSiteStyleOption", () => {
   it("says nothing for options without it", () => {
     expect(removedSiteStyleOption(undefined)).toBeUndefined();
     expect(removedSiteStyleOption({ tokens: { tokens: [] } })).toBeUndefined();
+  });
+});
+
+describe("the site's fluid range across the tiers", () => {
+  it("is stored only where it differs from the code's, and the stored one wins", () => {
+    const defaults = { tokens: [], fluidRange: { min: 360, max: 1280 } };
+    expect(
+      tokenOverrideOf(defaults, {
+        tokens: [],
+        fluidRange: { min: 360, max: 1280 },
+      }).fluidRange
+    ).toBeUndefined();
+    expect(
+      tokenOverrideOf(defaults, {
+        tokens: [],
+        fluidRange: { min: 320, max: 1440 },
+      }).fluidRange
+    ).toEqual({ min: 320, max: 1440 });
+    expect(
+      resolveSiteStyle(
+        { tokens: defaults },
+        { tokens: { tokens: [], fluidRange: { min: 320, max: 1440 } } }
+      ).tokens?.fluidRange
+    ).toEqual({ min: 320, max: 1440 });
   });
 });

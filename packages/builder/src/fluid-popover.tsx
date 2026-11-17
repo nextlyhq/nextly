@@ -31,6 +31,8 @@ export interface FluidHook {
   readonly onFluid: (sizes: FluidSizes) => void;
   /** The site's fluid range. */
   readonly range?: FluidRangeWidths;
+  /** Change the site's fluid range, from "Change range". */
+  readonly onRange?: (range: FluidRangeWidths) => void;
 }
 
 /** The sizes to start from: the stored ones, else the value's nearest. */
@@ -117,6 +119,9 @@ function FluidForm({
           ? "Type two sizes in px."
           : `${String(ready.small)}px at ${String(range.min)}px, growing to ${String(ready.large)}px at ${String(range.max)}px`}
       </p>
+      {hook.onRange === undefined ? null : (
+        <RangeLink range={range} onRange={hook.onRange} />
+      )}
       <Button
         type="button"
         size="sm"
@@ -131,6 +136,96 @@ function FluidForm({
       >
         Make fluid
       </Button>
+    </div>
+  );
+}
+
+/** "Change range", and the site's fluid range under it while it is open. */
+function RangeLink({
+  range,
+  onRange,
+}: {
+  range: FluidRangeWidths;
+  onRange: (range: FluidRangeWidths) => void;
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        className="nx-vars__link nx-fluid__range-link"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+      >
+        Change range
+      </button>
+      {open ? (
+        <FluidRangeFields range={range} onRange={onRange} readOnly={false} />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The site's fluid range: "Smallest screen" and "Largest screen", in px.
+ * Each field commits when it is left or on Enter; a range whose smallest
+ * screen is not the smaller is refused in its field, saying why, and not
+ * written. The one control for the range, in the Type tab and from every
+ * "Fluid…".
+ */
+export function FluidRangeFields({
+  range,
+  onRange,
+  readOnly,
+}: {
+  range: FluidRangeWidths;
+  onRange: (range: FluidRangeWidths) => void;
+  readOnly: boolean;
+}): React.JSX.Element {
+  const id = React.useId();
+  const [refused, setRefused] = React.useState<"min" | "max" | undefined>();
+  const commit = (end: "min" | "max", text: string): void => {
+    const width = sizeOf(text);
+    const next = { ...range, [end]: width };
+    if (width === undefined || next.min >= next.max) {
+      setRefused(end);
+      return;
+    }
+    setRefused(undefined);
+    if (next.min !== range.min || next.max !== range.max) {
+      onRange({ min: next.min, max: next.max });
+    }
+  };
+  const field = (end: "min" | "max", label: string): React.JSX.Element => (
+    <>
+      <label className="nx-vars-editor__label" htmlFor={`${id}-${end}`}>
+        {label}
+      </label>
+      <Input
+        id={`${id}-${end}`}
+        inputMode="decimal"
+        autoComplete="off"
+        readOnly={readOnly}
+        defaultValue={String(range[end])}
+        key={`${end}-${String(range[end])}`}
+        aria-invalid={refused === end ? true : undefined}
+        aria-describedby={refused === end ? `${id}-said` : undefined}
+        onBlur={event => commit(end, event.currentTarget.value)}
+        onKeyDown={event => {
+          if (event.key === "Enter") commit(end, event.currentTarget.value);
+        }}
+      />
+    </>
+  );
+  return (
+    <div className="nx-fluid__range" role="group" aria-label="Fluid range">
+      {field("min", "Smallest screen")}
+      {field("max", "Largest screen")}
+      {refused === undefined ? null : (
+        <p className="nx-fluid__said" id={`${id}-said`} role="status">
+          The smallest screen comes first, and both are widths in px.
+        </p>
+      )}
     </div>
   );
 }

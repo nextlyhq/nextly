@@ -261,6 +261,10 @@ export function tokenOverrideOf(
     ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
       ? {}
       : { darkMode: edited.darkMode }),
+    ...(edited.fluidRange === undefined ||
+    sameJsonValue(edited.fluidRange, defaults?.fluidRange)
+      ? {}
+      : { fluidRange: edited.fluidRange }),
   };
 }
 
@@ -415,10 +419,12 @@ function mergeTokens(
   );
   const prefix = stored?.prefix ?? defaults?.prefix;
   const darkMode = stored?.darkMode ?? defaults?.darkMode;
+  const fluidRange = stored?.fluidRange ?? defaults?.fluidRange;
   return {
     tokens: tokens === undefined ? [] : [...tokens],
     ...(prefix === undefined ? {} : { prefix }),
     ...(darkMode === undefined ? {} : { darkMode }),
+    ...(fluidRange === undefined ? {} : { fluidRange }),
   };
 }
 
