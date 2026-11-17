@@ -35,6 +35,7 @@ import {
   FORM_SERVICE,
   startFormProviders,
 } from "./forms/providers";
+import { editorFormsRoutes } from "./forms/editor-forms-route";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -142,6 +143,8 @@ export const pageBuilder = (
   const def = createDefinition(opts);
   // The form providers other plugins register, read by the form receiver.
   const formProviders = createFormProviders();
+  // The Form block's picker and the canvas's picked form, read as the author.
+  const editorForms = editorFormsRoutes(formProviders);
   // What a routed page's forms need: where they post, and its providers' forms.
   const pageForms = siteForms({
     providers: formProviders,
@@ -510,6 +513,8 @@ export const pageBuilder = (
         ...siteStyle.sharedStyles,
         ...siteStyle.variables,
         startup.builderStartup,
+        editorForms.list,
+        editorForms.describe,
         // The one public route every form on the site posts to.
         formReceiverRoute({
           providers: formProviders,
