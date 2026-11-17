@@ -19,16 +19,16 @@
  * are the `supports` vocabulary block authors declare, so they decide WHICH
  * properties a block has; `inspector-sections.ts` decides where an author
  * finds each one — eight sections, Layout to Effects, every property placed
- * once. A property the table has not met yet still appears, behind "+ More"
- * in its group's section.
+ * once. A property the table has not met yet still appears, as one the author
+ * adds from "Add CSS property".
  *
  * **Every supported property is offered; the common ones show at once.** Each
  * property carries whether it has an effect on the block in hand (`applies`,
  * the engine's answer, judged by the block's own arrangement, its parent's and
  * what it renders) and whether it shows without being asked for (`common`):
- * its tier is common and it applies. The rest wait behind the section's
- * "+ More", which is the panel's to draw. A property holding a value here
- * always shows, whether or not it still has an effect.
+ * its tier is common and it applies. The rest are the author's to add from
+ * "Add CSS property", which is the panel's to draw. A property holding a value
+ * here always shows, whether or not it still has an effect.
  *
  * @module style-inspector
  */
@@ -59,7 +59,6 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -69,6 +68,7 @@ import {
   type InspectorSectionKey,
   type TierContext,
 } from "./inspector-sections";
+import type { ParentArrangement } from "./plain-layout";
 import {
   styleControlsFor,
   type StyleControl,
@@ -179,9 +179,20 @@ export interface InspectedStyleProperty {
    */
   readonly applies: boolean;
   /**
+   * Whether its tier shows it without being asked for while the block is
+   * edited this way, whether or not it applies. False makes it a property the
+   * author adds from "Add CSS property", drawn in "CSS properties" once added
+   * or holding a value.
+   */
+  readonly tierShows: boolean;
+  /**
+   * The engine's answer for each field of an object property that answers
+   * per field (`position`'s `zIndex`), where one does.
+   */
+  readonly fieldApplies?: Readonly<Record<string, boolean>>;
+  /**
    * Whether it shows without being asked for: its tier holds for this block
-   * and it applies, or it holds a value here. False puts it behind its
-   * section's "+ More".
+   * and it applies, or it holds a value here.
    */
   readonly common: boolean;
 }
@@ -216,6 +227,8 @@ export interface StyleInspection {
    * what "Inside its parent" offers; absent where the parent isn't known.
    */
   readonly parent?: ParentArrangement;
+  /** The parent's way of laying the block out, beside its arrangement. */
+  readonly parentLayout?: ParentLayout;
   /**
    * The `object-fit` keyword in force here, lowercased, or `undefined` when
    * nothing sets one: what decides what the focal point says it does.
@@ -309,12 +322,16 @@ export function inspectStyle(
       breakpoint,
     });
     const has = applies(property, context);
+    const shows = tierShows(placement.tier, tiers);
+    const fields = fieldAnswers(property, context);
     return {
       placement,
       row: {
         ...row,
         applies: has,
-        common: row.set || (has && tierShows(placement.tier, tiers)),
+        tierShows: shows,
+        ...(fields === undefined ? {} : { fieldApplies: fields }),
+        common: row.set || (has && shows),
       },
     };
   });
@@ -331,7 +348,7 @@ export function inspectStyle(
     }
   }
 
-  const parent = laidOutBy(document, node, at, options, {
+  const parentLayout = laidOutBy(document, node, at, options, {
     position: context.position,
     sized: offered.has("width"),
   });
@@ -341,8 +358,23 @@ export function inspectStyle(
     breakpoint,
     sections,
     ...(objectFit === undefined ? {} : { objectFit }),
-    ...(parent === undefined ? {} : { parent }),
+    ...parentFields(parentLayout),
   };
+}
+
+/**
+ * The engine's answer for each field a catalog property answers for on its
+ * own, or `undefined` where it answers only as a whole.
+ */
+function fieldAnswers(
+  property: string,
+  context: AppliesContext
+): Readonly<Record<string, boolean>> | undefined {
+  const fields = getStyleProperty(property)?.fieldAppliesWhen;
+  if (fields === undefined) return undefined;
+  return Object.fromEntries(
+    Object.keys(fields).map(field => [field, applies(property, context, field)])
+  );
 }
 
 /** Where a property is read: the edited address, and how to read it. */
@@ -407,9 +439,18 @@ function laidOutBy(
   at: ReadAt,
   options: StyleInspectionOptions | undefined,
   block: { readonly position: string | undefined; readonly sized: boolean }
-): ParentArrangement | undefined {
+): ParentLayout | undefined {
   if (!block.sized || OUT_OF_FLOW.has(block.position ?? "")) return undefined;
-  return parentArrangementOf(document, node, at, options);
+  return parentLayoutOf(document, node, at, options);
+}
+
+/** How the parent lays the block out, as the inspection says it. */
+function parentFields(
+  layout: ParentLayout | undefined
+): Pick<StyleInspection, "parent" | "parentLayout"> {
+  return layout === undefined
+    ? {}
+    : { parent: layout.arrangement, parentLayout: layout };
 }
 
 /** The positions that take a block out of its parent's layout. */
@@ -491,18 +532,36 @@ function parentDisplayOf(
  * `undefined` where the parent isn't known (a shared style, a component's
  * top level) or arranges another way (a table).
  */
-function parentArrangementOf(
+function parentLayoutOf(
   document: BlockDocument,
   node: BlockNode,
   at: ReadAt,
   options: StyleInspectionOptions | undefined
-): ParentArrangement | undefined {
+): ParentLayout | undefined {
   const box = parentBoxOf(document, node, at, options);
   if (box === undefined) return undefined;
-  return arrangementOf(
+  const arrangement = arrangementOf(
     keywordIdentity(box.read("display", "display")) ?? IN_FLOW,
     keywordIdentity(box.read("flex-direction", "flexDirection"))
   );
+  if (arrangement === undefined) return undefined;
+  const keyword = (cssProperty: string, property: string) =>
+    keywordIdentity(box.read(cssProperty, property));
+  return {
+    arrangement,
+    alignItems: keyword("align-items", "alignItems"),
+    justifyItems: keyword("justify-items", "justifyItems"),
+  };
+}
+
+/**
+ * How the block's parent lays it out: its arrangement, and the alignment it
+ * gives its items, which a child's automatic self-alignment defers to.
+ */
+export interface ParentLayout {
+  readonly arrangement: ParentArrangement;
+  readonly alignItems: string | undefined;
+  readonly justifyItems: string | undefined;
 }
 
 /** The arrangement a display and a direction lay a box's children out in. */
@@ -708,7 +767,10 @@ function inspectProperty(
     state: StyleState;
     breakpoint: BreakpointId;
   }
-): Omit<InspectedStyleProperty, "common" | "applies"> {
+): Omit<
+  InspectedStyleProperty,
+  "common" | "applies" | "tierShows" | "fieldApplies"
+> {
   // Present by construction: the name came out of `stylePropertiesForSupports`,
   // which reads the same catalog. Asked again rather than threaded through so
   // this function takes a name, which is what makes it callable from a test

@@ -518,6 +518,20 @@ describe("leaving the editor", () => {
     fireEvent.click(exit);
     expect(onExit).toHaveBeenCalledTimes(1);
   });
+
+  it("names the exit where the host says it goes, and says nothing of 'Exit editor' then", () => {
+    // A host whose exit leaves for a list rather than the document names that
+    // place. Asserting the old name is gone too: a bar that kept "Exit editor"
+    // as the name and showed the new words only in a tooltip would tell a
+    // screen reader the arrow returns to the document.
+    const { onExit } = renderShell({ exitLabel: "Back to Pages" });
+
+    const exit = screen.getByRole("button", { name: "Back to Pages" });
+    expect(exit.getAttribute("title")).toBe("Back to Pages");
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+    fireEvent.click(exit);
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("panels the host cannot fill", () => {
@@ -1726,6 +1740,25 @@ describe("a viewport too narrow for the shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Exit editor" }));
     expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("words the way out as the top bar's arrow does, where the host names it", () => {
+    // The notice's button and the arrow are the same way out; worded apart,
+    // one of them would promise a place the exit doesn't go.
+    stubContainerFits(false);
+    const onExit = vi.fn();
+    render(
+      <BuilderShell
+        onExit={onExit}
+        exitLabel="Back to Pages"
+        store={memoryStore()}
+      />
+    );
+
+    expect(
+      screen.getAllByRole("button", { name: "Back to Pages" }).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
   });
 
   it("drops the escape sentence WITH the button when no host can be exited to", () => {

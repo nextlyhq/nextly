@@ -122,7 +122,7 @@ function shown(
 /**
  * A block's Size rows shown, then the rows of "Inside its parent" that apply:
  * a child's share of a Row or a Grid is drawn there as Fill / Fit / Fixed,
- * its CSS rows behind More, so what decides them is whether they apply.
+ * its CSS rows below it, so what decides them is whether they apply.
  */
 function sizeAndChild(
   document: BlockDocument,
@@ -143,7 +143,7 @@ function sizeAndChild(
   return [...size, ...child];
 }
 
-// A box's Size rows: its aspect ratio waits behind More, as on any block that
+// A box's Size rows: its aspect ratio is one to add, as on any block that
 // draws no replaced element.
 const SIZE = ["width", "height", "minWidth", "maxWidth"];
 
@@ -182,7 +182,7 @@ describe("a container's own rows", () => {
   });
 
   it("marks what does not apply, rather than dropping it", () => {
-    // "+ More" and the picker that replaces it read the same answer.
+    // The rows drawn and "Add CSS property" read the same answer.
     register();
     const rows =
       inspectStyle(nested(), "outer", {

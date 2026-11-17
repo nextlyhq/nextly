@@ -1,0 +1,116 @@
+/* The Styles tab's Block styles section: its heading and the line that says
+   what block styles are, then each block type's styles under a heading that
+   folds them, each a row drawn as a small block of its type with its chips
+   and its ⋯ menu, and the type's "+ New <block> style" row last. The Shared
+   styles section below carries a line of its own. */
+.nx-block-styles__head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.nx-block-styles__line,
+.nx-shared-styles__line {
+  margin: 0 0 0.25rem;
+  padding: 0 2px;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-block-styles__type-head {
+  margin: 0.375rem 0 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-block-styles__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The row shares its line with the ⋯, and a refusal under both. */
+.nx-block-styles__item {
+  flex-wrap: wrap;
+  border-bottom: 0;
+  border-radius: var(--radius-sm);
+}
+
+.nx-block-styles__row {
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  border-radius: var(--radius-sm);
+}
+
+.nx-block-styles__row .nx-vars__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The style the style editor edits, ringed in the selection colour, as a
+   chosen tile is. */
+.nx-block-styles__row[aria-pressed="true"] {
+  background: var(--nx-muted);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-select);
+}
+
+.nx-block-styles__row:focus-visible,
+.nx-block-styles__add:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -2px;
+}
+
+/* A hidden style is still listed, quieter: the block panel doesn't offer it. */
+.nx-block-styles__item[data-hidden] .nx-block-looks__specimen {
+  opacity: 0.55;
+}
+
+.nx-block-styles__chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-block-styles__star {
+  color: var(--nx-foreground);
+}
+
+/* "+ New <block> style": a whole-width row, a 24px target at least. */
+.nx-block-styles__add {
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  min-block-size: 1.75rem;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-foreground);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+
+.nx-block-styles__add:hover {
+  background: var(--nx-muted);
+}
+
+.nx-block-styles__name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.25rem 2px;
+}
+
+.nx-block-styles__issue {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 0 2px 0.25rem;
+}

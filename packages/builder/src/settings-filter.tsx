@@ -18,7 +18,6 @@ import * as React from "react";
 
 import { isElement } from "./dom-kind";
 import type { ParentArrangement } from "./plain-layout";
-import type { StyleSection } from "./style-inspector";
 import {
   filterEntries,
   filtering,
@@ -30,6 +29,7 @@ import {
   type SettingsFilter,
   type SettingTab,
 } from "./settings-index";
+import type { StyleSection } from "./style-inspector";
 
 /** The search and the toggle, and their setters. */
 interface FilterState extends SettingsFilter {
@@ -434,6 +434,11 @@ export interface ReportedStyle {
   readonly styles: unknown;
   /** How the block's parent arranges it, which "Inside its parent" offers by. */
   readonly parent?: ParentArrangement | undefined;
+  /**
+   * Whether Arrange reads the Layout in plain words (not Custom), so its
+   * Space between draws the space properties rather than CSS properties.
+   */
+  readonly arranges?: boolean | undefined;
 }
 
 /**
@@ -468,7 +473,8 @@ export function useReportStyle(
   sections: readonly StyleSection[] | undefined,
   shared = false,
   styles: unknown = undefined,
-  parent: ParentArrangement | undefined = undefined
+  parent: ParentArrangement | undefined = undefined,
+  arranges: boolean | undefined = undefined
 ): void {
   const report = React.useContext(StyleReportContext);
   // Told only while the panel is filtered: unfiltered, nothing reads it, and
@@ -493,10 +499,11 @@ export function useReportStyle(
             shared,
             styles: now.styles,
             parent,
+            arranges,
           }
         : undefined
     );
-  }, [report, nodeId, signature, on, shared, parent]);
+  }, [report, nodeId, signature, on, shared, parent, arranges]);
   React.useEffect(() => () => report?.(undefined), [report]);
 }
 

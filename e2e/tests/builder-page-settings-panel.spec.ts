@@ -26,7 +26,10 @@ const API = "/admin/api";
 const STAMP = `${Date.now().toString(36)}${Math.round(Math.random() * 1e4)}`;
 
 /** A page of its own, so no other spec meets its title or address. */
-async function seedPage(page: Page, name: string): Promise<{
+async function seedPage(
+  page: Page,
+  name: string
+): Promise<{
   id: string;
   title: string;
   slug: string;
@@ -166,7 +169,9 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
   await expect(end.getByRole("button", { name: "Saved" })).toBeVisible();
 
   const renamed = `Plans ${STAMP}`;
-  await pageSettings(page).getByRole("textbox", { name: "Title" }).fill(renamed);
+  await pageSettings(page)
+    .getByRole("textbox", { name: "Title" })
+    .fill(renamed);
 
   // The top bar follows at once, and there is something to save.
   await expect(
@@ -184,9 +189,9 @@ test("a rename in the panel is the page's title everywhere, saved with its draft
     .getByRole("button", { name: "All page settings…" })
     .click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
-  await expect(dialog.getByRole("textbox", { name: "Title", exact: true })).toHaveValue(
-    renamed
-  );
+  await expect(
+    dialog.getByRole("textbox", { name: "Title", exact: true })
+  ).toHaveValue(renamed);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 

@@ -69,7 +69,7 @@ export const COMMAND_CASES = {
   DATABASE_CATALOG_UNREADABLE: () => databaseCatalogUnreadable(),
   CORE_TABLES_NOT_CREATED: () =>
     coreTablesNotCreated(new Error('permission denied for schema "public"')),
-  SCHEMA_SYNC_IN_PRODUCTION: () => schemaSyncInProduction(["posts", "pages"]),
+  SCHEMA_SYNC_IN_PRODUCTION: () => schemaSyncInProduction(),
   BLOCK_MANIFEST_STALE: () =>
     blockManifestStale(
       `${PROJECT}/src/types/generated/blocks.manifest.json does not match this config.`

@@ -244,17 +244,26 @@ export interface EntryWriteContext {
   ): Promise<ReadonlyMap<string, PluginStoredValue>>;
 }
 
+/**
+ * The language a write is judged in, as every validator is told it: none for
+ * the default language, however the caller spelled it, so validators judge it
+ * the same on every path.
+ */
+function writtenLanguage(
+  write: EntryWriteContext | undefined
+): string | undefined {
+  if (write === undefined) return undefined;
+  return write.locale === undefined || write.locale === write.defaultLocale
+    ? undefined
+    : write.locale;
+}
+
 /** The write as one field type's validator may see it. */
 function fieldWriteFor(
   write: EntryWriteContext,
   type: string
 ): PluginFieldWrite {
-  // The default language is said as no language, however the caller spelled
-  // it, so validators judge it the same on every path.
-  const locale =
-    write.locale === undefined || write.locale === write.defaultLocale
-      ? undefined
-      : write.locale;
+  const locale = writtenLanguage(write);
   // A read that names no language reads the one the write is judged in, so
   // every stored value a validator compares with is the same language's.
   const inWriteLanguage = <T extends { readonly locale?: string }>(
@@ -1208,10 +1217,16 @@ async function validateFieldValue(
   // reality (the stored value is whatever the caller sent).
   if (typeof field.validate === "function") {
     const customValidate = field.validate as CustomFieldValidator;
+    // Told the language the write is judged in (`req.locale`), as a plugin
+    // type's validator is: none for the default language.
+    const locale = writtenLanguage(options.write);
     try {
       const result = await customValidate(value, {
         data,
-        req: options.req ?? {},
+        req: {
+          ...(options.req ?? {}),
+          ...(locale === undefined ? {} : { locale }),
+        },
       });
       if (typeof result === "string") {
         issues.push({
