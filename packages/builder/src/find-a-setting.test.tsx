@@ -89,6 +89,11 @@ const PAGE: BlockDocument = {
       },
     }),
     nodeOf("spacer", "core/spacer"),
+    nodeOf("section", "core/section", {
+      props: { as: "section" },
+      styles: { base: { base: { minHeight: "100svh" } } },
+      slots: { children: [] },
+    }),
     nodeOf("columns", "core/columns", {
       props: { as: "div" },
       styles: { base: { base: { gridTemplateColumns: "1fr 2fr" } } },
@@ -374,5 +379,15 @@ describe("Style while filtered", () => {
     type("height");
     type("");
     expect(width().value).toBe("wide");
+  });
+});
+
+describe("a Section's Height presets over its min height", () => {
+  it("stay shown for a search that finds them", () => {
+    mount("section");
+    openTab("Style");
+    type("full screen");
+    const preset = screen.getByRole("radio", { name: "Full screen" });
+    expect(preset.closest("[hidden]")).toBeNull();
   });
 });

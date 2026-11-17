@@ -374,7 +374,13 @@ function SectionFields({
           <SettingSlot
             key={`${surroundings.nodeId}:${property.property}`}
             tab="style"
-            ids={[property.property]}
+            // Min height draws a Section's Height presets over it, so the
+            // row is kept for those as well.
+            ids={
+              property.property === "minHeight"
+                ? [property.property, SHORTCUT_IDS.height]
+                : [property.property]
+            }
           >
             {property.property === "minHeight" ? (
               <BlockPresetsOver surroundings={surroundings} />
