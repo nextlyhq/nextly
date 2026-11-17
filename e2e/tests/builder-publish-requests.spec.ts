@@ -104,14 +104,17 @@ function apiRequests(
 }
 
 /**
- * Resolves once no admin API request has started for a second and none
- * started in the last twenty seconds is still open. Not `networkidle`: a
- * development server holds its reload poll open for seconds at a time, so the
- * page may never go a moment without a request; and a request held open for
- * longer than any answer takes is a stream, not a read still on its way. The
- * poll and the document's lock are left out, as the count leaves them.
+ * Resolves once no admin API request has started for a second and every one
+ * started from `since` on has finished. Not `networkidle`: a development
+ * server holds its reload poll open for seconds at a time, so the page may
+ * never go a moment without a request. A request from before `since` that is
+ * still open after twenty seconds is a stream the page opened as it loaded,
+ * not a read still on its way, so it is not waited for; one started from
+ * `since` on always is, so a slow read after the press fails the wait rather
+ * than settling it. The poll and the document's lock are left out, as the
+ * count leaves them.
  */
-function settling(page: Page): () => Promise<void> {
+function settling(page: Page): (since?: number) => Promise<void> {
   const inFlight = new Map<Request, number>();
   let lastStart = Date.now();
   const counts = (request: Request) => {
@@ -130,12 +133,14 @@ function settling(page: Page): () => Promise<void> {
   const done = (request: Request) => inFlight.delete(request);
   page.on("requestfinished", done);
   page.on("requestfailed", done);
-  return () =>
+  return (since = Number.POSITIVE_INFINITY) =>
     expect
       .poll(
         () => {
           const now = Date.now();
-          const open = [...inFlight.values()].filter(at => now - at < 20_000);
+          const open = [...inFlight.values()].filter(
+            at => at >= since || now - at < 20_000
+          );
           return open.length === 0 && now - lastStart > 1_000;
         },
         {
@@ -182,7 +187,9 @@ async function editLead(page: Page, text: string): Promise<void> {
 /**
  * Counts the elements the canvas adds or removes from now on: a canvas drawn
  * again from a read of the entry replaces its blocks, and an image replaced
- * loads again.
+ * loads again. A canvas replaced whole counts too: its own observer would not
+ * see that, so the count also asks whether the canvas drawn now is still the
+ * one being watched.
  */
 async function watchCanvas(page: Page): Promise<() => Promise<number>> {
   const handle = await canvasFrame(page).locator(".nx-canvas").elementHandle();
@@ -198,11 +205,15 @@ async function watchCanvas(page: Page): Promise<() => Promise<number>> {
     }).observe(canvas, { childList: true, subtree: true });
   });
   return () =>
-    handle.evaluate(
-      () =>
-        (window as unknown as { __canvasChanges: { changed: number } })
-          .__canvasChanges.changed
-    );
+    handle.evaluate(canvas => {
+      const changed = (
+        window as unknown as { __canvasChanges: { changed: number } }
+      ).__canvasChanges.changed;
+      const same =
+        canvas.isConnected &&
+        canvas.ownerDocument.querySelector(".nx-canvas") === canvas;
+      return changed + (same ? 0 : 1);
+    });
 }
 
 /** One of the top bar's actions, by what it does. */
@@ -255,21 +266,28 @@ for (const status of ["published", "draft"] as const) {
     await settled();
     const changes = await watchCanvas(page);
     await surveysSince(cdp);
-    // Read as the write leaves: what the press did before sending it.
-    let beforeSending: Promise<number> | undefined;
-    page.on("request", request => {
-      if (
-        beforeSending === undefined &&
-        request.method() === "PATCH" &&
-        new URL(request.url()).pathname === `${PAGES}/${id}`
-      ) {
-        beforeSending = surveysSince(cdp);
+    // Read as the write leaves, and the write held until it is read: what
+    // the press did before sending it, and nothing the answer started.
+    let beforeSending: number | undefined;
+    await page.route(`**${PAGES}/${id}`, async route => {
+      try {
+        if (route.request().method() !== "PATCH") {
+          await route.fallback();
+          return;
+        }
+        beforeSending ??= await surveysSince(cdp);
+        await route.continue();
+      } catch (error) {
+        // A route that fails takes the request with it, and Playwright then
+        // prints the request in full; said briefly instead.
+        throw new Error(`[e2e] holding the write failed: ${String(error)}`);
       }
     });
+    const pressedAt = Date.now();
     start();
     await barAction(page, status === "published" ? "publish" : "save").click();
     await expectSaved(page, status);
-    await settled();
+    await settled(pressedAt);
 
     const entryPath = `${PAGES}/${id}`;
     const onEntry = (method: string) =>
@@ -293,9 +311,7 @@ for (const status of ["published", "draft"] as const) {
     // No whole-document check between the press and the write: the editor
     // judged each edit as it was made, and the save route judges what enters.
     expect(beforeSending, "the write was seen leaving").toBeDefined();
-    expect(await beforeSending, "whole-document surveys before sending").toBe(
-      0
-    );
+    expect(beforeSending, "whole-document surveys before sending").toBe(0);
     // The control: the counter sees the survey the save's own move of the
     // stored copy runs, so a count of none is not a counter seeing nothing.
     expect(await surveysSince(cdp), "surveys after the write").toBeGreaterThan(
