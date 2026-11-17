@@ -204,6 +204,8 @@
  */
 .nx-page-inserters__add {
   position: relative;
+  /* Its full size in a row's gap too, a flex line of no width. */
+  flex: none;
   display: grid;
   place-items: center;
   width: 1.5rem;

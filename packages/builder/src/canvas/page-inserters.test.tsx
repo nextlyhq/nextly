@@ -629,6 +629,27 @@ describe("the + between the selected block's children", () => {
     ).toEqual([true, true, true, true, true]);
   });
 
+  it("puts a reversed column's gap between the edges that face it", async () => {
+    // Drawn in reverse order: the first child below the second.
+    BOXES["box-a"] = [0, 220, 300, 60];
+    BOXES["box-b"] = [0, 160, 300, 40];
+    BOXES["box-c"] = [0, 100, 300, 40];
+    try {
+      mount(ROW, { selectedId: "pricing" });
+      await act(async () => undefined);
+      const between = screen
+        .getByRole("button", { name: "Add a block between Box A and Box B" })
+        .closest(".nx-page-inserters__gap");
+      if (!(between instanceof HTMLElement)) throw new Error("no gap");
+      // Between Box B's bottom (200) and Box A's top (220), not inside A.
+      expect(between.style.top).toBe("210px");
+    } finally {
+      BOXES["box-a"] = [0, 120, 300, 160];
+      BOXES["box-b"] = [350, 120, 300, 160];
+      BOXES["box-c"] = [700, 120, 300, 160];
+    }
+  });
+
   it("offers no children's gaps with nothing selected", async () => {
     mount(ROW);
     await act(async () => undefined);

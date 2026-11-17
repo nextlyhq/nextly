@@ -93,3 +93,10 @@ describe("the gap + and the empty container's overlay take the editor's colours"
     expect(area).toMatch(/outline-color: Highlight;/);
   });
 });
+
+describe("the gap + keeps its size", () => {
+  it("never shrinks in a row's gap, which is a flex line of no width", () => {
+    const own = rulesNaming(".nx-page-inserters__add").join("");
+    expect(own).toMatch(/flex: none;/);
+  });
+});

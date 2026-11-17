@@ -278,6 +278,11 @@ test.describe("the + in the canvas's gaps", () => {
       await expect(
         gap(page, name).locator("xpath=ancestor::*[@data-line][1]")
       ).toHaveAttribute("data-line", "down");
+      // Its full 24×24 there too, not squeezed by a line of no width.
+      await pointNear(page, gap(page, name));
+      const size = await gap(page, name).boundingBox();
+      expect(size?.width ?? 0, name).toBeGreaterThanOrEqual(24);
+      expect(size?.height ?? 0, name).toBeGreaterThanOrEqual(24);
     }
   });
 

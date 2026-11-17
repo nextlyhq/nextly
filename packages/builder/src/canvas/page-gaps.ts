@@ -141,6 +141,17 @@ function edgeBetween(a: Rect, b: Rect): number | undefined {
 }
 
 /**
+ * Where the line between two boxes stacked one above the other runs: midway
+ * between the edges that face each other, in either order, so a reversed
+ * column reads as a column. Boxes that overlap meet at the first's bottom.
+ */
+function facingMiddle(a: Rect, b: Rect): number {
+  if (a.y + a.height <= b.y) return (a.y + a.height + b.y) / 2;
+  if (b.y + b.height <= a.y) return (b.y + b.height + a.y) / 2;
+  return a.y + a.height;
+}
+
+/**
  * The gap between two blocks drawn one after the other, from their boxes:
  * down the line between them where one is beside the other, across it where
  * one is below the other. `span`, when given, is what a line across runs the
@@ -169,7 +180,7 @@ function gapBetween(above: Drawn, below: Drawn, span?: Rect): Gap {
     before: below.id,
     line: "across",
     x: run.x + run.width / 2,
-    y: (a.y + a.height + b.y) / 2,
+    y: facingMiddle(a, b),
     length: run.width,
     ...clearance(depthBeside("across", [a, b])),
   };
