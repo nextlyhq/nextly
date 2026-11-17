@@ -159,6 +159,19 @@ describe("assertCollectionOpensIn", () => {
     expect(error.message).toContain('"posts"');
   });
 
+  it("reads a group that lays itself out without recursing for ever", () => {
+    // Raw config can hold a cycle; the refusal is still named.
+    const loop: Record<string, unknown> = { type: "group", fields: [] };
+    (loop.fields as unknown[]).push(loop);
+    const error = refusal(() =>
+      assertCollectionOpensIn(
+        [collection("notes", "builder", [title, loop])],
+        [viewPlugin()]
+      )
+    );
+    expect(error.message).toContain('"notes"');
+  });
+
   it("reads a plugin's slug view on the slug it is routed under, after a rename", () => {
     const renamed = viewPlugin({ renameMap: { posts: "articles" } });
     expect(() =>

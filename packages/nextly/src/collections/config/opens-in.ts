@@ -22,7 +22,7 @@ import {
 } from "../../plugins/validate-document-views";
 
 /** The value that keeps a collection's entries in the form. */
-export const OPENS_IN_FORM = "form";
+const OPENS_IN_FORM = "form";
 
 /** A collection as the merged configuration holds it. */
 interface ConfiguredCollection {
@@ -38,10 +38,35 @@ function declaredOpensIn(collection: ConfiguredCollection): unknown {
   return "opensIn" in admin ? admin.opensIn : undefined;
 }
 
+/** A field's type, or `undefined` for a value that declares none. */
+function typeOf(field: unknown): string | undefined {
+  if (typeof field !== "object" || field === null) return undefined;
+  return "type" in field && typeof field.type === "string"
+    ? field.type
+    : undefined;
+}
+
+/**
+ * The fields an unnamed group lays out at its parent's level, or none for
+ * anything else: a named group or a repeater moves its fields down a level.
+ */
+function unnamedGroupFields(field: unknown): readonly unknown[] {
+  if (
+    typeOf(field) !== "group" ||
+    typeof field !== "object" ||
+    field === null
+  ) {
+    return [];
+  }
+  if ("name" in field && typeof field.name === "string") return [];
+  const children = "fields" in field ? field.fields : undefined;
+  return Array.isArray(children) ? children : [];
+}
+
 /**
  * The field types a collection holds at its top level: its own fields and,
  * as the form lays them out, those of an unnamed group, which adds nothing to
- * a field's path. A named group or a repeater moves its fields down a level.
+ * a field's path.
  */
 function topLevelFieldTypes(
   fields: readonly unknown[] | undefined,
@@ -49,16 +74,13 @@ function topLevelFieldTypes(
 ): Set<string> {
   const types = new Set<string>();
   for (const field of fields ?? []) {
-    if (typeof field !== "object" || field === null) continue;
-    const type = "type" in field ? field.type : undefined;
-    if (typeof type === "string") types.add(type);
-    const named = "name" in field && typeof field.name === "string";
-    const children = "fields" in field ? field.fields : undefined;
+    const type = typeOf(field);
+    if (type !== undefined) types.add(type);
     // A cycle in raw config would otherwise recurse until the stack ran out.
-    if (type !== "group" || named || within.includes(field)) continue;
-    if (!Array.isArray(children)) continue;
-    for (const inner of topLevelFieldTypes(children, [...within, field])) {
-      types.add(inner);
+    if (within.includes(field)) continue;
+    const inner = unnamedGroupFields(field);
+    for (const each of topLevelFieldTypes(inner, [...within, field])) {
+      types.add(each);
     }
   }
   return types;
