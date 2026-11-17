@@ -25,7 +25,7 @@ import {
   toolbarActions,
   type ToolbarAction,
   type ToolbarActionId,
-} from "./toolbar-actions";
+} from "../toolbar-actions";
 
 afterEach(cleanup);
 

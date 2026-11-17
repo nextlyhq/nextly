@@ -8,6 +8,8 @@
  */
 import * as React from "react";
 
+import { isLeftPanel, topologyKey, type LeftPanel } from "../shell-state";
+
 import {
   EditorRail,
   PANEL_KEYS_LAYER,
@@ -16,7 +18,6 @@ import {
 } from "./editor-rail";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 import type { BuilderShellProps } from "./shell-props";
-import { isLeftPanel, topologyKey, type LeftPanel } from "./shell-state";
 
 /**
  * The panel set about to be rendered, named the same way a persisted layout

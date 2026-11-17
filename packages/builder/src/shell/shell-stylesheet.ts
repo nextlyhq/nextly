@@ -6,7 +6,7 @@
  */
 import * as React from "react";
 
-import { devWarnOnce } from "./dev-warn";
+import { devWarnOnce } from "../dev-warn";
 
 /**
  * One design-system token, read off the mounted shell.

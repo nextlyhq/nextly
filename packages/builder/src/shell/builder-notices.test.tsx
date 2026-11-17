@@ -45,10 +45,10 @@ import {
   NoticeSinkProvider,
   useNoticeQueue,
 } from "./builder-notices";
-import type { EditorState } from "./editor-state";
-import { SharedStylesPanel } from "./shared-styles-panel";
+import type { EditorState } from "../editor-state";
+import { SharedStylesPanel } from "../shared-styles-panel";
 import { ShellActiveContext } from "./shell-active";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import { StyleInspectorPanel } from "../style-inspector-panel";
 
 afterEach(cleanup);
 

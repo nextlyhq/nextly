@@ -33,9 +33,11 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import type { CanvasRegion } from "./canvas-regions";
-import type { EditorState } from "./editor-state";
-import { blockNameOf, type ComponentTitleOf } from "./layers";
+import type { CanvasRegion } from "../canvas-regions";
+import type { EditorState } from "../editor-state";
+import { blockNameOf, type ComponentTitleOf } from "../layers";
+import { BUILDER_TOKENS_CLASS } from "../shell-state";
+
 import {
   READ_KIND_WORDS,
   READ_KINDS,
@@ -49,7 +51,6 @@ import {
   type ReadBudgetStanding,
   type ReadKind,
 } from "./read-budget";
-import { BUILDER_TOKENS_CLASS } from "./shell-state";
 
 export interface ReadBudgetMeterProps {
   /** The latest draw's count, or `undefined` while the canvas is counting. */

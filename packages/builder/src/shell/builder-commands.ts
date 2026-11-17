@@ -25,9 +25,10 @@
  * @module builder-commands
  */
 
+import { CONVERSION_WORDS } from "../editor-words";
+import type { ToolbarAction, ToolbarActionId } from "../toolbar-actions";
+
 import type { BuilderCommand } from "./command-palette";
-import { CONVERSION_WORDS } from "./editor-words";
-import type { ToolbarAction, ToolbarActionId } from "./toolbar-actions";
 
 /** The verbs a palette command needs, as `BlockKeyboardActions` publishes them. */
 export interface CommandVerbs {

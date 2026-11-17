@@ -21,8 +21,8 @@
  * @module @nextlyhq/builder/shell
  */
 
-export { BuilderShell } from "./builder-shell";
-export type { BuilderShellProps } from "./builder-shell";
+export { BuilderShell } from "./shell/builder-shell";
+export type { BuilderShellProps } from "./shell/builder-shell";
 /**
  * The shell's preferences kept per signed-in user, for a host that knows who
  * is signed in: pass it as `store`. @experimental
@@ -72,7 +72,7 @@ export { pageStyleTrace } from "./style-trace";
  * Exported for slot content that PORTALS out of the shell, which the shell cannot reach with
  * `hidden` and `inert` and so has to inform instead.
  */
-export { useShellIsActive } from "./shell-active";
+export { useShellIsActive } from "./shell/shell-active";
 
 /**
  * The command palette, published here beside the shell because it is a client
@@ -81,8 +81,11 @@ export { useShellIsActive } from "./shell-active";
  *
  * Its types are described from the root entry, which stays server-callable.
  */
-export { COMMAND_PALETTE_KEYS, CommandPalette } from "./command-palette";
-export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
+export { COMMAND_PALETTE_KEYS, CommandPalette } from "./shell/command-palette";
+export type {
+  BuilderCommand,
+  CommandPaletteProps,
+} from "./shell/command-palette";
 
 /**
  * The canvas, behind the same client banner and for a stricter reason than the
@@ -165,7 +168,7 @@ export { CanvasMarks } from "./canvas-marks";
  * shortcuts — the canvas's bindings sit on the document, so Delete and
  * Alt+Arrow reach the page behind the dialog.
  */
-export { useModalKeyboardHold } from "./modal-keyboard-hold";
+export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas";
 // The regions of a page's Layout, drawn locked around the page on the canvas.
 export type { CanvasRegion } from "./canvas-regions";
@@ -263,8 +266,8 @@ export {
   BASE_DEVICE_LABEL,
   sameBreakpoints,
 } from "./breakpoints";
-export { BreakpointManager } from "./breakpoint-manager";
-export type { BreakpointManagerProps } from "./breakpoint-manager";
+export { BreakpointManager } from "./shell/breakpoint-manager";
+export type { BreakpointManagerProps } from "./shell/breakpoint-manager";
 
 /**
  * The control that sizes the canvas, and the derivations behind it.
@@ -281,8 +284,8 @@ export type { BreakpointManagerProps } from "./breakpoint-manager";
  * with it rather than from the root barrel so a host imports the pair from one
  * place.
  */
-export { BreakpointSwitcher } from "./breakpoint-switcher";
-export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
+export { BreakpointSwitcher } from "./shell/breakpoint-switcher";
+export type { BreakpointSwitcherProps } from "./shell/breakpoint-switcher";
 
 /**
  * The canvas zoom, and the control that names it.
@@ -350,8 +353,8 @@ export type { TurnIntoChoice } from "./toolbar-actions";
  * below `BlockKeyboardActions`, whose verbs it runs. A host that wants to build
  * its own list uses `CommandPalette` with `builderCommands` instead.
  */
-export { EditorCommandPalette } from "./editor-command-palette";
-export type { EditorCommandPaletteProps } from "./editor-command-palette";
+export { EditorCommandPalette } from "./shell/editor-command-palette";
+export type { EditorCommandPaletteProps } from "./shell/editor-command-palette";
 
 /**
  * The right-click menu over the canvas.
@@ -386,7 +389,7 @@ export type { SpacingOverlayProps } from "./spacing-overlay";
  * confirmed, as one edit. `@experimental` until the editor's lock surfaces
  * ship together.
  */
-export { RepairNotice } from "./repair-notice";
+export { RepairNotice } from "./shell/repair-notice";
 /*
  * The scrub context a host has to supply for a handle to write anywhere but the
  * base breakpoint of the resting state. The overlay defaults to that tier and
@@ -587,18 +590,18 @@ export {
   OnboardingChecklist,
   useBuilderChecklist,
   CHECKLIST_STORAGE_KEY,
-} from "./onboarding-checklist";
+} from "./shell/onboarding-checklist";
 export type {
   OnboardingChecklistProps,
   UseBuilderChecklistOptions,
   UseBuilderChecklistResult,
-} from "./onboarding-checklist";
+} from "./shell/onboarding-checklist";
 export {
   builderChecklist,
   checklistComplete,
   checklistDoneCount,
-} from "./onboarding";
-export type { ChecklistStep } from "./onboarding";
+} from "./shell/onboarding";
+export type { ChecklistStep } from "./shell/onboarding";
 export type { InlineTextTarget } from "./inline-text";
 export type {
   CanvasDrag,
@@ -657,21 +660,21 @@ export type {
   VariableUseKind,
   VariableUsesPage,
 } from "./variable-usage";
-export { SelectionBreadcrumb } from "./breadcrumb";
-export type { SelectionBreadcrumbProps } from "./breadcrumb";
+export { SelectionBreadcrumb } from "./shell/breadcrumb";
+export type { SelectionBreadcrumbProps } from "./shell/breadcrumb";
 /*
  * The page reads meter: the reads a page makes against its allowance, from
  * 80% of it a warning, and over it the blocks that went unread.
  */
-export { ReadBudgetMeter } from "./read-budget-meter";
-export type { ReadBudgetMeterProps } from "./read-budget-meter";
-export { readBudgetStanding, READ_WARNING_SHARE } from "./read-budget";
+export { ReadBudgetMeter } from "./shell/read-budget-meter";
+export type { ReadBudgetMeterProps } from "./shell/read-budget-meter";
+export { readBudgetStanding, READ_WARNING_SHARE } from "./shell/read-budget";
 export type {
   PageReadReport,
   ReadBudgetStanding,
   ReadKind,
   UnreadBlock,
-} from "./read-budget";
+} from "./shell/read-budget";
 /*
  * The editor's words, spelled once, for every surface a host draws beside the
  * shell's own: a panel it mounts names its places with these.
@@ -713,8 +716,8 @@ export { sharedStyleNameTaken } from "./shared-style-target";
  * which is why the region stays unpublished: the shell is the one place a
  * queue is drawn.
  */
-export { useNoticeQueue } from "./builder-notices";
-export type { NoticeQueue, RaiseNotice } from "./builder-notices";
+export { useNoticeQueue } from "./shell/builder-notices";
+export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
 export { SharedStylesPanel } from "./shared-styles-panel";
 export type {
   ClassRenameOutcome,

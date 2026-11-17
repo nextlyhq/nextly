@@ -19,14 +19,15 @@ import { Button } from "@nextlyhq/ui";
 import { Check } from "lucide-react";
 import * as React from "react";
 
-import { BreakpointEditor } from "./breakpoint-editor";
-import { deviceOptions, tierIcon } from "./breakpoint-switcher";
 import {
   authoredBreakpoints,
   BASE_BREAKPOINT,
   sameBreakpoints,
   type BreakpointSet,
-} from "./breakpoints";
+} from "../breakpoints";
+
+import { BreakpointEditor } from "./breakpoint-editor";
+import { deviceOptions, tierIcon } from "./breakpoint-switcher";
 
 /**
  * Props for BreakpointManager.

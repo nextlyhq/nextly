@@ -25,9 +25,10 @@ import {
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
-import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
-import { repairStepSentence } from "./lock-refusal";
+import type { EditorState } from "../editor-state";
+import { blockLabel } from "../inserter";
+import { repairStepSentence } from "../lock-refusal";
+
 import { repairOps, type RepairRefusal } from "./repair-ops";
 
 /**

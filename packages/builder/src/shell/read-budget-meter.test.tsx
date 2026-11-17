@@ -17,7 +17,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CanvasRegion } from "./canvas-regions";
+import type { CanvasRegion } from "../canvas-regions";
 import type { PageReadReport } from "./read-budget";
 import { ReadBudgetMeter } from "./read-budget-meter";
 

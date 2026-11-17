@@ -22,8 +22,9 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { PAGE_BUILDER_DOCS } from "./docs-links";
-import { EDITOR_WORDS } from "./editor-words";
+import { PAGE_BUILDER_DOCS } from "../docs-links";
+import { EDITOR_WORDS } from "../editor-words";
+
 import { helpShortcuts, type ShortcutRow } from "./help-shortcuts";
 import { useModalKeyboardHold } from "./modal-keyboard-hold";
 

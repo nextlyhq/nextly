@@ -26,9 +26,9 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { ChromeTooltip } from "./chrome-tooltip";
-import { EDITOR_WORDS } from "./editor-words";
-import { LEFT_PANELS, RAIL_WIDTH, type LeftPanel } from "./shell-state";
+import { ChromeTooltip } from "../chrome-tooltip";
+import { EDITOR_WORDS } from "../editor-words";
+import { LEFT_PANELS, RAIL_WIDTH, type LeftPanel } from "../shell-state";
 
 /**
  * Each panel's name, from the editor's words, its icon, and the single key

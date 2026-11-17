@@ -20,7 +20,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BreakpointEditor } from "./breakpoint-editor";
-import type { BreakpointSet } from "./breakpoints";
+import type { BreakpointSet } from "../breakpoints";
 
 function stored(): BreakpointSet {
   return {

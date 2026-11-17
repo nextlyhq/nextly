@@ -6,14 +6,14 @@
  */
 import * as React from "react";
 
-import type { CanvasZoom } from "./canvas-zoom";
+import type { CanvasZoom } from "../canvas-zoom";
 import {
   DEFAULT_PREFERENCES,
   readPreferences,
   writePreferences,
   type PreferenceStore,
   type ShellPreferences,
-} from "./shell-state";
+} from "../shell-state";
 
 /**
  * What the newest completed read of a preference store left behind.

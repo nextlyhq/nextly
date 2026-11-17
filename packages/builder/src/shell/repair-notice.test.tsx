@@ -28,7 +28,7 @@ import {
   type ContentModel,
 } from "@nextlyhq/blocks-engine";
 
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 import { RepairNotice } from "./repair-notice";
 
 const base = {

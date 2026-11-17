@@ -39,7 +39,7 @@ import {
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
-import { NoticeSinkProvider } from "./builder-notices";
+import { NoticeSinkProvider } from "./shell/builder-notices";
 import { InsertPanel } from "./insert-panel";
 import { besidePanel } from "./insert-panel-summon";
 import type { EditorState } from "./editor-state";

@@ -6,13 +6,14 @@
  */
 import * as React from "react";
 
-import { useSidesShortcut, type Region } from "./shell-region-cycling";
 import {
   LEFT_PANELS,
   panelAfterRailClick,
   type LeftPanel,
   type ShellPreferences,
-} from "./shell-state";
+} from "../shell-state";
+
+import { useSidesShortcut, type Region } from "./shell-region-cycling";
 
 /**
  * The left panel to show when the author asks for the left side back: the one

@@ -22,30 +22,31 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { BlockIconMark } from "./block-icon";
-import { builderCommands } from "./builder-commands";
-import {
-  CommandPalette,
-  type BuilderCommand,
-  type CommandGroupOptions,
-} from "./command-palette";
-import type { EditorState } from "./editor-state";
+import { BlockIconMark } from "../block-icon";
+import type { EditorState } from "../editor-state";
 import {
   InsertAnnouncement,
   placementWords,
   useInsertOffers,
   type InsertOffers,
   type InsertOffersInputs,
-} from "./insert-panel";
-import { blockLabel, filterEntries } from "./inserter";
-import { useBlockActionsContext } from "./keyboard-actions";
+} from "../insert-panel";
+import { blockLabel, filterEntries } from "../inserter";
+import { useBlockActionsContext } from "../keyboard-actions";
 import {
   layersOf,
   UNNAMED_COMPONENT,
   type ComponentTitleOf,
   type LayerNode,
-} from "./layers";
-import { useSelectionActions } from "./selection-actions";
+} from "../layers";
+import { useSelectionActions } from "../selection-actions";
+
+import { builderCommands } from "./builder-commands";
+import {
+  CommandPalette,
+  type BuilderCommand,
+  type CommandGroupOptions,
+} from "./command-palette";
 
 /** The groups a search shows, in the order an author reads them. */
 const ADD_GROUP = "Add";

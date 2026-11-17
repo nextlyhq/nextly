@@ -14,8 +14,16 @@ import {
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
-import type { CanvasZoom } from "./canvas-zoom";
-import { useZoomShortcuts } from "./canvas-zoom-control";
+import type { CanvasZoom } from "../canvas-zoom";
+import { useZoomShortcuts } from "../canvas-zoom-control";
+import {
+  BUILDER_CHROME_CLASS,
+  MIN_CANVAS_PANEL_WIDTH,
+  PANEL_BOUNDS,
+  topologyKey,
+  type ShellPreferences,
+} from "../shell-state";
+
 import { panelLabel } from "./editor-rail";
 import { CanvasPanelBody } from "./shell-canvas-region";
 import type { BuilderShellProps, PanelView } from "./shell-props";
@@ -30,13 +38,6 @@ import {
   type Region,
 } from "./shell-region-cycling";
 import { useSidePanels } from "./shell-side-panels";
-import {
-  BUILDER_CHROME_CLASS,
-  MIN_CANVAS_PANEL_WIDTH,
-  PANEL_BOUNDS,
-  topologyKey,
-  type ShellPreferences,
-} from "./shell-state";
 import {
   PANEL_DIVIDER_CLASS,
   SIDE_PANEL_CLASS,

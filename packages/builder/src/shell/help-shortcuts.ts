@@ -22,7 +22,7 @@ import {
   type ModifierState,
 } from "@nextlyhq/ui";
 
-import { keyHint } from "./key-hint";
+import { keyHint } from "../key-hint";
 
 /** One line of the list: what happens, and every key that does it. */
 export interface ShortcutRow {

@@ -6,9 +6,10 @@
  */
 import * as React from "react";
 
+import type { CanvasZoom } from "../canvas-zoom";
+import type { LeftPanel, PreferenceStore } from "../shell-state";
+
 import type { NoticeQueue } from "./builder-notices";
-import type { CanvasZoom } from "./canvas-zoom";
-import type { LeftPanel, PreferenceStore } from "./shell-state";
 
 /**
  * Which part of a panel is showing, for a panel with parts — the Design

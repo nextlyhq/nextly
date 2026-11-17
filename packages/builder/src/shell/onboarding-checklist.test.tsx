@@ -19,7 +19,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { useBuilderChecklist } from "./onboarding-checklist";
-import type { PreferenceStore } from "./shell-state";
+import type { PreferenceStore } from "../shell-state";
 
 afterEach(clearBlocks);
 

@@ -24,7 +24,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { SelectionBreadcrumb } from "./breadcrumb";
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../editor-state";
 
 afterEach(() => {
   cleanup();

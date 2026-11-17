@@ -8,7 +8,7 @@
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isHTMLElement } from "./dom-kind";
+import { isHTMLElement } from "../dom-kind";
 
 /**
  * The regions F6 cycles between, in the order a sighted user reads them.

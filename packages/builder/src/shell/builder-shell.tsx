@@ -8,19 +8,9 @@ import {
 import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
-import {
-  BuilderNoticeRegion,
-  NoticeSinkProvider,
-  useNoticeQueue,
-} from "./builder-notices";
-import { CanvasFrameShortcuts } from "./canvas-frame-context";
-import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
-import { HoveredBlockProvider } from "./hovered-block";
-import { ShellActiveContext, useShellIsActive } from "./shell-active";
-import { usePreferences } from "./shell-preferences";
-import type { BuilderShellProps } from "./shell-props";
-import { SettingsRequestContext } from "./shell-rail-dialogs";
-import { ShellRegions } from "./shell-regions";
+import { CanvasFrameShortcuts } from "../canvas-frame-context";
+import { FIT_ZOOM, type CanvasZoom } from "../canvas-zoom";
+import { HoveredBlockProvider } from "../hovered-block";
 import {
   browserStore,
   BUILDER_CHROME_CLASS,
@@ -30,7 +20,19 @@ import {
   MIN_SHELL_WIDTH,
   SHELL_PREFERENCES_KEY,
   type PreferenceStore,
-} from "./shell-state";
+} from "../shell-state";
+
+import {
+  BuilderNoticeRegion,
+  NoticeSinkProvider,
+  useNoticeQueue,
+} from "./builder-notices";
+import { ShellActiveContext, useShellIsActive } from "./shell-active";
+import { usePreferences } from "./shell-preferences";
+import type { BuilderShellProps } from "./shell-props";
+import { SettingsRequestContext } from "./shell-rail-dialogs";
+import { ShellRegions } from "./shell-regions";
+
 
 export type {
   BuilderShellProps,

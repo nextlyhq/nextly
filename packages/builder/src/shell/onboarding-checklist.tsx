@@ -24,13 +24,14 @@ import { cn } from "@nextlyhq/ui/utils";
 import { Check, X } from "lucide-react";
 import { type JSX, useCallback, useMemo, useState } from "react";
 
+import { browserStore, type PreferenceStore } from "../shell-state";
+
 import {
   builderChecklist,
   checklistComplete,
   checklistDoneCount,
   type ChecklistStep,
 } from "./onboarding";
-import { browserStore, type PreferenceStore } from "./shell-state";
 
 /** Where the dismissal is remembered. */
 export const CHECKLIST_STORAGE_KEY = "nextly.builder.checklist.dismissed";

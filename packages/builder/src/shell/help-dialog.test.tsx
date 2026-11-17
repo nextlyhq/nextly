@@ -14,7 +14,7 @@ import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 import { describe, expect, it } from "vitest";
 
-import { PAGE_BUILDER_DOCS } from "./docs-links";
+import { PAGE_BUILDER_DOCS } from "../docs-links";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 
 /** Each binding's description as it runs, for asking which one a key ran. */

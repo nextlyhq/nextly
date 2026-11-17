@@ -20,7 +20,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BreakpointManager } from "./breakpoint-manager";
-import type { BreakpointSet } from "./breakpoints";
+import type { BreakpointSet } from "../breakpoints";
 
 afterEach(cleanup);
 

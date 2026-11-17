@@ -16,9 +16,10 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import type { CanvasZoom } from "./canvas-zoom";
-import { CanvasZoomControl } from "./canvas-zoom-control";
-import { ChromeTooltip } from "./chrome-tooltip";
+import type { CanvasZoom } from "../canvas-zoom";
+import { CanvasZoomControl } from "../canvas-zoom-control";
+import { ChromeTooltip } from "../chrome-tooltip";
+
 import type { BuilderShellProps } from "./shell-props";
 import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
 
