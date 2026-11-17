@@ -76,6 +76,17 @@ export {
   type SlotAddress,
 } from "../ops";
 
+// "Turn into": the op that turns one block into another type, planned from
+// the block's own converter, so every surface (a menu, a toolbar, an agent)
+// carries over the same things and refuses for the same reasons.
+export {
+  planTurnInto,
+  turnIntoTargets,
+  type TurnIntoDefinitions,
+  type TurnIntoPlan,
+  type TurnIntoResult,
+} from "../turn-into";
+
 // The Layers lock's rule, stated once: for one op, which the apply asks of
 // every edit and an editing surface asks before offering one; and for a whole
 // write, judged against the document it would replace, which a save asks

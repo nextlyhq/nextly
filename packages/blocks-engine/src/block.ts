@@ -879,9 +879,61 @@ export interface BlockDefinition<
    * API question rather than a walk question.
    */
   conditionalSlots?: readonly string[];
+  /**
+   * The block types this block can be turned into, each with how: keyed by
+   * the target's name (`"core/heading"`), so the editor offers "Turn into" for
+   * exactly these and the engine's `turnInto` operation carries out the one
+   * chosen (see `turn-into`).
+   *
+   * Declared by the block being turned, because only it knows what its props
+   * mean: a passage of rich text becomes a heading's words, a heading's level
+   * a heading inside a passage. What every block keeps whatever its type (its
+   * name, styles, classes, visibility and conditions) is the operation's to
+   * carry, not each converter's.
+   *
+   * @experimental Settles with the editor's "Turn into".
+   */
+  converters?: Readonly<Record<string, BlockConverter<P>>>;
   /** Editor-only metadata; never serialized. */
   editor?: BlockEditorMeta<P>;
 }
+
+/**
+ * How one block turns into another type: the target's props from this
+ * block's, and where each of this block's bound props lands.
+ *
+ * @experimental Settles with the editor's "Turn into".
+ */
+export interface BlockConverter<P extends object = Record<string, unknown>> {
+  /**
+   * Which target prop each of this block's props becomes, by name: `{ text:
+   * "content" }`. A binding on a prop named here moves to that target prop
+   * when the target prop can show what the binding fills (the same kind of
+   * value); any other binding is removed.
+   */
+  readonly carries?: Readonly<Record<string, string>>;
+  /**
+   * The target's props for these props, with what is lost said in a short
+   * sentence for the author ("Bold and links are removed"), or why this block
+   * cannot be turned as it stands. Pure and synchronous: it runs when a menu
+   * opens, to say what each choice would do.
+   */
+  convert(this: void, props: P): BlockConversion;
+}
+
+/**
+ * What a converter answers: the target's props and what is lost, or a refusal
+ * in words an author reads.
+ *
+ * @experimental Settles with the editor's "Turn into".
+ */
+export type BlockConversion =
+  | {
+      readonly props: Record<string, unknown>;
+      /** What the target cannot hold and is removed, said for the author. */
+      readonly dropped?: string;
+    }
+  | { readonly refused: string };
 
 /**
  * What a block's `seo` is told about the props it is asked with.
@@ -1010,6 +1062,7 @@ export interface AnyBlockDefinition
     | "rendersNothing"
     | "contentModel"
     | "seo"
+    | "converters"
   > {
   example: { props: object; slots?: Record<string, BlockNode[]> };
   defaultProps?: object;
@@ -1033,4 +1086,6 @@ export interface AnyBlockDefinition
    * `registerBlocks` whether or not it contributed any SEO at all.
    */
   seo?(props: object, read?: BlockSeoRead): BlockSeoContribution | undefined;
+  /** Widened for the reason `rendersNothing` is: converted from stored props. */
+  converters?: Readonly<Record<string, BlockConverter<object>>>;
 }

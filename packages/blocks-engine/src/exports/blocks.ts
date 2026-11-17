@@ -28,6 +28,8 @@ export type {
   BlockIcon,
   BlockInspectorProps,
   BlockIsland,
+  BlockConversion,
+  BlockConverter,
   BlockExample,
   BlockSeoContribution,
   BlockSeoRead,
