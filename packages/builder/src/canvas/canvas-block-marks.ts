@@ -233,11 +233,11 @@ export function entryContentMarksOf(
 }
 
 /**
- * The words an Entry content block's outermost element carries, by its
- * address. Never inside a Layout region, a document of its own whose ids
- * may repeat the page's.
+ * The words a block's outermost element carries, by its address, from
+ * `marks`: an Entry content block's, or a hidden block's tag. Never inside a
+ * Layout region, a document of its own whose ids may repeat the page's.
  */
-export function entryContentMarkFor(
+export function outermostMarkFor(
   element: Element,
   container: HTMLElement,
   marks: ReadonlyMap<string, string>

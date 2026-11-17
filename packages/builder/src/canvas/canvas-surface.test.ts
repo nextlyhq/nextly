@@ -206,15 +206,18 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * exceptions are the admin's words on the page, which take the tokens the
      * frame hands them: a Layout region's badge and tag, a collection list's
      * note to its author and its "When empty" tag, and the danger hue of an
-     * Entry content block's failed note to its author.
+     * Entry content block's failed note to its author. A hidden block's
+     * edge reads a value the sheet itself sets on that block, never the
+     * admin's.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
     const naming = [
       ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
     ].filter(([, , body]) =>
       // The empty body's room is a length the overlay measures, not a
-      // colour: it paints nothing.
-      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-start-room)/.test(
+      // colour: it paints nothing. A hidden block's edge is the page's own
+      // Canvas and CanvasText, set by the sheet itself.
+      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-start-room|canvas-hidden-)/.test(
         body ?? ""
       )
     );

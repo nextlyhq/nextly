@@ -205,7 +205,7 @@ export function advancedEntries(
   );
   const conditions = node?.visibility?.conditions;
   const visibility: IndexedRow[] = [
-    { id: "visibleOn", label: "Visible on", set: hiddenSomewhere(node) },
+    { id: "hideOn", label: "Hide on", set: hiddenSomewhere(node) },
     {
       id: "showWhen",
       label: "Show when",
