@@ -13,6 +13,7 @@
  * @module site-font-roles-model
  */
 import {
+  compileStyleValues,
   DEFAULT_SITE_TEXT,
   isTokenRef,
   readFamilyList,
@@ -30,6 +31,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { declarationsText } from "./code-hints";
 import { drawsBold, roleStack, siteFamilies } from "./font-library";
 
 /** The two site-wide fonts. */
@@ -194,17 +196,47 @@ const ROLE_SELECTOR: Readonly<Record<FontRole, string>> = {
   heading: "h1, h2, h3, h4, h5, h6",
 };
 
+/** A font as the compiler writes it: a variable's `var()`, else as given. */
+function writtenFont(value: StyleValue, prefix: string): string {
+  const { declarations } = compileStyleValues({ fontFamily: value }, "", prefix);
+  return declarationsText(declarations);
+}
+
 /**
- * The CSS a role writes, for its hover text: the variable and the rule
- * reading it, or "Nothing" while it is unset.
+ * The variable a row's font reads and its value, as a declaration, or
+ * nothing for a font the row holds as written.
+ */
+function variableDeclared(
+  tokens: SiteTokenSet,
+  value: StyleValue,
+  prefix: string
+): string {
+  if (!isTokenRef(value)) return "";
+  const property = tokenCustomProperty(value.$token, prefix);
+  return `${property}: ${variableValue(tokens, value.$token) ?? ""}; `;
+}
+
+/**
+ * The CSS a role writes, for its hover text, read from the rows themselves:
+ * the variable a row points at with its value, and the rule the row writes,
+ * or "Nothing" while it is unset. Heading rows holding different fonts are
+ * said one by one.
  */
 export function fontRoleWrites(tokens: SiteTokenSet, role: FontRole): string {
-  const setting = fontRoleSetting(tokens, role);
-  if (setting.kind === "unset") return "Nothing";
   const { prefix } = resolveTokenPrefix(tokens.prefix);
-  const property = tokenCustomProperty(FONT_ROLE_TOKEN[role], prefix);
-  const rule = `${ROLE_SELECTOR[role]} { font-family: var(${property}) }`;
-  return setting.kind === "set" ? `${property}: ${setting.stack}; ${rule}` : rule;
+  const rows = resolveSiteText(tokens.siteText);
+  const held = rowsOf(role).flatMap(row => {
+    const font = rows[row]?.fontFamily;
+    return font === undefined ? [] : [[row, font] as const];
+  });
+  const [first] = held;
+  if (first === undefined) return "Nothing";
+  if (fontRoleSetting(tokens, role).kind === "set") {
+    return `${variableDeclared(tokens, first[1], prefix)}${ROLE_SELECTOR[role]} { ${writtenFont(first[1], prefix)} }`;
+  }
+  return held
+    .map(([row, font]) => `${variableDeclared(tokens, font, prefix)}${row} { ${writtenFont(font, prefix)} }`)
+    .join(" ");
 }
 
 /** One family the site loads, as a role's picker offers it. */

@@ -219,8 +219,16 @@ test("Body and Headings reach every page: the canvas, its header and footer, the
     // in the site's own font, and the page declares the variables anyway.
     await seedPage(page);
     await page.goto(`/${SLUG}`);
+    // The host's own font: the one its document body is set in, which a
+    // paragraph inherits while nothing is written for it.
+    const host = await page.evaluate(
+      () => getComputedStyle(document.body).fontFamily
+    );
+    expect(host).not.toBe("");
     const own = await fontsIn(page, "body");
-    expect(own.text).not.toMatch(/Lora/);
+    expect(own.text, "the paragraph is on the page").not.toBe("");
+    expect(own.text).toBe(host);
+    expect(own.heading).toBe(host);
     expect(
       await page.evaluate(() =>
         getComputedStyle(document.documentElement)

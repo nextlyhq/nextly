@@ -111,6 +111,30 @@ describe("the Body and Headings fonts", () => {
   });
 });
 
+describe("what a role's hover says it writes", () => {
+  it("says the rule the row writes: a plain font as written, with no variable", () => {
+    const tokens = { ...SITE, siteText: { body: { fontFamily: "Georgia, serif" } } };
+    expect(fontRoleWrites(tokens, "body")).toBe(
+      ".nx-pb-page { font-family: Georgia, serif }"
+    );
+  });
+
+  it("says the variable a row points at, and the rule reading it", () => {
+    const headings = withFontRole(SITE, "heading", '"Lora", serif');
+    expect(fontRoleWrites(headings, "heading")).toBe(
+      '--site-font-heading: "Lora", serif; h1, h2, h3, h4, h5, h6 { font-family: var(--site-font-heading) }'
+    );
+    // A row pointed at another font variable names that one.
+    const other = {
+      ...SITE,
+      siteText: { body: { fontFamily: { $token: "font.heading" } } },
+    };
+    expect(fontRoleWrites(other, "body")).toBe(
+      "--site-font-heading: system-ui; .nx-pb-page { font-family: var(--site-font-heading) }"
+    );
+  });
+});
+
 describe("a row's size edits keep the font", () => {
   it("keeps a heading's font when it is pointed at another type size, or reset", () => {
     const set = withFontRole(SITE, "heading", '"Lora", serif');
