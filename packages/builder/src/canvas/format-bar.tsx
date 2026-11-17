@@ -505,11 +505,24 @@ function useBarPlace(
 }
 
 /**
- * The focus leaving the bar, read once it has landed: back in the words is
- * still editing; anywhere else finishes the edit, as leaving the words does.
+ * The focus leaving the bar. For another element of the editor's own page it
+ * is known at once; across into the canvas frame it is read once it has
+ * landed: back in the words is still editing; anywhere else finishes the
+ * edit, as leaving the words does.
  */
-function leaveBar(bar: HTMLElement | null, target: FormatTarget): void {
+function leaveBar(
+  bar: HTMLElement | null,
+  target: FormatTarget,
+  next: EventTarget | null
+): void {
   const passage = target.element;
+  // Moving to another field of the editor: finished NOW, before that field can
+  // take the shared editor and supersede the words still unwritten in it.
+  if (isElement(next) && next !== passage) {
+    formatBar.setHoldsFocus(false);
+    target.finish();
+    return;
+  }
   setTimeout(() => {
     if (bar?.contains(bar.ownerDocument.activeElement)) return;
     const inWords =
@@ -601,7 +614,7 @@ function OpenBar({
         const next = event.relatedTarget;
         if (isElement(next) && bar.current?.contains(next)) return;
         setFocused(false);
-        leaveBar(bar.current, target);
+        leaveBar(bar.current, target, next);
       }}
       onKeyDown={onKeyDown}
     >

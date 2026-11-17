@@ -134,9 +134,9 @@ test.describe("a Text edited on the canvas", () => {
     await expect(address).toBeFocused();
     await address.fill("javascript:alert(1)");
     await address.press("Enter");
-    await expect(page.getByRole("alert")).toHaveText(
-      "This address can't be used for a link."
-    );
+    await expect(
+      page.getByRole("toolbar", { name: "Text formatting" }).getByRole("alert")
+    ).toHaveText("This address can't be used for a link.");
     await address.fill("https://example.com/survey");
     await address.press("Enter");
     await expect(words.locator("a")).toHaveAttribute(

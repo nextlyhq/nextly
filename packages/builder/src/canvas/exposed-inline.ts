@@ -170,9 +170,9 @@ export function composedTextAt(
 }
 
 /**
- * The words a one-paragraph value draws, as the element's text reads them:
- * every run, a link's included, with nothing for a line break, which the page
- * draws as an element with no text of its own.
+ * The words a one-paragraph value draws, as the plain surface reads them back
+ * (`elementWords`): every run, a link's included, and `\n` for a line break,
+ * so an edit that changes one word keeps the lines.
  */
 function drawnWords(value: unknown): string {
   const words: string[] = [];
@@ -183,6 +183,7 @@ function drawnWords(value: unknown): string {
     const node = stack.pop();
     if (!isRichTextNode(node)) continue;
     if (typeof node.text === "string") words.push(node.text);
+    if (node.type === "linebreak") words.push("\n");
     const kids = Array.isArray(node.children) ? node.children : [];
     for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
   }

@@ -273,6 +273,19 @@ describe("the keyboard", () => {
     expect(formatBar.holdsFocus()).toBe(true);
   });
 
+  it("finishes the edit at once when the focus leaves the bar for another field", () => {
+    // Before anything else can take the shared editor: an inspector field
+    // attaching on focus would otherwise supersede the words first.
+    const { finish } = serve();
+    const field = document.createElement("input");
+    document.body.append(field);
+    drawBar();
+    act(() => formatBar.requestFocus());
+    act(() => field.focus());
+    expect(finish).toHaveBeenCalled();
+    expect(formatBar.holdsFocus()).toBe(false);
+  });
+
   it("finishes the edit when the focus leaves the bar for anywhere but the words", async () => {
     const { finish } = serve();
     const elsewhere = document.createElement("button");
