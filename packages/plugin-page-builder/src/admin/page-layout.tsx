@@ -25,7 +25,7 @@ import {
   usePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
 import { Button, Label } from "@nextlyhq/ui";
-import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import {
   useController,
   useWatch,
@@ -56,6 +56,7 @@ import {
   type LayoutPickerView,
   type PickerOption,
 } from "./layout-choice-view";
+import { useRefreshOnReturn } from "./refresh-on-return";
 
 /** The page's stored Layout reference, as the pages collection names it. */
 const LAYOUT_FIELD = "layout";
@@ -122,33 +123,6 @@ function useLayoutChoices(
   const stale =
     read.data === undefined && read.error === null && held !== undefined;
   return { state, stale, retry: read.refetch };
-}
-
-/**
- * Ask again when the author returns to this tab: on window focus, and when
- * the page becomes visible. The admin turns refetch-on-focus off for every
- * read, so this one read asks for it itself.
- */
-function useRefreshOnReturn(enabled: boolean, refetch: () => void): void {
-  // The newest `refetch`, without re-attaching the listeners on each render:
-  // the read hands out a new function every time.
-  const latest = useRef(refetch);
-  useEffect(() => {
-    latest.current = refetch;
-  });
-  useEffect(() => {
-    if (!enabled) return;
-    const onFocus = () => latest.current();
-    const onVisible = () => {
-      if (document.visibilityState !== "hidden") latest.current();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [enabled]);
 }
 
 /**

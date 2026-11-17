@@ -36,6 +36,13 @@ import {
 } from "../image-slot";
 
 import { MEDIA } from "./categories";
+import {
+  ENLARGE_ATTRIBUTE,
+  enlargeName,
+  Lightbox,
+  LIGHTBOX_PARTS,
+  lightboxId,
+} from "./lightbox";
 import { imageLooks } from "./looks";
 import {
   boundImage,
@@ -202,6 +209,8 @@ export async function renderImage({
           ctx.resolveEntryPath(collection, id, claim)
         )
       : undefined;
+  // Where a click enlarges the picture, the id of the lightbox it opens.
+  const enlarge = lightboxOf(props, node, ctx);
 
   const image = (
     <img
@@ -216,7 +225,7 @@ export async function renderImage({
        * the wrapper around it looks correct. Handing the figure the whole
        * class string put the rule one element above the thing it constrains.
        */
-      className={pictureClass(className, caption, link, partClass)}
+      className={pictureClass(className, caption, { link, enlarge }, partClass)}
       {...pictureAttributes(sized, props.loading)}
       alt={alt}
       // Intrinsic dimensions reserve the space before the file arrives, which
@@ -226,15 +235,56 @@ export async function renderImage({
       {...(decorative ? { role: "presentation" } : {})}
     />
   );
+  if (enlarge !== undefined) {
+    return enlargedPicture(image, {
+      id: enlarge,
+      // Where an author is looking, a click on the picture selects the block.
+      opens: ctx?.diagnostics !== true,
+      className,
+      caption,
+      alt,
+      partClass,
+      // The full-size file is the original, never a copy sized to the page.
+      full: { src: picture.src, width: usable?.width, height: usable?.height },
+    });
+  }
   return wrapPicture(image, {
     className,
     caption,
     link,
     partClass,
-    // A picture with no alt text names no link; its caption, then where it
-    // goes, does instead, so the link is never unnamed.
-    linkName: alt !== "" ? undefined : caption !== "" ? caption : link?.href,
+    linkName: linkNameOf(alt, caption, link),
   });
+}
+
+/**
+ * The name a linked picture with no alt text gives its link: its caption,
+ * then where it goes, so the link is never unnamed. None while the alt text
+ * names it.
+ */
+function linkNameOf(
+  alt: string,
+  caption: string,
+  link: LinkAttributes | undefined
+): string | undefined {
+  if (alt !== "") return undefined;
+  return caption !== "" ? caption : link?.href;
+}
+
+/**
+ * The id of the lightbox a click on the picture opens, where it enlarges:
+ * from the node, which a block drawn on its own outside a page is not
+ * handed, so such a picture is drawn as Nothing would draw it.
+ */
+function lightboxOf(
+  props: ImageProps,
+  node: BlockNode | undefined,
+  ctx: PageContext | undefined
+): string | undefined {
+  if (whenClickedOf(props) !== "enlarge" || node?.id === undefined) {
+    return undefined;
+  }
+  return lightboxId(node.id, ctx?.itemPosition);
 }
 
 /**
@@ -508,20 +558,21 @@ async function sizedPicture(
 /**
  * The picture's classes: the node's own where it is the root, else the type
  * class and the part that takes the corners, proportion, fit and focal point
- * from the root (where the node's classes land), plus the part that fills a
- * link's box when it is linked.
+ * from the root (where the node's classes land), plus the part that fills
+ * the box of the link or button it is wrapped in.
  */
 function pictureClass(
   className: string,
   caption: string,
-  link: LinkAttributes | undefined,
+  around: { link: LinkAttributes | undefined; enlarge: string | undefined },
   partClass: (part: string) => string
 ): string {
-  if (caption === "" && link === undefined) return className;
+  const wrapped = around.link !== undefined || around.enlarge !== undefined;
+  if (caption === "" && !wrapped) return className;
   return [
     blockTypeClassName(IMAGE_BLOCK),
     partClass("picture"),
-    ...(link === undefined ? [] : [partClass("linked")]),
+    ...(wrapped ? [partClass("linked")] : []),
   ]
     .filter(Boolean)
     .join(" ");
@@ -575,6 +626,70 @@ function wrapPicture(
   );
 }
 
+/**
+ * A picture a click enlarges: the picture as the button that opens its
+ * lightbox, in a figure that holds the caption and the lightbox beside it,
+ * so the block keeps one root whether or not it has a caption.
+ *
+ * The button toggles, the browser's default: the backdrop lets clicks through
+ * to the page, so a click outside the panel but over the page's picture
+ * lands on this button, and closes the lightbox as a click anywhere else
+ * outside it does.
+ *
+ * Where an author is looking (the editor's canvas, a draft's preview) the
+ * button names no popover (`opens` false): the canvas draws the page as it
+ * is published, and a click on a picture there is how the block is
+ * selected, which would otherwise open the lightbox over the editor.
+ */
+function enlargedPicture(
+  image: ReactElement,
+  {
+    id,
+    opens,
+    className,
+    caption,
+    alt,
+    partClass,
+    full,
+  }: {
+    id: string;
+    opens: boolean;
+    className: string;
+    caption: string;
+    alt: string;
+    partClass: (part: string) => string;
+    full: { src: string; width?: number; height?: number };
+  }
+): ReactElement {
+  return (
+    <figure
+      className={[className, partClass("frame")].filter(Boolean).join(" ")}
+    >
+      <button
+        type="button"
+        className={partClass("enlarge")}
+        {...(opens ? { popoverTarget: id } : {})}
+        aria-label={enlargeName(alt)}
+        {...{ [ENLARGE_ATTRIBUTE]: "" }}
+      >
+        {image}
+      </button>
+      {caption === "" ? null : (
+        <figcaption className={partClass("caption")}>{caption}</figcaption>
+      )}
+      <Lightbox
+        id={id}
+        src={full.src}
+        alt={alt}
+        width={full.width}
+        height={full.height}
+        caption={caption}
+        partClass={partClass}
+      />
+    </figure>
+  );
+}
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -624,6 +739,8 @@ const IMAGE_BASE_STYLES = {
  * the two things that make it read as a caption instead.
  */
 const IMAGE_PARTS = {
+  // The button an enlarged picture is, and the lightbox it opens.
+  ...LIGHTBOX_PARTS,
   // A captioned picture's figure: the picture and its caption in a column,
   // so a height set on the block is shared between them rather than
   // overflowed.
@@ -654,7 +771,9 @@ const IMAGE_PARTS = {
         "objectFit",
         "objectPosition",
       ],
-      whenRootIs: ["frame", "link"],
+      // The enlarge button sits between the figure and the picture, as a
+      // link does inside a captioned picture's figure.
+      whenRootIs: ["frame", "link", "enlarge"],
     },
     baseStyles: {
       base: {
@@ -724,8 +843,9 @@ const IMAGE_PARTS = {
 const WHEN_CLICKED_SECTION = "When clicked";
 
 /**
- * The shared link props, each placed in the When clicked section, where the
- * editor draws them under the choice that uses them.
+ * The shared link props, placed in the When clicked section, where the
+ * editor draws them under the choice that uses them; all but `rel`, which is
+ * in Advanced › HTML.
  */
 function whenClickedLinkProps(): {
   readonly [Name in keyof typeof LINK_PROPS]: (typeof LINK_PROPS)[Name] & {
@@ -740,7 +860,10 @@ function whenClickedLinkProps(): {
     },
     entryId: { ...LINK_PROPS.entryId, section: WHEN_CLICKED_SECTION },
     target: { ...LINK_PROPS.target, section: WHEN_CLICKED_SECTION },
-    rel: { ...LINK_PROPS.rel, section: WHEN_CLICKED_SECTION },
+    // How the page relates to where it links is an HTML detail: drawn in
+    // Advanced › HTML with the block's other HTML settings, not with the
+    // click's choice.
+    rel: { ...LINK_PROPS.rel, section: "HTML" },
   };
 }
 

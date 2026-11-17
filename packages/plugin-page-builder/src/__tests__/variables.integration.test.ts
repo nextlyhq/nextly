@@ -1215,5 +1215,117 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(kept.item).toMatchObject({ title: "Old, renamed" });
     });
+
+    /** A type size the site added, with the line height it pairs with. */
+    const display = [
+      {
+        id: "t-display",
+        name: "font-size.display",
+        label: "Display",
+        kind: "dimension",
+        values: { light: "3rem" },
+      },
+      {
+        id: "t-display-line",
+        name: "line-height.display",
+        kind: "number",
+        values: { light: "1.05" },
+      },
+    ];
+    /** Heading 1 pointed at that type size. */
+    const headingOnDisplay = {
+      h1: {
+        fontSize: { $token: "t-display" },
+        lineHeight: { $token: "t-display-line" },
+      },
+    };
+
+    it("refuses a Site text change to a role that may read Design but not change it, and stores it for one that may", async () => {
+      const { t } = await boot();
+      const reader = await holding(t, "read-site-style");
+      const designer = await holding(t, ...DESIGN);
+      const body = {
+        tokens: {
+          tokens: [accent, styled, spare],
+          siteText: { h2: { fontSize: "40px", lineHeight: 1.1 } },
+        },
+        _overwrite: true,
+      };
+      const before = await storedSection(t);
+      const refused = await call("PATCH", SINGLE, reader, body);
+      expect(refused.status).toBe(403);
+      expect(await storedSection(t)).toBe(before);
+      // CONTROL: the same save by a Design manager is stored.
+      const accepted = await call("PATCH", SINGLE, designer, body);
+      expect(accepted.status).toBe(200);
+      expect(JSON.parse(await storedSection(t))).toMatchObject({
+        siteText: { h2: { fontSize: "40px", lineHeight: 1.1 } },
+      });
+    });
+
+    it("refuses a Site text row it cannot store, naming the row", async () => {
+      const { t } = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const refused = await call("PATCH", SINGLE, designer, {
+        tokens: {
+          tokens: [accent, styled, spare],
+          siteText: { h1: { fontSize: "huge" } },
+        },
+        _overwrite: true,
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain("Heading 1");
+    });
+
+    it("refuses removing a type size a Site text row uses, on the remove route and on a whole-section save, naming the row", async () => {
+      const { t, tick } = await boot();
+      await tick();
+      const designer = await holding(t, ...DESIGN);
+      const withRow = {
+        tokens: {
+          tokens: [accent, styled, spare, ...display],
+          siteText: headingOnDisplay,
+        },
+        _overwrite: true,
+      };
+      expect((await call("PATCH", SINGLE, designer, withRow)).status).toBe(200);
+      const before = await storedSection(t);
+
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-display", "t-display-line"],
+      });
+      expect(removed.status).toBe(409);
+      expect(JSON.stringify(removed.body)).toContain(
+        "Display is used by Site text: Heading 1."
+      );
+      expect(await storedSection(t)).toBe(before);
+
+      const dropped = await call("PATCH", SINGLE, designer, {
+        tokens: { tokens: [accent, styled, spare], siteText: headingOnDisplay },
+        _overwrite: true,
+      });
+      expect(dropped.status).toBe(400);
+      expect(JSON.stringify(dropped.body)).toContain(
+        "Display is used by Site text: Heading 1."
+      );
+      expect(await storedSection(t)).toBe(before);
+
+      // CONTROL: once the row points elsewhere, the same removal goes.
+      expect(
+        (
+          await call("PATCH", SINGLE, designer, {
+            tokens: {
+              tokens: [accent, styled, spare, ...display],
+              siteText: { h1: { fontSize: "40px" } },
+            },
+            _overwrite: true,
+          })
+        ).status
+      ).toBe(200);
+      const gone = await call("POST", route("remove"), designer, {
+        ids: ["t-display", "t-display-line"],
+      });
+      expect(gone.status).toBe(200);
+    });
   }
 );

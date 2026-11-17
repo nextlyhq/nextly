@@ -133,14 +133,14 @@ describe("an Image's When clicked", () => {
     mount({ src: "https://example.test/a.png" });
     expect(chosen()).toEqual(["Nothing"]);
     expect(linkShown()).toBe(false);
-    expect(screen.queryByText("Open in new tab")).toBeNull();
+    expect(screen.queryByText("Open in a new tab")).toBeNull();
   });
 
   it("reads Link, with the link settings, for an Image stored with a link", () => {
     mount({ src: "https://example.test/a.png", href: "/about" });
     expect(chosen()).toEqual(["Link"]);
     expect(linkShown()).toBe(true);
-    expect(screen.getByText("Open in new tab")).not.toBeNull();
+    expect(screen.getByText("Open in a new tab")).not.toBeNull();
   });
 
   it("reads Link for an Image whose link is bound", () => {

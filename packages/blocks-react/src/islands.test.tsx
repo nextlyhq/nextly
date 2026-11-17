@@ -442,3 +442,42 @@ describe("a form on a page", () => {
     expect(out).toContain('name="email"');
   });
 });
+
+describe("a picture a click enlarges", () => {
+  it("opens with the browser's own popover and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "i",
+            type: "core/image",
+            version: 1,
+            props: {
+              src: "https://example.test/team.png",
+              alt: "The team",
+              caption: "Our team",
+              whenClicked: "enlarge",
+            },
+          },
+        ],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    // Must-be-found: the lightbox and the button that opens it were drawn.
+    expect(out).toMatch(/<div[^>]*popover="auto"/);
+    // Attribute names are case-insensitive in HTML, and React writes this
+    // one in camel case.
+    expect(out).toMatch(/<button[^>]*popovertarget="/i);
+  });
+});
