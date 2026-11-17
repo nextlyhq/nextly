@@ -7,6 +7,8 @@
  * - At the panel's narrowest, the last row's unit menu opens inside the
  *   window.
  * - "Use 20px" under a line height of 20 saves 20px.
+ * - A font variable is chosen from the picker, never typed, and a weight by
+ *   name, each saved as the value the site's stylesheet reads.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -31,6 +33,12 @@ const TOKENS = [
   { name: "line-height.body", kind: "number", values: { light: "1.5" } },
   { name: "space.2", kind: "dimension", values: { light: "0.5rem" } },
   { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+  {
+    name: "font.heading",
+    kind: "fontFamily",
+    values: { light: "Georgia, serif" },
+  },
+  { name: "weight.strong", kind: "fontWeight", values: { light: "700" } },
 ];
 
 async function storedTokens(page: Page): Promise<unknown> {
@@ -151,6 +159,47 @@ test("a line height of 20 offers 20px, and uses it when asked", async ({
     await expect
       .poll(() => storedValue(page, "line-height.body"))
       .toBe("20px");
+  } finally {
+    await seed(page, before);
+  }
+});
+
+test("a font variable is picked from the site's and the system's fonts, and a weight by name", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, { tokens: TOKENS });
+    await openEditorWith(page, NODES, "values-text");
+    await openDesign(page, "Type");
+    const panel = page.getByRole("region", { name: "Design panel" });
+    const editor = page.locator(".nx-vars-editor");
+
+    await panel.getByRole("button", { name: /^Heading/ }).click();
+    // A picker, with no box to type a family into.
+    await expect(editor.getByRole("textbox", { name: "Light" })).toHaveCount(0);
+    await editor.getByRole("button", { name: /^Font, / }).click();
+    const list = page.getByRole("listbox");
+    await expect(list.getByRole("group", { name: "System" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Manage fonts…" })
+    ).toBeVisible();
+    await list
+      .getByRole("group", { name: "System" })
+      .getByRole("option")
+      .first()
+      .click();
+    await expect
+      .poll(() => storedValue(page, "font.heading"))
+      .not.toBe("Georgia, serif");
+    await page.keyboard.press("Escape");
+    await expect(editor).toBeHidden();
+
+    await panel.getByRole("button", { name: /^Strong/ }).click();
+    await editor.getByLabel("Light", { exact: true }).click();
+    await page.getByRole("option", { name: /^Regular 400/ }).click();
+    await expect.poll(() => storedValue(page, "weight.strong")).toBe("400");
   } finally {
     await seed(page, before);
   }
