@@ -197,6 +197,13 @@ export interface CollectionSave {
     | { column: string; kind: "delete_nonconforming" }
   >;
   /**
+   * A Single's one row given the default each field new to its table states (`singleRowFills`):
+   * written into the change's file as a fill, and the column left as its field declares it.
+   * Accepted for a Single alone, whose table holds one row; a collection's rows are settled only
+   * by the person's own answer (`resolutions`).
+   */
+  rowFills?: ReadonlyArray<{ column: string; value: unknown }>;
+  /**
    * The other collections deleted with this one: gone from the definition
    * the save writes, so the links between them do not hold this one's delete
    * back. Each still gets a migration of its own.
@@ -659,6 +666,58 @@ function answeredField(
   );
 }
 
+/**
+ * Refuses a save's row fills that are not a Single's fields new to its table, each with a value
+ * the field takes, before anything is written. A row fill is the default a field states, given to
+ * a Single's one row; a collection, whose rows only the person's answer settles, is refused one
+ * whoever passes it, and a column the table already has keeps the values it holds.
+ */
+function refuseRowFillsOutsideSingle(
+  save: CollectionSave,
+  live: TableSpec | undefined,
+  dialect: SupportedDialect
+): void {
+  const refusal = (path: string, code: string, message: string) =>
+    NextlyError.validation({ errors: [{ path, code, message }] });
+  for (const fill of save.rowFills ?? []) {
+    if (save.kind !== "single") {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_SINGLE",
+        "Only a Single's row is filled with a field's default; a collection's rows are settled by the answer given for them."
+      );
+    }
+    const field = answeredField(save, fill.column);
+    if (field === undefined) {
+      throw refusal(
+        fill.column,
+        "RESOLUTION_FIELD_UNKNOWN",
+        `${fill.column} is not a field of the saved Single.`
+      );
+    }
+    const column = toSnakeCase(fill.column);
+    if (live?.columns.some(c => c.name === column) === true) {
+      throw refusal(
+        fill.column,
+        "ROW_FILL_NOT_NEW",
+        `${fill.column} is already a column of the Single, so its value is kept rather than filled.`
+      );
+    }
+    const valid = validateDefaultValue(
+      { name: fill.column, type: field.type },
+      fill.value,
+      dialect
+    );
+    if (!valid.success) {
+      throw refusal(
+        fill.column,
+        "INVALID_DEFAULT_FOR_TYPE",
+        valid.error ?? "The fill value does not fit the field."
+      );
+    }
+  }
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -670,6 +729,7 @@ async function settledRows(
   const live = exists
     ? (await introspectLiveSnapshot(db, dialect, [table])).tables[0]
     : undefined;
+  refuseRowFillsOutsideSingle(save, live, dialect);
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
     const field = answeredField(save, resolution.column);
@@ -965,10 +1025,19 @@ async function writeFiles(
     table: plan.table,
     now: new Date(now.getTime() + offset),
     appended: addedStatements(deps, save, plan.table),
-    ...(save.resolutions === undefined
+    ...(save.resolutions === undefined && save.rowFills === undefined
       ? {}
       : {
-          resolutions: save.resolutions.map(r => ({
+          resolutions: [
+            ...(save.resolutions ?? []),
+            // A Single's row fills, written as fills; the generator leaves an optional field's
+            // column nullable after its fill.
+            ...(save.rowFills ?? []).map(f => ({
+              column: f.column,
+              kind: "fill" as const,
+              value: f.value,
+            })),
+          ].map(r => ({
             ...r,
             tableName: plan.table,
             columnName: toSnakeCase(r.column),
