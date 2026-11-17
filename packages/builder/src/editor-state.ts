@@ -56,6 +56,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { useFirstAdd, type FirstAdd } from "./first-add";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
@@ -78,6 +79,7 @@ import {
   type BlockSelection,
   type SelectionMode,
 } from "./selection";
+import { joinsTyping, typingRunNow, type TypingStep } from "./typing-run";
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
@@ -261,6 +263,12 @@ export interface EditorState {
   sortFieldAsked?: { readonly id: string; readonly seq: number };
   /** Select a list and take the author to its first sort row. */
   askSortField?: (id: string) => void;
+  /**
+   * A block just added that asks for a choice, while the canvas draws its
+   * chooser: editor state only, never stored. See `first-add.ts`.
+   * @experimental
+   */
+  firstAdd?: FirstAdd;
 }
 
 export interface UseEditorStateArgs {
@@ -932,8 +940,15 @@ function useHistoryStacks(): {
    * once a replay of one takes effect or any other entry is pushed.
    */
   const endedBranch = useRef<StepRun | null>(null);
+  // The run of typing the newest step was pushed for (`typing-run.ts`).
+  const typing = useRef<TypingStep<HistoryEntry> | null>(null);
   const push = useCallback(
     (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
+      // A later write of a run of typing keeps the run's one step, whose
+      // inverse puts back what was there before the author started.
+      const run = into === "new" ? typingRunNow() : null;
+      if (joinsTyping(typing.current, undoStack.current.at(-1), run)) return;
+      typing.current = run && { run, entry };
       let dropped: HistoryEntry | undefined;
       endedBranch.current = runAfterPush(
         endedBranch.current,
@@ -1151,7 +1166,8 @@ function toggled(
  * them, which are editor state and no step of the history.
  */
 export function useEditorState(args: UseEditorStateArgs): EditorState {
-  const state = useDocumentState(args);
+  // With the step that holds a block just added while it asks for a choice.
+  const state = useFirstAdd(useDocumentState(args));
   const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
   const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
   const [sortFieldAsked, setSortFieldAsked] =

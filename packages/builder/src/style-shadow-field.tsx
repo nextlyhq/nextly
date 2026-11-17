@@ -2,8 +2,8 @@
 
 /**
  * A block's shadow in its Style tab: the shadow control a shadow variable is
- * built with in Design, and the ◇ to use one of the site's shadow variables
- * instead.
+ * built with in Design, and a menu at its end to use one of the site's shadow
+ * variables instead.
  *
  * @module style-shadow-field
  */
@@ -61,8 +61,6 @@ export function ShadowField({
       <VariableChoice
         leaf={control.leaf}
         tokens={tokens}
-        bound={false}
-        empty={stored === undefined}
         current={undefined}
         label={actionName}
         onPick={identity => onCommit({ $token: identity })}

@@ -53,6 +53,7 @@ export { unitCategory } from "./css-value-types";
 export { checkUrlValue } from "./css-value-urls";
 export {
   checkCssValue,
+  customPropertiesReferenced,
   isOverlongValue,
   referencesCustomProperty,
 } from "./css-value-check";

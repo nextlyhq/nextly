@@ -535,17 +535,17 @@ test.describe("the inspector", () => {
       name: "Keep out of search previews",
     });
     await expect(never).toHaveAttribute("aria-checked", "false");
-    // After Visible on and Show when, before the anchor: each is measured,
+    // After Hide on and Show when, before the anchor: each is measured,
     // so the switch drawn above Show when, or Show when missing, fails here.
     const order = await page
       .getByRole("tabpanel", { name: "Advanced" })
       .locator(
-        "[data-visible-on], .nx-show-when, [data-never-quote], #nx-block-css-id:visible"
+        "[data-hide-on], .nx-show-when, [data-never-quote], #nx-block-css-id:visible"
       )
       .evaluateAll(elements =>
         elements.map(element =>
-          element.hasAttribute("data-visible-on")
-            ? "visible-on"
+          element.hasAttribute("data-hide-on")
+            ? "hide-on"
             : element.classList.contains("nx-show-when")
               ? "show-when"
               : element.hasAttribute("data-never-quote")
@@ -553,7 +553,7 @@ test.describe("the inspector", () => {
                 : "css-id"
         )
       );
-    expect(order).toEqual(["visible-on", "show-when", "never-quote", "css-id"]);
+    expect(order).toEqual(["hide-on", "show-when", "never-quote", "css-id"]);
 
     await never.click();
     await expect(page.getByText("On: marked")).toBeVisible();

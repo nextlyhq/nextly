@@ -16,6 +16,8 @@
 import {
   DEFAULT_BINDING_SOURCE,
   isPlainRecord,
+  isRichTextValue,
+  oneParagraphWords,
   SITE_SETTING_FIELD_SHAPES,
   type BindingDocument,
   type BindingFieldShape,
@@ -188,8 +190,17 @@ function placeOf(
   return {
     prop,
     blockType: typeof node.type === "string" ? node.type : "",
-    own: isPlainRecord(node.props) ? node.props[prop] : undefined,
+    own: isPlainRecord(node.props) ? shownOwn(node.props[prop]) : undefined,
   };
+}
+
+/**
+ * A block's own value as the report quotes it: a Text's one paragraph (or
+ * any rich value) as the words it draws, so the report reads "Opening hours"
+ * rather than nothing; anything else as it is stored.
+ */
+function shownOwn(value: unknown): unknown {
+  return isRichTextValue(value) ? oneParagraphWords(value) : value;
 }
 
 /** One row, from the problems found at one binding's pointer. */

@@ -94,6 +94,32 @@ const pageUsing = (identity?: string) => ({
   ],
 });
 
+/** A page whose one box's shadow names `property` through `var()`. */
+const pageWithShadow = (property: string) => ({
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [
+    {
+      id: "a",
+      type: "core/box",
+      version: 1,
+      props: {},
+      styles: {
+        base: { base: { boxShadow: `0 1px 2px var(${property})` } },
+      },
+    },
+  ],
+});
+
+/** A shadow variable whose value names `property` through `var()`. */
+const lift = (property: string) => ({
+  id: "t-lift",
+  name: "shadow.lift",
+  label: "Lift",
+  kind: "shadow",
+  values: { light: `0 1px 2px var(${property})` },
+});
+
 /**
  * A page past the walk's node bound, so the index cannot read it whole; its
  * last node, the one past the bound, names `identity`, or nothing.
@@ -944,6 +970,200 @@ describe.each(getConfiguredTestDialects())(
       const reader = await holding(t, "read-site-style");
       const usage = `${route("usage")}?id=t-accent`;
       // CONTROL: the row is gone, so a count of 1 below is the backfill's.
+      expect((await call("GET", usage, reader)).body).toMatchObject({
+        whole: false,
+        variables: { "t-accent": { documents: 0 } },
+      });
+
+      await tick();
+      expect((await call("GET", usage, reader)).body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+    });
+
+    it("counts a colour only a block's shadow names through var(), refusing its removal until the page stops", async () => {
+      const { t, tick } = await boot();
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageWithShadow("--site-t-accent"),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const designer = await holding(t, ...DESIGN, "read-pages");
+      const usage = await call(
+        "GET",
+        `${route("usage")}?id=t-accent`,
+        designer
+      );
+      expect(usage.body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+
+      const refused = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain('"code":"IN_USE"');
+      expect(JSON.stringify(refused.body)).toContain(
+        "Accent is used on 1 document."
+      );
+      expect(await storedIds(t)).toContain("t-accent");
+
+      // The page stops naming it; its save updates the index.
+      await t.nextly.update({
+        collection: "pages",
+        id: String(created.item.id),
+        data: { content: pageUsing(), _overwrite: true },
+        overrideAccess: true,
+      });
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      expect(removed.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-styled", "t-spare"]);
+    });
+
+    it("refuses removing a colour a shadow variable names, and removes the two together", async () => {
+      const { t, tick } = await boot();
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: { tokens: [accent, styled, spare, lift("--site-t-accent")] },
+          _overwrite: true,
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const designer = await holding(t, ...DESIGN, "read-pages");
+
+      const refused = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain(
+        "Accent is used by the variable Lift."
+      );
+      // The whole-section save dropping it alone, likewise.
+      const section = await call("PATCH", SINGLE, designer, {
+        tokens: { tokens: [styled, spare, lift("--site-t-accent")] },
+        _overwrite: true,
+      });
+      expect(section.status).toBe(400);
+      expect(JSON.stringify(section.body)).toContain('"code":"IN_USE"');
+      expect(await storedIds(t)).toEqual([
+        "t-accent",
+        "t-styled",
+        "t-spare",
+        "t-lift",
+      ]);
+
+      const both = await call("POST", route("remove"), designer, {
+        ids: ["t-accent", "t-lift"],
+      });
+      expect(both.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-styled", "t-spare"]);
+    });
+
+    it("neither refuses nor counts a var() a page names that is no variable of the site's", async () => {
+      const { t, tick } = await boot();
+      // A `var()` is CSS, never a reference a page's write is refused for,
+      // under the judgement that refuses a `$token` naming no variable (the
+      // last case here).
+      const created = await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageWithShadow("--not-a-site-variable"),
+        },
+        overrideAccess: true,
+      });
+      expect(created.item).toMatchObject({ title: "Home" });
+      await tick();
+      // CONTROL: the page was walked, and its property recorded under its
+      // own key, so the zero counts below are not a page left unread.
+      const rows = await t.adapter.select(TOKEN_ROWS, {
+        where: {
+          and: [
+            {
+              column: "tokenId",
+              op: "=" as const,
+              value: "var:--not-a-site-variable",
+            },
+          ],
+        },
+      });
+      expect(rows.length).toBeGreaterThan(0);
+      const designer = await holding(t, ...DESIGN, "read-pages");
+      const usage = await call(
+        "GET",
+        `${route("usage")}?id=t-accent&id=t-styled&id=t-spare`,
+        designer
+      );
+      expect(usage.body).toMatchObject({
+        whole: true,
+        variables: {
+          "t-accent": { documents: 0, complete: true },
+          "t-styled": { documents: 0 },
+          "t-spare": { documents: 0, complete: true },
+        },
+      });
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-spare"],
+      });
+      expect(removed.status).toBe(200);
+    });
+
+    it("walks again a page the index read before it counted var(), so its shadow's colour counts", async () => {
+      const { t, tick } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Home",
+          slug: "home",
+          content: pageWithShadow("--site-t-accent"),
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      // The index as the release before left it: the page walked, its run
+      // finished under the previous revision of the walk, and no row for the
+      // property its shadow names.
+      const propertyRows = {
+        and: [
+          {
+            column: "tokenId",
+            op: "=" as const,
+            value: "var:--site-t-accent",
+          },
+        ],
+      };
+      expect(
+        (await t.adapter.select(TOKEN_ROWS, { where: propertyRows })).length
+      ).toBeGreaterThan(0);
+      await t.adapter.delete(TOKEN_ROWS, propertyRows);
+      const usageRun = {
+        and: [{ column: "name", op: "=" as const, value: "usage" }],
+      };
+      const [run] = (await t.adapter.select(RUNS, { where: usageRun })) as {
+        generation: string;
+      }[];
+      expect(run?.generation).toMatch(/^3\|/);
+      await t.adapter.update(
+        RUNS,
+        { generation: (run?.generation ?? "").replace(/^3\|/, "2|") },
+        usageRun
+      );
+      const reader = await holding(t, "read-site-style");
+      const usage = `${route("usage")}?id=t-accent`;
+      // CONTROL: the row is gone, and work recorded under the previous
+      // revision is not taken as this walk's.
       expect((await call("GET", usage, reader)).body).toMatchObject({
         whole: false,
         variables: { "t-accent": { documents: 0 } },

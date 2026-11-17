@@ -29,6 +29,8 @@ import type {
   StyleStateBinding,
 } from "./inspector-panel-types";
 import { editedStyleState } from "./inspector-style-state";
+import { blockStyleTilesOf } from "./look-tiles-view";
+import { FirstSectionAbove } from "./panel-folds-context";
 import { deviceOptions, tierIcon } from "./shell/breakpoint-switcher";
 import { StyleStateField } from "./state-switcher";
 import {
@@ -125,6 +127,7 @@ export function StyleTab({
   | "sharedStyles"
   | "verbs"
   | "fonts"
+  | "onEditBlockStyles"
 > & {
   styleNode: ReturnType<typeof selectedNode>;
   renderedTag: StyleInspectorPanelProps["renderedTag"];
@@ -161,6 +164,9 @@ export function StyleTab({
         libraryAbsence={shared.classLibraryAbsence}
         host={shared.sharedStyles}
         verbs={shared.verbs}
+        // "Edit block styles", under the Block style tiles, where the host
+        // can open Design.
+        onEditBlockStyles={shared.onEditBlockStyles}
         {...barPlace(breakpoints, breakpoint)}
         breakpoints={breakpoints}
         state={state}
@@ -171,35 +177,42 @@ export function StyleTab({
           breakpoints
         )}
       />
-      <StateTinted state={state}>
-        {/* The picture the canvas draws, for the focal point aimed over it. */}
-        <FocalFrame.Provider
-          value={{
-            picture: renderedPicture,
-            position: renderedPicturePosition,
-          }}
-        >
-          <StyleInspectorPanel
-            editor={editor}
-            tokenMode={tokenMode}
-            // The block card above says why a held block can't be changed.
-            showReadOnlyReason={false}
-            renderedTag={renderedTag}
-            sideOrientation={sideOrientation}
-            policy={policy}
-            state={state}
-            breakpoint={breakpoint}
-            cascade={cascade}
-            breakpoints={breakpoints}
-            previewContainer={previewContainer}
-            liveBreakpoints={liveBreakpoints}
-            onJumpToBreakpoint={onJumpToBreakpoint}
-            tokens={tokens}
-            target={target}
-            fonts={fonts}
-          />
-        </FocalFrame.Provider>
-      </StateTinted>
+      {/* The Block style section above the bar is the tab's first where it
+        is drawn, so the first section under the bar does not also open for
+        being first. */}
+      <FirstSectionAbove.Provider
+        value={blockStyleTilesOf(editor, shared.classLibrary) !== undefined}
+      >
+        <StateTinted state={state}>
+          {/* The picture the canvas draws, for the focal point aimed over it. */}
+          <FocalFrame.Provider
+            value={{
+              picture: renderedPicture,
+              position: renderedPicturePosition,
+            }}
+          >
+            <StyleInspectorPanel
+              editor={editor}
+              tokenMode={tokenMode}
+              // The block card above says why a held block can't be changed.
+              showReadOnlyReason={false}
+              renderedTag={renderedTag}
+              sideOrientation={sideOrientation}
+              policy={policy}
+              state={state}
+              breakpoint={breakpoint}
+              cascade={cascade}
+              breakpoints={breakpoints}
+              previewContainer={previewContainer}
+              liveBreakpoints={liveBreakpoints}
+              onJumpToBreakpoint={onJumpToBreakpoint}
+              tokens={tokens}
+              target={target}
+              fonts={fonts}
+            />
+          </FocalFrame.Provider>
+        </StateTinted>
+      </FirstSectionAbove.Provider>
     </>
   );
 }

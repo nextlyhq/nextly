@@ -172,6 +172,13 @@ export { withTypographyDefaults } from "./blocks/typography-defaults";
  * keeping what visitors see, asks the same question the image block does.
  */
 export { fetchableUrl } from "./blocks/props";
+/**
+ * What a click on a picture does, by the Image's one reading of its props:
+ * exported so the editor's panel shows the choice the render follows.
+ *
+ * @experimental
+ */
+export { type WhenClicked, whenClickedOf } from "./blocks/props";
 // The element a container preset (Section, Box) renders its root as, which an
 // editor reads to say what the page will hold.
 export { containerRootTag } from "./blocks/container-root";

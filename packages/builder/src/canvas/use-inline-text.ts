@@ -33,7 +33,7 @@
  * The values here are plain text, and `contenteditable="plaintext-only"` is
  * what stops a paste bringing markup, a bold shortcut inserting a `<b>`, and
  * Enter inserting a `<div>`. Where a browser does not support it the attribute
- * falls back to ordinary editing, so the commit reads `textContent` — which is
+ * falls back to ordinary editing, so the commit reads the element's text — which is
  * text whatever the element ended up containing.
  *
  * @module use-inline-text
@@ -171,6 +171,34 @@ export interface UseInlineTextResult {
  * whatever leaf is under the pointer, and the element carrying the mark may be
  * an ancestor of it.
  */
+/**
+ * The words an element holds, as the value it edits: its text, with each
+ * `<br>` read as the `\n` it stands for. `textContent` alone drops a line
+ * break drawn as an element, so a line of a Text's one paragraph edited here
+ * would come back joined to the next.
+ */
+export function elementWords(element: Node): string {
+  const parts: string[] = [];
+  const stack: Node[] = [...element.childNodes].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) continue;
+    if (isElement(node) && node.localName === "br") {
+      parts.push("\n");
+      continue;
+    }
+    if (node.nodeType === node.TEXT_NODE) {
+      parts.push(node.nodeValue ?? "");
+      continue;
+    }
+    for (let i = node.childNodes.length - 1; i >= 0; i--) {
+      const child = node.childNodes[i];
+      if (child !== undefined) stack.push(child);
+    }
+  }
+  return parts.join("");
+}
+
 export function editableFrom(target: EventTarget | null): {
   element: HTMLElement;
   prop: string;
@@ -333,10 +361,11 @@ export function useInlineText(
     const element = elementRef.current;
     const current = editingRef.current;
     if (element === null || current === null) return NOTHING_TO_WRITE;
-    // `textContent` rather than `innerText` or `innerHTML`: the first is what
+    // The element's text (`elementWords`, with a `<br>` read as `\n`) rather
+    // than `innerText` or `innerHTML`: the first is what
     // the value IS regardless of what the element ended up containing, and the
     // last would store markup this value cannot hold.
-    const next = element.textContent ?? "";
+    const next = elementWords(element);
     const opened = session.current.opened;
     if (next === opened || !element.isConnected) return NOTHING_TO_WRITE;
     const live = liveValueOf(editorRef.current, current);
@@ -484,7 +513,7 @@ export function useInlineText(
      */
     let refusedWith: string | null = null;
     const tryToLeave = () => {
-      const words = element.textContent ?? "";
+      const words = elementWords(element);
       const refusal = commitOrHold();
       refusedWith = refusal === null ? null : words;
       if (refusal !== null) {
@@ -492,7 +521,7 @@ export function useInlineText(
       }
     };
     const exitByKey = () => {
-      const words = element.textContent ?? "";
+      const words = elementWords(element);
       if (refusedWith !== null && words === refusedWith) {
         cancel();
         return;

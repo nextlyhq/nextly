@@ -49,6 +49,8 @@
  * - image-states: an Image's empty state on the canvas, its upload, link and
  *   missing file.
  * - form-fields: a Form's Fields and After sending.
+ * - first-add: the chooser a block just added asks for on the canvas, such
+ *   as the Columns layouts.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
@@ -72,6 +74,8 @@
 @import "./layers.css";
 
 @import "./block-toolbar.css";
+/* The floating format bar over words being edited, and its paste notice. */
+@import "./format-bar.css";
 
 @import "./variables.css";
 
@@ -90,6 +94,7 @@
 @import "./fonts.css";
 
 @import "./spacing-box.css";
+@import "./spacing-popover.css";
 
 @import "./link-picker.css";
 
@@ -108,3 +113,5 @@
 @import "./image-states.css";
 
 @import "./form-fields.css";
+
+@import "./first-add.css";

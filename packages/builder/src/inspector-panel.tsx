@@ -68,6 +68,7 @@ import { ContentServicesContext } from "./content-controls";
 import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { HiddenStatus } from "./hide-on";
 import {
   inspectorTabsOf,
   inspectSelection,
@@ -94,6 +95,7 @@ import { StyleTab } from "./inspector-style-tab";
 import { inspectInstance, type InstanceInspection } from "./instance-inspector";
 import { InstanceInspectorPanel } from "./instance-inspector-panel";
 import { LookInspector } from "./look-inspector";
+import { blockStyleEntries } from "./look-tiles-view";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
@@ -138,7 +140,6 @@ export type { ComponentLibrary } from "./inspector-panel-types";
 export type { StyleStateBinding } from "./inspector-panel-types";
 export type {
   BlockInspectorResolver,
-  DocumentSettingsView,
   InspectorPanelProps,
 } from "./inspector-panel-types";
 export { editedStyleState } from "./inspector-style-state";
@@ -473,12 +474,15 @@ function ContentTabPanel({
   tabs,
   shown,
   onChoose,
+  status,
   ...content
 }: {
   tabs: readonly InspectorTab[];
   shown: string;
   /** Show another tab, from the filter's "2 in Advanced". */
   onChoose: (tab: string) => void;
+  /** Where the block is hidden, said at the top of the tab. */
+  status: React.ReactNode;
 } & Omit<
   React.ComponentProps<typeof ContentTab>,
   "onScreen"
@@ -486,9 +490,57 @@ function ContentTabPanel({
   if (!tabs.includes("content")) return null;
   return (
     <TabsContent value="content" forceMount hidden={shown !== "content"}>
+      {status}
       <FilterNote tab="content" onChoose={onChoose} />
       <ContentTab {...content} onScreen={shown === "content"} />
     </TabsContent>
+  );
+}
+
+/**
+ * The selected block's card: its icon, type, name and lock, and the verbs
+ * its menu offers.
+ */
+function SelectedBlockCard({
+  block,
+  editor,
+  verbs,
+  reasonId,
+}: {
+  block: BlockInspection;
+  editor: InspectorPanelProps["editor"];
+  verbs: InspectorPanelProps["verbs"];
+  reasonId: string;
+}): React.JSX.Element {
+  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
+  return (
+    <BlockCard
+      icon={block.icon}
+      type={block.label}
+      name={block.identity.name}
+      description={block.description}
+      lock={lock}
+      // Withheld while a Layers lock holds the block, its own or one around
+      // it: renaming is a change like any other, and the op layer refuses it.
+      onRename={
+        lock.layers || lock.inheritedFrom !== undefined
+          ? undefined
+          : name => editor.apply(renameOp(block.nodeId, name))
+      }
+      onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
+      // Held inside a `contentOnly` area, which pins the node's own lock
+      // with its design: the save would refuse the change. The one predicate
+      // the multi-selection card asks too, so a block's Lock is offered alike
+      // however it was selected; inside a block locked in Layers it stays
+      // offered, since a change to the lock alone is always allowed.
+      lockHeld={
+        layersLockChangeable(lock)
+          ? undefined
+          : "The area it sits in fixes this."
+      }
+      verbs={verbs}
+      reasonId={reasonId}
+    />
   );
 }
 
@@ -600,7 +652,6 @@ function SelectionInspector({
     );
   }
   const block = surface.block;
-  const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
   const tabs = inspectorTabsOf(block);
   const match = blockMatch(editor.document, block, filter, {
     state: styleState?.state,
@@ -614,38 +665,27 @@ function SelectionInspector({
       writingMode: canvas.orientation?.writingMode ?? "horizontal-tb",
       rtl: canvas.orientation?.direction === "rtl",
     },
+    editor,
+    library: styleOnly.classLibrary,
   });
+
+  // Where the block is hidden, at the top of every tab; "Change" goes to
+  // Hide on from the tabs it is not on.
+  const hidden = {
+    editor,
+    nodeId: block.nodeId,
+    breakpoints: styleOnly.breakpoints,
+  };
 
   return (
     // The "/" shortcut is the panel's: from anywhere in it but a text field.
     <div className="nx-inspector" onKeyDown={find.onKeyDown}>
-      <BlockCard
+      <SelectedBlockCard
         // Keyed by node, so a rename half-typed for one block does not carry
         // to the next.
         key={`${block.nodeId}:card`}
-        icon={block.icon}
-        type={block.label}
-        name={block.identity.name}
-        description={block.description}
-        lock={lock}
-        // Withheld while a Layers lock holds the block, its own or one around
-        // it: renaming is a change like any other, and the op layer refuses it.
-        onRename={
-          lock.layers || lock.inheritedFrom !== undefined
-            ? undefined
-            : name => editor.apply(renameOp(block.nodeId, name))
-        }
-        onLock={locked => editor.apply(lockOp(block.nodeId, locked))}
-        // Held inside a `contentOnly` area, which pins the node's own lock
-        // with its design: the save would refuse the change. The one predicate
-        // the multi-selection card asks too, so a block's Lock is offered alike
-        // however it was selected; inside a block locked in Layers it stays
-        // offered, since a change to the lock alone is always allowed.
-        lockHeld={
-          layersLockChangeable(lock)
-            ? undefined
-            : "The area it sits in fixes this."
-        }
+        block={block}
+        editor={editor}
         verbs={verbs}
         reasonId={reasonId}
       />
@@ -683,6 +723,7 @@ function SelectionInspector({
               tabs={tabs}
               shown={shown}
               onChoose={choose}
+              status={<HiddenStatus {...hidden} onChoose={choose} />}
               block={block}
               editor={editor}
               onCommit={commit}
@@ -698,6 +739,7 @@ function SelectionInspector({
             />
 
             <TabsContent value="style">
+              <HiddenStatus {...hidden} onChoose={choose} />
               <FilterNote tab="style" onChoose={choose} />
               <StyleChangedElsewhere
                 styles={
@@ -712,20 +754,24 @@ function SelectionInspector({
                 breakpoints={styleOnly.breakpoints}
                 onJumpToBreakpoint={styleOnly.onJumpToBreakpoint}
               />
-              <StyleTab
-                {...styleOnly}
-                editor={editor}
-                styleNode={styleNode}
-                renderedTag={canvas.tag}
-                renderedPicture={canvas.picture}
-                renderedPicturePosition={canvas.picturePosition}
-                sideOrientation={canvas.orientation}
-                styleState={styleState}
-                breakpoint={breakpoint}
-                cascade={cascade}
-                previewContainer={previewContainer}
-                verbs={verbs}
-              />
+              {/* The Style tab reaches the host's media library too: the
+                  background image picks and uploads as the Content tab does. */}
+              <ContentServicesContext.Provider value={contentServices}>
+                <StyleTab
+                  {...styleOnly}
+                  editor={editor}
+                  styleNode={styleNode}
+                  renderedTag={canvas.tag}
+                  renderedPicture={canvas.picture}
+                  renderedPicturePosition={canvas.picturePosition}
+                  sideOrientation={canvas.orientation}
+                  styleState={styleState}
+                  breakpoint={breakpoint}
+                  cascade={cascade}
+                  previewContainer={previewContainer}
+                  verbs={verbs}
+                />
+              </ContentServicesContext.Provider>
             </TabsContent>
 
             <TabsContent
@@ -733,6 +779,8 @@ function SelectionInspector({
               forceMount
               hidden={shown !== "advanced"}
             >
+              {/* No "Change" here: Hide on is on this tab. */}
+              <HiddenStatus {...hidden} />
               <FilterNote tab="advanced" onChoose={choose} />
               <AdvancedTab
                 block={block}
@@ -838,6 +886,8 @@ function blockMatch(
         at.reported?.arranges
       ),
       ...advancedEntries(block, node),
+      // The Block style section, drawn above the Style tab's bar.
+      ...blockStyleEntries(at.editor, at.library),
     ],
     filter
   );
@@ -851,6 +901,9 @@ interface MatchAt {
   /** What the Style tab draws, while it is open, for its target. */
   reported: ReportedStyle | undefined;
   flow: PlainFlow;
+  /** The editor and the site's library, which the Block style tiles read. */
+  editor: EditorState;
+  library: InspectorPanelProps["classLibrary"];
 }
 
 /**

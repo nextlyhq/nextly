@@ -103,6 +103,30 @@ describe("a write that drops a variable", () => {
     ]);
   });
 
+  it("hands the check the site's variables as the write leaves them, its prefix included", async () => {
+    const check = vi.fn<VariablesInUseCheck>(async () => undefined);
+
+    await written(
+      {
+        data: { tokens: { prefix: "--brand-", tokens: [brand] } },
+        originalData: stored(brand, accent),
+        user: author,
+        context: {},
+      },
+      check
+    );
+
+    const variables = check.mock.calls[0]?.[2];
+    // The prefix a `var()` naming a variable is read under, and every tier:
+    // the code's, the engine's and what the write keeps, but not what it drops.
+    expect(variables?.prefix).toBe("--brand-");
+    const names = (variables?.tokens ?? []).map(token => token.name);
+    expect(names).toEqual(
+      expect.arrayContaining(["color.code", "color.brand", "content.width"])
+    );
+    expect(names).not.toContain("color.accent");
+  });
+
   it("is refused with the check's own refusal", async () => {
     const inUse = NextlyError.validation({
       errors: [{ path: "tokens", code: "IN_USE", message: "Used." }],
