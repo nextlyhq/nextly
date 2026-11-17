@@ -34,7 +34,6 @@ import {
   useDocumentActions,
   useDocumentIdentity,
   useDocumentStatus,
-  usePluginRoute,
   writePluginRoute,
   type DocumentActions,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -63,6 +62,7 @@ import type {
 import { DEFAULT_LAYOUT_REFUSAL, PAGES_USE_IT } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
+import { useBuilderRoute } from "./builder-route-read";
 import { MovePagesDialog } from "./RemoveLayoutMove";
 
 /** Which Layout the action removes, and how it stands. */
@@ -147,7 +147,7 @@ export function RemoveLayoutToolbarSlot(_props: {
   const status = useDocumentStatus();
   const actions = useDocumentActions();
   const collection = identity?.kind === "collection";
-  const resolved = usePluginRoute<PageCollectionResponse>({
+  const resolved = useBuilderRoute<PageCollectionResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
     path: PAGE_COLLECTION_ROUTE_PATH,
     enabled: collection,

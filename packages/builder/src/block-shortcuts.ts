@@ -106,7 +106,8 @@ function written(
 // --- a Section's height
 
 /** At least the screen's height: `svh`, so a phone's toolbar hides none of it. */
-const FULL_SCREEN = "100svh";
+/** What Full screen writes as a Section's min height. */
+export const FULL_SCREEN = "100svh";
 
 export type HeightChoice = "auto" | "screen";
 
@@ -152,7 +153,7 @@ export type SizeChoice = "small" | "medium" | "large";
  * scaled, so the sizes follow the site's design and keep their order, and
  * its text in em, relative to what it inherits.
  */
-const SIZES = {
+export const SIZES = {
   small: { times: 0.75, text: "0.875em" },
   large: { times: 1.25, text: "1.125em" },
 } as const;
