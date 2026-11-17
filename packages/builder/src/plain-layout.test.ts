@@ -807,3 +807,24 @@ describe("Inside its parent: what a choice can't say", () => {
     });
   });
 });
+
+describe("Inside its parent with lines running down the screen", () => {
+  it("fills a vertical Row's width across it, and its height along it", () => {
+    const block = new Block();
+    block.flow = { writingMode: "vertical-rl", rtl: false };
+    block.apply(planChildWidth(block.tiers(), "base", "row", "fill"));
+    // The width is the Row's cross axis there: stretched, not grown.
+    expect(block.own.base).toEqual({ alignSelf: "stretch" });
+    const tall = new Block();
+    tall.flow = { writingMode: "vertical-rl", rtl: false };
+    tall.apply(planChildHeight(tall.tiers(), "base", "fill", undefined, "row"));
+    expect(tall.own.base).toMatchObject({
+      flexGrow: "1",
+      flexBasis: "0",
+      minHeight: "0",
+    });
+    expect(readChildHeight(tall.tiers(), "base", "row")).toEqual({
+      choice: "fill",
+    });
+  });
+});

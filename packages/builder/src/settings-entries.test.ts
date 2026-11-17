@@ -106,6 +106,8 @@ describe("Inside its parent's Width and Height under Only changed", () => {
     );
     const byId = new Map(entries.map(entry => [entry.id, entry]));
     expect(byId.get("child:width")?.set).toBe(true);
+    // Found by the CSS each choice writes, the longhands included.
+    expect(byId.get("child:width")?.css).toContain("flex-grow");
     // An order says nothing of the height.
     expect(byId.get("child:height")?.set).toBe(false);
   });

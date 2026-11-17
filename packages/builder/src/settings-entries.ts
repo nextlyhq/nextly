@@ -25,7 +25,13 @@ import {
   SIZE_LABELS,
 } from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
-import type { ParentArrangement } from "./plain-layout";
+import {
+  childAxisRows,
+  LAYOUT_CSS_NAMES,
+  offersChildAxis,
+  type ChildAxis,
+  type ParentArrangement,
+} from "./plain-layout";
 import { CHILD_SIZE_IDS } from "./plain-parent-controls";
 import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
 import { keywordLabel } from "./style-keyword-labels";
@@ -342,30 +348,32 @@ function childSizeRows(
       id: CHILD_SIZE_IDS.width,
       label: "Width",
       options: choices,
-      css: ["width", "flex", "align-self", "justify-self"],
-      set: holds(WIDTH_WRITTEN[parent]),
+      css: cssNamesOf(written("width")),
+      set: holds(written("width")),
     },
-    ...(parent === "row" || parent === "grid"
+    ...(offersChildAxis(parent, "height")
       ? [
           {
             id: CHILD_SIZE_IDS.height,
             label: "Height",
             options: choices,
-            css: ["height", "align-self"],
-            set: holds(["height", "alignSelf"]),
+            css: cssNamesOf(written("height")),
+            set: holds(written("height")),
           },
         ]
       : []),
   ];
+
+  /** What a size's choices write, its own size included. */
+  function written(axis: ChildAxis): string[] {
+    return [axis, ...childAxisRows(parent as ParentArrangement, axis)];
+  }
 }
 
-/** The properties Width writes, by the parent's arrangement. */
-const WIDTH_WRITTEN: Readonly<Record<ParentArrangement, readonly string[]>> = {
-  flow: ["width"],
-  column: ["width", "alignSelf"],
-  row: ["width", "flexGrow", "flexShrink", "flexBasis", "minWidth"],
-  grid: ["width", "justifySelf"],
-};
+/** Layout properties by their CSS names, as a search spells them. */
+function cssNamesOf(properties: readonly string[]): string[] {
+  return properties.map(property => LAYOUT_CSS_NAMES[property] ?? property);
+}
 
 /** The CSS properties a Style property's controls write. */
 function cssOf(property: StyleSection["properties"][number]): string[] {

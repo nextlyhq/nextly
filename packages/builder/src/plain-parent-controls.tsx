@@ -15,10 +15,11 @@ import * as React from "react";
 
 import { layoutWritesText } from "./code-hints";
 import {
-  planChildHeight,
-  planChildWidth,
-  readChildHeight,
-  readChildWidth,
+  childAxisRows,
+  offersChildAxis,
+  planChildSize,
+  readChildSize,
+  type ChildAxis,
   type ChildFit,
   type ChildSize,
   type LayoutTiers,
@@ -91,13 +92,12 @@ export function InsideParentFields({
   const apply = useApply(surroundings, target);
   if (parent === undefined || target.kind === "shared") return null;
   const editing = surroundings.breakpoint;
-  const width = widthAxis(tiers, editing, parent);
+  const width = axisOf(tiers, editing, parent, "width");
   // A Row or a Grid sizes its blocks across too; a column's height is its
   // blocks' own, set in Size.
-  const height =
-    parent === "row" || parent === "grid"
-      ? heightAxis(tiers, editing)
-      : undefined;
+  const height = offersChildAxis(parent, "height", tiers.flow)
+    ? axisOf(tiers, editing, parent, "height")
+    : undefined;
   return (
     <div className="nx-inside-parent" data-control="inside-parent">
       <SettingSlot tab="style" ids={[CHILD_SIZE_IDS.width]}>
@@ -112,30 +112,21 @@ export function InsideParentFields({
   );
 }
 
-/** The Width axis, by the parent's arrangement here. */
-function widthAxis(
+/** One size's axis, by the role it plays in the parent here. */
+function axisOf(
   tiers: LayoutTiers,
   editing: string,
-  parent: ParentArrangement
+  parent: ParentArrangement,
+  axis: ChildAxis
 ): Axis {
+  const width = axis === "width";
   return {
-    name: "Width",
-    lines: WIDTH_LINES,
-    size: readChildWidth(tiers, editing, parent),
-    start: STARTING_SIZE.width,
+    name: width ? "Width" : "Height",
+    lines: width ? WIDTH_LINES : HEIGHT_LINES,
+    size: readChildSize(tiers, editing, parent, axis),
+    start: width ? STARTING_SIZE.width : STARTING_SIZE.height,
     plan: (choice, size) =>
-      planChildWidth(tiers, editing, parent, choice, size),
-  };
-}
-
-/** The Height axis, under a Row or a Grid. */
-function heightAxis(tiers: LayoutTiers, editing: string): Axis {
-  return {
-    name: "Height",
-    lines: HEIGHT_LINES,
-    size: readChildHeight(tiers, editing),
-    start: STARTING_SIZE.height,
-    plan: (choice, size) => planChildHeight(tiers, editing, choice, size),
+      planChildSize(tiers, editing, parent, axis, choice, size),
   };
 }
 
@@ -200,26 +191,6 @@ function AxisRow({
 }
 
 /**
- * The CSS rows each axis draws in plain words, by the parent's arrangement:
- * in a column the width is its self-alignment, in a Row its share, in a Grid
- * its justification; the height, under a Row or a Grid, its self-alignment.
- */
-const DRAWN_ROWS: Readonly<
-  Record<
-    ParentArrangement,
-    { readonly width: readonly string[]; readonly height: readonly string[] }
-  >
-> = {
-  flow: { width: [], height: [] },
-  column: { width: ["alignSelf"], height: [] },
-  row: {
-    width: ["flexGrow", "flexShrink", "flexBasis"],
-    height: ["alignSelf"],
-  },
-  grid: { width: ["justifySelf"], height: ["alignSelf"] },
-};
-
-/**
  * The rows of "Inside its parent" that Width and Height draw in plain words
  * while each reads as a choice: they leave the raw rows, as Arrange's do,
  * and come back while that axis reads Custom. None where neither is drawn.
@@ -233,14 +204,12 @@ export function useDrawnChildRows(
   if (parent === undefined || target.kind === "shared") return NONE;
   const editing = surroundings.breakpoint;
   const drawn = new Set<string>();
-  if (readChildWidth(tiers, editing, parent).choice !== "custom") {
-    for (const row of DRAWN_ROWS[parent].width) drawn.add(row);
-  }
-  if (
-    DRAWN_ROWS[parent].height.length > 0 &&
-    readChildHeight(tiers, editing).choice !== "custom"
-  ) {
-    for (const row of DRAWN_ROWS[parent].height) drawn.add(row);
+  for (const axis of ["width", "height"] as const) {
+    if (!offersChildAxis(parent, axis, tiers.flow)) continue;
+    if (readChildSize(tiers, editing, parent, axis).choice === "custom") {
+      continue;
+    }
+    for (const row of childAxisRows(parent, axis, tiers.flow)) drawn.add(row);
   }
   return drawn;
 }
