@@ -26,7 +26,7 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
-import type { RefusalWording } from "./drag-refusal";
+import type { RefusalWording } from "./canvas/drag-refusal";
 import { lockRefusalWording } from "./lock-refusal";
 
 /** What holds one value a placement drives. */

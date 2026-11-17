@@ -71,39 +71,29 @@ export interface ComputeDiffOptions {
    * versions; a path that names a list row by index belongs in one version's
    * own set below, since the two versions may hold their rows in different
    * places.
-   *
-   * @experimental
    */
   withheld?: ReadonlySet<string>;
   /**
    * What the redaction removed from the earlier version (`before`), by that
    * version's own paths: a list row is named by its index in it
    * (`items.1.secret`).
-   *
-   * @experimental
    */
   withheldFrom?: ReadonlySet<string>;
   /**
    * What the redaction removed from the later version (`after`), by that
    * version's own paths, as `withheldFrom` is for the earlier one.
-   *
-   * @experimental
    */
   withheldTo?: ReadonlySet<string>;
   /**
    * Whether the caller's redaction applied each component's own read rules
    * inside the snapshots. Without it, a component field that declares a read
    * rule is left out, since nothing has judged it for this reader.
-   *
-   * @experimental
    */
   componentRulesApplied?: boolean;
   /**
    * The kind of document compared. A framework column belongs to some kinds
    * only (a Single has no owner column), and a key that is not one of this
    * kind's columns is a removed field. Defaults to `collection`.
-   *
-   * @experimental
    */
   entity?: SystemColumnEntity;
 }

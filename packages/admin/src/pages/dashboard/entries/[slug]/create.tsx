@@ -41,7 +41,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
-import { navigateTo } from "@admin/lib/navigation";
+import { navigateTo, replaceTo } from "@admin/lib/navigation";
 import {
   getComponent,
   type CustomEditViewProps,
@@ -146,16 +146,19 @@ function CreateEntryScreen({
    */
   const customViewUnsaved = useUnsavedWork();
   /*
-   * The document a custom editor with pages of its own just created. Its
-   * editor carries on at the new document's own address. Moved there on the
-   * render AFTER the guard is told to stand down: the view clears its unsaved
-   * work as it reports success, but the guard only hears that on its next
-   * render, and a move made in the same breath would be asked about.
+   * The entry the first save just created. Every collection's editor carries
+   * on at the new entry's own address, so the author stays on what they made
+   * and a refresh reopens it. Moved there on the render AFTER the guard is
+   * told to stand down: an editor clears its unsaved work as it reports
+   * success, but the guard only hears that on its next render, and a move
+   * made in the same breath would be asked about. A replace, not a push: the
+   * create address is spent, so Back leaves for wherever the author came from
+   * rather than returning to an empty form.
    */
   const [createdId, setCreatedId] = useState<string>();
   useEffect(() => {
     if (createdId === undefined || slug === undefined) return;
-    navigateTo(
+    replaceTo(
       buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id: createdId })
     );
   }, [createdId, slug]);
@@ -269,18 +272,18 @@ function CreateEntryScreen({
     ? getComponent<CustomEditViewProps>(customEditViewPath)
     : undefined;
 
-  // A custom edit view with pages of its own is a whole editor, which carries
-  // on at the document it created; any other view returns to the list.
+  // A custom edit view with pages of its own lays out its own measure.
   const customViewHasPages = editViewHasPages(slug, customEditViewPath);
 
-  // Shared callbacks
+  // One rule for every collection and every editor: a successful first save
+  // stays on the entry it created. Only a custom view that reports success
+  // without the entry leaves nothing to stay on, so that returns to the list.
   const handleSuccess = (entry?: Record<string, unknown>) => {
     const id = entry?.id;
-    if (customViewHasPages && typeof id === "string" && id !== "") {
+    if (typeof id === "string" && id !== "") {
       setCreatedId(id);
       return;
     }
-    // Navigate to entry list page after successful creation
     navigateTo(buildRoute(ROUTES.COLLECTION_ENTRIES, { slug }));
   };
 

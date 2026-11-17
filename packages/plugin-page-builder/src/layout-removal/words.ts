@@ -13,48 +13,49 @@
  * default guard and by Remove Layout alike.
  */
 export const DEFAULT_LAYOUT_REFUSAL =
-  "This Layout is the site's default. Choose another default first.";
+  "This header & footer set is the site's default. Choose another default first.";
 
 /**
  * What a move is told while the site has no published default to move its
  * pages to: they would be left with no header or footer.
  */
 export const NO_USABLE_DEFAULT =
-  "The site has no published default Layout to move these pages to. Publish one or choose another default first.";
+  "The site has no published default header & footer set to move these pages to. Publish one or choose another default first.";
 
 /** The dialog's sentence over the pages that stop a removal. */
 export const PAGES_USE_IT =
-  "These pages use this Layout. Choose another Layout for them first.";
+  "These pages use this header & footer set. Choose another header & footer set for them first.";
 
 /** What a plain delete or unpublish of a Layout is told: the way to do it. */
 export const REMOVE_LAYOUT_REFUSAL =
-  "Use Remove Layout… on the Layout's screen to take it down safely.";
+  "Use Remove header & footer set… on the set's screen to take it down safely.";
 
 /** A second removal of a Layout already being removed. */
-export const ALREADY_BEING_REMOVED = "This Layout is already being removed.";
+export const ALREADY_BEING_REMOVED =
+  "This header & footer set is already being removed.";
 
 /** A promotion of a Layout that is being removed. */
 export const BEING_REMOVED_NOT_DEFAULT =
-  "This Layout is being removed, so it can't be the default.";
+  "This header & footer set is being removed, so it can't be the default.";
 
 /** A delete that a promotion raced: the Layout was put back. */
 export const KEPT_AS_DEFAULT =
-  "This Layout just became the site default, so it was kept.";
+  "This header & footer set just became the site default, so it was kept.";
 
 /** A Layout that kept changing between its copy and its removal. */
 export const CHANGED_WHILE_REMOVING =
-  "This Layout changed while it was being removed. Try again.";
+  "This header & footer set changed while it was being removed. Try again.";
 
 /** An unpublish of a Layout that is not published. */
 export const NOT_PUBLISHED =
-  "This Layout isn't published, so there is nothing to unpublish.";
+  "This header & footer set isn't published, so there is nothing to unpublish.";
 
 /**
  * A Layout edit while its removal is running: the removal holds the Layout as
  * its copy took it, and finishes or gives up within moments.
  */
 export const LAYOUT_EDIT_DURING_REMOVAL =
-  "This Layout is being removed. Try again in a moment.";
+  "This header & footer set is being removed. Try again in a moment.";
 
 /** Where a Layout a page tried to choose stands with Remove Layout. */
 export type FencedLayoutState = "removing" | "unpublished" | "deleted";
@@ -63,11 +64,11 @@ export type FencedLayoutState = "removing" | "unpublished" | "deleted";
 export function pageLayoutRefusal(state: FencedLayoutState): string {
   switch (state) {
     case "removing":
-      return "This Layout is being removed, so pages can't choose it. Choose another Layout.";
+      return "This header & footer set is being removed, so pages can't choose it. Choose another header & footer set.";
     case "unpublished":
-      return "This Layout was unpublished with Remove Layout, so pages can't choose it until it is published again. Choose another Layout.";
+      return "This header & footer set was unpublished with Remove header & footer set, so pages can't choose it until it is published again. Choose another header & footer set.";
     case "deleted":
-      return "This Layout was deleted, so pages can't choose it. Choose another Layout.";
+      return "This header & footer set was deleted, so pages can't choose it. Choose another header & footer set.";
   }
 }
 
@@ -123,12 +124,12 @@ export function pagesUseItRefusal(found: PagesInTheWay): string {
     // Unfinished: the site has more pages than one removal checks, or a page
     // that is still there could not be read.
     if (total === 0) {
-      return "Not every page could be checked, so this Layout can't be removed yet. Choose another Layout for any page that uses it, or try again in a moment.";
+      return "Not every page could be checked, so this header & footer set can't be removed yet. Choose another header & footer set for any page that uses it, or try again in a moment.";
     }
-    return `At least ${pages(total)} use this Layout, so it can't be removed yet. Choose another Layout for the pages that use it first.`;
+    return `At least ${pages(total)} use this header & footer set, so it can't be removed yet. Choose another header & footer set for the pages that use it first.`;
   }
   const verb = total === 1 ? "uses" : "use";
-  return `${pages(total)} ${verb} this Layout: ${listed(found.titles, found.unreadable)}. Choose another Layout for ${total === 1 ? "it" : "them"} first.`;
+  return `${pages(total)} ${verb} this header & footer set: ${listed(found.titles, found.unreadable)}. Choose another header & footer set for ${total === 1 ? "it" : "them"} first.`;
 }
 
 /** "Home", "Home and About", "Home, About and 1 page you can't view". */
@@ -152,8 +153,8 @@ export function stillUsedAfterDelete(found: {
 }): string {
   const one = found.titles.length + found.unreadable === 1;
   return one
-    ? `${namedPages(found.titles, found.unreadable)} still uses this Layout. It shows the site default until it is published with another Layout.`
-    : `${namedPages(found.titles, found.unreadable)} still use this Layout. They show the site default until they are published with another Layout.`;
+    ? `${namedPages(found.titles, found.unreadable)} still uses this header & footer set. It shows the site default until it is published with another header & footer set.`
+    : `${namedPages(found.titles, found.unreadable)} still use this header & footer set. They show the site default until they are published with another header & footer set.`;
 }
 
 /** Why a move left a page the person may not edit, or may not read. */
@@ -167,7 +168,7 @@ export const PAGE_NOT_SAVED = "This page couldn't be saved. Try again.";
  * closed, or taken up again elsewhere.
  */
 export const MOVE_STOPPED =
-  "Moving stopped, so the Layout was not removed. Pages already moved stay on the site default.";
+  "Moving stopped, so the header & footer set was not removed. Pages already moved stay on the site default.";
 
 /** Why a move left a page that kept being saved while it was moved. */
 export const PAGE_KEPT_CHANGING =
@@ -181,7 +182,10 @@ export function movedOffLayoutReason(
   title: string,
   action: "delete" | "unpublish"
 ): string {
-  const named = title.trim() === "" ? "Its Layout" : `Layout "${title}"`;
+  const named =
+    title.trim() === ""
+      ? "Its header & footer set"
+      : `Header & footer set "${title}"`;
   const going = action === "delete" ? "deleted" : "unpublished";
   return `${named} is being ${going}, so this page was moved to the site default.`;
 }
@@ -194,6 +198,6 @@ export function movedOffLayoutReason(
  */
 export function liveCopiesLeftSentence(count: number): string {
   return count === 1
-    ? "The published version of 1 page still names this Layout, because changing it needs permission to publish it. Visitors see the site default's header and footer there until someone who can publish it chooses another Layout."
-    : `The published versions of ${String(count)} pages still name this Layout, because changing them needs permission to publish them. Visitors see the site default's header and footer there until someone who can publish them chooses another Layout.`;
+    ? "The published version of 1 page still names this header & footer set, because changing it needs permission to publish it. Visitors see the site default's header and footer there until someone who can publish it chooses another header & footer set."
+    : `The published versions of ${String(count)} pages still name this header & footer set, because changing them needs permission to publish them. Visitors see the site default's header and footer there until someone who can publish them chooses another header & footer set.`;
 }

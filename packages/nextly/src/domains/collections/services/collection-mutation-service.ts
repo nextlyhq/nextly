@@ -198,6 +198,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { editsOver } from "../../audit/lifecycle-fields";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
+  partsMovesRecord,
   recordSaveEvent,
   recordTransitionEvents,
   recordWriteEvent,
@@ -308,6 +309,13 @@ import {
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
+  NO_PART,
+  partOfRewrittenField,
+  partsCreated,
+  partsTogether,
+  type ChangedParts,
+} from "../../versions/changed-parts";
+import {
   bumpDocumentRevision,
   changerColumns,
   documentVersionOn,
@@ -361,11 +369,13 @@ import { languagesHoldingWorkingDrafts } from "../../versions/held-working-draft
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   combinedDraft,
+  draftSlotParts,
   draftsKeptByPart,
   findPartDrafts,
   holdsPendingChange,
   partKeysOf,
   partsPromoted,
+  partsWritten,
   SHARED_DRAFT_SLOT,
   sharedFieldsJudged,
   storePartDrafts,
@@ -1828,13 +1838,20 @@ interface WorkingDraftWriteContext {
 }
 
 /**
- * The top-level keys a held save sets: what it laid over the working draft.
- * A translatable value is among them however drafts are kept: the locale
- * split moves it out of `updatePayload` into the translations row, and a
- * save to a draft that already exists builds on that draft, so a key left
- * out here is dropped from the draft while the save reports success.
+ * The top-level keys a save sets: what a held save laid over the working
+ * draft, and what a save in place wrote, which says the parts it changed
+ * (`partsWritten`). A translatable value is among them however drafts are
+ * kept: the locale split moves it out of `updatePayload` into the
+ * translations row, and a save to a draft that already exists builds on that
+ * draft, so a key left out here is dropped from the draft while the save
+ * reports success.
  */
-function keysHeldSaveSets(ctx: WorkingDraftWriteContext): Set<string> {
+function keysSaveSets(
+  ctx: Pick<
+    WorkingDraftWriteContext,
+    "updatePayload" | "componentFieldData" | "manyToManyData" | "translatedKeys"
+  >
+): Set<string> {
   return new Set<string>([
     ...Object.keys(ctx.updatePayload),
     ...Object.keys(ctx.componentFieldData),
@@ -2764,6 +2781,12 @@ export class CollectionMutationService extends BaseService {
       onlyIfChanged?: boolean;
       /** Whether the collection has the Draft/Published lifecycle. */
       lifecycle: boolean;
+      /**
+       * The parts this write changed, which the version records, given the
+       * language the snapshot is recorded in: the one resolved below, so the
+       * language a write names is never worked out a second way.
+       */
+      changedParts: (snapshotLocale: string | null) => ChangedParts;
     }
   ): Promise<number | null> {
     // The version recorded, or null when versioning is off or the save
@@ -2771,6 +2794,18 @@ export class CollectionMutationService extends BaseService {
     if (!args.versionsConfig?.enabled) {
       return null;
     }
+    // The locale this snapshot belongs to: the one the write put translatable
+    // parent values in, when it did. Otherwise the component rule — the
+    // subtrees were read at the default locale (these paths pass no write
+    // locale), so tag the version with it when there are any, exactly as the
+    // interactive create/update paths do. Null when the snapshot carries
+    // neither, since there is then one set of values and nothing to
+    // disambiguate.
+    const snapshotLocale =
+      args.localeTag ??
+      (carriesComponentValues(args.fields)
+        ? this.componentSnapshotLocale(undefined)
+        : null);
     try {
       const { versionNo } = await captureInTx(tx, this.versionCapture, {
         onlyIfChanged: args.onlyIfChanged === true,
@@ -2785,18 +2820,8 @@ export class CollectionMutationService extends BaseService {
         // event carries, and that payload is read shape.
         parts: await this.snapshotPartsFor(args.documentParts, args.fields, tx),
         createdBy: args.createdBy,
-        // The locale this snapshot belongs to: the one the write put
-        // translatable parent values in, when it did. Otherwise the component
-        // rule — the subtrees were read at the default locale (these paths
-        // pass no write locale), so tag the version with it when there are
-        // any, exactly as the interactive create/update paths do. Null when
-        // the snapshot carries neither, since there is then one set of values
-        // and nothing to disambiguate.
-        locale:
-          args.localeTag ??
-          (carriesComponentValues(args.fields)
-            ? this.componentSnapshotLocale(undefined)
-            : null),
+        locale: snapshotLocale,
+        changedParts: args.changedParts(snapshotLocale),
         maxPerDoc: args.versionsConfig.maxPerDoc,
       });
       return versionNo;
@@ -2928,6 +2953,9 @@ export class CollectionMutationService extends BaseService {
       // them in one language, and an untagged snapshot of them reads as
       // shared.
       localeTag: args.localeTag,
+      // The language the snapshot is recorded in: the one its translatable
+      // values or its translated components went into.
+      changedParts: partsCreated,
     });
     const eventFields = await this.webhookFieldTreeIfRecording(
       args.collectionName,
@@ -7082,6 +7110,7 @@ export class CollectionMutationService extends BaseService {
       documentParts: parts.documentParts,
       fields,
       ...(translatedIn === null ? {} : { localeTag: translatedIn }),
+      changedParts: () => partOfRewrittenField(translatedIn),
       onlyIfChanged: true,
       lifecycle: (args.collection as { status?: boolean }).status === true,
     });
@@ -9280,6 +9309,18 @@ export class CollectionMutationService extends BaseService {
         // event below.
         let createdVersionNo: number | null = null;
         if (versionsConfig?.enabled) {
+          // Set only when localized values were actually routed, for the
+          // same reason the update path is careful about it.
+          // Set when locale-specific state was actually captured. A
+          // collection whose translatable content lives only in embedded
+          // components routes nothing through `localizedWrite`, yet the
+          // components above were read as this locale — so without counting
+          // them the version would be unlabelled and unrestorable.
+          const createdLocale =
+            localizedWrite?.writeLocale ??
+            (carriesComponentValues(fields)
+              ? this.componentSnapshotLocale(params.locale)
+              : null);
           const captured = await captureInTx(tx, this.versionCapture, {
             lifecycle: hasLifecycle(collection),
             ref: {
@@ -9300,18 +9341,11 @@ export class CollectionMutationService extends BaseService {
             // outbox event below carries, and that payload is read shape.
             parts: await this.snapshotPartsFor(documentParts, fields, tx),
             createdBy: params.user?.id ?? null,
-            // Set only when localized values were actually routed, for the
-            // same reason the update path is careful about it.
-            // Set when locale-specific state was actually captured. A
-            // collection whose translatable content lives only in embedded
-            // components routes nothing through `localizedWrite`, yet the
-            // components above were read as this locale — so without counting
-            // them the version would be unlabelled and unrestorable.
-            locale:
-              localizedWrite?.writeLocale ??
-              (carriesComponentValues(fields)
-                ? this.componentSnapshotLocale(params.locale)
-                : null),
+            locale: createdLocale,
+            // The shared row the create begins, and the language the snapshot
+            // is recorded in: the one its translatable values or its
+            // translated components went into.
+            changedParts: partsCreated(createdLocale),
             maxPerDoc: versionsConfig.maxPerDoc,
           });
           createdVersionNo = captured.versionNo;
@@ -11476,6 +11510,83 @@ export class CollectionMutationService extends BaseService {
           locale: EVERY_LOCALE,
         });
 
+        // The languages whose own translation row moves to `direction`'s
+        // status here, each told by a locale-tagged transition below.
+        // Decided once, before the version, the untagged event and the tagged
+        // ones, so all of them read one answer: a published translation row a
+        // promotion creates counts, and a language with no row after the
+        // publish shows the language it falls back to rather than going live.
+        const taggedTransitions = new Set(
+          publishes
+            ? told
+                .filter(
+                  language =>
+                    language.priorStatus !== direction.nextStatus &&
+                    (priorCompanionStatuses.has(language.locale) ||
+                      translated.has(language.locale))
+                )
+                .map(language => language.locale)
+            : [...priorCompanionStatuses]
+                .filter(
+                  ([locale, priorLocaleStatus]) =>
+                    (configuredLocales.size === 0 ||
+                      configuredLocales.has(locale)) &&
+                    movesLanguage(params.parts, locale) &&
+                    priorLocaleStatus !== direction.nextStatus
+                )
+                .map(([locale]) => locale)
+        );
+        // The moves the publish's one history event names, decided before its
+        // version is recorded so the version names the same parts
+        // (`partsMovesRecord`): each language whose translation row moved,
+        // from the status it held, and each whose pending change went live,
+        // recorded moving from draft to published, as its publish alone
+        // records it, though it was published before and after: the move is
+        // the change's. So is a main row whose change, kept under no
+        // language, went live.
+        const localeMoves = new Map<string, string | null>(
+          publishes
+            ? told
+                .filter(language => taggedTransitions.has(language.locale))
+                .map(language => [
+                  language.locale,
+                  typeof language.priorStatus === "string"
+                    ? language.priorStatus
+                    : null,
+                ])
+            : [...priorCompanionStatuses].filter(([locale]) =>
+                taggedTransitions.has(locale)
+              )
+        );
+        for (const language of told) {
+          if (
+            language.promoted &&
+            (priorCompanionStatuses.has(language.locale) ||
+              translated.has(language.locale))
+          ) {
+            localeMoves.set(language.locale, "draft");
+          }
+        }
+        const historyMoves: StatusMove[] = [
+          // The entry's own move only where the shared part moved: a move of chosen languages
+          // alone leaves the entry's status, so its history records none.
+          ...(hasMainStatus && movesShared(params.parts)
+            ? [
+                {
+                  from: promotions.some(p => p.locale === null)
+                    ? "draft"
+                    : lockedPreviousStatus,
+                  to: direction.nextStatus,
+                },
+              ]
+            : []),
+          ...[...localeMoves].map(([locale, from]) => ({
+            locale,
+            from,
+            to: direction.nextStatus,
+          })),
+        ];
+
         if (needsFreshParent) {
           // The committed post-publish parent, read back on the lock this
           // transaction holds (read-your-writes): a promotion writes a
@@ -11549,6 +11660,16 @@ export class CollectionMutationService extends BaseService {
               // so it holds no locale's translatable values. Claiming one
               // would tell a restore to write content it never captured.
               locale: null,
+              // The parts the publish put live: the status moves its history
+              // event names, with each pending change it promoted, in the
+              // part that change's draft holds. A component's draft of a
+              // collection with no translated fields of its own moves no
+              // translation row, so the event names no language for it, yet
+              // the promotion wrote that language's component values.
+              changedParts: partsTogether([
+                partsMovesRecord(historyMoves),
+                ...promotions.map(promoted => draftSlotParts(promoted.locale)),
+              ]),
               maxPerDoc: versionsConfig.maxPerDoc,
             });
             publishVersionNo = capture.versionNo;
@@ -11647,32 +11768,6 @@ export class CollectionMutationService extends BaseService {
           },
         });
         eventRecorded = baseRecorded || eventRecorded;
-        // The languages whose own translation row moves to `direction`'s
-        // status here, each told by a locale-tagged transition below.
-        // Decided once, before the untagged event and the tagged ones, so
-        // both read one answer: a published translation row a promotion
-        // creates counts, and a language with no row after the publish
-        // shows the language it falls back to rather than going live.
-        const taggedTransitions = new Set(
-          publishes
-            ? told
-                .filter(
-                  language =>
-                    language.priorStatus !== direction.nextStatus &&
-                    (priorCompanionStatuses.has(language.locale) ||
-                      translated.has(language.locale))
-                )
-                .map(language => language.locale)
-            : [...priorCompanionStatuses]
-                .filter(
-                  ([locale, priorLocaleStatus]) =>
-                    (configuredLocales.size === 0 ||
-                      configuredLocales.has(locale)) &&
-                    movesLanguage(params.parts, locale) &&
-                    priorLocaleStatus !== direction.nextStatus
-                )
-                .map(([locale]) => locale)
-        );
         // Whether the default locale's own companion row transitions here.
         // When it does, the per-locale events below emit the default
         // locale's transition tagged `locale: <default>` — matching the
@@ -11960,24 +12055,8 @@ export class CollectionMutationService extends BaseService {
           }
         );
 
-        // One history event for the whole publish, naming the languages it
-        // moved, rather than one per language as the deliveries above are.
-        // A language whose pending change went live is recorded moving from
-        // draft to published, as its publish alone records it, though it
-        // was published before and after: the move is the change's. So is a
-        // main row whose change, kept under no language, went live.
-        const localeMoves = new Map(
-          perLocaleTransitions.map(t => [t.locale, t.from])
-        );
-        for (const language of told) {
-          if (
-            language.promoted &&
-            (priorCompanionStatuses.has(language.locale) ||
-              translated.has(language.locale))
-          ) {
-            localeMoves.set(language.locale, "draft");
-          }
-        }
+        // One history event for the whole publish, naming the moves decided
+        // before its version was recorded (`historyMoves`).
         await this.recordTransitionHistory(
           tx,
           params.collectionName,
@@ -11987,25 +12066,7 @@ export class CollectionMutationService extends BaseService {
             personName: params.user?.name ?? null,
             versionNo: publishVersionNo,
           },
-          [
-            // The entry's own move only where the shared part moved: a move of chosen languages
-            // alone leaves the entry's status, so its history records none.
-            ...(hasMainStatus && movesShared(params.parts)
-              ? [
-                  {
-                    from: promotions.some(p => p.locale === null)
-                      ? "draft"
-                      : lockedPreviousStatus,
-                    to: direction.nextStatus,
-                  },
-                ]
-              : []),
-            ...[...localeMoves].map(([locale, from]) => ({
-              locale,
-              from,
-              to: direction.nextStatus,
-            })),
-          ]
+          historyMoves
         );
 
         // Last in the transaction, as on an update: publishing or withdrawing
@@ -14797,7 +14858,7 @@ export class CollectionMutationService extends BaseService {
     // since the live row the re-fetch returns is the unchanged
     // published content.
     // base below rather than replacing it.
-    const touched = keysHeldSaveSets(ctx);
+    const touched = keysSaveSets(ctx);
     const patchFields = Object.fromEntries(
       Object.entries(patchedDocument).filter(([key]) => touched.has(key))
     );
@@ -15152,9 +15213,11 @@ export class CollectionMutationService extends BaseService {
       | ResolvedVersionsConfig
       | null
       | undefined;
-    // Kept by part: the keys this save set, and which part each belongs to,
-    // read once for the store that splits the document and the history that
-    // judges every language's review.
+    // The keys this save set, and which part each belongs to, read once for
+    // the parts its version records and, kept by part, the store that splits
+    // the document and the history that judges every language's review.
+    const touched = keysSaveSets(ctx);
+    const keys = await partKeysOf(fields);
     const byParts =
       parts && draftLocale !== SHARED_DRAFT_SLOT
         ? {
@@ -15162,8 +15225,8 @@ export class CollectionMutationService extends BaseService {
             // The language whose draft this save writes beside the shared
             // one: never the shared slot here, so the store is handed a code.
             locale: draftLocale,
-            touched: keysHeldSaveSets(ctx),
-            keys: await partKeysOf(fields),
+            touched,
+            keys,
           }
         : undefined;
     const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
@@ -15186,6 +15249,9 @@ export class CollectionMutationService extends BaseService {
       sourceVersionNo: params.sourceVersionNo ?? null,
       // Recorded per field on the save's version, where still true of it.
       ...(params.restoredFrom ? { restoredFrom: params.restoredFrom } : {}),
+      // The parts this save held values in: its language's, the shared
+      // part's, or the one part of a document without languages.
+      changedParts: partsWritten({ locale: draftLocale, touched, keys }),
       maxPerDoc: versionsConfig?.maxPerDoc,
       ...(byParts
         ? {
@@ -15717,8 +15783,6 @@ export class CollectionMutationService extends BaseService {
        * The fields this write restored, and the version each came from, as
        * server code states it. A client states it as `_restoredFrom` in the
        * body, read below when this is absent.
-       *
-       * @experimental
        */
       restoredFrom?: FieldSources;
       /**
@@ -17009,6 +17073,9 @@ export class CollectionMutationService extends BaseService {
                   ? (localizedUpdate?.writeLocale ??
                     this.componentSnapshotLocale(params.locale))
                   : null,
+                // The document as it stood before the restore, which this
+                // version writes nowhere: it changes no part.
+                changedParts: NO_PART,
                 label: "Before restore",
               });
             };
@@ -17857,6 +17924,41 @@ export class CollectionMutationService extends BaseService {
                 ...(params.restoredFrom
                   ? { restoredFrom: params.restoredFrom }
                   : {}),
+                // Written in place: the language where it wrote a translated
+                // value, a component or the language's status, and the
+                // shared part where it wrote a shared value. A pending change
+                // it put live is folded into what it wrote, so the drafts'
+                // values count where the publish carried them.
+                changedParts: partsWritten({
+                  // The language the snapshot is recorded in, so a write to
+                  // a translated component of a collection with no
+                  // translations of its own is named as well.
+                  locale: versionLocale,
+                  touched: keysSaveSets({
+                    updatePayload,
+                    componentFieldData,
+                    manyToManyData,
+                    translatedKeys: Object.keys(
+                      localizedUpdate?.localizedFieldValues ?? {}
+                    ),
+                  }),
+                  // A collection that keeps no translations of its own stores
+                  // its fields on the shared row; its components alone are
+                  // a language's.
+                  keys: await partKeysOf(fields, {
+                    translated: Boolean(localizedUpdate),
+                  }),
+                  // The language's own status rides its translation row; the
+                  // document's is the main row's, which a write in the
+                  // default language (or of a document without languages)
+                  // moves too, and which every language shows.
+                  statusWritten:
+                    localizedUpdate?.companionData?._status !== undefined,
+                  documentStatusWritten: Object.prototype.hasOwnProperty.call(
+                    updatePayload,
+                    "status"
+                  ),
+                }),
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
               producedVersionNo = versionNo;
@@ -22884,6 +22986,12 @@ export class CollectionMutationService extends BaseService {
           ? localizedUpdate?.writeLocale
           : undefined;
         const savedStatus = (updated as { status?: unknown }).status;
+        // Which part each key belongs to, for the parts the version records.
+        // A collection that keeps no translations of its own stores its
+        // fields on the shared row; its components alone are a language's.
+        const updateKeys = await partKeysOf(fields, {
+          translated: Boolean(localizedUpdate),
+        });
         const versionNo = await this.captureTxVersion(tx, {
           onlyIfChanged: true,
           lifecycle: hasLifecycle(collection),
@@ -22899,6 +23007,30 @@ export class CollectionMutationService extends BaseService {
           // shared and a restore drops every per-locale field — or refuses,
           // on a collection where they all are.
           localeTag,
+          // Written in place: the language where it wrote a translated value,
+          // a component or the language's status, and the shared part where
+          // it set a shared value.
+          changedParts: snapshotLocale =>
+            partsWritten({
+              locale: snapshotLocale,
+              touched: keysSaveSets({
+                updatePayload: finalData,
+                componentFieldData,
+                manyToManyData,
+                translatedKeys: Object.keys(
+                  localizedUpdate?.localizedFieldValues ?? {}
+                ),
+              }),
+              keys: updateKeys,
+              // The language's own status rides its translation row; the
+              // document's is the main row's, which every language shows.
+              statusWritten:
+                localizedUpdate?.companionData?._status !== undefined,
+              documentStatusWritten: Object.prototype.hasOwnProperty.call(
+                finalData,
+                "status"
+              ),
+            }),
         });
         producedVersionNo = versionNo;
         await this.recordSaveHistory(

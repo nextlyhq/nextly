@@ -28,6 +28,7 @@ import { useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
+import { useHistoryOffered } from "@admin/components/features/versions/history-offered";
 import { LazyVersionHistorySheet } from "@admin/components/features/versions/LazyVersionHistorySheet";
 import { useVersionActions } from "@admin/components/features/versions/version-actions";
 import {
@@ -43,7 +44,6 @@ import {
   useTopBarWidth,
 } from "@admin/components/layout/header/TopBarPlaces";
 import { useCan } from "@admin/hooks/useCan";
-import { useCanRequest } from "@admin/hooks/useCanRequest";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -76,6 +76,7 @@ import {
   type PreviewActionsProps,
 } from "./PreviewActions";
 import { SaveStateIndicator } from "./SaveStateIndicator";
+import { useBarShowsPill } from "./title-in-view";
 import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
@@ -247,8 +248,12 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
   // Read before anything returns early, and the address opens history only
   // when it is offered, so a link naming it on a document without it opens
   // nothing.
-  const mayReadHistory = useCanRequest(collectionSlug, "readHistory");
-  const historyOffered = isHistoryOffered(props, mayReadHistory);
+  const historyOffered = useHistoryOffered(collectionSlug, {
+    mode: props.mode,
+    documentId: props.entry?.id,
+    fields: props.historyFields,
+    enabled: props.historyEnabled,
+  });
   const { open: historyOpen, setOpen: setHistoryOpen } =
     useHistoryAddress(historyOffered);
   // Its real height, for the panel that sticks under it. Called before the
@@ -517,25 +522,6 @@ function ShareAnchor({
           draws them. */}
       <span className="absolute right-0 bottom-0 h-0 w-0" aria-hidden="true" />
     </SharePreviewPopover>
-  );
-}
-
-/**
- * Whether the document offers its history. A document only has history once
- * it has been saved, and rendering a snapshot needs the schema, so both are
- * required. The history is read in every language, as the server judges it,
- * so a user who may read only some is not offered it.
- */
-function isHistoryOffered(
-  props: DocumentBarProps,
-  mayReadHistory: boolean
-): boolean {
-  return (
-    props.mode === "edit" &&
-    Boolean(props.entry?.id) &&
-    props.historyFields !== undefined &&
-    props.historyEnabled !== false &&
-    mayReadHistory
   );
 }
 
@@ -908,13 +894,17 @@ function DocumentBarState({
   );
 }
 
-/** The status pill, where the document has a status to show. */
+/**
+ * The status pill, where the document has a status to show, and only while
+ * the title's own pill is out of view (`title-in-view`), so it shows once.
+ */
 function BarStatusPill({
   documentStatus,
 }: {
   documentStatus: DocumentBarProps["documentStatus"];
 }) {
-  if (!documentStatus) return null;
+  const shown = useBarShowsPill();
+  if (!documentStatus || !shown) return null;
   return (
     <DocumentStatusPill
       status={documentStatus.status}

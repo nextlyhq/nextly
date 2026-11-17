@@ -27,7 +27,6 @@ const rendered = (
     statusFilter: { values: ["published"], isPublicRead: true },
     localeChain: ["es", "en"],
     mainIdColumn: sql.identifier("id"),
-    defaultLocale: "en",
     ...args,
   });
   if (condition === undefined) throw new Error("no condition");
@@ -59,7 +58,6 @@ describe("publishedInLanguageCondition", () => {
         statusFilter: { values: ["draft"], isPublicRead: false },
         localeChain: ["es"],
         mainIdColumn: sql.identifier("id"),
-        defaultLocale: "en",
       })
     ).toBeUndefined();
   });

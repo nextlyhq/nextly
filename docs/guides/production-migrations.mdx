@@ -370,7 +370,7 @@ Specific examples:
 2. Reads the `nextly_schema_events` ledger to see which `.sql` files have been applied (a `file_apply` event per file).
 3. Checks the app's history against the folder before it changes anything, core tables included. **An applied migration the folder lacks = abort with `MIGRATION_MISSING` (exit 3)**: a newer build migrated this database, or a file was removed (see [A build older than the database](#a-build-older-than-the-database)). An unresolved attempt stops it as [Recovering from a failed migration](#recovering-from-a-failed-migration) says. **A hash mismatch on an applied file = abort with `MIGRATION_TAMPERED` (exit 2).** No partial state, nothing else runs. `migrate:down`, `migrate:baseline` and `nextly upgrade --reconcile-core` run the same checks first, with the same exit codes.
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp). A pending file whose snapshot an earlier release's `migrate:create` wrote, without the registry metadata, is refused before anything applies when it comes after a migration that carries the metadata, or once the database has its registry record; see [The first `nextly migrate` on this release](#the-first-nextly-migrate-on-this-release).
-5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
+5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below. A pending file whose schema the database already has (after `db:sync` on a shared database, for example) is recorded applied without running only when its snapshot proves all of it: every statement changes only tables, columns, indexes, constraints and foreign keys, its checksum is the one its snapshot recorded, and it has no unresolved attempt. Otherwise the run stops with `MIGRATION_NOT_PROVEN` (exit 2) before running or recording it, and lists each statement it would have skipped: run the ones its snapshot does not show by hand, or confirm they are not needed, then `nextly migrate:resolve --applied <migration>`. A file the database stands at the start of always runs, data statements included.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`. Once a file is recorded, it marks as no longer declared each permission that file's snapshot drops, keeping every grant of it, and clears the mark of one it declares again; see [A permission your build no longer declares](#a-permission-your-build-no-longer-declares).
 7. Makes each one-to-one relationship's column unique where an earlier release left it without its uniqueness, once no file is pending, after checking it for repeated values (see [One-to-one relationships made unique](#one-to-one-relationships-made-unique)).
 8. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. It makes the built-in Public role, the one visitors are judged by, and grants it `read-media`, the read of each collection and Single whose read rule answers a visitor `true`, and what your plugins declare for it, each once, so a grant you take away on the Roles screen stays away (see [Permissions](/docs/permissions)). A plugin's install does the same for that plugin. It sets every preset role's grants in one transaction with a record of the Nextly release that set them, and a run from an older release leaves them as they are (see [The preset grants and the release that set them](#the-preset-grants-and-the-release-that-set-them)). When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. This step never marks a permission as no longer declared (step 6 does, from the migrations), and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
@@ -382,6 +382,7 @@ Specific examples:
 | 0         | All pending applied OR no pending                                        |
 | 1         | A migration failed during execution                                      |
 | 2         | `MIGRATION_TAMPERED`. Abort before running any.                          |
+| 2         | `MIGRATION_NOT_PROVEN`. Stop before running or recording that file.      |
 | 3         | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
 
 ### One-to-one relationships made unique
@@ -923,6 +924,17 @@ The Builder dual-writes every entity it creates or saves into the UI-schema mani
 `db.uiSchemaFile` names, `./ui-schema.json` by default — for all three entity kinds. Commit that
 file with your migrations: it is the **input** `nextly migrate:create` reads to know a Builder
 entity exists, and a Builder change missing from the commit cannot appear in any migration.
+Nextly's scaffold does not ignore it; if your project's `.gitignore` lists it, remove that line.
+
+`nextly migrate:create` and `nextly migrate:check` read the file by the same rules, so a definition
+one refuses the other refuses with the same message. Both refuse, as
+[`BUILDER_DEFINITION_MISSING`](/docs/cli/errors/builder-definition-missing), when the newest
+migration snapshot records a Builder entity that neither `nextly.config.ts` nor the file declares:
+the file lost it (it was never committed, or the entry was removed by hand), and a migration
+written from what is left would drop that entity's table and its content. Restore the file from
+version control. To remove an entity, delete it in the Builder, which writes the migration that
+drops it. An entry whose slug a code-first entity of the same kind also uses is ignored, and both
+commands warn, naming its kind and slug: the code-first definition wins.
 
 Two things to know before relying on it:
 
@@ -965,10 +977,10 @@ than something production generates.
   leave the `localized` registry value behind, because the upsert is filtered by the same
   touched-table set the companion file does not populate. Check the registry row after toggling
   localization on an existing entity.
-- **A deletion leaves the registry row behind.** Deleting a Collection in the Builder writes a
-  migration that drops its table. Deleting a Single or a Field Group writes none: the Builder drops
-  the development table and removes the manifest entry, and the next `migrate:create` finds that
-  table in the previous snapshot but not in the manifest and writes the `DROP TABLE`. Either way the
+- **A deletion leaves the registry row behind.** Deleting a Collection, a Single or a Field Group
+  in the Builder writes the migration that drops its table, with a snapshot that no longer records
+  the entity, so the next `migrate:create` and `migrate:check` find nothing lost. Removing the
+  entry from `ui-schema.json` by hand is not a deletion: both commands refuse it, as above. The
   table goes. Its registry row does not: `migrate:create`
   builds registry upserts only for entities still in the manifest, and nothing on the
   `nextly migrate` path removes a row. The other environment keeps a row describing a table that no
@@ -1246,7 +1258,7 @@ On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt l
 
 `nextly upgrade` is a list of steps, each of which brings one part of an existing database up to date. It takes the steps in order: it counts what a step would change and, when that is more than nothing, runs it and prints its count, before it looks at the next step. So when a later step stops the upgrade, the earlier ones have already been applied; run it again once the cause is fixed, and it carries on. It asks for a backup before the first step that has work. When no step has anything, it prints `Already upgraded. Nothing to do.` and asks for nothing. Running it again after it finishes changes nothing.
 
-- **Move the migration records into `nextly_schema_events`.** A database from an early alpha keeps them in `nextly_migrations` and `nextly_migration_journal`; the step copies them across and drops the old tables.
+- **Move the migration records into `nextly_schema_events`.** A database from an early alpha keeps them in `nextly_migrations` and `nextly_migration_journal`; the step copies them across and drops the old tables. It reads `nextly_migrations` in both shapes `nextly migrate` and `nextly db:sync` kept it, including the empty one an earlier `nextly db:sync` created on SQLite. A record of a run that never finished is skipped and named. It reads every record before writing any, so a record it cannot read stops it with nothing changed (`UPGRADE_LEDGER_UNREADABLE`). A run stopped part-way keeps the old tables, and the next run finishes the move without writing a record twice.
 - **Hash passwords stored before this release.** A password inside a group or repeater that is not yet a hash is stored as a hash of itself, so it keeps working. A value already in a password hasher's format is left alone. The step prints a count for each collection, Single and field group, never a value.
 - **Convert translated date columns kept with a time zone (PostgreSQL).** Each date column an earlier release made with a time zone in a translations table becomes a plain `timestamp`, each value keeping the date Nextly showed; see [Translated date fields on PostgreSQL](#translated-date-fields-on-postgresql). The step prints each column and the time zone it read the values in.
 - **Remove passwords kept in version history.** A version's snapshot never keeps a password. The step strips any it finds from a snapshot captured by an earlier release, leaving the rest of the version as it was, and prints how many versions of each collection and Single it changed.

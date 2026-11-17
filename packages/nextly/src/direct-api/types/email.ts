@@ -7,6 +7,10 @@
  * @packageDocumentation
  */
 
+import type {
+  DeliveryActivityFilter,
+  QueuedEmailActivityFilter,
+} from "../../domains/email/delivery-activity";
 import type { EmailFailure } from "../../domains/email/failure";
 import type {
   EmailTemplateComparison as TemplateComparison,
@@ -618,6 +622,46 @@ export interface CancelQueuedEmailArgs extends DirectAPIConfig {
  * option `sendWithTemplate` takes. The template is rendered at each attempt.
  */
 export type QueueTemplateEmailArgs = SendTemplateEmailArgs;
+
+/**
+ * @experimental Arguments for `nextly.emailDeliveries.find()`: the delivery
+ * list's filters. A call that checks access needs `read-email-deliveries`.
+ */
+export interface FindEmailDeliveriesArgs
+  extends DirectAPIConfig,
+    DeliveryActivityFilter {}
+
+/**
+ * @experimental Arguments for `nextly.emailDeliveries.findQueued()`: the
+ * queued-email list's filters. A call that checks access needs
+ * `read-email-deliveries`.
+ */
+export interface FindQueuedEmailsArgs
+  extends DirectAPIConfig,
+    QueuedEmailActivityFilter {}
+
+/**
+ * @experimental Arguments for `nextly.emailDeliveries.lastSent()`. A call
+ * that checks access needs `read-email-deliveries`.
+ */
+export interface EmailLastSentArgs extends DirectAPIConfig {
+  /** The templates to answer for, at most 200; every template sent when absent. */
+  slugs?: string[];
+}
+
+/**
+ * @experimental Arguments for `nextly.emailDeliveries.overdue()`. A call
+ * that checks access needs `read-email-deliveries`.
+ */
+export type EmailOverdueArgs = DirectAPIConfig;
+
+export type {
+  ActivityPage,
+  DeliveryActivity,
+  QueuedEmailActivity,
+  QueuedEmailOverdue,
+  TemplatesLastSent,
+} from "../../domains/email/delivery-activity";
 
 export type {
   QueuedEmail,

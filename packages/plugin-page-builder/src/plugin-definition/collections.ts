@@ -21,6 +21,7 @@ import { hostFetchPolicy } from "../host-policy";
 import { layoutFenceFloor } from "../layout-removal/page-reference-guard";
 import { siteCodeSingle } from "../site-code/storage";
 import { siteStyleSingle } from "../site-style-storage";
+
 import type { BreakpointRemovalParts } from "./breakpoints";
 import { componentStoreOf, pagesOptions, storeIsOwn } from "./options";
 import type { Definition } from "./state";

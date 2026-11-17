@@ -264,6 +264,8 @@ const DOCUMENT_ISSUE_CODES = {
     "A node lists more classes than the compiler will apply to it.",
   "invalid-attributes": "A node attributes field is not a string map.",
   "invalid-css-id": "A node cssId is not a string.",
+  "invalid-css-classes":
+    "A node's own CSS class names are not text, or hold a name a block may not carry.",
   "invalid-nosnippet": "A node nosnippet mark is not true or false.",
   "unknown-node-type": "A node type is not registered.",
   "invalid-style-state": "A style state key is not a known interactive state.",

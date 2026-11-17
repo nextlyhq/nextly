@@ -11,7 +11,9 @@ import { expectTypeOf } from "vitest";
 
 import {
   DocumentPrimaryAction,
+  DocumentSaveAndPublish,
   DocumentSaveIndicator,
+  useDocumentLifeStage,
   useBeforeDocumentAction,
   useDocumentActions,
   useTrackedWrite,
@@ -72,3 +74,17 @@ expectTypeOf(DocumentSaveIndicator).parameter(0).toEqualTypeOf<{
 }>();
 expectTypeOf(DocumentSaveIndicator).returns.toEqualTypeOf<JSX.Element | null>();
 expectTypeOf(DocumentPrimaryAction).returns.toEqualTypeOf<JSX.Element | null>();
+
+// The status-carrying Save and Publish pair: placed with no props, drawn by
+// the admin, nothing outside a document editor.
+expectTypeOf(DocumentSaveAndPublish).parameters.toEqualTypeOf<[]>();
+expectTypeOf(
+  DocumentSaveAndPublish
+).returns.toEqualTypeOf<JSX.Element | null>();
+// The life stage beside it: one of three, its words, and when a scheduled
+// page goes live; null outside an editor or without a lifecycle.
+expectTypeOf(useDocumentLifeStage).returns.toEqualTypeOf<{
+  stage: "draft" | "published" | "scheduled";
+  label: string;
+  detail?: string;
+} | null>();

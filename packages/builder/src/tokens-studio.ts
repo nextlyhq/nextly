@@ -37,9 +37,12 @@
  * @module tokens-studio
  */
 import {
+  checkTokenKind,
   emitTokenBlocks,
   tokenDisplayLabel,
+  tokenKindExample,
   tokenLabelIssue,
+  MAX_TOKEN_LABEL_LENGTH,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
   tokenNamingProblem,
@@ -487,6 +490,33 @@ function lineHeightValueIssue(value: string): string | undefined {
     : undefined;
 }
 
+/** A number with no unit, other than zero, which a length needs a unit for. */
+const BARE_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
+
+/** A zero, which is a length without a unit. */
+const ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
+
+/**
+ * A length as typed, with `px` added to a bare number, as the block panel
+ * adds it: `20` in a spacing variable means 20px to an author, and to CSS it
+ * is no length at all. A zero needs no unit and is left as typed.
+ */
+function withPixels(value: string): string {
+  return BARE_NUMBER.test(value) && !ZERO.test(value) ? `${value}px` : value;
+}
+
+/**
+ * Why a value cannot be its variable's kind, in words with what to type
+ * instead, or nothing. The engine's own kind check, the one a save runs, so
+ * the field refuses exactly what the server would.
+ */
+function kindValueIssue(kind: TokenKind, value: string): string | undefined {
+  const mismatch = checkTokenKind(kind, value);
+  if (mismatch === undefined) return undefined;
+  const example = tokenKindExample(kind);
+  return `"${value}" ${mismatch}.${example === undefined ? "" : ` Type ${example}.`}`;
+}
+
 /** What writing a variable's value comes to: the new set, or why not. */
 export type TokenValueWrite =
   | {
@@ -521,8 +551,13 @@ export function writeTokenValue(
   value: string
 ): TokenValueWrite {
   const token = tokens.tokens[at];
-  if (token === undefined || !isLineHeightToken(token)) {
-    return { tokens: setTokenValue(tokens, at, mode, value) };
+  if (token === undefined) return { tokens };
+  if (!isLineHeightToken(token)) {
+    const written = token.kind === "dimension" ? withPixels(value) : value;
+    const issue = kindValueIssue(token.kind, written);
+    return issue === undefined
+      ? { tokens: setTokenValue(tokens, at, mode, written) }
+      : { issue };
   }
   const issue = lineHeightValueIssue(value);
   if (issue !== undefined) return { issue };
@@ -655,11 +690,12 @@ export function addToken(
 /* ------------------------------------------------------------------ groups */
 
 /** The groups the Design panel shows variables in, in order. */
-export type VariableGroup = "colours" | "type" | "spacing" | "other";
+export type VariableGroup = "colours" | "type" | "fonts" | "spacing" | "other";
 
 const VARIABLE_GROUPS: readonly VariableGroup[] = [
   "colours",
   "type",
+  "fonts",
   "spacing",
   "other",
 ];
@@ -668,9 +704,48 @@ const VARIABLE_GROUPS: readonly VariableGroup[] = [
 const VARIABLE_GROUP_LABELS: Readonly<Record<VariableGroup, string>> = {
   colours: "Colours",
   type: "Type scale",
+  fonts: "Fonts and weights",
   spacing: "Spacing, radius & shadows",
-  other: "Other",
+  other: "Other values",
 };
+
+/** The Design panel's tabs, by kind, in the order they are shown. */
+export type DesignTab = "colours" | "type" | "spacing" | "styles";
+
+/**
+ * The variable groups each Design tab lists, in order: a font and a weight
+ * sit with the type sizes, and what belongs to no other group ends Spacing.
+ * Styles lists none.
+ */
+export const DESIGN_TAB_GROUPS: Readonly<
+  Record<DesignTab, readonly VariableGroup[]>
+> = {
+  colours: ["colours"],
+  type: ["type", "fonts"],
+  spacing: ["spacing", "other"],
+  styles: [],
+};
+
+/**
+ * The groups narrowed to a search, matched on the name shown only: the code
+ * name is hidden, so a match on it would list a row with nothing in it that
+ * matches what was typed. The one rule for a variable search, so a count
+ * beside a tab and the rows that tab lists cannot disagree.
+ */
+export function searchVariableGroups<
+  G extends { entries: readonly { label: string }[] },
+>(groups: readonly G[], needle: string): G[] {
+  const text = needle.trim().toLowerCase();
+  if (text === "") return [...groups];
+  return groups
+    .map(group => ({
+      ...group,
+      entries: group.entries.filter(entry =>
+        entry.label.toLowerCase().includes(text)
+      ),
+    }))
+    .filter(group => group.entries.length > 0);
+}
 
 /**
  * Every group with its heading, in the order the Design panel lists them, for
@@ -751,6 +826,9 @@ export function variableGroupOf(token: {
 }): VariableGroup {
   if (token.kind === "color") return "colours";
   if (token.kind === "shadow") return "spacing";
+  if (token.kind === "fontFamily" || token.kind === "fontWeight") {
+    return "fonts";
+  }
   const family = lengthFamilyOf(token);
   if (family === "font-size" || family === "line-height") return "type";
   if (family === "spacing" || family === "radius") return "spacing";
@@ -865,6 +943,28 @@ export function variableGroups(
       (byGroup.get(group) ?? []).filter(entry => !paired.has(entry.row))
     ),
   }));
+}
+
+/**
+ * How many variables a search matches in each Design tab that lists
+ * variables: the rows each tab would list, counted, through the same groups
+ * and the same search the tab draws with, so a count beside a tab and the
+ * rows under it cannot disagree.
+ */
+export function variableMatchesByTab(
+  tokens: SiteTokenSet | undefined,
+  needle: string
+): Readonly<Record<Exclude<DesignTab, "styles">, number>> {
+  const found = searchVariableGroups(variableGroups(tokens), needle);
+  const countOf = (tab: DesignTab): number =>
+    found
+      .filter(group => DESIGN_TAB_GROUPS[tab].includes(group.group))
+      .reduce((sum, group) => sum + group.entries.length, 0);
+  return {
+    colours: countOf("colours"),
+    type: countOf("type"),
+    spacing: countOf("spacing"),
+  };
 }
 
 /* ------------------------------------------------------------------ labels */
@@ -1088,6 +1188,72 @@ export function labelNewVariable(
     next[partnerAt] = { ...partner, name: `${LINE_HEIGHT_PREFIX}${words}` };
   }
   return { ...relabelled, tokens: next };
+}
+
+/**
+ * The set with a copy of one variable right below it, and where the copy
+ * landed: the same values, labelled "<label> copy" ("<label> copy 2" when
+ * that is taken), under a free code name made from that label. A type size's line height is copied beside it, under
+ * the same words, which is what pairs them.
+ *
+ * The copy has no `id`, as a new variable has none: nothing references it
+ * yet, so its code name can still follow its label until it is first saved.
+ */
+export function duplicateVariable(
+  tokens: SiteTokenSet,
+  at: number,
+  label: string
+): { tokens: SiteTokenSet; at: number } {
+  const token = tokens.tokens[at];
+  if (token === undefined) return { tokens, at };
+  const copyLabel = copyLabelFor(tokens, label);
+  const dot = token.name.indexOf(".");
+  const prefix = dot === -1 ? token.name : token.name.slice(0, dot);
+  const partner = token.name.startsWith(SIZE_PREFIX)
+    ? tokens.tokens.find(
+        other =>
+          other.name ===
+          `${LINE_HEIGHT_PREFIX}${token.name.slice(SIZE_PREFIX.length)}`
+      )
+    : undefined;
+  const words = freeWords(
+    tokens,
+    prefix,
+    slugOf(copyLabel) || "copy",
+    partner !== undefined
+  );
+  const copies: SiteToken[] = [
+    { ...withoutId(token), name: `${prefix}.${words}`, label: copyLabel },
+  ];
+  if (partner !== undefined) {
+    const { label: _label, ...line } = withoutId(partner);
+    copies.push({ ...line, name: `${LINE_HEIGHT_PREFIX}${words}` });
+  }
+  const next = [...tokens.tokens];
+  next.splice(at + 1, 0, ...copies);
+  return { tokens: { ...tokens, tokens: next }, at: at + 1 };
+}
+
+/**
+ * The first free name for a copy: "<label> copy", then "copy 2", "copy 3"…,
+ * the label shortened where the suffix would take it past the longest
+ * label the engine stores, so the copy is saved as it is.
+ */
+function copyLabelFor(tokens: SiteTokenSet, label: string): string {
+  for (let n = 1; ; n += 1) {
+    const suffix = n === 1 ? " copy" : ` copy ${String(n)}`;
+    const room = MAX_TOKEN_LABEL_LENGTH - suffix.length;
+    const candidate = `${label.slice(0, room).trimEnd()}${suffix}`;
+    if (variableLabelIssue(tokens, -1, candidate) === undefined) {
+      return candidate;
+    }
+  }
+}
+
+/** A token without its frozen identity, as a copy starts. */
+function withoutId(token: SiteToken): SiteToken {
+  const { id: _id, ...rest } = token;
+  return rest;
 }
 
 /** A label as code-name words: lowercase letters, digits and dashes. */

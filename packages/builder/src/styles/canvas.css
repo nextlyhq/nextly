@@ -9,6 +9,19 @@
  * larger, so an enlarged page scrolls from its left edge with nothing clipped.
  */
 /*
+ * The canvas region is the well the page sits in: the editor's one grey,
+ * plain, around a frame drawn on the page's own surface. Painted here, over
+ * the panel surface the chrome's root paints, so the rail and the panels on
+ * either side read as tools and the page as the thing being made.
+ */
+.nx-canvas-strip-slot,
+.nx-canvas-scroller {
+  /* The strip a template draws above the page (what it previews) sits in the
+     well too, so the column reads as one grey region down to the page. */
+  background-color: var(--nx-builder-well);
+}
+
+/*
  * The canvas region, while it scrolls a frame painted past it: a tab stop of
  * its own, so its focus is drawn.
  */
@@ -36,7 +49,7 @@
      as the page sits on any screen; a page shorter than the region leaves
      the room below it rather than an empty band above. */
   margin: 0 auto auto;
-  outline: 1px solid var(--nx-builder-border);
+  outline: 1px solid var(--nx-builder-frame-edge);
   box-shadow: var(--shadow-md);
 }
 

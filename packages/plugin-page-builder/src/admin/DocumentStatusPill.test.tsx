@@ -1,66 +1,64 @@
 // @vitest-environment jsdom
 /**
- * The editor's page status: the saved document's state, in the entry page's
- * words, and nothing about unsaved edits (the save chip reports those).
- *
- * The rule itself is the admin's (`savedPillState`), used here unmocked, so a
- * pill that drifted to a rule of its own would fail these cases. Unsaved edits
- * on a published page are covered where an edit can actually happen, in the
- * editor's own harness (`BlocksField.settingsPanel.test.tsx`).
+ * The editor's page status: where the page is in its life, in the admin's
+ * words (Draft, Published or Scheduled, with when a scheduled page goes live
+ * on hover), and never anything about its work. The life stage itself is the
+ * admin's answer (`useDocumentLifeStage`), tested there against the status,
+ * the page's history and its scheduled releases.
  */
-import type { DocumentStatus } from "@nextlyhq/plugin-sdk/admin";
+import type { DocumentLifeStage } from "@nextlyhq/plugin-sdk/admin";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-/** What the surrounding form reports, set by each case. */
-let status: DocumentStatus | null = null;
+/** What the surrounding editor reports, set by each case. */
+let stage: DocumentLifeStage | null = null;
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  useDocumentStatus: () => status,
+  useDocumentLifeStage: () => stage,
 }));
 
 const { DocumentStatusPill } = await import("./DocumentStatusPill");
 
 afterEach(() => {
   cleanup();
-  status = null;
+  stage = null;
 });
 
-/** The pill's visible words, without the screen-reader subject. */
-function pillWords(): string {
-  const pill = screen.getByText(/Page status/).parentElement;
-  if (pill === null) throw new Error("the pill was not drawn");
-  return pill.textContent?.replace("Page status: ", "") ?? "";
+/** The pill, and its visible words without the screen-reader subject. */
+function pill(): { words: string; element: HTMLElement } {
+  const element = screen.getByText(/Page status/).parentElement;
+  if (element === null) throw new Error("the pill was not drawn");
+  return {
+    element,
+    words: element.textContent?.replace("Page status: ", "") ?? "",
+  };
 }
 
 describe("DocumentStatusPill", () => {
   it.each([
-    ["a draft", { status: "draft", hasWorkingDraft: false }, "Draft"],
-    [
-      "a published page",
-      { status: "published", hasWorkingDraft: false },
-      "Published",
-    ],
-    [
-      "a published page with saved changes not yet live",
-      { status: "published", hasWorkingDraft: true },
-      "Changed",
-    ],
-    // A draft's working copy is the draft itself: still a draft.
-    [
-      "a draft with a working draft",
-      { status: "draft", hasWorkingDraft: true },
-      "Draft",
-    ],
-  ] as const)("reads %s as %s", (_name, facts, words) => {
-    status = facts;
+    [{ stage: "draft", label: "Draft" }, "Draft"],
+    [{ stage: "published", label: "Published" }, "Published"],
+  ] as const)("reads %o as %s", (given, words) => {
+    stage = given;
     render(<DocumentStatusPill />);
-    expect(pillWords()).toBe(words);
+    expect(pill().words).toBe(words);
+    expect(pill().element.getAttribute("title")).toBeNull();
   });
 
-  it("draws nothing where no form reports a status", () => {
-    status = null;
+  it("reads Scheduled, with when it goes live on hover", () => {
+    stage = {
+      stage: "scheduled",
+      label: "Scheduled",
+      detail: "Goes live 3 Dec, 09:00",
+    };
+    render(<DocumentStatusPill />);
+    expect(pill().words).toBe("Scheduled");
+    expect(pill().element.getAttribute("title")).toBe("Goes live 3 Dec, 09:00");
+  });
+
+  it("draws nothing where no editor knows the page's life stage", () => {
+    stage = null;
     const { container } = render(<DocumentStatusPill />);
     expect(container.childElementCount).toBe(0);
   });
