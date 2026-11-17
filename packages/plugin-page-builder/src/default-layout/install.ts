@@ -163,10 +163,10 @@ function installFirstFill(
     ctx,
     components,
     warn: setup.warn,
-    deps: async () => {
+    deps: async carried => {
       const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
       return {
-        nextly: await getCachedNextly(),
+        nextly: carried.nextly ?? (await getCachedNextly()),
         slugs: setup.slugs,
         components,
         componentField: COMPONENT_DOCUMENT_FIELD,

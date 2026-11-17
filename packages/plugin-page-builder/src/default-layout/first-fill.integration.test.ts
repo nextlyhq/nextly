@@ -34,12 +34,19 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
+import { PAGES_SLUG } from "../collections/pages";
+import { deleteUnplacedComponent } from "../component-delete/system-delete";
+import { fenceStore } from "../host-rewrite/fence";
+import { layoutRemovalStore } from "../layout-removal/store";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 
+import { ensureDefaultLayout } from "./ensure-default";
 import { fillMarkStore, type FillMarkStore } from "./fill-mark";
+import { fillDefaultOnFirstPublish } from "./first-fill";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import { starterRecordStore, type StarterRecord } from "./starter-record";
+import type { StarterParts } from "./starter-seed";
 import { readLayoutSettings, writeLayoutSettings } from "./store";
 
 const SLUGS = {
@@ -93,18 +100,39 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
+    function db(): PluginDatabase {
+      if (probe.db === undefined) throw new Error("the probe did not boot");
+      return probe.db;
+    }
+
+    function dialectOf(): Parameters<typeof fillMarkStore>[1] {
+      if (probe.dialect === undefined) throw new Error("no dialect");
+      return probe.dialect;
+    }
+
     function marks(): FillMarkStore {
-      if (probe.db === undefined || probe.dialect === undefined) {
-        throw new Error("the probe did not boot");
-      }
-      return fillMarkStore(probe.db, probe.dialect);
+      return fillMarkStore(db(), dialectOf());
+    }
+
+    /** The parts the installed plugin seeds its starter with. */
+    function starterParts(): StarterParts {
+      return {
+        components: COMPONENTS_SLUG,
+        record: starterRecordStore(db(), dialectOf()),
+        removeComponent: (nextly, id) =>
+          deleteUnplacedComponent(
+            {
+              nextly,
+              runs: fenceStore(db(), dialectOf()),
+              components: COMPONENTS_SLUG,
+            },
+            id
+          ),
+      };
     }
 
     async function starter(): Promise<StarterRecord> {
-      if (probe.db === undefined || probe.dialect === undefined) {
-        throw new Error("the probe did not boot");
-      }
-      const record = await starterRecordStore(probe.db, probe.dialect).read();
+      const record = await starterRecordStore(db(), dialectOf()).read();
       if (record === null || record === "made") throw new Error("no starter");
       return record;
     }
@@ -121,17 +149,17 @@ describe.each(getConfiguredTestDialects())(
           probePlugin(probe),
         ],
       });
-      // The boot's seed runs once the boot has finished, without being
-      // awaited; wait for its record before the test writes anything.
-      for (let tries = 0; tries < 100; tries++) {
-        const { seededLayout } = await readLayoutSettings(
-          current.nextly,
-          SLUGS
-        );
-        if (seededLayout !== null) return current;
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      throw new Error("the boot did not seed the default");
+      // Joins the boot's own seed, which `onReady` starts without awaiting,
+      // with what the installed plugin seeds with.
+      await ensureDefaultLayout({
+        nextly: current.nextly,
+        slugs: SLUGS,
+        pagesSlug: PAGES_SLUG,
+        removals: layoutRemovalStore(db(), dialectOf()),
+        warn: () => {},
+        ...(mode === "code" ? {} : { starter: starterParts() }),
+      });
+      return current;
     }
 
     async function all(t: TestNextly, collection: string): Promise<Row[]> {
@@ -370,6 +398,40 @@ describe.each(getConfiguredTestDialects())(
       expect(await marks().read()).toEqual({
         header: { component: filled, tell: null },
       });
+    });
+
+    it("lets one fill land when two pass every check at the same moment: the mark's insert decides", async () => {
+      const t = await boot();
+      const record = await starter();
+      // Drafts, so no publish fills on its own; then both fills at once, each
+      // past its checks before either claims.
+      const a = await component(t, "Header A", {
+        area: "header",
+        status: "draft",
+      });
+      const b = await component(t, "Header B", {
+        area: "header",
+        status: "draft",
+      });
+      const deps = {
+        nextly: t.nextly,
+        slugs: SLUGS,
+        components: COMPONENTS_SLUG,
+        componentField: "content",
+        marks: marks(),
+        starter: starterRecordStore(db(), dialectOf()),
+      };
+      const filled = await Promise.all([
+        fillDefaultOnFirstPublish(deps, { id: a, area: "header", by: null }),
+        fillDefaultOnFirstPublish(deps, { id: b, area: "header", by: null }),
+      ]);
+      expect(filled.filter(Boolean)).toHaveLength(1);
+      const winner = filled[0] ? a : b;
+      expect(areasOf(await main(t))).toEqual({
+        header: winner,
+        footer: record.footer.id,
+      });
+      expect((await marks().read()).header?.component).toBe(winner);
     });
 
     it("keeps both when a first header and a first footer fill Main at once", async () => {

@@ -45,7 +45,13 @@ interface ComponentWriteContext {
   data?: unknown;
   originalData?: unknown;
   user?: { id?: unknown } | null;
+  req?: { nextly?: unknown };
   afterCommit?: (effect: () => unknown) => Promise<void>;
+}
+
+/** The Direct API a write's request carried, when it carried one. */
+export interface CarriedApi {
+  readonly nextly?: DefaultLayoutDirectApi;
 }
 
 /** What the hook is wired with. */
@@ -53,8 +59,11 @@ export interface FirstFillHookArgs {
   readonly ctx: HookRegistry;
   /** The RESOLVED components collection. */
   readonly components: string;
-  /** What a fill needs, resolved when it runs. */
-  readonly deps: () => Promise<FirstFillDeps>;
+  /**
+   * What a fill needs, resolved when it runs, over the Direct API the write's
+   * own request carries when it carries one.
+   */
+  readonly deps: (carried: CarriedApi) => Promise<FirstFillDeps>;
   readonly warn: (message: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -98,17 +107,23 @@ async function onWrite(
 ): Promise<void> {
   const published = firstPublishedAs(context);
   if (published === null) return;
-  const fill = () => runFill(args, published);
+  const nextly = context.req?.nextly;
+  const carried: CarriedApi =
+    typeof nextly === "object" && nextly !== null
+      ? { nextly: nextly as DefaultLayoutDirectApi }
+      : {};
+  const fill = () => runFill(args, published, carried);
   await (context.afterCommit ? context.afterCommit(fill) : fill());
 }
 
 /** The fill, logged rather than thrown when it fails. */
 async function runFill(
   args: FirstFillHookArgs,
-  published: PublishedAs
+  published: PublishedAs,
+  carried: CarriedApi
 ): Promise<void> {
   try {
-    if (await fillDefaultOnFirstPublish(await args.deps(), published)) {
+    if (await fillDefaultOnFirstPublish(await args.deps(carried), published)) {
       args.warn(
         `[page-builder] the first published ${published.area} now fills the default header & footer set`,
         { component: published.id, area: published.area }
