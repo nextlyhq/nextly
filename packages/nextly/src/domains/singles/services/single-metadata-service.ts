@@ -1147,9 +1147,9 @@ export class SingleMetadataService {
 
   /**
    * Whether this save carries values across its change, which the service's own statements do and
-   * the migration file does not (`pushCarriesValues`): translation turned on or off, its
-   * per-language Draft/Published turned on or off, a field joining or leaving translation, or a
-   * change reaching a relation's storage. Asked before the save writes anything.
+   * the migration file does not (`pushCarriesValues`): a Required or Unique field leaving
+   * translation, a column changing type, a field its row is filled in, or a change reaching a
+   * relation's storage. Asked before the save writes anything.
    */
   private async carriesValues(
     input: UpdateSingleSchemaInput,
@@ -1202,8 +1202,6 @@ export class SingleMetadataService {
       newFields: after,
       wasStored: input.wasLocalized,
       isStored: input.isLocalized,
-      wasStatus: input.layout?.wasPublishedPerLanguage ?? input.wasStatus,
-      status: input.layout?.isPublishedPerLanguage ?? input.hasStatus,
       renamed: companion?.rename,
       liveTable: async () =>
         (

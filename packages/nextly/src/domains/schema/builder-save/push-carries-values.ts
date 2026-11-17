@@ -5,6 +5,7 @@
  * @module domains/schema/builder-save/push-carries-values
  */
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { fieldsWithLeavingSettingsDeferred } from "../../i18n/migration/archive-preflight";
 import type { FieldRename } from "../../i18n/migration/reconcile-companion";
 import type { TableSpec } from "../pipeline/diff/types";
 import { reachesRelationStorage } from "../pipeline/recorded-shapes";
@@ -16,18 +17,16 @@ import {
 
 /**
  * Whether the save carries values across its change, which the dialog's push does and the file,
- * written from the newest snapshot, does not yet: translation turned on or off for the entity's
- * values, or its per-language Draft/Published turned on or off, each seeding or restoring
- * columns from the ones they replace; a field joining translation or leaving it, its values moved
- * between the main table and the companion (judged under `renamed`, the companion rename the save
- * makes, as the preflights judge it); a translated field renamed or removed, its companion column
- * judged against the companion as it stands; a field whose column changes type or size, whose
- * stored values the push judges before it alters the column; a field new to a Single's table that
- * its row is filled in; and a change reaching a relation's storage
- * (`reachesRelationStorage`), which the push plans from the live table.
+ * written from the newest snapshot, does not yet: a Required or Unique field leaving translation,
+ * whose setting the push applies once the default language's values are in its shared column
+ * (`fieldsWithLeavingSettingsDeferred`); a field whose column changes type or size, whose stored
+ * values the push judges before it alters the column; a field new to a Single's table that its row
+ * is filled in; and a change reaching a relation's storage (`reachesRelationStorage`), which the
+ * push plans from the live table.
  *
- * Any other save moves no value, and its file applies it, in tries over a busy table and on SQLite
- * as a migration file runs, with the companion brought in step after it.
+ * Any other save, translation turned on or off and a field joining or leaving it included, is
+ * applied by its file, in tries over a busy table and on SQLite as a migration file runs, with the
+ * companion brought in step after it.
  */
 export async function pushCarriesValues(args: {
   oldFields: readonly FieldDefinition[];
@@ -35,10 +34,7 @@ export async function pushCarriesValues(args: {
   /** Whether the values are stored per language before and after the save. */
   wasStored: boolean;
   isStored: boolean;
-  /** Per-language Draft/Published before and after the save. A field group has neither. */
-  wasStatus?: boolean;
-  status?: boolean;
-  /** The companion rename the save makes, if any. */
+  /** The companion rename the save makes, if any, under which a field leaving translation is named. */
   renamed: FieldRename | null | undefined;
   /** The entity's main table as the database holds it. */
   liveTable: () => Promise<TableSpec | undefined>;
@@ -59,6 +55,20 @@ export async function pushCarriesValues(args: {
     holdsRow: () => Promise<boolean>;
   };
 }): Promise<boolean> {
+  // A Required or Unique field leaving translation: the push adds its shared column without the
+  // setting, copies the default language's values in, then sets it. The file adds the column with
+  // the setting before any value is there, refused for every table that has rows.
+  if (
+    fieldsWithLeavingSettingsDeferred({
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+      wasLocalized: args.wasStored,
+      isLocalized: args.isStored,
+      renamed: args.renamed,
+    }) !== undefined
+  ) {
+    return true;
+  }
   // A field whose column changes type or size: the push judges every stored value against the new
   // column before it alters it, refusing one it would cut short; the file's statements have no
   // such judgement yet, and a server refuses them with its own error, or cuts the value.

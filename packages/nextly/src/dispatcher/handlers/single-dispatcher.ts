@@ -1717,8 +1717,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   newFields: fields as unknown as FieldDefinition[],
                   wasStored: layout.wasStored,
                   isStored: layout.isStored,
-                  wasStatus: layout.wasPublishedPerLanguage,
-                  status: layout.isPublishedPerLanguage,
                   renamed: companionRename,
                   liveTable: async () =>
                     (await introspectLiveSnapshot(db, dialect, [tableName]))

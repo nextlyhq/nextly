@@ -49,94 +49,96 @@ describe("pushCarriesValues", () => {
     ).toBe(false);
   });
 
-  it("keeps the push for a translated field renamed, its companion column renamed", async () => {
+  // A translation change is the file's: its companion files carry the values, and a translations
+  // table the history does not describe is refused as drift before it runs.
+  it.each([
+    [
+      "a translated field renamed",
+      {
+        oldFields: [translated("title"), shared("body")],
+        newFields: [translated("headline"), shared("body")],
+        renamed: { from: "title", to: "headline" },
+      },
+    ],
+    [
+      "a translated field removed",
+      {
+        oldFields: [translated("title"), shared("body")],
+        newFields: [shared("body")],
+      },
+    ],
+    [
+      "translation turned on",
+      {
+        oldFields: [translated("heading")],
+        newFields: [translated("heading")],
+        wasStored: false,
+      },
+    ],
+    [
+      "translation turned off",
+      {
+        oldFields: [translated("heading")],
+        newFields: [translated("heading")],
+        isStored: false,
+      },
+    ],
+    [
+      "translation turned off over a Required translated field",
+      {
+        oldFields: [translated("heading")],
+        newFields: [field("heading", { localized: true, required: true })],
+        isStored: false,
+      },
+    ],
+    [
+      "a field joining translation",
+      { oldFields: [shared("heading")], newFields: [translated("heading")] },
+    ],
+    [
+      "a field leaving translation",
+      { oldFields: [translated("title")], newFields: [shared("title")] },
+    ],
+    [
+      "a field leaving translation under its rename",
+      {
+        oldFields: [translated("title")],
+        newFields: [shared("headline")],
+        renamed: { from: "title", to: "headline" },
+      },
+    ],
+  ] as const)("runs the file for %s", async (_what, change) => {
     expect(
       await pushCarriesValues(
-        save({
-          oldFields: [translated("title"), shared("body")],
-          newFields: [translated("headline"), shared("body")],
-          wasStored: true,
-          isStored: true,
-          renamed: { from: "title", to: "headline" },
-        })
+        save({ wasStored: true, isStored: true, ...change })
       )
-    ).toBe(true);
-  });
-
-  it("keeps the push for a translated field removed, its companion column dropped", async () => {
-    const removed = save({
-      oldFields: [translated("title"), shared("body")],
-      newFields: [translated("headline"), shared("body")],
-      wasStored: true,
-      isStored: true,
-    });
-    expect(await pushCarriesValues(removed)).toBe(true);
-    // A shared field removed leaves the companion alone.
-    expect(
-      await pushCarriesValues({
-        ...removed,
-        oldFields: [translated("title"), shared("body")],
-        newFields: [translated("title")],
-      })
     ).toBe(false);
   });
 
+  // The push adds the shared column without the setting, copies the default language's values in,
+  // then sets it; the file would add it with the setting over rows that hold no value yet.
   it.each([
-    ["turned on", false, true],
-    ["turned off", true, false],
-  ])(
-    "keeps the push when translation is %s",
-    async (_what, wasStored, isStored) => {
-      expect(
-        await pushCarriesValues(
-          save({
-            oldFields: [translated("heading")],
-            newFields: [translated("heading")],
-            wasStored,
-            isStored,
-          })
-        )
-      ).toBe(true);
-    }
-  );
-
-  it("keeps the push when per-language Draft/Published changes on a translated entity", async () => {
-    expect(
-      await pushCarriesValues(
-        save({
-          wasStored: true,
-          isStored: true,
-          wasStatus: false,
-          status: true,
-        })
-      )
-    ).toBe(true);
-  });
-
-  it("keeps the push for a field joining translation", async () => {
-    expect(
-      await pushCarriesValues(
-        save({
-          oldFields: [shared("heading")],
-          newFields: [translated("heading")],
-          wasStored: true,
-          isStored: true,
-        })
-      )
-    ).toBe(true);
-  });
-
-  it.each([
-    ["under its own name", "title", undefined],
-    ["under its rename", "headline", { from: "title", to: "headline" }],
+    ["Required", "under its own name", "title", undefined],
+    [
+      "Required",
+      "under its rename",
+      "headline",
+      { from: "title", to: "headline" },
+    ],
+    ["Unique", "under its own name", "title", undefined],
   ] as const)(
-    "keeps the push for a field leaving translation %s",
-    async (_how, name, renamed) => {
+    "keeps the push for a %s field leaving translation %s",
+    async (setting, _how, name, renamed) => {
       expect(
         await pushCarriesValues(
           save({
             oldFields: [translated("title")],
-            newFields: [shared(name)],
+            newFields: [
+              field(name, {
+                localized: false,
+                [setting === "Required" ? "required" : "unique"]: true,
+              }),
+            ],
             wasStored: true,
             isStored: true,
             renamed,
