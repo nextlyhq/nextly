@@ -40,7 +40,13 @@ const seen: {
   builderShell: Record<string, unknown> | undefined;
   appender: Record<string, unknown> | undefined;
   insertPanel: Record<string, unknown> | undefined;
-} = { builderShell: undefined, appender: undefined, insertPanel: undefined };
+  picker: Record<string, unknown> | undefined;
+} = {
+  builderShell: undefined,
+  appender: undefined,
+  insertPanel: undefined,
+  picker: undefined,
+};
 
 /**
  * The editor's selection, which `select` writes and the next render reads, so
@@ -119,6 +125,11 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     InspectorPanel: nothing,
     InsertPanel: (props: Record<string, unknown>): null => {
       seen.insertPanel = props;
+      return null;
+    },
+    // The in-place picker, recording the opening it is handed.
+    InsertPicker: (props: Record<string, unknown>): null => {
+      seen.picker = props;
       return null;
     },
     RepairNotice: nothing,
@@ -308,6 +319,7 @@ beforeEach(() => {
   seen.builderShell = undefined;
   seen.appender = undefined;
   seen.insertPanel = undefined;
+  seen.picker = undefined;
   selectedId = null;
   draggingId = null;
 });
@@ -350,39 +362,37 @@ function drawAddPanel(): Record<string, unknown> | undefined {
 /** Press the "+" of the empty container `id`. */
 function pressAppender(id: string): void {
   const onAppend = seen.appender?.onAppend as
-    | ((nodeId: string) => void)
+    | ((nodeId: string, control: HTMLElement) => void)
     | undefined;
   if (onAppend === undefined) {
     throw new Error("the appender was given no onAppend");
   }
   React.act(() => {
-    onAppend(id);
+    onAppend(id, document.createElement("button"));
   });
 }
 
 describe('the empty-container appender\'s "+"', () => {
-  it("opens Add to add INSIDE its container", () => {
+  it("opens the in-place picker aimed INSIDE its container, selecting nothing", () => {
     openEditor();
 
     pressAppender("box");
 
-    expect(seen.builderShell?.openPanelRequest).toMatchObject({ panel: "add" });
-    expect(drawAddPanel()?.inside).toBe("box");
+    expect(
+      (seen.picker?.request as { target?: unknown } | null)?.target
+    ).toEqual({ kind: "place", place: { inside: "box" } });
+    // Not by way of the Add panel, and with nothing selected on the way.
+    expect(seen.builderShell?.openPanelRequest).not.toMatchObject({
+      panel: "add",
+    });
+    expect(selectedId).toBeNull();
   });
 
-  it("adds after the selection again once the selection moves, even back to the container", () => {
-    // Selecting the container is never "inside" by itself: only its "+"
-    // says so, and only until the author selects something else.
-    const { rerender } = openEditor();
+  it("leaves the Add panel's own place alone", () => {
+    openEditor();
     pressAppender("box");
 
-    selectedId = "other";
-    rerender();
     expect(drawAddPanel()).toBeDefined();
-    expect(drawAddPanel()).not.toHaveProperty("inside");
-
-    selectedId = "box";
-    rerender();
     expect(drawAddPanel()).not.toHaveProperty("inside");
   });
 
