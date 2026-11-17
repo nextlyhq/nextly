@@ -595,6 +595,34 @@ async function build(): Promise<InlineRichTextEditor> {
     });
 
   /**
+   * Replace the passage with `value`, restricted, keeping the caret where it
+   * was. As an update of its own, queued after whatever produced the change,
+   * rather than by swapping the editor's state from inside the listener that
+   * saw it: a swap there is overtaken by updates a paste is still applying,
+   * and the heading or list it brought stays on screen.
+   */
+  const replaceWith = (value: unknown): void => {
+    const caret = caretOffset();
+    const blocks = (value as { root?: { children?: unknown[] } }).root
+      ?.children;
+    editor.update(
+      () => {
+        const root = $getRoot();
+        root.clear();
+        for (const block of blocks ?? []) {
+          root.append(
+            lexical.$parseSerializedNode(
+              block as Parameters<typeof lexical.$parseSerializedNode>[0]
+            )
+          );
+        }
+      },
+      { tag: lexical.HISTORY_MERGE_TAG }
+    );
+    if (caret !== undefined) placeCaret(caret);
+  };
+
+  /**
    * Registers what makes the editor hold ONE paragraph, and returns what
    * takes it off again.
    *
@@ -647,11 +675,7 @@ async function build(): Promise<InlineRichTextEditor> {
             JSON.parse(JSON.stringify(editorState.toJSON())) as unknown
           );
           if (restricted.dropped) {
-            const caret = caretOffset();
-            editor.setEditorState(
-              editor.parseEditorState(JSON.stringify(restricted.value))
-            );
-            if (caret !== undefined) placeCaret(caret);
+            replaceWith(restricted.value);
             mode.onDropped?.();
             // The restricted state's own update reports the change.
             return;
