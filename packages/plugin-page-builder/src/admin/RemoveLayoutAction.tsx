@@ -225,7 +225,14 @@ export function useRemoveLayout({
 }: {
   readonly entryId: string | null;
   readonly published: boolean;
-  readonly leave: (action: "delete" | "unpublish") => void;
+  /**
+   * What follows a removal, with the pages a move took off the set first,
+   * by id (none where nothing was moved).
+   */
+  readonly leave: (
+    action: "delete" | "unpublish",
+    moved: readonly string[]
+  ) => void;
   /**
    * Whether the dialog closes as it leaves: where the author stays (the
    * Pages panel). On the set's own form it stays up while the page goes.
@@ -238,6 +245,8 @@ export function useRemoveLayout({
   const opening = useRef(0);
   // Set once a move removed the Layout: closing the dialog then leaves it.
   const movedAway = useRef<"delete" | "unpublish" | null>(null);
+  // The pages that move took off the Layout, by id, for what follows.
+  const movedPages = useRef<readonly string[]>([]);
   // Nothing to remove while a Layout is being created.
   if (entryId === null || entryId === "" || entryId === "create") {
     return { open: () => undefined, dialog: null };
@@ -284,7 +293,7 @@ export function useRemoveLayout({
   /** What follows a removal, closing the dialog where the author stays. */
   const finish = (action: "delete" | "unpublish"): void => {
     if (closeOnLeave) setState({ kind: "closed" });
-    leave(action);
+    leave(action, movedPages.current);
   };
   const toList = (): void => finish("delete");
 
@@ -347,6 +356,7 @@ export function useRemoveLayout({
             published={published}
             onRemoved={action => {
               movedAway.current = action;
+              movedPages.current = state.check.pages.map(page => page.id);
             }}
             onFinished={finish}
           />

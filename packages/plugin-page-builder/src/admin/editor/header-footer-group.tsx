@@ -124,8 +124,11 @@ function formHref(collection: string, id?: string): string {
  */
 export function HeaderFooterGroup({
   folds,
+  currentPageId = null,
 }: {
   readonly folds: GroupFolds;
+  /** The page being edited, by id, or null where none is saved yet. */
+  readonly currentPageId?: string | null;
 }): React.JSX.Element | null {
   const choices = usePluginRoute<LayoutChoicesResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
@@ -179,6 +182,7 @@ export function HeaderFooterGroup({
       {open ? (
         <GroupBody
           read={choices}
+          currentPageId={currentPageId}
           counts={counts.data}
           picture={picture}
           reread={afterWrite}
@@ -194,8 +198,10 @@ function GroupBody({
   counts,
   picture,
   reread,
+  currentPageId,
 }: {
   read: ReturnType<typeof usePluginRoute<LayoutChoicesResponse>>;
+  currentPageId: string | null;
   counts: LayoutPageCountsResponse | undefined;
   picture: ReturnType<typeof useSetPictures>;
   /** Reads the sets and their counts again, after a write here. */
@@ -252,6 +258,7 @@ function GroupBody({
               remove: meta.canDeleteAnyLayout === true,
             }}
             onMakeDefault={makeDefault.start}
+            currentPageId={currentPageId}
             shownTitle={renamed.get(set.id) ?? set.title}
             onRenamed={title => {
               setRenamed(current => new Map(current).set(set.id, title));
@@ -303,6 +310,7 @@ function refusalOf(error: unknown): string {
  */
 function SetRow({
   set,
+  currentPageId,
   isDefault,
   onMakeDefault,
   shownTitle,
@@ -314,6 +322,8 @@ function SetRow({
   onWritten,
 }: {
   set: LayoutChoice;
+  /** The page being edited, by id, so a removal that moved it reloads it. */
+  currentPageId: string | null;
   /** Whether this set is the site default. */
   isDefault: boolean;
   onMakeDefault: (asked: MakeDefaultAsked) => void;
@@ -339,7 +349,16 @@ function SetRow({
   const removal = useRemoveLayout({
     entryId: set.id,
     published: set.published,
-    leave: onWritten,
+    // A removal that moved the page being edited onto the site default has
+    // changed that page on the server: the editor reads it again (asking
+    // first if it holds unsaved work), so it draws the default it now uses.
+    leave: (_action, moved) => {
+      if (currentPageId !== null && moved.includes(currentPageId)) {
+        window.location.reload();
+        return;
+      }
+      onWritten();
+    },
     closeOnLeave: true,
   });
   const write = (run: () => Promise<unknown>) => {

@@ -68,13 +68,21 @@ vi.mock("../layout-writes-client", () => setWrites);
 const flows = vi.hoisted(() => ({
   makeDefault: vi.fn(),
   remove: vi.fn(),
-  removeArgs: [] as Array<{ entryId: string | null; published: boolean }>,
+  removeArgs: [] as Array<{
+    entryId: string | null;
+    published: boolean;
+    leave: (action: "delete" | "unpublish", moved: readonly string[]) => void;
+  }>,
 }));
 vi.mock("../make-default-action", () => ({
   useMakeDefaultFlow: () => ({ start: flows.makeDefault, dialog: null }),
 }));
 vi.mock("../RemoveLayoutAction", () => ({
-  useRemoveLayout: (args: { entryId: string | null; published: boolean }) => {
+  useRemoveLayout: (args: {
+    entryId: string | null;
+    published: boolean;
+    leave: (action: "delete" | "unpublish", moved: readonly string[]) => void;
+  }) => {
     flows.removeArgs.push(args);
     return { open: () => flows.remove(args.entryId), dialog: null };
   },
@@ -436,5 +444,31 @@ describe("a set's menu", () => {
       expect(queryClient.getQueryState(canvasKey)?.isInvalidated).toBe(true)
     );
     expect(queryClient.getQueryState(other)?.isInvalidated).toBe(false);
+  });
+
+  it("reads the page being edited again when a removal moved it onto the default", () => {
+    const reload = vi.fn();
+    const location = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...location, reload },
+    });
+    try {
+      render(<HeaderFooterGroup folds={folds} currentPageId="current" />);
+      const landing = flows.removeArgs.findLast(
+        args => args.entryId === "landing"
+      );
+      // Another page moved: the panel reads its sets again, no reload.
+      act(() => landing?.leave("delete", ["other"]));
+      expect(reload).not.toHaveBeenCalled();
+      // The page being edited moved: it is read again.
+      act(() => landing?.leave("delete", ["other", "current"]));
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: location,
+      });
+    }
   });
 });
