@@ -92,10 +92,14 @@ describe("which look is a block type's ★", () => {
 
 describe("a block type's ★ look on the page", () => {
   it("writes nothing while no look of the type is starred", () => {
-    // Absent pointer: today's sheet.
+    // Absent pointer: today's sheet. The same selector, once a look carries
+    // ★, is what this absence is of.
     expect(compile([primary, secondary, ghost]).css).not.toContain(
-      ":where(:not("
+      STARRED_RULE
     );
+    expect(
+      compile([primary, secondary, { ...ghost, starred: true }]).css
+    ).toContain(STARRED_RULE);
   });
 
   it("is written for the type's blocks that wear none of its looks", () => {
@@ -176,12 +180,19 @@ describe("where a ★ look's values come from, as the inspector asks", () => {
       namedClasses: [primary, secondary, { ...ghost, starred: true }],
       trace: true,
     }).trace ?? [];
-  const query = { property: "color", state: "base" as const, breakpoints: ["base"] };
+  const query = {
+    property: "color",
+    state: "base" as const,
+    breakpoints: ["base"],
+  };
 
   it("names the ★ look on a block that picked no style", () => {
     expect(
-      styleOrigin(traced(), { nodeId: "plain", blockType: "core/button", classIds: [] }, query)
-        ?.origin
+      styleOrigin(
+        traced(),
+        { nodeId: "plain", blockType: "core/button", classIds: [] },
+        query
+      )?.origin
     ).toMatchObject({ kind: "class", id: ghost.id });
   });
 
@@ -210,5 +221,18 @@ describe("a ★ look's value problems", () => {
       { ...ghost, starred: true, styles: values(wrong) },
     ]);
     expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it("leave the page's unusable token prefix said once, by the look's own rule", () => {
+    // Said once per compile: the ★ pass, written first and silently, must not
+    // be the one that says it.
+    const { warnings } = compilePageCss(twoButtons, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [primary, secondary, { ...ghost, starred: true }],
+      tokenPrefix: "not a prefix",
+    });
+    expect(
+      warnings.filter(issue => issue.message.includes("custom-property prefix"))
+    ).toHaveLength(1);
   });
 });
