@@ -33,9 +33,12 @@ A site could no longer save an edit to a built-in block style, or take
 back in an export of its own design: the save said the built-in style
 "can't be renamed" though nothing renamed it.
 
-A stored override of a built-in block style keeps only what the site
-changed. Its name, slug, block type and own-style mark come from the code
-when the two are merged, so an override that leaves them out renames
-nothing. The check now compares only the fields an override states. One
-that states a different name, slug, block type or own-style mark is still
-refused, and ★ and hidden, the author's own marks, are never compared.
+A stored override of a built-in block style may now leave out the style's
+name. The name only labels the style, and the merge gives it the code's.
+The slug, the block type and the own-style mark decide what the entry is,
+so they are still stated as the code states them. A different name, slug,
+block type or own-style mark is still refused.
+
+The ★ and hidden marks on an override are judged as the override merges,
+so ★ can't land on a block's own style. They were never compared with the
+code's.
