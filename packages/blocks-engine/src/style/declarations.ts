@@ -199,6 +199,12 @@ export const MAX_TOKEN_NAME_SEGMENTS = 32;
 export function safeTokenPrefix(prefix: unknown): {
   prefix: string;
   warning?: string;
+  /**
+   * The reserved prefix a refused one starts with, so a reader that words the
+   * refusal for a person can tell which, without a second copy of the list.
+   * Absent for a prefix refused for its shape, and for one accepted.
+   */
+  reserved?: (typeof RESERVED_TOKEN_PREFIXES)[number];
 } {
   if (prefix === undefined) return { prefix: DEFAULT_TOKEN_PREFIX };
   // TYPE before length before pattern, and the parameter is `unknown` because
@@ -228,6 +234,7 @@ export function safeTokenPrefix(prefix: unknown): {
     return {
       prefix: DEFAULT_TOKEN_PREFIX,
       warning: `"${describeValue(prefix)}" starts with "${reserved}", which is reserved, so design tokens were written under "${DEFAULT_TOKEN_PREFIX}" instead. Tokens under that prefix would change the ${reserved === "--nx-" ? "admin interface" : "Tailwind internals"} as well as this site.`,
+      reserved,
     };
   }
   return { prefix };
