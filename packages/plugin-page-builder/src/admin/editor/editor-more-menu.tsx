@@ -32,10 +32,10 @@ import {
 import { MoreHorizontal } from "lucide-react";
 
 /** The menu button's name, as the entry page's own ⋯ is named. */
-export const MORE_ACTIONS = "More actions";
+const MORE_ACTIONS = "More actions";
 
 /** The way to the document's form. */
-export const OPEN_AS_FORM = "Open as form";
+const OPEN_AS_FORM = "Open as form";
 
 export function EditorMoreMenu({
   onOpenAsForm,
