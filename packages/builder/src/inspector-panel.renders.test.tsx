@@ -487,7 +487,7 @@ describe("what Advanced writes as it goes away", () => {
     openTab("Advanced");
     // An id another block holds, refused and kept in the field with its
     // reason, so what the panel holds stays apart from what is stored.
-    const id = screen.getByLabelText("CSS id");
+    const id = screen.getByLabelText("Anchor (ID)");
     fireEvent.change(id, { target: { value: "hero" } });
     fireEvent.blur(id);
     const value = screen.getByLabelText("Value of attribute 1");
@@ -509,7 +509,7 @@ describe("what Advanced writes as it goes away", () => {
     render(<Host page={ATTRIBUTED} />);
     act(() => editor().select("first"));
     openTab("Advanced");
-    const id = screen.getByLabelText("CSS id");
+    const id = screen.getByLabelText("Anchor (ID)");
     act(() => (id as HTMLInputElement).focus());
     fireEvent.change(id, { target: { value: "intro" } });
     leaveForStyle();
@@ -520,9 +520,9 @@ describe("what Advanced writes as it goes away", () => {
     });
     expect(editor().document.nodes[0]?.cssId).toBeUndefined();
     openTab("Advanced");
-    expect((screen.getByLabelText("CSS id") as HTMLInputElement).value).toBe(
-      ""
-    );
+    expect(
+      (screen.getByLabelText("Anchor (ID)") as HTMLInputElement).value
+    ).toBe("");
   });
 
   it("still writes a draft typed while it shows, when another block is selected straight away", () => {
