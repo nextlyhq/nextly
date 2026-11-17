@@ -228,7 +228,13 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
       type: "text",
       inline: true,
     },
-    citeUrl: { label: "Source URL", role: "content", type: "url" },
+    // Where the quote comes from, drawn with its title in the Source section.
+    citeUrl: {
+      label: "Source URL",
+      section: "Source",
+      role: "content",
+      type: "url",
+    },
   },
   defaultProps: { text: "" },
   example: {

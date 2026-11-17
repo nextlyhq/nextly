@@ -724,8 +724,9 @@ const IMAGE_PARTS = {
 const WHEN_CLICKED_SECTION = "When clicked";
 
 /**
- * The shared link props, each placed in the When clicked section, where the
- * editor draws them under the choice that uses them.
+ * The shared link props, placed in the When clicked section, where the
+ * editor draws them under the choice that uses them; all but `rel`, which is
+ * in Advanced › HTML.
  */
 function whenClickedLinkProps(): {
   readonly [Name in keyof typeof LINK_PROPS]: (typeof LINK_PROPS)[Name] & {
@@ -740,7 +741,10 @@ function whenClickedLinkProps(): {
     },
     entryId: { ...LINK_PROPS.entryId, section: WHEN_CLICKED_SECTION },
     target: { ...LINK_PROPS.target, section: WHEN_CLICKED_SECTION },
-    rel: { ...LINK_PROPS.rel, section: WHEN_CLICKED_SECTION },
+    // How the page relates to where it links is an HTML detail: drawn in
+    // Advanced › HTML with the block's other HTML settings, not with the
+    // click's choice.
+    rel: { ...LINK_PROPS.rel, section: "HTML" },
   };
 }
 

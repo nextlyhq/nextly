@@ -106,7 +106,7 @@ const RICH_TEXT = {
 /** A linked Box or Card opening its link in a new tab. */
 const NEW_TAB: Edit = {
   kind: "check",
-  label: "Open in new tab",
+  label: "Open in a new tab",
   prop: "target",
   stored: "_blank",
   checked: true,
@@ -293,7 +293,7 @@ const CASES: readonly Case[] = [
     },
     edit: {
       kind: "type",
-      label: "Attribution",
+      label: "Who said it",
       prop: "attribution",
       value: "R. Austin Freeman",
       stored: "R. Austin Freeman",
@@ -305,7 +305,7 @@ const CASES: readonly Case[] = [
     props: { src: "https://example.com/player", title: "A product demo" },
     edit: {
       kind: "type",
-      label: "Title for screen readers",
+      label: "Screen reader label",
       prop: "title",
       value: "An edited demo",
       stored: "An edited demo",
