@@ -34,7 +34,6 @@ import { basename, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import type { Command } from "commander";
 
 import { container } from "../../di/container";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
@@ -57,7 +56,7 @@ import {
 } from "../../domains/schema/busy-table/run-unit";
 import { boundedStopRecord } from "../../domains/schema/busy-table/stopped-record";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
-import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { detectLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
   removedOnPurpose,
   standingsByFilename,
@@ -268,6 +267,7 @@ import { NextlyError, describeError } from "../../errors";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
 import type { UserConfig } from "../../users/config/types";
 import { busyTableNotices } from "../busy-table-options";
+import { reportDryRun } from "../dry-run";
 import { CliError, exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import {
@@ -298,13 +298,13 @@ import {
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
+import { askYesInTerminal } from "../utils/prompt-cancelled";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
 import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
-import { commandRun } from "./command-run";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import {
   CORE_UPGRADE_LABEL,
@@ -369,6 +369,16 @@ export interface MigrateCommandOptions {
    * @default false
    */
   repairLocalization?: boolean;
+
+  /**
+   * The operator's statement that the database is backed up
+   * (`--backup-confirmed`). Read only where the database still keeps its
+   * migration records the way an earlier release did: the run moves them into
+   * `nextly_schema_events` once this is given, or once a person at a terminal
+   * says yes, and otherwise changes nothing.
+   * @default false
+   */
+  backupConfirmed?: boolean;
 
   /**
    * Consent to the data a migration file deletes: alone, every deletion of
@@ -619,11 +629,45 @@ export async function runMigrate(
       deferredExtends: configResult.deferredExtends,
     });
 
-    // Phase 0 — legacy bookkeeping gate (spec §4.6). Aborts with
-    // NEXTLY_LEGACY_BOOKKEEPING_DETECTED if the pre-consolidation tables exist.
-    await assertNoLegacyBookkeeping(
+    // Phase 0: a database that still keeps its migration records the way an
+    // earlier release did has them moved into `nextly_schema_events` first,
+    // under the schema lock and once a backup is confirmed. Before every
+    // check below, since each reads the run's history from the events table.
+    const legacy = await detectLegacyBookkeeping(
       adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
     );
+    if (legacy.hasLegacy) {
+      const { consolidateLegacyBookkeeping, previewLegacyConsolidation } =
+        await import("./legacy-bookkeeping");
+      const backupConfirmed = options.backupConfirmed === true;
+      if (options.dryRun) {
+        // The move alone: which files are pending is not known until it ran.
+        reportDryRun(
+          logger,
+          await previewLegacyConsolidation({
+            adapter: adapter as unknown as DrizzleAdapter,
+            dialect,
+            backupConfirmed,
+            interactive: canPrompt(),
+          })
+        );
+        return;
+      }
+      await consolidateLegacyBookkeeping({
+        adapter: adapter as unknown as DrizzleAdapter,
+        dialect,
+        bounds,
+        backupConfirmed,
+        interactive: canPrompt(),
+        askBackedUp: () =>
+          askYesInTerminal("Have you backed up your database? [y/N]: "),
+        // A stale lock is cleared before this lock as before the run's own.
+        beforeLock: () => maybeForceUnlock(options, db, dialect),
+        lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+        log: message => logger.info(message),
+        warn: message => logger.warn(message),
+      });
+    }
 
     // What the declared schema names, with the ledger's old Builder marks:
     // the one value every reader of the folder below reads it through.
@@ -5048,22 +5092,5 @@ export { splitSqlStatements };
 // F11: dropped local generateUUID() in favor of node:crypto's randomUUID,
 // which is what the rest of the codebase uses (matches schema/migration-journal
 // pattern from F8 PR 5). Avoids re-implementing UUID v4 generation.
-
-/**
- * The action of `nextly migrate`, loaded when it runs.
- */
-export async function migrateAction(
-  cmdOptions: MigrateCommandOptions,
-  cmd: Command
-): Promise<void> {
-  const { context, options } = commandRun(cmdOptions, cmd);
-  const resolvedOptions: ResolvedMigrateOptions = options;
-
-  try {
-    await runMigrate(resolvedOptions, context);
-  } catch (error) {
-    exitWithError(context.logger, error);
-  }
-}
 
 export { registerMigrateCommand } from "./migrate.command";

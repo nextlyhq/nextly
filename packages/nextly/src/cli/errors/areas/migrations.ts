@@ -896,7 +896,9 @@ export const MIGRATION_CODES = defineCodes({
           return {
             what,
             why: "They hold the history an earlier release recorded, which this release keeps in `nextly_schema_events`.",
-            next: next || "Run `pnpm nextly upgrade` once to consolidate them.",
+            next:
+              next ||
+              "Back up the database, then run `nextly migrate --backup-confirmed` once to move them.",
           };
         },
       },

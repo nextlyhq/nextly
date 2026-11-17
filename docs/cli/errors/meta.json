@@ -78,6 +78,8 @@
     "migration-missing",
     "migration-name-required",
     "migration-not-proven",
+    "migrate-backup-declined",
+    "migrate-backup-not-confirmed",
     "migration-sql-uncheckable",
     "migration-tampered",
     "missing-migration",

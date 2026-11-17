@@ -1,5 +1,6 @@
 /**
- * Cases for `nextly upgrade` and its steps.
+ * Cases for `nextly upgrade` and its steps, and for the move of an earlier
+ * release's migration records that `nextly migrate` makes.
  *
  * @module cli/__tests__/error-cases/upgrade
  */
@@ -24,25 +25,43 @@ export const UPGRADE_CASES = {
         "`--confirm-backed-up` (CI/non-TTY) after backing up your database.",
       logContext: { reason: "backup-not-confirmed" },
     }),
-  // As `ledgerUnreadable` in `cli/commands/upgrade-steps/schema-events.ts` throws it.
+  // As `backupNotConfirmed` in `cli/commands/legacy-bookkeeping.ts` throws it with no terminal to ask.
+  MIGRATE_BACKUP_NOT_CONFIRMED: () =>
+    new NextlyError({
+      code: "NEXTLY_UPGRADE_IN_PROGRESS",
+      publicMessage:
+        "This database keeps its migration records the way an earlier Nextly release did, and `nextly migrate` moves them only once a backup is confirmed. " +
+        "Back up the database, then run `nextly migrate --backup-confirmed`.",
+      logContext: { reason: "migrate-backup-not-confirmed" },
+    }),
+  // As `backupDeclined` in the same module throws it for a "no" at the prompt.
+  MIGRATE_BACKUP_DECLINED: () =>
+    new NextlyError({
+      code: "NEXTLY_UPGRADE_IN_PROGRESS",
+      publicMessage:
+        "The migration records of an earlier Nextly release were not moved: the backup question was answered no. " +
+        "Back up the database, then run `nextly migrate` again and answer yes, or pass `--backup-confirmed`.",
+      logContext: { reason: "migrate-backup-declined" },
+    }),
+  // As `ledgerUnreadable` in `cli/commands/legacy-bookkeeping.ts` throws it.
   UPGRADE_LEDGER_UNREADABLE: () =>
     new NextlyError({
       code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
       publicMessage:
-        'The table "nextly_migrations" holds records `nextly upgrade` cannot read: the record of 0001_init.sql has the status "rolled_back". ' +
-        "Rename the table if Nextly did not create it, then run `nextly upgrade` again.",
+        'The table "nextly_migrations" holds records `nextly migrate` cannot read: the record of 0001_init.sql has the status "rolled_back". ' +
+        "Rename the table if Nextly did not create it, then run `nextly migrate` again.",
       logContext: {
         reason: "legacy-ledger-unreadable",
         table: "nextly_migrations",
       },
     }),
-  // As `pending` in `cli/commands/upgrade-steps/schema-events.ts` throws it.
+  // As `planMove` in `cli/commands/legacy-bookkeeping.ts` throws it.
   UPGRADE_EVENTS_TABLE_TAKEN: () =>
     new NextlyError({
       code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
       publicMessage:
         'A table named "nextly_schema_events" already exists with an unexpected ' +
-        "shape. Rename it, or re-run with `--target-table-name <name>`.",
+        "shape. Rename it, then run `nextly migrate` again.",
       logContext: { table: "nextly_schema_events" },
     }),
 } satisfies ErrorCases;

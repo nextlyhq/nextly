@@ -1,35 +1,37 @@
 /**
- * Upgrade step: move the migration records into `nextly_schema_events`
- * (spec §4.10).
+ * `nextly migrate` on a database an earlier release kept its migration
+ * records in: the records are moved into `nextly_schema_events` before the
+ * run reads its history, since every check of that history reads the events
+ * table.
  *
- * Backfills legacy `nextly_migrations` + `nextly_migration_journal` rows into
+ * The run confirms a backup first (`--backup-confirmed`, or a yes at a
+ * terminal), then holds the schema lock for the whole move. Without the
+ * confirmation it changes nothing and names the flag.
+ *
+ * The move backfills legacy `nextly_migrations` + `nextly_migration_journal` rows into
  * the `nextly_schema_events` table, creating it when absent, records one
  * audit row for the core schema that already exists, and drops the legacy
- * tables. A database with no legacy table and an events table of the
- * expected shape has nothing to move.
+ * tables.
  *
  * `nextly_migrations` is read in whichever shape an earlier release kept it
  * (`legacyLedgerShape`), and every row is read before anything is written, so
- * a row the step cannot move stops the upgrade with the database unchanged.
+ * a row the move cannot read stops the run with the database unchanged.
  *
  * Resumable rather than one transaction: MySQL commits a `DROP TABLE` on its
- * own, so a transaction around the step would promise on one dialect what it
+ * own, so a transaction around the move would promise on one dialect what it
  * cannot keep. Instead every row is written before the legacy tables are
  * dropped, and a record already in the events table is not written again. A
  * run stopped anywhere keeps the legacy tables, and the next run finishes the
  * move without writing anything twice.
  *
- * @module cli/commands/upgrade-steps/schema-events
+ * @module cli/commands/legacy-bookkeeping
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
-import {
-  busyTableBounds,
-  type BusyTableBounds,
-} from "../../../domains/schema/busy-table/bounds";
-import { runStatementsInTries } from "../../../domains/schema/busy-table/run-on-session";
+import type { BusyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import {
   legacyLedgerShape,
   mapJournalRow,
@@ -38,18 +40,27 @@ import {
   synthesizedCoreApplyEvent,
   type BackfillEvent,
   type LegacyMigrationsRow,
-} from "../../../domains/schema/events/backfill";
-import { detectLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
-import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
-import { quoteIdent } from "../../../domains/schema/pipeline/sql-templates/identifier-quoting";
-import { NextlyError } from "../../../errors";
-import type {
-  UpgradeAdapter,
-  UpgradeDialect,
-  UpgradeStep,
-  UpgradeStepContext,
-} from "../upgrade-step";
+} from "../../domains/schema/events/backfill";
+import { detectLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
+import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
+import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { withMigrateLock } from "../../domains/schema/pipeline/locks";
+import { quoteIdent } from "../../domains/schema/pipeline/sql-templates/identifier-quoting";
+import { NextlyError } from "../../errors";
+import type { DryRunPlan } from "../dry-run";
+
+import type { UpgradeAdapter, UpgradeDialect } from "./upgrade-step";
+
+/** What the move is handed: the database, the run's busy-table bounds and its log. */
+export interface LegacyBookkeepingContext {
+  adapter: UpgradeAdapter;
+  db: unknown;
+  dialect: UpgradeDialect;
+  /** The bounds each schema statement waits for a busy table within, read before anything changes. */
+  bounds: BusyTableBounds;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
 
 const EVENTS_TABLE = "nextly_schema_events";
 
@@ -127,8 +138,8 @@ function toInsertValues(event: BackfillEvent): Record<string, unknown> {
   return out;
 }
 
-/** What a busy-table report and the schema lock's mark call this step. */
-const UPGRADE_CHANGE = "nextly upgrade";
+/** What a busy-table report and the schema lock's claim call the move. */
+const MIGRATE_COMMAND = "nextly migrate";
 
 /**
  * The adapter as the command hands it over, a whole `DrizzleAdapter` whose sessions the step's
@@ -143,15 +154,14 @@ function sessionAdapterOf(adapter: UpgradeAdapter): DrizzleAdapter | undefined {
 }
 
 /**
- * Runs the step's schema statements in order and returns what a report calls each one that ran.
+ * Runs the move's schema statements in order and returns what a report calls each one that ran.
  * On the command's adapter each statement waits for a busy table in its own tries, bounded by
- * `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice through the step's warning
- * (`runStatementsInTries`); one that stays busy stops the upgrade with `NEXTLY_TABLE_BUSY`, naming
+ * the run's bounds (`--lock-timeout`, `--lock-timeout-total`), each try's notice through its warning
+ * (`runStatementsInTries`); one that stays busy stops the run with `NEXTLY_TABLE_BUSY`, naming
  * the statements before it, which stay.
  */
 async function runSchemaStatements(
-  context: UpgradeStepContext,
-  bounds: BusyTableBounds,
+  context: LegacyBookkeepingContext,
   statements: readonly string[],
   name: (index: number) => string,
   appliedBefore: readonly string[]
@@ -161,19 +171,16 @@ async function runSchemaStatements(
     for (const statement of statements) {
       await execRaw(context.db, context.dialect, statement);
     }
-    return statements.map((_, index) => `${UPGRADE_CHANGE}: ${name(index)}`);
+    return statements.map((_, index) => `${MIGRATE_COMMAND}: ${name(index)}`);
   }
   return runStatementsInTries(adapter, statements, {
-    change: UPGRADE_CHANGE,
-    bounds,
+    change: MIGRATE_COMMAND,
+    bounds: context.bounds,
     notify: context.warn,
     appliedBefore,
     name,
   });
 }
-
-const eventsTableOf = (context: UpgradeStepContext) =>
-  context.options.targetTableName ?? EVENTS_TABLE;
 
 /**
  * The column names of `table` in the live database, lowercased. On
@@ -198,7 +205,7 @@ async function columnsOf(
   );
 }
 
-/** What the step moves out of `nextly_migrations`, read whole before anything is written. */
+/** What the run moves out of `nextly_migrations`, read whole before anything is written. */
 interface LegacyLedgerPlan {
   moves: LegacyMigrationsRow[];
   skips: { filename: string; status: string }[];
@@ -207,7 +214,7 @@ interface LegacyLedgerPlan {
 /**
  * Every row of `nextly_migrations`, read through the shape the table has.
  * A table of no known shape that holds rows, or a row whose meaning is not
- * known, stops the upgrade here, before anything is written: guessed into
+ * known, stops the run here, before anything is written: guessed into
  * the ledger, it would change what `nextly migrate` believes has run. An
  * empty table of any shape has nothing to move and is only dropped.
  */
@@ -238,13 +245,13 @@ async function readLegacyLedger(
   return plan;
 }
 
-/** The refusal of a `nextly_migrations` table the step cannot move. */
+/** The refusal of a `nextly_migrations` table whose records cannot be read. */
 function ledgerUnreadable(why: string): NextlyError {
   return new NextlyError({
     code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
     publicMessage:
-      `The table "nextly_migrations" holds records \`nextly upgrade\` cannot read: ${why}. ` +
-      "Rename the table if Nextly did not create it, then run `nextly upgrade` again.",
+      `The table "nextly_migrations" holds records \`nextly migrate\` cannot read: ${why}. ` +
+      "Rename the table if Nextly did not create it, then run `nextly migrate` again.",
     logContext: {
       reason: "legacy-ledger-unreadable",
       table: "nextly_migrations",
@@ -252,50 +259,53 @@ function ledgerUnreadable(why: string): NextlyError {
   });
 }
 
+/** One legacy table the run would move and drop, with the records it holds now. */
+interface LegacyTablePlan {
+  table: string;
+  rows: number;
+}
+
 /**
- * How many rows the step would write: one per legacy record, plus the core
- * schema's audit row. 0 once moved. A table squatting the events table's
- * name stops the upgrade here, before anything is written.
+ * What the move would do, read without writing: each legacy table with the
+ * number of records it holds. A table of another shape under the events
+ * table's name, or a `nextly_migrations` record that cannot be read, stops
+ * the run here, a dry run's too, before the backup question and before
+ * anything is written.
  */
-async function pending(context: UpgradeStepContext): Promise<number> {
+async function planMove(
+  context: Pick<LegacyBookkeepingContext, "adapter" | "db" | "dialect">
+): Promise<LegacyTablePlan[]> {
   const { adapter, db, dialect } = context;
-  const eventsTable = eventsTableOf(context);
   const legacy = await detectLegacyBookkeeping(adapter);
-  const eventsExists = await adapter.tableExists(eventsTable);
-  const eventsShapeOk = eventsExists
-    ? await hasExpectedShape(db, dialect, eventsTable)
-    : false;
 
-  // Checked before the collision: a clean database with an events table has
-  // nothing to move.
-  if (!legacy.hasLegacy && eventsExists && eventsShapeOk) return 0;
-
-  if (eventsExists && !eventsShapeOk) {
+  if (
+    (await adapter.tableExists(EVENTS_TABLE)) &&
+    !(await hasExpectedShape(db, dialect, EVENTS_TABLE))
+  ) {
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
       publicMessage:
-        `A table named "${eventsTable}" already exists with an unexpected ` +
-        "shape. Rename it, or re-run with `--target-table-name <name>`.",
-      logContext: { table: eventsTable },
+        `A table named "${EVENTS_TABLE}" already exists with an unexpected ` +
+        "shape. Rename it, then run `nextly migrate` again.",
+      logContext: { table: EVENTS_TABLE },
     });
   }
 
-  // Read whole first, so a table the run could not move is refused here, by a
-  // dry run as by a real one, before the backup question and before any write.
+  // Read whole first, so a table the run could not move is refused here.
   if (legacy.tables.includes("nextly_migrations")) {
     await readLegacyLedger(db, dialect);
   }
 
-  let rows = 1;
+  const plan: LegacyTablePlan[] = [];
   for (const table of legacy.tables) {
     const [count] = await queryRaw(
       db,
       dialect,
-      `SELECT COUNT(*) AS n FROM ${table}`
+      `SELECT COUNT(*) AS n FROM ${quoteIdent(table, dialect)}`
     );
-    rows += Number(count?.n ?? 0);
+    plan.push({ table, rows: Number(count?.n ?? 0) });
   }
-  return rows;
+  return plan;
 }
 
 /** Whether `event` is already in the events table: written by a run that stopped before its drop. */
@@ -318,7 +328,7 @@ async function alreadyMoved(
  */
 async function backfillMigrations(
   repo: SchemaEventsRepository,
-  context: UpgradeStepContext
+  context: LegacyBookkeepingContext
 ): Promise<number> {
   const { moves, skips } = await readLegacyLedger(context.db, context.dialect);
   for (const skip of skips) {
@@ -342,7 +352,7 @@ async function backfillMigrations(
  */
 async function backfillJournal(
   repo: SchemaEventsRepository,
-  context: UpgradeStepContext
+  context: LegacyBookkeepingContext
 ): Promise<number> {
   const rows = await queryRaw(
     context.db,
@@ -373,22 +383,18 @@ async function backfillJournal(
 }
 
 /** Create the events table, backfill it and drop the legacy tables. */
-async function run(context: UpgradeStepContext): Promise<number> {
-  // Read before anything else, so a bound outside its range is refused with the database as it
-  // was: the backfill below writes rows that a run stopped after it would write again.
-  const bounds = busyTableBounds({ env: process.env });
+async function run(context: LegacyBookkeepingContext): Promise<number> {
   const { adapter, db, dialect, log } = context;
-  const eventsTable = eventsTableOf(context);
+  const eventsTable = EVENTS_TABLE;
   const legacy = await detectLegacyBookkeeping(adapter);
 
-  // What this step applied, as a busy-table report names it.
+  // What the move applied, as a busy-table report names it.
   const applied: string[] = [];
   if (!(await adapter.tableExists(eventsTable))) {
     const ddl = getSchemaEventsDdl(dialect);
     applied.push(
       ...(await runSchemaStatements(
         context,
-        bounds,
         ddl,
         index =>
           `the creation of ${eventsTable}, statement ${String(index + 1)} of ${String(ddl.length)}`,
@@ -428,7 +434,6 @@ async function run(context: UpgradeStepContext): Promise<number> {
     applied.push(
       ...(await runSchemaStatements(
         context,
-        bounds,
         [`DROP TABLE IF EXISTS ${quoteIdent(table, dialect)}`],
         () => `the drop of table ${JSON.stringify(table)}`,
         applied
@@ -439,8 +444,163 @@ async function run(context: UpgradeStepContext): Promise<number> {
   return written;
 }
 
-export const schemaEventsStep: UpgradeStep = {
-  title: "move the migration records into nextly_schema_events",
-  pending,
-  run,
-};
+/** What `consolidateLegacyBookkeeping` is handed by `nextly migrate`. */
+export interface ConsolidateLegacyArgs {
+  /** The run's adapter, whose sessions the schema statements and the lock use. */
+  adapter: DrizzleAdapter;
+  dialect: UpgradeDialect;
+  /** The run's busy-table bounds, checked before anything was read. */
+  bounds: BusyTableBounds;
+  /** Whether the operator stated a backup exists (`--backup-confirmed`). */
+  backupConfirmed: boolean;
+  /** Whether a person is at a terminal to be asked. */
+  interactive: boolean;
+  /** Asks that person whether the database is backed up; only called when `interactive`. */
+  askBackedUp: () => Promise<boolean>;
+  /** Runs before the lock is taken, once the backup is confirmed: `--force-unlock`. */
+  beforeLock?: () => Promise<void>;
+  /** The schema lock's lease, in seconds, as the configuration sets it. */
+  lockTtlSeconds?: number;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/** The move's context over the run's adapter. */
+function contextOf(
+  args: Pick<
+    ConsolidateLegacyArgs,
+    "adapter" | "dialect" | "bounds" | "log" | "warn"
+  >
+): LegacyBookkeepingContext {
+  return {
+    adapter: args.adapter as unknown as UpgradeAdapter,
+    db: args.adapter.getDrizzle(),
+    dialect: args.dialect,
+    bounds: args.bounds,
+    log: args.log,
+    warn: args.warn,
+  };
+}
+
+/** The refusal of a move whose backup nobody confirmed, and nobody can be asked about. */
+function backupNotConfirmed(): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_UPGRADE_IN_PROGRESS",
+    publicMessage:
+      "This database keeps its migration records the way an earlier Nextly release did, and `nextly migrate` moves them only once a backup is confirmed. " +
+      "Back up the database, then run `nextly migrate --backup-confirmed`.",
+    logContext: { reason: "migrate-backup-not-confirmed" },
+  });
+}
+
+/** The refusal of a move whose backup question was answered no. */
+function backupDeclined(): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_UPGRADE_IN_PROGRESS",
+    publicMessage:
+      "The migration records of an earlier Nextly release were not moved: the backup question was answered no. " +
+      "Back up the database, then run `nextly migrate` again and answer yes, or pass `--backup-confirmed`.",
+    logContext: { reason: "migrate-backup-declined" },
+  });
+}
+
+/**
+ * Moves the migration records an earlier release kept into
+ * `nextly_schema_events`, for a `nextly migrate` run that found a legacy
+ * table. Returns once the legacy tables are gone, so the run reads its
+ * history where every check expects it.
+ *
+ * In order: the tables are read whole, so one the run cannot move is refused
+ * with nothing asked; the backup is confirmed, by the flag or by a yes at a
+ * terminal, before the lock, so no other run waits on a person; then the
+ * schema lock is held from the first statement to the last drop. Without the
+ * confirmation nothing is written, the lock's own table included.
+ */
+export async function consolidateLegacyBookkeeping(
+  args: ConsolidateLegacyArgs
+): Promise<void> {
+  const context = contextOf(args);
+  await planMove(context);
+
+  if (!args.backupConfirmed) {
+    if (!args.interactive) throw backupNotConfirmed();
+    if (!(await args.askBackedUp())) throw backupDeclined();
+  }
+
+  await args.beforeLock?.();
+  await withMigrateLock(
+    args.adapter,
+    args.dialect,
+    async () => {
+      // Read again under the lock: a run this one waited behind may have
+      // moved the records already, and then there is nothing left to do.
+      if (!(await detectLegacyBookkeeping(context.adapter)).hasLegacy) return;
+      const written = await run(context);
+      args.log(
+        `Moved the migration records of an earlier release into ${EVENTS_TABLE}: ${String(written)} written.`
+      );
+    },
+    {
+      command: MIGRATE_COMMAND,
+      mode: "wait",
+      ttlSeconds: args.lockTtlSeconds,
+      releaseOnInterrupt: true,
+      logger: { warn: args.warn, info: args.log },
+    }
+  );
+}
+
+/**
+ * `nextly migrate --dry-run` on a database with a legacy table: the move as
+ * the real run would make it, read-only, with no backup question and no lock.
+ * The run's pending migrations are not listed: which files have applied is
+ * recorded in the legacy tables until the move, and every check of that
+ * history reads the events table.
+ */
+export async function previewLegacyConsolidation(args: {
+  adapter: DrizzleAdapter;
+  dialect: UpgradeDialect;
+  backupConfirmed: boolean;
+  /** Whether a real run could ask at a terminal. */
+  interactive: boolean;
+}): Promise<DryRunPlan> {
+  let tables: LegacyTablePlan[];
+  try {
+    tables = await planMove({
+      adapter: args.adapter as unknown as UpgradeAdapter,
+      db: args.adapter.getDrizzle(),
+      dialect: args.dialect,
+    });
+  } catch (error) {
+    // The real run stops here, so the dry run reports it as that run's refusal.
+    if (!NextlyError.isCode(error, "NEXTLY_UPGRADE_TABLE_NAME_COLLISION")) {
+      throw error;
+    }
+    return { changes: [], refusals: [error.publicMessage] };
+  }
+  const notes: string[] = [];
+  let refusal: string | undefined;
+  if (!args.backupConfirmed) {
+    if (args.interactive) {
+      notes.push(
+        "A real run first asks whether the database is backed up; pass --backup-confirmed to confirm it without being asked."
+      );
+    } else {
+      refusal = backupNotConfirmed().publicMessage;
+    }
+  }
+  notes.push(
+    "The pending migrations are listed once the records are moved: run `nextly migrate --dry-run` again after a real run."
+  );
+  return {
+    changes: tables.flatMap(({ table, rows }) => [
+      {
+        action: "move",
+        target: `${String(rows)} ${rows === 1 ? "record" : "records"} from ${table} into ${EVENTS_TABLE}`,
+      },
+      { action: "remove", target: `table ${table}` },
+    ]),
+    ...(refusal !== undefined ? { refusals: [refusal] } : {}),
+    notes,
+  };
+}

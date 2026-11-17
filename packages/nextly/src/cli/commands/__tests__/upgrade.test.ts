@@ -5,11 +5,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import { busyTableBounds } from "../../../domains/schema/busy-table/bounds";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import {
+  consolidateLegacyBookkeeping,
+  type ConsolidateLegacyArgs,
+} from "../legacy-bookkeeping";
 import { runUpgrade, type UpgradeAdapter } from "../upgrade";
-import { schemaEventsStep } from "../upgrade-steps/schema-events";
 
-// The schema lock is exercised against real databases in its own suites. These drive the upgrade steps
+// The schema lock is exercised against real databases in its own suites. These drive the upgrade steps,
+// and the move of an earlier release's migration records that `nextly migrate` makes,
 // through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
 // `program` imports every command, `migrate` with its whole graph among them;
 // the command under test takes only its context factory from it, and is
@@ -36,9 +41,6 @@ vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
     fn: () => Promise<T>
   ) => ({ ran: true as const, value: await fn() }),
 }));
-
-/** The step these fixtures exercise: a fake adapter serves no content table. */
-const steps = [schemaEventsStep];
 
 /** Fake adapter over the in-memory SQLite fixture. */
 function makeAdapter(testDb: TestDb): UpgradeAdapter {
@@ -67,7 +69,7 @@ function tableExistsSync(testDb: TestDb, name: string): boolean {
     .get(name);
 }
 
-describe("nextly upgrade (sqlite)", () => {
+describe("the move of an earlier release's migration records (sqlite)", () => {
   let testDb: TestDb;
   let adapter: UpgradeAdapter;
 
@@ -87,8 +89,31 @@ describe("nextly upgrade (sqlite)", () => {
     `);
   });
 
+  /** The move as `nextly migrate` starts it, with what was asked recorded. */
+  function move(
+    over: Partial<
+      Pick<ConsolidateLegacyArgs, "backupConfirmed" | "interactive">
+    > & { answer?: boolean } = {}
+  ) {
+    const asked: string[] = [];
+    const moved = consolidateLegacyBookkeeping({
+      adapter: adapter as unknown as ConsolidateLegacyArgs["adapter"],
+      dialect: "sqlite",
+      bounds: busyTableBounds({ env: {} }),
+      backupConfirmed: over.backupConfirmed ?? false,
+      interactive: over.interactive ?? false,
+      askBackedUp: () => {
+        asked.push("backed up?");
+        return Promise.resolve(over.answer ?? false);
+      },
+      log: () => {},
+      warn: () => {},
+    });
+    return { moved, asked };
+  }
+
   it("creates the events table, backfills file_apply rows, and drops the legacy table", async () => {
-    await runUpgrade({ confirmBackedUp: true }, { adapter, steps });
+    await move({ backupConfirmed: true }).moved;
 
     expect(tableExistsSync(testDb, "nextly_schema_events")).toBe(true);
     expect(tableExistsSync(testDb, "nextly_migrations")).toBe(false);
@@ -97,27 +122,103 @@ describe("nextly upgrade (sqlite)", () => {
     expect(await repo.isFileApplied("0001.sql")).toBe(true);
   });
 
-  it("is idempotent — a second run reports already-upgraded and does not throw", async () => {
-    await runUpgrade({ confirmBackedUp: true }, { adapter, steps });
+  it("is idempotent: a second run finds nothing to move and writes nothing", async () => {
+    await move({ backupConfirmed: true }).moved;
+    const count = () =>
+      (
+        testDb.sqlite
+          .prepare("SELECT COUNT(*) AS n FROM nextly_schema_events")
+          .get() as { n: number }
+      ).n;
+    const before = count();
     await expect(
-      runUpgrade({ confirmBackedUp: true }, { adapter, steps })
+      move({ backupConfirmed: true }).moved
     ).resolves.toBeUndefined();
+    expect(count()).toBe(before);
   });
 
-  it("aborts on a foreign nextly_schema_events table (collision)", async () => {
-    testDb.sqlite.exec("DROP TABLE IF EXISTS nextly_migrations");
+  it("refuses a foreign nextly_schema_events table (collision), naming no flag and keeping the legacy table", async () => {
     testDb.sqlite.exec(
       "CREATE TABLE nextly_schema_events (totally_wrong INTEGER)"
     );
-    await expect(
-      runUpgrade({ confirmBackedUp: true }, { adapter, steps })
-    ).rejects.toMatchObject({ code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION" });
+    const refusal = await move({ backupConfirmed: true }).moved.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refusal).toMatchObject({
+      code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
+    });
+    expect((refusal as { publicMessage: string }).publicMessage).toMatch(
+      /Rename it, then run `nextly migrate` again/
+    );
+    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
   });
 
-  it("requires --confirm-backed-up in non-TTY", async () => {
-    await expect(
-      runUpgrade({ confirmBackedUp: false }, { adapter, isTTY: false, steps })
-    ).rejects.toBeTruthy();
+  it("with nobody to ask and no confirmation, changes nothing and names --backup-confirmed", async () => {
+    const { moved, asked } = move({ interactive: false });
+    await expect(moved).rejects.toMatchObject({
+      code: "NEXTLY_UPGRADE_IN_PROGRESS",
+      logContext: { reason: "migrate-backup-not-confirmed" },
+      publicMessage: expect.stringContaining("--backup-confirmed") as string,
+    });
+    expect(asked).toEqual([]);
+    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
+    expect(tableExistsSync(testDb, "nextly_schema_events")).toBe(false);
+  });
+
+  it("at a terminal it asks: a no changes nothing", async () => {
+    const { moved, asked } = move({ interactive: true, answer: false });
+    await expect(moved).rejects.toMatchObject({
+      code: "NEXTLY_UPGRADE_IN_PROGRESS",
+      logContext: { reason: "migrate-backup-declined" },
+    });
+    expect(asked).toEqual(["backed up?"]);
+    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
+    expect(tableExistsSync(testDb, "nextly_schema_events")).toBe(false);
+  });
+
+  it("at a terminal it asks: a yes moves the records", async () => {
+    const { moved, asked } = move({ interactive: true, answer: true });
+    await moved;
+    expect(asked).toEqual(["backed up?"]);
+    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(false);
+  });
+
+  it("the confirmation given, nobody is asked", async () => {
+    const { moved, asked } = move({ backupConfirmed: true, interactive: true });
+    await moved;
+    expect(asked).toEqual([]);
+  });
+
+  it("nextly upgrade refuses the database, running no step and naming nextly migrate", async () => {
+    let ran = false;
+    const refusal = await runUpgrade(
+      { confirmBackedUp: true },
+      {
+        adapter,
+        steps: [
+          {
+            title: "a step with work",
+            pending: () => Promise.resolve(1),
+            run: () => {
+              ran = true;
+              return Promise.resolve(1);
+            },
+          },
+        ],
+      }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refusal).toMatchObject({
+      code: "NEXTLY_LEGACY_BOOKKEEPING_DETECTED",
+      publicMessage: expect.stringContaining(
+        "nextly migrate --backup-confirmed"
+      ) as string,
+    });
+    expect(ran).toBe(false);
+    expect(tableExistsSync(testDb, "nextly_migrations")).toBe(true);
   });
 });
 
