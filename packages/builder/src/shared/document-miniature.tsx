@@ -1,0 +1,284 @@
+"use client";
+
+/**
+ * A small picture of a document, wherever an author chooses one: a saved
+ * section in the Add panel, a header & footer set in a menu.
+ *
+ * Drawn by the same `PageRenderer` as the canvas, at the desktop preview's
+ * width, scaled to the picture's box and inert. A picture with its own drawing
+ * path would be a second answer to "what does this look like", and the two
+ * drift where nobody looks.
+ *
+ * **Generic.** It draws the documents it is handed, top to bottom with a thin
+ * gap between them (a set's header above its footer), and knows nothing of
+ * sets, sections or templates: the host decides what to draw and with what.
+ *
+ * **It never holds anything up.** Nothing is drawn until the picture's box is
+ * on screen, so a panel or a menu opens at once and a long list draws only
+ * the rows scrolled to. A document already seen in the host's session is
+ * drawn straight away when its row comes back.
+ *
+ * **A plain icon in place of a broken picture.** With nothing to draw (an
+ * empty set, "None") it shows the empty-frame icon. When the host says the
+ * document can't be drawn, when drawing it throws, or when the renderer had
+ * to leave a placeholder for any block in it (a type no block is registered
+ * for, a component that could not be loaded), it shows the item's own type
+ * icon.
+ *
+ * **Light or dark, as the canvas is previewed.** The mode is stated on the
+ * drawn surface as the site's own theme marker, so a site's dark tokens apply
+ * exactly as they do on the canvas, and the drawing is not redone for a switch.
+ *
+ * The picture is `aria-hidden`: it is the row's picture, and the row's own
+ * name is what a screen reader reads.
+ *
+ * @module document-miniature
+ */
+import {
+  DARK_MODE_ATTRIBUTE,
+  type BlockDocument,
+  type TokenMode,
+} from "@nextlyhq/blocks-engine";
+import { PageRenderer, type PageRendererProps } from "@nextlyhq/blocks-react";
+import * as React from "react";
+
+import { BlockIconMark } from "../block-icon";
+
+import {
+  MINIATURE_RENDER_WIDTH,
+  MiniatureSurface,
+  useFirstSeen,
+  useWidthScale,
+  type MiniatureSession,
+} from "./miniature-surface";
+
+/**
+ * What a picture is drawn with: the renderer's inputs for this site, except
+ * the document, its context and the editor-only switches, which the picture
+ * decides itself.
+ */
+export type MiniatureRender = Omit<
+  PageRendererProps,
+  "document" | "context" | "nodeAttribute" | "keepAsyncOutputs" | "prepared"
+>;
+
+export interface DocumentMiniatureProps {
+  /**
+   * What to draw, top to bottom: one document, or a set's header above its
+   * footer. None draws the empty-frame icon.
+   */
+  documents: readonly BlockDocument[];
+  /** This site's rendering: its sheet, its blocks, its breakpoints. */
+  render: MiniatureRender;
+  /**
+   * The mode the canvas is previewed in, when one is picked. Absent, the
+   * document's own, as on the canvas.
+   */
+  mode?: TokenMode;
+  /** The item's type icon, shown in place of a picture that can't be drawn. */
+  icon?: string;
+  /** The host already knows the documents can't be drawn. */
+  failed?: boolean;
+  /** What the host's pictures share for as long as it edits. */
+  session: MiniatureSession;
+  /** The width to compose at before scaling. The desktop preview's by default. */
+  renderWidth?: number;
+}
+
+/** The gap between two documents drawn one above the other, in composed px. */
+const STACK_GAP = 16;
+
+/**
+ * Turns a throw while drawing into the plain icon. A picture is never worth
+ * an error the surface around it has to handle.
+ */
+class PictureBoundary extends React.Component<
+  { onFail: () => void; children: React.ReactNode },
+  { failed: boolean }
+> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch(): void {
+    this.props.onFail();
+  }
+
+  override render(): React.ReactNode {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+/** An empty frame: a dashed box, for nothing to draw. */
+function EmptyFrameIcon(): React.JSX.Element {
+  return (
+    <svg
+      className="nx-picture__empty"
+      width="24"
+      height="16"
+      viewBox="0 0 24 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="1"
+        y="1"
+        width="22"
+        height="14"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeDasharray="3 2"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The marker the renderer leaves where a block could not be drawn: a type no
+ * block is registered for, a component that could not be loaded, a block that
+ * threw. A picture with one in it is a broken picture.
+ */
+const PLACEHOLDER_SELECTOR = "[data-nx-block-placeholder]";
+
+/**
+ * The height the documents were drawn at, in composed px, kept current as
+ * what they draw settles (an image arriving moves everything below it), and
+ * whether any block in them could not be drawn, asked at the same moments.
+ */
+function useDrawnLayout(
+  scaled: React.RefObject<HTMLDivElement | null>,
+  drawn: boolean,
+  onBroken: () => void
+): number {
+  const [height, setHeight] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const element = scaled.current;
+    if (!drawn || !element) return;
+    const measure = (): void => {
+      if (element.querySelector(PLACEHOLDER_SELECTOR) !== null) onBroken();
+      setHeight(element.offsetHeight);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [scaled, drawn, onBroken]);
+  return height;
+}
+
+/** What the picture shows: nothing to draw, the icon, or the documents. */
+type PictureState = "empty" | "failed" | "drawn";
+
+function stateOf(
+  documents: readonly BlockDocument[],
+  failed: boolean
+): PictureState {
+  if (documents.length === 0) return "empty";
+  return failed ? "failed" : "drawn";
+}
+
+/** The documents, one above the other, held apart from the scale. */
+function useDrawnDocuments(
+  documents: readonly BlockDocument[],
+  render: MiniatureRender,
+  session: MiniatureSession
+): React.ReactNode {
+  /*
+   * Held apart from the measured scale and the mode, which change without the
+   * documents changing: rebuilt inline, every resize would rerun the whole
+   * render beneath it.
+   */
+  return React.useMemo(
+    () =>
+      documents.map((document, index) => (
+        <div
+          // Position is identity here: the list is the host's fixed order
+          // (a header, then a footer) and never reorders.
+          key={index}
+          style={index === 0 ? undefined : { marginTop: STACK_GAP }}
+          className="nx-picture__document"
+        >
+          <PageRenderer
+            {...render}
+            document={document}
+            context={session.context}
+            // What async blocks drew is kept between pictures and openings,
+            // as on the canvas, so an image does not blink.
+            keepAsyncOutputs
+          />
+        </div>
+      )),
+    [documents, render, session]
+  );
+}
+
+export function DocumentMiniature({
+  documents,
+  render,
+  mode,
+  icon,
+  failed = false,
+  session,
+  renderWidth = MINIATURE_RENDER_WIDTH,
+}: DocumentMiniatureProps): React.JSX.Element {
+  const frame = React.useRef<HTMLSpanElement>(null);
+  const scaled = React.useRef<HTMLDivElement>(null);
+  const [threw, setThrew] = React.useState(false);
+  const broke = React.useCallback(() => setThrew(true), []);
+  const state = stateOf(documents, failed || threw);
+  const first = documents[0];
+  const seen = useFirstSeen(
+    frame,
+    first !== undefined && session.seen.has(first)
+  );
+  React.useEffect(() => {
+    if (seen && first !== undefined) session.seen.add(first);
+  }, [seen, first, session]);
+  const drawn = seen && state === "drawn";
+  const scale = useWidthScale(frame, renderWidth);
+  const composed = useDrawnLayout(scaled, drawn, broke);
+  const pages = useDrawnDocuments(documents, render, session);
+  const boxHeight = frame.current?.clientHeight ?? 0;
+  // A document shorter than the box sits in its middle; a taller one is
+  // shown from its top.
+  const offsetTop = Math.max(0, (boxHeight - composed * scale) / 2);
+
+  return (
+    <span
+      ref={frame}
+      className="nx-picture"
+      data-state={state}
+      data-drawn={drawn ? "true" : undefined}
+      // The previewed scheme for the whole box, so the ground around a short
+      // document is the page's own and not the admin's.
+      style={mode === undefined ? undefined : { colorScheme: mode }}
+      aria-hidden="true"
+    >
+      {state === "empty" ? <EmptyFrameIcon /> : null}
+      {state === "failed" ? <BlockIconMark icon={icon} size={20} /> : null}
+      {drawn ? (
+        <PictureBoundary onFail={broke}>
+          <MiniatureSurface
+            scaledRef={scaled}
+            renderWidth={renderWidth}
+            scale={scale}
+            previewContainer={render.styleContext?.previewContainer}
+            offsetTop={offsetTop}
+            slot="picture"
+          >
+            <div
+              className="nx-picture__page"
+              {...(mode === undefined ? {} : { [DARK_MODE_ATTRIBUTE]: mode })}
+            >
+              {pages}
+            </div>
+          </MiniatureSurface>
+        </PictureBoundary>
+      ) : null}
+    </span>
+  );
+}

@@ -238,6 +238,24 @@
     var(--nx-destructive),
     white 95%
   );
+  /*
+   * A small picture of a document (a saved section, a header & footer set):
+   * its edge, the ground an icon sits on while there is no picture, and that
+   * icon. The edge is the panel mixed toward the admin's text colour far
+   * enough to hold 3:1 against the panel in both themes, so a white page drawn
+   * on a white panel still reads as a picture with a boundary. The icon takes
+   * the muted text, which holds 3:1 on the well in both. Mixed from the
+   * admin's tokens only, so the dark theme follows through them and the
+   * page's own colours are never touched. `chrome-panel-tokens.test.ts`
+   * holds both ratios in both themes.
+   */
+  --nx-builder-picture-edge: color-mix(
+    in oklch,
+    var(--nx-builder-panel) 58%,
+    var(--nx-foreground)
+  );
+  --nx-builder-picture-ground: var(--nx-builder-well);
+  --nx-builder-picture-icon: var(--nx-builder-text-muted);
   /* The editing colours, picked for the admin's theme — see below. */
   --nx-builder-select: var(--nx-builder-select-on-light);
   --nx-builder-component: var(--nx-builder-component-on-light);
