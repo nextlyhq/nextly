@@ -119,7 +119,11 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         citeUrl: "https://example.com/osiris",
       }),
     ],
-    '<div class="nx-pb-page"><figure class="nx-pb-2cjpyijwyvj nx-bt-core--quote"><blockquote class="nx-bp-core--quote--quotation" cite="https://example.com/osiris"><p>Simplicity is the soul of efficiency.</p></blockquote><figcaption class="nx-bp-core--quote--attribution">R. Austin Freeman<!-- -->, <cite>The Eye of Osiris</cite></figcaption></figure></div>',
+    // Read as version 2, its source address the shared link's: `cite` as
+    // before, and now the source's title links there and the person's name
+    // carries the mark its CSS dash is drawn on (the dash's rule is hoisted
+    // into the page's head).
+    '<style data-precedence="default" data-href="nx-quote">[data-nx-quote-by]::before{content:"\\2014\\00a0"}</style><div class="nx-pb-page"><figure class="nx-pb-2cjpyijwyvj nx-bt-core--quote"><blockquote class="nx-bp-core--quote--quotation" cite="https://example.com/osiris"><p>Simplicity is the soul of efficiency.</p></blockquote><figcaption class="nx-bp-core--quote--attribution"><span data-nx-quote-by="">R. Austin Freeman</span>, <cite><a href="https://example.com/osiris">The Eye of Osiris</a></cite></figcaption></figure></div>',
   ],
   [
     "embed",

@@ -182,7 +182,11 @@ describe("core/quote", () => {
     // The figcaption is a PART now, so it carries a class. Asserted on the
     // content and the element rather than on the exact opening tag, which is
     // what made this pin markup the block is free to change.
-    expect(out).toContain("Ada, <cite>A Book</cite></figcaption>");
+    // The person's name in its own element, which the dash is drawn before
+    // in CSS, so the dash is never part of the words.
+    expect(out).toContain(
+      '<span data-nx-quote-by="">Ada</span>, <cite>A Book</cite></figcaption>'
+    );
   });
 
   it("is a bare blockquote when there is nothing to attribute", () => {
