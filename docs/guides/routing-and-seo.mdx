@@ -436,15 +436,36 @@ export default function ContentPage(props: {
 }
 ```
 
-The blocks page helpers in `@nextlyhq/blocks-react/next` (`createBlocksPage`,
-`createSinglePage` and their public versions) provide this boundary themselves,
-so their pages are exported as they are.
+A boundary has a cost: whatever renders beneath it is sent after the rest of
+the page, in a hidden part of the HTML that React's script reveals. A visitor
+or crawler without JavaScript never sees it, and React sends even a finished
+boundary that way once it holds an eagerly loaded image or follows more than a
+few kilobytes of the page. So put a boundary only around what has to read the
+request.
+
+The blocks page helpers in `@nextlyhq/blocks-react/next` follow that rule
+themselves, so their pages are exported as they are:
+
+- `createBlocksPage` and `createSinglePage` read with access enforced, so their
+  page is rendered beneath a boundary of their own. Under Cache Components its
+  content needs JavaScript to be seen.
+- `createPublicBlocksPage`, `createPublicSinglePage` and
+  `createPublicContentPage` render their page with no boundary, so its whole
+  content is in the HTML a build or the cache sends. Export the
+  `generateStaticParams` each returns: a path it doesn't list is rendered on
+  its first request and kept. Only a miss answered by your own `notFound` (the
+  SEO plugin's `notFoundLogged`, for example, which reads the request) is
+  rendered beneath a boundary.
+- On a published page, an asynchronous block is drawn in place, and the page
+  waits for it. A `blockFallback` you pass instead streams each one in a
+  boundary of its own, shown by JavaScript.
 
 A page that isn't there (an unknown slug, or an entry that is unpublished or
 the visitor may not read) renders your not-found page with
 `<meta name="robots" content="noindex">`. Under Cache Components the static
 shell is sent before the route knows the entry is missing, so the HTTP status
-is already 200. A route that reads with access enforced, such as
+is already 200; a public blocks page with no `notFound` of yours, which
+renders with no boundary, still answers 404. A route that reads with access enforced, such as
 `createContentRoute` or `createBlocksPage`, decides on every request, so it
 answers 200 with `noindex` every time, crawlers included. Next.js answers a
 real 404 only where it can keep the finished not-found render, which needs a
