@@ -144,6 +144,26 @@ describe("a size", () => {
   });
 });
 
+describe("the CSS a size writes", () => {
+  it("shows on hover over the number and its unit menu", async () => {
+    render(<Hosted tokens={SITE} />);
+    const editor = await openEditor(/^Space 4/);
+    const size = within(editor)
+      .getByLabelText("Unit for Light")
+      .closest("[title]");
+    expect(size?.getAttribute("title")).toBe("--site-space-4: 1rem");
+  });
+
+  it("names the custom property under the site's own prefix", async () => {
+    render(<Hosted tokens={{ ...SITE, prefix: "--brand-" }} />);
+    const editor = await openEditor(/^Space 4/);
+    const size = within(editor)
+      .getByLabelText("Unit for Light")
+      .closest("[title]");
+    expect(size?.getAttribute("title")).toBe("--brand-space-4: 1rem");
+  });
+});
+
 describe("a line height", () => {
   it("is a plain number, labelled as times the text size", async () => {
     render(<Hosted tokens={SITE} />);

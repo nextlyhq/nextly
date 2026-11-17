@@ -53,6 +53,7 @@ import {
   SizeInput,
   useDraft,
   valueFieldFor,
+  variableCss,
 } from "./variable-value-controls";
 
 export interface VariableEditorProps {
@@ -326,6 +327,7 @@ function Values({
   const pair = (at: number, held: SiteToken): React.JSX.Element => (
     <ModeValues
       token={held}
+      cssOf={value => variableCss(tokens, held, value)}
       readOnly={readOnly}
       onCommit={(mode, value) => write(at, mode, value)}
       onClear={() => onChange(clearDarkValue(tokens, at))}
@@ -410,6 +412,7 @@ function TypePair({
             readOnly={readOnly}
             refusedBy={refusalAt(refused, half.at, "light")}
             onCommit={value => write(half.at, "light", value)}
+            css={variableCss(tokens, half.token, half.token.values.light)}
           />
         ))}
         {hasDark ? (
@@ -424,6 +427,11 @@ function TypePair({
                   label={`${half.name}, dark`}
                   value={half.token.values.dark ?? ""}
                   placeholder={half.token.values.light}
+                  css={variableCss(
+                    tokens,
+                    half.token,
+                    half.token.values.dark ?? half.token.values.light
+                  )}
                   readOnly={readOnly}
                   refusedBy={refusalAt(refused, half.at, "dark")}
                   onCommit={value => write(half.at, "dark", value)}
@@ -517,6 +525,7 @@ function HalfInput({
   readOnly: boolean;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
+  css: string;
 }): React.JSX.Element {
   return half === "Size" ? <SizeInput {...field} /> : <LineHeightInput {...field} />;
 }
@@ -527,12 +536,15 @@ function HalfInput({
  */
 function ModeValues({
   token,
+  cssOf,
   readOnly,
   onCommit,
   onClear,
   refusedIn,
 }: {
   token: SiteToken;
+  /** The CSS a value of this variable writes. */
+  cssOf: (value: string) => string;
   readOnly: boolean;
   onCommit: (mode: TokenMode, value: string) => void;
   onClear: () => void;
@@ -548,9 +560,11 @@ function ModeValues({
         readOnly={readOnly}
         refusedBy={refusedIn("light")}
         onCommit={value => onCommit("light", value)}
+        css={cssOf(token.values.light)}
       />
       <DarkValue
         token={token}
+        cssOf={cssOf}
         readOnly={readOnly}
         refusedBy={refusedIn("dark")}
         onCommit={value => onCommit("dark", value)}
@@ -749,6 +763,7 @@ function isCssColour(text: string): boolean {
 /** The dark value: its field, or a line saying it follows light. */
 function DarkValue({
   token,
+  cssOf,
   readOnly,
   refusedBy,
   onCommit,
@@ -756,6 +771,7 @@ function DarkValue({
   onClear,
 }: {
   token: SiteToken;
+  cssOf: (value: string) => string;
   readOnly: boolean;
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
@@ -794,6 +810,7 @@ function DarkValue({
         readOnly={readOnly}
         refusedBy={refusedBy}
         onCommit={onCommit}
+        css={cssOf(dark)}
       />
       {readOnly ? null : (
         <Button

@@ -12,7 +12,14 @@
  *
  * @module variable-value-controls
  */
-import { getStyleProperty, type SiteToken } from "@nextlyhq/blocks-engine";
+import {
+  getStyleProperty,
+  resolveTokenPrefix,
+  tokenCustomProperty,
+  tokenIdentity,
+  type SiteToken,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -30,6 +37,25 @@ export interface ValueFieldProps {
   /** The id of the reason, while this field holds a value that was refused. */
   refusedBy?: string | undefined;
   onCommit: (value: string) => void;
+  /**
+   * The CSS this value writes, shown on hover over a control that writes it
+   * in other words: a number and a unit menu.
+   */
+  css?: string | undefined;
+}
+
+/**
+ * The declaration a variable's value writes into the site's stylesheet: its
+ * custom property, under the site's prefix, and the value. Named by the
+ * engine's own rules, the ones the stylesheet is written with.
+ */
+export function variableCss(
+  tokens: SiteTokenSet,
+  token: SiteToken,
+  value: string
+): string {
+  const { prefix } = resolveTokenPrefix(tokens.prefix);
+  return `${tokenCustomProperty(tokenIdentity(token), prefix)}: ${value}`;
 }
 
 /**
@@ -176,6 +202,7 @@ export function SizeInput({
   readOnly,
   refusedBy,
   onCommit,
+  css,
 }: Omit<ValueFieldProps, "label"> & {
   label: string;
   /** What shows in an empty field: the light value, for a dark one. */
@@ -207,6 +234,7 @@ export function SizeInput({
         refusedBy={refusedBy}
         onCommit={onCommit}
         control={SIZE_CONTROL}
+        css={css}
       />
     </>
   );
@@ -219,6 +247,7 @@ export function SizeValue({
   readOnly,
   refusedBy,
   onCommit,
+  css,
 }: ValueFieldProps): React.JSX.Element {
   const id = React.useId();
   if (readOnly || SIZE_CONTROL === undefined) {
@@ -245,6 +274,7 @@ export function SizeValue({
         refusedBy={refusedBy}
         onCommit={onCommit}
         control={SIZE_CONTROL}
+        css={css}
       />
     </div>
   );
@@ -259,6 +289,7 @@ function SizeField({
   refusedBy,
   onCommit,
   control,
+  css,
 }: {
   id: string;
   label: string;
@@ -267,12 +298,13 @@ function SizeField({
   refusedBy: string | undefined;
   onCommit: (value: string) => void;
   control: StyleControl;
+  css: string | undefined;
 }): React.JSX.Element {
   return (
     // The light value shows as the empty dark field's hint, as a value
     // reaching a block's field from elsewhere shows in the block panel.
     <InheritedValue.Provider value={placeholder}>
-      <div className="nx-vars-editor__size">
+      <div className="nx-vars-editor__size" title={css}>
         <NumericField
           id={id}
           control={control}
