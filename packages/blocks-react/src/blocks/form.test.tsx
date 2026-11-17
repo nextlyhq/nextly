@@ -398,9 +398,12 @@ describe("sending, with no script", () => {
     expect(out).not.toContain("hooks.example.com");
   });
 
-  it("posts nowhere where the page has no receiver, as on the canvas", async () => {
+  it("posts nowhere where the page has no receiver, and never puts answers in the address", async () => {
+    // As on the canvas, or a standalone render: a submit there must not be
+    // a GET, which writes every answer into the URL, the history and logs.
     const out = await html({ fields: [{ label: "Name" }] });
-    expect(out).toMatch(/^<form class="nx-n1">/);
+    expect(out).toMatch(/^<form class="nx-n1" method="post">/);
+    expect(out).not.toContain("action=");
     expect(out).not.toContain('name="_form"');
   });
 
@@ -481,6 +484,34 @@ describe("a form saved before this version", () => {
       // What the button said when nothing was stored.
       submitText: "Submit",
     });
+  });
+
+  it("keeps the names its unnamed fields were sent under", () => {
+    // A version 1 field with no name was sent as `field-<n>`; a receiving
+    // address may expect exactly that.
+    const { doc } = migrateDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            ...v1,
+            props: {
+              ...v1.props,
+              fields: [
+                { label: "Name", required: true },
+                { label: "Email", name: "email", type: "email" },
+                { label: "Note" },
+              ],
+            },
+          },
+        ],
+      },
+      migrationSourceFor(resolver)
+    );
+    expect(
+      formFields(doc.nodes[0]?.props ?? {}).map(field => field.name)
+    ).toEqual(["field-0", "email", "field-2"]);
   });
 
   it("keeps words its button had", () => {

@@ -845,7 +845,9 @@ describe("after sending, as the block chose", () => {
         await receiveFormPost(post({ ...ANSWERS, _locale: "de" }), withAddress)
       )
     ).toBe("/de/danke");
-    expect(asked).toEqual([["pages", "p9", "de"]]);
+    // Told the page the visitor sent from, so the address is formed in the
+    // way that page's own was.
+    expect(asked).toEqual([["pages", "p9", "de", "/contact"]]);
   });
 
   it("shows the message where the page it names cannot be followed", async () => {
@@ -904,5 +906,23 @@ describe("after sending, as the block chose", () => {
       const response = await receiveFormPost(post({ email: "a@b.co" }), deps);
       expect(location(response), JSON.stringify(props)).toBe(expected);
     }
+  });
+});
+
+describe("the language a page was sent from", () => {
+  it("is read from its path's language segment, where it has one", async () => {
+    const { languageOfPage } = await import("./route");
+    expect(languageOfPage("de", "/de/kontakt")).toEqual({
+      locale: "de",
+      fromSegment: true,
+    });
+    // The default language, served without a segment, forms no prefix.
+    expect(languageOfPage("en", "/contact")).toEqual({
+      locale: "en",
+      fromSegment: false,
+    });
+    expect(languageOfPage(undefined, "/de/kontakt")).toEqual({
+      fromSegment: false,
+    });
   });
 });

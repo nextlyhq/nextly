@@ -112,7 +112,9 @@ export interface ReceiverDeps {
   readonly entryAddress?: (
     collection: string,
     id: string,
-    locale: string | undefined
+    locale: string | undefined,
+    /** The same-site path the visitor sent from, in its own language's form. */
+    from: string
   ) => Promise<string | null>;
   readonly logger: Pick<PluginContext["logger"], "warn">;
 }
@@ -164,6 +166,7 @@ export async function receiveFormPost(
   return sendForm({
     node,
     answers: answersOf(post),
+    back,
     locale,
     request,
     deps,
@@ -179,17 +182,19 @@ export async function receiveFormPost(
 async function sendForm(send: {
   readonly node: BlockNode;
   readonly answers: Map<string, string[]>;
+  /** The same-site path the visitor came from and goes back to. */
+  readonly back: string;
   readonly locale: string | undefined;
   readonly request: Request;
   readonly deps: ReceiverDeps;
   readonly answer: (outcome: FormOutcome) => Response;
 }): Promise<Response> {
-  const { node, answers, locale, request, deps, answer } = send;
+  const { node, answers, back, locale, request, deps, answer } = send;
   const picked = pickedForm(node);
   const chosen = afterSendingChosen(node, picked !== null);
   // Where the block itself sends a visitor once a send is accepted.
   const blockPage = async (): Promise<Response> => {
-    const href = await blockPageOf(node, locale, deps);
+    const href = await blockPageOf(node, locale, back, deps);
     return href === null ? answer("sent") : redirect(href, null, "sent");
   };
   if (picked === null) {
@@ -244,13 +249,14 @@ function storedText(value: unknown): string {
 async function blockPageOf(
   node: BlockNode,
   locale: string | undefined,
+  from: string,
   deps: ReceiverDeps
 ): Promise<string | null> {
   const collection = storedText(node.props.entryCollection);
   const id = storedText(node.props.entryId);
   if (collection !== "" && id !== "" && deps.entryAddress !== undefined) {
     const served = await deps
-      .entryAddress(collection, id, locale)
+      .entryAddress(collection, id, locale, from)
       .catch(() => null);
     const path = sameSitePath(served ?? undefined);
     if (path !== null) return path;

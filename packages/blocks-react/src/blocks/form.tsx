@@ -185,9 +185,10 @@ interface FormSpec {
 }
 
 /**
- * Where the form posts and the hidden fields it posts beside its answers,
- * or nothing where the page has no receiver to post to (the editor's
- * canvas), whose submits the canvas holds.
+ * Where the form posts and the hidden fields it posts beside its answers.
+ * Where the page has no receiver (the editor's canvas, a standalone render)
+ * it names no address but still posts: a browser's default is a GET, which
+ * would write every answer into the URL, the history and the logs.
  */
 function sending(
   ctx: PageContext,
@@ -198,7 +199,8 @@ function sending(
   readonly hidden: ReactElement[];
 } {
   const forms = ctx.forms;
-  if (forms === undefined) return { attributes: {}, hidden: [] };
+  if (forms === undefined)
+    return { attributes: { method: "post" }, hidden: [] };
   const values: [string, string | undefined][] = [
     [FORM_POST_FIELDS.document, forms.document],
     [FORM_POST_FIELDS.node, nodeId],
@@ -352,9 +354,27 @@ export function renderForm(
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
   const { method: _method, ...rest } = props;
-  return text(rest.submitText).trim() === ""
-    ? { ...rest, submitText: "Submit" }
+  const upgraded = Array.isArray(rest.fields)
+    ? { ...rest, fields: rest.fields.map(namedAsVersion1) }
     : rest;
+  return text(upgraded.submitText).trim() === ""
+    ? { ...upgraded, submitText: "Submit" }
+    : upgraded;
+}
+
+/**
+ * A version 1 field with the name it was sent under written down: one with
+ * none was sent as `field-<n>`, and a receiving address may expect exactly
+ * that, where a field added now is named from its label.
+ */
+function namedAsVersion1(field: unknown, index: number): unknown {
+  if (typeof field !== "object" || field === null || Array.isArray(field)) {
+    return field;
+  }
+  const record = field as Record<string, unknown>;
+  return text(record.name).trim() === ""
+    ? { ...record, name: `field-${index}` }
+    : record;
 }
 
 /** The words each field type is offered under. */

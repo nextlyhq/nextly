@@ -19,10 +19,16 @@ import type { PageRendererProps } from "./page-renderer";
 import { createBlockResolver, SITE_FORMS_SERVICE } from "./resolver";
 
 let offered: Record<string, Record<string, unknown>> = {};
+/** The options each cached read was kept under. */
+const cachedUnder = vi.hoisted(() => [] as Record<string, unknown>[]);
 
 vi.mock("nextly/runtime", async importOriginal => ({
   ...(await importOriginal<typeof import("nextly/runtime")>()),
   requireNextly: () => ({ plugins: offered }),
+  cachedFind: async (read: () => Promise<unknown>, options: object) => {
+    cachedUnder.push(options as Record<string, unknown>);
+    return await read();
+  },
 }));
 
 afterEach(() => {
@@ -88,6 +94,25 @@ describe("a routed page's forms", () => {
     expect(forms?.returnTo).toBe("/contact");
     // Asked about the row the page was read from and the field it draws.
     expect(rows).toEqual([{ collection: "pages", id: "p1", field: "content" }]);
+  });
+
+  it("keep a picked form's description no longer than a short while", async () => {
+    offerForms();
+    const forms = await formsOfPage();
+    cachedUnder.length = 0;
+    await forms?.describe({ provider: "acme", ref: "contact" });
+    // Nothing tells the page when a provider's form changes, so a kept
+    // description must expire on its own, whatever the route's window is.
+    const revalidate = cachedUnder[0]?.revalidate;
+    expect(typeof revalidate).toBe("number");
+    expect(revalidate as number).toBeGreaterThan(0);
+    expect(revalidate as number).toBeLessThanOrEqual(60);
+    expect(cachedUnder[0]?.keyParts).toEqual([
+      "nextly-form-description",
+      "acme",
+      "contact",
+      "",
+    ]);
   });
 
   it("are left out where the instance has no page builder to post to", async () => {

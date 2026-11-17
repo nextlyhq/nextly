@@ -97,8 +97,8 @@ export function formReceiverRoute(parts: {
         provider: id => parts.providers.get(id),
         limits: ctx.limits,
         deliver: (address, answers) => deliverAnswers(address, answers),
-        entryAddress: (collection, id, locale) =>
-          servedAddressOf(api, collection, id, locale),
+        entryAddress: (collection, id, locale, from) =>
+          servedAddressOf(api, collection, id, locale, from),
         logger: ctx.logger,
       });
     },
@@ -114,7 +114,8 @@ async function servedAddressOf(
   api: unknown,
   collection: string,
   id: string,
-  locale: string | undefined
+  locale: string | undefined,
+  from: string
 ): Promise<string | null> {
   const plugins = (api as { plugins?: unknown }).plugins;
   const service = (
@@ -123,5 +124,25 @@ async function servedAddressOf(
     | Pick<ContentAddressService, "pathHeldBy">
     | undefined;
   if (typeof service?.pathHeldBy !== "function") return null;
-  return await service.pathHeldBy(locale, collection, id);
+  const path = await service.pathHeldBy(locale, collection, id);
+  if (path === null) return null;
+  const { servedAddress } = await import("nextly/runtime");
+  return await servedAddress(path, languageOfPage(locale, from));
+}
+
+/**
+ * The language a page was served in, as the address rule reads it: from the
+ * route's language segment where the page's own path starts with it, and
+ * otherwise as the site's own mount for one language, whose paths carry none.
+ */
+export function languageOfPage(
+  locale: string | undefined,
+  from: string
+): { readonly locale?: string; readonly fromSegment: boolean } {
+  if (locale === undefined) return { fromSegment: false };
+  const segment = from.split("/")[1] ?? "";
+  return {
+    locale,
+    fromSegment: segment.toLowerCase() === locale.toLowerCase(),
+  };
 }

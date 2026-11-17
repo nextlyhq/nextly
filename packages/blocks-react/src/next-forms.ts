@@ -100,7 +100,14 @@ async function returnPathOf(input: PageFormsInput): Promise<string> {
   return await servedAddress(path, input.language);
 }
 
-/** A description read as the public reads it, kept as long as the page around it. */
+/**
+ * The longest a kept description lives, in seconds. Nothing tells a page
+ * when a provider's form changes (its fields, closing, opening), so a kept
+ * description expires on its own, however long the page around it is kept.
+ */
+const DESCRIPTION_LIFETIME = 60;
+
+/** A description read as the public reads it, kept a short while. */
 function cachedDescribe(
   service: SiteFormsService,
   locale: string | undefined,
@@ -117,7 +124,10 @@ function cachedDescribe(
           form.ref,
           locale ?? "",
         ],
-        ...(revalidate === undefined ? {} : { revalidate }),
+        revalidate:
+          typeof revalidate === "number"
+            ? Math.min(revalidate, DESCRIPTION_LIFETIME)
+            : DESCRIPTION_LIFETIME,
       }
     );
 }
