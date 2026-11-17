@@ -59,6 +59,7 @@ describe("a starter's fingerprint", () => {
 
   it("is short enough that the record fits the options table with room to spare", () => {
     const record: StarterRecord = {
+      set: "0196a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5a",
       header: {
         id: "0196a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
         fingerprint: starterFingerprint(header),
@@ -76,6 +77,7 @@ describe("a starter's fingerprint", () => {
 
 describe("the recorded starter", () => {
   const record: StarterRecord = {
+    set: "s",
     header: { id: "h", fingerprint: starterFingerprint(header) },
     footer: {
       id: "f",
@@ -86,6 +88,8 @@ describe("the recorded starter", () => {
   it("reads nothing it did not write as a record", () => {
     expect(decodeStarterRecord("")).toBeNull();
     expect(decodeStarterRecord("one two three")).toBeNull();
+    // The four words a record had before it named its set.
+    expect(decodeStarterRecord("h 1 f 2")).toBeNull();
     expect(decodeStarterRecord("a  b c")).toBeNull();
   });
 
