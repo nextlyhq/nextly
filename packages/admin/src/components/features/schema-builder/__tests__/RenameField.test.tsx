@@ -50,8 +50,10 @@ function panel(
       docked
       savedFields={fields.filter(field => saved.includes(field.id))}
       lifecycleEnabled={false}
-      startRenaming={startRenaming}
-      namedByHooks={fieldsNamedByHooks(storedHooks)}
+      rename={{
+        asked: startRenaming,
+        namedByHooks: fieldsNamedByHooks(storedHooks),
+      }}
       onFieldChange={onFieldChange}
       onFieldDelete={() => {}}
       onClose={() => {}}

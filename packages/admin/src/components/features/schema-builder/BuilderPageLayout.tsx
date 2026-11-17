@@ -293,7 +293,15 @@ function BuilderWorkspace(
     <div className="flex flex-1 items-start">
       <FieldListRegion
         {...props}
-        namedByHooks={namedByHooks}
+        renameCallbacks={renameCallbacksOf(
+          builder.fields,
+          {
+            savedFieldIds: props.savedFieldIds,
+            locked: props.locked,
+            namedByHooks,
+          },
+          props.onActiveChange
+        )}
         moveContext={moveContext}
         outline={outline}
         fieldGroups={fieldGroups}
@@ -366,8 +374,7 @@ function EditedFieldSettings({
       kind={config.kind}
       fields={builder.fields}
       fieldId={active.fieldId}
-      startRenaming={active.renaming !== undefined}
-      namedByHooks={namedByHooks}
+      rename={{ asked: active.renaming !== undefined, namedByHooks }}
       savedFieldIds={savedFieldIds}
       readOnly={locked}
       docked={docked}
@@ -442,7 +449,6 @@ function FieldListRegion({
   config,
   builder,
   entitySlug,
-  savedFieldIds,
   outline,
   fieldGroups,
   fieldGroupsLoad,
@@ -454,14 +460,13 @@ function FieldListRegion({
   onDuplicateField,
   moveContext,
   openFieldGroup,
-  namedByHooks,
+  renameCallbacks,
 }: Pick<
   Props,
   | "config"
   | "builder"
   | "entitySlug"
   | "locked"
-  | "savedFieldIds"
   | "configPath"
   | "beforeFieldList"
   | "active"
@@ -470,8 +475,8 @@ function FieldListRegion({
 > & {
   /** What the move rule needs beyond the fields, for every way of moving one. */
   moveContext: MoveContext;
-  /** The field names the stored hooks name, which no row offers to rename. */
-  namedByHooks: ReadonlyMap<string, string>;
+  /** Each row's Rename…: whether its field offers it, and asking for it. */
+  renameCallbacks: Pick<OutlineCallbacks, "rename" | "canRename">;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;
@@ -495,11 +500,7 @@ function FieldListRegion({
 
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
-    ...renameCallbacksOf(
-      builder.fields,
-      { savedFieldIds, locked, namedByHooks },
-      onActiveChange
-    ),
+    ...renameCallbacks,
     addAt: position => onActiveChange({ kind: "picker", position }),
     fields: builder.fields,
     judgeMove: (fieldId, target) =>

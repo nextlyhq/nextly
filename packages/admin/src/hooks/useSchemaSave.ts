@@ -29,7 +29,6 @@ import {
   renameAnswers,
   renameNotOffered,
   withDecidedRenames,
-  type DraftRename,
 } from "@admin/lib/builder/rename-answers";
 import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type {
@@ -176,8 +175,6 @@ export interface UseSchemaSaveReturn {
    * on its way is not listed, and the confirmation refuses it unseen.
    */
   reviewedSettingChanges: readonly SettingChange[];
-  /** The saved fields the draft renamed, for the review to show as renames whose values are kept. */
-  draftRenames: readonly DraftRename[];
   /** The toolbar's Save. */
   handleSave: () => void;
   /** The confirmation dialog's confirm. */
@@ -205,8 +202,7 @@ export function useSchemaSave({
   settingChanges = NO_SETTING_CHANGES,
   fieldGroupsFirst,
 }: UseSchemaSaveOptions): UseSchemaSaveReturn {
-  // The saved fields the draft renamed, read once from its pending changes: the save answers
-  // them, and the page's review shows them.
+  // The saved fields the draft renamed, read from its pending changes, which the save answers.
   const draftRenames = useMemo(
     () => draftRenamesOf(pendingChanges),
     [pendingChanges]
@@ -414,5 +410,5 @@ export function useSchemaSave({
     ]
   );
 
-  return { handleSave, confirmApply, reviewedSettingChanges, draftRenames };
+  return { handleSave, confirmApply, reviewedSettingChanges };
 }
