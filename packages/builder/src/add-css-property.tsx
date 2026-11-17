@@ -35,17 +35,22 @@ import { StylePropertyFields } from "./style-property-fields";
  * Panel state, like a section's folds: what the author chose to look at, not
  * anything the page stores. A property holding a value is drawn whatever this
  * says, so it hides nothing set; it starts empty for the next block.
+ *
+ * `used` says the author has added or removed a property on this block, so
+ * the section they are working in stays open, as a section holding a value
+ * opens, even once its last value is removed.
  */
 export function useAddedProperties(nodeId: string): {
   readonly added: ReadonlySet<string>;
+  readonly used: boolean;
   readonly add: (id: string) => void;
   readonly remove: (id: string) => void;
 } {
   const [held, setHeld] = React.useState<{
     readonly nodeId: string;
     readonly ids: ReadonlySet<string>;
-  }>(() => ({ nodeId, ids: new Set() }));
-  const added = held.nodeId === nodeId ? held.ids : EMPTY;
+  }>(() => ({ nodeId, ids: EMPTY }));
+  const mine = held.nodeId === nodeId;
   const change = (next: (ids: Set<string>) => void) =>
     setHeld(current => {
       const ids = new Set(current.nodeId === nodeId ? current.ids : EMPTY);
@@ -53,7 +58,9 @@ export function useAddedProperties(nodeId: string): {
       return { nodeId, ids };
     });
   return {
-    added,
+    added: mine ? held.ids : EMPTY,
+    // A change made here for this block, which only an add or a remove makes.
+    used: mine && held.ids !== EMPTY,
     add: id => change(ids => ids.add(id)),
     remove: id => change(ids => ids.delete(id)),
   };

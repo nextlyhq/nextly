@@ -242,6 +242,34 @@ describe("+ Add CSS property", () => {
     expect(offered()).toContain("columnGap");
   });
 
+  it("offers a Columns block's rows and columns apart, which no Arrange draws there", () => {
+    // Columns draws its own layout in Content, so its Layout has no Arrange
+    // to hold a gap; a row or column gap is added like any other.
+    render(
+      <Host
+        page={
+          {
+            formatVersion: DOCUMENT_FORMAT_VERSION,
+            kind: "page",
+            nodes: [
+              nodeOf("columns", "core/columns", {
+                props: { as: "div" },
+                styles: at({ gridTemplateColumns: "1fr 1fr" }),
+                slots: { children: [] },
+              }),
+            ],
+          } as BlockDocument
+        }
+      />
+    );
+    act(() => editor().select("columns"));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: /^Style/ }));
+    openSection(/^CSS properties/);
+    openPicker();
+    expect(offered()).toContain("rowGap");
+    expect(offered()).toContain("columnGap");
+  });
+
   it("keeps the option chosen from the keyboard in view", () => {
     mount();
     openPicker();
@@ -344,6 +372,22 @@ describe("removing an added property", () => {
 
     expect(stored()).toEqual({ display: "block", position: { zIndex: 2 } });
     expect(rowOf("position.zIndex")).not.toBeNull();
+  });
+
+  it("stays open, at + Add CSS property, once the last value it held is removed", () => {
+    // Opened because it holds a value, with no fold of the author's: removing
+    // that value must not close the section being worked in.
+    mount(pageOf(at({ display: "block", mixBlendMode: "multiply" }), STACK));
+    const section = screen.getByRole("button", { name: /^CSS properties/ });
+    expect(section.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove mix-blend-mode" })
+    );
+
+    expect(stored()).toEqual({ display: "block" });
+    expect(section.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(addButton());
   });
 
   it("takes focus to the next row", () => {

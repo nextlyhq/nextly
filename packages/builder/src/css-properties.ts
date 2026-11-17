@@ -22,7 +22,7 @@
  */
 import { SECTION_BLOCK } from "./block-shortcuts";
 import { OWN_ROW_FIELDS, type InspectorSectionKey } from "./inspector-sections";
-import { SPACE_PROPERTIES } from "./plain-layout-controls";
+import { arrangesLayout, SPACE_PROPERTIES } from "./plain-layout-controls";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
 
 /** The section's key and words. */
@@ -204,9 +204,10 @@ export interface PlainControls {
    */
   readonly blockType: string | undefined;
   /**
-   * Whether Arrange reads the Layout in plain words (not Custom), so its
-   * Space between draws the space properties. Where the reading isn't known
-   * (the Style tab isn't drawn), taken as true wherever Arrange is drawn.
+   * Whether Arrange draws the Layout and reads it in plain words (not
+   * Custom), so its Space between draws the space properties. Where the
+   * reading isn't known (the Style tab isn't drawn), taken from whether the
+   * block's Layout is Arrange's at all.
    */
   readonly arranges?: boolean | undefined;
 }
@@ -223,7 +224,8 @@ function drawnByPlainControls(
   plain: PlainControls
 ): ReadonlySet<string> {
   if (offersArrange(section)) {
-    return plain.arranges === false ? NONE : SPACE_PROPERTIES;
+    const arranges = plain.arranges ?? arrangesLayout(plain.blockType);
+    return arranges ? SPACE_PROPERTIES : NONE;
   }
   if (section.key === "size" && plain.blockType === SECTION_BLOCK) {
     return MIN_HEIGHT;

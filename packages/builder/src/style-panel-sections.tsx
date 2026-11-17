@@ -95,8 +95,9 @@ export function StyleSections({
   // Read here as Layout reads it, so what Arrange draws stays out of CSS
   // properties only while Arrange draws it.
   const reading = useArrangeReading(surroundings, layout !== undefined);
-  const arranges =
-    reading === undefined ? undefined : reading.arrange.mode !== "custom";
+  // No reading is no Arrange (Columns draws its own layout), so nothing of
+  // Layout is Arrange's to keep.
+  const arranges = reading !== undefined && reading.arrange.mode !== "custom";
   const arranged = arrangeCssProperties(sections, {
     blockType:
       target.kind === "block"
@@ -129,7 +130,9 @@ export function StyleSections({
       : [
           {
             ...CSS_PROPERTIES_SECTION,
-            holdsValue: css.some(each => each.row.set),
+            // Kept open once the author works in it, so removing its last
+            // value doesn't close the section they are using.
+            holdsValue: added.used || css.some(each => each.row.set),
           },
         ]),
   ]);
