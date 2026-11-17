@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorRestoreSurface } from "../document-history-context";
+import type { EditorRestore } from "../editor-restore";
 import { restoreIntoEditor } from "../restore-into-editor";
 import type { RestoreRow } from "../restore-plan";
 
@@ -13,7 +14,8 @@ const { toastSuccess } = vi.hoisted(() => ({ toastSuccess: vi.fn() }));
 vi.mock("@admin/components/ui", () => ({ toast: { success: toastSuccess } }));
 
 function editorWith(extra: Partial<EditorRestoreSurface> = {}) {
-  const apply = vi.fn(() => ({ undo: vi.fn() }));
+  // Typed as the restore's own `apply`, so a test can read what it was handed.
+  const apply = vi.fn<EditorRestore["apply"]>(() => ({ undo: vi.fn() }));
   const editor = {
     restore: {
       apply,
@@ -75,9 +77,7 @@ describe("restoreIntoEditor", () => {
 
     restoreIntoEditor({ editor, rows, names: ["bio"], versionNo: 2 });
 
-    const typeOf = apply.mock.calls[0]?.[2] as
-      | ((name: string) => string | undefined)
-      | undefined;
+    const typeOf = apply.mock.calls[0]?.[2];
     expect(typeOf?.("bio")).toBe("json");
   });
 
