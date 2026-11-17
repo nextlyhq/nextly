@@ -59,6 +59,7 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 import { runUpgrade, type UpgradeAdapter } from "../upgrade";
+import { schemaEventsStep } from "../upgrade-steps/schema-events";
 
 type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 type Row = Record<string, unknown>;
@@ -217,10 +218,14 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** With a connection of the test's own, closed after. */
-    async function on<T>(fn: (adapter: DrizzleAdapter) => Promise<T>) {
-      const adapter = (await createAdapter({ type: dialect, url } as Parameters<
-        typeof createAdapter
-      >[0])) as unknown as DrizzleAdapter;
+    async function on<T>(
+      fn: (adapter: DrizzleAdapter) => Promise<T>,
+      at: string = url
+    ) {
+      const adapter = (await createAdapter({
+        type: dialect,
+        url: at,
+      } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
       try {
         return await fn(adapter);
       } finally {
@@ -245,19 +250,21 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** `nextly upgrade --confirm-backed-up`; what it said. */
-    async function upgrade(): Promise<string[]> {
+    async function upgrade(at: string = url): Promise<string[]> {
       const said: string[] = [];
-      await on(adapter =>
-        runUpgrade(
-          { confirmBackedUp: true },
-          {
-            adapter: adapter as unknown as UpgradeAdapter,
-            logger: {
-              info: line => said.push(line),
-              warn: line => said.push(line),
-            },
-          }
-        )
+      await on(
+        adapter =>
+          runUpgrade(
+            { confirmBackedUp: true },
+            {
+              adapter: adapter as unknown as UpgradeAdapter,
+              logger: {
+                info: line => said.push(line),
+                warn: line => said.push(line),
+              },
+            }
+          ),
+        at
       );
       return said;
     }
@@ -470,6 +477,56 @@ describe.each(getConfiguredTestDialects())(
 
         // And a second upgrade has nothing to do.
         expect((await upgrade()).join("\n")).toContain("Nothing to do");
+      },
+      240_000
+    );
+
+    it("refuses the migration helper's table holding records, changing nothing", async () => {
+      await siteOnThisRelease();
+      // The helper's `name` is a label, and its `id` names no file: neither
+      // is the file `nextly migrate` decides from.
+      await sql(
+        `CREATE TABLE ${id("nextly_migrations")} (${id("id")} VARCHAR(255) PRIMARY KEY, ${id("name")} VARCHAR(255) NOT NULL, ${id("applied_at")} TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, ${id("checksum")} VARCHAR(64))`
+      );
+      await sql(
+        `INSERT INTO ${id("nextly_migrations")} (${id("id")}, ${id("name")}) VALUES ('20250104_001_create_users', 'Create users table')`
+      );
+      const events = await count("nextly_schema_events");
+
+      await expect(upgrade()).rejects.toThrow(/nextly_migrations.*cannot read/);
+
+      expect(await count("nextly_migrations")).toBe(1);
+      expect(await count("nextly_schema_events")).toBe(events);
+    }, 240_000);
+
+    it.runIf(dialect === "postgresql")(
+      "reads the ledger in the schema the search path finds it in, not only its first",
+      async () => {
+        await siteOnThisRelease();
+        const files = await asTheEarlierReleaseLeftIt("file-ledger");
+        // A first schema on the path that does not hold the ledger: the table
+        // is found in `public`, behind it, as `tableExists` finds it.
+        await sql(`CREATE SCHEMA uod_first`);
+        const pathed = new URL(url);
+        pathed.searchParams.set("options", "-c search_path=uod_first,public");
+
+        // The step's own count, read-only, through that path: one record per
+        // file and the core schema's audit row. Asked of the step, not the
+        // whole command, whose schema lock is a separate question.
+        const pending = await on(
+          adapter =>
+            schemaEventsStep.pending({
+              adapter: adapter as unknown as UpgradeAdapter,
+              db: adapter.getDrizzle(),
+              dialect,
+              options: {},
+              log: () => {},
+              warn: () => {},
+            }),
+          pathed.toString()
+        );
+
+        expect(pending).toBe(files.length + 1);
       },
       240_000
     );

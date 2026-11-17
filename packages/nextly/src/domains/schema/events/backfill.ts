@@ -37,12 +37,16 @@ export interface LegacyMigrationsRow {
  * - the shape before it, which a sync created as a system table: `name`,
  *   `checksum`, `status`, `error_message`, `executed_at` (renamed to
  *   `filename`, `sha256`, `error_json` and `applied_at` by the file ledger),
- *   plus `id` and `batch`;
- * - the adapters' own migration helper: `name`, `checksum`, `applied_at`,
- *   with no status, since it recorded only what applied.
+ *   plus `id` and `batch`.
  *
- * Each part is read from whichever of its names the table has, so all three
- * move the same way. `null` for a part the shape does not keep.
+ * Each part is read from whichever of its names the table has, so both move
+ * the same way. `null` for a part the shape does not keep.
+ *
+ * The adapters' own migration helper made a third shape (`id`, `name`,
+ * `applied_at`, `checksum`, with no `batch`), and it is not read: its `name`
+ * is a label such as "Create users table", not the file `nextly migrate`
+ * decides from, and its `id` names no file either. Read as filenames, its
+ * records would be recorded as applied files no folder holds.
  */
 export interface LegacyLedgerShape {
   filename: string;
@@ -59,8 +63,9 @@ export interface LegacyLedgerShape {
 
 /**
  * The shape of a `nextly_migrations` table from its column names, or `null`
- * when it has no column naming the migration file: a table no release of
- * Nextly wrote, whose rows cannot be moved.
+ * when no column names the migration file: a table of no shape `nextly
+ * migrate` wrote, the migration helper's among them, whose rows cannot be
+ * moved.
  */
 export function legacyLedgerShape(
   columns: readonly string[]
@@ -68,7 +73,12 @@ export function legacyLedgerShape(
   const present = new Set(columns.map(column => column.toLowerCase()));
   const first = (...names: string[]): string | null =>
     names.find(name => present.has(name)) ?? null;
-  const filename = first("filename", "name");
+  // `name` holds the file only in the shape with `batch`; the helper's `name` is a label.
+  const filename = present.has("filename")
+    ? "filename"
+    : present.has("name") && present.has("batch")
+      ? "name"
+      : null;
   if (filename === null) return null;
   const appliedAt = first("applied_at", "executed_at");
   return {

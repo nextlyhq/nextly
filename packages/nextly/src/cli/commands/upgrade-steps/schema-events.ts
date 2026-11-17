@@ -175,7 +175,12 @@ async function runSchemaStatements(
 const eventsTableOf = (context: UpgradeStepContext) =>
   context.options.targetTableName ?? EVENTS_TABLE;
 
-/** The column names of `table` in the live database, lowercased. */
+/**
+ * The column names of `table` in the live database, lowercased. On
+ * PostgreSQL the table is the one `to_regclass` resolves, as the adapter's
+ * `tableExists` and the step's unqualified statements resolve it: through
+ * the search path, which need not find it in the path's first schema.
+ */
 async function columnsOf(
   db: unknown,
   dialect: UpgradeDialect,
@@ -185,7 +190,7 @@ async function columnsOf(
     dialect === "sqlite"
       ? `SELECT name AS column_name FROM pragma_table_info('${table}')`
       : dialect === "postgresql"
-        ? `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+        ? `SELECT attname AS column_name FROM pg_attribute WHERE attrelid = to_regclass('${table}') AND attnum > 0 AND NOT attisdropped`
         : `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '${table}'`;
   const rows = await queryRaw(db, dialect, statement);
   return rows.map(row =>

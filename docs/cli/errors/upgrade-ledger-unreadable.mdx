@@ -7,7 +7,7 @@ description: "`nextly upgrade` found a `nextly_migrations` table holding records
 
 `nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.
 
-An earlier release kept its migration records in `nextly_migrations`. `nextly upgrade` moves them into `nextly_schema_events` and reads every record before writing any. It reads each shape a release of Nextly kept the table in. This table has a record it cannot read: one with a status no release wrote, one naming no migration file, or a table of another shape that holds rows. So the upgrade stopped before changing anything.
+An earlier release kept its migration records in `nextly_migrations`. `nextly upgrade` moves them into `nextly_schema_events` and reads every record before writing any. It reads the two shapes `nextly migrate` and `nextly db:sync` kept the table in. This table has a record it cannot read: one with a status no release wrote, one naming no migration file, or a table of another shape that holds rows, such as the one the adapters' migration helper kept, whose records name a label rather than a migration file. So the upgrade stopped before changing anything.
 
 ## Fix
 

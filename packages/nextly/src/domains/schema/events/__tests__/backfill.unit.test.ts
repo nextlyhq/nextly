@@ -167,15 +167,20 @@ describe("reading nextly_migrations in the shape an earlier release kept it", ()
     });
   });
 
-  it("reads the helper's shape, which kept no status, as applied, and its SQLite time as UTC", () => {
+  it("reads no shape in the migration helper's table, whose name is a label rather than a file", () => {
+    expect(legacyLedgerShape(HELPER)).toBeNull();
+  });
+
+  it("reads a time kept as SQLite's CURRENT_TIMESTAMP text as UTC, and an empty checksum as none", () => {
     const read = readLegacyLedgerRow(
       {
-        id: "x",
         name: "0003.sql",
-        applied_at: "2026-01-02 03:04:05",
-        checksum: null,
+        batch: 1,
+        checksum: "",
+        status: "applied",
+        executed_at: "2026-01-02 03:04:05",
       },
-      legacyLedgerShape(HELPER)!
+      legacyLedgerShape(EARLIER)!
     );
     expect(read).toMatchObject({
       kind: "move",
