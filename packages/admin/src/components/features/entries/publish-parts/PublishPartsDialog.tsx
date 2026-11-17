@@ -118,7 +118,7 @@ export function PublishPartsDialog({
   // What the server refuses, by part: from the move when it was refused, else from the
   // description, which is refused for the same reasons the move would be.
   const refusal = move.error ?? description.error ?? null;
-  const refused = refusalsByPart(refusal);
+  const refused = refusalsByPart(refusal, [...languages, SHARED_PATH]);
   const general = refused.get("") ?? [];
   const outcomes = new Map(
     (description.data?.languages ?? []).map(language => [

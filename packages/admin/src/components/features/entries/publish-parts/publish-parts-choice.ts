@@ -106,15 +106,23 @@ export function sharedSentence(
 }
 
 /**
- * Each refused part's reason, by part: a language code, or {@link SHARED_PATH}. A reason naming
- * neither (a field, say) is kept under the empty key, shown above the choices.
+ * Each refused part's reason, by part: one of the `parts` the dialog draws (a language code, or
+ * {@link SHARED_PATH}). A reason naming none of them (a field, say) is kept under the empty key,
+ * shown above the choices with the name it gives, so no refusal goes unshown.
  */
-export function refusalsByPart(error: unknown): ReadonlyMap<string, string[]> {
+export function refusalsByPart(
+  error: unknown,
+  parts: readonly string[]
+): ReadonlyMap<string, string[]> {
+  const drawn = new Set(parts);
   const byPart = new Map<string, string[]>();
   for (const issue of validationIssues(error)) {
     if (issue.message === undefined) continue;
-    const key = issue.path ?? "";
-    byPart.set(key, [...(byPart.get(key) ?? []), issue.message]);
+    const path = issue.path ?? "";
+    const key = drawn.has(path) ? path : "";
+    const message =
+      key === "" && path !== "" ? `${path}: ${issue.message}` : issue.message;
+    byPart.set(key, [...(byPart.get(key) ?? []), message]);
   }
   return byPart;
 }

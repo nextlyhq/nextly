@@ -201,4 +201,46 @@ describe("choosing what to publish", () => {
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
+  it("shows a refusal naming a field rather than a part, with the field's name", async () => {
+    const user = userEvent.setup();
+    const refusal = parseApiError(
+      {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Validation failed.",
+          requestId: "r2",
+          data: {
+            errors: [
+              {
+                path: "slug",
+                code: "UNIQUE_VALUE_REQUIRED_IN_LANGUAGE",
+                message: "Another entry already uses this value in Spanish.",
+              },
+            ],
+          },
+        },
+      },
+      400
+    );
+    api.publishParts.mockImplementation(
+      (
+        _slug: string,
+        _id: string,
+        _direction: string,
+        choice: PublishPartsChoice
+      ) =>
+        choice.describe === true
+          ? Promise.resolve(describing(choice))
+          : Promise.reject(refusal)
+    );
+    open();
+    await screen.findByText("Goes live for the first time.");
+
+    await user.click(screen.getByRole("button", { name: "Publish" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "slug: Another entry already uses this value in Spanish."
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
 });

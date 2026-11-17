@@ -128,7 +128,7 @@ describe("a refusal", () => {
       400
     );
 
-    const byPart = refusalsByPart(refusal);
+    const byPart = refusalsByPart(refusal, ["en", "es", "shared"]);
 
     expect(byPart.get("es")).toEqual([
       'The "es" language has no current approval.',
