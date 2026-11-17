@@ -62,9 +62,11 @@ export function useDocumentAddress(): DocumentAddressOf {
         document,
         options.collection ?? bySlug.get(document.slug),
         {
+          // A view edits the default language, whatever language the screen
+          // the link is on was asked in: `update` answers for that one.
           canUpdate:
             document.kind === "collection" &&
-            canAccessCollection(document.slug, "update"),
+            canAccessCollection(document.slug, "updateInDefaultLanguage"),
           ...(options.locale === undefined ? {} : { locale: options.locale }),
           ...(defaultLocale ? { defaultLocale } : {}),
         },

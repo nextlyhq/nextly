@@ -30,8 +30,13 @@ vi.mock("@admin/hooks/queries/useCollections", () => ({
     ],
   }),
 }));
+/** What the reader may do, by the access asked; every access unless a test says otherwise. */
+const access = vi.hoisted(() => ({ refused: new Set<string>() }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({ canAccessCollection: () => true }),
+  useCurrentUserPermissions: () => ({
+    canAccessCollection: (_slug: string, asked: string) =>
+      !access.refused.has(asked),
+  }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({
@@ -50,6 +55,19 @@ const NOTE = { kind: "collection", slug: "notes", id: "n1" } as const;
 const BUILDER = "/admin/collections/notes/n1/builder?field=sections";
 
 describe("useDocumentAddress", () => {
+  it("asks whether the reader may update the default language, which a view edits", () => {
+    // On a screen in another language, `update` answers for that language; a
+    // reader who may change Spanish but not the default language gets the
+    // form, read-only.
+    access.refused = new Set(["updateInDefaultLanguage"]);
+    const { result } = renderHook(() => useDocumentAddress());
+    expect(result.current(NOTE)).toBe("/admin/collections/notes/n1");
+    access.refused = new Set(["update"]);
+    const { result: other } = renderHook(() => useDocumentAddress());
+    expect(other.current(NOTE)).toBe(BUILDER);
+    access.refused = new Set();
+  });
+
   it("opens a collection's entry where it says, from the admin's list of collections", () => {
     const { result } = renderHook(() => useDocumentAddress());
     expect(result.current(NOTE)).toBe(BUILDER);

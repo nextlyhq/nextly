@@ -59,7 +59,7 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
     useCurrentUserPermissions: () => ({
       ...original.useCurrentUserPermissions(),
       canAccessCollection: (_slug: string, action: string) =>
-        action === "update" ? mayUpdate : true,
+        action === "updateInDefaultLanguage" ? mayUpdate : true,
     }),
   };
 });
