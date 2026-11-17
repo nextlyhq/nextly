@@ -220,6 +220,9 @@ test.describe("a published page without JavaScript", () => {
   }, testInfo) => {
     const baseURL = testInfo.project.use.baseURL;
     if (baseURL === undefined) throw new Error("[e2e] No baseURL configured.");
+    // Two paths, each of which may wait out the fill window for its cached
+    // repeat (below).
+    test.setTimeout(240_000);
     await publishPage(await signIn(page));
     const visitor = await playwright.request.newContext({ baseURL });
     try {
@@ -229,10 +232,14 @@ test.describe("a published page without JavaScript", () => {
         expectInline(first.html, [HEADING, CAPTION, `alt="${ALT}"`]);
 
         // Once the first render is stored, a repeat is answered from the
-        // cache: the stored page holds its content inline too.
+        // cache: the stored page holds its content inline too. Next.js stores
+        // this path's page from a background render that read no cache entry
+        // first, and the cache keeps such a render only once no write to its
+        // tags falls within the 60 s fill window. The publish above is one, so
+        // the wait covers that window.
         await expect
           .poll(async () => (await fetched(visitor, path)).cache, {
-            timeout: 15_000,
+            timeout: 80_000,
           })
           .toBe("HIT");
         const repeat = await fetched(visitor, path);
