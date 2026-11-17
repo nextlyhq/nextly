@@ -159,8 +159,7 @@ export function editorCanvasRegion(view: EditorView): React.JSX.Element {
     visitorUnreadable,
     readMedia,
   } = view;
-  // The theme the frame draws the page in and the tags saying so, from one
-  // answer, so the tag never names a mode the canvas is not drawn in.
+  // The theme the frame draws the page in, and the tags over it.
   const previewed = previewedCanvas(view.previewMode, view.preview.previewing);
   return (
     <>
