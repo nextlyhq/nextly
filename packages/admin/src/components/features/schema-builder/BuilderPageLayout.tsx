@@ -44,7 +44,10 @@ import {
   fieldsWithDeleted,
   markPending,
 } from "@admin/lib/builder/outline/pending-rows";
-import { renameOffered } from "@admin/lib/builder/rename-field";
+import {
+  fieldsNamedByHooks,
+  renameOffered,
+} from "@admin/lib/builder/rename-field";
 import { navigateTo } from "@admin/lib/navigation";
 import type { StoredHookConfig } from "@admin/types/collection";
 
@@ -209,9 +212,15 @@ function BuilderWorkspace(
     | "settings"
     | "pending"
     | "lifecycleEnabled"
+    | "storedHooks"
   >
 ): JSX.Element {
   const { builder, pending } = props;
+  // The field names the stored hooks name, which neither the panel nor a row offers to rename.
+  const namedByHooks = useMemo(
+    () => fieldsNamedByHooks(props.storedHooks),
+    [props.storedHooks]
+  );
   // Drawn with every pending delete shown where it was saved, marked, so a
   // delete stays in sight until it is saved or undone. Only drawn: the save
   // sends the builder's fields as they are.
@@ -249,6 +258,7 @@ function BuilderWorkspace(
     <div className="flex flex-1 items-start">
       <FieldListRegion
         {...props}
+        namedByHooks={namedByHooks}
         moveContext={moveContext}
         outline={outline}
         fieldGroups={fieldGroups}
@@ -257,6 +267,7 @@ function BuilderWorkspace(
       />
       <EditedFieldSettings
         {...props}
+        namedByHooks={namedByHooks}
         outline={outline}
         openFieldGroup={openFieldGroup}
       />
@@ -283,6 +294,7 @@ function EditedFieldSettings({
   openFieldGroup,
   pending,
   lifecycleEnabled,
+  namedByHooks,
 }: Pick<
   Props,
   | "active"
@@ -294,6 +306,8 @@ function EditedFieldSettings({
   | "pending"
   | "lifecycleEnabled"
 > & {
+  /** The field names the stored hooks name (`fieldsNamedByHooks`). */
+  namedByHooks: ReadonlyMap<string, string>;
   outline: readonly OutlineNode[];
   openFieldGroup: (slug: string) => void;
 }): JSX.Element | null {
@@ -318,6 +332,7 @@ function EditedFieldSettings({
       fields={builder.fields}
       fieldId={active.fieldId}
       startRenaming={active.renaming !== undefined}
+      namedByHooks={namedByHooks}
       savedFieldIds={savedFieldIds}
       readOnly={locked}
       docked={docked}
@@ -366,6 +381,7 @@ function FieldListRegion({
   onDuplicateField,
   moveContext,
   openFieldGroup,
+  namedByHooks,
 }: Pick<
   Props,
   | "config"
@@ -381,6 +397,8 @@ function FieldListRegion({
 > & {
   /** What the move rule needs beyond the fields, for every way of moving one. */
   moveContext: MoveContext;
+  /** The field names the stored hooks name, which no row offers to rename. */
+  namedByHooks: ReadonlyMap<string, string>;
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
   fieldGroupsLoad: FieldGroupsLoad;
@@ -416,7 +434,8 @@ function FieldListRegion({
           placement.field,
           placement.ancestors,
           savedFieldIds.has(fieldId),
-          locked
+          locked,
+          namedByHooks
         )
       );
     },
