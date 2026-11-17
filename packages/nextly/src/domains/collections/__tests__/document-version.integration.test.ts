@@ -1170,7 +1170,7 @@ describe.each(getConfiguredTestDialects())(
       );
       const longest = `${"p".repeat(PRINCIPAL_KIND_MAX_LENGTH - ":member".length)}:member`;
       expect(longest).toHaveLength(PRINCIPAL_KIND_MAX_LENGTH);
-      await handlerOf(t).updateEntry(
+      const saved = await handlerOf(t).updateEntry(
         {
           collectionName: DOCS,
           entryId: id,
@@ -1180,6 +1180,9 @@ describe.each(getConfiguredTestDialects())(
         },
         { note: "by the longest kind", _overwrite: true }
       );
+      // The handler answers a refused save rather than throwing: its message
+      // says what refused it.
+      expect(saved, JSON.stringify(saved)).toMatchObject({ success: true });
       const row = await rowOf(t, `dc_${DOCS}`, { id });
       expect([row._changed_by_kind, row._changed_by_principal_kind]).toEqual([
         "principal",
