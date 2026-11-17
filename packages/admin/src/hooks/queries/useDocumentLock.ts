@@ -89,6 +89,19 @@
  * out minutes ago. The deadline leaves two intervals of lease in hand, so it
  * lands while the editor is still protected.
  *
+ * ## A beat held up by the page itself asks before it gives up
+ *
+ * 🔴 A long task on the main thread runs no timer until it ends, so a page
+ * that froze for a minute or two comes back past the deadline with nothing
+ * refused: the lease ran on without the beats that renew it, and the server
+ * may well still hold it. Surrendering there drops an author into read-only
+ * over their own browser's stall. So a beat that ran a whole beat late, with
+ * the deadline behind it, sends its renewal anyway and lets the answer decide:
+ * renewed keeps the claim, a colleague's claim surrenders it as any refusal
+ * does, and a lease the server let go with nobody taking it is claimed again
+ * with a plain claim, which displaces nobody. A renewal that does not answer
+ * by the next beat, which runs on time, meets the deadline there as before.
+ *
  * ## The beat also says whether the document changed
  *
  * Given the version the editor's copy started from, every claim and beat
@@ -685,15 +698,27 @@ export function useDocumentLock({
     window.addEventListener("pagehide", onLeave);
     window.addEventListener("pageshow", onReturn);
 
+    // When the last beat began, so the next one can tell it ran late.
+    let lastBeatAt = Date.now();
     const heartbeat = setInterval(() => {
       if (cancelled) return;
 
+      const beganAt = Date.now();
+      // A beat a whole interval behind was held up by the page, not by the
+      // server: a long task on the main thread, or a hidden tab's timers
+      // slowed by the browser. No renewal could be sent while it waited.
+      const late =
+        beganAt - lastBeatAt >= 2 * DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS;
+      lastBeatAt = beganAt;
+
       // 🔴 Judged before anything is sent, so a request that never settles
-      // cannot hold the claim open past the lease it rests on.
-      if (
-        token !== null &&
-        Date.now() - confirmedAt >= DOCUMENT_LOCK_LOSS_AFTER_MS
-      ) {
+      // cannot hold the claim open past the lease it rests on. Unless the
+      // deadline passed while no beat could run: then nothing has said the
+      // claim is gone, and this beat's renewal asks. Only the late beat asks;
+      // the next one runs on time and judges as before.
+      const recovering =
+        token !== null && beganAt - confirmedAt >= DOCUMENT_LOCK_LOSS_AFTER_MS;
+      if (recovering && !late) {
         surrender({ status: "lost" });
         return;
       }
@@ -759,6 +784,20 @@ export function useDocumentLock({
               changeBeat = beat;
               tell(item.changed, false);
             }
+            return;
+          }
+          // 🔴 After a long task, a refusal is read for whether anyone else
+          // took the document. Nobody did when no claim is left, or only a
+          // lapsed one, which is this editor's own lease run out: a plain
+          // claim takes the document back and cannot displace a colleague who
+          // got there first. The state stays as it is until that claim
+          // answers. A live claim of anyone's is a refusal like any other.
+          if (
+            recovering &&
+            (item.holder === undefined || item.holder.expiresInSeconds <= 0)
+          ) {
+            token = null;
+            void acquire(false);
             return;
           }
           surrender({ status: "taken-over", holder: item.holder });
