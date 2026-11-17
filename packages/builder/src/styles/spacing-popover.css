@@ -118,13 +118,16 @@
   white-space: nowrap;
 }
 
-.nx-spacing-popover__presets {
+/* A Spacer's Height presets wear the same chips, in the panel's own width. */
+.nx-spacing-popover__presets,
+.nx-spacer-presets {
   display: grid;
   gap: 0.25rem;
 }
 
 /* Presets as separate chips that wrap, the chosen one in the shared green. */
-.nx-spacing-popover__presets .nx-segment {
+.nx-spacing-popover__presets .nx-segment,
+.nx-spacer-presets .nx-segment {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
@@ -133,7 +136,9 @@
 }
 
 .nx-spacing-popover__presets .nx-segment__option,
-.nx-spacing-popover__presets .nx-segment__option:last-child {
+.nx-spacing-popover__presets .nx-segment__option:last-child,
+.nx-spacer-presets .nx-segment__option,
+.nx-spacer-presets .nx-segment__option:last-child {
   max-inline-size: 100%;
   overflow: hidden;
   padding: 0 0.4375rem;
@@ -143,7 +148,8 @@
   white-space: nowrap;
 }
 
-.nx-spacing-popover__presets .nx-segment__option[aria-checked="true"] {
+.nx-spacing-popover__presets .nx-segment__option[aria-checked="true"],
+.nx-spacer-presets .nx-segment__option[aria-checked="true"] {
   border-color: var(--nx-builder-target-shared);
   background: var(--nx-builder-target-shared-ground);
   color: var(--nx-builder-target-shared);
