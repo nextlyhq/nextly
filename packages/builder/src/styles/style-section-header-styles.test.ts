@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import { chromeStylesheetSource } from "./chrome-stylesheet";
 
 // Comments replaced by a marker, so a rule's prose never answers for its
 // declarations, while the marker still ends the text before the next rule.
