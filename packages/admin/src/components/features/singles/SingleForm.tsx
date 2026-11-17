@@ -177,8 +177,8 @@ import type { SingleAdminOptions } from "@admin/types/entities";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
-import { useSinglePreviewLink } from "./useSinglePreviewLink";
 import { useSinglePanel, type SinglePanelProps } from "./useSinglePanel";
+import { useSinglePreviewLink } from "./useSinglePreviewLink";
 import { useSinglePreviewPane } from "./useSinglePreviewPane";
 
 // ============================================================================

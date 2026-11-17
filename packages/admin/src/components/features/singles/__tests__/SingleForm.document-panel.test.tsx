@@ -321,7 +321,9 @@ describe("what the Single's panel says about the Single", () => {
 
   it("says there's only ever one of it, where its code gives no description", () => {
     renderEditor();
-    expect(docked().getByRole("region", { name: "What this is" })).toHaveTextContent(
+    expect(
+      docked().getByRole("region", { name: "What this is" })
+    ).toHaveTextContent(
       "One entry the site uses in one place. There's only ever one Landing Page."
     );
   });
@@ -339,9 +341,9 @@ describe("what the Single's panel says about the Single", () => {
         onSubmit={vi.fn()}
       />
     );
-    expect(docked().getByRole("region", { name: "What this is" })).toHaveTextContent(
-      "The first page visitors see."
-    );
+    expect(
+      docked().getByRole("region", { name: "What this is" })
+    ).toHaveTextContent("The first page visitors see.");
   });
 
   it("reads who changed it from the Single's own details, in the language being edited", () => {
@@ -369,9 +371,9 @@ describe("what the Single's panel says about the Single", () => {
       entryId: "s1",
       locale: "de",
     });
-    expect(docked().getByRole("region", { name: "Last changed" })).toHaveTextContent(
-      "2 hours ago by Ana Lopez"
-    );
+    expect(
+      docked().getByRole("region", { name: "Last changed" })
+    ).toHaveTextContent("2 hours ago by Ana Lopez");
   });
 
   it("gives the API address View API response reads, under For developers", () => {

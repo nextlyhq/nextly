@@ -81,7 +81,7 @@ export function DetailRow({
   icon: typeof Hash;
   label: string;
   children: React.ReactNode;
-}) {
+}): React.ReactElement {
   return (
     <div className="flex items-center justify-between gap-3">
       <dt className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
@@ -133,7 +133,7 @@ export function ApiAddressCopy({
 }: {
   address: string;
   id: string | null | undefined;
-}) {
+}): React.ReactElement {
   const full =
     typeof window === "undefined"
       ? address

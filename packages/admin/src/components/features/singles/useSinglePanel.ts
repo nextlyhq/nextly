@@ -14,8 +14,8 @@
  * @module components/features/singles/useSinglePanel
  */
 
-import type { DocumentPanelProps } from "@admin/components/features/entries/EntryForm/panels";
 import { useEntryDetails } from "@admin/components/features/entries/EntryForm/entry-details-read";
+import type { DocumentPanelProps } from "@admin/components/features/entries/EntryForm/panels";
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useCanRequest } from "@admin/hooks/useCanRequest";

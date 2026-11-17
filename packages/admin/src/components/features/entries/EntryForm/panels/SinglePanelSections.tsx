@@ -81,7 +81,10 @@ export function LastChangedSection({
         ) : (
           <time
             dateTime={at}
-            title={formatDate(when, { dateStyle: "medium", timeStyle: "short" })}
+            title={formatDate(when, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })}
           >
             {formatTimeAgo(when)}
           </time>
