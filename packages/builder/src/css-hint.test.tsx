@@ -182,6 +182,16 @@ describe("a control's tooltip says what it writes", () => {
     ).getByRole("radio", { name: "Boxed" });
     expect(await hintOn(boxed)).toBe('class="nx-pb-contained"');
   });
+
+  it("on Arrange's choices, as what each one would write", async () => {
+    mount();
+    openTab("Style");
+    openSection("layout");
+    const modes = screen.getByRole("radiogroup", { name: "Arrange" });
+    expect(
+      await hintOn(within(modes).getByRole("radio", { name: "Grid" }))
+    ).toBe("display: grid");
+  });
 });
 
 describe("the tooltip on keyboard focus", () => {

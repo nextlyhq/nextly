@@ -34,6 +34,12 @@ import type {
   PublishAllLanguageOutcome,
   PublishAllPreview,
 } from "./publishAllPreview";
+import {
+  publishPartsBody,
+  type PublishPartsChoice,
+  type PublishPartsDirection,
+  type PublishPartsResult,
+} from "./publishParts";
 
 /** The canonical mutation envelope, exactly as the server sends it. */
 interface MutationResponse<T> {
@@ -939,6 +945,29 @@ export const entryApi = {
     protectedApi.get<PublishAllPreview>(
       `/collections/${collectionSlug}/entries/${id}/publish-all`
     ),
+
+  /**
+   * Publish or unpublish the parts of an entry a person chose: some of its languages, and
+   * separately its shared fields. With `describe`, say what that would do and change nothing.
+   * Hits `POST /api/collections/{slug}/entries/{id}/publish` (or `/unpublish`).
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  publishParts: async (
+    collectionSlug: string,
+    id: string,
+    direction: PublishPartsDirection,
+    choice: PublishPartsChoice
+  ): Promise<PublishPartsResult> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: PublishPartsResult;
+    }>(
+      `/collections/${collectionSlug}/entries/${id}/${direction}`,
+      publishPartsBody(choice)
+    );
+    return result.item;
+  },
 
   // ===========================================================================
   // Legacy Methods (for backwards compatibility with internal table components)

@@ -45,7 +45,11 @@ function stateOf(overrides: Partial<PartsState> = {}): PartsState {
   };
 }
 
-const OPEN_GATE: PublishGate = { refusals: () => Promise.resolve([]) };
+const OPEN_GATE: PublishGate = {
+  refusals: () => Promise.resolve([]),
+  judge: () =>
+    Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
+};
 
 /** Runs `request` against `reads`, recording each move the request makes. */
 async function run(
@@ -151,8 +155,14 @@ describe("publishing chosen parts, rule by rule", () => {
         Promise.resolve(
           question.parts
             .filter(part => part.kind === "shared")
-            .map(part => ({ part, message: "Waiting." }))
+            .map(part => ({
+              part,
+              code: "NOT_APPROVED" as const,
+              message: "Waiting.",
+            }))
         ),
+      judge: () =>
+        Promise.resolve({ refusals: [], settle: () => Promise.resolve() }),
     };
     const { issues } = await run(
       { direction: "publish", locales: ["es"], shared: true },
@@ -164,8 +174,9 @@ describe("publishing chosen parts, rule by rule", () => {
       gate
     );
 
+    // Each refusal carries the gate's own code, so a caller tells "not approved" from other holds.
     expect(issues.map(issue => [issue.code, issue.path])).toEqual([
-      ["HELD", "shared"],
+      ["NOT_APPROVED", "shared"],
     ]);
   });
 

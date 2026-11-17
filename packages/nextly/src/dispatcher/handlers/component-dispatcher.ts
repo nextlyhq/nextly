@@ -44,16 +44,22 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
-import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
+import {
+  renamedFieldsOf,
+  type SchemaChangeAnswers,
+} from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
+import { getComponentRowColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -84,6 +90,8 @@ import {
   builderSchemaPush,
   leavingSettingsStep,
   pushAndReconcileCompanion,
+  reconcileBuilderCompanion,
+  type BuilderCompanionReconcile,
 } from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -905,46 +913,47 @@ export const COMPONENTS_METHODS: Record<
           // changes.
           // The change applied by the push and written as the field group's migration, so its table
           // stands on record for every migration after it, as a collection's Builder save leaves it.
+          const companion: BuilderCompanionReconcile = {
+            slug,
+            tableName,
+            oldFields: component.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            localized: isStored,
+            wasLocalized: wasStored,
+            adapter,
+            renamed: companionRename ?? undefined,
+            // The settings the first push left off, once the shared columns hold the default
+            // language's values. A new desired schema rather than an edit of the first: the
+            // pipeline keeps the last one it applied, by reference, to skip a push that changes
+            // nothing.
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: slug,
+                  tableName,
+                  builtBy: "fieldGroup",
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  renamed: companionRename,
+                  push: () =>
+                    push({
+                      ...desired,
+                      components: {
+                        ...desired.components,
+                        [slug]: {
+                          ...desired.components[slug],
+                          fields: fields as DesiredFieldGroup["fields"],
+                        },
+                      },
+                    }),
+                })
+              : undefined,
+          };
           await writeBuilderSchemaChange(
             builderSave,
             () =>
-              pushAndReconcileCompanion(push, desired, "component", {
-                slug,
-                tableName,
-                oldFields: component.fields as unknown as FieldDefinition[],
-                newFields: fields as unknown as FieldDefinition[],
-                localized: isStored,
-                wasLocalized: wasStored,
-                adapter,
-                renamed: companionRename ?? undefined,
-                // The settings the first push left off, once the shared columns hold the default
-                // language's values. A new desired schema rather than an edit of the first: the
-                // pipeline keeps the last one it applied, by reference, to skip a push that changes
-                // nothing.
-                settleLeaving: settingsDeferred
-                  ? leavingSettingsStep({
-                      adapter,
-                      entity: slug,
-                      tableName,
-                      builtBy: "fieldGroup",
-                      oldFields: (component.fields ??
-                        []) as unknown as FieldDefinition[],
-                      newFields: fields as unknown as FieldDefinition[],
-                      renamed: companionRename,
-                      push: () =>
-                        push({
-                          ...desired,
-                          components: {
-                            ...desired.components,
-                            [slug]: {
-                              ...desired.components[slug],
-                              fields: fields as DesiredFieldGroup["fields"],
-                            },
-                          },
-                        }),
-                    })
-                  : undefined,
-              }),
+              pushAndReconcileCompanion(push, desired, "component", companion),
             {
               kind: "fieldGroup",
               slug,
@@ -973,7 +982,32 @@ export const COMPONENTS_METHODS: Record<
                     fields as unknown as FieldDefinition[]
                   )),
             },
-            landing.landed
+            landing.landed,
+            {
+              // The push where the save carries values across its change; its own migration file,
+              // run in tries as `nextly migrate` runs it, where it carries none.
+              pushWhen: () =>
+                pushCarriesValues({
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasStored,
+                  isStored,
+                  renamed: companionRename,
+                  liveTable: async () =>
+                    (await introspectLiveSnapshot(db, dialect, [tableName]))
+                      .tables[0],
+                  columnOf: field =>
+                    getComponentRowColumnDescriptor(
+                      field,
+                      dialect,
+                      "fieldGroup"
+                    ),
+                  renames: renamedFieldsOf(renameResolutions ?? []),
+                }),
+              afterFile: () =>
+                reconcileBuilderCompanion("component", companion),
+            }
           );
 
           const newSchemaVersion = currentVersion + 1;

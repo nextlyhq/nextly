@@ -13,7 +13,7 @@
 
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
@@ -33,6 +33,8 @@ import {
   UnsavedWorkProvider,
   useUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import { usePublishPartsAction } from "@admin/components/features/entries/publish-parts/usePublishPartsAction";
+import { languageLabelOf } from "@admin/components/features/entries/publishAllOutcomes";
 import {
   isRemovedFromCode,
   removedEntityHasNoTable,
@@ -74,6 +76,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import type { ShownCopy } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -342,6 +345,31 @@ export default function EditEntryPage({
       collection.localized === true
         ? locales.map(each => each.label)
         : undefined,
+  });
+  // "Choose what to publish…", on the Publish split: each language, and separately the shared
+  // fields. A translated entry offers its languages; one that is not offers the shared fields,
+  // which are the whole document.
+  const translatedLanguages =
+    localizationEnabled &&
+    collection !== undefined &&
+    "localized" in collection &&
+    collection.localized === true
+      ? locales.map(each => each.code)
+      : [];
+  // How to read the copy the editor shows, filled by the editor once it is drawn, so a publish
+  // of chosen parts is refused when the entry changed since the editor opened it.
+  const shownCopy = useRef<(() => ShownCopy) | null>(null);
+  const publishParts = usePublishPartsAction({
+    target: slug && id ? { kind: "collection", slug, id } : undefined,
+    shown: () => shownCopy.current?.(),
+    lifecycleEnabled: collection?.status,
+    languages: translatedLanguages,
+    labelOf: languageLabelOf(locales),
+    currentLocale: locale,
+    defaultLocale,
+    sharedPending:
+      (entry as { _sharedChangesPending?: unknown } | undefined)
+        ?._sharedChangesPending === true,
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -821,7 +849,9 @@ export default function EditEntryPage({
             </div>
           )}
           {schedule.dialog}
+          {publishParts.dialog}
           <EntryForm
+            shownCopy={shownCopy}
             revealOutline={<EditEntryPageSkeleton />}
             revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
@@ -866,15 +896,19 @@ export default function EditEntryPage({
             onViewApi={() =>
               navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
             }
-            /* Contributed to the editor's action model, which places both on
-             the Publish split's arrow: they decide when this goes live, and
-             the toolbar is reserved for the verbs an author reaches for while
-             writing. Schedule first, the one most often reached for. A
-             document whose collection was removed from code offers none. */
+            /* Contributed to the editor's action model, which places them on
+             the Publish split's arrow: they decide what goes live and when,
+             and the toolbar is reserved for the verbs an author reaches for
+             while writing. Choosing what to publish first, as it publishes
+             now; then Schedule. A document whose collection was removed from
+             code offers none. */
             documentActions={
               removedFromCode
                 ? []
                 : [
+                    ...(publishParts.contributed === null
+                      ? []
+                      : [publishParts.contributed]),
                     ...(schedule.contributed === null
                       ? []
                       : [schedule.contributed]),

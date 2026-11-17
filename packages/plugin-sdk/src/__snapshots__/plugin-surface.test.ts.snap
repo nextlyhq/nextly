@@ -612,6 +612,8 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "EmailProviderDefinition (type)",
   "EmailProviderDescriptor (type)",
   "EmailTemplateData (type)",
+  "EmailTemplateReference (type)",
+  "EmailTemplateReferencesContext (type)",
   "EntryVerdict (type)",
   "EventBus (type)",
   "EventEnvelope (type)",

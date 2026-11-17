@@ -13,6 +13,7 @@
 // genuinely reachable; with letters outside ASCII it is reached sooner.
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { listMarkedUnique, uniqueNotOnListMessage } from "../field-rules";
 import { isMysqlTextOrBlobType } from "../pipeline/sql-templates/create-index";
 
 /**
@@ -290,6 +291,44 @@ export function uniquenessCanBeAnIndex(
   // The same TEXT/BLOB question the index renderer asks before keying a column by prefix, every
   // size of both included.
   return !isMysqlTextOrBlobType(columnType);
+}
+
+/**
+ * Refuses the first relation holding a list that `fields` marks unique, nested and translated ones
+ * included (`listMarkedUnique`). Each generator and the Builder's save ask it of the fields as
+ * declared, before anything is filtered by where it is stored or any statement is made.
+ */
+export function refuseUniqueOnList(
+  tableName: string,
+  fields: readonly unknown[],
+  dialect: string
+): void {
+  const listName = listMarkedUnique(fields);
+  if (listName !== undefined) {
+    throw uniqueNotOnListError(tableName, listName, dialect);
+  }
+}
+
+/**
+ * The refusal for a relationship holding a list marked unique, on every dialect and every road
+ * that judges it: no dialect keeps such uniqueness (`relationHoldsReferenceList` says why), so the
+ * mark is refused before any statement, naming the field and what to do instead.
+ */
+function uniqueNotOnListError(
+  tableName: string,
+  fieldName: string,
+  dialect: string
+): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `fields.${fieldName}`,
+        code: "UNIQUE_NOT_ON_LIST",
+        message: uniqueNotOnListMessage(fieldName),
+      },
+    ],
+    logContext: { tableName, field: fieldName, dialect },
+  });
 }
 
 /**

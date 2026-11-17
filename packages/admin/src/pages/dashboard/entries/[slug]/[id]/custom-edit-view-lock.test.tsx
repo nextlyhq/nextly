@@ -139,6 +139,7 @@ vi.mock("@admin/hooks/useCanRequest", () => ({
   useAsksTranslationStatus: () => false,
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
+  // As the hook answers on a site without languages: no locales, always a list.
   useLocalization: () => ({
     defaultLocale: undefined,
     enabled: false,
