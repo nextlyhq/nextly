@@ -850,10 +850,11 @@ export class SingleMetadataService {
     // HMR reload can replace the process-global field-type registry while this request waits, and
     // `planUpdate` below renders DDL against the NEW registration while `updateData.fields` still
     // carries options only the old one accepted.
-    const { assertValidPluginFieldOptions } = await import(
-      "../../../api/fields-payload"
-    );
+    const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+      await import("../../../api/fields-payload");
     assertValidPluginFieldOptions(args.fields ?? []);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(args.fields ?? []);
     // Judged against the fields as stored now, so only a pair of sibling fields this save creates
     // is refused, and one the Single already holds keeps working.
     if (args.fields !== undefined) {
@@ -2863,10 +2864,11 @@ export class SingleMetadataService {
     //
     // Placed alongside the ownership checks so the whole precondition set is re-established in one
     // place: this method is what a new precondition should be added to.
-    const { assertValidPluginFieldOptions } = await import(
-      "../../../api/fields-payload"
-    );
+    const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+      await import("../../../api/fields-payload");
     assertValidPluginFieldOptions(input.fields);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(input.fields);
   }
 
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
