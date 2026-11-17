@@ -489,6 +489,31 @@ and nothing changes. If an Image's file is deleted from the media library, the b
 
 An Image with no picture draws nothing on the published page.
 
+## Bold, italic and links in a Text
+
+A Text is one paragraph of words, edited where it is shown: double-click it on the
+canvas, or select it and press <kbd>Enter</kbd>. Select some words and a small bar
+appears just above them:
+
+- **B** makes them bold and **I** italic. <kbd>Ctrl</kbd>+<kbd>B</kbd> and
+  <kbd>Ctrl</kbd>+<kbd>I</kbd> do the same.
+- **Link** (or <kbd>Ctrl</kbd>+<kbd>K</kbd>) asks for the address, with **Open in a new
+  tab**. An address that would run a script is refused. With a link selected, **Remove
+  link** takes it off.
+
+<kbd>Alt</kbd>+<kbd>F10</kbd> moves to the bar from the keyboard, the arrow keys
+move along it, and <kbd>Escape</kbd> goes back to the words.
+
+A Text stays one paragraph: <kbd>Enter</kbd> (and <kbd>Shift</kbd>+<kbd>Enter</kbd>)
+starts a new line in it. Paste a passage with headings or lists and the words stay
+while the rest goes, with the note "Text keeps words, bold, italic and links. Use Rich
+text for headings and lists". Headings, lists and quotes belong in a **Rich text**
+block.
+
+The Text's field in the inspector edits the same words, and the canvas shows them as you
+type. A Text bound to a field takes a text field's words as one plain paragraph; a
+rich-text field isn't offered for it.
+
 ## Pages
 
 **Pages** in the rail lists the site's pages, grouped by the kind of page when the
@@ -655,6 +680,23 @@ layout:
 A block hidden on a device still counts as a block above the next one. When every
 block above it is hidden, the first block shown in a normal-flow container keeps the
 gap above it; give that block a top margin of 0 on that device to remove it.
+
+### Setting margin and padding
+
+**Style → Spacing** draws a block's margin and padding as one box: margin is the outer
+ring and padding the inner one. Each side shows its value.
+
+- **Click a side** (or press Enter on it) to open its popover. It holds:
+  - your spacing variables as presets, smallest first, after **None**;
+  - a number with its unit;
+  - **Apply to**: **This side**, **Top & bottom** (or **Left & right**), or **All sides**.
+- **Type a number** on a side to set it straight away. Tab saves it and moves to the next
+  side, so `4 0 Tab 4 0 Tab…` goes round the box: Top, Right, Bottom, Left, margin first,
+  then padding.
+- **A value in green** comes from one of your spacing variables, so it changes when the
+  variable does.
+- **To reset a side**, use the popover's **⋯ → Reset**, right-click the side, or press
+  Alt+Backspace (Option+Delete on a Mac).
 
 With a block selected, the canvas shows the space above it from its container as
 **Gap · from Section** (or the container's name), not as the block's own margin.
@@ -991,6 +1033,9 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>V</kbd>                                                                | Paste copied blocks where a clicked block would land                                                                              |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd>                                 | While editing a Text, make the selected words bold or italic                                                                      |
+| <kbd>Ctrl</kbd>+<kbd>K</kbd>                                                                | While editing a Text, link the selected words                                                                                     |
+| <kbd>Alt</kbd>+<kbd>F10</kbd>                                                               | While editing a Text, move to the formatting bar                                                                                  |
 | <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |

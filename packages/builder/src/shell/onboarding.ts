@@ -25,11 +25,13 @@
 
 import {
   getBlock,
+  oneParagraphWords,
   walkNodes,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { richInlineTargets } from "../canvas/inline-rich-text";
 import { inlineTargets } from "../canvas/inline-text";
 import { startWords } from "../canvas/page-start-words";
 import { insertionPropSets } from "../panels/add/inserter";
@@ -55,7 +57,11 @@ function startingTexts(node: BlockNode, prop: string): ReadonlySet<string> {
   return new Set(
     insertionPropSets(definition).flatMap(props => {
       const value = props[prop];
-      return typeof value === "string" ? [value.trim()] : [];
+      // A Text starts with a one-paragraph value: its words are what it
+      // started with.
+      if (typeof value === "string") return [value.trim()];
+      const words = oneParagraphWords(value).trim();
+      return words === "" ? [] : [words];
     })
   );
 }
@@ -73,7 +79,18 @@ function hasAuthoredText(document: BlockDocument): boolean {
     // so "text an author could have written here" means one thing in both
     // places. A block with no inline values cannot satisfy this step, which is
     // correct: there was nothing to type.
-    found = inlineTargets(document, node.id).some(target => {
+    // A Text's words count as typed text as a line's do: its one-paragraph
+    // value, read as the words it draws.
+    const typed = [
+      ...inlineTargets(document, node.id),
+      ...richInlineTargets(document, node.id)
+        .filter(target => target.oneParagraph === true)
+        .map(target => ({
+          prop: target.prop,
+          value: oneParagraphWords(target.stored),
+        })),
+    ];
+    found = typed.some(target => {
       const text = target.value.trim();
       return text !== "" && !startingTexts(node, target.prop).has(text);
     });
