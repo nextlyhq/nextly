@@ -389,6 +389,20 @@ function openAdvanced(): void {
   if (advanced.getAttribute("aria-selected") !== "true") {
     fireEvent.mouseDown(advanced);
   }
+  openHtmlSection();
+}
+
+/**
+ * Open Advanced's HTML section unless it is open: it starts closed on a block
+ * whose HTML holds nothing, and these tests are about its fields.
+ */
+function openHtmlSection(): void {
+  const header = document.querySelector<HTMLElement>(
+    '[data-section="html"] [data-slot="accordion-trigger"]'
+  );
+  if (header !== null && header.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(header);
+  }
 }
 
 describe("the picture the canvas draws, carried to the focal point", () => {
@@ -490,7 +504,10 @@ describe("InspectorPanel block card", () => {
 
   it("titles the card by type alone when the block has no label", () => {
     mount();
-    expect(screen.getByRole("heading", { name: "Heading" })).toBeDefined();
+    // The card's title, a level above the Content section named after it.
+    expect(
+      screen.getByRole("heading", { name: "Heading", level: 2 })
+    ).toBeDefined();
   });
 
   it("renames from the menu, in one op through the store, on blur", async () => {
