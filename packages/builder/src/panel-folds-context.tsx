@@ -9,6 +9,7 @@
  */
 import * as React from "react";
 
+import { sectionShown, useSettingsMatch } from "./settings-filter";
 import {
   sectionOpens,
   withSectionFold,
@@ -81,6 +82,24 @@ export function useTabFolds(
   readonly onOpenChange: (open: string[]) => void;
 } {
   const { folds, change } = usePanelFolds();
+  const match = useSettingsMatch();
+  // While the panel is filtered, the sections holding a match open on their
+  // own, and what the author opens or closes then is kept for that search
+  // alone: the folds they left come back as they were once it is cleared.
+  const searching = `${match.query}\u0000${String(match.onlyChanged)}`;
+  const [during, setDuring] = React.useState<{
+    readonly search: string;
+    readonly open: string[];
+  } | null>(null);
+  if (match.active) {
+    const matched = sections
+      .filter(section => sectionShown(match, tab, section.key))
+      .map(section => section.key);
+    return {
+      open: during?.search === searching ? during.open : matched,
+      onOpenChange: next => setDuring({ search: searching, open: next }),
+    };
+  }
   const open = sections
     .filter((section, index) =>
       sectionOpens(folds, tab, section.label, {

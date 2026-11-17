@@ -32,7 +32,14 @@
  * @module inspector-panel
  */
 
-import type { BlockDocument, ComponentLookup } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  findNode,
+  type BlockDocument,
+  type BreakpointId,
+  type ComponentLookup,
+  type StyleState,
+} from "@nextlyhq/blocks-engine";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -91,6 +98,24 @@ import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
+import {
+  advancedEntries,
+  contentEntries,
+  styleEntries,
+} from "./settings-entries";
+import {
+  FilterNote,
+  SettingsFilterProvider,
+  SettingsMatchProvider,
+  SettingsSearchRow,
+  settingsMatch,
+  TabCount,
+  useFilterState,
+  useFindShortcut,
+  type SettingsMatch,
+} from "./settings-filter";
+import { filtering, type SettingsFilter } from "./settings-index";
+import { inspectStyle } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -303,7 +328,9 @@ export function InspectorPanel({
         <CanvasPassageContext.Provider value={canvasPassage}>
           <PanelFoldsProvider>
             <CssNamesProvider>
-              <SelectionInspector {...panel} />
+              <SettingsFilterProvider>
+                <SelectionInspector {...panel} />
+              </SettingsFilterProvider>
             </CssNamesProvider>
           </PanelFoldsProvider>
         </CanvasPassageContext.Provider>
@@ -422,6 +449,7 @@ function InspectorTabs({
           className="nx-inspector__tab"
         >
           {tab.label}
+          <TabCount tab={tab.value} />
         </TabsTrigger>
       ))}
     </TabsList>
@@ -435,10 +463,13 @@ function InspectorTabs({
 function ContentTabPanel({
   tabs,
   shown,
+  onChoose,
   ...content
 }: {
   tabs: readonly InspectorTab[];
   shown: string;
+  /** Show another tab, from the filter's "2 in Advanced". */
+  onChoose: (tab: string) => void;
 } & Omit<
   React.ComponentProps<typeof ContentTab>,
   "onScreen"
@@ -446,6 +477,7 @@ function ContentTabPanel({
   if (!tabs.includes("content")) return null;
   return (
     <TabsContent value="content" forceMount hidden={shown !== "content"}>
+      <FilterNote tab="content" onChoose={onChoose} />
       <ContentTab {...content} onScreen={shown === "content"} />
     </TabsContent>
   );
@@ -513,6 +545,9 @@ function SelectionInspector({
     editor.sortFieldAsked?.seq,
     inspection
   );
+  // "Find a setting" and "Only changed", kept across selections above this.
+  const filter = useFilterState();
+  const find = useFindShortcut();
 
   const commit = React.useCallback(
     (name: string, value: unknown): BlockDocument | null => {
@@ -554,9 +589,14 @@ function SelectionInspector({
   const block = surface.block;
   const lock = lockStatusOf(editor.document, block.nodeId, lockViewOf(editor));
   const tabs = inspectorTabsOf(block);
+  const match = blockMatch(editor.document, block, filter, {
+    state: styleState?.state,
+    breakpoint,
+  });
 
   return (
-    <div className="nx-inspector">
+    // The "/" shortcut is the panel's: from anywhere in it but a text field.
+    <div className="nx-inspector" onKeyDown={find.onKeyDown}>
       <BlockCard
         // Keyed by node, so a rename half-typed for one block does not carry
         // to the next.
@@ -596,10 +636,18 @@ function SelectionInspector({
         the chosen tab shows its first, and the next block that has the
         chosen one shows it again.
       */}
-      <Tabs value={shown} onValueChange={choose} className="nx-inspector__tabs">
-        <InspectorTabList tabs={tabs} shown={shown} />
+      <SettingsMatchProvider value={match}>
+        <Tabs
+          value={shown}
+          onValueChange={choose}
+          className="nx-inspector__tabs"
+        >
+          <InspectorTabList tabs={tabs} shown={shown} />
+          {/* Under the tabs, on every tab; before the panels in the page's
+            order, so a sticky header can hold the two together. */}
+          <SettingsSearchRow field={find.field} />
 
-        {/*
+          {/*
           FORCE-MOUNTED, Content and Advanced both: a field commits on blur
           and the tabs activate on mousedown, before the blur, and Advanced
           holds a draft, so unmounting either threw away what the author
@@ -608,56 +656,90 @@ function SelectionInspector({
           accessibility tree as unmounting did. A block without a Content tab
           mounts none.
         */}
-        <ContentTabPanel
-          tabs={tabs}
-          shown={shown}
-          block={block}
-          editor={editor}
-          onCommit={commit}
-          inspectors={inspectors}
-          services={contentServices}
-          reasonId={reasonId}
-          fields={fields}
-          around={{
-            breakpoints: styleOnly.breakpoints,
-            cascade,
-            renderedTag: canvas.tag,
-          }}
-        />
-
-        <TabsContent value="style">
-          <StyleTab
-            {...styleOnly}
-            editor={editor}
-            styleNode={styleNode}
-            renderedTag={canvas.tag}
-            renderedPicture={canvas.picture}
-            renderedPicturePosition={canvas.picturePosition}
-            sideOrientation={canvas.orientation}
-            styleState={styleState}
-            breakpoint={breakpoint}
-            cascade={cascade}
-            previewContainer={previewContainer}
-            verbs={verbs}
-          />
-        </TabsContent>
-
-        <TabsContent value="advanced" forceMount hidden={shown !== "advanced"}>
-          <AdvancedTab
+          <ContentTabPanel
+            tabs={tabs}
+            shown={shown}
+            onChoose={choose}
             block={block}
             editor={editor}
             onCommit={commit}
+            inspectors={inspectors}
             services={contentServices}
-            blocks={blocks}
-            onScreen={shown === "advanced"}
             reasonId={reasonId}
             fields={fields}
-            breakpoints={styleOnly.breakpoints}
-            breakpoint={breakpoint}
-            breakpointsStatus={breakpointsStatus}
+            around={{
+              breakpoints: styleOnly.breakpoints,
+              cascade,
+              renderedTag: canvas.tag,
+            }}
           />
-        </TabsContent>
-      </Tabs>
+
+          <TabsContent value="style">
+            <FilterNote tab="style" onChoose={choose} />
+            <StyleTab
+              {...styleOnly}
+              editor={editor}
+              styleNode={styleNode}
+              renderedTag={canvas.tag}
+              renderedPicture={canvas.picture}
+              renderedPicturePosition={canvas.picturePosition}
+              sideOrientation={canvas.orientation}
+              styleState={styleState}
+              breakpoint={breakpoint}
+              cascade={cascade}
+              previewContainer={previewContainer}
+              verbs={verbs}
+            />
+          </TabsContent>
+
+          <TabsContent
+            value="advanced"
+            forceMount
+            hidden={shown !== "advanced"}
+          >
+            <FilterNote tab="advanced" onChoose={choose} />
+            <AdvancedTab
+              block={block}
+              editor={editor}
+              onCommit={commit}
+              services={contentServices}
+              blocks={blocks}
+              onScreen={shown === "advanced"}
+              reasonId={reasonId}
+              fields={fields}
+              breakpoints={styleOnly.breakpoints}
+              breakpoint={breakpoint}
+              breakpointsStatus={breakpointsStatus}
+            />
+          </TabsContent>
+        </Tabs>
+      </SettingsMatchProvider>
     </div>
+  );
+}
+
+/**
+ * What the filter keeps of the selected block: its settings on every tab,
+ * read from the same inspections the tabs draw. Read only while a filter is
+ * on, so an unfiltered panel builds no index.
+ */
+function blockMatch(
+  document: BlockDocument,
+  block: BlockInspection,
+  filter: SettingsFilter,
+  at: { state: StyleState | undefined; breakpoint: BreakpointId | undefined }
+): SettingsMatch {
+  if (!filtering(filter)) return settingsMatch([], filter);
+  const style = inspectStyle(document, block.nodeId, {
+    state: at.state ?? "base",
+    breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+  });
+  return settingsMatch(
+    [
+      ...contentEntries(block),
+      ...styleEntries(style?.sections ?? [], block),
+      ...advancedEntries(block, findNode(document.nodes, block.nodeId)),
+    ],
+    filter
   );
 }

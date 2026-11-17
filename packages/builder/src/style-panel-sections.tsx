@@ -28,6 +28,11 @@ import { ContentWidthFields } from "./content-width-fields";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
+import {
+  sectionShown,
+  useSettingsMatch,
+  type SettingsMatch,
+} from "./settings-filter";
 import { SectionHeading } from "./panel-section";
 import { SectionHeld } from "./section-held";
 import { spacingRings } from "./spacing-box";
@@ -66,6 +71,7 @@ export function StyleSections({
 }): React.JSX.Element {
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
+  const match = useSettingsMatch();
   const { open, onOpenChange } = useTabFolds(
     "style",
     sections.map(section => ({
@@ -85,6 +91,7 @@ export function StyleSections({
             key={section.key}
             section={section}
             open={open.includes(section.key)}
+            hidden={!sectionShown(match, "style", section.key)}
             readOnlyReason={readOnlyReason}
             {...surroundings}
           />
@@ -125,6 +132,8 @@ type StyleSectionItemProps = {
   section: StyleSection;
   /** Whether it is the section open, whose fields are drawn. */
   open: boolean;
+  /** Whether the panel's filter keeps nothing in it, so it is not drawn. */
+  hidden: boolean;
   /** Why every control is read-only, which also withholds "+ More". */
   readOnlyReason: string | undefined;
 } & StyleFieldSurroundings;
@@ -145,6 +154,7 @@ function sameClosedSection(
 ): boolean {
   if (before.open || after.open) return false;
   return (
+    before.hidden === after.hidden &&
     before.section.key === after.section.key &&
     before.section.label === after.section.label &&
     holdsValues(before.section) === holdsValues(after.section)
@@ -166,11 +176,16 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
   React.memo(function StyleSectionItem({
     section,
     open: _open,
+    hidden,
     readOnlyReason,
     ...surroundings
   }: StyleSectionItemProps): React.JSX.Element {
     return (
-      <AccordionItem value={section.key} data-section={section.key}>
+      <AccordionItem
+        value={section.key}
+        data-section={section.key}
+        hidden={hidden}
+      >
         <SectionHeading
           label={section.label}
           holdsValues={holdsValues(section)}
@@ -191,6 +206,38 @@ const StyleSectionItem: React.NamedExoticComponent<StyleSectionItemProps> =
   }, sameClosedSection);
 
 /**
+ * A section's properties drawn at once, and those behind "+ More". While the
+ * panel is filtered, every property it keeps is drawn at once, "+ More"'s
+ * included, and nothing else.
+ */
+function shownProperties(
+  section: StyleSection,
+  isRevealed: (property: string) => boolean,
+  match: SettingsMatch
+): {
+  shown: readonly InspectedStyleProperty[];
+  more: readonly InspectedStyleProperty[];
+} {
+  if (match.active) {
+    const kept = match.kept.get("style");
+    return {
+      shown: section.properties.filter(
+        property => kept?.has(property.property) === true
+      ),
+      more: [],
+    };
+  }
+  return {
+    shown: section.properties.filter(
+      property => property.common || isRevealed(property.property)
+    ),
+    more: section.properties.filter(
+      property => !property.common && !isRevealed(property.property)
+    ),
+  };
+}
+
+/**
  * An open section's fields: its common properties, any that hold a value,
  * and the rest behind "+ More".
  */
@@ -209,7 +256,7 @@ function SectionBody({
   editing,
   onChooseForm,
   breakpoints,
-}: Omit<StyleSectionItemProps, "open">): React.JSX.Element {
+}: Omit<StyleSectionItemProps, "open" | "hidden">): React.JSX.Element {
   const readOnly = readOnlyReason !== undefined;
   /*
    * What the author brought out from "+ More". Held here, in a body keyed by
@@ -222,12 +269,8 @@ function SectionBody({
     () => new Set()
   );
   const isRevealed = (property: string) => revealed.has(property);
-  const shown = section.properties.filter(
-    property => property.common || isRevealed(property.property)
-  );
-  const more = section.properties.filter(
-    property => !property.common && !isRevealed(property.property)
-  );
+  const match = useSettingsMatch();
+  const { shown, more } = shownProperties(section, isRevealed, match);
   const surroundings: StyleFieldSurroundings = {
     orientation,
     nodeId,
