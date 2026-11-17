@@ -12,9 +12,9 @@
  * @module admin/site-style-read.test
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   PAGE_BUILDER_PLUGIN_NAME,
@@ -36,6 +36,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 const { useStoredSiteStyle } = await import("./site-style-read");
+const { forgetStartedReads, startBuilderReads } = await import(
+  "./startup-reads"
+);
 
 const STORED = {
   tokens: { tokens: [] },
@@ -170,5 +173,55 @@ describe("whether the answer in hand is the site as it is now", () => {
     expect(second.result.current.current).toBe(true);
     // Fresh, so nothing was read again.
     expect(reads).toHaveLength(1);
+  });
+});
+
+describe("the builder's start-up answer for the site style", () => {
+  /** A start-up read whose site style answer is `body`. */
+  function startWith(body: unknown): void {
+    startBuilderReads("ada", [SITE_STYLE_ROUTE_PATH], async () => ({
+      [SITE_STYLE_ROUTE_PATH]: { status: 200, body },
+    }));
+  }
+
+  afterEach(() => forgetStartedReads());
+
+  it("is what the opening read takes, with no request of its own", async () => {
+    startWith(STORED);
+    const { result } = renderHook(() => useStoredSiteStyle(), {
+      wrapper: wrapper(),
+    });
+    await waitFor(() => expect(result.current.data).toEqual(STORED));
+    expect(reads).toHaveLength(0);
+  });
+
+  it("is never what a refresh reads, though it is still handed out", async () => {
+    const shared = wrapper(60_000);
+    const first = renderHook(() => useStoredSiteStyle(), { wrapper: shared });
+    await waitFor(() => expect(first.result.current.current).toBe(true));
+    first.unmount();
+
+    // The builder opens again on a fresh cached answer: the mount reads
+    // nothing, so the start-up answer read before the save is left untaken.
+    startWith({ ...STORED, classes: [] });
+    const second = renderHook(() => useStoredSiteStyle(), { wrapper: shared });
+    const saved = { ...STORED, fonts: { body: "Inter" } };
+    answer = async () => saved;
+
+    await act(async () => {
+      await second.result.current.refetch();
+    });
+    expect(reads).toHaveLength(2);
+    await waitFor(() => expect(second.result.current.data).toEqual(saved));
+
+    // Nor is it what a read made to merge a refused save onto takes.
+    const merged = { ...saved, tokens: { tokens: [{ id: "t" }] } };
+    answer = async () => merged;
+    let fresh: unknown;
+    await act(async () => {
+      fresh = await second.result.current.readFresh();
+    });
+    expect(fresh).toEqual(merged);
+    expect(reads).toHaveLength(3);
   });
 });
