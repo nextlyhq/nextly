@@ -102,6 +102,13 @@ export interface DocumentsUsing {
     readonly collection: string;
     readonly documents: readonly (string | null)[];
     /**
+     * How many blocks reference it in each document, in `documents`' order,
+     * where the read could count them: `null` for a document whose rows hold
+     * no count (stored before the count was kept). Absent from a listing the
+     * grouped read made, which sees documents and not rows.
+     */
+    readonly blocks?: readonly (number | null)[];
+    /**
      * Set when `collection` names a Single rather than a collection: its one
      * document is listed with no id, and is read through the Single API.
      */
@@ -119,6 +126,16 @@ interface FoundReference {
   readonly document: string | null;
   /** Whether the row is filed under a Single rather than a collection. */
   readonly single?: boolean;
+  /**
+   * The row's own share of the document's blocks, where the row read it:
+   * which stored copy (language and form) and field it describes, and its
+   * count, `null` when it holds none.
+   */
+  readonly share?: {
+    readonly copy: string;
+    readonly field: string;
+    readonly blocks: number | null;
+  };
 }
 
 /** Where a reference's documents are grouped: a Single apart from a collection of its name. */
@@ -146,7 +163,12 @@ function listingFrom(
     {
       collections: Map<
         string,
-        { collection: string; single: boolean; documents: Set<string | null> }
+        {
+          collection: string;
+          single: boolean;
+          documents: Set<string | null>;
+          shares: Map<string | null, FoundReference["share"][]>;
+        }
       >;
       placeable: boolean;
     }
@@ -167,23 +189,57 @@ function listingFrom(
       collection,
       single: reference.single === true,
       documents: new Set<string | null>(),
+      shares: new Map<string | null, FoundReference["share"][]>(),
     };
     group.documents.add(reference.document);
+    const shares = group.shares.get(reference.document) ?? [];
+    shares.push(reference.share);
+    group.shares.set(reference.document, shares);
     entry.collections.set(key, group);
   }
   const whole = indexIsWhole(health);
   const listings = new Map<string, DocumentsUsing>();
   for (const [id, entry] of byId) {
     listings.set(id, {
-      collections: [...entry.collections.values()].map(group => ({
-        collection: group.collection,
-        documents: [...group.documents],
-        ...(group.single ? { single: true as const } : {}),
-      })),
+      collections: [...entry.collections.values()].map(group => {
+        const documents = [...group.documents];
+        const blocks = documents.map(document =>
+          blocksInDocument(group.shares.get(document) ?? [])
+        );
+        return {
+          collection: group.collection,
+          documents,
+          // Only where every document's rows were read: the grouped read
+          // finds documents without their rows.
+          ...(blocks.every(count => count !== undefined)
+            ? { blocks: blocks.map(count => count ?? null) }
+            : {}),
+          ...(group.single ? { single: true as const } : {}),
+        };
+      }),
       complete: !readCut && entry.placeable && whole,
     });
   }
   return listings;
+}
+
+/**
+ * How many blocks of one document reference something, from its rows: the
+ * fields of one stored copy add up, since each is part of the same page, and
+ * the copies (a draft beside the published page, another language) are the
+ * same blocks again, so the largest copy is the page's. `null` when some row
+ * holds no count, and `undefined` when the rows were not read.
+ */
+function blocksInDocument(
+  shares: readonly FoundReference["share"][]
+): number | null | undefined {
+  const byCopy = new Map<string, number>();
+  for (const share of shares) {
+    if (share === undefined) return undefined;
+    if (share.blocks === null) return null;
+    byCopy.set(share.copy, (byCopy.get(share.copy) ?? 0) + share.blocks);
+  }
+  return byCopy.size === 0 ? undefined : Math.max(...byCopy.values());
 }
 
 /**
@@ -327,7 +383,48 @@ function foundIn<TRow extends UsageSubject>(
     document:
       typeof row[DOCUMENT_COLUMN] === "string" ? row[DOCUMENT_COLUMN] : null,
     single: row.scope === "single",
+    ...shareOf(index, own, row),
   };
+}
+
+/**
+ * A row's share of its document's blocks, for an index that counts them: the
+ * class index's rows carry `blocks`. Nothing for any other index.
+ */
+function shareOf<TRow extends UsageSubject>(
+  index: UsageIndex<TRow>,
+  own: Omit<TRow, keyof UsageSubject>,
+  row: Record<string, unknown>
+): Pick<FoundReference, "share"> {
+  const blocks = index.blocksOf?.(own);
+  if (blocks === undefined) return {};
+  return {
+    share: {
+      copy: `${String(row.locale)}\u0000${String(row.variant)}`,
+      field: String(row.field),
+      blocks,
+    },
+  };
+}
+
+/**
+ * How many blocks a listing's documents hold, and whether that is all of them:
+ * a floor when the listing is, or when any document's count is unknown.
+ * `undefined` when the listing counted no blocks at all.
+ */
+export function blockCountOf(
+  found: DocumentsUsing
+): { blocks: number; complete: boolean } | undefined {
+  let blocks = 0;
+  let known = found.complete;
+  for (const entry of found.collections) {
+    if (entry.blocks === undefined) return undefined;
+    for (const count of entry.blocks) {
+      if (count === null) known = false;
+      else blocks += count;
+    }
+  }
+  return { blocks, complete: known };
 }
 
 /**
