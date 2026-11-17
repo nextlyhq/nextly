@@ -754,7 +754,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("a shared style's block counts", () => {
-      const styled = (id: string): Node => ({ ...text(id), classes: ["c-card"] });
+      const styled = (id: string): Node => ({
+        ...text(id),
+        classes: ["c-card"],
+      });
 
       /** Each page's stored rows for `c-card`: its id, field, copy and count. */
       async function cardRows(t: TestNextly) {

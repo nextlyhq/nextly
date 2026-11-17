@@ -1156,7 +1156,9 @@ export function sharedStyleUsagePath(
   if (here !== undefined) {
     params.set(
       SHARED_STYLE_HERE_PARAM,
-      "single" in here ? `single:${here.single}` : `${here.collection}/${here.id}`
+      "single" in here
+        ? `single:${here.single}`
+        : `${here.collection}/${here.id}`
     );
   }
   return `${SHARED_STYLE_USAGE_ROUTE_PATH}?${params.toString()}`;

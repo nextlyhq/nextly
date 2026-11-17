@@ -70,7 +70,10 @@ describe("a style's usage", () => {
 
   it("counts no blocks for an index that keeps none", () => {
     const usage = usageOf(
-      { collections: [{ collection: "pages", documents: ["p1"] }], complete: true },
+      {
+        collections: [{ collection: "pages", documents: ["p1"] }],
+        complete: true,
+      },
       kindOf,
       { collection: "pages", id: "p1" }
     );

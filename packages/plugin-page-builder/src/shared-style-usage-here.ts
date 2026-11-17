@@ -12,7 +12,11 @@ import {
   type SharedStyleUsageHere,
   type SharedStyleUsageKind,
 } from "./library-contract";
-import { blockCountOf, documentCountOf, type DocumentsUsing } from "./usage-count";
+import {
+  blockCountOf,
+  documentCountOf,
+  type DocumentsUsing,
+} from "./usage-count";
 
 /**
  * The open document a usage read names, from `here=<collection>/<id>` or

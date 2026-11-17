@@ -64,7 +64,13 @@ describe("deriving a document's index rows", () => {
       formatVersion: 1,
       kind: "page",
       nodes: [
-        { id: "n1", type: "core/text", version: 1, props: {}, classes: ["hero"] },
+        {
+          id: "n1",
+          type: "core/text",
+          version: 1,
+          props: {},
+          classes: ["hero"],
+        },
         {
           id: "n2",
           type: "core/text",
