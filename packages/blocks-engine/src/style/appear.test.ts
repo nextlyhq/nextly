@@ -234,6 +234,19 @@ describe("a page carrying an animation", () => {
     expect(compiled([box({ base: { base: rise } })]).css).not.toContain(clip);
   });
 
+  it("clips only its own document's root when it is compiled under a scope", () => {
+    // A page drawn beside its header and footer compiles each under a scope of
+    // its own, so a slide on the page must not clip a region beside it.
+    const { css } = compilePageCss(
+      page([box({ base: { base: { appear: { effect: "slide-in-right" } } } })]),
+      { breakpoints: FIXTURE_BREAKPOINTS, scope: "nx-doc-main" }
+    );
+    expect(css).toContain(
+      `:where(.${PAGE_ROOT_CLASS}.nx-doc-main) { overflow-x: clip; }`
+    );
+    expect(css).not.toContain(`:where(.${PAGE_ROOT_CLASS}) { overflow-x`);
+  });
+
   it("keeps the prelude in the sheet when the animated block is gated", () => {
     const { css, gated } = compiled([
       box(

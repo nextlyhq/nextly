@@ -954,7 +954,7 @@ export function compilePageCss(
     // The NORMALISED name, so a refused one leaves this absent and the artifact
     // reads as the published sheet it actually is.
     ...(preview === undefined ? {} : { previewContainer: preview }),
-    css: withPreludes(rules, gated),
+    css: withPreludes(rules, gated, scope),
     warnings,
     classes: attributeClasses,
     // Omitted rather than empty when nobody asked, so a caller cannot mistake "not requested"
@@ -973,7 +973,8 @@ export function compilePageCss(
  */
 function withPreludes(
   rules: readonly CssRule[],
-  gated: Readonly<Record<string, string>>
+  gated: Readonly<Record<string, string>>,
+  scope: string
 ): string {
   const css = serializeRules(rules);
   // A gated node's rules are kept apart, and appended for a reader who sees
@@ -981,7 +982,7 @@ function withPreludes(
   // one an ungated compile writes.
   const fragments = Object.values(gated);
   const preludes = [
-    appearPrelude([css, ...fragments]),
+    appearPrelude([css, ...fragments], scope),
     readsOverlay(rules, fragments) ? OVERLAY_RESET : undefined,
   ].filter((prelude): prelude is string => prelude !== undefined);
   // Joined only to what is there: a sheet whose every rule is gated is its

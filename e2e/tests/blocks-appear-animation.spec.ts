@@ -158,13 +158,22 @@ test("plays on a desktop screen, on load and as the block scrolls into view", as
   const response = await page.goto(`/${slug}`);
   expect(response?.status()).toBe(200);
 
-  // On load: it plays once and ends as it is.
-  await page
+  // On load: one animation, on the document's own timeline, which plays and
+  // ends as it is. Held at its end by its fill, so it is still listed after.
+  const played = await page
     .getByText(ON_LOAD, { exact: true })
     .locator("xpath=ancestor::section[1]")
-    .evaluate(element =>
-      Promise.all(element.getAnimations().map(animation => animation.finished))
-    );
+    .evaluate(async element => {
+      const animations = element.getAnimations();
+      await Promise.all(animations.map(animation => animation.finished));
+      return animations.map(animation => ({
+        name: (animation as CSSAnimation).animationName,
+        onDocumentTimeline: animation.timeline === document.timeline,
+      }));
+    });
+  expect(played).toHaveLength(1);
+  expect(played[0]?.name).toMatch(/-appear-fade-in$/);
+  expect(played[0]?.onDocumentTimeline).toBe(true);
   expect(await stateOf(page, ON_LOAD)).toMatchObject({ opacity: "1" });
 
   // Below the fold: waiting in its starting place, on its own view timeline.

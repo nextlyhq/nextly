@@ -31,8 +31,8 @@
  * transform's own properties, so an author's `transform` still applies on top
  * of them and nothing a block's layout reads changes. A slide still makes a
  * block overflow its page sideways while it waits to come in, so a sheet using
- * one clips the page root's sideways overflow, at no weight, so a site's own
- * rule wins.
+ * one clips its own document root's sideways overflow, at no weight, so a
+ * site's own rule wins.
  *
  * Everything the custom properties need on the page is one prelude, written
  * once by a sheet that reads them, as the overlay's reset is.
@@ -218,16 +218,26 @@ const KEYFRAMES = `@media screen and (prefers-reduced-motion: no-preference) {\n
   )
   .join("\n")}\n}`;
 
-/** The page root's sideways overflow, clipped, for a sheet using a slide. */
-const SIDEWAYS_CLIP = `:where(.${PAGE_ROOT_CLASS}) { overflow-x: clip; }`;
+/**
+ * The document's own root's sideways overflow, clipped, for a sheet using a
+ * slide: under its scope, so a header or footer compiled beside the page is
+ * never clipped by the page's slide.
+ */
+function sidewaysClip(scope: string): string {
+  return `:where(.${PAGE_ROOT_CLASS}${scope}) { overflow-x: clip; }`;
+}
 
 /**
  * The prelude a sheet carries once when anything in it reads the animation,
  * or `undefined` when nothing does: so a page without one compiles exactly as
  * before. `parts` are the sheet and whatever is kept apart from it to be
- * appended later, which is read as part of the page.
+ * appended later, which is read as part of the page. `scope` is the
+ * document's scope as a selector (`.nx-doc-main`), or `""` for none.
  */
-export function appearPrelude(parts: readonly string[]): string | undefined {
+export function appearPrelude(
+  parts: readonly string[],
+  scope: string
+): string | undefined {
   if (!parts.some(part => part.includes(APPEAR_PREFIX))) return undefined;
   const slides = SIDEWAYS.some(effect =>
     parts.some(part => part.includes(appearKeyframesName(effect)))
@@ -236,6 +246,6 @@ export function appearPrelude(parts: readonly string[]): string | undefined {
     RESET,
     SCROLL_SUPPORT,
     KEYFRAMES,
-    ...(slides ? [SIDEWAYS_CLIP] : []),
+    ...(slides ? [sidewaysClip(scope)] : []),
   ].join("\n");
 }
