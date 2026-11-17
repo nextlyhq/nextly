@@ -8,6 +8,7 @@
  * @module style-panel-sections
  */
 import {
+  findNode,
   paintsBackgroundImage,
   type NodeStyles,
   type StyleValues,
@@ -19,7 +20,11 @@ import * as React from "react";
 import { CssPropertiesSection, useAddedProperties } from "./add-css-property";
 import { SHORTCUT_IDS } from "./block-shortcuts-field";
 import { ContentWidthFields } from "./content-width-fields";
-import { arrangeCssProperties, CSS_PROPERTIES_SECTION } from "./css-properties";
+import {
+  arrangeCssProperties,
+  CSS_PROPERTIES_SECTION,
+  offersArrange,
+} from "./css-properties";
 import { FocalFrame } from "./focal-frame";
 import type { InspectorSectionKey } from "./inspector-sections";
 import { useTabFolds } from "./panel-folds-context";
@@ -72,7 +77,13 @@ export function StyleSections({
   // The picture lent from above, with the fit in force here.
   const { picture, position } = React.useContext(FocalFrame);
   const match = useSettingsMatch();
-  const arranged = arrangeCssProperties(sections);
+  const target = React.useContext(StyleTargetContext);
+  const arranged = arrangeCssProperties(
+    sections,
+    target.kind === "block"
+      ? findNode(surroundings.editor.document.nodes, surroundings.nodeId)?.type
+      : undefined
+  );
   const added = useAddedProperties(surroundings.nodeId);
   // Drawn wherever the block has any Style section, so the tab always ends
   // the same way.
@@ -303,15 +314,7 @@ function useSectionRows(
   shown: readonly InspectedStyleProperty[];
   arrange: ArrangedSection["arrange"];
 } {
-  const reading = useArrangeReading(
-    surroundings,
-    section.key === "layout" &&
-      section.properties.some(
-        // Offered, not only kept: a block that no longer has layout keeps a
-        // stored Display clear-only, as a raw row.
-        property => property.property === "display" && property.offered
-      )
-  );
+  const reading = useArrangeReading(surroundings, offersArrange(section));
   const drawn = useDrawnChildRows(surroundings);
   const arranged = arrangedSection(section.properties, reading);
   const listed = withoutDrawn(section.key, arranged.listed, drawn);

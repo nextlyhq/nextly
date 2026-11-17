@@ -20,7 +20,9 @@
  *
  * @module css-properties
  */
+import { SECTION_BLOCK } from "./block-shortcuts";
 import { OWN_ROW_FIELDS, type InspectorSectionKey } from "./inspector-sections";
+import { SPACE_PROPERTIES } from "./plain-layout-controls";
 import type { InspectedStyleProperty, StyleSection } from "./style-inspector";
 
 /** The section's key and words. */
@@ -181,20 +183,58 @@ function cssRow(
 }
 
 /**
+ * Whether a Layout section draws Arrange: where the block offers a display,
+ * not only keeps a stored one (a block that no longer has layout keeps it
+ * clear-only, as a raw row).
+ */
+export function offersArrange(section: StyleSection): boolean {
+  return (
+    section.key === "layout" &&
+    section.properties.some(
+      property => property.property === "display" && property.offered
+    )
+  );
+}
+
+/**
+ * The properties a section's own plain controls draw, which stay in it
+ * whatever their tier: Arrange's space between (rows and columns set apart
+ * included), and the min height a Section's Height presets stand over. The
+ * Height presets are the block's own, so not a shared style's.
+ */
+function drawnByPlainControls(
+  section: StyleSection,
+  blockType: string | undefined
+): ReadonlySet<string> {
+  if (offersArrange(section)) return SPACE_PROPERTIES;
+  if (section.key === "size" && blockType === SECTION_BLOCK) {
+    return MIN_HEIGHT;
+  }
+  return NONE;
+}
+
+const MIN_HEIGHT: ReadonlySet<string> = new Set(["minHeight"]);
+const NONE: ReadonlySet<string> = new Set();
+
+/**
  * A block's sections as the Style tab draws them: each keeps what its tier
- * shows unasked, and every other property becomes a row "CSS properties" can
- * hold. A section left with nothing is not drawn.
+ * shows unasked and what its plain controls draw, and every other property
+ * becomes a row "CSS properties" can hold. A section left with nothing is not
+ * drawn. `blockType` is the block's type where the block itself is edited,
+ * `undefined` for a shared style.
  */
 export function arrangeCssProperties(
-  sections: readonly StyleSection[]
+  sections: readonly StyleSection[],
+  blockType: string | undefined
 ): ArrangedStyle {
   const drawn: StyleSection[] = [];
   const extras: CssPropertyRow[] = [];
   for (const section of sections) {
     const kept: InspectedStyleProperty[] = [];
+    const plain = drawnByPlainControls(section, blockType);
     for (const property of section.properties) {
       const { home, fields } = splitFields(property);
-      if (home.tierShows) kept.push(home);
+      if (home.tierShows || plain.has(home.property)) kept.push(home);
       else extras.push(cssRow(home.property, home, [], section));
       for (const { field, row } of fields) {
         extras.push(cssRow(`${row.property}.${field}`, row, [field], section));

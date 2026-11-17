@@ -81,7 +81,7 @@ function page(inner?: NodeStyles, outer?: NodeStyles): BlockDocument {
 function arranged(inner?: NodeStyles, outer?: NodeStyles) {
   const inspection = inspectStyle(page(inner, outer), "inner");
   if (inspection === null) throw new Error("the block was not inspected");
-  return arrangeCssProperties(inspection.sections);
+  return arrangeCssProperties(inspection.sections, "acme/everything");
 }
 
 /** Styles at the base state and breakpoint. */
@@ -156,7 +156,7 @@ describe("what Add CSS property offers", () => {
       new Set()
     ).map(each => each.id);
     expect(onGrid).toContain("gridAutoFlow");
-    expect(onGrid).toContain("rowGap");
+    expect(onGrid).toContain("justifyItems");
   });
 
   it("offers z-index only where it stacks: positioned, or in a flex or grid", () => {
@@ -190,6 +190,38 @@ describe("what Add CSS property offers", () => {
 });
 
 describe("the sections beside CSS properties", () => {
+  it("keeps in its section what a plain control there draws", () => {
+    const inspection = inspectStyle(
+      page(at({ display: "grid", rowGap: "8px", minHeight: "100svh" })),
+      "inner"
+    );
+    const sections = inspection?.sections ?? [];
+    const keys = (arranged: ReturnType<typeof arrangeCssProperties>) => ({
+      layout: arranged.sections
+        .find(section => section.key === "layout")
+        ?.properties.map(each => each.property),
+      size: arranged.sections
+        .find(section => section.key === "size")
+        ?.properties.map(each => each.property),
+      extras: arranged.extras.map(each => each.id),
+    });
+    // Arrange draws rows and columns apart; a Section's Height presets stand
+    // over its min height.
+    const section = keys(arrangeCssProperties(sections, "core/section"));
+    expect(section.layout).toContain("rowGap");
+    expect(section.size).toContain("minHeight");
+    expect(section.extras).not.toContain("rowGap");
+    expect(section.extras).not.toContain("minHeight");
+    // Another block, or a shared style, has no Height presets: its min height
+    // is one of its CSS properties.
+    for (const other of ["acme/everything", undefined]) {
+      const arranged = keys(arrangeCssProperties(sections, other));
+      expect(arranged.size).not.toContain("minHeight");
+      expect(arranged.extras).toContain("minHeight");
+      expect(arranged.layout).toContain("rowGap");
+    }
+  });
+
   it("keeps what a tier shows unasked, and moves a set value it doesn't to CSS properties", () => {
     const { sections, extras } = arranged(at({ mixBlendMode: "multiply" }));
     const effects = sections.find(section => section.key === "effects");
