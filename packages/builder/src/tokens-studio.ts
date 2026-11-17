@@ -56,6 +56,12 @@ import {
   validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "./fluid-size";
+
 import { lineHeightFromText } from "./style-folded";
 
 /**
@@ -442,9 +448,33 @@ export function setTokenValue(
 ): SiteTokenSet {
   const token = tokens.tokens[at];
   if (token === undefined) return tokens;
+  // A light value typed by hand is no longer the one its fluid sizes made,
+  // so it keeps no sizes, and a change of the site's fluid range leaves it.
+  const { fluid: _made, ...rest } = token;
+  return withToken(tokens, at, {
+    ...(mode === "light" ? rest : token),
+    values: { ...token.values, [mode]: value },
+  });
+}
+
+/**
+ * The set with a size made fluid from two sizes: its light value grows
+ * from `small` on the range's smallest screen to `large` on its largest,
+ * and the two sizes are kept beside it so it can be made again when the
+ * site's fluid range changes.
+ */
+export function setFluidSize(
+  tokens: SiteTokenSet,
+  at: number,
+  sizes: FluidSizes,
+  range: FluidRangeWidths
+): SiteTokenSet {
+  const token = tokens.tokens[at];
+  if (token === undefined) return tokens;
   return withToken(tokens, at, {
     ...token,
-    values: { ...token.values, [mode]: value },
+    values: { ...token.values, light: fluidValue(sizes, range) },
+    fluid: { small: sizes.small, large: sizes.large },
   });
 }
 

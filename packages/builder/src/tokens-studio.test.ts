@@ -36,6 +36,7 @@ import {
   clearDarkValue,
   removeToken,
   renameToken,
+  setFluidSize,
   setTokenValue,
   tokenNameIssue,
   tokenRowsFor,
@@ -43,6 +44,7 @@ import {
   LINE_HEIGHT_MIXED,
   DARK_FOLLOWS_LIGHT,
 } from "./tokens-studio";
+import { fluidValue } from "./fluid-size";
 
 const BREAKPOINTS = { base: { id: "base", label: "Base" } } as never;
 
@@ -873,5 +875,31 @@ describe("duplicating a variable", () => {
     expect(label.length).toBeLessThanOrEqual(MAX_TOKEN_LABEL_LENGTH);
     expect(label.endsWith(" copy")).toBe(true);
     expect(variableLabelIssue(made.tokens, made.at, label)).toBeUndefined();
+  });
+});
+
+describe("a size made fluid from two sizes", () => {
+  const set: SiteTokenSet = {
+    tokens: [
+      { name: "font-size.lead", kind: "dimension", values: { light: "18px" } },
+    ],
+  };
+  const range = { min: 360, max: 1280 };
+
+  it("stores the value made from them and keeps the two sizes beside it", () => {
+    const made = setFluidSize(set, 0, { small: 16, large: 20 }, range);
+    expect(made.tokens[0]?.values.light).toBe(
+      fluidValue({ small: 16, large: 20 }, range)
+    );
+    expect(made.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
+  });
+
+  it("becomes a value typed by hand once its light value is typed, and drops the two sizes", () => {
+    const made = setFluidSize(set, 0, { small: 16, large: 20 }, range);
+    const typed = setTokenValue(made, 0, "light", "22px");
+    expect(typed.tokens[0]?.fluid).toBeUndefined();
+    // A dark value leaves the fluid light value as it was made.
+    const dark = setTokenValue(made, 0, "dark", "24px");
+    expect(dark.tokens[0]?.fluid).toEqual({ small: 16, large: 20 });
   });
 });

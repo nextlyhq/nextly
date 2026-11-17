@@ -19,6 +19,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
+import { lengthInPx } from "./fluid-size";
 import { typeScaleProperty } from "./tokens-studio";
 
 /**
@@ -70,32 +71,9 @@ export function tokenForTypedName(
   return identity;
 }
 
-/**
- * The CSS pixels a root-relative length is at the browser's default size.
- *
- * `em` is read as `rem` is: what it resolves to depends on the element it is
- * used on, and a sample has no element, so the default size is the honest
- * single answer.
- */
-const ROOT_PX = 16;
-
-/**
- * How many CSS pixels a length is, or `undefined` for one this cannot measure
- * without a page: a percentage, a viewport unit, `clamp()`, a keyword.
- *
- * One reading of a length for every sample that sizes itself by one, the
- * Design panel's type specimen and the inspector's bars, so the two draw the
- * same variable at the same scale.
- */
-export function lengthInPx(value: string): number | undefined {
-  const match = /^(-?\d*\.?\d+)(px|rem|em)?$/.exec(value.trim());
-  if (match === null) return undefined;
-  const amount = Number(match[1]);
-  const unit = match[2];
-  // Only zero may go without a unit; any other bare number is not a length.
-  if (unit === undefined) return amount === 0 ? 0 : undefined;
-  return unit === "px" ? amount : amount * ROOT_PX;
-}
+// One reading of a length for every place that measures one; kept beside
+// the fluid-size maths, which reads lengths too and imports nothing else.
+export { lengthInPx };
 
 /**
  * Whether a variable is ONE length that changes with the page: `clamp()`,
