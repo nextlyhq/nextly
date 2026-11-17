@@ -34,7 +34,7 @@ function simpleForm(overrides: Partial<BlockNode> = {}): BlockNode {
   return {
     id: "f1",
     type: "core/form",
-    version: 1,
+    version: 2,
     props: {
       action: "https://hooks.example.com/contact?key=secret",
       fields: [
@@ -932,5 +932,29 @@ describe("the language a page was sent from", () => {
     // The default language, served without a segment, forms no prefix.
     expect(addressInLanguageOf("/thanks", "en", "/contact")).toBe("/thanks");
     expect(addressInLanguageOf("/thanks", undefined, "/de/x")).toBe("/thanks");
+  });
+});
+
+describe("a form saved before this version", () => {
+  it("checks its answers under the names its page draws, the upgraded form's", async () => {
+    // Version 1, an unnamed required Email: its page draws `field-0`.
+    const { deps, delivered } = parts(
+      simpleForm({
+        version: 1,
+        props: {
+          action: "https://hooks.example.com/in",
+          method: "post",
+          fields: [{ label: "Email", type: "email", required: true }],
+        },
+      })
+    );
+    const response = await receiveFormPost(
+      post({ "field-0": "ada@example.com" }),
+      deps
+    );
+    expect(location(response)).toBe("/contact#form-f1-sent");
+    expect(delivered[0]?.answers).toEqual([
+      { name: "field-0", values: ["ada@example.com"] },
+    ]);
   });
 });

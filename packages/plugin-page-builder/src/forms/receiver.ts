@@ -31,8 +31,9 @@
  *
  * @module forms/receiver
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { migrateDocument, type BlockNode } from "@nextlyhq/blocks-engine";
 import {
+  form as FORM_BLOCK,
   FORM_FILE_NEEDS_SCRIPT,
   FORM_HONEYPOT_FIELD,
   FORM_POST_FIELDS as BLOCK_POST_FIELDS,
@@ -162,10 +163,12 @@ export async function receiveFormPost(
     deps.logger.warn("[page-builder] A form's page could not be read.");
     return answer("error");
   }
-  if (node === null || node.type !== "core/form") return answer("error");
+  if (node === null || node.type !== FORM_BLOCK.name) return answer("error");
+  const current = upgraded(node);
+  if (current === null) return answer("error");
 
   return sendForm({
-    node,
+    node: current,
     answers: answersOf(post),
     back,
     locale,
@@ -217,6 +220,32 @@ async function sendForm(send: {
   return outcome.kind === "page"
     ? redirect(outcome.href, null, "sent")
     : answer(outcome.kind);
+}
+
+/**
+ * The form as its page draws it: a node stored at an older version of the
+ * block upgraded, as every reader of the page upgrades it, so its answers
+ * are checked under the names and settings the visitor was shown. `null`
+ * where the upgrade fails, which the page draws as no form.
+ */
+function upgraded(node: BlockNode): BlockNode | null {
+  if (node.version === FORM_BLOCK.version) return node;
+  const { doc } = migrateDocument(
+    { formatVersion: 1, kind: "page", nodes: [node] },
+    {
+      get: type =>
+        type === FORM_BLOCK.name
+          ? {
+              version: FORM_BLOCK.version,
+              ...(FORM_BLOCK.migrate === undefined
+                ? {}
+                : { migrate: FORM_BLOCK.migrate }),
+            }
+          : undefined,
+    }
+  );
+  const [migrated] = doc.nodes;
+  return migrated?.version === FORM_BLOCK.version ? migrated : null;
 }
 
 /** What a block shows once a send is accepted. */
