@@ -139,6 +139,34 @@ describe("the views a form offers to open the document in", () => {
     ]);
   });
 
+  it("offers the view where its field sits inside a named group, leaving the field to the view", () => {
+    // The view applies to a field inside a named group (`hero.body`), which
+    // the rule for where an entry opens never names; the view resolves the
+    // field it edits itself, as it does for any address without one.
+    const nested: OpenableCollection = {
+      fields: [
+        title,
+        { name: "hero", type: "group", fields: [blocks("body")] },
+      ],
+    };
+    expect(bar(nested)).toEqual([
+      {
+        label: "Open in builder",
+        address: "/admin/collections/items/7/builder",
+        opens: "view",
+      },
+    ]);
+    expect(row(nested)).toEqual(bar(nested));
+  });
+
+  it("offers nothing where the only field of the view's type is hidden", () => {
+    const hidden: OpenableCollection = {
+      fields: [title, { ...blocks("content"), admin: { hidden: true } }],
+    };
+    expect(bar(hidden)).toEqual([]);
+    expect(row(hidden)).toEqual([]);
+  });
+
   it("offers nothing on a document with no field of the view's type", () => {
     expect(bar(AUTHORS)).toEqual([]);
   });

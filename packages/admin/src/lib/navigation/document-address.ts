@@ -336,8 +336,17 @@ function viewDestination(
 ): { view: string; field?: string } | undefined {
   if ("slug" in view)
     return view.slug === slug ? { view: view.path } : undefined;
+  if (!documentViewApplies(view, fieldsOf(collection))) return undefined;
   const destination = fieldTypeDestination(collection, view);
-  return destination.view === undefined ? undefined : destination;
+  if (destination.view !== undefined) return destination;
+  // A top-level field of the type that the rule passed over is hidden, and a
+  // hidden field is offered no way in. A field the rule cannot name at all,
+  // one inside a named group, is left to the view, which resolves the field
+  // it edits from an address without one, as for any such address.
+  const atTopLevel = addressableFieldsWithin(fieldsOf(collection)).some(
+    ({ field }) => typeOf(field) === view.fieldType
+  );
+  return atTopLevel ? undefined : { view: view.path };
 }
 
 /** Each published view applying to the entry, as a way in, by its path. */
