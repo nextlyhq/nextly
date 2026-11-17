@@ -57,6 +57,7 @@ beforeEach(() => registerBlocks(coreBlocks as never, { source: "core" }));
 afterEach(() => {
   cleanup();
   clearBlocks();
+  refuseWrites = 0;
 });
 
 function nodeOf(id: string, type: string, props = {}): BlockNode {
@@ -76,11 +77,23 @@ const PAGE: BlockDocument = {
 
 let editorRef: EditorState | null = null;
 const editor = (): EditorState => editorRef!;
+/** How many of the next writes the editor refuses, as a full page would. */
+let refuseWrites = 0;
 
 function Host(): React.JSX.Element {
   const state = useEditorState({ initialDocument: PAGE });
   editorRef = state;
-  return <InspectorPanel editor={state} />;
+  const refusing: EditorState = {
+    ...state,
+    apply: op => {
+      if (refuseWrites > 0) {
+        refuseWrites -= 1;
+        return null;
+      }
+      return state.apply(op);
+    },
+  };
+  return <InspectorPanel editor={refusing} />;
 }
 
 /** The panel on `id`'s Advanced tab, and its HTML section. */
@@ -238,6 +251,20 @@ describe("CSS classes", () => {
     fireEvent.change(field, { target: { value: "promo wide" } });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
     expect(stored("hero")?.cssClasses).toBe("promo wide");
+  });
+
+  it("writes a refused save again when the author finishes the field again", () => {
+    const html = advancedOf("hero");
+    refuseWrites = 1;
+    const field = typeClasses(html, "promo");
+    expect(stored("hero")?.cssClasses).toBeUndefined();
+    expect(within(html).getByRole("alert").textContent).toContain(
+      "could not be saved"
+    );
+    // Nothing typed since: finishing the field again tries the save again.
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(stored("hero")?.cssClasses).toBe("promo");
+    expect(within(html).queryByRole("alert")).toBeNull();
   });
 
   it("shows what an undo puts back", async () => {

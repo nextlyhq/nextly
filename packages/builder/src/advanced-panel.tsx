@@ -608,7 +608,7 @@ function CssClassesField({
   // Whether the field holds what was last finished, so every name is judged.
   const [finished, setFinished] = React.useState(true);
   const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
-  // The text the field was filled with or last finished at: leaving a field
+  // The text the field was filled with or last saved at: leaving a field
   // nobody changed writes nothing, even where the stored text would tidy.
   const loaded = React.useRef(stored ?? "");
   // What this field last wrote, so its own echo is told from an undo.
@@ -634,9 +634,9 @@ function CssClassesField({
     const text = latest.current;
     setFinished(true);
     if (text === loaded.current) return;
-    loaded.current = text;
     const next = checkCssClassNames(text).valid.join(" ");
     if (next === (stored ?? "")) {
+      loaded.current = text;
       setRefusal(undefined);
       return;
     }
@@ -655,10 +655,13 @@ function CssClassesField({
         ? { kind: "update", id: nodeId, patch: {}, unset: ["cssClasses"] }
         : { kind: "update", id: nodeId, patch: { cssClasses: next } }
     );
+    // A refused save leaves `loaded` where it was, so finishing the field
+    // again tries again once whatever refused it has cleared.
     if (applied === null) {
       setRefusal(REFUSED);
       return;
     }
+    loaded.current = text;
     setRefusal(undefined);
     lastWritten.current = next;
   };
