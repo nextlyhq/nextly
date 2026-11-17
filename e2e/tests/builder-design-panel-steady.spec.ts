@@ -81,7 +81,7 @@ async function openDesign(page: Page): Promise<void> {
 
 /** The first variable row's name and value columns, in the window. */
 async function firstRowColumns(page: Page) {
-  const row = page.locator(".nx-vars__row").first();
+  const row = page.locator(".nx-vars__line > .nx-vars__row").first();
   await expect(row).toBeVisible();
   // Each column found by what it is, so the row is measured the same way
   // before and after its usage arrives.

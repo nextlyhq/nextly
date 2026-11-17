@@ -46,7 +46,7 @@ import {
   variableLabelIssue,
   type VariableEntry,
 } from "./tokens-studio";
-import { VariableEditor } from "./variable-editor";
+import { VariableEditor, type VariableEditorProps } from "./variable-editor";
 import { RowMenu } from "./variable-row-menu";
 import { swatchStyle } from "./variable-swatch";
 import { variableCountWords, type VariableReach } from "./variable-usage";
@@ -188,31 +188,49 @@ export function VariableRow({
             ) : null}
           </div>
         </PopoverAnchor>
-        <PopoverContent
-          side="right"
-          align="start"
-          sideOffset={12}
-          // Kept inside the window, clear of its edges.
-          collisionPadding={8}
-          className="nx-vars-editor"
-          aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
-          onCloseAutoFocus={handOff.onCloseAutoFocus}
-        >
-          <CloseVariableEditor.Provider value={handOff.close}>
-            <VariableEditor
-              entry={entry}
-              tokens={tokens}
-              suppliedOf={suppliedOf}
-              readOnly={readOnly}
-              onChange={onChange}
-              onRemoved={onRemoved}
-              removing={removing}
-              {...(usage === undefined ? {} : { usage })}
-            />
-          </CloseVariableEditor.Provider>
-        </PopoverContent>
+        <RowEditor
+          entry={entry}
+          tokens={tokens}
+          suppliedOf={suppliedOf}
+          readOnly={readOnly}
+          onChange={onChange}
+          onRemoved={onRemoved}
+          removing={removing}
+          usage={usage}
+          handOff={handOff}
+        />
       </Popover>
     </li>
+  );
+}
+
+/** The variable's editor, in the popover beside its row. */
+function RowEditor({
+  handOff,
+  usage,
+  ...editor
+}: Omit<VariableEditorProps, "usage"> & {
+  usage: VariableUsageHere | undefined;
+  handOff: ReturnType<typeof useHandOff>;
+}): React.JSX.Element {
+  return (
+    <PopoverContent
+      side="right"
+      align="start"
+      sideOffset={12}
+      // Kept inside the window, clear of its edges.
+      collisionPadding={8}
+      className="nx-vars-editor"
+      aria-label={`${editor.readOnly ? "" : "Edit "}${editor.entry.label}`}
+      onCloseAutoFocus={handOff.onCloseAutoFocus}
+    >
+      <CloseVariableEditor.Provider value={handOff.close}>
+        <VariableEditor
+          {...editor}
+          {...(usage === undefined ? {} : { usage })}
+        />
+      </CloseVariableEditor.Provider>
+    </PopoverContent>
   );
 }
 
@@ -440,7 +458,7 @@ function ColourSwatch({
  * editor closes without handing focus back to the row, which would take it
  * from the place the author was sent to.
  */
-export function useHandOff(onOpenChange: (open: boolean) => void): {
+function useHandOff(onOpenChange: (open: boolean) => void): {
   close: () => void;
   onCloseAutoFocus: (event: Event) => void;
 } {
