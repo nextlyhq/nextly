@@ -536,7 +536,8 @@ export {
   type ItemHiddenOptions,
 } from "./conditions/use-applied-conditions";
 export { PageInserters } from "./canvas/page-inserters";
-export type { PageInsertersProps } from "./canvas/page-inserters";
+export type { PageInsertersProps, StartOptions } from "./canvas/page-inserters";
+export type { StarterPage } from "./canvas/page-start-area";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook

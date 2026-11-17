@@ -87,3 +87,44 @@ describe("the count line", () => {
     expect(summary?.textContent).toBe("Page 2 of 7");
   });
 });
+
+describe("the page count", () => {
+  /** The elements whose whole text is `text`: the summary and the count. */
+  function saying(container: HTMLElement, text: string): Element[] {
+    return Array.from(container.querySelectorAll("div")).filter(
+      element => element.textContent === text
+    );
+  }
+
+  it("is said once when the total is unknown", () => {
+    /*
+     * Without a total the summary on the left falls back to the page count,
+     * which is the very line the right end shows. Both read "Page 2 of 7" side
+     * by side, so the summary keeps it and the right end leaves it out.
+     */
+    const { container } = render(
+      <Pagination {...props} totalPages={7} currentPage={1} />
+    );
+
+    expect(saying(container, "Page 2 of 7")).toHaveLength(1);
+  });
+
+  it("is still shown at the right end when the summary counts rows", () => {
+    // The control: with a total the summary is a range, and the page count
+    // belongs at the right end as before.
+    const { container } = render(
+      <Pagination
+        {...props}
+        totalPages={7}
+        currentPage={1}
+        totalItems={140}
+        itemLabel="entries"
+      />
+    );
+
+    expect(
+      container.querySelector('[data-slot="pagination-summary"]')?.textContent
+    ).toBe("Showing 21-40 of 140 entries");
+    expect(saying(container, "Page 2 of 7")).toHaveLength(1);
+  });
+});

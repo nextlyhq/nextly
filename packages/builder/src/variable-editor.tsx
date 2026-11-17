@@ -30,12 +30,13 @@ import { Undo2 } from "lucide-react";
 import * as React from "react";
 
 import { FluidButton, type FluidHook } from "./fluid-popover";
-import { DEFAULT_FLUID_RANGE } from "./fluid-size";
 import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
   labelNewVariable,
+  fluidRangeOf,
+  setFluidRange,
   setFluidSize,
   relabelToken,
   variableLabelIssue,
@@ -165,10 +166,7 @@ export function VariableEditor({
           isNew={isNew}
         />
       </div>
-      <VariableDescription
-        token={token}
-        supplied={suppliedOf(row.identity)}
-      />
+      <VariableDescription token={token} supplied={suppliedOf(row.identity)} />
       {token === undefined ? null : (
         <Values
           entry={entry}
@@ -488,7 +486,13 @@ function TypeSizeFluid({
   onChange: (tokens: SiteTokenSet) => void;
   readOnly: boolean;
 }): React.JSX.Element | null {
-  const hook = fluidHookOf({ token: size, tokens, at: sizeAt, onChange, readOnly });
+  const hook = fluidHookOf({
+    token: size,
+    tokens,
+    at: sizeAt,
+    onChange,
+    readOnly,
+  });
   return hook === undefined ? null : <FluidButton hook={hook} />;
 }
 
@@ -678,11 +682,13 @@ function fluidHookOf({
   readOnly: boolean;
 }): FluidHook | undefined {
   if (readOnly || token.kind !== "dimension") return undefined;
+  const range = fluidRangeOf(tokens);
   return {
     sizes: token.fluid,
     value: token.values.light,
-    onFluid: sizes =>
-      onChange(setFluidSize(tokens, at, sizes, DEFAULT_FLUID_RANGE)),
+    range,
+    onFluid: sizes => onChange(setFluidSize(tokens, at, sizes, range)),
+    onRange: next => onChange(setFluidRange(tokens, next)),
   };
 }
 

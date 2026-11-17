@@ -60,9 +60,11 @@ import type {
   NamedQueryLookup,
   PageBindings,
   PageContext,
+  PageForms,
   PageIssue,
   QueryBudget,
 } from "./context";
+import { createStandaloneContext } from "./context";
 import {
   anyListWhere,
   listCollectionsWhere,
@@ -827,8 +829,13 @@ export function drawWithRegions(args: {
   shared: SharedRendererProps;
   siteStyles: SiteSheetInput | undefined;
   definitions: DefinitionsById;
+  /**
+   * The forms of a region's component: a form in a header or footer posts
+   * naming the component that defines it, not the page around it.
+   */
+  formsFor?: (componentId: string) => PageForms;
 }): ReactElement[] {
-  const { regions, page, shared, siteStyles, definitions } = args;
+  const { regions, page, shared, siteStyles, definitions, formsFor } = args;
   const header = regions.find(part => part.region.area === "header");
   const footer = regions.find(part => part.region.area === "footer");
   // In the order they are drawn: header, page, footer.
@@ -861,12 +868,15 @@ export function drawWithRegions(args: {
         ...shared,
         // The blocks the renderer keeps for this region's own conditions,
         // from the preparation it draws the region with, not the page's.
-        ...(shared.context === undefined
+        ...(shared.context === undefined && formsFor === undefined
           ? {}
           : {
               context: {
-                ...shared.context,
+                ...(shared.context ?? createStandaloneContext()),
                 heldConditions: heldConditionsOf(part.prepared ?? undefined),
+                ...(formsFor === undefined
+                  ? {}
+                  : { forms: formsFor(part.region.componentId) }),
               },
             }),
         ...sheet,

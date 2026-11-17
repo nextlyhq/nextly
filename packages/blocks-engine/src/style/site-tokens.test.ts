@@ -1083,6 +1083,18 @@ describe("stored data reaching the stylesheet", () => {
 });
 
 describe("resolveSiteTokens", () => {
+  it("keeps the site's fluid range, a site-wide setting like the prefix", () => {
+    // Dropped here, a reopened editor read the default range while the stored
+    // sizes were made across the site's own, and the next "Make fluid" used
+    // the wrong widths.
+    const resolved = resolveSiteTokens({
+      tokens: [],
+      fluidRange: { min: 320, max: 1440 },
+    });
+    expect(resolved.fluidRange).toEqual({ min: 320, max: 1440 });
+    expect(resolveSiteTokens({ tokens: [] })).not.toHaveProperty("fluidRange");
+  });
+
   it("returns the defaults when a site defines nothing", () => {
     expect(
       resolveSiteTokens()

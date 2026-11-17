@@ -258,13 +258,18 @@ export function BuilderShell({
     if (!loadedFromCurrentStore) return;
     if (handledPanelRequest.current === openPanelRequest.count) return;
     handledPanelRequest.current = openPanelRequest.count;
-    const { panel, view } = openPanelRequest;
-    update(current => ({
-      ...current,
-      leftPanel: panel,
-      leftPanelHidden: false,
-      leftPanelView: view ?? current.leftPanelView,
-    }));
+    const { panel, view, unlessHidden = false } = openPanelRequest;
+    update(current =>
+      // The author's own hiding outranks a request the editor made itself.
+      unlessHidden && current.leftPanelHidden
+        ? current
+        : {
+            ...current,
+            leftPanel: panel,
+            leftPanelHidden: false,
+            leftPanelView: view ?? current.leftPanelView,
+          }
+    );
   }, [openPanelRequest, update, loadedFromCurrentStore]);
 
   /*
