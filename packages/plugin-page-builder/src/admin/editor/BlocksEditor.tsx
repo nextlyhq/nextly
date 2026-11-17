@@ -144,6 +144,14 @@ interface BlocksEditorProps<TFieldValues extends FieldValues> {
   kinds: readonly DocumentKind[] | undefined;
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
+  /**
+   * Where the exit arrow goes instead of the form, and what it is called
+   * there: on an entry whose collection opens in the builder, its list
+   * ("Back to Pages"). Leaving the document asks first about unsaved work,
+   * as any leave does; "Open as form" stays `onClose`. Absent elsewhere,
+   * where the arrow is "Exit editor" and goes to the form.
+   */
+  back?: { label: string; go: () => void } | undefined;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
   /**
@@ -348,6 +356,7 @@ function EditorBody<TFieldValues extends FieldValues>({
   kinds,
   onCommit,
   onClose,
+  back,
   name,
   control,
   openAt,
@@ -642,7 +651,8 @@ function EditorBody<TFieldValues extends FieldValues>({
       <VisitorUnreadableProvider value={view.visitorUnreadable}>
         <BuilderShell
           notices={notices}
-          onExit={shellExit(componentView, done)}
+          onExit={shellExit(componentView, back?.go ?? done)}
+          exitLabel={back?.label}
           // The signed-in author's own preferences, not the browser's.
           store={mount.preferenceStore}
           availablePanels={availablePanels}
@@ -671,6 +681,9 @@ function EditorBody<TFieldValues extends FieldValues>({
             // "Preview as visitor", in Preview's menu.
             visitor: conditions.visitor,
             pageData,
+            // The form, in the ⋯ menu: the same leave as the exit to the
+            // form, so it is offered exactly where that is.
+            openAsForm: shellExit(componentView, done),
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
@@ -841,13 +854,14 @@ function addBlockHere(
 /**
  * The shell's exit arrow: withheld while the component banner offers its
  * Back, so the view has one way back rather than two arrows going to two
- * places. Leaving through search still commits, as the exit always did.
+ * places. Leaving through search still commits, as the exit always did. The
+ * ⋯ menu's "Open as form" follows the same rule.
  */
 function shellExit(
   view: Pick<ComponentView, "offersBack">,
-  done: () => void
+  leave: () => void
 ): (() => void) | undefined {
-  return view.offersBack ? undefined : done;
+  return view.offersBack ? undefined : leave;
 }
 
 /**
