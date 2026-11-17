@@ -67,6 +67,7 @@ import {
   safeTokenPrefix,
   tokenCustomProperty,
 } from "./declarations";
+import type { SiteTextMap } from "./site-text";
 import { checkTokenKind, tokenKindExample } from "./site-token-kind";
 
 /** The modes a token may carry a value for. */
@@ -182,6 +183,17 @@ export interface SiteTokenSet {
    * remakes those values.
    */
   fluidRange?: { readonly min: number; readonly max: number };
+  /**
+   * The site's text: Body, the six heading levels, Links, Buttons and
+   * Captions, each a size and line height (and for links a colour and an
+   * underline) set once for every page. A row left out keeps its built-in
+   * value (`resolveSiteText`). Never emitted here: the element tier writes
+   * it. Kept with the variables because a row points at them, so the two
+   * save, merge and undo as one.
+   *
+   * @experimental
+   */
+  siteText?: SiteTextMap;
 }
 
 /**
@@ -727,6 +739,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.fluidRange === undefined
       ? {}
       : { fluidRange: override.fluidRange }),
+    // And the site's text, which the element tier reads beside the tokens.
+    ...(override?.siteText === undefined
+      ? {}
+      : { siteText: override.siteText }),
   };
 }
 
@@ -839,6 +855,14 @@ export function defaultSiteTokens(): SiteToken[] {
       values: { light: "#6b7280", dark: "#9ca3af" },
     },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
+    ...TYPE_SIZE_DEFAULTS.flatMap(([name, size, lineHeight]): SiteToken[] => [
+      { name: `font-size.${name}`, kind: "dimension", values: { light: size } },
+      {
+        name: `line-height.${name}`,
+        kind: "number",
+        values: { light: lineHeight },
+      },
+    ]),
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
     ...SPACING_DEFAULTS.map(
       ({ name, value, description }): SiteToken => ({
@@ -850,6 +874,24 @@ export function defaultSiteTokens(): SiteToken[] {
     ),
   ];
 }
+
+/**
+ * The built-in type sizes, each a size and the line height it pairs with
+ * (`font-size.h2` and `line-height.h2`). The heading sizes are the ones the
+ * block library drew before Site text existed, at a 16px root, in `rem` so
+ * they follow the reader's text size; the heading rows of Site text point
+ * at them, and Small is there to be picked. Line height tightens as the size
+ * grows, because large text needs less leading to stay readable.
+ */
+const TYPE_SIZE_DEFAULTS: readonly (readonly [string, string, string])[] = [
+  ["h1", "2.25rem", "1.15"],
+  ["h2", "1.75rem", "1.2"],
+  ["h3", "1.375rem", "1.3"],
+  ["h4", "1.125rem", "1.4"],
+  ["h5", "1rem", "1.45"],
+  ["h6", "0.875rem", "1.5"],
+  ["small", "0.875rem", "1.5"],
+];
 
 /**
  * A spacing default: one length, or a fluid one that grows with the viewport

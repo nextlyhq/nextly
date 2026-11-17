@@ -1771,3 +1771,51 @@ describe("the default spacing", () => {
     expect(css).toContain("--site-button-padding-x:1.25rem");
   });
 });
+
+describe("the built-in type sizes", () => {
+  /** A built-in variable's light value, by name. */
+  const builtIn = (name: string): string | undefined =>
+    defaultSiteTokens().find(token => token.name === name)?.values.light;
+
+  it.each([
+    // The heading sizes the block library drew before, at a 16px root, as
+    // `rem`: a heading inside a container with its own size no longer scales.
+    ["h1", "2.25rem", "1.15"],
+    ["h2", "1.75rem", "1.2"],
+    ["h3", "1.375rem", "1.3"],
+    ["h4", "1.125rem", "1.4"],
+    ["h5", "1rem", "1.45"],
+    ["h6", "0.875rem", "1.5"],
+    ["small", "0.875rem", "1.5"],
+  ])(
+    "gives %s its size and the line height it pairs with",
+    (name, size, line) => {
+      expect(builtIn(`font-size.${name}`)).toBe(size);
+      expect(builtIn(`line-height.${name}`)).toBe(line);
+    }
+  );
+
+  it("names them as an author reads them", () => {
+    const label = (name: string): string | undefined => {
+      const token = defaultSiteTokens().find(entry => entry.name === name);
+      return token === undefined ? undefined : tokenDisplayLabel(token);
+    };
+    expect(label("font-size.h2")).toBe("H2");
+    expect(label("font-size.small")).toBe("Small");
+  });
+
+  it("are sizes and numbers, so each field offers them", () => {
+    const kinds = defaultSiteTokens()
+      .filter(token => /^(font-size|line-height)\./.test(token.name))
+      .map(token => `${token.name}:${token.kind}`);
+    expect(kinds).toContain("font-size.h1:dimension");
+    expect(kinds).toContain("line-height.h1:number");
+  });
+
+  it("passes a site's text through a resolve, as it passes its fluid range", () => {
+    const siteText = { h2: { fontSize: "40px" } };
+    expect(resolveSiteTokens({ tokens: [], siteText }).siteText).toEqual(
+      siteText
+    );
+  });
+});
