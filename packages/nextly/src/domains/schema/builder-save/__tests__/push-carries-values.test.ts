@@ -282,9 +282,15 @@ describe("pushCarriesValues", () => {
         type: "relationship",
         options: { relationType: "oneToOne", target: "people" },
       });
+      // Gaining a column, and losing one the other way round.
       expect(
         await pushCarriesValues(
           save({ oldFields: [manyToMany], newFields: [oneToOne] })
+        )
+      ).toBe(false);
+      expect(
+        await pushCarriesValues(
+          save({ oldFields: [oneToOne], newFields: [manyToMany] })
         )
       ).toBe(false);
     });
