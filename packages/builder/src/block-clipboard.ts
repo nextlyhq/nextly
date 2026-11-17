@@ -250,6 +250,33 @@ export type PastePlan =
   | { readonly refusal: string; readonly ops?: undefined };
 
 /**
+ * Why pasted blocks carrying an Entry content block cannot go into this
+ * document, or `undefined` when they may (or carry none). A template holds
+ * one Entry content block, so a paste bringing a second is refused as adding
+ * one is.
+ */
+function entryContentPasteRefusal(
+  document: BlockDocument,
+  blocks: readonly BlockNode[],
+  sources: PasteSources
+): string | undefined {
+  if (!blocks.some(block => holdsEntryContent(block))) return undefined;
+  // Only a template draws an entry, so anywhere else the block is refused
+  // here rather than left for the save to refuse.
+  if (!offeredIn(document.kind, ENTRY_CONTENT_TYPE)) {
+    return ENTRY_CONTENT_TEMPLATE_ONLY;
+  }
+  // One Entry content block per template, counted in what is pasted as well
+  // as in what the template already holds.
+  if (entryContentCount(blocks) > 1) return ENTRY_CONTENT_ONE_REASON;
+  const fields = sources.entryFields;
+  return (
+    entryContentRefusal(document, ENTRY_CONTENT_TYPE, fields !== undefined) ??
+    foreignFieldRefusal(blocks, fields ?? [])
+  );
+}
+
+/**
  * Plan a paste where a click on a tile adding these blocks would land.
  *
  * The places are the Add panel's (`insertionCandidates`), tried in the order
@@ -266,25 +293,8 @@ export function planPaste(
   blocks: readonly BlockNode[],
   sources: PasteSources
 ): PastePlan {
-  // A template holds one Entry content block, so a paste bringing a second
-  // is refused as adding one is.
-  if (blocks.some(block => holdsEntryContent(block))) {
-    // Only a template draws an entry, so anywhere else the block is refused
-    // here rather than left for the save to refuse.
-    if (!offeredIn(document.kind, ENTRY_CONTENT_TYPE)) {
-      return { refusal: ENTRY_CONTENT_TEMPLATE_ONLY };
-    }
-    // One Entry content block per template, counted in what is pasted as
-    // well as in what the template already holds.
-    if (entryContentCount(blocks) > 1) {
-      return { refusal: ENTRY_CONTENT_ONE_REASON };
-    }
-    const fields = sources.entryFields;
-    const held =
-      entryContentRefusal(document, ENTRY_CONTENT_TYPE, fields !== undefined) ??
-      foreignFieldRefusal(blocks, fields ?? []);
-    if (held !== undefined) return { refusal: held };
-  }
+  const entryRefusal = entryContentPasteRefusal(document, blocks, sources);
+  if (entryRefusal !== undefined) return { refusal: entryRefusal };
 
   const role = runRole(
     blocks.flatMap(block => placementTypesOf(block, sources.components)),
