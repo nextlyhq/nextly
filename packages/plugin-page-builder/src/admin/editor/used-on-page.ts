@@ -1,7 +1,7 @@
 /**
  * The variables the open page uses, for the Colours tab's "Used on this
- * page": read from the editor's document, so an edit not yet saved counts at
- * once, with every component inlined as the canvas draws it (a placement's
+ * page": read from the editor's document and the header and footer drawn
+ * around it, so an edit not yet saved counts at once, with every component inlined as the canvas draws it (a placement's
  * override or variant included), the shared styles and block looks its
  * blocks wear, the site's text (which every page takes), and each variable
  * a used variable names through `var()`.
@@ -34,21 +34,23 @@ import {
   type VariablesAsked,
 } from "../../token-usage";
 
+/** One document the page draws, with the components it reaches. */
+export interface PageDocument {
+  readonly document: BlockDocument;
+  readonly components: ComponentLookup;
+}
+
 export function usedOnPage(
-  document: BlockDocument,
-  components: ComponentLookup,
+  parts: readonly PageDocument[],
   limits: DocumentLimits,
   tokens: SiteTokenSet | undefined,
   classes: readonly NamedClass[] = []
 ): ReadonlySet<string> {
-  const rendered = resolveComponentInstances(document, components, {
-    limits,
-  }).document;
-  const usage = documentTokenUsage(rendered, limits);
-  const ids = new Set(usage.ids);
-  const properties = new Set(usage.properties);
-  // The shared styles and looks the page's blocks wear, as composed.
-  const worn = new Set(classUsageOf(document, limits, components).ids);
+  const ids = new Set<string>();
+  const properties = new Set<string>();
+  const worn = new Set<string>();
+  for (const part of parts) readPart(part, limits, { ids, properties, worn });
+  // The shared styles and looks the page's blocks wear.
   for (const style of classes) {
     if (!worn.has(style.id)) continue;
     styleEnvelopeTokens(style.styles, ids);
@@ -67,6 +69,26 @@ export function usedOnPage(
     usageKeysOf({ ids: [...ids], properties: [...properties] })
   );
   return tokens === undefined ? used : withNamedVariables(used, tokens, asked);
+}
+
+/**
+ * What one document references, as the canvas composes it: every component
+ * inlined, a placement's override or variant applied, and one placed under a
+ * condition expanded too, since a visitor may see it.
+ */
+function readPart(
+  { document, components }: PageDocument,
+  limits: DocumentLimits,
+  into: { ids: Set<string>; properties: Set<string>; worn: Set<string> }
+): void {
+  const rendered = resolveComponentInstances(document, components, {
+    limits,
+    conditioned: "carry",
+  }).document;
+  const usage = documentTokenUsage(rendered, limits);
+  for (const id of usage.ids) into.ids.add(id);
+  for (const property of usage.properties) into.properties.add(property);
+  for (const id of classUsageOf(rendered, limits).ids) into.worn.add(id);
 }
 
 /**

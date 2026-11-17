@@ -581,6 +581,9 @@ export function VariablesTab({
   );
 }
 
+/** No components, for a region that reaches none. */
+const NO_COMPONENTS: ComponentLookup = new Map();
+
 /**
  * The Colours tab, with what the open page and the components it places use,
  * read from the editor's document so it follows an edit before any save.
@@ -588,18 +591,36 @@ export function VariablesTab({
 export function ColoursTab({
   document,
   components,
+  regions,
   limits,
 }: {
   document: BlockDocument;
   components: ComponentLookup;
+  /** The header and footer drawn around the page, each with its components. */
+  regions: readonly {
+    readonly document: BlockDocument;
+    readonly definitions?: ComponentLookup;
+  }[];
   limits: DocumentLimits;
 }): React.JSX.Element | null {
   const studio = useContext(VariablesStudio);
   const tokens = studio?.tokens;
   const classes = studio?.classes;
   const used = useMemo(
-    () => usedOnPage(document, components, limits, tokens, classes),
-    [document, components, limits, tokens, classes]
+    () =>
+      usedOnPage(
+        [
+          { document, components },
+          ...regions.map(region => ({
+            document: region.document,
+            components: region.definitions ?? NO_COMPONENTS,
+          })),
+        ],
+        limits,
+        tokens,
+        classes
+      ),
+    [document, components, regions, limits, tokens, classes]
   );
   return <VariablesTab tab="colours" usedOnPage={used} />;
 }

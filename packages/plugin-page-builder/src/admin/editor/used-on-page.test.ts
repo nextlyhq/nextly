@@ -71,7 +71,13 @@ describe("the variables the open page uses", () => {
       placed("p2", "card"),
     ]);
     expect(
-      [...usedOnPage(page, components, DEFAULT_LIMITS, TOKENS)].sort()
+      [
+        ...usedOnPage(
+          [{ document: page, components: components }],
+          DEFAULT_LIMITS,
+          TOKENS
+        ),
+      ].sort()
     ).toEqual(["color.accent", "color.muted", "color.primary"]);
   });
 
@@ -89,7 +95,12 @@ describe("the variables the open page uses", () => {
       },
     ];
     expect([
-      ...usedOnPage(page, new Map(), DEFAULT_LIMITS, TOKENS, library),
+      ...usedOnPage(
+        [{ document: page, components: new Map() }],
+        DEFAULT_LIMITS,
+        TOKENS,
+        library
+      ),
     ]).toEqual(["color.border"]);
   });
 
@@ -104,7 +115,13 @@ describe("the variables the open page uses", () => {
       },
     ]);
     expect(
-      [...usedOnPage(page, new Map(), DEFAULT_LIMITS, TOKENS)].sort()
+      [
+        ...usedOnPage(
+          [{ document: page, components: new Map() }],
+          DEFAULT_LIMITS,
+          TOKENS
+        ),
+      ].sort()
     ).toEqual(["color.accent", "shadow.lift"]);
   });
 
@@ -119,13 +136,61 @@ describe("the variables the open page uses", () => {
     expect(
       [
         ...usedOnPage(
-          document([coloured("p1", "#111111")]),
-          new Map(),
+          [
+            {
+              document: document([coloured("p1", "#111111")]),
+              components: new Map(),
+            },
+          ],
           DEFAULT_LIMITS,
           site
         ),
       ].sort()
     ).toEqual(["color.muted", "color.primary"]);
+  });
+
+  it("reads a component placed under a condition, which a visitor may see", () => {
+    const components = new Map<string, BlockDocument>([
+      [
+        "card",
+        document([coloured("c1", { $token: "color.accent" })], "component"),
+      ],
+    ]);
+    const page = document([
+      {
+        ...placed("p1", "card"),
+        visibility: {
+          conditions: [[{ field: "tier", op: "equals", value: "vip" }]],
+        },
+      } as BlockNode,
+    ]);
+    expect([
+      ...usedOnPage(
+        [{ document: page, components: components }],
+        DEFAULT_LIMITS,
+        TOKENS
+      ),
+    ]).toEqual(["color.accent"]);
+  });
+
+  it("reads the page's header and footer, each with its own components", () => {
+    const header = document([placed("h1", "brand")]);
+    const own = new Map<string, BlockDocument>([
+      [
+        "brand",
+        document([coloured("b1", { $token: "color.border" })], "component"),
+      ],
+    ]);
+    expect([
+      ...usedOnPage(
+        [
+          { document: document([]), components: new Map() },
+          { document: header, components: own },
+        ],
+        DEFAULT_LIMITS,
+        TOKENS
+      ),
+    ]).toEqual(["color.border"]);
   });
 
   it("reads a component placed inside itself once", () => {
@@ -140,8 +205,7 @@ describe("the variables the open page uses", () => {
     ]);
     expect([
       ...usedOnPage(
-        document([placed("p1", "loop")]),
-        components,
+        [{ document: document([placed("p1", "loop")]), components }],
         DEFAULT_LIMITS,
         TOKENS
       ),

@@ -837,6 +837,7 @@ export function editorPanelRenderer({
   componentVerbs,
   componentView,
   layersRegions,
+  canvasRegions,
   drag,
   offered,
   offerablePatterns,
@@ -922,6 +923,7 @@ export function editorPanelRenderer({
     | "pages"
     | "designFolds"
     | "pictureSession"
+    | "canvasRegions"
   > &
   Partial<
     Pick<EditorPanels, "designReveal" | "onDesignRevealed">
@@ -1107,6 +1109,7 @@ export function editorPanelRenderer({
               <ColoursTab
                 document={editor.document}
                 components={componentLibrary.definitions}
+                regions={canvasRegions}
                 limits={documentLimits}
               />
             ),
