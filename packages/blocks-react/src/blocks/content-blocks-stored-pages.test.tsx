@@ -200,6 +200,11 @@ describe("the settings added beside them", () => {
     expect(offered(name)).toContain("backgroundColor");
   });
 
+  it("offer an Image the text and colour its caption takes", () => {
+    expect(offered("core/image")).toContain("fontSize");
+    expect(offered("core/image")).toContain("color");
+  });
+
   it("offer a Divider its line, and no text colour", () => {
     expect(offered("core/divider")).toContain("border");
     expect(offered("core/divider")).not.toContain("color");

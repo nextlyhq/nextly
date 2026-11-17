@@ -30,7 +30,11 @@ import type { SiteStyleData } from "../../site-style";
 export { useBreakpointWriter } from "./site-style-breakpoints";
 export { useClassSurface, type ClassSurface } from "./site-style-class-surface";
 export { SharedStylesStudio } from "./site-style-shared-styles";
-export { TokensStudio, VariablesTab } from "./site-style-tokens-studio";
+export {
+  ColoursTab,
+  TokensStudio,
+  VariablesTab,
+} from "./site-style-tokens-studio";
 // Part of this module's exported names; no importer in the package reads it.
 // fallow-ignore-next-line unused-type
 export type { StyleOpeners } from "./site-style-tokens-studio";

@@ -2,8 +2,8 @@
 
 /**
  * The editor's top bar: the page's title and state with its history at the
- * start, the devices in the centre, and search, Preview, the document's
- * actions and its ⋯ menu at the end.
+ * start, the devices and the light and dark preview in the centre, and
+ * search, Preview, the document's actions and its ⋯ menu at the end.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
@@ -14,6 +14,7 @@ import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import { CanvasModeSwitch } from "./canvas-preview-mode";
 import { EditorMoreMenu } from "./editor-more-menu";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
@@ -148,6 +149,9 @@ export function editorTopBar(
           onSelect={chooseDevice}
           status={siteStyleStatus(siteStylePending, siteStyleError)}
         />
+        {/* Beside the devices: the whole site in its dark values, offered
+            while some variable has one. */}
+        <CanvasModeSwitch preview={view.previewMode} />
       </>
     ),
     topBarEnd: (

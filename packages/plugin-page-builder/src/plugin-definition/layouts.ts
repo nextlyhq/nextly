@@ -17,6 +17,7 @@ import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { layoutCountsRoute } from "../layout-counts-route";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
+import { layoutWriteRoutes } from "../layout-writes-route";
 
 import type { InitContext } from "./install-context";
 import { componentStoreOf } from "./options";
@@ -59,6 +60,7 @@ export function routesForLayouts(def: Definition): {
   readonly removeLayout: PluginRoute;
   readonly layoutChoices: PluginRoute;
   readonly layoutCounts: PluginRoute;
+  readonly layoutWrites: PluginRoute[];
 } {
   const { opts } = def;
   return {
@@ -83,5 +85,8 @@ export function routesForLayouts(def: Definition): {
     // How many pages use each set the caller may read, counted as the
     // system and answered as numbers only.
     layoutCounts: layoutCountsRoute(),
+    // A set's rename and copy from the builder's Pages panel, each gated by
+    // the set write it makes and written as the caller.
+    layoutWrites: layoutWriteRoutes(),
   };
 }
