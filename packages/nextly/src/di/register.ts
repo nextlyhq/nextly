@@ -172,6 +172,7 @@ import {
   publishWorkflows,
   type RegisteredWorkflow,
 } from "../domains/workflows/registry";
+import { recheckReleasesInWorkflowScopes } from "../domains/workflows/release-recheck-signal";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -392,6 +393,7 @@ import {
   registerWorkflowComparisonBaselines,
   registerWorkflowNoticeKinds,
   registerWorkflowPublishGate,
+  registerWorkflowReleaseChecks,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -814,6 +816,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // release that stops or runs late) can register its kinds against it.
   registerNoticeServices(ctx);
   registerReleaseServices(ctx);
+  // Workflows' "Not approved" check beside core's, and the hold the release's run and a reader's
+  // projection of a due release ask, so no release goes live past a workflow.
+  registerWorkflowReleaseChecks(ctx);
   // The notices a workflow's steps and assignments give the people they name, registered with
   // the notices service as the releases' are, so no move can name a person it cannot tell.
   registerWorkflowNoticeKinds();
@@ -1612,6 +1617,13 @@ async function registerServicesOnce(
     },
     logger: resolvedLogger,
   });
+
+  // Every scheduled release holding a document of a collection or Single with a workflow attached
+  // is checked again now that review state follows this boot's workflows: approvals a change of
+  // definition withdrew, here or in `nextly migrate`, and a workflow attached for the first time,
+  // leave nothing else to signal from. Last, once the services are registered and the boot is
+  // published, as the checks resolve them; a stop it cannot make is logged, never failing the boot.
+  await recheckReleasesInWorkflowScopes();
 }
 
 // ============================================================

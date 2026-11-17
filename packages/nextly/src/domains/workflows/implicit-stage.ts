@@ -63,8 +63,13 @@ export function partStage(
   return known ? state.stage : workflow.firstStage;
 }
 
-/** The registry record a document's liveness is read from, or null when it is gone. */
-async function entityOf(document: ReviewDocument) {
+/**
+ * The registry record a document's liveness is read from, or null when its collection or Single is
+ * gone. Asked of the scope alone, so a check over many documents of one scope asks it once.
+ */
+export async function entityOf(
+  document: Pick<ReviewDocument, "scopeKind" | "scopeSlug">
+) {
   return document.scopeKind === "single"
     ? container
         .get<SingleRegistryService>("singleRegistryService")
