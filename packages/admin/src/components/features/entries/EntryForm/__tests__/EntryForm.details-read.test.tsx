@@ -52,9 +52,10 @@ vi.mock("@admin/lib/api/protectedApi", async importOriginal => {
       get: vi.fn((url: string, ...rest: unknown[]) =>
         url.includes("details=1")
           ? Promise.resolve({ id: "e1", _details: ANSWER })
-          : (
-              original.protectedApi.get as (...args: unknown[]) => unknown
-            )(url, ...rest)
+          : (original.protectedApi.get as (...args: unknown[]) => unknown)(
+              url,
+              ...rest
+            )
       ),
     },
   };

@@ -69,9 +69,7 @@ test("opening a page in the builder reads no details", async ({ page }) => {
   expect(reads.details).toEqual([]);
 });
 
-test("the entry page reads its details once", async ({
-  page,
-}) => {
+test("the entry page reads its details once", async ({ page }) => {
   const tag = uniqueTag();
   const id = await createEntry(page.request, "posts", {
     title: `Details shown ${tag}`,
