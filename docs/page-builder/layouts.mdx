@@ -9,9 +9,9 @@ published like a component: its draft can change without the site seeing it unti
 publish.
 
 <Callout type="warn">
-  Header & footer sets are experimental: the fields, the default's rules and the route option
-  may still change before they are marked stable. A page route draws header & footer sets
-  once it turns them on; see [Draw pages inside their
+  Header & footer sets are experimental: the fields, the default's rules and the
+  route option may still change before they are marked stable. A page route
+  draws header & footer sets once it turns them on; see [Draw pages inside their
   header and footer](#draw-pages-inside-their-header-and-footer).
 </Callout>
 
@@ -368,10 +368,10 @@ export default defineConfig({
 });
 ```
 
-| Value | Who draws the header and footer |
-| --- | --- |
+| Value                          | Who draws the header and footer                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
 | `"page-builder"` (the default) | The header & footer sets authors build, drawn by a page route given the `layouts` option. |
-| `"code"` | Your site's own layout, around its page route. |
+| `"code"`                       | Your site's own layout, around its page route.                                            |
 
 The option is read when the server starts, and any other value stops it with an
 error that names the option.

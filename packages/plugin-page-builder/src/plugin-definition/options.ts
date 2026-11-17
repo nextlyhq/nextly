@@ -23,13 +23,13 @@ import { withRegisteredLooks } from "../core-looks";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "../library-route";
 import { previewViewportsFromSiteStyle } from "../preview-viewports";
 import type { PublishReadinessSetup } from "../publish-readiness";
-import type { SiteHeaderFooter } from "../site-header-footer";
 import type { PageBuilderSiteCodeOptions } from "../site-code/route";
 import type {
   PageBuilderFontOptions,
   resolveFontOptions,
 } from "../site-fonts/options";
 import { siteFontRoutes } from "../site-fonts/routes";
+import type { SiteHeaderFooter } from "../site-header-footer";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import type { PageBuilderTemplateOptions } from "../templates/template-addresses";
 

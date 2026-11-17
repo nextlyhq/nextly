@@ -73,6 +73,7 @@ import {
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import {
   CANVAS_FRAME_BOX_ATTRIBUTE,
+  boxInFrameViewport,
   CANVAS_LAYER_ATTRIBUTE,
   CHROME_BLEED,
   frameInsetOf,
@@ -348,8 +349,7 @@ function FramedCanvas({
   const [frame, setFrame] = React.useState<HTMLIFrameElement | null>(null);
   const { shown, pending, refuse } = useShownSource(source, onSourceFallback);
   const { page, mountPoint } = useFramePage(frame, shown, refuse);
-  const siteChrome = useSiteChrome(page, mountPoint);
-  useReportedSiteChrome(siteChrome, mountPoint, onSiteChrome);
+  const siteChrome = useSiteChrome(page, mountPoint, onSiteChrome);
 
   const region = useRegionSize(stage);
   const { height, scale } = frameLayout(width, statedHeight, region, zoom);
@@ -936,11 +936,14 @@ const NO_CHROME: readonly Element[] = [];
  *
  * Marked again when an ancestor gains a child, for a site whose layout draws
  * part of itself once its own scripts have run. Answers with the elements it
- * marked, for the cues drawn over them.
+ * marked, for the cues drawn over them, and tells `onSiteChrome` where they
+ * draw around the page.
  */
 function useSiteChrome(
   page: Document | null,
-  mountPoint: HTMLElement | null
+  mountPoint: HTMLElement | null,
+  /** Told where the marked parts draw around the page; see the prop. */
+  onSiteChrome: CanvasFrameProps["onSiteChrome"]
 ): readonly Element[] {
   const [chrome, setChrome] = React.useState<readonly Element[]>(NO_CHROME);
   useIsomorphicLayoutEffect(() => {
@@ -971,6 +974,7 @@ function useSiteChrome(
       setChrome(NO_CHROME);
     };
   }, [page, mountPoint]);
+  useReportedSiteChrome(chrome, mountPoint, onSiteChrome);
   return chrome;
 }
 
@@ -989,7 +993,7 @@ function siteChromeDrawn(
   let before = false;
   let after = false;
   for (const element of elements) {
-    const box = element.getBoundingClientRect();
+    const box = boxInFrameViewport(element);
     if (box.width === 0 || box.height === 0) continue;
     // The constant from the node itself, which belongs to the frame's realm.
     const precedes =
