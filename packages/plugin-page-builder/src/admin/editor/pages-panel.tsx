@@ -88,6 +88,11 @@ export interface PagesPanelMount {
   openSettings: () => void;
   /** The page being edited, or null before it has been saved. */
   currentPage: PageReference | null;
+  /**
+   * Asks the panel to show its Header & footer sets: the group unfolded and
+   * brought into view, as "Manage headers & footers" leads there.
+   */
+  revealSets: () => void;
 }
 
 /**
@@ -113,19 +118,56 @@ export function usePagesPanel(
     () => setSettingsRequest(earlier => ({ count: (earlier?.count ?? 0) + 1 })),
     []
   );
+  // Each request to show the sets, counted; the last one met is kept here,
+  // so a panel opened again later does not take an old request as new.
+  const [revealRequest, setRevealRequest] = React.useState(0);
+  const revealsMet = React.useRef(0);
+  const revealSets = React.useCallback(
+    () => setRevealRequest(count => count + 1),
+    []
+  );
   return {
     currentPage,
     settingsRequest,
     openSettings,
+    revealSets,
     renderPagesPanel: ({ unsavedWork }) => (
       <PagesPanel
         current={currentPage}
         unsavedWork={unsavedWork}
         onOpenSettings={openSettings}
+        reveal={{ count: revealRequest, met: revealsMet }}
       />
     ),
   };
 }
+
+/**
+ * Meets a request to show the Header & footer sets once: the group unfolded
+ * (an author's own fold gives way to their asking for it) and scrolled into
+ * view, after the unfold has drawn it.
+ */
+function useRevealSets(
+  reveal: PagesPanelProps["reveal"],
+  folds: ReturnType<typeof useGroupFolds>,
+  sets: React.RefObject<HTMLDivElement | null>
+): void {
+  const count = reveal?.count ?? 0;
+  React.useEffect(() => {
+    if (reveal === undefined || count === 0 || reveal.met.current === count) {
+      return;
+    }
+    reveal.met.current = count;
+    if (folds.folded.has(SETS_GROUP)) folds.onFold(SETS_GROUP, false);
+    // After the unfold is drawn, so the whole group comes into view.
+    requestAnimationFrame(() =>
+      sets.current?.scrollIntoView({ block: "start" })
+    );
+  }, [count, reveal, folds, sets]);
+}
+
+/** The Header & footer group's key in the panel's fold memory. */
+const SETS_GROUP = "header-footer";
 
 /** Whether this page was opened from another page's "Settings". */
 function arrivedForSettings(): boolean {
@@ -140,12 +182,15 @@ interface PagesPanelProps {
   unsavedWork: boolean;
   /** Opens this page's Settings dialog. */
   onOpenSettings: () => void;
+  /** Requests to show the Header & footer sets, and the last one met. */
+  reveal?: { readonly count: number; readonly met: { current: number } };
 }
 
 function PagesPanel({
   current,
   unsavedWork,
   onOpenSettings,
+  reveal,
 }: PagesPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const list = usePagesList(query);
@@ -166,6 +211,8 @@ function PagesPanel({
   const foldStore = React.useMemo(() => pagesFoldsStoreFor(userId), [userId]);
   const folds = useGroupFolds(foldStore);
   const pagesOpen = !folds.folded.has(PAGES_GROUP);
+  const setsRef = React.useRef<HTMLDivElement>(null);
+  useRevealSets(reveal, folds, setsRef);
 
   return (
     // In the builder's panel text; the surface is the panel region's own.
@@ -219,7 +266,9 @@ function PagesPanel({
           </>
         ) : null}
       </section>
-      <HeaderFooterGroup folds={folds} currentPageId={current?.id ?? null} />
+      <div ref={setsRef}>
+        <HeaderFooterGroup folds={folds} currentPageId={current?.id ?? null} />
+      </div>
       <CollectionTemplatesGroup folds={folds} />
       <DeletePageDialog
         page={deleting}

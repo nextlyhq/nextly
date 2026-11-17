@@ -154,6 +154,7 @@ export function editorSettings(
         value={() => {
           dialog.onOpenChange(false);
           view.requestPanel("pages");
+          view.pages.revealSets();
         }}
       >
         <SettingsDialog

@@ -11,7 +11,12 @@
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+
+// The site default is shared by every spec that reads or changes it: this
+// one replaces it and puts it back, so it holds the lock they hold.
+test.describe.configure({ mode: "serial", lock: [LOCK.siteDefaultLayout] });
 
 const API = "/admin/api";
 const PLUGIN = `${API}/plugins/@nextlyhq/plugin-page-builder`;
