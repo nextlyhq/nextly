@@ -53,18 +53,46 @@ describe("the colours' groups and order", () => {
     ]);
   });
 
-  it("lists the colours an order names first, in that order, then the rest", () => {
-    expect(
-      colourOrder({
-        ...SET,
-        order: ["color.text", "color.gone", "color.primary"],
-      })
-    ).toEqual([
+  it("lists the colours an order names first, in that order, then the rest, each in its group", () => {
+    const ordered = {
+      ...SET,
+      order: ["color.text", "color.gone", "color.primary"],
+    };
+    expect(shape(ordered)).toEqual([
+      "Text and surfaces: color.text color.border",
+      "Brand: color.primary color.accent color.muted",
+    ]);
+    // The flat order is the groups' order: what the pickers list is what
+    // the panel draws.
+    expect(colourOrder(ordered)).toEqual([
       "color.text",
+      "color.border",
       "color.primary",
       "color.accent",
       "color.muted",
-      "color.border",
+    ]);
+  });
+
+  it("lists a colour the order misses where its group does, in the pickers too", () => {
+    const set: SiteTokenSet = {
+      tokens: [
+        colour("color.accent", "Accents"),
+        colour("color.brand", "Brand"),
+        colour("color.brand-copy", "Brand"),
+        colour("color.text", "Text"),
+      ],
+      order: ["color.accent", "color.brand", "color.text"],
+    };
+    expect(shape(set)).toEqual([
+      "Accents: color.accent",
+      "Brand: color.brand color.brand-copy",
+      "Text: color.text",
+    ]);
+    expect(colourOrder(set)).toEqual([
+      "color.accent",
+      "color.brand",
+      "color.brand-copy",
+      "color.text",
     ]);
   });
 

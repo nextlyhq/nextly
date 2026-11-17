@@ -1355,7 +1355,37 @@ export function duplicateVariable(
   }
   const next = [...tokens.tokens];
   next.splice(at + 1, 0, ...copies);
-  return { tokens: { ...tokens, tokens: next }, at: at + 1 };
+  return {
+    tokens: {
+      ...tokens,
+      tokens: next,
+      ...orderWithCopy(tokens, token, copies),
+    },
+    at: at + 1,
+  };
+}
+
+/**
+ * The site's colour order with a copy listed right after the colour it
+ * copies, where the order names that colour; otherwise nothing, and the copy
+ * is listed where its group puts it.
+ */
+function orderWithCopy(
+  tokens: SiteTokenSet,
+  token: SiteToken,
+  copies: readonly SiteToken[]
+): { order?: readonly string[] } {
+  const order = tokens.order;
+  const at = order?.indexOf(tokenIdentity(token)) ?? -1;
+  const copy = copies[0];
+  if (order === undefined || at === -1 || copy === undefined) return {};
+  return {
+    order: [
+      ...order.slice(0, at + 1),
+      tokenIdentity(copy),
+      ...order.slice(at + 1),
+    ],
+  };
 }
 
 /**

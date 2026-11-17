@@ -12,7 +12,11 @@
  *
  * @module colour-group-ui
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  MAX_TOKEN_LABEL_LENGTH,
+  tokenLabelIssue,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,8 +75,11 @@ export function useColourGroupHost(
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState<string | null>(null);
   const real = colourGroups(tokens).map(group => group.name);
-  // A draft a colour has moved into is a group like any other now.
+  // A draft a colour has moved into is a group like any other now, so it is
+  // let go, not just hidden: kept, it would come back empty once that group
+  // is renamed or removed.
   const pending = drafts.filter(name => !real.includes(name));
+  if (pending.length !== drafts.length) setDrafts(pending);
   return {
     tokens,
     readOnly,
@@ -274,7 +281,9 @@ function GroupNameField({
       ...colourGroups(host.tokens).map(group => group.name),
       ...host.pending,
     ].filter(other => other !== name);
-    if (!keep || next === "" || next === name || taken.includes(next)) return;
+    // A name the site could not store keeps the old one, as a taken one does.
+    const refused = next === "" || tokenLabelIssue(next) !== undefined;
+    if (!keep || refused || next === name || taken.includes(next)) return;
     if (host.pending.includes(name)) host.renamePending(name, next);
     else host.commit(renameColourGroup(host.tokens, name, next));
   };
@@ -286,7 +295,7 @@ function GroupNameField({
       autoComplete="off"
       spellCheck={false}
       value={draft}
-      maxLength={120}
+      maxLength={MAX_TOKEN_LABEL_LENGTH}
       onChange={event => setDraft(event.currentTarget.value)}
       onBlur={() => finish(true)}
       onKeyDown={event => {

@@ -4,7 +4,10 @@
  * The Colours tab's named groups, and moving a colour by its ⋯ menu and by
  * Alt+Up and Alt+Down.
  */
-import type { SiteTokenSet } from "@nextlyhq/blocks-engine";
+import {
+  MAX_TOKEN_LABEL_LENGTH,
+  type SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   cleanup,
   fireEvent,
@@ -259,6 +262,82 @@ describe("+ New group", () => {
       "Brand: color.brand",
       "Text and surfaces: color.text color.muted",
       "Accents: color.accent",
+    ]);
+  });
+});
+
+describe("a group's name", () => {
+  it("is no longer than a stored label, and a longer one keeps the old name", async () => {
+    saved = SITE;
+    render(<Host />);
+    fireEvent.click(
+      within(await openGroupMenu("Brand")).getByRole("menuitem", {
+        name: "Rename group",
+      })
+    );
+    const field = await screen.findByRole<HTMLInputElement>("textbox", {
+      name: "Group name",
+    });
+    expect(field.maxLength).toBe(MAX_TOKEN_LABEL_LENGTH);
+    fireEvent.change(field, {
+      target: { value: "A".repeat(MAX_TOKEN_LABEL_LENGTH + 1) },
+    });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(saved).toBe(SITE);
+    expect(listed()[0]).toBe("Brand: Brand, Accent");
+  });
+
+  it("keeps a new group's draft name where the one typed could not be stored", async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: "New group" }));
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(field, {
+      // A tab: a control character, which a label refuses and a field keeps.
+      target: { value: "Tab\there" },
+    });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(listed()).toEqual([
+      "Brand: Brand, Accent",
+      "Text and surfaces: Text, Muted",
+      "New group: ",
+    ]);
+  });
+});
+
+describe("a new group a colour has moved into", () => {
+  it("does not come back empty once renamed or removed", async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: "New group" }));
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(field, { target: { value: "Accents" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    const menu = await openMenu("Accent");
+    fireEvent.keyDown(
+      within(menu).getByRole("menuitem", { name: "Move to group…" }),
+      { key: "ArrowRight" }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Accents" }));
+    fireEvent.click(
+      within(await openGroupMenu("Accents")).getByRole("menuitem", {
+        name: "Rename group",
+      })
+    );
+    const rename = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(rename, { target: { value: "Highlights" } });
+    fireEvent.keyDown(rename, { key: "Enter" });
+    expect(listed()).toEqual([
+      "Brand: Brand",
+      "Text and surfaces: Text, Muted",
+      "Highlights: Accent",
+    ]);
+    fireEvent.click(
+      within(await openGroupMenu("Highlights")).getByRole("menuitem", {
+        name: "Remove group",
+      })
+    );
+    expect(listed()).toEqual([
+      "Brand: Brand",
+      "Text and surfaces: Text, Muted, Accent",
     ]);
   });
 });

@@ -32,11 +32,12 @@ function isColour(token: SiteToken): boolean {
 }
 
 /**
- * The site's colours, by identity, in the order they are listed: those the
+ * The site's colours, by identity, in the order they are stored: those the
  * site's order names first, in that order, then the rest in the set's own
  * order. An identity the order names that the site no longer has is skipped.
+ * The groups are read from this; what is listed is `colourOrder`.
  */
-export function colourOrder(tokens: SiteTokenSet | undefined): string[] {
+function storedOrder(tokens: SiteTokenSet | undefined): string[] {
   const colours = (tokens?.tokens ?? []).filter(isColour).map(tokenIdentity);
   const present = new Set(colours);
   const named = (tokens?.order ?? []).filter(identity => present.has(identity));
@@ -55,7 +56,7 @@ export function colourGroups(tokens: SiteTokenSet | undefined): ColourGroup[] {
   );
   const groups: { name: string; identities: string[] }[] = [];
   let current = DEFAULT_COLOUR_GROUP;
-  for (const identity of colourOrder(tokens)) {
+  for (const identity of storedOrder(tokens)) {
     const own = byIdentity.get(identity)?.group;
     current = own ?? current;
     const group =
@@ -64,6 +65,16 @@ export function colourGroups(tokens: SiteTokenSet | undefined): ColourGroup[] {
     group.identities.push(identity);
   }
   return groups;
+}
+
+/**
+ * The site's colours, by identity, in the order the panel lists them: group
+ * by group. Every colour picker lists them in this order, derived from the
+ * groups, so a colour the stored order misses sits in both where its group
+ * puts it.
+ */
+export function colourOrder(tokens: SiteTokenSet | undefined): string[] {
+  return colourGroups(tokens).flatMap(group => group.identities);
 }
 
 function pushed<T>(list: T[], item: T): T {
