@@ -41,6 +41,8 @@ type Props = {
   onAddField: () => void;
   onOpenSettings: () => void;
   onSave: () => void;
+  /** Why Save waits, while it does: Save is held and the reason shown beside it. */
+  saveHeld?: string;
   /**
    * Where the Page Builder opens for this entity, for one laid out from blocks
    * and saved; absent, nothing is offered.
@@ -86,6 +88,34 @@ function saveBlockedTitle(
   return `Fix the ${errorCount === 1 ? "error" : `${errorCount} errors`} before saving.`;
 }
 
+/**
+ * Why Save waits, said where Save is, so a held Save is never a button that
+ * does nothing without a reason. Mounted whether or not Save is held, and only
+ * its text changes: a status region inserted with its message already in it is
+ * not reliably announced. Visually hidden while empty, so it takes no room
+ * beside Save, and on a phone, whose row is full: there Save carries the
+ * reason as its title.
+ */
+function SaveHeldStatus({
+  reason,
+}: {
+  reason: string | undefined;
+}): JSX.Element {
+  return (
+    <span
+      role="status"
+      data-testid="save-held-status"
+      className={
+        reason === undefined
+          ? "sr-only"
+          : "sr-only sm:not-sr-only text-xs text-muted-foreground"
+      }
+    >
+      {reason ?? ""}
+    </span>
+  );
+}
+
 export function BuilderToolbar({
   config,
   name,
@@ -96,12 +126,18 @@ export function BuilderToolbar({
   onAddField,
   onOpenSettings,
   onSave,
+  saveHeld,
   pageBuilderHref,
   errorIds = [],
   onShowError,
 }: Props): JSX.Element {
-  // A field the save would refuse keeps Save from saving, as the save itself would.
-  const saveDisabled = unsavedCount === 0 || locked || errorIds.length > 0;
+  // A field the save would refuse keeps Save from saving, as the save itself would; so does a
+  // Save held while an address move is checked.
+  const saveDisabled =
+    unsavedCount === 0 ||
+    locked ||
+    saveHeld !== undefined ||
+    errorIds.length > 0;
   const lockedSaveTitle = saveBlockedTitle(
     config.kind,
     locked,
@@ -148,6 +184,7 @@ export function BuilderToolbar({
           saving={saving}
           errorIds={errorIds}
           onShowError={onShowError}
+          held={saveHeld !== undefined}
         />
         {/* Adding is an edit, so a read-only entity has no add here. */}
         {!locked && (
@@ -183,10 +220,11 @@ export function BuilderToolbar({
         >
           <Settings className="h-4 w-4" />
         </Button>
+        <SaveHeldStatus reason={saveHeld} />
         <Button
           size="sm"
           disabled={saveDisabled}
-          title={lockedSaveTitle}
+          title={lockedSaveTitle ?? saveHeld}
           onClick={onSave}
         >
           Save

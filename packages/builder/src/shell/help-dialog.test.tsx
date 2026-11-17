@@ -14,7 +14,9 @@ import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 import { describe, expect, it } from "vitest";
 
+import type { EditorState } from "../editor-state";
 import { PAGE_BUILDER_DOCS } from "../docs-links";
+import { BlockKeyboardActions } from "../keyboard-actions";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 
 /** Each binding's description as it runs, for asking which one a key ran. */
@@ -231,6 +233,32 @@ describe("HelpDialog", () => {
     act(() => laterOn());
 
     expect(list().textContent).toContain("Publish the page");
+  });
+
+  it('lists "/" as Add a block here where the editor has a picker', () => {
+    const editor = {
+      document: { formatVersion: 1, kind: "page", nodes: [] },
+      selectedId: null,
+      selection: { ids: [], primary: null },
+      canUndo: false,
+      canRedo: false,
+    } as unknown as EditorState;
+    render(
+      <Editor>
+        <BlockKeyboardActions
+          editor={editor}
+          onSaveAsPattern={() => undefined}
+          onAddBlockHere={() => undefined}
+        />
+      </Editor>
+    );
+    // The row's own keys: the description, and "/" as the one key that does it.
+    const keys = [
+      ...(screen
+        .getByText("Add a block here")
+        .parentElement?.querySelectorAll("kbd") ?? []),
+    ].map(key => key.textContent);
+    expect(keys).toEqual(["/"]);
   });
 
   it("links to the documentation in a new tab", () => {

@@ -97,6 +97,24 @@ export interface NamedClass {
    * @experimental
    */
   isDefault?: true;
+  /**
+   * Set on the look a block of its type has while it wears none of the type's looks: the
+   * type's ★ block style. Absent, never `false`, and read only on a worn look. A type with no
+   * look marked keeps its own look as its default, as before the mark existed.
+   *
+   * The site stores the mark; {@link starredLooksOf} says which one a compile reads.
+   *
+   * @experimental
+   */
+  starred?: true;
+  /**
+   * Set while a look is hidden: it is not offered to blocks, and a block already wearing it
+   * keeps it. Display only: nothing compiled reads it, so a hidden look is still written.
+   * Absent, never `false`.
+   *
+   * @experimental
+   */
+  hidden?: true;
 }
 
 /**
@@ -158,6 +176,32 @@ export function ownLooksRead(library: unknown): NamedClass[] {
     own.push(cls);
   }
   return own;
+}
+
+/**
+ * Each block type's ★ look among the classes a compile writes (`usableNamedClasses` of the part
+ * it reads), keyed by type: the first worn look of the type marked `starred`, in the order the
+ * classes override one another. A block's own look is never one, since it is the default
+ * already, and a mark that is not `true` marks nothing.
+ *
+ * The one reading of the mark, so the compiler writing the ★ rule and a panel showing which
+ * style carries ★ see the same look.
+ *
+ * @experimental
+ */
+export function starredLooksOf(
+  written: readonly NamedClass[]
+): Map<string, NamedClass> {
+  const starred = new Map<string, NamedClass>();
+  for (const cls of orderedNamedClasses(written)) {
+    if (!isUsableNamedClass(cls) || !isLook(cls) || isDefaultLook(cls)) {
+      continue;
+    }
+    if ((cls as { starred?: unknown }).starred !== true) continue;
+    const type = cls.blockType as string;
+    if (!starred.has(type)) starred.set(type, cls);
+  }
+  return starred;
 }
 
 /**

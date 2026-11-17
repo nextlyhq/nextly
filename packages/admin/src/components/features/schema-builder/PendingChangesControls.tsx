@@ -48,6 +48,13 @@ type Props = {
   errorIds?: readonly string[];
   /** Brings a field into view and opens it, as a click on its row does. */
   onShowError?: (fieldId: string) => void;
+  /**
+   * Undo, Redo and Discard all wait, by button and by key: an unsaved entity's
+   * address move, still being checked, records its settings when it ends, and
+   * would write over a step taken meanwhile; a discard meanwhile would let the
+   * entity go before the move renames it.
+   */
+  held?: boolean;
 };
 
 /** "1 error", "3 errors". */
@@ -86,6 +93,7 @@ export function PendingChangesControls({
   saving = false,
   errorIds = [],
   onShowError,
+  held = false,
 }: Props): JSX.Element | null {
   const [announcement, setAnnouncement] = useState("");
   // The error a press shows next: each press moves to the one after, back to the first after the
@@ -115,7 +123,9 @@ export function PendingChangesControls({
     if (said) announce(said);
   };
 
-  const noDialog = () => !dialogOpen();
+  // Not while a dialog is open over the builder, nor while the page holds
+  // Undo and Redo.
+  const noDialog = () => !held && !dialogOpen();
   // Not while typing: inside a text input these keys undo the text, which is
   // what a person typing expects them to do.
   useKeyboardShortcuts(
@@ -181,7 +191,7 @@ export function PendingChangesControls({
         size="icon-sm"
         aria-label="Undo"
         title="Undo"
-        disabled={!pending.canUndo}
+        disabled={held || !pending.canUndo}
         onClick={undo}
       >
         <Undo className="h-4 w-4" />
@@ -191,7 +201,7 @@ export function PendingChangesControls({
         size="icon-sm"
         aria-label="Redo"
         title="Redo"
-        disabled={!pending.canRedo}
+        disabled={held || !pending.canRedo}
         onClick={redo}
       >
         <Redo className="h-4 w-4" />
@@ -200,7 +210,7 @@ export function PendingChangesControls({
         variant="ghost"
         size="sm"
         aria-label="Discard all changes"
-        disabled={count === 0 || saving}
+        disabled={count === 0 || saving || held}
         onClick={() => setConfirmingDiscard(true)}
       >
         <RotateCcw className="h-4 w-4 sm:hidden" />

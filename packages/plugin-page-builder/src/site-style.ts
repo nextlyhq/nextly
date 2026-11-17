@@ -169,6 +169,10 @@ function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
     // A block's own look edits its type's base; the same entry without the
     // mark is a look blocks wear instead.
     a.isDefault === b.isDefault &&
+    // The block style marks: an override that only moves the default ★ or
+    // hides a built-in style is a difference worth storing.
+    a.starred === b.starred &&
+    a.hidden === b.hidden &&
     sameJsonValue(a.styles, b.styles)
   );
 }

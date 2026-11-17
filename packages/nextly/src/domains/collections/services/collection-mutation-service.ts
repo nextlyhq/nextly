@@ -315,6 +315,7 @@ import {
   partsTogether,
   type ChangedParts,
 } from "../../versions/changed-parts";
+import type { VersionsDbApi } from "../../versions/db-api";
 import {
   bumpDocumentRevision,
   changerColumns,
@@ -527,8 +528,18 @@ import {
   entryStillReferenced,
   referrersHolding,
 } from "./entry-still-referenced";
+import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
+import {
+  judgeStatusSave,
+  refusePublishEarly,
+  refuseStatusSaveEarly,
+  sharedDraftPendingOn,
+  type StatusSave,
+  WITHOUT_REVIEW_KEY,
+  withoutReviewOfBody,
+} from "./save-door-gate";
 import {
   entryWriteContext,
   fieldAccessPass,
@@ -8621,6 +8632,9 @@ export class CollectionMutationService extends BaseService {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
+    // A publish made without review, and why, read off the body for the publish gate and never
+    // stored; see updateEntry.
+    const withoutReview = withoutReviewOfBody(body);
     // What the create claims about where its translated values came from,
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
@@ -8629,7 +8643,8 @@ export class CollectionMutationService extends BaseService {
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
-    body = withoutDocumentVersionKeys(body);
+    body = withoutDocumentVersionKeys({ ...body });
+    delete body[WITHOUT_REVIEW_KEY];
     // Set once the outbox event is appended (below), so the catch can report a
     // committed-but-hook-failed write as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -8674,6 +8689,33 @@ export class CollectionMutationService extends BaseService {
       );
       const { fields, storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
+
+      // A create that names "published" is a publish, so the publish gate's early answer is asked
+      // here, before any hook runs: a create the gate holds back runs no hook, and so no side effect
+      // a hook makes, and writes nothing. Nothing of the entry is live, and it has no id until its
+      // insert, so the gate is told none. Its verdict under the lock follows the insert, below,
+      // judged on the status the hooks left.
+      const earlyCreate =
+        body.status === "published"
+          ? this.statusSaveOf(
+              { ...params, entryId: "" },
+              {
+                status: body.status,
+                locale: params.locale,
+                everyLanguage: false,
+                withoutReview,
+                // A new entry has no drafts.
+                sharedDraftPending: false,
+              },
+              collection
+            )
+          : null;
+      if (earlyCreate) {
+        await refuseStatusSaveEarly(earlyCreate, {
+          languages: [],
+          shared: false,
+        });
+      }
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments or throw to abort
@@ -9157,6 +9199,32 @@ export class CollectionMutationService extends BaseService {
           entry[toCamelCase(key)] = value;
         }
 
+        // A create that puts its entry live is a publish, so the publish gate is asked of it on
+        // this transaction, once the entry has its id: nothing of it was live before. A part held
+        // back refuses the create, and it rolls back; what the verdict started is settled before
+        // the transaction commits, below.
+        const createdSave =
+          finalData.status === "published"
+            ? this.statusSaveOf(
+                { ...params, entryId: String(entry.id) },
+                {
+                  status: finalData.status,
+                  locale: params.locale,
+                  everyLanguage: false,
+                  withoutReview,
+                  // A new entry has no drafts.
+                  sharedDraftPending: false,
+                },
+                collection
+              )
+            : null;
+        const settleCreateGate = createdSave
+          ? await judgeStatusSave(tx, createdSave, {
+              languages: [],
+              shared: false,
+            })
+          : undefined;
+
         // i18n M5: write the translatable values to the companion `_locales` row for the
         // write's locale (same transaction → rolls back with the main insert).
         if (localizedWrite) {
@@ -9481,6 +9549,9 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
+        // What the gate's verdict on a create that publishes started is settled now the create is
+        // written, before it commits; a gate that throws takes the create back.
+        if (settleCreateGate) await settleCreateGate();
       }, transactionOptions);
       // Set only after the transaction resolves (this line is skipped if it
       // rejected), so a commit failure never flags a durable event that isn't
@@ -10823,6 +10894,41 @@ export class CollectionMutationService extends BaseService {
       // make it, and before anything is written, so a plugin's guard refuses
       // this as it refuses that. A refusal thrown here is answered by the
       // catch below with the hook's own status and message.
+      // What the publish gate is told of this move: its direction, and the parts it puts live or
+      // takes down. Languages only where the collection keeps a status per language: an
+      // untranslated one moves its shared part alone, whatever languages the site has.
+      const gateDirection =
+        direction.nextStatus === "published" ? "publish" : "unpublish";
+      const gateParts: PublishPart[] = [
+        ...(companionPublishable ? (this.localization?.locales ?? []) : [])
+          .map(language => language.code)
+          .filter(locale => movesLanguage(params.parts, locale))
+          .map(locale => ({ kind: "language" as const, locale })),
+        ...(movesShared(params.parts) ? [{ kind: "shared" as const }] : []),
+      ];
+      // The gate's early answer, asked before the move runs any hook: a publish the gate holds
+      // back runs none, whichever door it came through. A move made for a publish of chosen parts
+      // was asked already, with the rest of that request. Its verdict under the row lock follows.
+      if (gateDirection === "publish" && params.gateAskedEarly !== true) {
+        await refusePublishEarly({
+          scope: { kind: "collection", slug: params.collectionName },
+          entryId: params.entryId,
+          direction: gateDirection,
+          parts: gateParts,
+          live: await this.livePartsOn(this.adapter, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            mainStatus: (existingEntry as { status?: unknown }).status,
+            companion: companionPublishable ? companion : null,
+          }),
+          caller: publishCallerOf(params),
+          ...(params.actor === undefined ? {} : { actor: params.actor }),
+          ...(params.withoutReview === undefined
+            ? {}
+            : { withoutReview: params.withoutReview }),
+        });
+      }
+
       const hooks = await this.lifecycleBeforeHooks(direction, {
         params,
         existingEntry: existingEntry as Record<string, unknown>,
@@ -11148,6 +11254,43 @@ export class CollectionMutationService extends BaseService {
             publishRefused = refusal;
             throw refusal;
           }
+        }
+
+        // The publish gate's verdict, asked on this transaction once the entry is locked: the
+        // early answer came before the transaction, and this is the one the move keeps to. It is
+        // told the parts this move puts live or takes down, and what was live as this lock reads
+        // it. A part held back refuses the whole move, before anything is written.
+        // Unpublishing is never gated: only a publish asks the gate, and only it is settled.
+        const gateVerdict =
+          gateDirection !== "publish"
+            ? undefined
+            : await publishGate().judge(tx, {
+                scope: { kind: "collection", slug: params.collectionName },
+                entryId: params.entryId,
+                direction: gateDirection,
+                parts: gateParts,
+                live: {
+                  languages: [...priorCompanionStatuses]
+                    .filter(([, status]) => status === "published")
+                    .map(([locale]) => locale),
+                  shared: lockedPreviousStatus === "published",
+                },
+                caller: publishCallerOf(params),
+                ...(params.actor === undefined ? {} : { actor: params.actor }),
+                ...(params.withoutReview === undefined
+                  ? {}
+                  : { withoutReview: params.withoutReview }),
+              });
+        if (gateVerdict !== undefined && gateVerdict.refusals.length > 0) {
+          const refusal = NextlyError.validation({
+            errors: gateVerdict.refusals.map(({ part, code, message }) =>
+              part.kind === "shared"
+                ? { path: "shared", code, message }
+                : { path: part.locale, code, locale: part.locale, message }
+            ),
+          });
+          publishRefused = refusal;
+          throw refusal;
         }
 
         // One instant for everything this attempt writes.
@@ -12098,6 +12241,10 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: {},
         });
+        // What the gate's verdict started is finished on this transaction, now the parts are
+        // written and before it commits: a publish only, since an unpublish closes no review. A
+        // gate that finds what it judged has changed throws, and the whole move rolls back.
+        if (gateVerdict !== undefined) await gateVerdict.settle();
       }, transactionOptions);
 
       // The entry was deleted out from under the publish: nothing was written or
@@ -12391,6 +12538,102 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * What of an entry is live, as `reader` reads it: each language whose own status is published,
+   * and whether the entry's own status (the shared part) is. Told to the publish gate as the parts
+   * live before a move: on the pool for its early answer, on the move's transaction under the lock
+   * for its verdict. Reads only on `reader`: the translations table is resolved before the
+   * transaction opens, so nothing under the row lock reaches back to the pool.
+   */
+  private async livePartsOn(
+    reader: Pick<TransactionContext, "getDrizzle">,
+    args: {
+      collectionName: string;
+      entryId: string;
+      mainStatus: unknown;
+      /** The entry's translations table, where it keeps a status per language; else null. */
+      companion: CompanionSchema | null;
+    }
+  ): Promise<{ languages: string[]; shared: boolean }> {
+    const statuses = await this.priorCompanionStatusesOnTx(reader, {
+      companion: args.companion?.hasStatus ? args.companion : null,
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+    });
+    return {
+      languages: [...statuses]
+        .filter(([, status]) => status === "published")
+        .map(([locale]) => locale),
+      shared: args.mainStatus === "published",
+    };
+  }
+
+  /**
+   * The publish gate's view of a save that names a lifecycle status, or null where it names none
+   * or the collection has no lifecycle: which parts it moves follows from its status and language.
+   */
+  private statusSaveOf(
+    params: {
+      collectionName: string;
+      entryId: string;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      authenticatedScope?: AuthenticatedScope;
+      actor?: RequestActor;
+    },
+    save: {
+      status: unknown;
+      locale: string | undefined;
+      everyLanguage: boolean;
+      withoutReview: { reason: string } | undefined;
+      /** Whether a pending shared draft goes live with the save, as its caller read it. */
+      sharedDraftPending: boolean;
+    },
+    /** The collection, as its caller resolved it before any row lock: never read here. */
+    collection: unknown
+  ): StatusSave | null {
+    if (!isLifecycleStatus(save.status)) return null;
+    const shape = collection as { status?: boolean; localized?: boolean };
+    if (shape.status !== true) return null;
+    return {
+      scope: { kind: "collection", slug: params.collectionName },
+      entryId: params.entryId,
+      status: save.status,
+      locale: save.locale,
+      everyLanguage: save.everyLanguage,
+      translated: shape.localized === true && !!this.localization,
+      configured: (this.localization?.locales ?? []).map(l => l.code),
+      defaultLocale: this.localization?.defaultLocale,
+      caller: publishCallerOf(params),
+      ...(params.actor === undefined ? {} : { actor: params.actor }),
+      ...(save.withoutReview === undefined
+        ? {}
+        : { withoutReview: save.withoutReview }),
+      sharedDraftPending: save.sharedDraftPending,
+    };
+  }
+
+  /**
+   * Whether a save that publishes this entry also puts a pending shared draft live: only where
+   * the entry is translated and keeps its parts apart, read on `reader`.
+   */
+  private async publishedSaveCarriesSharedDraft(
+    reader: VersionsDbApi,
+    collectionName: string,
+    entryId: string,
+    status: unknown,
+    collection: unknown
+  ): Promise<boolean> {
+    if (status !== "published" || !draftsKeptByPart()) return false;
+    if ((collection as { localized?: boolean }).localized !== true)
+      return false;
+    return sharedDraftPendingOn(reader, {
+      scopeKind: "collection",
+      scopeSlug: collectionName,
+      entryId,
+    });
+  }
+
+  /**
    * Every stored translation's committed `_status`, read on `tx`, or none
    * where the entry's translations carry no status of their own.
    *
@@ -12400,7 +12643,7 @@ export class CollectionMutationService extends BaseService {
    * details that must not reach the caller through the service's result.
    */
   private async priorCompanionStatusesOnTx(
-    tx: TransactionContext,
+    tx: Pick<TransactionContext, "getDrizzle">,
     args: {
       /** The translations, where they carry a status; null otherwise. */
       companion: CompanionSchema | null;
@@ -15836,6 +16079,9 @@ export class CollectionMutationService extends BaseService {
     const restored = this.restoredFromOf(rawParams, body);
     if ("refused" in restored) return restored.refused;
     const restoredFrom = restored.sources;
+    // A publish made without review, and why, is read off the body here: the publish gate is told
+    // it, and it is never stored, so it is dropped with the version below.
+    const withoutReview = withoutReviewOfBody(body);
     // What the save claims about where its translated values came from, read
     // before the key is dropped below.
     const provenance = this.provenanceOf(
@@ -15847,6 +16093,7 @@ export class CollectionMutationService extends BaseService {
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
+    delete body[WITHOUT_REVIEW_KEY];
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
     const withSources = restoredFrom
       ? { ...rawParams, restoredFrom }
@@ -16166,6 +16413,46 @@ export class CollectionMutationService extends BaseService {
       // in the database. The keys a read adds are taken off, so a document sent back as it was
       // read still saves.
       body = writableBodyOf(body, "collection", fields);
+      // A save that names a status changes what readers see, so the publish gate is asked of it
+      // as a publish of chosen parts is: its early answer here, before any hook runs, and its
+      // verdict under the row lock below.
+      // What the gate is told of the collection is resolved here, on the pool and before the
+      // transaction opens, so nothing judged under the row lock reaches back to the pool.
+      const gateCollection = await this.collectionService.getCollection(
+        params.collectionName
+      );
+      const gateCompanion = await this.fileManager.loadCompanionSchema(
+        params.collectionName
+      );
+      const earlySave = this.statusSaveOf(
+        params,
+        {
+          status: body.status,
+          locale: params.locale,
+          everyLanguage: sweepAllLocales,
+          withoutReview,
+          sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+            this.adapter,
+            params.collectionName,
+            params.entryId,
+            body.status,
+            gateCollection
+          ),
+        },
+        gateCollection
+      );
+      if (earlySave) {
+        await refuseStatusSaveEarly(
+          earlySave,
+          await this.livePartsOn(this.adapter, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            mainStatus: (existingEntry as { status?: unknown } | undefined)
+              ?.status,
+            companion: gateCompanion,
+          })
+        );
+      }
 
       // A version below the one the entry already held when it was read is
       // certainly out of date, since a counter only goes up: refused here,
@@ -16961,6 +17248,40 @@ export class CollectionMutationService extends BaseService {
             writeFilters
           )
         );
+        // The publish gate's verdict on a save that names a status, on this transaction now the
+        // entry is locked: judged on the status its hooks left, of what is live as this lock reads
+        // it. A part held back refuses the save before anything is written; what the verdict
+        // started is settled once the save is written, below.
+        const lockedSave = this.statusSaveOf(
+          params,
+          {
+            status: intendedStatus,
+            locale: params.locale,
+            everyLanguage: sweepAllLocales,
+            withoutReview,
+            sharedDraftPending: await this.publishedSaveCarriesSharedDraft(
+              tx,
+              params.collectionName,
+              params.entryId,
+              intendedStatus,
+              gateCollection
+            ),
+          },
+          gateCollection
+        );
+        const settleGate = lockedSave
+          ? await judgeStatusSave(
+              tx,
+              lockedSave,
+              await this.livePartsOn(tx, {
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                mainStatus: (preUpdateRow as { status?: unknown } | undefined)
+                  ?.status,
+                companion: gateCompanion,
+              })
+            )
+          : undefined;
         // A conditional write is judged here, under the lock and after the
         // access it owes, against the value as committed now; a refused one
         // writes nothing.
@@ -18468,6 +18789,10 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           context: sharedContext,
         });
+        // What the gate's verdict started is finished on this transaction, now the save is
+        // written and before it commits; a gate that finds what it judged has changed throws, and
+        // the save rolls back.
+        if (settleGate) await settleGate();
       }, transactionOptions);
       // The transaction committed (skipped if the retry ultimately threw), so
       // the event is durable; a later hook failure must not hide the delivery.
@@ -21747,6 +22072,8 @@ export class CollectionMutationService extends BaseService {
       body
     );
     if ("success" in versionCheck) return versionCheck;
+    // A publish made without review, read off the body for the publish gate; see updateEntry.
+    const withoutReview = withoutReviewOfBody(body);
     // What the write claims about where its translated values came from,
     // read before the key is dropped with the version.
     const provenance = this.provenanceOf(
@@ -21755,7 +22082,8 @@ export class CollectionMutationService extends BaseService {
     );
     if ("refused" in provenance) return provenance.refused;
     // A version sent with the body is the server's to decide; see updateEntry.
-    body = withoutDocumentVersionKeys(body);
+    body = withoutDocumentVersionKeys({ ...body });
+    delete body[WITHOUT_REVIEW_KEY];
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
     // return, so a committed item whose after-hook then throws still surfaces
@@ -22292,6 +22620,43 @@ export class CollectionMutationService extends BaseService {
       if (transitionDenied) {
         return transitionDenied;
       }
+      // The publish gate's verdict on this item, on the caller's transaction now its row is
+      // locked: a write made on a transaction it was handed has no moment before one, so this is
+      // its only ask. It names no language, so it moves the entry's own status, as the default
+      // language's save does. Settled once the item is written, below.
+      const itemSave = this.statusSaveOf(
+        { ...params, entryId },
+        {
+          status: finalData.status,
+          locale: undefined,
+          everyLanguage: false,
+          withoutReview,
+          // A write on a handed transaction promotes no pending draft.
+          sharedDraftPending: false,
+        },
+        collection
+      );
+      const settleItemGate = itemSave
+        ? await judgeStatusSave(
+            tx,
+            itemSave,
+            await this.livePartsOn(tx, {
+              collectionName: params.collectionName,
+              entryId,
+              // Read on the caller's transaction, as everything this write reads.
+              companion: await this.fileManager.loadCompanionSchema(
+                params.collectionName,
+                tx.getDrizzle()
+              ),
+              mainStatus: (
+                await tx.selectOne<{ status?: unknown }>(tableName, {
+                  columns: ["status"],
+                  where: { and: [{ column: "id", op: "=", value: entryId }] },
+                })
+              )?.status,
+            })
+          )
+        : undefined;
 
       // Same rule as every other update seam. Read under the lock the transition gate above
       // already holds, so the prior status and stored marker are the committed ones, and only
@@ -23223,6 +23588,9 @@ export class CollectionMutationService extends BaseService {
         user: params.user,
         context: sharedContext,
       });
+      // What the gate's verdict on this item started is settled now it is written, on the
+      // caller's transaction before it commits; a gate that throws takes the write back.
+      if (settleItemGate) await settleItemGate();
 
       // The collection event, held for the caller's commit, as on create.
       // Skipped for a held draft edit, which leaves the live row unchanged, as

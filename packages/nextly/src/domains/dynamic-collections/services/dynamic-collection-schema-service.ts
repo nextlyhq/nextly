@@ -38,7 +38,10 @@ import {
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
-import { builderColumnIsUnique } from "../../schema/field-rules";
+import {
+  builderColumnIsUnique,
+  isListMarkedUnique,
+} from "../../schema/field-rules";
 import type {
   ForeignKeySpec,
   ReferentialAction,
@@ -72,6 +75,7 @@ import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
+  refuseUniqueOnList,
   uniquenessNotEnforceableError,
 } from "../../schema/services/index-name";
 import {
@@ -550,6 +554,23 @@ export class DynamicCollectionSchemaService {
    * a later one that turns it back on must replay as a drop and then a create, whatever the table
    * shows while both are waiting.
    */
+  /**
+   * Refuses a list marked unique among a change's fields as declared, nested ones included: the
+   * full list where the change's own lists are a localized collection's shared subset, so a
+   * translated list is judged as one kept on the row is.
+   */
+  private refuseDeclaredUniqueLists(
+    tableName: string,
+    declaredNewFields: FieldDefinition[],
+    options: { junctionFields?: { new: FieldDefinition[] } } | undefined
+  ): void {
+    refuseUniqueOnList(
+      tableName,
+      options?.junctionFields?.new ?? declaredNewFields,
+      this.dialect
+    );
+  }
+
   private uniquenessToggleStatements(
     tableName: string,
     pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
@@ -564,7 +585,10 @@ export class DynamicCollectionSchemaService {
     for (const { previous, field } of pairs) {
       // Unique by its mark or by a relationship being one-to-one, so a relationship becoming
       // one-to-one is made unique as a field marked unique is, and loses it when it stops.
-      const wasUnique = this.columnIsUnique(previous);
+      // A list an earlier release made unique counts as unique before, so the index it made goes
+      // when the mark does (`uniqueIndexBefore`).
+      const wasUnique =
+        this.columnIsUnique(previous) || isListMarkedUnique(previous);
       const isUnique = this.columnIsUnique(field);
       if (wasUnique === isUnique || !fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
@@ -598,7 +622,7 @@ export class DynamicCollectionSchemaService {
       if (
         live === undefined &&
         ((options?.uniqueColumns !== undefined && previous.unique !== true) ||
-          this.plannedUniqueIndexName(tableName, previous) === null)
+          this.uniqueIndexBefore(tableName, previous) === null)
       )
         continue;
       const present = live ?? uniqueIndexNameForColumn(tableName, before);
@@ -610,6 +634,23 @@ export class DynamicCollectionSchemaService {
       statements.push(this.dropIndexSql(tableName, present));
     }
     return statements;
+  }
+
+  /**
+   * The name of the unique index the field had before a change, as the generator made it, or null
+   * when it had none of its own. A relation holding a list is never unique now, but an earlier
+   * release made one marked unique so, under the generated name, on PostgreSQL and SQLite (MySQL
+   * refused the create): that index is still there to drop once the mark goes.
+   */
+  private uniqueIndexBefore(
+    tableName: string,
+    previous: FieldDefinition
+  ): string | null {
+    if (!isListMarkedUnique(previous)) {
+      return this.plannedUniqueIndexName(tableName, previous);
+    }
+    if (this.dialect === "mysql" || !fieldProducesColumn(previous)) return null;
+    return uniqueIndexNameForColumn(tableName, toSnakeCase(previous.name));
   }
 
   /**
@@ -1316,6 +1357,10 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string {
+    // A list marked unique is refused as declared, nested and translated ones included, before
+    // the fields are narrowed to those stored on this row and before any SQL is made: every road
+    // to this create, a save or not, meets the same refusal.
+    refuseUniqueOnList(tableName, fields, this.dialect);
     // The fields whose columns sit on this row, as its table stores them (`rowColumnFields`).
     const stored = this.rowColumnFields(tableName, fields, _options);
     // Refuse an unusable decimal shape before any of it becomes SQL.
@@ -1717,6 +1762,8 @@ ${allColumnDefs.join(",\n")}
       isSingle?: boolean;
     }
   ): string {
+    // A list marked unique is refused as declared, as at the create (`refuseDeclaredUniqueLists`).
+    this.refuseDeclaredUniqueLists(tableName, declaredNewFields, options);
     // The fields whose columns sit on the row before and after, those inside a group with no name
     // among them, as the creating SQL reads them (`fieldsStoredOnRow`): the group has no name to
     // pair or to name a column by, and the fields it holds are columns that stay where they are.

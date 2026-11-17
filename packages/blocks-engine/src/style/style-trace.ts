@@ -60,6 +60,15 @@ export type StyleOrigin =
       slug: string;
       /** The block type a look is bound to; absent for a shared style. */
       blockType?: string;
+      /**
+       * Set on a block type's ★ look as written for the blocks of the type
+       * that wear none of its looks: the ids of those looks. Such a rule
+       * reaches a block of the type that applies none of them, whether or not
+       * it applies the ★ look itself.
+       *
+       * @experimental
+       */
+      unlessWearing?: readonly string[];
     }
   /** One node's own values. */
   | { kind: "node"; id: string };
