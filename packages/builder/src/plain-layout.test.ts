@@ -13,7 +13,9 @@ import {
   planSpread,
   planStackOn,
   planWrap,
+  normalBeneath,
   ownCascade,
+  planPlain,
   readArrange,
   unusedSettings,
   type AlignPoint,
@@ -426,5 +428,56 @@ describe("a shared style read at an interaction state", () => {
       inForce,
     };
     expect(readArrange(tiers, "base")).toMatchObject({ mode: "row" });
+  });
+});
+
+describe("a shared style at an interaction state, as the page applies it", () => {
+  const at = (values: Record<string, LayoutValues>) => (device: string) =>
+    values[device] ?? {};
+
+  it("lets a Hover value at a wider device beat a Normal one at this device", () => {
+    const normal = at({ sm: { display: "grid" } });
+    const hover = at({ base: { display: "flex" } });
+    const tiers: LayoutTiers = {
+      order: ORDER,
+      own: hover,
+      inForce: ownCascade(ORDER, hover, normal),
+    };
+    expect(readArrange(tiers, "sm")).toMatchObject({ mode: "row" });
+  });
+
+  it("undoes a Normal wrap when Wrap is turned off at Hover", () => {
+    const normal = at({ base: { display: "flex", flexWrap: "wrap" } });
+    const hover = at({});
+    const tiers: LayoutTiers = {
+      order: ORDER,
+      own: hover,
+      inForce: ownCascade(ORDER, hover, normal),
+      beneath: normalBeneath(ORDER, normal),
+    };
+    expect(planWrap(tiers, "base", false)).toEqual([
+      { device: "base", property: "flexWrap", value: "nowrap" },
+    ]);
+  });
+});
+
+describe("Stack on: Never over a shared style's stacking", () => {
+  it("writes the row back where the shared style stacks it", () => {
+    const block = new Block({ display: "flex" });
+    block.shared.sm = { flexDirection: "column" };
+    expect(block.read("sm")).toMatchObject({ mode: "row", stackOn: "sm" });
+    block.apply(planStackOn(block.tiers(), null));
+    expect(block.own.sm.flexDirection).toBe("row");
+    expect(block.read("sm")).toMatchObject({ mode: "row", stacked: false });
+  });
+});
+
+describe("wrapping in reverse", () => {
+  it("reads as Custom, and plain controls take the reverse wrap away", () => {
+    const block = new Block({ display: "flex", flexWrap: "wrap-reverse" });
+    expect(block.read()).toEqual({ mode: "custom" });
+    block.apply(planPlain(block.tiers(), "base"));
+    expect(block.own.base.flexWrap).toBeUndefined();
+    expect(block.read()).toMatchObject({ mode: "row", wrap: false });
   });
 });

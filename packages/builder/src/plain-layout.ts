@@ -78,23 +78,41 @@ export interface PlainFlow {
 }
 
 /**
- * What a target's own values put in force at a device, widest first: at an
- * interaction state, its Normal values beneath that state's own, as the
- * page's styles apply them. A shared style edited on its own is read so.
+ * What a target's own values put in force at a device, in the order the
+ * page's styles are written: state outside, device inside. Its Normal values
+ * cascade widest first, and the edited state's values, cascading the same
+ * way, go over all of them, so a Hover value set at any wider device beats a
+ * Normal one at this device. A shared style edited on its own is read so.
  */
 export function ownCascade(
   order: readonly string[],
   own: (device: string) => LayoutValues,
   normal: (device: string) => LayoutValues
 ): (device: string) => LayoutValues {
-  return device => {
+  const upTo = (
+    device: string,
+    read: (device: string) => LayoutValues
+  ): Partial<Record<LayoutProperty, string>> => {
     const merged: Partial<Record<LayoutProperty, string>> = {};
     for (const each of order) {
-      Object.assign(merged, normal(each), own(each));
+      Object.assign(merged, read(each));
       if (each === device) break;
     }
     return merged;
   };
+  return device => ({ ...upTo(device, normal), ...upTo(device, own) });
+}
+
+/**
+ * At an interaction state, what is in force beneath the state's own values:
+ * the target's Normal values, cascading widest first, which a value cleared
+ * at the state leaves in force. Nothing at Normal itself.
+ */
+export function normalBeneath(
+  order: readonly string[],
+  normal: (device: string) => LayoutValues
+): (device: string) => LayoutValues {
+  return ownCascade(order, () => ({}), normal);
 }
 
 /** Horizontal lines, left to right: what is assumed where nothing is measured. */
@@ -152,6 +170,9 @@ export interface LayoutWrite {
 }
 
 const COLUMN_DIRECTIONS = new Set(["column", "column-reverse"]);
+
+/** The wraps Wrap onto new lines says: on, or off. */
+const PLAIN_WRAPS: ReadonlySet<string> = new Set(["wrap", "nowrap"]);
 const ROW_DIRECTIONS = new Set(["row", "row-reverse"]);
 
 /** Whether a device's values make the block a flex row. */
@@ -388,6 +409,8 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   // A column below a Row is that Row stacked; any other column is a Stack.
   const stacked = column && stackIndex !== -1 && index >= stackIndex;
   if (column && !stacked) return readStack(values, tiers.flow);
+  // Wrapping in reverse has no plain word: the raw rows hold it.
+  if (!PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")) return { mode: "custom" };
   const align = readAlign(values, column ? "column" : "row", tiers.flow);
   if (align === "custom") return { mode: "custom" };
   const main = values.justifyContent;
@@ -463,7 +486,11 @@ function settled(
   return {
     device,
     property,
-    value: reaching === undefined ? null : RESET[property],
+    // Nothing left in force but the default: the clear is enough.
+    value:
+      reaching === undefined || reaching === RESET[property]
+        ? null
+        : RESET[property],
   };
 }
 
@@ -518,9 +545,10 @@ export function planStackOn(
 ): LayoutWrite[] {
   const current = stackDevice(tiers);
   const writes: LayoutWrite[] = [];
-  // The old stack device gives up its column.
+  // The old stack device gives up its column, undone there where a shared
+  // style or a wider device would keep it.
   if (current !== undefined && current !== device) {
-    writes.push({ device: current, property: "flexDirection", value: null });
+    writes.push(settled(tiers, current, "flexDirection", null));
   }
   if (device !== null) {
     const reversed =
@@ -773,6 +801,9 @@ export function planPlain(tiers: LayoutTiers, editing: string): LayoutWrite[] {
     ...(display === undefined ? (["flexDirection"] as const) : []),
     ...unplainAlign(values, plainKind(display, values)),
     ...(display === "grid" ? unplainTemplates(values) : []),
+    ...(PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")
+      ? []
+      : (["flexWrap"] as const)),
   ];
   return [
     settled(tiers, editing, "display", display ?? null),

@@ -29,6 +29,7 @@ import type { EditorState } from "./editor-state";
 import {
   LAYOUT_CSS_NAMES,
   LAYOUT_PROPERTIES,
+  normalBeneath,
   ownCascade,
   planAlign,
   planArrange,
@@ -136,20 +137,48 @@ function layoutTiers(
   const order = deviceOrder(surroundings.breakpoints);
   const styles = stylesOf(target, surroundings);
   const own = (device: string) => ownAt(styles, surroundings.state, device);
+  const normal = (device: string) => ownAt(styles, "base", device);
   const block = target.kind === "block";
   const inForce =
     block && cascade.applied !== undefined
       ? appliedInForce(cascade.applied)
-      : ownCascade(order, own, device => ownAt(styles, "base", device));
+      : ownCascade(order, own, normal);
+  const beneath = beneathOf({
+    order,
+    normal,
+    atState: surroundings.state !== "base",
+    cascade: block ? cascade.beneath : undefined,
+  });
   return {
     order,
     own,
     inForce,
-    ...(block && cascade.beneath !== undefined
-      ? { beneath: appliedInForce(cascade.beneath) }
-      : {}),
+    ...(beneath === undefined ? {} : { beneath }),
     flow: flowOf(surroundings.orientation),
   };
+}
+
+/**
+ * What lies beneath the target's own values at a device: for a block, what
+ * the cascade applies without its declarations; at an interaction state, the
+ * target's own Normal values too, which a value cleared at the state leaves.
+ */
+function beneathOf({
+  order,
+  normal,
+  atState,
+  cascade,
+}: {
+  order: readonly string[];
+  normal: (device: string) => LayoutValues;
+  atState: boolean;
+  cascade: CascadeAt | undefined;
+}): ((device: string) => LayoutValues) | undefined {
+  const others = cascade === undefined ? undefined : appliedInForce(cascade);
+  const ownNormal = atState ? normalBeneath(order, normal) : undefined;
+  if (others === undefined) return ownNormal;
+  if (ownNormal === undefined) return others;
+  return device => ({ ...others(device), ...ownNormal(device) });
 }
 
 /** The container's flow, as the canvas measured it; left to right if not. */
