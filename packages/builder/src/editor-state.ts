@@ -56,6 +56,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { useFirstAdd, type FirstAdd } from "./first-add";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
@@ -262,6 +263,12 @@ export interface EditorState {
   sortFieldAsked?: { readonly id: string; readonly seq: number };
   /** Select a list and take the author to its first sort row. */
   askSortField?: (id: string) => void;
+  /**
+   * A block just added that asks for a choice, while the canvas draws its
+   * chooser: editor state only, never stored. See `first-add.ts`.
+   * @experimental
+   */
+  firstAdd?: FirstAdd;
 }
 
 export interface UseEditorStateArgs {
@@ -1159,7 +1166,8 @@ function toggled(
  * them, which are editor state and no step of the history.
  */
 export function useEditorState(args: UseEditorStateArgs): EditorState {
-  const state = useDocumentState(args);
+  // With the step that holds a block just added while it asks for a choice.
+  const state = useFirstAdd(useDocumentState(args));
   const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
   const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
   const [sortFieldAsked, setSortFieldAsked] =

@@ -20,8 +20,6 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { SettingSlot } from "./settings-filter";
-
 import {
   COLUMNS_LAYOUTS,
   COLUMNS_ROW,
@@ -41,6 +39,7 @@ import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
 import type { PanelSection } from "./panel-section";
 import { arrowTo, SegmentChoices } from "./segment-choices";
+import { SettingSlot } from "./settings-filter";
 import { appliedAtReader, selectedSubject } from "./style-panel-reading";
 import { readStyleValue } from "./style-values";
 
@@ -51,8 +50,15 @@ const STACK_LABELS: Readonly<Record<StackOn, string>> = {
   mobile: "Mobile",
 };
 
-/** A tile's picture: its columns as bars, at their widths. */
-function Glyph({ layout }: { layout: ColumnsLayout }): React.JSX.Element {
+/**
+ * A tile's picture: its columns as bars, at their widths. Exported for the
+ * first-add picker, which offers the same tiles.
+ */
+export function ColumnsLayoutGlyph({
+  layout,
+}: {
+  layout: ColumnsLayout;
+}): React.JSX.Element {
   return (
     <span className="nx-columns-layout__glyph" aria-hidden="true">
       {layout.tracks.map((width, index) => (
@@ -93,8 +99,12 @@ type Row = NonNullable<ReturnType<typeof findNode>>;
  * Where every choice here writes: the row's own base values, whatever device,
  * state or shared style the Style tab is editing, since how many columns a
  * row holds is its structure. Stacking still names the devices it applies on.
+ * The first-add picker writes there too.
  */
-const ROW_OWN = { state: "base", breakpoint: BASE_BREAKPOINT } as const;
+export const ROW_OWN: {
+  readonly state: "base";
+  readonly breakpoint: typeof BASE_BREAKPOINT;
+} = { state: "base", breakpoint: BASE_BREAKPOINT };
 
 /** The width tiles: one tab stop, arrows choosing, a held tile saying why. */
 function WidthTiles({
@@ -162,7 +172,7 @@ function WidthTiles({
             onKeyDown={event => arrowTo(event, index, allowed, choose)}
             onClick={() => choose(index)}
           >
-            <Glyph layout={layout} />
+            <ColumnsLayoutGlyph layout={layout} />
             <span>{layout.label}</span>
           </button>
         );
