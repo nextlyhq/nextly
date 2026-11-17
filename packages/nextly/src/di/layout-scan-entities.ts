@@ -9,10 +9,73 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { resolveFieldGroupRegistryName } from "../domains/field-groups/storage/resolve-storage-names";
 import type { LaidOutEntity } from "../domains/i18n/per-language-storage-layout";
 import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
 import { NextlyError } from "../errors/nextly-error";
 
 import { loadDynamicTables } from "./load-dynamic-tables";
 import type { StartRegistry } from "./start-reads";
+
+/** The entities a configuration declares, as `declaredLaidOutEntities` reads it. */
+export interface DeclaringConfig {
+  collections?: readonly { slug: string; fields?: unknown }[];
+  singles?: readonly { slug: string; fields?: unknown }[];
+  fieldGroups?: readonly { slug: string; fields?: unknown }[];
+}
+
+/**
+ * Every collection, Single and component the configuration declares, by the table it is stored
+ * in: the entities the boot's storage-layout check and `nextly upgrade` judge alongside the
+ * Schema Builder's (`readLayoutScanEntities`).
+ */
+export function declaredLaidOutEntities(
+  config: DeclaringConfig
+): LaidOutEntity[] {
+  const fieldsOf = (entity: { fields?: unknown }) =>
+    (entity.fields ?? []) as LaidOutEntity["fields"];
+  const localizedOf = (entity: object) =>
+    (entity as { localized?: unknown }).localized;
+  const statusOf = (entity: object) =>
+    (entity as { status?: unknown }).status === true;
+  const dbNameOf = (entity: object) => (entity as { dbName?: string }).dbName;
+  return [
+    ...(config.collections ?? []).map(
+      (c): LaidOutEntity => ({
+        kind: "collection",
+        slug: c.slug,
+        tableName: resolveCollectionTableName(c.slug, dbNameOf(c)),
+        fields: fieldsOf(c),
+        localized: localizedOf(c),
+        status: statusOf(c),
+      })
+    ),
+    ...(config.singles ?? []).map(
+      (s): LaidOutEntity => ({
+        kind: "single",
+        slug: s.slug,
+        tableName: resolveSingleTableName({
+          slug: s.slug,
+          dbName: dbNameOf(s),
+        }),
+        fields: fieldsOf(s),
+        localized: localizedOf(s),
+        status: statusOf(s),
+      })
+    ),
+    ...(config.fieldGroups ?? []).map(
+      (g): LaidOutEntity => ({
+        kind: "component",
+        slug: g.slug,
+        tableName: resolveComponentTableName(g.slug),
+        fields: fieldsOf(g),
+        localized: localizedOf(g),
+      })
+    ),
+  ];
+}
 
 /**
  * Every Builder entity a registry holds that the configuration does not declare (`declared`, by
@@ -50,7 +113,7 @@ export async function readLayoutScanEntities(
     const { failures } = await loadDynamicTables(
       adapter,
       registryTable,
-      (tableName, fields, _status, localized) => {
+      (tableName, fields, status, localized, builderOwned) => {
         if (declared.has(tableName)) return Promise.resolve();
         entities.push({
           kind,
@@ -58,6 +121,8 @@ export async function readLayoutScanEntities(
           tableName,
           fields: fields as LaidOutEntity["fields"],
           localized,
+          status,
+          ...(builderOwned === undefined ? {} : { builderOwned }),
         });
         return Promise.resolve();
       },

@@ -365,7 +365,10 @@ import {
   takesDevelopmentStartHold,
   withDevelopmentStartSchemaLock,
 } from "./development-start-schema-lock";
-import { readLayoutScanEntities } from "./layout-scan-entities";
+import {
+  declaredLaidOutEntities,
+  readLayoutScanEntities,
+} from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -6398,53 +6401,10 @@ async function refuseMixedStorageInConfig(
   // Which layout the setting chooses: a database laid out in the other is refused.
   perLanguage: boolean
 ): Promise<void> {
-  const [
-    { refuseMixedStorage },
-    { resolveSingleTableName },
-    { resolveCollectionTableName, resolveComponentTableName },
-  ] = await Promise.all([
-    import("../domains/i18n/per-language-storage-layout"),
-    import("../domains/singles/services/resolve-single-table-name"),
-    import("../domains/schema/utils/resolve-table-name"),
-  ]);
-  type Entity = Parameters<typeof refuseMixedStorage>[1][number];
-  const fieldsOf = (entity: { fields?: unknown }) =>
-    (entity.fields ?? []) as Entity["fields"];
-  const entities: Entity[] = [
-    ...(config.collections ?? []).map(
-      (c): Entity => ({
-        kind: "collection",
-        slug: c.slug,
-        tableName: resolveCollectionTableName(
-          c.slug,
-          (c as { dbName?: string }).dbName
-        ),
-        fields: fieldsOf(c),
-        localized: (c as { localized?: unknown }).localized,
-      })
-    ),
-    ...(config.singles ?? []).map(
-      (s): Entity => ({
-        kind: "single",
-        slug: s.slug,
-        tableName: resolveSingleTableName({
-          slug: s.slug,
-          dbName: (s as { dbName?: string }).dbName,
-        }),
-        fields: fieldsOf(s),
-        localized: (s as { localized?: unknown }).localized,
-      })
-    ),
-    ...(config.fieldGroups ?? []).map(
-      (g): Entity => ({
-        kind: "component",
-        slug: g.slug,
-        tableName: resolveComponentTableName(g.slug),
-        fields: fieldsOf(g),
-        localized: (g as { localized?: unknown }).localized,
-      })
-    ),
-  ];
+  const { refuseMixedStorage } = await import(
+    "../domains/i18n/per-language-storage-layout"
+  );
+  const entities = declaredLaidOutEntities(config);
   const declaredTables = new Set(entities.map(entity => entity.tableName));
   // At a development start, an entity whose declaration a start already brought in line under the
   // same settings is not read again: nothing about its layout can have changed since.

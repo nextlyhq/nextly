@@ -64,6 +64,8 @@ import { dryRunRefusalOf } from "./migrate-create";
 import type {
   RunUpgradeOptions,
   UpgradeAdapter,
+  UpgradeReport,
+  UpgradeSite,
   UpgradeStep,
   UpgradeStepContext,
 } from "./upgrade-step";
@@ -88,6 +90,11 @@ export interface RunUpgradeDeps {
   steps?: readonly UpgradeStep[];
   /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
   lockWaitMs?: number;
+  /**
+   * The site's configuration: its languages and the entities it declares, which the steps that
+   * bring content into the site's model judge by. The CLI loads it as every command does.
+   */
+  config?: UpgradeSite;
 }
 
 async function confirmBackup(
@@ -122,7 +129,7 @@ function backupNotConfirmed(): NextlyError {
 /** What each step is handed: the database, the command's options and its log. */
 function stepContext(
   options: RunUpgradeOptions,
-  deps: Pick<RunUpgradeDeps, "adapter" | "logger">
+  deps: Pick<RunUpgradeDeps, "adapter" | "logger" | "config">
 ): UpgradeStepContext {
   const { adapter } = deps;
   return {
@@ -130,6 +137,7 @@ function stepContext(
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,
     options,
+    ...(deps.config === undefined ? {} : { site: deps.config }),
     log: msg => deps.logger?.info?.(msg),
     warn: msg => deps.logger?.warn?.(msg),
   };
@@ -200,11 +208,13 @@ export async function runUpgrade(
  */
 export async function previewUpgrade(
   options: RunUpgradeOptions,
-  deps: Pick<RunUpgradeDeps, "adapter" | "isTTY" | "steps">
+  deps: Pick<RunUpgradeDeps, "adapter" | "isTTY" | "steps" | "config">
 ): Promise<DryRunPlan> {
   const context = stepContext(options, deps);
   const changes: DryRunChange[] = [];
   const idle: string[] = [];
+  // What the steps that move content list of it, each step's lists in step order.
+  const report: UpgradeReport = { move: [], conflicts: [], check: [] };
   let refusal: string | undefined;
   for (const step of deps.steps ?? UPGRADE_STEPS) {
     let pending: number;
@@ -217,6 +227,12 @@ export async function previewUpgrade(
     }
     if (pending === 0) idle.push(step.title);
     else changes.push(stepChange(step.title, pending));
+    if (pending > 0 && step.report) {
+      const listed = await step.report(context);
+      report.move.push(...listed.move);
+      report.conflicts.push(...listed.conflicts);
+      report.check.push(...listed.check);
+    }
   }
   const backupConfirmed =
     options.force === true || options.confirmBackedUp === true;
@@ -235,6 +251,7 @@ export async function previewUpgrade(
     changes,
     ...(refusal !== undefined ? { refusals: [refusal] } : {}),
     notes,
+    report,
   };
 }
 
@@ -608,6 +625,7 @@ export async function upgradeAction(
           },
           // The CLI's one answer to whether anyone can be asked.
           isTTY: canPrompt(),
+          config: await siteOf(globalOpts),
           promptConfirm: () =>
             askYesInTerminal("Have you backed up your database? [y/N]: "),
         }
@@ -620,6 +638,27 @@ export async function upgradeAction(
   } finally {
     await adapter.disconnect?.();
   }
+}
+
+/**
+ * The site's configuration as the upgrade's steps read it, loaded as every command loads it: a
+ * project with no configuration file is the default one, which declares no languages and no
+ * entities, so the steps judge only what the database's own registries hold.
+ */
+async function siteOf(globalOpts: ConfigOptions): Promise<UpgradeSite> {
+  const { config } = await loadConfig({
+    configPath: globalOpts.config,
+    cwd: globalOpts.cwd,
+    debug: globalOpts.verbose,
+  });
+  return {
+    ...(config.localization === undefined
+      ? {}
+      : { localization: config.localization }),
+    collections: config.collections ?? [],
+    singles: config.singles ?? [],
+    fieldGroups: config.fieldGroups ?? [],
+  };
 }
 
 /**
@@ -665,7 +704,11 @@ async function reportUpgradeDryRun(
             force: cmdOptions.force,
             targetTableName: cmdOptions.targetTableName,
           },
-          { adapter, isTTY: interactive }
+          {
+            adapter,
+            isTTY: interactive,
+            config: await siteOf(globalOpts),
+          }
         );
     reportDryRun(
       context.logger,

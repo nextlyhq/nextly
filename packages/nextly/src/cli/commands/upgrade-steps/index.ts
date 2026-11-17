@@ -37,10 +37,22 @@ const zonedDatesStep: UpgradeStep = {
     (await import("./zoned-dates")).convertZonedDates(context),
 };
 
+/** Storing every entity's translatable values per language. */
+const localisationValuesStep: UpgradeStep = {
+  title: "store translatable values per language",
+  pending: async context =>
+    (await import("./localisation-values")).entitiesWithValuesToMove(context),
+  run: async context =>
+    (await import("./localisation-values")).moveValuesPerLanguage(context),
+  report: async context =>
+    (await import("./localisation-values")).valuesMoveReport(context),
+};
+
 export const UPGRADE_STEPS: readonly UpgradeStep[] = [
   schemaEventsStep,
   storedPasswordsStep,
   versionPasswordsStep,
   retiredManageStep,
   zonedDatesStep,
+  localisationValuesStep,
 ];
