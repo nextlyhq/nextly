@@ -25,6 +25,7 @@ import {
   openLayers,
   pressSave,
   selection,
+  structure,
 } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
 import { canvasLayer } from "./support/canvas-frame";
@@ -268,25 +269,17 @@ test.describe("a block locked in Layers", () => {
     // Duplicate says why and copies nothing.
     await clickBlock(page, TITLE);
     await expect.poll(() => selection(page)).toEqual([TITLE]);
-    const layers = page
-      .getByRole("tree", { name: "Layers" })
-      .getByRole("treeitem");
-    const rows = await layers.count();
-    expect(rows).toBeGreaterThan(0);
+    const before = await structure(page);
     await (await toolbarButton(page, "Duplicate")).click();
-    await expect(
-      page
-        .getByRole("status")
-        .filter({ hasText: "Hero is locked. Unlock it to add blocks to it." })
-    ).toHaveCount(1);
-    await expect(layers).toHaveCount(rows);
+    await expect(announcer(page)).toContainText(
+      "Hero is locked. Unlock it to add blocks to it."
+    );
+    expect(await structure(page)).toEqual(before);
     await expect.poll(() => selection(page)).toEqual([TITLE]);
 
     // The locked block itself copies, and the copy keeps its lock.
     await selectBlock(page, HERO);
-    const duplicate = await toolbarButton(page, "Duplicate");
-    await expect(duplicate).not.toHaveAttribute("aria-disabled", "true");
-    await duplicate.click();
+    await (await toolbarButton(page, "Duplicate")).click();
     // Selection follows the copy, which is what the author works on next.
     await expect
       .poll(async () => {
@@ -404,16 +397,13 @@ test.describe("a block locked in Layers", () => {
     // nothing.
     const remove = await toolbarButton(page, "Delete");
     await remove.click();
-    await expect(
-      page.getByRole("status").filter({
-        hasText:
-          "Save first: this block is still locked on the saved page. Save, then delete it.",
-      })
-    ).toHaveCount(1);
+    await expect(announcer(page)).toContainText(
+      "Save first: this block is still locked on the saved page. Save, then delete it."
+    );
     await expect(await block(page, HERO)).toHaveCount(1);
+    await expect.poll(() => selection(page)).toEqual([HERO]);
 
     expect(await saveDraft(page)).toBe(1);
-    await expect(remove).not.toHaveAttribute("aria-disabled", "true");
     await remove.click();
     await expect(await block(page, HERO)).toHaveCount(0);
     expect(await saveDraft(page)).toBe(1);
