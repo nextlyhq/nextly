@@ -225,6 +225,7 @@ async function createShortPage(request: APIRequestContext): Promise<string> {
           id,
           type: "core/text",
           version: 1,
+          name: `Line ${String(index + 1)}`,
           props: { text: `Line ${String(index + 1)}` },
         })),
       },
@@ -496,15 +497,16 @@ test.describe("the + in the canvas's gaps", () => {
     const line = await boxOf(page, LINES[1]);
     // Drawn shorter than the 24px "+".
     expect(line.height).toBeLessThan(24);
-    const x = line.x + line.width * 0.75;
-    // On the line between the first two, where the "+" shows...
-    await page.mouse.move(x, line.y, { steps: 4 });
+    // On the line between the first two, off to the side, where the "+"
+    // shows in the middle of the line...
+    await page.mouse.move(line.x + line.width * 0.75, line.y, { steps: 4 });
     const add = gap(page, "Add a block between Line 1 and Line 2");
     await expect
       .poll(() => add.evaluate(element => getComputedStyle(element).opacity))
       .toBe("1");
-    // ...then a click at the second's middle selects it, and opens nothing.
-    await page.mouse.click(x, line.y + line.height / 2);
+    // ...then a click at the very middle of the second, under where that
+    // "+" is drawn, selects the block, and opens nothing.
+    await page.mouse.click(line.x + line.width / 2, line.y + line.height / 2);
     await expect.poll(() => selection(page)).toEqual([LINES[1]]);
     await expect(picker(page)).toBeHidden();
   });

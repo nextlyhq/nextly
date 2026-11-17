@@ -68,7 +68,12 @@ import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor, watchScreenBand } from "./canvas-geometry-watch";
-import { canvasContentPoint, onScreenOf, overlaySpaceOf } from "./geometry-dom";
+import {
+  boxInFrameViewport,
+  canvasContentPoint,
+  onScreenOf,
+  overlaySpaceOf,
+} from "./geometry-dom";
 import {
   blockRectOf,
   gapAfter,
@@ -292,12 +297,29 @@ function GapControl({
   // Held only while the pointer on the "+" is within the gap's reach of its
   // line, which runs through the "+"'s middle: further, towards a block's
   // middle, the "+" lets go so a press there is the block's.
+  //
+  // Let go at once, too, not on the next render: a press can follow the move
+  // that left the reach before React draws again, and it must reach the
+  // block under the "+" rather than the "+". Taken back once the "+" shows
+  // again.
+  const button = React.useRef<HTMLButtonElement | null>(null);
+  // On every render that shows it, since a let-go and a fresh show can land
+  // in one render, which leaves `shown` as it was.
+  React.useLayoutEffect(() => {
+    if (shown && button.current !== null) {
+      button.current.style.pointerEvents = "";
+    }
+  });
   const hold = (event: React.PointerEvent<HTMLButtonElement>): void => {
-    const button = event.currentTarget;
+    const target = event.currentTarget;
+    // Both in the editor window's coordinates, which the chrome is drawn at.
+    const box = boxInFrameViewport(target);
     const off = across
-      ? event.nativeEvent.offsetY - button.offsetHeight / 2
-      : event.nativeEvent.offsetX - button.offsetWidth / 2;
-    onHold(Math.abs(off) <= gap.reach ? key : undefined);
+      ? event.clientY - (box.y + box.height / 2)
+      : event.clientX - (box.x + box.width / 2);
+    const inReach = Math.abs(off) <= gap.reach;
+    if (!inReach) target.style.pointerEvents = "none";
+    onHold(inReach ? key : undefined);
   };
   return (
     <div
@@ -314,6 +336,7 @@ function GapControl({
       <span className="nx-page-inserters__line" aria-hidden="true" />
       <ChromeTooltip content={words} side={across ? "top" : "right"}>
         <button
+          ref={button}
           type="button"
           className="nx-page-inserters__add"
           aria-label={words}

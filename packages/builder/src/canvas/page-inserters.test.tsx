@@ -13,7 +13,6 @@
 import {
   act,
   cleanup,
-  createEvent,
   fireEvent,
   render,
   screen,
@@ -749,12 +748,13 @@ describe("the + between blocks drawn shorter than it", () => {
     );
   });
 
-  /** A pointer move on the "+" itself, `offsetY` down from its top edge. */
+  /**
+   * A pointer move on the "+" itself, `offsetY` down from its middle: the
+   * stub above draws every element that is not a block 32.4px tall from the
+   * window's top, so the "+"'s middle is at 16.2.
+   */
   function moveOnPlus(button: HTMLElement, offsetY: number): void {
-    const event = createEvent.pointerMove(button);
-    Object.defineProperty(event, "offsetY", { value: offsetY });
-    Object.defineProperty(event, "offsetX", { value: 0 });
-    fireEvent(button, event);
+    fireEvent.pointerMove(button, { clientX: 500, clientY: 16.2 + offsetY });
   }
 
   it("never shows over a short block's middle, only right at the line", async () => {
@@ -779,7 +779,7 @@ describe("the + between blocks drawn shorter than it", () => {
     const [first] = gapButtons();
     if (first === undefined) throw new Error("no gap");
     const shown = () => first.closest("[data-near]") !== null;
-    // On the "+", at its line (jsdom gives it no size, so its middle is 0).
+    // On the "+", by its line.
     moveOnPlus(first, 1);
     expect(shown()).toBe(true);
     // Further down the "+", over the next block's middle: let go.
