@@ -7,7 +7,7 @@
  * when the browser is idle, and an edit stops a count being made: a count
  * draws the whole page, which must not compete with an author at work. Two
  * ways a count could never land are held here: a count that fails, which
- * must be said with a way to count again rather than left "Counting reads";
+ * must be said with a way to count again rather than left counting;
  * and an editor that renders with nothing changed, which must not put the
  * count off. A count that never answers is a failed one too, once it has had
  * its while from when it began. The
@@ -100,7 +100,22 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
 }));
 
-import { PageReadMeter } from "./page-read-meter";
+import {
+  PageReadMeter,
+  usePageDataCount,
+  type PageDataCountInputs,
+} from "./page-read-meter";
+
+/**
+ * The page counted, as Page settings shows it: at every level, counting
+ * included, so each step of the count can be read off it.
+ */
+function Counted(
+  props: Omit<PageDataCountInputs, "counts">
+): React.JSX.Element | null {
+  const count = usePageDataCount({ ...props, counts: true });
+  return <PageReadMeter count={count} place="settings" />;
+}
 
 const counted: PageReadReport = {
   cap: 500,
@@ -163,22 +178,20 @@ describe("a count that could not be made", () => {
       .mockRejectedValueOnce(new Error("bindings route unavailable"))
       .mockResolvedValueOnce(counted);
     render(
-      <PageReadMeter
-        editor={editor}
-        drawnWith={drawnWith}
-        regions={NO_REGIONS}
-      />
+      <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
     );
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     await wait(2000);
     await settle();
     expect(countWithStages).toHaveBeenCalledTimes(1);
     // Said, in the meter's place, its name and its tooltip the same words.
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     expect(meter().getAttribute("title")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     expect(meter().getAttribute("data-standing")).toBe("failed");
     // It stays said: no count is made again on its own.
@@ -187,12 +200,16 @@ describe("a count that could not be made", () => {
     expect(meter().getAttribute("data-standing")).toBe("failed");
 
     fireEvent.click(meter());
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     // At once, not after the moment the page is given to settle.
     await wait(0);
     await settle();
     expect(countWithStages).toHaveBeenCalledTimes(2);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 });
 
@@ -202,25 +219,25 @@ describe("a count that never answers", () => {
       .mockReturnValueOnce(new Promise<never>(() => undefined))
       .mockResolvedValueOnce(counted);
     render(
-      <PageReadMeter
-        editor={editor}
-        drawnWith={drawnWith}
-        regions={NO_REGIONS}
-      />
+      <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
     );
     await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
     // Still counting well into its while: a slow count is not a failed one.
     await wait(15_000);
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     await wait(5_000);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     fireEvent.click(meter());
     await wait(0);
     await settle();
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 });
 
@@ -228,46 +245,36 @@ describe("an editor that renders more often than the count waits", () => {
   it("has its page counted within the wait, the form's identity new each render", async () => {
     countWithStages.mockResolvedValue(counted);
     const view = render(
-      <PageReadMeter
-        editor={editor}
-        drawnWith={drawnWith}
-        regions={NO_REGIONS}
-      />
+      <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
     );
     // Rendered again every 200 ms, the page itself unchanged.
     for (let step = 0; step < 3; step += 1) {
       await wait(200);
       view.rerender(
-        <PageReadMeter
-          editor={editor}
-          drawnWith={drawnWith}
-          regions={NO_REGIONS}
-        />
+        <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
       );
     }
     await wait(1400);
     await settle();
     // Two seconds after the page was drawn, once.
     expect(countWithStages).toHaveBeenCalledTimes(1);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 
   it("has its page counted only once its inputs stop changing, and then at once", async () => {
     countWithStages.mockResolvedValue(counted);
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     // What the canvas draws with, a new object every 200 ms for three
     // seconds: an author at work, so nothing is drawn to count meanwhile.
     for (let step = 0; step < 15; step += 1) {
       await wait(200);
       view.rerender(
-        <PageReadMeter
-          editor={editor}
-          drawnWith={fresh()}
-          regions={NO_REGIONS}
-        />
+        <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
       );
     }
     expect(countWithStages).not.toHaveBeenCalled();
@@ -275,7 +282,9 @@ describe("an editor that renders more often than the count waits", () => {
     await wait(2000);
     await settle();
     expect(countWithStages).toHaveBeenCalledTimes(1);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 
   it("waits for the browser to be idle once the page has rested", async () => {
@@ -289,11 +298,7 @@ describe("an editor that renders more often than the count waits", () => {
     vi.stubGlobal("cancelIdleCallback", () => undefined);
     try {
       render(
-        <PageReadMeter
-          editor={editor}
-          drawnWith={drawnWith}
-          regions={NO_REGIONS}
-        />
+        <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
       );
       await wait(2000);
       // Rested, the count is handed to the browser's idle time, not made,
@@ -320,17 +325,13 @@ describe("a page changing all the while its counts are slow", () => {
   function changingMeter(): (ms: number) => Promise<void> {
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     return async ms => {
       for (let elapsed = 0; elapsed < ms; elapsed += 100) {
         await wait(100);
         view.rerender(
-          <PageReadMeter
-            editor={editor}
-            drawnWith={fresh()}
-            regions={NO_REGIONS}
-          />
+          <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
         );
       }
     };
@@ -340,12 +341,16 @@ describe("a page changing all the while its counts are slow", () => {
     countWithStages.mockResolvedValue(counted);
     await changingMeter()(20_000);
     expect(countWithStages).not.toHaveBeenCalled();
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     // Once it rests, the count is made.
     await wait(2000);
     await settle();
     expect(countWithStages).toHaveBeenCalledTimes(1);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 
   it("stops a count being made when the page changes, and counts again once it rests", async () => {
@@ -373,7 +378,9 @@ describe("a page changing all the while its counts are slow", () => {
     await vi.waitFor(() => expect(draws).toHaveLength(2));
     expect(draws[1]?.signal?.aborted).toBe(false);
     await wait(5000);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 
   it("says the count could not be made twenty seconds after it began, when it never answers", async () => {
@@ -386,10 +393,12 @@ describe("a page changing all the while its counts are slow", () => {
     await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
     await wait(19_900);
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     await wait(100);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
   });
 
@@ -412,7 +421,7 @@ describe("a page changing all the while its counts are slow", () => {
     expect(draws[0]?.ended).toBe("drawing");
     await wait(20_000);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     return { drawing, ended };
   }
@@ -452,7 +461,7 @@ describe("a page changing all the while its counts are slow", () => {
     await expect(drawing).rejects.toThrow();
     expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     fireEvent.click(meter());
     await wait(0);
@@ -474,32 +483,32 @@ describe("a count given up on that answers after all", () => {
   it("is shown where the page has not changed since it began", async () => {
     lateCount();
     render(
-      <PageReadMeter
-        editor={editor}
-        drawnWith={drawnWith}
-        regions={NO_REGIONS}
-      />
+      <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
     );
     // Begun at two seconds, given up on at twenty-two.
     await wait(22_000);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     // It answers at twenty-seven, the page unchanged since it began.
     await wait(5000);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 
   it("goes on counting after its late answer is shown", async () => {
     lateCount();
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     await wait(27_000);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
     view.rerender(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(2);
@@ -509,18 +518,18 @@ describe("a count given up on that answers after all", () => {
     lateCount();
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     // Begun at two seconds and given up on at twenty-two.
     await wait(22_000);
     // A change after the count began, before its answer at twenty-seven.
     view.rerender(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     await wait(10_000);
     expect(countWithStages).toHaveBeenCalledTimes(1);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
   });
 });
@@ -563,11 +572,7 @@ describe("the count's request to the bindings route", () => {
       () => new Promise<PageReadReport>(() => undefined)
     );
     render(
-      <PageReadMeter
-        editor={editor}
-        drawnWith={drawnWith}
-        regions={NO_REGIONS}
-      />
+      <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
     );
     await wait(2000);
     // The count's bindings read, its request held by the route.
@@ -577,7 +582,7 @@ describe("the count's request to the bindings route", () => {
     await vi.waitFor(() => expect(routeAsks.made).toHaveLength(1));
     await wait(20_000);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     expect(routeAsks.made[0]?.signal?.aborted).toBe(false);
     expect(ended).not.toHaveBeenCalled();
@@ -617,22 +622,28 @@ describe("a count stopped by a change that then fails", () => {
       );
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     await wait(2000);
     await vi.waitFor(() => expect(draws).toHaveLength(1));
     // Changed while the first count, begun at two seconds, is being made:
     // it is stopped, and its failure is not the meter's to say.
     view.rerender(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     await settle();
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     await wait(2000);
     expect(countWithStages).toHaveBeenCalledTimes(2);
-    expect(meter().getAttribute("aria-label")).toBe("Counting page reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: counting. What's this?"
+    );
     await wait(1000);
-    expect(meter().getAttribute("aria-label")).toBe("3 of 500 reads");
+    expect(meter().getAttribute("aria-label")).toBe(
+      "Page data: 3 of 500, within the limit. What's this?"
+    );
   });
 });
 
@@ -652,23 +663,23 @@ describe("a count stopped by an edit that answers anyway", () => {
       );
     const fresh = () => ({ ...drawnWith }) as CountedDrawing;
     const view = render(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     // The first count begins at two seconds; an edit at 2.5 stops it.
     await wait(2500);
     view.rerender(
-      <PageReadMeter editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
+      <Counted editor={editor} drawnWith={fresh()} regions={NO_REGIONS} />
     );
     // The second begins at 4.5 and is given up on at 24.5.
     await wait(22_100);
     expect(countWithStages).toHaveBeenCalledTimes(2);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     // The first answers at 27, of a page that has changed since: not shown.
     await wait(3000);
     expect(meter().getAttribute("aria-label")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
   });
 });
@@ -677,15 +688,30 @@ describe("a meter that closes", () => {
   it("starts no count once it has gone", async () => {
     countWithStages.mockResolvedValue(counted);
     const view = render(
-      <PageReadMeter
-        editor={editor}
-        drawnWith={drawnWith}
-        regions={NO_REGIONS}
-      />
+      <Counted editor={editor} drawnWith={drawnWith} regions={NO_REGIONS} />
     );
     await wait(1000);
     view.unmount();
     await wait(5000);
     expect(countWithStages).not.toHaveBeenCalled();
+  });
+});
+
+describe("a document that is not a page", () => {
+  it("is never counted, and draws no meter", async () => {
+    countWithStages.mockResolvedValue(counted);
+    function NotCounted(): React.JSX.Element | null {
+      const count = usePageDataCount({
+        counts: false,
+        editor,
+        drawnWith,
+        regions: NO_REGIONS,
+      });
+      return <PageReadMeter count={count} place="settings" />;
+    }
+    const view = render(<NotCounted />);
+    await wait(5000);
+    expect(countWithStages).not.toHaveBeenCalled();
+    expect(view.container.innerHTML).toBe("");
   });
 });

@@ -74,6 +74,7 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
+import { readPageDataLimit, usePageDataCount } from "./page-read-meter";
 import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
@@ -589,6 +590,16 @@ function EditorBody<TFieldValues extends FieldValues>({
     composedDocument: conditions.composed,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
+  // The page's data, counted once for the top bar's meter and Page
+  // settings' line.
+  const pageData = usePageDataCount({
+    counts: mount.initialDocument.kind === "page",
+    editor,
+    drawnWith: view.canvasRender,
+    regions: view.canvasRegions,
+    componentTitle: view.componentLibrary.titleOf,
+    cap: readPageDataLimit(mount.clientConfig),
+  });
   useOpenAtSection({
     sectionId: openAt?.sectionId,
     blockId: openAt?.blockId,
@@ -649,6 +660,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             canvas: canvas.canvasElement,
             // "Preview as visitor", in Preview's menu.
             visitor: conditions.visitor,
+            pageData,
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
@@ -674,6 +686,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           inspector={editorInspector(view, cardVerbs, sharedStyle.host, {
             control,
             page,
+            pageData,
           })}
           // Switched on the panel id rather than rendering the inserter for
           // whatever the rail reports open. The shell asks for the panel it
