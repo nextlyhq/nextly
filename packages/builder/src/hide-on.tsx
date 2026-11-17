@@ -30,6 +30,7 @@ import {
   listedNames,
   toggleOnDeviceOp,
 } from "./panels/layers/layer-row-actions";
+import { useFilterState } from "./settings-filter";
 import { tierIcon } from "./shell/breakpoint-switcher";
 
 /** Whether the site's breakpoints are its own set yet, as the editor reads it. */
@@ -186,15 +187,18 @@ export function HiddenStatus({
 
 /**
  * "Change": the Advanced tab shown, its Visibility section opened, and focus
- * on Hide on's first toggle once it is on screen. `undefined` where there is
- * no other tab to go from.
+ * on Hide on's first toggle once it is on screen. A search that would keep
+ * Hide on out is cleared first; "Only changed" keeps it, since a hidden block
+ * holds a value there. `undefined` where there is no other tab to go from.
  */
 function useToHideOn(
   onChoose: ((tab: "advanced") => void) | undefined
 ): ((event: React.MouseEvent<HTMLElement>) => void) | undefined {
   const { change } = usePanelFolds();
+  const { query, setQuery } = useFilterState();
   if (onChoose === undefined) return undefined;
   return event => {
+    if (query !== "") setQuery("");
     // Read now: the tab holding this link may be gone once Advanced shows.
     const panel = event.currentTarget.closest(".nx-inspector");
     change(folds => withSectionFold(folds, "advanced", HIDE_ON_SECTION, true));

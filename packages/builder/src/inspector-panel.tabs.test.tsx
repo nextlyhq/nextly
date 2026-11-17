@@ -553,6 +553,28 @@ describe("where the block is hidden, at the top of every tab", () => {
     }
   );
 
+  it('clears a search that leaves Hide on out, so "Change" still reaches it', async () => {
+    mountHidden();
+    choose("Style");
+    const search = (): HTMLInputElement =>
+      screen.getByRole("searchbox", { name: "Find a setting" });
+    fireEvent.change(search(), { target: { value: "padding" } });
+    // While filtering, each tab's name carries its count: the one shown.
+    fireEvent.click(
+      within(screen.getByRole("tabpanel")).getByRole("button", {
+        name: "Change",
+      })
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(shownPanel("Advanced")).getByRole("button", {
+          name: "Hide on Desktop",
+        })
+      )
+    );
+    expect(search().value).toBe("");
+  });
+
   it('offers no "Change" on Advanced, where Hide on is', () => {
     mountHidden();
     choose("Advanced");

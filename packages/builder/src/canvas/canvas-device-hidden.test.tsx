@@ -14,11 +14,21 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { createElement } from "react";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { Canvas } from "./canvas";
+import { CanvasMarks } from "./canvas-marks";
 import {
   DEVICE_HIDDEN_ATTRIBUTE,
   deviceHiddenDrawing,
@@ -52,6 +62,43 @@ const PAGE = {
   ],
 } as unknown as BlockDocument;
 
+// The blocks the canvas tests draw: an image among them, drawn bare.
+beforeAll(() => {
+  clearBlocks();
+  registerBlocks(
+    [
+      {
+        name: "acme/leaf",
+        version: 1,
+        description: "A block.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("div", { className }),
+      },
+      {
+        // Drawn as a bare image, as an Image with no caption or link is.
+        name: "acme/picture",
+        version: 1,
+        description: "An image.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("img", { className, alt: "" }),
+      },
+      {
+        name: "acme/box",
+        version: 1,
+        description: "A container.",
+        example: { props: {} },
+        render: ({ className }: { className: string }) =>
+          createElement("div", { className }),
+      },
+    ] as never,
+    { source: "canvas-device-hidden-test" }
+  );
+});
+afterAll(() => clearBlocks());
+afterEach(cleanup);
+
 describe("deviceHiddenDrawing", () => {
   it("lifts the hiding of each block hidden on the device, and tags it", () => {
     const { document, marks } = deviceHiddenDrawing(PAGE, SITE, "mobile");
@@ -77,33 +124,6 @@ describe("deviceHiddenDrawing", () => {
 });
 
 describe("the canvas at each device", () => {
-  beforeAll(() => {
-    clearBlocks();
-    registerBlocks(
-      [
-        {
-          name: "acme/leaf",
-          version: 1,
-          description: "A block.",
-          example: { props: {} },
-          render: ({ className }: { className: string }) =>
-            createElement("div", { className }),
-        },
-        {
-          name: "acme/box",
-          version: 1,
-          description: "A container.",
-          example: { props: {} },
-          render: ({ className }: { className: string }) =>
-            createElement("div", { className }),
-        },
-      ] as never,
-      { source: "canvas-device-hidden-test" }
-    );
-  });
-  afterAll(() => clearBlocks());
-  afterEach(cleanup);
-
   /** The canvas drawn in a window `width` wide. */
   async function drawAt(width: number, asVisitor = false) {
     Object.defineProperty(window, "innerWidth", {
@@ -152,5 +172,77 @@ describe("the canvas at each device", () => {
   it("marks nothing while the page is shown as a visitor gets it", async () => {
     const { container } = await drawAt(400, true);
     expect(container.querySelector(`[${DEVICE_HIDDEN_ATTRIBUTE}]`)).toBeNull();
+  });
+});
+
+describe("a hidden block drawn as an image", () => {
+  // An image takes no ::after, so the frame's sheet can't stripe it: the
+  // editor's marks over the canvas stripe and tag it instead.
+  const PICTURE = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "pic",
+        type: "acme/picture",
+        version: 1,
+        props: {},
+        visibility: { devices: { mobile: false } },
+      },
+      { id: "plain", type: "acme/leaf", version: 1, props: {} },
+    ],
+  } as unknown as BlockDocument;
+
+  beforeEach(() => {
+    // A layout box for every element, which jsdom does not give.
+    vi.spyOn(Element.prototype, "getClientRects").mockImplementation(() => {
+      const rects = [new DOMRect(0, 0, 100, 50)];
+      return Object.assign(rects, {
+        item: (index: number) => rects[index] ?? null,
+      }) as unknown as DOMRectList;
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("is striped and tagged by the editor's marks over it", async () => {
+    const { container } = render(
+      <Canvas
+        document={PICTURE}
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ styleContext: { breakpoints: SITE } } as never}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const marks = () =>
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          '.nx-canvas-mark[data-mark="device-hidden"]'
+        ),
+      ].map(mark => mark.getAttribute("data-device-tag"));
+    await waitFor(() => expect(marks()).toEqual([TAG]));
+  });
+
+  it("is not marked over a block the frame stripes itself", async () => {
+    const { container } = render(
+      <Canvas
+        document={PAGE}
+        siteStyles={{ css: "", classes: {} } as never}
+        render={{ styleContext: { breakpoints: SITE } } as never}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    // CONTROL: the block is marked on the page, and drawn by the frame.
+    expect(
+      container.querySelector(`[${DEVICE_HIDDEN_ATTRIBUTE}]`)
+    ).not.toBeNull();
+    expect(
+      container.querySelector('.nx-canvas-mark[data-mark="device-hidden"]')
+    ).toBeNull();
   });
 });

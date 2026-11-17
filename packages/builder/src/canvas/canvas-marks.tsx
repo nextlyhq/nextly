@@ -44,6 +44,10 @@ import {
   nodeAddressOf,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
+import {
+  DEVICE_HIDDEN_ATTRIBUTE,
+  drawsNoPseudoElements,
+} from "./canvas-device-hidden";
 import { useCanvasFrame } from "./canvas-frame-context";
 import {
   OVERLAY_OUTPUT_ATTRIBUTE,
@@ -88,11 +92,20 @@ const OUTLINE_MARKS = [
   [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
 ] as const;
 
-/** The outline-only marks an element asks for, drawn as `box`. */
+/**
+ * The marks drawn over an element's box alone that it asks for, drawn as
+ * `box`: its outline-only marks, and the stripes and tag of a hidden block
+ * drawn as an image or another element the frame's sheet can't stripe.
+ */
 function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
-  return OUTLINE_MARKS.filter(([attribute]) =>
+  const marks: Mark[] = OUTLINE_MARKS.filter(([attribute]) =>
     marked.hasAttribute(attribute)
   ).map(([, kind]) => ({ ...box, kind }));
+  const deviceTag = marked.getAttribute(DEVICE_HIDDEN_ATTRIBUTE);
+  if (deviceTag !== null && drawsNoPseudoElements(marked)) {
+    marks.push({ ...box, kind: "device-hidden", deviceTag });
+  }
+  return marks;
 }
 
 /** One box to draw, in the chrome's coordinates. */
@@ -104,6 +117,7 @@ interface Mark {
     | "look-reach"
     | "drop-parent"
     | "drop-refused"
+    | "device-hidden"
     | "at-rest";
   /** The rest of a multi-block selection, drawn thinner than the primary. */
   readonly secondary: boolean;
@@ -118,6 +132,11 @@ interface Mark {
   readonly editing?: boolean;
   /** Another exposed part of a placement while one of its parts is edited. */
   readonly dimmed?: boolean;
+  /**
+   * A hidden block drawn as an image or another element that takes no
+   * stripe of its own: the tag its stripes carry over it.
+   */
+  readonly deviceTag?: string;
   /**
    * A selected block the page hides on the device shown, drawn because it is
    * selected: hatched, and tagged as hidden.
@@ -708,7 +727,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
   const copies = new Map<Element | null, number>();
   root
     .querySelectorAll(
-      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}]`
+      `[${SELECTED_ATTRIBUTE}], [${EXPOSED_ATTRIBUTE}], [${LOOK_REACH_ATTRIBUTE}], [${DROP_PARENT_ATTRIBUTE}], [${DROP_REFUSED_ATTRIBUTE}], [${DEVICE_HIDDEN_ATTRIBUTE}]`
     )
     .forEach(marked => {
       // A canvas rendered inside a block of this one marks its own elements.
@@ -1354,6 +1373,7 @@ export function CanvasMarks({
           data-locked={mark.locked ? "" : undefined}
           {...editingAttributes(mark)}
           data-hidden={mark.hidden ? "" : undefined}
+          data-device-tag={mark.deviceTag}
           // The tag a hidden block's ring carries, drawn by the stylesheet
           // from this attribute; the layer is hidden from assistive
           // technology, and Layers and the inspector say it in words.

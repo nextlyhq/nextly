@@ -39,6 +39,33 @@ import { editedBreakpointAtWidth } from "./canvas-width";
  */
 export const DEVICE_HIDDEN_ATTRIBUTE = "data-nx-device-hidden";
 
+/**
+ * The elements a browser draws no `::before` or `::after` for: an image, a
+ * video, a frame, a form control and the like. A hidden block drawn as one of
+ * these gets its stripes and tag from the editor's marks over the canvas
+ * (`canvas-marks.tsx`), since the frame's sheet can't draw them on it.
+ */
+const NO_PSEUDO_ELEMENTS: ReadonlySet<string> = new Set([
+  "audio",
+  "br",
+  "canvas",
+  "embed",
+  "hr",
+  "iframe",
+  "img",
+  "input",
+  "object",
+  "select",
+  "svg",
+  "textarea",
+  "video",
+]);
+
+/** Whether `element` is one the frame's sheet can't stripe. */
+export function drawsNoPseudoElements(element: Element): boolean {
+  return NO_PSEUDO_ELEMENTS.has(element.localName);
+}
+
 /** The tag on a block hidden on `device`. */
 function deviceHiddenTag(device: string): string {
   return `Hidden on ${device} · still here in the builder`;
