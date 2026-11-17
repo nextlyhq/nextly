@@ -43,6 +43,10 @@ import {
 import { introspectLiveSnapshot } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { CollectionRegistryService } from "../../../services/collections/collection-registry-service";
 import {
+  databaseState,
+  LOCK_TABLES,
+} from "../../__tests__/helpers/database-state";
+import {
   NEXTLY_RUN_TIMEOUT,
   runNextly,
 } from "../../__tests__/helpers/run-nextly";
@@ -81,40 +85,7 @@ const CONFIG_V2 = `export default {
 };
 `;
 
-/** The tables the schema lock keeps its row in; the process holding it writes them. */
-const LOCK_TABLES = new Set([
-  "nextly_schema_lock",
-  "nextly_field_group_lock",
-  "nextly_migrate_lock",
-]);
-
 const logger = createLogger({ quiet: true });
-
-const quote = (dialect: SupportedDialect, name: string) =>
-  dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
-
-/** Every table but the lock's, with its columns as the pipeline reads them and all its rows. */
-async function databaseState(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect
-): Promise<{ shape: unknown; rows: Record<string, string[]> }> {
-  const tables = (await adapter.listTables())
-    .filter(name => !LOCK_TABLES.has(name))
-    .sort();
-  const shape = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    dialect,
-    tables
-  );
-  const rows: Record<string, string[]> = {};
-  for (const table of tables) {
-    const read = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT * FROM ${quote(dialect, table)}`
-    );
-    rows[table] = read.map(row => JSON.stringify(row)).sort();
-  }
-  return { shape, rows };
-}
 
 /** Each table's columns, by name, from the same reading. */
 async function columnsByTable(
@@ -499,21 +470,18 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
   );
 
   it(
-    "names the production refusal a real sync makes on collections it would change, exit 0",
+    "names the refusal a real sync makes in production, exit 0",
     async () => {
       const before = await databaseState(adapter, dialect);
       const out = await dryRun("production", [], { NODE_ENV: "production" });
-      // The registry step creates dsd_moved and rewrites dsd_posts' fields.
+      // A real run refuses before it opens the database, whatever the configuration changed.
       expect(out).toContain(
-        "A real run would refuse: Cannot auto-sync schema in production mode. `NODE_ENV` is `production`, and 2 collections would change: dsd_moved, dsd_posts."
+        "A real run would refuse: db:sync does not run in production. `NODE_ENV` is `production`, and db:sync changes the database directly, without a migration. Nothing was changed."
       );
-      expect(out).not.toMatch(/^ℹ Would run /m);
-      // A real production run still creates and updates Single and field-group tables, so the
-      // note must not claim it changes no schema.
+      expect(out).not.toMatch(/^ℹ Would /m);
       expect(out).toContain(
-        "NODE_ENV is production: a real run pushes no collection schema change, but still creates or updates Single and field-group tables, which are not shown here (use nextly migrate:create and nextly migrate for collections)."
+        "NODE_ENV is production: a real run refuses before it reads or changes anything (use nextly migrate:create and nextly migrate)."
       );
-      expect(out).not.toContain("a real run applies no schema change");
       expect(await databaseState(adapter, dialect)).toEqual(before);
     },
     2 * NEXTLY_RUN_TIMEOUT
