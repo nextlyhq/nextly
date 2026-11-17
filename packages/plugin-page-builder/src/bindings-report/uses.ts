@@ -49,6 +49,12 @@ export interface BindingUse {
   readonly path: string;
 }
 
+/**
+ * The longest Single slug a use is kept for: the width of the index's
+ * column. No Single's slug is longer, so a binding naming one names none.
+ */
+const SOURCE_KEY_MAX = 255;
+
 /** A binding's Single and field, when it is a well-formed one to a Single. */
 function singleRead(
   binding: unknown
@@ -56,6 +62,7 @@ function singleRead(
   if (!isPlainRecord(binding) || binding.source !== "single") return undefined;
   const { sourceKey, $bind } = binding;
   if (typeof sourceKey !== "string" || sourceKey === "") return undefined;
+  if (sourceKey.length > SOURCE_KEY_MAX) return undefined;
   if (typeof $bind !== "string" || $bind === "") return undefined;
   return { sourceKey, path: $bind };
 }

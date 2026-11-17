@@ -55,6 +55,7 @@ interface Fixture {
 
 function depsFor(fixture: Fixture) {
   const ofSingle = vi.fn(async () => [...fixture.uses]);
+  const refresh = vi.fn();
   const deps: ShownOnDeps = {
     uses: () =>
       fixture.installed === false
@@ -78,10 +79,11 @@ function depsFor(fixture: Fixture) {
     mayReadSingle: async () => fixture.singleReadable !== false,
     singleLabels: async (_ctx, slugs) =>
       new Map([...slugs].map(slug => [slug, `The ${slug}`])),
+    refresh,
     defaultLocale: () => fixture.defaultLocale,
     blocks,
   };
-  return { deps, ofSingle };
+  return { deps, ofSingle, refresh };
 }
 
 const ctx = {} as PluginRouteContext;
@@ -157,6 +159,15 @@ describe("readShownOn", () => {
     const all = await readShownOn("homepage", true, ctx, deps);
     expect(all.places).toHaveLength(12);
     expect(all.more).toBe(0);
+  });
+
+  it("starts the check that fills the index while it has not been filled, and not after", async () => {
+    const waiting = depsFor({ uses: [], filled: false });
+    await readShownOn("homepage", false, ctx, waiting.deps);
+    expect(waiting.refresh).toHaveBeenCalledTimes(1);
+    const filled = depsFor({ uses: [] });
+    await readShownOn("homepage", false, ctx, filled.deps);
+    expect(filled.refresh).not.toHaveBeenCalled();
   });
 
   it("says it is still checking until the index has been filled once", async () => {

@@ -99,7 +99,7 @@ describe("ShownOnSection", () => {
     const href = row.getAttribute("href") ?? "";
     expect(href).toContain("/admin/collections/pages/home/");
     expect(href).toContain("field=content");
-    expect(href).toContain("hero");
+    expect(new URL(href, "http://site").searchParams.get("block")).toBe("hero");
     fireEvent.click(row);
     expect(navigated).toEqual([href]);
     expect(asked[0]?.path).toBe("/singles/homepage/shown-on");
@@ -157,6 +157,13 @@ describe("ShownOnSection", () => {
     onSingle();
     expect(screen.getByText("and 1 you can't open")).toBeTruthy();
     expect(screen.getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("doesn't say nothing shows the Single when every place is one the reader can't open", () => {
+    answers.first = answer({ hidden: 2 });
+    onSingle();
+    expect(screen.queryByText(WORDS.none)).toBeNull();
+    expect(screen.getByText("and 2 you can't open")).toBeTruthy();
   });
 
   it("says a place only in another language without a link", () => {

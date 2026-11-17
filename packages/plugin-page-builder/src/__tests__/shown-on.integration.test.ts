@@ -5,9 +5,11 @@
  * with a signed session, and a reader is shown only the places they may
  * read, the rest as a number.
  *
- * What only a server shows: the table on each dialect (and its migration,
- * up and down), the uses written in the sweep's pass after a real save, the
- * caller's read of each document, and the index the panel's one query uses.
+ * What only a server shows: the table on each dialect, the uses written in
+ * the sweep's pass after a real save, the caller's read of each document,
+ * and the index the panel's one query uses. The migration is applied and
+ * undone with the command a deployment runs by
+ * `breakpoint-removals-migration.integration.test.ts`.
  *
  * @module __tests__/shown-on.integration.test
  */

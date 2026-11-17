@@ -246,10 +246,12 @@ async function documentRows(
   const rows: BindingReportRow[] = [];
   const uses: DocumentUse[] = [];
   let incomplete = false;
+  let unread = false;
   const shared = new Set<string>();
   for (const candidate of hosts) {
     const judged = await hostRows(candidate, shared, deps, reading);
     incomplete ||= judged.incomplete;
+    unread ||= judged.unread;
     rows.push(...judged.rows);
     uses.push(...judged.uses);
   }
@@ -262,14 +264,21 @@ async function documentRows(
       rows.push({ ...row, layout: layout.id, blocksField: "layout" });
     }
   }
-  return { rows, uses, incomplete };
+  return { rows, uses, incomplete, unread };
 }
 
 /** One document's judgement: its report rows, and where it binds a Single. */
 interface Judged {
   readonly rows: BindingReportRow[];
   readonly uses: DocumentUse[];
+  /** Whether the rows may miss a problem, so the row is not settled. */
   readonly incomplete: boolean;
+  /**
+   * Whether a stored value could not be read, so the uses may miss some
+   * too. Uses are read off the stored values alone, so they are whole
+   * whenever every value was read, a judgement left incomplete included.
+   */
+  readonly unread: boolean;
 }
 
 /**
@@ -311,7 +320,7 @@ async function hostRows(
   >,
   reading: DocumentReading
 ): Promise<Judged> {
-  const none = { rows: [], uses: [] };
+  const none = { rows: [], uses: [], unread: false };
   // A host searched row by row (a blocks field inside a repeater) is not one
   // document the report can point an author at; it is left out.
   if (access === "scan") return { ...none, incomplete: false };
@@ -322,7 +331,7 @@ async function hostRows(
     // Not read is not judged: a read that failed (the database, or a value
     // that kept changing while it was read) leaves the document marked, so
     // its last verdict stands until a later pass reads it.
-    return { ...none, incomplete: true };
+    return { ...none, incomplete: true, unread: true };
   }
   const value = valueOf(read.draft) ?? valueOf(read.published);
   if (value === undefined) return { ...none, incomplete: false };
@@ -336,6 +345,7 @@ async function hostRows(
   const judged = await valueRows(host, value, deps, reading.components);
   return {
     incomplete: judged.incomplete,
+    unread: false,
     uses: hostUses(
       read,
       {
@@ -511,10 +521,14 @@ async function settleOne(
   // A document gone, or holding no blocks field any more, has nothing.
   const judged =
     hosts.length === 0
-      ? { rows: [], uses: [], incomplete: false }
+      ? { rows: [], uses: [], incomplete: false, unread: false }
       : await documentRows(at, hosts, deps, reading);
   if (!judged.incomplete) {
     await store.settle(marked, judged.rows, judged.uses);
+  } else if (!judged.unread) {
+    // The report waits for a whole judgement; where the document binds a
+    // Single is known already, so a Single's panel does not wait with it.
+    await store.keepUses(marked, judged.uses);
   }
 }
 

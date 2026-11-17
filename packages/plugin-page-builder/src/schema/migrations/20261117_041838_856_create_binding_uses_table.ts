@@ -5,25 +5,25 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261117_030715_497_create_binding_uses_table",
+  name: "20261117_041838_856_create_binding_uses_table",
   schemaVersion: 11,
-  checksum: "8e4a60381a51a2f9466399b10ae4ba210c8cae77d937c8e0dbce95723a6e3e2c",
+  checksum: "10a452ef720ae9efde86e9dd47ac545d92d731dba730f662c375ea1904c0b3ac",
   dialects: {
     postgresql: {
       up: [
-        'CREATE TABLE "page_builder__binding_uses" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "version" text NOT NULL,\n  "locale" text,\n  "blocks_field" text NOT NULL,\n  "node_id" text NOT NULL,\n  "block_type" text NOT NULL,\n  "block_name" text,\n  "prop" text NOT NULL,\n  "source_kind" text NOT NULL,\n  "source_key" text NOT NULL,\n  "path" text NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_source_kind_source_key_001e79k" ON "page_builder__binding_uses" ("source_kind", "source_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_document_key" ON "page_builder__binding_uses" ("document_key")',
+        'CREATE TABLE "page_builder__binding_uses" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "version" text NOT NULL,\n  "locale" text,\n  "blocks_field" text NOT NULL,\n  "node_id" text NOT NULL,\n  "block_type" text NOT NULL,\n  "block_name" text,\n  "prop" text NOT NULL,\n  "path" text NOT NULL,\n  "source_kind" text NOT NULL,\n  "source_key" text NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_source_kind_source_key_001e79k" ON "page_builder__binding_uses" ("source_kind", "source_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_document_key" ON "page_builder__binding_uses" ("document_key")',
       ],
       down: ['DROP TABLE "page_builder__binding_uses" CASCADE'],
     },
     mysql: {
       up: [
-        "CREATE TABLE `page_builder__binding_uses` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `document_key` varchar(512) NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `document_id` varchar(255),\n  `place` varchar(16) NOT NULL,\n  `version` varchar(16) NOT NULL,\n  `locale` varchar(64),\n  `blocks_field` varchar(255) NOT NULL,\n  `node_id` varchar(255) NOT NULL,\n  `block_type` varchar(255) NOT NULL,\n  `block_name` varchar(255),\n  `prop` varchar(255) NOT NULL,\n  `source_kind` varchar(16) NOT NULL,\n  `source_key` varchar(255) NOT NULL,\n  `path` varchar(512) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE INDEX `idx_page_builder__binding_uses_source_kind_source_key_001e79k` ON `page_builder__binding_uses` (`source_kind`, `source_key`);\nCREATE INDEX `idx_page_builder__binding_uses_document_key` ON `page_builder__binding_uses` (`document_key`)",
+        "CREATE TABLE `page_builder__binding_uses` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `document_key` varchar(512) NOT NULL,\n  `kind` varchar(16) NOT NULL,\n  `slug` varchar(255) NOT NULL,\n  `document_id` varchar(255),\n  `place` varchar(16) NOT NULL,\n  `version` varchar(16) NOT NULL,\n  `locale` text,\n  `blocks_field` text NOT NULL,\n  `node_id` text NOT NULL,\n  `block_type` text NOT NULL,\n  `block_name` text,\n  `prop` text NOT NULL,\n  `path` text NOT NULL,\n  `source_kind` varchar(16) NOT NULL,\n  `source_key` varchar(255) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE INDEX `idx_page_builder__binding_uses_source_kind_source_key_001e79k` ON `page_builder__binding_uses` (`source_kind`, `source_key`);\nCREATE INDEX `idx_page_builder__binding_uses_document_key` ON `page_builder__binding_uses` (`document_key`)",
       ],
       down: ["DROP TABLE `page_builder__binding_uses`"],
     },
     sqlite: {
       up: [
-        'CREATE TABLE "page_builder__binding_uses" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "version" text NOT NULL,\n  "locale" text,\n  "blocks_field" text NOT NULL,\n  "node_id" text NOT NULL,\n  "block_type" text NOT NULL,\n  "block_name" text,\n  "prop" text NOT NULL,\n  "source_kind" text NOT NULL,\n  "source_key" text NOT NULL,\n  "path" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_source_kind_source_key_001e79k" ON "page_builder__binding_uses" ("source_kind", "source_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_document_key" ON "page_builder__binding_uses" ("document_key")',
+        'CREATE TABLE "page_builder__binding_uses" (\n  "id" text PRIMARY KEY NOT NULL,\n  "document_key" text NOT NULL,\n  "kind" text NOT NULL,\n  "slug" text NOT NULL,\n  "document_id" text,\n  "place" text NOT NULL,\n  "version" text NOT NULL,\n  "locale" text,\n  "blocks_field" text NOT NULL,\n  "node_id" text NOT NULL,\n  "block_type" text NOT NULL,\n  "block_name" text,\n  "prop" text NOT NULL,\n  "path" text NOT NULL,\n  "source_kind" text NOT NULL,\n  "source_key" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_source_kind_source_key_001e79k" ON "page_builder__binding_uses" ("source_kind", "source_key");\nCREATE INDEX IF NOT EXISTS "idx_page_builder__binding_uses_document_key" ON "page_builder__binding_uses" ("document_key")',
       ],
       down: ['DROP TABLE "page_builder__binding_uses"'],
     },
@@ -827,17 +827,17 @@ export default {
               nullable: false,
             },
             {
+              name: "path",
+              type: "text",
+              nullable: false,
+            },
+            {
               name: "source_kind",
               type: "text",
               nullable: false,
             },
             {
               name: "source_key",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "path",
               type: "text",
               nullable: false,
             },
@@ -1633,32 +1633,37 @@ export default {
             },
             {
               name: "locale",
-              type: "varchar(64)",
+              type: "text",
               nullable: true,
             },
             {
               name: "blocks_field",
-              type: "varchar(255)",
+              type: "text",
               nullable: false,
             },
             {
               name: "node_id",
-              type: "varchar(255)",
+              type: "text",
               nullable: false,
             },
             {
               name: "block_type",
-              type: "varchar(255)",
+              type: "text",
               nullable: false,
             },
             {
               name: "block_name",
-              type: "varchar(255)",
+              type: "text",
               nullable: true,
             },
             {
               name: "prop",
-              type: "varchar(255)",
+              type: "text",
+              nullable: false,
+            },
+            {
+              name: "path",
+              type: "text",
               nullable: false,
             },
             {
@@ -1669,11 +1674,6 @@ export default {
             {
               name: "source_key",
               type: "varchar(255)",
-              nullable: false,
-            },
-            {
-              name: "path",
-              type: "varchar(512)",
               nullable: false,
             },
             {
@@ -2497,17 +2497,17 @@ export default {
               nullable: false,
             },
             {
+              name: "path",
+              type: "text",
+              nullable: false,
+            },
+            {
               name: "source_kind",
               type: "text",
               nullable: false,
             },
             {
               name: "source_key",
-              type: "text",
-              nullable: false,
-            },
-            {
-              name: "path",
               type: "text",
               nullable: false,
             },

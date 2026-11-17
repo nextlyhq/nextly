@@ -204,13 +204,15 @@ export function ShownOnBody({
   const empty = answer.places.length === 0;
   return (
     <div className="grid gap-2.5" data-testid="shown-on">
-      {empty ? (
-        <p className="m-0 text-sm text-muted-foreground">
-          {answer.checking ? WORDS.checking : WORDS.none}
-        </p>
-      ) : (
+      {/* "Not shown" would be untrue where every place is one they can't
+          open: the count below says it instead. */}
+      {!empty ? (
         <PlaceList places={answer.places} />
-      )}
+      ) : answer.checking ? (
+        <p className="m-0 text-sm text-muted-foreground">{WORDS.checking}</p>
+      ) : answer.hidden === 0 ? (
+        <p className="m-0 text-sm text-muted-foreground">{WORDS.none}</p>
+      ) : null}
       <Counts answer={answer} onMore={onMore} />
       {!empty && answer.checking ? (
         <p className="m-0 text-sm text-muted-foreground">{WORDS.checking}</p>

@@ -59,7 +59,7 @@ const PAGE_METADATA = "Page metadata";
 
 /** What the route needs of the installed plugin. */
 export interface ShownOnDeps {
-  /** The index's reads; `null` before the plugin's tables are ready. */
+  /** The index's reads; `null` before the plugin is installed. */
   readonly uses: () => BindingUsesReader | null;
   /** What the caller may read of each document, read as them. */
   readonly readable: (
@@ -76,6 +76,11 @@ export interface ShownOnDeps {
     ctx: PluginRouteContext,
     slugs: ReadonlySet<string>
   ) => Promise<SingleLabels>;
+  /**
+   * Start the check of every document, through the caller's request, never
+   * waiting for it: asked while the index has not been filled once.
+   */
+  readonly refresh: (ctx: PluginRouteContext) => void;
   /** The site's default language, the one the builder edits. */
   readonly defaultLocale: () => string | undefined;
   /** The site's block registry, whose labels name a block without its own. */
@@ -196,7 +201,7 @@ export async function readShownOn(
     });
   }
   const reader = deps.uses();
-  // Before the plugin's tables are ready the index has nothing to say yet.
+  // Before the plugin is installed the index has nothing to say yet.
   if (reader === null) {
     return { checking: true, places: [], more: 0, hidden: 0 };
   }
@@ -204,6 +209,7 @@ export async function readShownOn(
     reader.ofSingle(slug, USES_READ_MAX),
     reader.filled(),
   ]);
+  if (!filled) deps.refresh(ctx);
   const places = placesOf(uses, deps.defaultLocale());
   const readable = await deps.readable(ctx, questionsOf(places));
   const singleDocuments = new Set(

@@ -7,7 +7,11 @@
  * Single's values, from the index the report's sweep keeps beside it.
  */
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
-import type { PluginRoute, PluginRouteIdentity } from "@nextlyhq/plugin-sdk";
+import type {
+  PluginRoute,
+  PluginRouteContext,
+  PluginRouteIdentity,
+} from "@nextlyhq/plugin-sdk";
 
 import { bindingFieldsRoute } from "../binding-fields-route";
 import { schemaFingerprint } from "../bindings-report/fingerprint";
@@ -282,6 +286,23 @@ export function routesForBindings(
   readonly shownOn: PluginRoute;
 } {
   const { opts, state, namedQueryDeclarations, requireTemplateGuard } = def;
+  // A read starts a check when the schema may have changed, at most once a
+  // minute, and never waits for it.
+  const refresh = (routeCtx: PluginRouteContext): void => {
+    const now = Date.now();
+    if (now - state.bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
+    state.bindingsRefreshedAt = now;
+    routeCtx.services.jobs
+      .runSweepNow(BINDINGS_REPORT_JOB, {
+        maxDurationMs: BINDINGS_REFRESH_RUN_MS,
+      })
+      .catch((error: unknown) =>
+        state.bindingReportCtx?.logger.warn(
+          "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
+          { error }
+        )
+      );
+  };
   return {
     // A collection loop's menus: the collections the author may read,
     // the plugin's own stores left out, with each one's sortable fields.
@@ -317,23 +338,7 @@ export function routesForBindings(
     bindingsToFix: bindingsToFixRoute({
       store: bindingReportDeps.store,
       readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
-      // A read starts a check when the schema may have changed, at most
-      // once a minute, and never waits for it.
-      refresh: routeCtx => {
-        const now = Date.now();
-        if (now - state.bindingsRefreshedAt < BINDINGS_REFRESH_MS) return;
-        state.bindingsRefreshedAt = now;
-        routeCtx.services.jobs
-          .runSweepNow(BINDINGS_REPORT_JOB, {
-            maxDurationMs: BINDINGS_REFRESH_RUN_MS,
-          })
-          .catch((error: unknown) =>
-            state.bindingReportCtx?.logger.warn(
-              "[page-builder] the bindings report's check could not start; the next jobs pass runs it.",
-              { error }
-            )
-          );
-      },
+      refresh,
       // Where a Layout region's binding is edited, and the language the
       // builder edits, for each row's way into the editor.
       componentStore: () =>
@@ -355,6 +360,9 @@ export function routesForBindings(
           : bindingUsesReader(state.bindingReportCtx.db),
       readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
       mayReadSingle: (routeCtx, slug) => mayReadSingle(routeCtx, slug),
+      // Until the index has been filled once, a read starts the check that
+      // fills it, as the report's read does.
+      refresh,
       singleLabels: (routeCtx, slugs) => singleLabelsOf(routeCtx, slugs),
       defaultLocale: () =>
         state.bindingReportCtx?.config.localization?.defaultLocale,

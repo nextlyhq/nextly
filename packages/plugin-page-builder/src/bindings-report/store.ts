@@ -131,6 +131,15 @@ export interface BindingReportStore {
     rows: readonly BindingReportRow[],
     uses: readonly DocumentUse[]
   ): Promise<boolean>;
+  /**
+   * Replace a marked document's uses, leaving it marked, while its mark is
+   * still the one read: for a judgement left incomplete, whose uses are
+   * whole. `false`, changing nothing, when it was marked again since.
+   */
+  keepUses(
+    marked: DirtyDocument,
+    uses: readonly DocumentUse[]
+  ): Promise<boolean>;
   /** Every document with a broken binding, newest judged first. */
   list(): Promise<StoredDocumentReport[]>;
   /** One document's row, when it has a broken binding. */
@@ -329,6 +338,25 @@ export function bindingReportStore(
           })
           .where(where);
         if (settled === 0) return false;
+        await replaceUses(tx, marked.document, uses);
+        return true;
+      }),
+
+    keepUses: async (marked, uses) =>
+      db.transaction(async tx => {
+        const t = tx.table(bindingIssues);
+        const where =
+          and(
+            eq(t.documentKey, marked.document.documentKey),
+            eq(t.dirty, marked.token)
+          ) ?? eq(t.dirty, marked.token);
+        // Writes the mark it holds, to hold the row until the commit: a
+        // write marking it meanwhile waits, then leaves these uses to its
+        // own judgement. Every dialect counts the rows matched.
+        const held = await tx
+          .update(bindingIssues, { dirty: marked.token })
+          .where(where);
+        if (held === 0) return false;
         await replaceUses(tx, marked.document, uses);
         return true;
       }),

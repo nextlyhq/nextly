@@ -89,6 +89,12 @@ function memoryStore() {
       uses.set(marked.document.documentKey, used);
       return true;
     },
+    keepUses: async (marked, used) => {
+      const held = rows.get(marked.document.documentKey);
+      if (held === undefined || held.dirty !== marked.token) return false;
+      uses.set(marked.document.documentKey, used);
+      return true;
+    },
     list: async () =>
       [...rows.values()]
         .filter(row => row.rows.length > 0)
@@ -498,5 +504,42 @@ describe("the check of every document", () => {
     // Nothing changed: no check, and no second mark.
     expect(await runFullCheck(pages.walk, using, LATER())).toBe("current");
     expect(memory.filled()).toBe(1);
+  });
+
+  it("writes a document's uses while its judgement waits on a source, and keeps them while its value can't be read", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const document: ReportedDocument = {
+      documentKey: keyOf("a"),
+      kind: "collection",
+      slug: "pages",
+      documentId: "a",
+      place: "pages",
+    };
+    // The schema is current: only marked documents are judged.
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    memory.uses.clear();
+    await memory.store.markDirty(document);
+    // The Single's fields can't be read: the report waits, the uses don't.
+    const failing: BindingReportDeps = {
+      ...deps(memory.store, pages.reading),
+      shapesOf: async () => {
+        throw new Error("registry unavailable");
+      },
+    };
+    await runFullCheck(pages.walk, failing, LATER());
+    expect(memory.rows.get(document.documentKey)?.dirty).not.toBeNull();
+    expect(
+      memory.uses.get(document.documentKey)?.map(use => use.sourceKey)
+    ).toEqual(["homepage"]);
+    // Its stored value can't be read: what was written stays.
+    const unreadable = {
+      ...pages.reading,
+      read: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+    await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER());
+    expect(memory.uses.get(document.documentKey)).toHaveLength(1);
   });
 });

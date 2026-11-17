@@ -702,15 +702,18 @@ export const bindingUses: TableDefinition<"binding_uses", BindingUsesColumns> =
       documentId: col.varchar(255, { nullable: true }),
       place: col.varchar(16),
       version: col.varchar(16),
-      locale: col.varchar(64, { nullable: true }),
-      blocksField: col.varchar(255),
-      nodeId: col.varchar(255),
-      blockType: col.varchar(255),
-      blockName: col.varchar(255, { nullable: true }),
-      prop: col.varchar(255),
+      // What a document holds, which nothing bounds, unbounded on every
+      // dialect: a long block name or field path is stored, never refused.
+      locale: col.longText({ nullable: true }),
+      blocksField: col.longText(),
+      nodeId: col.longText(),
+      blockType: col.longText(),
+      blockName: col.longText({ nullable: true }),
+      prop: col.longText(),
+      path: col.longText(),
       sourceKind: col.varchar(16),
+      // Indexed, so bounded: a Single's slug, which a longer one never is.
       sourceKey: col.varchar(255),
-      path: col.varchar(512),
       ...col.timestamps(),
     },
     {
