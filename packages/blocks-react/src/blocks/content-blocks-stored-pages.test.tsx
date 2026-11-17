@@ -6,8 +6,8 @@
  *   expected markup below was rendered by the blocks as they were before it
  *   (a Heading linking by address only, a Button's type and label in
  *   Content), and is held here as written, never read back from the blocks
- *   now. React's streaming scripts are set aside: they are React's, not the
- *   page's.
+ *   now. React's streaming scripts, and the order it streams a part a block
+ *   waited for in, are set aside: they are React's, not the page's.
  * - The settings added beside them do what they say: a Heading links to an
  *   entry, and the style groups added to a block reach the panel, while a
  *   Divider, with no text, offers no text colour.
@@ -50,7 +50,27 @@ async function markup(
     <PageRenderer document={document} blocks={blocks} context={context} />
   );
   const html = await new Response(stream).text();
-  return html.replace(/<script>[\s\S]*?<\/script>/g, "");
+  return settled(html.replace(/<script>[\s\S]*?<\/script>/g, ""));
+}
+
+/**
+ * Streamed markup with each part a block waited for put back where it goes:
+ * React streams an async block's element after the page, in a hidden part a
+ * placeholder names, which is how it is sent, not what the page holds.
+ */
+function settled(html: string): string {
+  const parts = new Map<string, string>();
+  const page = html.replace(
+    /<div hidden id="S:(\d+)">([\s\S]*?)<\/div>(?=<div hidden id="S:|$)/g,
+    (_whole, id: string, part: string) => {
+      parts.set(id, part);
+      return "";
+    }
+  );
+  return page.replace(
+    /<!--\$\?--><template id="B:(\d+)"><\/template><!--\/\$-->/g,
+    (_whole, id: string) => parts.get(id) ?? ""
+  );
 }
 
 /**
@@ -87,7 +107,7 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         rel: "sponsored",
       }),
     ],
-    '<div class="nx-pb-page"><!--$?--><template id="B:0"></template><!--/$--><!--$?--><template id="B:1"></template><!--/$--></div><div hidden id="S:0"><button class="nx-pb-281l09f9qxc nx-bt-core--button" aria-label="Send the form" type="submit">Send</button></div><div hidden id="S:1"><a class="nx-pb-1dlmdl9upku nx-bt-core--button" href="/docs" target="_blank" rel="sponsored noopener noreferrer">Read</a></div>',
+    '<div class="nx-pb-page"><button class="nx-pb-281l09f9qxc nx-bt-core--button" aria-label="Send the form" type="submit">Send</button><a class="nx-pb-1dlmdl9upku nx-bt-core--button" href="/docs" target="_blank" rel="sponsored noopener noreferrer">Read</a></div>',
   ],
   [
     "quote",
