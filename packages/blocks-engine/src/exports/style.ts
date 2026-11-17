@@ -297,6 +297,21 @@ export type { CompiledDeclarations, Declaration } from "../style/declarations";
  * @experimental
  */
 export { OVERLAY_COLOR, OVERLAY_STRENGTH } from "../style/overlay";
+/**
+ * "Animation when it appears": its parts' custom properties, for an editor
+ * naming and drawing their controls, and the page's two gates, which a surface
+ * that must show every block in its final state (the editor's canvas) closes.
+ *
+ * @experimental
+ */
+export {
+  APPEAR_DELAY_PROPERTY,
+  APPEAR_DURATION_PROPERTY,
+  APPEAR_EFFECT_PROPERTY,
+  APPEAR_LOAD_GATE,
+  APPEAR_SCROLL_GATE,
+  APPEAR_START_PROPERTY,
+} from "../style/appear";
 export {
   DISCLOSURE_ICON_PROPERTY,
   DISCLOSURE_ICONS,

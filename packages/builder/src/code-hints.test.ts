@@ -87,6 +87,27 @@ describe("what a control writes", () => {
     expect(written.split("; ").length).toBeGreaterThan(1);
   });
 
+  it("says the animation an entrance effect writes, on hover", () => {
+    const written = controlWrites(
+      control("appear", ["effect"], "--nx-pb-appear-effect"),
+      "rise",
+      "--site-"
+    );
+    expect(written).toMatch(/^--nx-pb-appear-effect: rise; /);
+    expect(written).toContain("animation-name: ");
+    expect(written).toContain(
+      "animation-duration: calc(var(--nx-pb-appear-duration, 600) * 1ms)"
+    );
+    expect(written).toContain("animation-timeline: ");
+    expect(
+      controlWrites(
+        control("appear", ["start"], "--nx-pb-appear-start"),
+        "load",
+        "--site-"
+      )
+    ).toContain("--nx-pb-appear-timeline: auto");
+  });
+
   it("falls back to the property alone for a value the engine refuses", () => {
     expect(
       controlWrites(control("minHeight", [], "min-height"), "red", "--site-")
