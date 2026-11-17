@@ -384,10 +384,15 @@ export function DesignGroup({
   );
 }
 
+/** The Type tab's group of the site's fonts, which "Manage fonts…" opens. */
+export const SITE_FONTS_GROUP = "site-fonts";
+
 /**
  * The site's fonts for Design's Font and Weight controls, given as the block
  * panel is given them: the faces the canvas loads, those the site's code
- * supplies, and the way to the site's fonts, which in Design is its Type tab.
+ * supplies, and the way to the site's fonts. In Design that way is its Type
+ * tab with the site's Fonts group opened and brought into view, since an
+ * author may already be on the tab, with the group folded or scrolled away.
  */
 export function DesignFonts({
   faces,
@@ -395,13 +400,17 @@ export function DesignFonts({
   onManageFonts,
   children,
 }: FontChoices & { children: React.ReactNode }): React.JSX.Element {
+  const { reveal } = useDesignBrowse();
   const fonts = React.useMemo<FontChoices>(
     () => ({
       faces,
       fromCode,
-      ...(onManageFonts === undefined ? {} : { onManageFonts }),
+      onManageFonts: () => {
+        onManageFonts?.();
+        reveal(SITE_FONTS_GROUP);
+      },
     }),
-    [faces, fromCode, onManageFonts]
+    [faces, fromCode, onManageFonts, reveal]
   );
   return (
     <FontChoicesContext.Provider value={fonts}>

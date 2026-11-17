@@ -54,6 +54,7 @@ import {
   DesignPanel,
   DesignReveal,
   ReportStylesMatches,
+  SITE_FONTS_GROUP,
   type DesignView,
 } from "./design-panel";
 import {
@@ -788,7 +789,7 @@ export function editorPanelRenderer({
             type: () => (
               <>
                 <DesignGroup
-                  id="site-fonts"
+                  id={SITE_FONTS_GROUP}
                   heading={EDITOR_WORDS.fonts}
                   count={
                     offerableFaces(

@@ -32,6 +32,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { isInput } from "./dom-kind";
 import { FontChoicesContext, FontFamilyField } from "./font-family-field";
 import { NAMED_WEIGHTS, weightName, weightsDrawn } from "./font-library";
 import { InheritedValue } from "./inherited-value";
@@ -331,7 +332,7 @@ function SizeField({
   // Putting back what the field stored is how an author answers a refusal.
   const restore = (event: React.SyntheticEvent): void => {
     const field = event.target;
-    if (refusedBy === undefined || !(field instanceof HTMLInputElement)) return;
+    if (refusedBy === undefined || !isInput(field)) return;
     if (restoresStored(field.value, value)) onCommit(value);
   };
   return (
