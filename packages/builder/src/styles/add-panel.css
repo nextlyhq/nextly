@@ -767,7 +767,8 @@
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--nx-ring) 30%, transparent);
 }
 
-.nx-insert-picker__search input {
+/* The field has a class of its own, so its placeholder needs no descendant. */
+.nx-insert-picker__input {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -778,7 +779,7 @@
   font: inherit;
 }
 
-.nx-insert-picker__search input::placeholder {
+.nx-insert-picker__input::placeholder {
   color: var(--nx-builder-text-muted);
 }
 

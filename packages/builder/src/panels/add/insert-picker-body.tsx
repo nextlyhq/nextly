@@ -204,6 +204,7 @@ export function OpenPicker({
           <Search aria-hidden="true" size={14} />
           <input
             ref={input}
+            className="nx-insert-picker__input"
             role="combobox"
             aria-label={PICKER_WORDS.search}
             placeholder={PICKER_WORDS.search}
