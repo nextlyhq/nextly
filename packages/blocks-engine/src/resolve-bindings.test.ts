@@ -24,6 +24,7 @@ import {
 import {
   SITE_SETTING_FIELD_SHAPES,
   SITE_SETTING_LABELS,
+  siteComputedValues,
 } from "./site-setting-fields";
 
 /** A bound heading under `depth` nested boxes, built without recursion. */
@@ -277,57 +278,66 @@ describe("the site's current year", () => {
   const schema: BindingSchemaSource = {
     fieldsOf: ref => ("site" in ref ? SITE_SETTING_FIELD_SHAPES : undefined),
   };
-  const yearText: BlockNode = {
-    id: "year",
-    type: "core/text",
-    version: 1,
-    props: { text: "" },
-    bindings: { text: { $bind: "currentYear", source: "site" } },
-  } as unknown as BlockNode;
+  const bound = (field: string): BlockNode =>
+    ({
+      id: field,
+      type: "core/text",
+      version: 1,
+      props: { text: "" },
+      bindings: { text: { $bind: field, source: "site" } },
+    }) as unknown as BlockNode;
 
   afterEach(() => {
-    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
-  it("is the year the render is drawn in, as written, in the site's time zone", () => {
-    // Late on New Year's Eve in UTC is already the next year in Tokyo.
-    vi.useFakeTimers({ now: new Date("2026-12-31T20:00:00Z") });
-    const inUtc = resolveNodeBindings(
-      yearText,
-      createBindingRun({
-        sources: { site: { applicationName: "Acme" } },
-        schema,
-        props: textProps,
-      }),
-      { phase: "page" }
+  it("is read from the site values the host hands in, and the engine never reads the clock", () => {
+    // Any read of the time here would throw: a prerender under Cache
+    // Components refuses it outside a cached read, and the engine has none.
+    const RealDate = Date;
+    vi.stubGlobal(
+      "Date",
+      new Proxy(RealDate, {
+        construct() {
+          throw new Error("the engine read the clock");
+        },
+        get(target, property, receiver) {
+          if (property === "now") {
+            return () => {
+              throw new Error("the engine read the clock");
+            };
+          }
+          return Reflect.get(target, property, receiver) as unknown;
+        },
+      })
     );
-    expect(inUtc.issues).toEqual([]);
-    expect(inUtc.props.text).toBe("2026");
-    const inTokyo = resolveNodeBindings(
-      yearText,
-      createBindingRun({
-        sources: { site: { applicationName: "Acme" } },
-        schema,
-        timeZone: "Asia/Tokyo",
-        props: textProps,
-      }),
-      { phase: "page" }
-    );
-    expect(inTokyo.props.text).toBe("2027");
-  });
-
-  it("is there for a site read as holding nothing, and never for a site not read", () => {
-    vi.useFakeTimers({ now: new Date("2031-06-01T12:00:00Z") });
-    const empty = createBindingRun({
-      sources: { site: null },
+    const run = createBindingRun({
+      sources: { site: { applicationName: "Acme", currentYear: "2031" } },
       schema,
+      timeZone: "Asia/Tokyo",
       props: textProps,
     });
+    const year = resolveNodeBindings(bound("currentYear"), run, {
+      phase: "page",
+    });
+    expect(year.issues).toEqual([]);
+    expect(year.props.text).toBe("2031");
     expect(
-      resolveNodeBindings(yearText, empty, { phase: "page" }).props.text
-    ).toBe("2031");
-    const unread = createBindingRun({ sources: {}, schema, props: textProps });
-    expect(unread.sources.site).toBeUndefined();
+      resolveNodeBindings(bound("applicationName"), run, { phase: "page" })
+        .props.text
+    ).toBe("Acme");
+  });
+
+  it("is worked out from a given time in a given zone, without reading the clock", () => {
+    // Late on New Year's Eve in UTC is already the next year in Tokyo.
+    const eve = new Date("2026-12-31T20:00:00Z");
+    expect(siteComputedValues(eve, "UTC")).toEqual({ currentYear: "2026" });
+    expect(siteComputedValues(eve, "Asia/Tokyo")).toEqual({
+      currentYear: "2027",
+    });
+    expect(siteComputedValues(eve, "America/New_York").currentYear).toBe(
+      "2026"
+    );
   });
 
   it("can be bound wherever the site's settings can, under its own words", () => {

@@ -32,8 +32,12 @@ export type SiteSettingName = keyof typeof SITE_SETTING_FIELD_TYPES;
  * stored settings: read-only, kept nowhere, and the same for every visitor.
  *
  * `currentYear` is the year in the site's time zone, as text ("2026"), so a
- * copyright line shows it as written rather than formatted as a number. A
- * cached page shows a new year from its next render.
+ * copyright line shows it as written rather than formatted as a number.
+ *
+ * The engine never reads the clock: the host works these out and hands them
+ * in with the settings (`siteComputedValues`), where it may read the time. A
+ * Next.js route does so inside a cached read, as a prerender under Cache
+ * Components requires.
  *
  * @experimental Settles with the editor's binding controls.
  */
@@ -63,6 +67,7 @@ export const SITE_SETTING_FIELD_SHAPES: readonly BindingFieldShape[] =
 /**
  * The worked-out site values at `now`, in `timeZone` (an IANA zone the
  * caller has already checked; UTC when it is not one the runtime knows).
+ * The caller reads the clock; this only works the values out from it.
  *
  * @experimental Settles with the editor's binding controls.
  */
