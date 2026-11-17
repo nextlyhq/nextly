@@ -42,6 +42,27 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useDocumentIdentity: () => identity,
   useDocumentStatus: () => liveStatus,
+  useCurrentUserId: () => userId,
+  devicePreferenceStore: (key: string) => ({
+    read: () => kept.get(key) ?? null,
+    write: (value: string) => {
+      kept.set(key, value);
+    },
+  }),
+}));
+
+/** The author signed in, and what the preference store keeps, by key. */
+let userId: string | null = "ada";
+const kept = new Map<string, string>();
+
+// The Header & footer group reads its own routes; it is tested on its own.
+vi.mock("./header-footer-group", () => ({
+  HEADER_FOOTER_GROUP: "header-footer",
+  HeaderFooterGroup: () => (
+    <section aria-label="Header & footer">
+      <button type="button" aria-label="Header & footer, 2" />
+    </section>
+  ),
 }));
 
 const client = {
@@ -166,6 +187,8 @@ const address = (id: string, collection = "pages") =>
   `/admin/collections/${collection}/${id}/builder?field=content`;
 
 beforeEach(() => {
+  userId = "ada";
+  kept.clear();
   reads.length = 0;
   navigateTo.mockReset();
   for (const write of Object.values(client)) write.mockReset();
@@ -342,6 +365,46 @@ describe("the list", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByRole("button", { name: "Home" });
     expect(reads).toHaveLength(2);
+  });
+});
+
+describe("the panel's groups", () => {
+  it("shows Pages, then Header & footer", async () => {
+    await mount([item("a", "Home")]);
+    // The groups' folding headings, in the order they are drawn.
+    const headings = screen
+      .getAllByRole("button")
+      .map(button => button.getAttribute("aria-label") ?? "")
+      .filter(label =>
+        /^(Pages|Header & footer|Collection templates), \d+$/.test(label)
+      );
+    expect(headings).toEqual(["Pages, 1", "Header & footer, 2"]);
+  });
+
+  it("keeps the Pages group folded for the author who folded it, and only them", async () => {
+    await mount([item("a", "Home")]);
+    await userEvent.click(screen.getByRole("button", { name: "Pages, 1" }));
+    expect(screen.queryByRole("button", { name: "Home" })).toBeNull();
+    expect(JSON.parse(kept.get("nx-pb-pages-folds:ada") ?? "[]")).toEqual([
+      "pages",
+    ]);
+    cleanup();
+    // Opened again by the same author: still folded.
+    await mount([]);
+    expect(
+      screen
+        .getByRole("button", { name: /^Pages, / })
+        .getAttribute("aria-expanded")
+    ).toBe("false");
+    cleanup();
+    // Another author of this browser: open.
+    userId = "grace";
+    await mount([item("a", "Home")]);
+    expect(
+      screen
+        .getByRole("button", { name: "Pages, 1" })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
   });
 });
 
