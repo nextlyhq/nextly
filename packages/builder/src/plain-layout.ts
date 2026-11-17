@@ -423,6 +423,17 @@ function stackedRowAt(tiers: LayoutTiers, device: string): boolean {
   );
 }
 
+/**
+ * Whether a flex container's direction and wrap have plain words: a
+ * direction such as `inherit`, or wrapping in reverse, is the raw rows'.
+ */
+function plainFlex(values: LayoutValues): boolean {
+  return (
+    PLAIN_DIRECTIONS.has(values.flexDirection ?? "row") &&
+    PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")
+  );
+}
+
 /** What a container's Arrange reads as at the edited device. */
 export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   const values = tiers.inForce(editing);
@@ -439,12 +450,7 @@ export function readArrange(tiers: LayoutTiers, editing: string): PlainArrange {
   // A column below a Row is that Row stacked; any other column is a Stack.
   const stacked = column && stackIndex !== -1 && index >= stackIndex;
   if (column && !stacked) return readStack(values, tiers.flow);
-  // A direction with no plain reading (`inherit`) is the raw rows' too.
-  if (!PLAIN_DIRECTIONS.has(values.flexDirection ?? "row")) {
-    return { mode: "custom" };
-  }
-  // Wrapping in reverse has no plain word: the raw rows hold it.
-  if (!PLAIN_WRAPS.has(values.flexWrap ?? "nowrap")) return { mode: "custom" };
+  if (!plainFlex(values)) return { mode: "custom" };
   const align = readAlign(values, column ? "column" : "row", tiers.flow);
   if (align === "custom") return { mode: "custom" };
   const main = values.justifyContent;
