@@ -37,6 +37,10 @@ export type ClipboardWrite = (text: string) => boolean | Promise<boolean>;
 /** Said when the clipboard would not take the copied blocks. */
 const NOT_ON_CLIPBOARD = "The blocks couldn’t be put on the clipboard";
 
+/** Said when the blocks being cut changed before the clipboard answered. */
+const CHANGED_WHILE_CUTTING =
+  "The blocks changed while they were being copied, so nothing was cut. Cut them again.";
+
 /** Run `then` with whether a write was taken, once it has answered. */
 function afterWrite(
   written: boolean | Promise<boolean>,
@@ -142,9 +146,19 @@ export function useBlockClipboardVerbs({
       // Copied first, and removed only once the clipboard has taken the copy,
       // so a cut the clipboard refuses keeps the blocks. One apply, one undo
       // step.
-      afterWrite(write(serializeCopiedBlocks(copied)), ok => {
+      const text = serializeCopiedBlocks(copied);
+      afterWrite(write(text), ok => {
         if (!ok) {
           notify(`${NOT_ON_CLIPBOARD}, so nothing was cut.`);
+          return;
+        }
+        // A clipboard that answers later leaves the author free to edit in
+        // the meantime. The removal is by id, so it would take those edits
+        // too; the blocks are removed only while they still are what was
+        // copied.
+        const now = copyOfSelection(latest.current.document, ids, copied.origin);
+        if (now === null || serializeCopiedBlocks(now) !== text) {
+          notify(CHANGED_WHILE_CUTTING);
           return;
         }
         if (editorNow.applyAll(plan.ops) === null) return;

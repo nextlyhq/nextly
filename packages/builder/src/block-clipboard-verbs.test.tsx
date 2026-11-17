@@ -280,6 +280,34 @@ describe("a clipboard that will not take the copy", () => {
     ]);
   });
 
+  it("keeps the blocks when they change while the clipboard answers", async () => {
+    const { result, notify } = setUp(
+      page(node("a", "core/heading"), node("b", "core/heading"))
+    );
+    act(() => result.current.editor.select("a"));
+    let answer: (ok: boolean) => void = () => undefined;
+    act(() => {
+      result.current.verbs.cut(
+        () => new Promise<boolean>(resolve => (answer = resolve))
+      );
+    });
+    // An edit to the block being cut, made while the copy is pending: the
+    // clipboard holds the block as it was, so removing it would lose this.
+    act(() => {
+      result.current.editor.apply({
+        kind: "update",
+        id: "a",
+        patch: { name: "Renamed while waiting" },
+      });
+    });
+    await act(async () => answer(true));
+    expect(result.current.editor.document.nodes.map(each => each.id)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/changed/));
+  });
+
   it("keeps the blocks when a write that answers later fails", async () => {
     const { result, notify } = setUp(
       page(node("a", "core/heading"), node("b", "core/heading"))
