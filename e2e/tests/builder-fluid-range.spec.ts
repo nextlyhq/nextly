@@ -50,6 +50,21 @@ async function seed(page: Page, tokens: unknown): Promise<void> {
   expect(written.ok(), `writing the variables: ${written.status()}`).toBe(true);
 }
 
+/** Opens the editor on a fresh load, and the Type tab's Fluid range in it. */
+async function openRange(page: Page) {
+  await openEditorWith(page, NODES, "fluid-text");
+  const panel = page.getByRole("region", { name: "Design panel" });
+  await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
+  if (!(await panel.isVisible())) {
+    await page
+      .getByRole("navigation", { name: "Editor panels" })
+      .getByRole("button", { name: "Design", exact: true })
+      .click();
+  }
+  await panel.getByRole("tab", { name: /^Type/ }).click();
+  return panel.getByRole("group", { name: "Fluid range" });
+}
+
 const valueOf = (set: StoredSet | null, name: string) =>
   set?.tokens?.find(token => token.name === name)?.values.light;
 
@@ -73,17 +88,7 @@ test("changing the fluid range remakes a size made with Fluid…, and leaves the
       ],
     });
     await page.setViewportSize({ width: 1280, height: 720 });
-    await openEditorWith(page, NODES, "fluid-text");
-    const panel = page.getByRole("region", { name: "Design panel" });
-    await page.getByRole("navigation", { name: "Editor panels" }).waitFor();
-    if (!(await panel.isVisible())) {
-      await page
-        .getByRole("navigation", { name: "Editor panels" })
-        .getByRole("button", { name: "Design", exact: true })
-        .click();
-    }
-    await panel.getByRole("tab", { name: /^Type/ }).click();
-    const range = panel.getByRole("group", { name: "Fluid range" });
+    const range = await openRange(page);
     await expect(range.getByLabel("Smallest screen")).toHaveValue("360");
     const largest = range.getByLabel("Largest screen");
     await largest.fill("1440");
@@ -98,6 +103,10 @@ test("changing the fluid range remakes a size made with Fluid…, and leaves the
     const after = await stored(page);
     expect(valueOf(after, "font-size.lead")).toBe(LEAD_WIDER);
     expect(valueOf(after, "space.stack")).toBe(STACK);
+
+    // Opened again, the editor reads the stored range, not the default one.
+    const reopened = await openRange(page);
+    await expect(reopened.getByLabel("Largest screen")).toHaveValue("1440");
   } finally {
     await seed(page, before);
   }

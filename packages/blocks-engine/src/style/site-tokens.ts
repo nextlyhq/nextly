@@ -690,7 +690,7 @@ function typeInstead(kind: TokenKind): string {
  * that agree today drift, and the drift is invisible because a missing token
  * looks exactly like a token whose value did not apply.
  *
- * `prefix` and `darkMode` come from the override when it states them, because
+ * `prefix`, `darkMode` and `fluidRange` come from the override when it states them, because
  * they are site-wide decisions rather than per-token values. A site that sets a
  * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
  * for declaring and for referencing from a single value for exactly this
@@ -722,6 +722,10 @@ export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
     ...(override?.darkMode === undefined
       ? {}
       : { darkMode: override.darkMode }),
+    // Site-wide too: the widths the sizes made with Fluid… grow between.
+    ...(override?.fluidRange === undefined
+      ? {}
+      : { fluidRange: override.fluidRange }),
   };
 }
 

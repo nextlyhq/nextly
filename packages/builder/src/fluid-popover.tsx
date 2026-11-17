@@ -166,6 +166,44 @@ function RangeLink({
   );
 }
 
+/** The range's two widths as the fields show them. */
+interface RangeDrafts {
+  readonly min: string;
+  readonly max: string;
+}
+
+/**
+ * The fields' typing, until the stored range changes underneath them (an
+ * undo, another author's save), which replaces both.
+ */
+function useRangeDrafts(
+  range: FluidRangeWidths
+): [RangeDrafts, React.Dispatch<React.SetStateAction<RangeDrafts>>] {
+  const stored = `${String(range.min)} ${String(range.max)}`;
+  const [drafts, setDrafts] = React.useState<RangeDrafts>(() =>
+    draftsOf(range)
+  );
+  const [shown, setShown] = React.useState(stored);
+  if (shown !== stored) {
+    setShown(stored);
+    setDrafts(draftsOf(range));
+  }
+  return [drafts, setDrafts];
+}
+
+function draftsOf(range: FluidRangeWidths): RangeDrafts {
+  return { min: String(range.min), max: String(range.max) };
+}
+
+/** The end whose own text is no width, or `undefined` when both are widths. */
+function unreadableEnd(next: {
+  min: number | undefined;
+  max: number | undefined;
+}): "min" | "max" | undefined {
+  if (next.min === undefined) return "min";
+  return next.max === undefined ? "max" : undefined;
+}
+
 /**
  * The site's fluid range: "Smallest screen" and "Largest screen", in px.
  * Each field commits when it is left or on Enter; a range whose smallest
@@ -183,12 +221,19 @@ export function FluidRangeFields({
   readOnly: boolean;
 }): React.JSX.Element {
   const id = React.useId();
+  const [drafts, setDrafts] = useRangeDrafts(range);
   const [refused, setRefused] = React.useState<"min" | "max" | undefined>();
-  const commit = (end: "min" | "max", text: string): void => {
-    const width = sizeOf(text);
-    const next = { ...range, [end]: width };
-    if (width === undefined || next.min >= next.max) {
-      setRefused(end);
+  // Both fields are read on either's commit, so the pair saved is the pair on
+  // screen: a refused width stays typed, and putting the other right saves
+  // both rather than the stored one beside it.
+  const commit = (end: "min" | "max"): void => {
+    const next = { min: sizeOf(drafts.min), max: sizeOf(drafts.max) };
+    if (
+      next.min === undefined ||
+      next.max === undefined ||
+      next.min >= next.max
+    ) {
+      setRefused(unreadableEnd(next) ?? end);
       return;
     }
     setRefused(undefined);
@@ -206,13 +251,16 @@ export function FluidRangeFields({
         inputMode="decimal"
         autoComplete="off"
         readOnly={readOnly}
-        defaultValue={String(range[end])}
-        key={`${end}-${String(range[end])}`}
+        value={drafts[end]}
         aria-invalid={refused === end ? true : undefined}
         aria-describedby={refused === end ? `${id}-said` : undefined}
-        onBlur={event => commit(end, event.currentTarget.value)}
+        onChange={event => {
+          const text = event.currentTarget.value;
+          setDrafts(current => ({ ...current, [end]: text }));
+        }}
+        onBlur={() => commit(end)}
         onKeyDown={event => {
-          if (event.key === "Enter") commit(end, event.currentTarget.value);
+          if (event.key === "Enter") commit(end);
         }}
       />
     </>

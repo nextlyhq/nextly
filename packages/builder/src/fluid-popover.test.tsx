@@ -198,4 +198,41 @@ describe("the site's fluid range", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(smallest.getAttribute("aria-invalid")).toBe("true");
   });
+
+  it("saves the range both fields show, once a refused one is put right by the other", () => {
+    // A refused smallest screen stays typed in its field. Setting the largest
+    // screen past it makes the pair a range, and that pair is what is saved:
+    // never the stored smallest screen beside the typed largest one.
+    const onChange = vi.fn();
+    render(
+      <Hosted tokens={made} groups={["type", "fonts"]} onChange={onChange} />
+    );
+    const range = screen.getByRole("group", { name: "Fluid range" });
+    const smallest = within(range).getByLabelText("Smallest screen");
+    enter(smallest, "1600");
+    enter(within(range).getByLabelText("Largest screen"), "1920");
+    const saved = onChange.mock.lastCall?.[0] as SiteTokenSet;
+    expect(saved.fluidRange).toEqual({ min: 1600, max: 1920 });
+    expect(smallest.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("keeps a refused field marked while the other is changed and the pair is still no range", () => {
+    const onChange = vi.fn();
+    render(
+      <Hosted tokens={made} groups={["type", "fonts"]} onChange={onChange} />
+    );
+    const range = screen.getByRole("group", { name: "Fluid range" });
+    const smallest = within(range).getByLabelText("Smallest screen");
+    enter(smallest, "1600");
+    enter(within(range).getByLabelText("Largest screen"), "1500");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(
+      within(range)
+        .getAllByRole("textbox")
+        .some(field => field.getAttribute("aria-invalid") === "true")
+    ).toBe(true);
+    expect(within(range).getByRole("status").textContent).toContain(
+      "The smallest screen comes first"
+    );
+  });
 });
