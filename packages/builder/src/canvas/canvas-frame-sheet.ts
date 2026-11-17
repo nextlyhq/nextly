@@ -27,6 +27,7 @@ import {
   APPEAR_LOAD_GATE,
   APPEAR_SCROLL_GATE,
   DEFAULT_TOKEN_PREFIX,
+  blockTypeClassName,
   tokenCustomProperty,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -34,6 +35,7 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import { GALLERY_BLOCK } from "../gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
@@ -46,6 +48,9 @@ const ROOT = `.${CANVAS_ROOT_CLASS}`;
 function siteToken(name: string, fallback: string): string {
   return `var(${tokenCustomProperty(name, DEFAULT_TOKEN_PREFIX)}, ${fallback})`;
 }
+
+/** The class every Gallery's root wears, its block type's. */
+const EMPTY_GALLERY_CLASS = blockTypeClassName(GALLERY_BLOCK);
 
 /** A collection list drawing its empty state while that state holds nothing. */
 const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
@@ -221,6 +226,10 @@ ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
    they are set, edge to edge. In the page's own text colour, so it reads on
    a light page and a dark section alike. */
 :where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
+/* An empty Gallery is the room its "Add images" plate is drawn in, its two
+   buttons and its drop hint with it (\`image-states.tsx\`): as tall as a
+   small picture, at no specificity, as the height above. */
+:where(${EMPTY_CONTAINER_SELECTOR}.${EMPTY_GALLERY_CLASS}) { min-height: 12rem; }
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
   outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);

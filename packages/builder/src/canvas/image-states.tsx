@@ -27,6 +27,15 @@
  * holds the picture. An Image inside a placed component, in the Layout around
  * the page, or bound to a field is not offered: its picture is set elsewhere.
  *
+ * A Gallery holding no pictures is drawn over the same way: "Add images"
+ * with Upload and Media library, and "or drop files here", in place of the
+ * "+" an empty container draws, so no empty Image is ever made to be filled.
+ * Upload takes several files, Media library picks several, and files
+ * dropped on a gallery, empty or not, are uploaded and added after its
+ * pictures. Each way adds one Image per picture, in the order chosen or
+ * dropped, as ONE step to undo (`addPicturesTo`). Several files held over a
+ * gallery's picture go to the gallery; one replaces that picture.
+ *
  * Drawn like `EmptyContainerAppenders`, in the overlay over the canvas, at
  * each box's measured rectangle; see that module for why the rectangles are
  * read in the canvas's content coordinates and kept current by
@@ -49,6 +58,7 @@ import * as React from "react";
 import type { ContentServices, PickedMedia } from "../content-services";
 import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
+import { addPicturesTo, picturesHeld } from "../gallery-pictures";
 import type { Rect } from "../geometry";
 import { lockViewOf, propIsWritable } from "../inspector";
 import { selectionModeFor, type SelectionMode } from "../selection";
@@ -58,6 +68,13 @@ import { nodeAddressOf, nodeElement } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import {
+  chosenPictures,
+  emptyGalleryBoxes,
+  fileLanding,
+  filesCarried,
+  GALLERY_STATE_WORDS,
+} from "./gallery-states-model";
 import {
   layoutFragments,
   overlaySpaceOf,
@@ -117,8 +134,11 @@ type Activity =
 interface Plate {
   readonly key: string;
   readonly nodeId: string;
-  /** `filled`: an Image with a picture, drawn over only while it is busy. */
-  readonly reason: ImageEmptyReason | "filled";
+  /**
+   * `filled`: a block with a picture, or a gallery with pictures, drawn
+   * over only while it is busy; `gallery`: a gallery waiting for pictures.
+   */
+  readonly reason: ImageEmptyReason | "filled" | "gallery";
   readonly rect: Rect;
 }
 
@@ -145,7 +165,11 @@ export function ImageStates({
   const [activity, setActivity] =
     React.useState<ReadonlyMap<string, Activity>>(NO_ACTIVITY);
   const [dropTarget, setDropTarget] = React.useState<string | null>(null);
-  const [picking, setPicking] = React.useState<string | null>(null);
+  // The block the library is open for, and whether it takes several picks.
+  const [picking, setPicking] = React.useState<{
+    readonly nodeId: string;
+    readonly many: boolean;
+  } | null>(null);
 
   // Read in callbacks that outlive the render that made them: an upload
   // finishes against the document as it is then, not as it was.
@@ -230,7 +254,7 @@ export function ImageStates({
 
   /** Take the first file a drop or the chooser handed over. */
   const take = React.useCallback(
-    (nodeId: string, files: FileList | null) => {
+    (nodeId: string, files: FileList | readonly File[] | null) => {
       const chosen = chosenFile(files);
       if (chosen === undefined || upload === undefined) return;
       const current = choose(nodeId);
@@ -274,6 +298,70 @@ export function ImageStates({
     [choose, place, setFor, upload, writable]
   );
 
+  /** Whether a gallery takes pictures from here, now: no lock holds them. */
+  const galleryWritable = React.useCallback(
+    (nodeId: string): boolean => !picturesHeld(latest.current.editor, nodeId),
+    []
+  );
+
+  /**
+   * Add every picture among the files to a gallery: each uploaded, with
+   * their progress together on the gallery, then all that uploaded added
+   * at once, in the order given, as one step. A file that is not a picture
+   * is left out and said, in the Image's words; an upload that did not
+   * finish is said, and the rest are still added. A later drop does not
+   * cancel an earlier one: each adds its own.
+   */
+  const takeMany = React.useCallback(
+    (nodeId: string, files: FileList | readonly File[] | null) => {
+      const { pictures, refused } = chosenPictures(files);
+      if (upload === undefined || (pictures.length === 0 && !refused)) return;
+      const current = choose(nodeId);
+      if (pictures.length === 0) {
+        setFor(nodeId, { kind: "note", words: WORDS.notImage });
+        return;
+      }
+      if (!galleryWritable(nodeId)) return;
+      const name =
+        pictures.length === 1
+          ? (pictures[0]?.name ?? "")
+          : `${String(pictures.length)} images`;
+      const percents = pictures.map(() => 0);
+      setFor(nodeId, { kind: "uploading", name, percent: 0 });
+      void Promise.allSettled(
+        pictures.map((file, index) =>
+          upload(file, percent => {
+            percents[index] = Math.max(0, Math.min(100, percent));
+            const together = Math.round(
+              percents.reduce((sum, each) => sum + each, 0) / percents.length
+            );
+            if (current())
+              setFor(nodeId, { kind: "uploading", name, percent: together });
+          })
+        )
+      ).then(results => {
+        const ids = results.flatMap(result =>
+          result.status === "fulfilled" ? [result.value.id] : []
+        );
+        const failed = results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected"
+        );
+        const added =
+          ids.length > 0 && addPicturesTo(latest.current.editor, nodeId, ids);
+        if (!current()) return;
+        if (failed !== undefined) {
+          setFor(nodeId, { kind: "note", words: failureWords(failed.reason) });
+        } else if (refused) {
+          setFor(nodeId, { kind: "note", words: WORDS.notImage });
+        } else {
+          setFor(nodeId, added ? { kind: "placing" } : undefined);
+        }
+      });
+    },
+    [choose, galleryWritable, setFor, upload]
+  );
+
   /** Check a typed link, and store it once it loads as a picture. */
   const tryLink = React.useCallback(
     (nodeId: string, typed: string) => {
@@ -309,7 +397,10 @@ export function ImageStates({
       return;
     }
     const { editor: now, activity: busy, dropTarget: over } = latest.current;
-    const empty = emptyPlates(space, now.document);
+    const empty = [
+      ...emptyPlates(space, now.document),
+      ...galleryPlates(space, now.document),
+    ];
     const drawn = new Set(empty.map(plate => plate.nodeId));
     setPlates([...empty, ...busyPlates(space, drawn, busy, over)]);
     // A picture stored from here has been drawn once its box is gone.
@@ -328,37 +419,51 @@ export function ImageStates({
     [measure, editor.document, canvasFrame]
   );
 
-  // A file held over an Image that has a picture, inside the page, is taken
-  // by the page: listened for there. Over an empty box, the plate drawn over
-  // it takes it instead.
+  // Files held over a block inside the page are taken by the page: listened
+  // for there. Over an Image with a picture, one file replaces it; over a
+  // gallery, or several over a gallery's picture, they are added to the
+  // gallery (`fileLanding`). Over an empty box, the plate drawn over it
+  // takes them instead.
   React.useEffect(() => {
     const root = canvasRootOf(layer.current);
     if (root === null || upload === undefined) return;
-    const imageUnder = (target: EventTarget | null): string | null => {
+    const landingUnder = (
+      target: EventTarget | null,
+      count: number
+    ): ReturnType<typeof fileLanding> => {
       if (!isElement(target)) return null;
       const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
       // A picture inside a placed component is the component's.
       if (owner === null || owner.hasAttribute(INSTANCE_ATTRIBUTE)) return null;
       const nodeId = nodeAddressOf(owner);
       if (nodeId === null) return null;
-      return writable(nodeId) ? nodeId : null;
+      return fileLanding(latest.current.editor.document, nodeId, count, {
+        image: writable,
+        gallery: galleryWritable,
+      });
     };
     const over = (event: DragEvent): void => {
       if (!carriesFiles(event.dataTransfer)) return;
-      const nodeId = imageUnder(event.target);
+      const landing = landingUnder(
+        event.target,
+        filesCarried(event.dataTransfer)
+      );
+      const nodeId = landing?.nodeId ?? null;
       if (latest.current.dropTarget !== nodeId) setDropTarget(nodeId);
       if (nodeId === null) return;
       event.preventDefault();
       if (event.dataTransfer !== null) event.dataTransfer.dropEffect = "copy";
     };
     const drop = (event: DragEvent): void => {
-      const nodeId = carriesFiles(event.dataTransfer)
-        ? imageUnder(event.target)
+      const files = event.dataTransfer?.files ?? null;
+      const landing = carriesFiles(event.dataTransfer)
+        ? landingUnder(event.target, files?.length ?? 0)
         : null;
       setDropTarget(null);
-      if (nodeId === null) return;
+      if (landing === null) return;
       event.preventDefault();
-      take(nodeId, event.dataTransfer?.files ?? null);
+      if (landing.kind === "gallery") takeMany(landing.nodeId, files);
+      else take(landing.nodeId, files);
     };
     const away = (event: DragEvent): void => {
       const next = event.relatedTarget;
@@ -376,7 +481,15 @@ export function ImageStates({
       root.removeEventListener("dragleave", away);
       root.ownerDocument.removeEventListener("dragend", ended);
     };
-  }, [take, upload, writable, canvasFrame, editor.document]);
+  }, [
+    take,
+    takeMany,
+    upload,
+    writable,
+    galleryWritable,
+    canvasFrame,
+    editor.document,
+  ]);
 
   const selectImage = (nodeId: string, mode?: SelectionMode): void => {
     if (mode === undefined) editor.select(nodeId);
@@ -396,12 +509,27 @@ export function ImageStates({
           plate={plate}
           activity={activity.get(plate.nodeId)}
           held={dropTarget === plate.nodeId}
-          writable={writable(plate.nodeId)}
+          // A gallery takes pictures where no lock holds them; an Image,
+          // where its picture may be set.
+          writable={
+            isGalleryPlate(plate, editor.document)
+              ? galleryWritable(plate.nodeId)
+              : writable(plate.nodeId)
+          }
+          heldWords={
+            isGalleryPlate(plate, editor.document)
+              ? GALLERY_STATE_WORDS.dropToAdd
+              : WORDS.dropToReplace
+          }
           dragging={dragging}
           canUpload={upload !== undefined}
           canPick={Picker !== undefined}
           onSelect={mode => selectImage(plate.nodeId, mode)}
-          onFiles={files => take(plate.nodeId, files)}
+          onFiles={files =>
+            isGalleryPlate(plate, editor.document)
+              ? takeMany(plate.nodeId, files)
+              : take(plate.nodeId, files)
+          }
           onHeld={held =>
             setDropTarget(current =>
               held ? plate.nodeId : current === plate.nodeId ? null : current
@@ -409,7 +537,10 @@ export function ImageStates({
           }
           onLibrary={() => {
             selectImage(plate.nodeId);
-            setPicking(plate.nodeId);
+            setPicking({
+              nodeId: plate.nodeId,
+              many: plate.reason === "gallery",
+            });
           }}
           onLink={typed => {
             selectImage(plate.nodeId);
@@ -436,12 +567,24 @@ export function ImageStates({
           onOpenChange={open => {
             if (!open) setPicking(null);
           }}
-          title={WORDS.libraryTitle}
+          // A gallery picks several, each one a picture to add.
+          {...(picking.many ? { mode: "multi" as const } : {})}
+          title={
+            picking.many ? GALLERY_STATE_WORDS.libraryTitle : WORDS.libraryTitle
+          }
           accept="image/*"
           initialSelectedIds={new Set()}
           onSelect={media => {
-            const nodeId = picking;
+            const { nodeId, many } = picking;
             setPicking(null);
+            if (many) {
+              addPicturesTo(
+                latest.current.editor,
+                nodeId,
+                media.map(each => each.id)
+              );
+              return;
+            }
             const first = media[0];
             if (first === undefined) return;
             // The pick wins over an upload or a link check still out.
@@ -507,6 +650,40 @@ function emptyPlates(space: Space, document: EditorState["document"]): Plate[] {
   return plates;
 }
 
+/** A plate over each gallery this page owns that waits for pictures. */
+function galleryPlates(
+  space: Space,
+  document: EditorState["document"]
+): Plate[] {
+  const plates: Plate[] = [];
+  for (const box of emptyGalleryBoxes(space.root, document)) {
+    const rect = shownRectOf(box.element, space);
+    if (rect === null) continue;
+    plates.push({
+      key: `${box.nodeId}:gallery`,
+      nodeId: box.nodeId,
+      reason: "gallery",
+      rect,
+    });
+  }
+  return plates;
+}
+
+/**
+ * Whether a plate is a gallery's: one waiting for pictures, or one with
+ * pictures something is happening to.
+ */
+function isGalleryPlate(
+  plate: Plate,
+  document: EditorState["document"]
+): boolean {
+  return (
+    plate.reason === "gallery" ||
+    (plate.reason === "filled" &&
+      imageNodeOf(document, plate.nodeId) === undefined)
+  );
+}
+
 /**
  * A plate over each Image with a picture that something is happening to: a
  * file held over it, an upload, a note. One whose stored picture is drawn now
@@ -539,13 +716,15 @@ interface ImagePlateProps {
   readonly activity: Activity | undefined;
   /** A file is held over it. */
   readonly held: boolean;
+  /** What a file held over a filled plate does, said while it is held. */
+  readonly heldWords: string;
   readonly writable: boolean;
   readonly dragging: boolean;
   readonly canUpload: boolean;
   readonly canPick: boolean;
   /** Select the Image, as a click on the canvas would: Shift extends, Ctrl or Cmd toggles. */
   readonly onSelect: (mode: SelectionMode) => void;
-  readonly onFiles: (files: FileList | null) => void;
+  readonly onFiles: (files: FileList | readonly File[] | null) => void;
   readonly onHeld: (held: boolean) => void;
   readonly onLibrary: () => void;
   readonly onLink: (typed: string) => void;
@@ -567,7 +746,13 @@ function ImagePlate(props: ImagePlateProps): React.JSX.Element {
       data-image-activity={activity?.kind}
       data-held={held ? "" : undefined}
       role="group"
-      aria-label={plate.reason === "missing" ? WORDS.missing : "Image"}
+      aria-label={
+        plate.reason === "missing"
+          ? WORDS.missing
+          : plate.reason === "gallery"
+            ? "Gallery"
+            : "Image"
+      }
       style={{ left: x, top: y, width, height }}
       onClick={event => {
         // Anywhere on the box selects the Image, its words and its icon
@@ -619,7 +804,12 @@ function PlateBody(
   }
   const note = activity?.kind === "note" ? activity.words : undefined;
   if (plate.reason === "filled") {
-    return <OverPicture note={note} held={props.held} />;
+    return (
+      <OverPicture note={note} held={props.held} words={props.heldWords} />
+    );
+  }
+  if (plate.reason === "gallery") {
+    return <GalleryChoices {...props} note={note} />;
   }
   return (
     <Choices {...props} note={note} missing={plate.reason === "missing"} />
@@ -681,9 +871,11 @@ function BadLink({
 function OverPicture({
   note,
   held,
+  words,
 }: {
   readonly note: string | undefined;
   readonly held: boolean;
+  readonly words: string;
 }): React.JSX.Element | null {
   if (note !== undefined) {
     return (
@@ -692,9 +884,7 @@ function OverPicture({
       </p>
     );
   }
-  return held ? (
-    <p className="nx-image-state__words">{WORDS.dropToReplace}</p>
-  ) : null;
+  return held ? <p className="nx-image-state__words">{words}</p> : null;
 }
 
 /** The Image's choices: an empty one's three, or a missing file's Replace. */
@@ -736,6 +926,77 @@ function Choices(
           aria-hidden="true"
           onChange={event => {
             onFiles(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A gallery's choices: "Add images" with Upload, which takes several files,
+ * and Media library, which picks several, and "or drop files here".
+ */
+function GalleryChoices(
+  props: ImagePlateProps & {
+    readonly note: string | undefined;
+    readonly takesFiles: boolean;
+  }
+): React.JSX.Element {
+  const { note, writable, canUpload, canPick, takesFiles, onFiles } = props;
+  const chooser = React.useRef<HTMLInputElement | null>(null);
+  return (
+    <div className="nx-image-state__stack">
+      <ImagePlus
+        className="nx-image-state__icon"
+        size={28}
+        aria-hidden="true"
+      />
+      <p className="nx-image-state__title">{GALLERY_STATE_WORDS.title}</p>
+      {writable ? (
+        <div className="nx-image-state__actions">
+          {canUpload ? (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => chooser.current?.click()}
+            >
+              {WORDS.upload}
+            </Button>
+          ) : null}
+          {canPick ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={props.onLibrary}
+            >
+              {WORDS.library}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {note === undefined ? null : (
+        <p className="nx-image-state__problem" role="alert">
+          {note}
+        </p>
+      )}
+      {note === undefined && takesFiles ? (
+        <p className="nx-image-state__hint">{GALLERY_STATE_WORDS.drop}</p>
+      ) : null}
+      {canUpload ? (
+        <input
+          ref={chooser}
+          type="file"
+          accept="image/*"
+          multiple
+          className="nx-image-state__chooser"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={event => {
+            // Copied before the field is emptied, which empties its list.
+            onFiles(Array.from(event.currentTarget.files ?? []));
             event.currentTarget.value = "";
           }}
         />

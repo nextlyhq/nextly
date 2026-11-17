@@ -23,6 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { whenClickedOf } from "@nextlyhq/blocks-react";
 
+import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 import { authoredName } from "./panels/layers/layers";
 
@@ -76,6 +77,33 @@ export function addPicturesOps(
     }),
     at: { parentId: galleryId, slot: PICTURES_SLOT, index: have + offset },
   }));
+}
+
+/**
+ * Add several library files to a gallery as ONE step: one Image each, in
+ * the order given. Answers whether they landed; a lock or a node that is no
+ * gallery refuses the whole add.
+ */
+export function addPicturesTo(
+  editor: Pick<EditorState, "document" | "applyAll">,
+  galleryId: string,
+  mediaIds: readonly string[]
+): boolean {
+  const ops = addPicturesOps(editor.document, galleryId, mediaIds);
+  if (ops === null || ops.length === 0) return false;
+  return editor.applyAll(ops) !== null;
+}
+
+/**
+ * Whether a lock keeps a gallery's pictures as they are: asked of one
+ * picture's add, through the same question `apply` asks.
+ */
+export function picturesHeld(
+  editor: Pick<EditorState, "document" | "lockRefusalFor">,
+  galleryId: string
+): boolean {
+  const ops = addPicturesOps(editor.document, galleryId, ["held"]);
+  return ops === null || editor.lockRefusalFor(ops) !== undefined;
 }
 
 /** What a click on a gallery's pictures does, as the gallery says. */

@@ -31,7 +31,7 @@ import {
   planGalleryColumns,
   planGalleryMobile,
 } from "./gallery-columns";
-import { addPicturesOps, isGallery } from "./gallery-pictures";
+import { addPicturesTo, isGallery, picturesHeld } from "./gallery-pictures";
 import { HeldByLock } from "./held-by-lock";
 import type { PanelSection } from "./panel-section";
 import { arrowTo } from "./segment-choices";
@@ -47,33 +47,6 @@ const GALLERY_FIELD_WORDS = {
   columns: "Columns",
   onMobile: "On mobile",
 } as const;
-
-/**
- * Add several library files to a gallery as ONE step: one Image each, in
- * the order given. Answers whether they landed; a lock or a node that is no
- * gallery refuses the whole add.
- */
-function addPicturesTo(
-  editor: Pick<EditorState, "document" | "applyAll">,
-  galleryId: string,
-  mediaIds: readonly string[]
-): boolean {
-  const ops = addPicturesOps(editor.document, galleryId, mediaIds);
-  if (ops === null || ops.length === 0) return false;
-  return editor.applyAll(ops) !== null;
-}
-
-/**
- * Whether a lock keeps a gallery's pictures as they are: asked of one
- * picture's add, through the same question `apply` asks.
- */
-function picturesHeld(
-  editor: Pick<EditorState, "document" | "lockRefusalFor">,
-  galleryId: string
-): boolean {
-  const ops = addPicturesOps(editor.document, galleryId, ["held"]);
-  return ops === null || editor.lockRefusalFor(ops) !== undefined;
-}
 
 /** "+ Add images", and the library's picker it opens to pick several. */
 function AddImages({
