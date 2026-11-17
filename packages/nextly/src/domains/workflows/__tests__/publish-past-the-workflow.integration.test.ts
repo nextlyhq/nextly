@@ -744,8 +744,20 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("Singles", () => {
-      it("refuses a REST save carrying a status on an unapproved Single", async () => {
+    // A Single takes no workflow steps yet, so none can hold an approval: the gate does not judge
+    // a Single's publish until it can (`SINGLES_GOVERNED`), and one with a workflow attached
+    // publishes through every door as one without.
+    describe("Singles, not judged until they take steps", () => {
+      /** The Banner as a visitor reads it, or null where nothing of it is live. */
+      const liveBanner = async () =>
+        (await app()
+          .nextly.findSingle({
+            slug: BANNER as never,
+            overrideAccess: false,
+          } as never)
+          .catch(() => null)) as Doc | null;
+
+      it("publishes through a REST save carrying a status", async () => {
         await boot(dialect);
         const session = await publisher();
         await app().nextly.updateSingle({
@@ -758,17 +770,11 @@ describe.each(getConfiguredTestDialects())(
           _overwrite: true,
         });
 
-        expect(answer.status).toBeGreaterThanOrEqual(400);
-        const read = (await app()
-          .nextly.findSingle({
-            slug: BANNER as never,
-            overrideAccess: false,
-          } as never)
-          .catch(() => null)) as Doc | null;
-        expect(read?.title).not.toBe("Banner draft");
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await liveBanner())?.title).toBe("Banner draft");
       });
 
-      it("refuses a REST publish of every language on an unapproved Single", async () => {
+      it("publishes through a REST publish of every language", async () => {
         await boot(dialect);
         const session = await publisher();
         await app().nextly.updateSingle({
@@ -783,38 +789,23 @@ describe.each(getConfiguredTestDialects())(
           { _overwrite: true }
         );
 
-        expect(answer.status).toBeGreaterThanOrEqual(400);
-        const read = (await app()
-          .nextly.findSingle({
-            slug: BANNER as never,
-            overrideAccess: false,
-          } as never)
-          .catch(() => null)) as Doc | null;
-        expect(read?.title).not.toBe("Banner draft");
+        expect(answer.status, JSON.stringify(answer.json)).toBeLessThan(400);
+        expect((await liveBanner())?.title).toBe("Banner draft");
       });
 
-      it("refuses the Direct API's update carrying a status on an unapproved Single, trusted", async () => {
+      it("publishes through the Direct API's update carrying a status, trusted", async () => {
         await boot(dialect);
 
-        const refused = await refusedBy(() =>
-          app().nextly.updateSingle({
-            slug: BANNER as never,
-            data: {
-              title: "Banner draft",
-              status: "published",
-              _overwrite: true,
-            },
-          } as never)
-        );
+        await app().nextly.updateSingle({
+          slug: BANNER as never,
+          data: {
+            title: "Banner draft",
+            status: "published",
+            _overwrite: true,
+          },
+        } as never);
 
-        expect(refused).toBe(true);
-        const read = (await app()
-          .nextly.findSingle({
-            slug: BANNER as never,
-            overrideAccess: false,
-          } as never)
-          .catch(() => null)) as Doc | null;
-        expect(read?.title).not.toBe("Banner draft");
+        expect((await liveBanner())?.title).toBe("Banner draft");
       });
     });
 

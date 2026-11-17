@@ -215,6 +215,19 @@ function holdReason(
   return null;
 }
 
+/**
+ * Whether the gate judges a Single's publish. Off until Singles take workflow steps: a step on a
+ * Single is refused today (`WORKFLOW_SINGLES_NOT_SUPPORTED`), so no Single can hold an approval,
+ * and judging one would hold every publish of it. A Single with a workflow attached publishes as
+ * one without; turned on, with its tests, once a Single's steps can approve it.
+ */
+const SINGLES_GOVERNED = false;
+
+/** Whether the gate judges a publish of `scope` at all. */
+function governs(scope: PublishGateQuestion["scope"]): boolean {
+  return scope.kind === "collection" || SINGLES_GOVERNED;
+}
+
 const NOTHING_HELD: PublishGateVerdict = {
   refusals: [],
   settle: () => Promise.resolve(),
@@ -247,7 +260,13 @@ async function earlyRefusals(
     question.scope.kind,
     question.scope.slug
   );
-  if (!registered || question.direction === "unpublish") return [];
+  if (
+    !registered ||
+    question.direction === "unpublish" ||
+    !governs(question.scope)
+  ) {
+    return [];
+  }
   const bypass = await bypassOf(question, async userId =>
     holdsWithoutReview(await actorForUser(userId), question.scope.slug)
   );
@@ -295,7 +314,13 @@ async function judgeOnLock(
     question.scope.kind,
     question.scope.slug
   );
-  if (!registered || question.direction === "unpublish") return NOTHING_HELD;
+  if (
+    !registered ||
+    question.direction === "unpublish" ||
+    !governs(question.scope)
+  ) {
+    return NOTHING_HELD;
+  }
   const executor = tx.getDrizzle();
   const bypass = await bypassOf(question, async userId =>
     holdsWithoutReview(
