@@ -22,6 +22,7 @@ function host(over: Partial<EntryWriteContext> = {}): EntryWriteContext {
     readStored: vi.fn(() =>
       Promise.resolve({ kind: "value" as const, value: "stored" })
     ),
+    readStoredOf: vi.fn(() => Promise.resolve(new Map())),
     ...over,
   };
 }
@@ -113,6 +114,42 @@ describe("an instance's view of its host write", () => {
       instanceWriteOf(write, OWN).readStored("blocks", target)
     ).resolves.toEqual({ kind: "value", value: "stored" });
     expect(write.readStored).toHaveBeenCalledWith("blocks", target);
+  });
+
+  it("leaves the host entry itself out of a several-entry read of one of the instance's fields", async () => {
+    const write = host();
+
+    await instanceWriteOf(write, OWN).readStoredOf("blocks", {
+      collection: "landings",
+      ids: ["l2", "l1", "l3"],
+      field: "content",
+      form: "draft",
+    });
+
+    expect(write.readStoredOf).toHaveBeenCalledWith("blocks", {
+      collection: "landings",
+      ids: ["l2", "l3"],
+      field: "content",
+      form: "draft",
+    });
+  });
+
+  it("reads several entries of another field, or of another collection, through the host's own read", async () => {
+    const write = host();
+    const sidebar = {
+      collection: "landings",
+      ids: ["l1", "l2"],
+      field: "sidebar",
+      form: "published" as const,
+    };
+    const elsewhere = { ...sidebar, collection: "pages", field: "content" };
+    const view = instanceWriteOf(write, OWN);
+
+    await view.readStoredOf("blocks", sidebar);
+    await view.readStoredOf("blocks", elsewhere);
+
+    expect(write.readStoredOf).toHaveBeenNthCalledWith(1, "blocks", sidebar);
+    expect(write.readStoredOf).toHaveBeenNthCalledWith(2, "blocks", elsewhere);
   });
 
   it("keeps the host's entry, operation, language, payload and connection", () => {
