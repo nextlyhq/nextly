@@ -109,7 +109,10 @@ test("tags the starter on the canvas, in the builder only", async ({
   const footer = root.locator('[data-nx-region="footer"]');
   await expect(header).toContainText("Contact us", { timeout: 30_000 });
   await expect(footer).toContainText("Pages");
-  await expect(footer).toContainText(`© ${new Date().getFullYear()}`);
+  // "©", the year and the name are three texts in a row, spaced by the row.
+  await expect(footer).toContainText(
+    new RegExp(`©\\s*${String(new Date().getFullYear())}`)
+  );
 
   await expect(
     header.getByRole("button", {
@@ -172,7 +175,13 @@ for (const width of [375, 1280]) {
       expect(Math.abs(pageBox.y - nameBox.y)).toBeLessThan(nameBox.height);
     }
     await page.screenshot({
-      path: test.info().outputPath(`starter-${width}.png`),
+      path: test.info().outputPath(`starter-${width}-light.png`),
+      fullPage: true,
+    });
+    // The site's dark values, where it follows the visitor's preference.
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.screenshot({
+      path: test.info().outputPath(`starter-${width}-dark.png`),
       fullPage: true,
     });
   });
