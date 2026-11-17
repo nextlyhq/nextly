@@ -371,6 +371,45 @@ describe("an install of every plugin over pending modules that delete data", () 
     expect(d.applyMigrations).not.toHaveBeenCalled();
   });
 
+  it("plans no change in a dry run a later plugin's refusal ends, as the real run makes none", async () => {
+    const required: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/hx",
+      declaredModules: ["0001_hx"],
+    };
+    const disabled: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/off",
+      enabled: false,
+    };
+    const d = everyInstall({
+      plugins: [
+        disabled,
+        plugin,
+        { ...second, requires: [required.name] },
+        required,
+      ],
+      readLifecycle: vi.fn(
+        async () => new Map([[plugin.name, { state: "installed" as const }]])
+      ),
+    });
+    const plan = await previewPluginInstallAll(d);
+    expect(plan.refusals).toEqual([expect.stringContaining(required.name)]);
+    // The first plugin's module and its deletion are not listed as planned.
+    expect(plan.changes).toEqual([]);
+    expect(plan.notes).toEqual([expect.stringContaining("Skipping @acme/off")]);
+
+    // The control: with the refused plugin away, the first plugin's module is planned.
+    const planned = await previewPluginInstallAll(
+      everyInstall({ plugins: [disabled, plugin] })
+    );
+    expect(planned.refusals ?? []).toEqual([]);
+    expect(planned.changes).toContainEqual({
+      action: "run",
+      target: "plugin module plugin:@acme/fx/0002_prune",
+    });
+  });
+
   it("names in a dry run the one consent that covers every plugin's deletions", async () => {
     const plan = await previewPluginInstallAll(everyInstall());
     expect(

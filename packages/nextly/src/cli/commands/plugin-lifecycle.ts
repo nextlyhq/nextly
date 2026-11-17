@@ -618,35 +618,42 @@ async function planInstall(
 /**
  * `plugins install --all --dry-run`: each enabled plugin planned in the order
  * the real run installs them, each one planned before it counting as
- * installed. A disabled plugin is skipped as the real run skips it, and the
- * plan stops at the first refusal, which the real run makes before it
- * installs any plugin. The consent it names covers every plugin's deletions
- * together, as the real run judges them (`judgeEveryInstallDeletions`).
+ * installed. A disabled plugin is skipped as the real run skips it. The plan
+ * stops at the first refusal, which the real run makes before it installs
+ * any plugin: such a plan lists no change, since that run makes none, and
+ * keeps the plugins it would skip. The consent a plan names covers every
+ * plugin's deletions together, as the real run judges them
+ * (`judgeEveryInstallDeletions`).
  */
 export async function previewPluginInstallAll(
   deps: PluginLifecycleDeps
 ): Promise<DryRunPlan> {
   const changes: DryRunChange[] = [];
   const notes: string[] = [];
+  // The plugins the run skips, which a refused run would skip too.
+  const skipped: string[] = [];
   const installed = new Set<string>();
   const deletions: Deletion[] = [];
   for (const plugin of deps.plugins) {
     if (!plugin.enabled) {
-      notes.push(
-        `Skipping ${plugin.name}: it is disabled in config. Enable it to install it.`
-      );
+      const note = `Skipping ${plugin.name}: it is disabled in config. Enable it to install it.`;
+      notes.push(note);
+      skipped.push(note);
       continue;
     }
     const planned = await planInstall(plugin.name, deps, installed);
+    if ((planned.plan.refusals ?? []).length > 0) {
+      // Nothing the plugins before it would have changed: the real run
+      // makes this refusal before it installs any of them.
+      return {
+        changes: [],
+        refusals: planned.plan.refusals,
+        notes: skipped,
+      };
+    }
     changes.push(...planned.plan.changes);
     notes.push(...(planned.plan.notes ?? []));
     deletions.push(...planned.deletions);
-    if ((planned.plan.refusals ?? []).length > 0) {
-      return withConsentNote(
-        { changes, refusals: planned.plan.refusals, notes },
-        deletions
-      );
-    }
     installed.add(plugin.name);
   }
   return withConsentNote(
