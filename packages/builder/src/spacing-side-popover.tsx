@@ -68,6 +68,42 @@ function spacingPresets(
     .sort((a, b) => size(a) - size(b));
 }
 
+/**
+ * The preset to mark: the one the side holds, where the popover offers it. A
+ * variable that is not a spacing preset (a radius) marks none, so the first
+ * preset keeps the group's Tab stop.
+ */
+function offeredPreset(
+  stored: StyleValue | undefined,
+  presets: readonly SiteVariable[]
+): string | undefined {
+  const held = heldPreset(stored);
+  return held === NONE || presets.some(preset => preset.identity === held)
+    ? held
+    : undefined;
+}
+
+/**
+ * What the number's commit comes to as the popover closes. A number still
+ * being typed is committed by taking focus off it (to no other element, so
+ * the popover isn't left); otherwise its last commit says, which an Enter has
+ * just made.
+ */
+function commitTyped(
+  root: HTMLElement | null,
+  outcome: React.RefObject<CommitOutcome | undefined>
+): CommitOutcome | undefined {
+  const active = root?.ownerDocument.activeElement;
+  if (root === null || !isInput(active) || !root.contains(active)) {
+    return outcome.current;
+  }
+  outcome.current = undefined;
+  active.blur();
+  const result = outcome.current;
+  if (result === "refused") active.focus();
+  return result;
+}
+
 /** The preset a side holds: its variable, "None" for a zero, else none. */
 function heldPreset(stored: StyleValue | undefined): string | undefined {
   if (isTokenRef(stored)) return stored.$token;
@@ -97,6 +133,8 @@ export interface SpacingSidePopoverProps {
   ) => CommitOutcome;
   readonly onReset: () => void;
   readonly onClose: (to: SideClose) => void;
+  /** Why the side's last write was refused, said in the popover. */
+  readonly refusal: string | null;
   /** The side it opened from, whose own click closes it. */
   readonly side: React.RefObject<HTMLButtonElement | null>;
 }
@@ -109,11 +147,28 @@ export function SpacingSidePopover(
   const content = React.useRef<HTMLDivElement>(null);
   const mode = useCanvasTokenMode();
   const presets = spacingPresets(control, props.tokens, mode);
+  // What the number's last commit came to: a refused one keeps the popover
+  // open with the draft, so the author can correct it.
+  const outcome = React.useRef<CommitOutcome | undefined>(undefined);
+  const record = (result: CommitOutcome): CommitOutcome => {
+    outcome.current = result;
+    return result;
+  };
   const write = (value: StyleValue): CommitOutcome =>
-    props.onCommitSides(props.pathsFor(applyTo), value);
-  // Every way of closing moves focus itself, before the popover goes, so
-  // nothing is left to put it back afterwards.
-  const close = (to: SideClose): void => props.onClose(to);
+    record(props.onCommitSides(props.pathsFor(applyTo), value));
+  /*
+   * Every way of closing moves focus itself, before the popover goes, so
+   * nothing is left to put it back afterwards. A number still being typed is
+   * committed first, by moving focus off it within the popover, and a refused
+   * commit keeps the popover open on it.
+   */
+  const close = (to: SideClose): void => {
+    if (commitTyped(content.current, outcome) === "refused") return;
+    props.onClose(to);
+  };
+  // Escape, ✕ and Reset close whatever the number holds: the author is
+  // leaving it, and its refusal is still said under the side.
+  const leave = (to: SideClose): void => props.onClose(to);
   return (
     <PopoverContent
       ref={content}
@@ -128,7 +183,7 @@ export function SpacingSidePopover(
       }}
       onEscapeKeyDown={event => {
         event.preventDefault();
-        close("side");
+        leave("side");
       }}
       // A click elsewhere leaves focus where it went.
       onCloseAutoFocus={event => event.preventDefault()}
@@ -165,7 +220,7 @@ export function SpacingSidePopover(
               disabled={stored === undefined}
               onSelect={() => {
                 props.onReset();
-                close("side");
+                leave("side");
               }}
             >
               Reset
@@ -176,7 +231,7 @@ export function SpacingSidePopover(
           type="button"
           className="nx-spacing-popover__icon"
           aria-label="Close"
-          onClick={() => close("side")}
+          onClick={() => leave("side")}
         >
           <X size={14} aria-hidden="true" />
         </button>
@@ -187,7 +242,7 @@ export function SpacingSidePopover(
         </span>
         <SegmentChoices
           options={[NONE, ...presets.map(preset => preset.identity)]}
-          on={heldPreset(stored)}
+          on={offeredPreset(stored, presets)}
           labels={presetLabels(presets)}
           labelId={`${id}-presets`}
           onChoose={choice => {
@@ -206,12 +261,25 @@ export function SpacingSidePopover(
           stored={stored}
           tokens={props.tokens}
           actionName={name}
-          describedBy={undefined}
+          describedBy={
+            props.refusal === null ? undefined : `${id}-refusal`
+          }
           seed={seed}
           offerVariables={false}
-          onCommit={value => (value === null ? props.onCommit(null) : write(value))}
+          onCommit={value =>
+            value === null ? record(props.onCommit(null)) : write(value)
+          }
         />
       </CompactSides.Provider>
+      {props.refusal === null ? null : (
+        <p
+          id={`${id}-refusal`}
+          className="nx-spacing-popover__refusal"
+          role="alert"
+        >
+          {props.refusal}
+        </p>
+      )}
       <span id={`${id}-apply`} className="nx-spacing-popover__label">
         Apply to
       </span>
@@ -276,11 +344,12 @@ function focusStart(root: HTMLElement | null, seed: string | undefined): void {
     });
     return;
   }
-  root
-    .querySelector<HTMLElement>(
+  // The marked preset, or the first; the number where there is no preset.
+  (
+    root.querySelector<HTMLElement>(
       '.nx-spacing-popover__presets [role="radio"][tabindex="0"]'
-    )
-    ?.focus();
+    ) ?? root.querySelector<HTMLElement>("input")
+  )?.focus();
 }
 
 /** The popover's own keys: Tab past either end, and Enter in the number. */

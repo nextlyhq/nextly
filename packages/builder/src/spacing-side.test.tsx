@@ -201,6 +201,59 @@ describe("a spacing-box side", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps a refused value in the popover on Enter, and says why", () => {
+    const editor = mount();
+    fireEvent.click(side("Padding top"));
+    const number = screen.getByLabelText(
+      "Value for Padding top"
+    ) as HTMLInputElement;
+    fireEvent.change(number, { target: { value: "red" } });
+    fireEvent.keyDown(number, { key: "Enter" });
+    // Nothing written, the popover still open on the draft, and the refusal
+    // said where it was typed.
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Padding top" });
+    expect(number.value).toBe("red");
+    expect(within(dialog).getByRole("alert").textContent).not.toBe("");
+    expect(number.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("still closes on Escape over a refused value, back on its side", () => {
+    mount();
+    fireEvent.click(side("Padding top"));
+    const number = screen.getByLabelText("Value for Padding top");
+    fireEvent.change(number, { target: { value: "red" } });
+    fireEvent.keyDown(number, { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(side("Padding top"));
+  });
+
+  it("keeps a refused value in quick entry on Tab, and doesn't move on", () => {
+    const editor = mount();
+    const top = side("Margin top");
+    top.focus();
+    fireEvent.keyDown(top, { key: "4" });
+    const number = screen.getByLabelText(
+      "Value for Margin top"
+    ) as HTMLInputElement;
+    fireEvent.change(number, { target: { value: "4qq" } });
+    fireEvent.keyDown(number, { key: "Tab" });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Margin top" })).toBeDefined();
+    expect(document.activeElement).toBe(number);
+  });
+
+  it("opens with focus inside it for a side holding a variable it doesn't offer as a preset", () => {
+    // A radius bound to a margin: no preset is marked, so the first keeps
+    // the group's Tab stop and takes focus.
+    mount(at({ margin: { blockStart: { $token: "radius.pill" } } }));
+    fireEvent.click(side("Margin top"));
+    const dialog = screen.getByRole("dialog", { name: "Margin top" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement?.textContent).toBe("None 0");
+  });
+
   it("offers Left & right for a left side", () => {
     mount();
     fireEvent.click(side("Margin left"));

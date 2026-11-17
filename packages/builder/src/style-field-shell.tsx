@@ -316,6 +316,7 @@ export function StyleControlField({
                   describedBy={describedBy}
                   onCommit={commit}
                   onCommitSides={writes.commitSides}
+                  refusal={issue}
                 />
               </InheritedValue.Provider>
             </LabelScrubRow>
@@ -355,9 +356,11 @@ export function StyleControlField({
 function FieldValue({
   asSide,
   inherited,
+  refusal,
   onCommitSides,
   ...control
 }: Parameters<typeof ControlOrFont>[0] & {
+  refusal: string | null;
   /** Drawn as a side of the spacing box: see {@link drawnAsSide}. */
   asSide: boolean;
   inherited: string | undefined;
@@ -376,6 +379,7 @@ function FieldValue({
       describedBy={fieldDescribedBy(control.describedBy, true, control.id)}
       onCommit={control.onCommit}
       onCommitSides={onCommitSides}
+      refusal={refusal}
     />
   );
 }

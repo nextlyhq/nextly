@@ -175,6 +175,8 @@ export interface SpacingSideProps {
   readonly inherited: string | undefined;
   readonly tokens: SiteTokenSet | undefined;
   readonly describedBy: string | undefined;
+  /** Why the side's last write was refused, if it was. */
+  readonly refusal: string | null;
   readonly onCommit: (value: StyleValue | null) => CommitOutcome;
   readonly onCommitSides: (
     paths: readonly (readonly string[])[],
@@ -275,6 +277,7 @@ export function SpacingSide(props: SpacingSideProps): React.JSX.Element {
           onCommitSides={props.onCommitSides}
           onReset={reset}
           onClose={close}
+          refusal={props.refusal}
           side={button}
         />
       )}

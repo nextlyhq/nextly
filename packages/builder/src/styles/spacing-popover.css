@@ -169,3 +169,10 @@
   padding-inline: 0.25rem;
   white-space: nowrap;
 }
+
+/* Why a value was refused, under the number it was typed in. */
+.nx-spacing-popover__refusal {
+  margin: 0;
+  color: var(--nx-destructive);
+  font-size: var(--text-xs);
+}
