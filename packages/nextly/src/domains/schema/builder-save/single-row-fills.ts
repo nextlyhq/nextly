@@ -9,7 +9,15 @@
  *
  * @module domains/schema/builder-save/single-row-fills
  */
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
+import type {
+  BrowserRenameResolution,
+  LegacyFieldResolution,
+  LegacyResolutionsBundle,
+} from "../pipeline/prompt-dispatcher/browser";
 import {
   fieldsStoredOnRow,
   toSnakeCase,
@@ -52,7 +60,7 @@ export function fieldsNewToSingleTable(args: {
  * default the field states, where `fillValue` (`singleRowFillValue`) takes one. A field it takes
  * none for is left out, and its row keeps no value, as before.
  */
-export function singleRowFills(args: {
+function singleRowFills(args: {
   oldFields: readonly FieldDefinition[];
   newFields: readonly FieldDefinition[];
   renamedTo: readonly string[];
@@ -62,4 +70,57 @@ export function singleRowFills(args: {
     const value = args.fillValue(field);
     return value === undefined ? [] : [{ field: field.name, value }];
   });
+}
+
+/**
+ * What a Single's dialog save hands on for its row, from the fields before and after it and the
+ * person's own answers. The file the save writes takes every row fill (`singleRowFills`, by
+ * `singleRowFillValue`, as the PATCH road fills the row) for a field the person did not answer
+ * themselves, whose answer wins. The push takes the person's answers, with a required field's
+ * fill given as an answer would be, since the push asks only a required field's rows; an optional
+ * field's fill reaches the row by the file alone.
+ */
+export function dialogRowAnswers(args: {
+  /** The Single as stored before the save: its table and its fields. */
+  single: { tableName: string; fields?: unknown };
+  /** Its fields after the save. */
+  fields: readonly FieldDefinition[];
+  renameResolutions: readonly BrowserRenameResolution[] | undefined;
+  resolutions: Readonly<Record<string, LegacyFieldResolution>> | undefined;
+  dialect: SupportedDialect;
+}): {
+  fileAnswers: { rowFills?: { field: string; value: unknown }[] };
+  legacyBundle: LegacyResolutionsBundle | undefined;
+} {
+  const answered = args.resolutions ?? {};
+  const schema = new DynamicCollectionSchemaService(undefined, args.dialect);
+  const rowFills = singleRowFills({
+    oldFields: (args.single.fields ?? []) as FieldDefinition[],
+    newFields: args.fields,
+    renamedTo: (args.renameResolutions ?? [])
+      .filter(rename => rename.choice === "rename")
+      .map(rename => rename.toColumn),
+    fillValue: field => schema.singleRowFillValue(field),
+  }).filter(fill => answered[fill.field] === undefined);
+  const required = new Set(
+    args.fields.filter(field => field.required === true).map(f => f.name)
+  );
+  const pushAnswers: Record<string, LegacyFieldResolution> = {
+    ...Object.fromEntries(
+      rowFills
+        .filter(fill => required.has(fill.field))
+        .map(fill => [
+          fill.field,
+          { action: "provide_default" as const, value: fill.value },
+        ])
+    ),
+    ...answered,
+  };
+  return {
+    fileAnswers: rowFills.length > 0 ? { rowFills } : {},
+    legacyBundle:
+      Object.keys(pushAnswers).length > 0
+        ? { tableName: args.single.tableName, byFieldName: pushAnswers }
+        : undefined,
+  };
 }

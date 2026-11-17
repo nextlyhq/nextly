@@ -42,7 +42,6 @@ import {
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import {
   appLanguageOrder,
@@ -63,7 +62,7 @@ import {
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
-import { singleRowFills } from "../../domains/schema/builder-save/single-row-fills";
+import { dialogRowAnswers } from "../../domains/schema/builder-save/single-row-fills";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -1487,40 +1486,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
-          // The default each field new to the Single's table states, given to its one row
-          // (`singleRowFills`, by `singleRowFillValue` as the PATCH road fills it), except for a
-          // field the person answered for themselves, whose answer wins.
-          const rowFills = singleRowFills({
-            oldFields: single.fields as unknown as FieldDefinition[],
-            newFields: fields as unknown as FieldDefinition[],
-            renamedTo: (renameResolutions ?? [])
-              .filter(rename => rename.choice === "rename")
-              .map(rename => rename.toColumn),
-            fillValue: field =>
-              new DynamicCollectionSchemaService(
-                undefined,
-                adapter.dialect
-              ).singleRowFillValue(field),
-          }).filter(fill => resolutions?.[fill.field] === undefined);
-          // The push asks only a required field's rows, so it takes those fills as the person's
-          // answer would be given; an optional field's fill reaches the row by the file alone.
-          const requiredFills = Object.fromEntries(
-            rowFills
-              .filter(fill =>
-                (fields as unknown as FieldDefinition[]).some(
-                  field => field.name === fill.field && field.required === true
-                )
-              )
-              .map(fill => [
-                fill.field,
-                { action: "provide_default" as const, value: fill.value },
-              ])
-          );
-          const pushAnswers = { ...requiredFills, ...(resolutions ?? {}) };
-          const legacyBundle =
-            Object.keys(pushAnswers).length > 0
-              ? { tableName, byFieldName: pushAnswers }
-              : undefined;
+          // The Single's row given each new field's stated default (`dialogRowAnswers`).
+          const { fileAnswers, legacyBundle } = dialogRowAnswers({
+            single,
+            fields: fields as unknown as FieldDefinition[],
+            renameResolutions,
+            resolutions,
+            dialect: adapter.dialect,
+          });
           // Where the translatable values live and how each language publishes, before and after
           // this save (`translationLayoutChange`). Under `experimental.perLanguageStorage` a toggle
           // moves no value: it gives each language a publish state of its own, or takes it away.
@@ -1720,8 +1693,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
                 ...(resolutions ? { resolutions } : {}),
-                // The Single's row given each new field's stated default, in the file it writes.
-                ...(rowFills.length > 0 ? { rowFills } : {}),
+                ...fileAnswers,
                 // The conversions an adoption makes that the review showed and the person confirmed.
                 ...(acknowledgedConversions === undefined
                   ? {}
@@ -1741,10 +1713,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             landing.landed,
             {
               // The push where the save carries values across its change; its own migration file,
-              // run in tries as `nextly migrate` runs it, where it carries none. No `singleRow`:
-              // this dialog's push does not fill the Single's row for a field it adds either (an
-              // optional field's default stays out of it, and a required field is refused unless
-              // the dialog answers with a value), so keeping the push for one would fill nothing.
+              // run in tries as `nextly migrate` runs it, where it carries none. No `singleRow`: the
+              // file fills the Single's row (`dialogRowAnswers`), so no fill keeps the push.
               pushWhen: () =>
                 pushCarriesValues({
                   oldFields: single.fields as unknown as FieldDefinition[],
