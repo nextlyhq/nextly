@@ -265,9 +265,9 @@ describe("dark values only where they make sense", () => {
     [/^Space 4/, false],
     [/^Body, size/, false],
     [/^Bold/, false],
-    [/^Ratio/, false],
+    [/^Number ratio/, false],
     [/^Fast/, false],
-    [/^Grid/, false],
+    [/^Custom grid/, false],
   ])("%s offers a dark value: %s", async (row, offered) => {
     const tokens: SiteTokenSet = {
       tokens: SITE.tokens.map(token =>
