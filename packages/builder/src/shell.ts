@@ -157,6 +157,11 @@ export {
   SITE_CODE_POLICY_DOCS_HREF,
 } from "./docs-links";
 export { CanvasMarks } from "./canvas/canvas-marks";
+/**
+ * @experimental The line where the Add panel's highlighted tile would land,
+ * drawn in the canvas's overlay.
+ */
+export { InsertionLine } from "./canvas/insertion-line";
 
 /**
  * @experimental Hold the editor's shortcuts while something modal is over it.
