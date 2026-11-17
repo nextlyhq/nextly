@@ -8,7 +8,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BOT_CHECK_SCRIPT } from "./bot-check-script";
 
+// A browser runs the module once per page; these tests run it once per test
+// in one document. Each run's observer is recorded so it stops with its test,
+// rather than readying the next test's forms as a second instance.
+const observers: MutationObserver[] = [];
+const NativeObserver = window.MutationObserver;
+window.MutationObserver = class extends NativeObserver {
+  constructor(callback: MutationCallback) {
+    super(callback);
+    observers.push(this);
+  }
+};
+
 afterEach(() => {
+  for (const observer of observers.splice(0)) observer.disconnect();
   vi.restoreAllMocks();
   delete (window as unknown as Record<string, unknown>).turnstile;
   document.body.innerHTML = "";
@@ -51,6 +64,41 @@ describe("the forms plugin's page script", () => {
       "token-1"
     );
     expect(posted()).toBe(1);
+  });
+
+  it("readies a form that arrives after it runs, and readies each form once", async () => {
+    // The module is async and may be cached, so it can run before the body
+    // is parsed or a streamed form arrives: forms added later still get their
+    // browser token and their held send.
+    const send = vi
+      .spyOn(HTMLFormElement.prototype, "submit")
+      .mockImplementation(() => undefined);
+    run();
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `<form><input type="hidden" name="nextly-browser-token" value="" data-forms-browser-token=""><input type="hidden" name="g-recaptcha-response" value="" data-forms-bot-check="recaptcha" data-forms-site-key="site-1"></form>`
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const token = document.querySelector(
+      "input[data-forms-browser-token]"
+    ) as HTMLInputElement;
+    expect(token.value).not.toBe("");
+    const form = document.querySelector("form") as HTMLFormElement;
+    const early = new Event("submit", { cancelable: true });
+    form.dispatchEvent(early);
+    expect(early.defaultPrevented).toBe(true);
+    // Another change to the page readies nothing twice: one listener, so
+    // one send once the token is made.
+    document.body.append(document.createElement("p"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    (window as unknown as Record<string, unknown>).grecaptcha = {
+      ready: (callback: () => void) => callback(),
+      execute: async () => "token-1",
+    };
+    document.head.querySelector("script")?.dispatchEvent(new Event("load"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(send.mock.calls.length).toBe(1);
   });
 
   it("fills a browser token, the same one each time on this browser", () => {

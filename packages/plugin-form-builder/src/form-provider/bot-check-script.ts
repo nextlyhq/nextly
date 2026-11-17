@@ -98,15 +98,25 @@ function browserToken() {
   try { localStorage.setItem(key, made); } catch {}
   return made;
 }
-for (const input of document.querySelectorAll("input[data-forms-browser-token]")) {
-  input.value = browserToken();
+// Each form's inputs are readied once, marked so a later pass skips them.
+// The module is async and may come from the cache, so it can run before the
+// body is parsed or a streamed form arrives: it readies what is there now,
+// and then whatever the page adds.
+function ready() {
+  for (const input of document.querySelectorAll("input[data-forms-browser-token]:not([data-forms-ready])")) {
+    input.dataset.formsReady = "";
+    input.value = browserToken();
+  }
+  for (const input of document.querySelectorAll("input[data-forms-bot-check]:not([data-forms-ready])")) {
+    input.dataset.formsReady = "";
+    const siteKey = input.dataset.formsSiteKey;
+    if (!siteKey) continue;
+    if (input.dataset.formsBotCheck === "turnstile") turnstile(input, siteKey);
+    else if (input.dataset.formsBotCheck === "recaptcha") recaptcha(input, siteKey);
+  }
 }
-for (const input of document.querySelectorAll("input[data-forms-bot-check]")) {
-  const siteKey = input.dataset.formsSiteKey;
-  if (!siteKey) continue;
-  if (input.dataset.formsBotCheck === "turnstile") turnstile(input, siteKey);
-  else if (input.dataset.formsBotCheck === "recaptcha") recaptcha(input, siteKey);
-}
+ready();
+new MutationObserver(ready).observe(document.documentElement, { childList: true, subtree: true });
 `;
 
 /** The public route serving {@link BOT_CHECK_SCRIPT}. */
