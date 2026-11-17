@@ -68,7 +68,8 @@ describeEachDialect("every publishing door asks the gate in time", dialect => {
             text({ name: "title" }),
             text({ name: "code", localized: false }),
           ],
-          hooks: { beforeChange: [countCall], beforeOperation: [countCall] },
+          // A Single has no operation hooks: its write hooks are the ones a status move runs.
+          hooks: { beforeValidate: [countCall], beforeChange: [countCall] },
         }),
       ],
     });

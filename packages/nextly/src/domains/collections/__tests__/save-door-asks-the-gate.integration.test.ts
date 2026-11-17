@@ -107,11 +107,6 @@ describeEachDialect(
                   afterCalls.count += 1;
                 },
               ],
-              afterOperation: [
-                () => {
-                  afterCalls.count += 1;
-                },
-              ],
             },
           }),
           // A field of the author's own that happens to be called what the gate's option once was.
