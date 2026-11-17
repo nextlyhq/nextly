@@ -920,6 +920,29 @@ describe("a folded field in the panel", () => {
   });
 });
 
+describe("a held weight unlinked", () => {
+  it("writes a numeric weight variable as the number a weight is stored as", () => {
+    const editor = mount(
+      { typography: true },
+      { fontWeight: { $token: "font-weight.strong" } },
+      {
+        tokens: [
+          {
+            name: "font-weight.strong",
+            kind: "fontWeight",
+            values: { light: "700" },
+          },
+        ],
+      }
+    );
+    fireEvent.click(
+      fieldsOf("fontWeight").getByRole("button", { name: "Unlink Font weight" })
+    );
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(written(editor)).toContain('"fontWeight":700');
+  });
+});
+
 describe("the source caption after the value changes elsewhere", () => {
   it("is held back when an undo or another edit changes the value", () => {
     register({ typography: true });

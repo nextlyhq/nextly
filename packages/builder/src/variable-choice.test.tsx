@@ -505,6 +505,13 @@ describe("the value Unlink keeps", () => {
   it("keeps a number variable as a number", () => {
     expect(unlinkedValue(variable("700", "number"))).toBe(700);
   });
+
+  it("keeps a numeric weight as a number, and a weight keyword as written", () => {
+    // A weight is stored as a number, its words as keywords: "700" written
+    // as a string is a keyword no weight has, and the write would be refused.
+    expect(unlinkedValue(variable("700", "fontWeight"))).toBe(700);
+    expect(unlinkedValue(variable("bold", "fontWeight"))).toBe("bold");
+  });
 });
 
 describe("a fluid variable in the list and on the chip", () => {

@@ -176,6 +176,19 @@ export function variableTip(
   return `${variableKindWord(variable)} variable ${name} · ${variable.value} · ${css}`;
 }
 
+/**
+ * Whether a variable's value is kept as a number when unlinked: a number
+ * variable, and a weight written as one ("700"), which a weight is stored as;
+ * a weight's keyword ("bold") stays a word.
+ */
+function storedAsNumber(variable: SiteVariable): boolean {
+  const numeric =
+    variable.value.trim() !== "" && Number.isFinite(Number(variable.value));
+  return (
+    numeric && (variable.kind === "number" || variable.kind === "fontWeight")
+  );
+}
+
 /** The fewest decimals a scaled length is written with, so 0.1 × 3 reads 0.3. */
 const SCALED_DECIMALS = 4;
 
@@ -185,17 +198,15 @@ const SCALED_DECIMALS = 4;
  *
  * A scaled measurement is multiplied out ("16px" × 0.75 is "12px"); any other
  * value, such as a fluid `clamp()`, is scaled by `calc()`, as the engine
- * scales the reference itself. A number variable (a weight) stays a number,
- * as a typed one is stored.
+ * scales the reference itself. A number variable, and a weight written as a
+ * number, stay numbers, as a typed one is stored.
  */
 export function unlinkedValue(
   variable: SiteVariable,
   times?: number
 ): StyleValue {
   const { value } = variable;
-  if (variable.kind === "number" && Number.isFinite(Number(value))) {
-    return Number(value) * (times ?? 1);
-  }
+  if (storedAsNumber(variable)) return Number(value) * (times ?? 1);
   if (times === undefined) return value;
   const measurement = measurementOfText(value);
   if (measurement === undefined) return `calc(${value} * ${String(times)})`;
