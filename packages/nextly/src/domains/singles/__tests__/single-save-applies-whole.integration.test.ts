@@ -369,6 +369,27 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     }
   );
 
+  // PostgreSQL only: a kept field whose column changes type is the push's, which judges each
+  // stored value and converts it with a cast; a plain `SET DATA TYPE` with no cast is refused
+  // there. The rule picking the road reads each kept field's column as the Single's row declares
+  // it (`columnOf`), so the change is seen as one. SQLite and MySQL convert "12" on either road.
+  it.skipIf(dialect !== "postgresql")(
+    "turns a Single's text holding a whole number into a number field, its value converted",
+    async () => {
+      await heroWith([{ name: "heading", type: "text" }], { heading: "12" });
+
+      await save([{ name: "heading", type: "number" }]);
+
+      expect(await registeredFields()).toEqual([
+        expect.objectContaining({ name: "heading", type: "number" }),
+      ]);
+      const [row] = await query<{ heading: unknown }>(
+        `SELECT ${q("heading")} AS heading FROM ${q("single_hero")}`
+      );
+      expect(Number(row?.heading)).toBe(12);
+    }
+  );
+
   it("saves a field whose default holds the statement separator's text", async () => {
     // The separator is a line of its own between statements; the same text inside a quoted default
     // is part of the value, and a statement cut there is no longer valid SQL.
