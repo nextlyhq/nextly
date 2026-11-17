@@ -66,11 +66,11 @@ export interface ShownOnDeps {
     ctx: PluginRouteContext,
     entries: readonly ReadableQuestion[]
   ) => Promise<ReadonlyMap<string, ReadableDocument>>;
-  /** Which of these Singles the caller may read, read as them. */
-  readonly readableSingles: (
+  /** Whether the caller may read the Single, read as them. */
+  readonly mayReadSingle: (
     ctx: PluginRouteContext,
-    slugs: ReadonlySet<string>
-  ) => Promise<ReadonlySet<string>>;
+    slug: string
+  ) => Promise<boolean>;
   /** The admin's name for each of these Singles. */
   readonly singleLabels: (
     ctx: PluginRouteContext,
@@ -190,7 +190,7 @@ export async function readShownOn(
   ctx: PluginRouteContext,
   deps: ShownOnDeps
 ): Promise<ShownOnAnswer> {
-  if (!(await deps.readableSingles(ctx, new Set([slug]))).has(slug)) {
+  if (slug === "" || !(await deps.mayReadSingle(ctx, slug))) {
     throw NextlyError.forbidden({
       logContext: { reason: "shown-on-single-not-readable" },
     });

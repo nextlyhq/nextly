@@ -14,6 +14,7 @@ import { schemaFingerprint } from "../bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB } from "../bindings-report/job";
 import { layoutRegionsOf } from "../bindings-report/layout-regions";
 import {
+  mayReadSingle,
   readableAsCaller,
   readableSingles,
   visibleBindings,
@@ -353,7 +354,7 @@ export function routesForBindings(
           ? null
           : bindingUsesReader(state.bindingReportCtx.db),
       readable: (routeCtx, entries) => readableAsCaller(routeCtx, entries),
-      readableSingles: (routeCtx, slugs) => readableSingles(routeCtx, slugs),
+      mayReadSingle: (routeCtx, slug) => mayReadSingle(routeCtx, slug),
       singleLabels: (routeCtx, slugs) => singleLabelsOf(routeCtx, slugs),
       defaultLocale: () =>
         state.bindingReportCtx?.config.localization?.defaultLocale,

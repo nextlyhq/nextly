@@ -75,8 +75,7 @@ function depsFor(fixture: Fixture) {
       }
       return found;
     },
-    readableSingles: async (_ctx, slugs) =>
-      fixture.singleReadable === false ? new Set() : new Set(slugs),
+    mayReadSingle: async () => fixture.singleReadable !== false,
     singleLabels: async (_ctx, slugs) =>
       new Map([...slugs].map(slug => [slug, `The ${slug}`])),
     defaultLocale: () => fixture.defaultLocale,

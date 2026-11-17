@@ -216,6 +216,20 @@ export async function readableSingles(
   return readable;
 }
 
+/**
+ * Whether the caller may read this Single, read as them: only a read that
+ * answered its row says yes. Core answers a reader it refuses with "not
+ * found" as well as with "forbidden", so neither is taken for a yes; a
+ * Single's own edit page has read, and so stored, its row before anything
+ * asks this.
+ */
+export async function mayReadSingle(
+  ctx: IdentifiedCaller,
+  slug: string
+): Promise<boolean> {
+  return typeof (await singleAsCaller(ctx, slug)) === "object";
+}
+
 /** One reported Single, as the caller may read it. */
 async function readSingle(
   ctx: IdentifiedCaller,
