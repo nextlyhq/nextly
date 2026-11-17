@@ -140,6 +140,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The admin's pill words, for the template preview's rows.
   PILL_LABEL: (
     await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()

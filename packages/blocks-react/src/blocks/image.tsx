@@ -138,15 +138,18 @@ export async function renderImage({
   const fetchable = (value: unknown): string | undefined =>
     fetchableUrl(value, patterns);
 
-  const picture = await firstDrawable(
+  const { picture, missing } = await firstDrawable(
     pictureCandidates(mediaId, props.src, boundImage(bound?.mediaId)),
     ctx,
     fetchable,
     claim
   );
   // Nothing to show. An `<img>` with no `src` still requests the current page
-  // in some browsers, so render nothing rather than a broken element.
-  if (picture === undefined) return null;
+  // in some browsers, so a visitor's page draws nothing rather than a broken
+  // element, and the editor draws the box it puts its controls on.
+  if (picture === undefined) {
+    return emptyPicture({ ctx, node, className, partClass, missing });
+  }
   const { record: usable } = picture;
   // Sized to where it sits, where the site keeps copies; as it is otherwise.
   const sized = await sizedPicture(picture, ctx, node, fetchable);
@@ -210,6 +213,60 @@ export async function renderImage({
   });
 }
 
+/**
+ * The attribute on the box an Image with no picture draws on the editor's
+ * canvas, naming why it has none: `empty`, nothing chosen yet, or `missing`,
+ * a library file it names that the library no longer has. The editor's
+ * canvas finds the box by it and draws its controls over it; its test draws
+ * this block to find it, so the two spellings cannot drift apart unseen.
+ */
+const IMAGE_EMPTY_ATTRIBUTE = "data-nx-image-empty";
+
+/** Why an Image draws its empty box, as {@link IMAGE_EMPTY_ATTRIBUTE} says it. */
+type ImageEmptyReason = "empty" | "missing";
+
+/**
+ * What an Image with no picture draws.
+ *
+ * Nothing on a page a visitor is served, which is where an empty Image has
+ * nothing to show. Where an author is looking (`diagnostics`), a box the size
+ * the picture would take, 16:9 unless the block sets its own proportion, so
+ * a new Image is a place on the canvas rather than a line nothing can land
+ * on; the editor draws its choices over it. The box carries the block's own
+ * classes, so a size, a proportion or a corner set on the block shapes it.
+ *
+ * A bound Image, by its media or its address, is left out: its picture is
+ * its binding's, and what it shows without one is the binding's Fallback,
+ * which the binding's own controls set.
+ */
+function emptyPicture({
+  ctx,
+  node,
+  className,
+  partClass,
+  missing,
+}: {
+  ctx: PageContext | undefined;
+  node: BlockNode | undefined;
+  className: string;
+  partClass: (part: string) => string;
+  missing: boolean;
+}): ReactElement | null {
+  if (ctx?.diagnostics !== true) return null;
+  if (
+    node?.bindings?.mediaId !== undefined ||
+    node?.bindings?.src !== undefined
+  )
+    return null;
+  const reason: ImageEmptyReason = missing ? "missing" : "empty";
+  return (
+    <div
+      className={[className, partClass("empty")].filter(Boolean).join(" ")}
+      {...{ [IMAGE_EMPTY_ATTRIBUTE]: reason }}
+    />
+  );
+}
+
 /** One place a picture may come from: a media id, or an address. */
 type PictureCandidate = ImageValue;
 
@@ -255,18 +312,25 @@ function pictureCandidates(
  * for its url. Its alt text and intrinsic size describe the asset that was
  * refused, so keeping them beside the next candidate announces one image to a
  * screen reader while reserving the other one's space. A record the host
- * cannot find, deleted since it was picked or bound, moves on the same way.
+ * cannot find, deleted since it was picked or bound, moves on the same way,
+ * and is reported as `missing` when nothing after it draws either.
  */
 async function firstDrawable(
   candidates: readonly PictureCandidate[],
   ctx: PageContext,
   fetchable: (value: unknown) => string | undefined,
   claim: ReadClaim | undefined
-): Promise<Picture | undefined> {
+): Promise<{ picture?: Picture; missing: boolean }> {
+  let missing = false;
   for (const candidate of candidates) {
     if (candidate.holds === "address") {
       const src = fetchable(candidate.value);
-      if (src !== undefined) return { src, record: null, source: { url: src } };
+      if (src !== undefined) {
+        return {
+          picture: { src, record: null, source: { url: src } },
+          missing,
+        };
+      }
       continue;
     }
     // A resolver that throws must not take the page with it: media lives
@@ -275,16 +339,20 @@ async function firstDrawable(
     const record = await ctx
       .resolveMedia(candidate.value, claim)
       .catch(() => null);
+    if (record === null) missing = true;
     const src = fetchable(record?.url);
     if (
       record !== null &&
       src !== undefined &&
       typeof candidate.value === "string"
     ) {
-      return { src, record, source: { id: candidate.value } };
+      return {
+        picture: { src, record, source: { id: candidate.value } },
+        missing,
+      };
     }
   }
-  return undefined;
+  return { missing };
 }
 
 /** The picture's sources as drawn: one address, or copies for its slot. */
@@ -597,6 +665,20 @@ const IMAGE_PARTS = {
       },
     },
   },
+  // The box an Image with no picture draws for its author (`emptyPicture`):
+  // as wide as its column and 16:9, the proportion a picture most often has,
+  // until the block sets its own size or proportion, which outweighs these.
+  empty: {
+    baseStyles: {
+      base: {
+        base: {
+          display: "block",
+          width: "100%",
+          aspectRatio: "16 / 9",
+        },
+      },
+    },
+  },
   caption: {
     baseStyles: {
       base: {
@@ -694,10 +776,12 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
         : { url: candidate.value }
     ),
   }),
-  // The address only, for the same reason: blocks are placed with their
-  // example, and an example alt would be stored as the page's own words in
-  // place of the library's.
-  example: { props: { src: "/example.jpg" } },
+  // Nothing at all. Blocks are placed with their example, so an address here
+  // is stored on every new Image as the page's own, pointing at a file the
+  // site does not have; an alt would be stored as the page's own words in
+  // place of the library's. A new Image starts empty, and the canvas draws
+  // its choices: upload, the media library, or a link.
+  example: { props: {} },
   supports: {
     spacing: true,
     dimensions: true,
@@ -711,11 +795,13 @@ export const image: BlockDefinition<ImageProps, PageContext> = defineBlock({
     is: canLink(props) ? ["flow", "interactive"] : ["flow"],
   }),
   render: renderImage,
-  // A media id may still resolve to nothing, and that is settled by a call to
-  // the host — so only the case decidable from the props alone is claimed here:
-  // no id AND no usable direct url means there is nothing to draw and nothing
-  // to ask about. An id that fails to resolve falls back to drawing nothing at
-  // render time, which the boundary already treats as a deliberate decision.
-  rendersNothing: props =>
-    text(props.mediaId) === "" && url(props.src) === undefined,
+  // No `rendersNothing`. An Image with no picture draws nothing on a page a
+  // visitor is served, but on the canvas it draws its empty box, which wears
+  // the block's own classes so a size or a proportion set on the block shapes
+  // it. A declaration answers from the props alone, for every render, and the
+  // stylesheet holds back the rules of a block that declares it draws
+  // nothing; declared here, the box would lose the very rules it is drawn to
+  // show. So an empty Image draws nothing at render time instead, as one whose
+  // library file has gone always has, and the boundary treats that as a
+  // deliberate decision too.
 });

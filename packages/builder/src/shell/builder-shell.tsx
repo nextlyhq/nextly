@@ -35,6 +35,7 @@ import { usePreferences } from "./shell-preferences";
 import type { BuilderShellProps } from "./shell-props";
 import { SettingsRequestContext } from "./shell-rail-dialogs";
 import { ShellRegions } from "./shell-regions";
+import { DEFAULT_EXIT_LABEL } from "./shell-top-bar";
 
 export type {
   BuilderShellProps,
@@ -502,7 +503,9 @@ export function BuilderShell({
                     onClick={props.onExit}
                     className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
                   >
-                    Exit editor
+                    {/* The same words as the top bar's arrow, so the two
+                        ways out say the same place. */}
+                    {props.exitLabel ?? DEFAULT_EXIT_LABEL}
                   </button>
                 </>
               ) : (

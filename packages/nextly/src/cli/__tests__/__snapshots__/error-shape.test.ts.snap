@@ -1861,9 +1861,9 @@ exports[`each code, as a command ends with it > SCHEMA_LOCK_UNAVAILABLE 1`] = `
 `;
 
 exports[`each code, as a command ends with it > SCHEMA_SYNC_IN_PRODUCTION 1`] = `
-"✗ Cannot auto-sync schema in production mode.
-  Why:  \`NODE_ENV\` is \`production\`, and 2 collections would change: posts, pages.
-  Next: Run \`nextly migrate:create --name="<migration-name>"\` to create migrations, then \`nextly migrate\` to apply.
+"✗ db:sync does not run in production.
+  Why:  \`NODE_ENV\` is \`production\`, and db:sync changes the database directly, without a migration. Nothing was changed.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\` where you develop, commit the migration, then run \`nextly migrate\` against this database.
   Docs: https://nextlyhq.com/docs/cli/errors/schema-sync-in-production  (SCHEMA_SYNC_IN_PRODUCTION)"
 `;
 
