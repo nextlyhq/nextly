@@ -47,6 +47,16 @@ const translatedOf = (doc: unknown) =>
 
 const told: Told[] = [];
 
+/** The language each user `validate` was told, in the order they ran. */
+const validatedIn: unknown[] = [];
+const recordValidate = (
+  _value: unknown,
+  { req }: { req: { locale?: unknown } }
+): true => {
+  validatedIn.push(req.locale);
+  return true;
+};
+
 /** Records what a hook's context says, under the hook's name. */
 const record =
   (hook: string) =>
@@ -119,7 +129,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             },
           }),
           // Translated too, and left alone by the updates below.
-          text({ name: "body" }),
+          text({ name: "body", validate: recordValidate as never }),
           // Shared: one value for every language.
           text({ name: "code", localized: false }),
         ],
@@ -141,7 +151,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         hooks: everyHook("site"),
         fields: [
           text({ name: "title" }),
-          text({ name: "body" }),
+          text({ name: "body", validate: recordValidate as never }),
           text({ name: "code", localized: false }),
         ],
       }),
@@ -479,6 +489,43 @@ describe.each(getConfiguredTestDialects())(
       for (const entry of after) {
         expect(entry.locales, String(entry.locale)).toEqual([entry.locale]);
       }
+    }, 90_000);
+
+    // A field's own `validate` is told the language the write is judged in,
+    // as a plugin type's validator is: none for the default language.
+    it("tells a field's validate the language written", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInBoth(t);
+      validatedIn.length = 0;
+      await t.nextly.update({
+        collection: POSTS,
+        id,
+        locale: "es",
+        data: { body: "Cuerpo", _overwrite: true },
+      });
+      await t.nextly.update({
+        collection: POSTS,
+        id,
+        locale: "en",
+        data: { body: "Body", _overwrite: true },
+      });
+      expect(validatedIn).toEqual(["es", undefined]);
+
+      validatedIn.length = 0;
+      const singles = t.getService("singleEntryService") as unknown as {
+        update(
+          slug: string,
+          data: Record<string, unknown>,
+          options: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+      const saved = await singles.update(
+        SITE,
+        { body: "Cuerpo", _overwrite: true },
+        { locale: "es", overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      expect(validatedIn).toEqual(["es"]);
     }, 90_000);
 
     // A Single's publish of every language runs the user hooks a
