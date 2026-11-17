@@ -301,3 +301,45 @@ describe("what the review asked of it", () => {
     expect(onCommit.mock.calls).toEqual([[null]]);
   });
 });
+
+describe("an upload finishing after the field was drawn again", () => {
+  it("writes through the newest commit, not the one the upload started with", async () => {
+    // Each render's commit holds the document as it was then; an upload that
+    // finished through an older one would write back an older page.
+    let finish: (media: PickedMedia) => void = () => {};
+    const uploadMedia = vi.fn(
+      () =>
+        new Promise<PickedMedia>(resolve => {
+          finish = resolve;
+        })
+    );
+    const first = vi.fn<Commit>(() => "applied");
+    const second = vi.fn<Commit>(() => "applied");
+    const field = (onCommit: Commit) => (
+      <ContentServicesContext.Provider
+        value={{ uploadMedia } as unknown as ContentServices}
+      >
+        <BackgroundImageField
+          id="bg-image"
+          labelledBy="label"
+          stored={undefined}
+          actionName="Set Image"
+          describedBy={undefined}
+          onCommit={onCommit}
+        />
+      </ContentServicesContext.Provider>
+    );
+    const { rerender } = render(field(first));
+    const input =
+      document.querySelector<HTMLInputElement>('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(["x"], "a.jpg", { type: "image/jpeg" })] },
+    });
+    rerender(field(second));
+    finish(PICKED);
+    await vi.waitFor(() =>
+      expect(second).toHaveBeenCalledWith("https://cdn.example.com/hero.jpg")
+    );
+    expect(first).not.toHaveBeenCalled();
+  });
+});

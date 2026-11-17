@@ -75,6 +75,13 @@ function useImageWrites(
   // Counts the writes started here, so an upload that finishes after a later
   // choice (a pasted link) does not overwrite it.
   const writes = React.useRef(0);
+  // The newest commit, which writes against the page as it is now: an upload
+  // finishing later must not write through the one it started with, whose
+  // page may since have changed (another style set meanwhile).
+  const commitNow = React.useRef(onCommit);
+  React.useEffect(() => {
+    commitNow.current = onCommit;
+  });
 
   // A picked or uploaded file is written by its address; one without an
   // address has nothing a page could draw.
@@ -84,7 +91,7 @@ function useImageWrites(
       return;
     }
     setIssue(null);
-    onCommit(media.url);
+    commitNow.current(media.url);
   };
   // The file chosen is checked as the canvas's Image checks it, and its
   // failure is said in the same words.
