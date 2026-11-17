@@ -97,50 +97,51 @@ test("a colour is renamed in place: Enter and leaving the field keep the name, E
     const panel = page.getByRole("region", { name: "Design panel" });
 
     // From the ⋯ menu's Rename: the field is in the row, and Enter keeps it.
+    // Names no colour the site's code supplies has, which would be refused.
     await panel.getByRole("button", { name: "More actions for Brand" }).click();
     await page.getByRole("menuitem", { name: "Rename" }).click();
     const brand = panel.getByRole("textbox", { name: "Name of Brand" });
     await expect(brand).toBeFocused();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await brand.fill("Primary");
+    await brand.fill("Harbour");
     await brand.press("Enter");
     await expect(
-      panel.getByRole("button", { name: /^Primary,/ })
+      panel.getByRole("button", { name: /^Harbour,/ })
     ).toBeFocused();
     await expect
       .poll(() => storedNames(page))
-      .toEqual(["color.brand=Primary", "color.text="]);
+      .toEqual(["color.brand=Harbour", "color.text="]);
 
     // F2, then leaving the field: kept.
     await panel.getByRole("button", { name: /^Text,/ }).focus();
     await page.keyboard.press("F2");
     const text = panel.getByRole("textbox", { name: "Name of Text" });
     await expect(text).toBeFocused();
-    await text.fill("Body text");
+    await text.fill("Paper ink");
     await page.getByRole("tab", { name: /^Colours/ }).click();
     await expect(
-      panel.getByRole("button", { name: /^Body text,/ })
+      panel.getByRole("button", { name: /^Paper ink,/ })
     ).toBeVisible();
     await expect
       .poll(() => storedNames(page))
-      .toEqual(["color.brand=Primary", "color.text=Body text"]);
+      .toEqual(["color.brand=Harbour", "color.text=Paper ink"]);
 
     // F2, then Escape: cancelled, focus back on the row, nothing stored.
-    const primary = panel.getByRole("button", { name: /^Primary,/ });
-    await primary.focus();
+    const harbour = panel.getByRole("button", { name: /^Harbour,/ });
+    await harbour.focus();
     await page.keyboard.press("F2");
-    const field = panel.getByRole("textbox", { name: "Name of Primary" });
+    const field = panel.getByRole("textbox", { name: "Name of Harbour" });
     await field.fill("Gone");
     await field.press("Escape");
     await expect(field).toHaveCount(0);
     await expect(
-      panel.getByRole("button", { name: /^Primary,/ })
+      panel.getByRole("button", { name: /^Harbour,/ })
     ).toBeFocused();
     // The Design panel stays open: Escape closed only the field.
     await expect(panel).toBeVisible();
     expect(await storedNames(page)).toEqual([
-      "color.brand=Primary",
-      "color.text=Body text",
+      "color.brand=Harbour",
+      "color.text=Paper ink",
     ]);
   } finally {
     await seed(page, before);
