@@ -7,7 +7,9 @@
  * The definition (stages, steps and their rules) is the code's: a write naming any part of it is
  * refused, never stored or ignored. A write is a compare-and-set on the settings' revision, and a
  * change of grants commits in the same transaction as the settings, so the two never disagree.
- * Each committed change is recorded in the activity log under {@link WORKFLOW_SETTINGS_ACTIVITY_COLLECTION}.
+ * Default reviewers written with grants are judged by the grants about to be stored, and a refused
+ * reviewer refuses the whole write, grants included. Each committed change is recorded in the
+ * activity log with the other settings changes ({@link WORKFLOW_SETTINGS_ACTIVITY_COLLECTION}).
  *
  * Who may read or write is asked by the door, before anything here runs.
  *
@@ -34,12 +36,12 @@ import {
 } from "../auth/services/role-grants-changed";
 import { RolePermissionService } from "../auth/services/role-permission-service";
 import { RoleService } from "../auth/services/role-service";
+import { PLUGIN_SETTINGS_ACTIVITY_COLLECTION } from "../plugins/settings-activity";
 
-import { holderAnswer } from "./holders";
+import { holderAnswer, holderAnswerOnceGranted, namesOf } from "./holders";
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
 import { registeredWorkflows, type RegisteredWorkflow } from "./registry";
 import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
-import { WORKFLOW_SETTINGS_ACTIVITY_COLLECTION } from "./settings-activity";
 import { primaryAction } from "./steps";
 import type { Workflow, WorkflowStepKind } from "./types";
 import {
@@ -47,6 +49,25 @@ import {
   writeWorkflowSettings,
   type WorkflowSettings,
 } from "./workflow-settings-repository";
+
+/**
+ * The activity-log `collection` a workflow's settings changes are filed under: the settings one a
+ * plugin's settings use, which the feed shows to a reader holding `read-settings`. Each entry is
+ * the workflow's {@link workflowActivityEntry}.
+ *
+ * @experimental
+ */
+export const WORKFLOW_SETTINGS_ACTIVITY_COLLECTION =
+  PLUGIN_SETTINGS_ACTIVITY_COLLECTION;
+
+/**
+ * The activity-log entry a workflow's settings changes are filed as: prefixed, so a workflow and a
+ * plugin of the same name never share one in the settings namespace.
+ *
+ * @experimental
+ */
+export const workflowActivityEntry = (slug: string): string =>
+  `workflow:${slug}`;
 
 /** Error codes a settings write refuses with, each a validation problem's own code. @experimental */
 export const WORKFLOW_SETTINGS_ERROR_CODES = {
@@ -125,10 +146,29 @@ export interface WorkflowSettingsView {
   emails: WorkflowEmailSettings;
   /**
    * The roles granted each grantable step's permission directly on every collection and Single
-   * the workflow is attached to, by step name. The super-admin role holds every step and is not
-   * listed.
+   * the workflow is attached to, by step name: what a write's `grants` sets. The super-admin role
+   * holds every step and is not listed.
    */
   grants: Record<string, string[]>;
+  /** What else an editor of `grants` needs to see of each grantable step, by step name. */
+  grantableSteps: Record<string, GrantableStepView>;
+}
+
+/**
+ * A grantable step's permission as it stands, beyond the roles holding it everywhere.
+ *
+ * @experimental
+ */
+export interface GrantableStepView {
+  /** The action it needs, held as `<permission>-<slug>` on each attachment. */
+  permission: string;
+  /**
+   * The roles granted it directly on some attachments but not all, which `grants` does not list:
+   * a write naming the step without them takes it from them everywhere.
+   */
+  partialRoles: { id: string; name: string | null }[];
+  /** The other grantable steps needing the same permission, which hold whatever this one holds. */
+  sharesPermissionWith: string[];
 }
 
 /**
@@ -312,20 +352,27 @@ async function directHolders(
   return held;
 }
 
-/** The roles granted `action` directly on every one of `slugs`, sorted, super-admin left out. */
-async function rolesGrantedEverywhere(
+/**
+ * The roles granted `action` directly on `slugs`, each sorted, super-admin left out: those holding
+ * it on every one, and those holding it on some but not all.
+ */
+async function rolesGranted(
   adapter: DrizzleAdapter,
   action: string,
   slugs: readonly string[],
   superAdmin: string | null
-): Promise<string[]> {
+): Promise<{ everywhere: string[]; partly: string[] }> {
   const ids = await permissionIdsOf(adapter, action, slugs);
-  if (ids.size < slugs.length) return [];
   const holders = await directHolders(adapter, [...ids.values()]);
-  return [...holders]
-    .filter(([roleId, held]) => roleId !== superAdmin && held.size === ids.size)
-    .map(([roleId]) => roleId)
-    .sort();
+  const everywhere: string[] = [];
+  const partly: string[] = [];
+  for (const [roleId, held] of holders) {
+    if (roleId === superAdmin) continue;
+    // A slug with no permission row yet is one no role holds it on.
+    if (held.size === slugs.length) everywhere.push(roleId);
+    else partly.push(roleId);
+  }
+  return { everywhere: everywhere.sort(), partly: partly.sort() };
 }
 
 const DEFAULT_EMAILS: WorkflowEmailSettings = {
@@ -343,16 +390,39 @@ async function viewOf(
   const settings = stored?.settings ?? {};
   const slugs = attachedTo(registered);
   const superAdmin = await superAdminRoleId(adapter);
-  const byAction = new Map<string, string[]>();
+  const grantable = grantableActions(registered.workflow);
+  const byAction = new Map<
+    string,
+    { everywhere: string[]; partly: string[] }
+  >();
+  for (const action of new Set(grantable.values())) {
+    byAction.set(
+      action,
+      await rolesGranted(adapter, action, slugs, superAdmin)
+    );
+  }
+  // Every partial holder named in one read.
+  const { roles: names } = await namesOf(adapter, {
+    users: [],
+    roles: [...byAction.values()].flatMap(each => each.partly),
+  });
   const grants: Record<string, string[]> = {};
-  for (const [step, action] of grantableActions(registered.workflow)) {
-    if (!byAction.has(action)) {
-      byAction.set(
-        action,
-        await rolesGrantedEverywhere(adapter, action, slugs, superAdmin)
-      );
-    }
-    grants[step] = [...(byAction.get(action) ?? [])];
+  const grantableSteps: Record<string, GrantableStepView> = {};
+  for (const [step, action] of grantable) {
+    const held = byAction.get(action) ?? { everywhere: [], partly: [] };
+    grants[step] = [...held.everywhere];
+    grantableSteps[step] = {
+      permission: action,
+      partialRoles: held.partly.map(id => ({
+        id,
+        name: names.get(id) ?? null,
+      })),
+      sharesPermissionWith: [...grantable]
+        .filter(
+          ([other, otherAction]) => other !== step && otherAction === action
+        )
+        .map(([other]) => other),
+    };
   }
   return {
     workflow: registered.workflow.slug,
@@ -361,6 +431,7 @@ async function viewOf(
     labels: { ...settings.stages },
     emails: { ...DEFAULT_EMAILS, ...settings.emails },
     grants,
+    grantableSteps,
   };
 }
 
@@ -392,11 +463,15 @@ const unknownStage = (path: string, stage: string): Problem => ({
 /**
  * Why each default reviewer named may not be one: a stage the workflow lacks, or a reviewer who
  * cannot take the stage's primary step on every collection and Single the workflow is attached to.
+ * A step whose permission the same write grants is judged by the roles it is about to be granted
+ * to (`granting`, by action), the grants the write stores on every attachment alike; any other by
+ * the grants in force.
  */
 async function reviewerProblems(
   adapter: DrizzleAdapter,
   registered: RegisteredWorkflow,
-  reviewers: NonNullable<WorkflowSettingsChange["defaultReviewers"]>
+  reviewers: NonNullable<WorkflowSettingsChange["defaultReviewers"]>,
+  granting: ReadonlyMap<string, ReadonlySet<string>>
 ): Promise<Problem[]> {
   const { workflow } = registered;
   const problems: Problem[] = [];
@@ -411,6 +486,13 @@ async function reviewerProblems(
     let lacking: string | null = null;
     if (action === null) {
       lacking = "it has no step out of it";
+    } else if (granting.has(action)) {
+      const answer = await holderAnswerOnceGranted(adapter, reviewer, [
+        ...(granting.get(action) ?? []),
+      ]);
+      if (answer !== "holds") {
+        lacking = `they would not hold its primary step once this write's grants are stored (${answer})`;
+      }
     } else {
       for (const slug of attachedTo(registered)) {
         const answer = await holderAnswer(adapter, reviewer, action, slug);
@@ -684,9 +766,16 @@ export async function updateWorkflowSettings(
   const planned = change.grants
     ? await plannedGrants(adapter, registered, change.grants)
     : null;
+  // Judged before anything is written, from the grants planned here: a refused reviewer leaves
+  // every grant and setting as it was.
   const problems = [
     ...(change.defaultReviewers
-      ? await reviewerProblems(adapter, registered, change.defaultReviewers)
+      ? await reviewerProblems(
+          adapter,
+          registered,
+          change.defaultReviewers,
+          planned?.byAction ?? new Map()
+        )
       : []),
     ...(change.labels ? labelProblems(workflow, change.labels) : []),
     ...(planned?.problems ?? []),
@@ -797,8 +886,8 @@ async function recordChange(
     await recordSettingsActivity({
       action: "update",
       collection: WORKFLOW_SETTINGS_ACTIVITY_COLLECTION,
-      entityId: registered.workflow.slug,
-      entityTitle: registered.workflow.label,
+      entityId: workflowActivityEntry(registered.workflow.slug),
+      entityTitle: `Workflow: ${registered.workflow.label}`,
       changedFields,
       metadata: {
         workflow: registered.workflow.slug,
