@@ -4,9 +4,9 @@
  * tables. Both readers of the newest snapshot take the template's entities as
  * already made:
  *
- * - the comparison `nextly migrate` and `migrate:check` make names a
- *   collection, a Single or a top-level field added or removed since, and
- *   nothing for the template as shipped;
+ * - the comparison `nextly migrate` makes names a collection, a Single or a
+ *   top-level field added or removed since, and nothing for the template as
+ *   shipped;
  * - `migrate:create` writes a migration holding that change alone.
  *
  * Driven with the template's own collections, Singles and migrations folder.
