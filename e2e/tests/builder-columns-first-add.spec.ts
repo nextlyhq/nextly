@@ -19,6 +19,8 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import {
   clickBlock,
+  layerRow,
+  openLayers,
   pressSave,
   selection,
   structure,
@@ -349,5 +351,59 @@ test.describe("choosing a Columns layout when the row is added", () => {
     await expect
       .poll(() => inView(chooser(page).getByRole("button", { name: "Skip" })))
       .toBe("in view");
+  });
+  test("a row added below a scrolling box's view is scrolled into view with its chooser", async ({
+    page,
+  }) => {
+    // A box 240px tall that scrolls, holding two spacers 400px tall: the
+    // second, and anything added after it, start below the box's view.
+    const box = "00000000-0000-4000-8000-00000000f201";
+    const last = "00000000-0000-4000-8000-00000000f203";
+    const spacer = (id: string) => ({
+      id,
+      type: "core/spacer",
+      version: 1,
+      props: {},
+      styles: { base: { base: { height: "400px" } } },
+    });
+    const pageId = await createPage(page.request, [
+      {
+        id: box,
+        type: "core/box",
+        version: 1,
+        props: { as: "div" },
+        styles: { base: { base: { height: "240px", overflowY: "auto" } } },
+        slots: {
+          children: [
+            spacer("00000000-0000-4000-8000-00000000f202"),
+            spacer(last),
+          ],
+        },
+      },
+    ]);
+    await openBuilder(page, pageId);
+    // The last spacer selected from Layers, so the row goes after it, in the
+    // box, below the box's view.
+    await openLayers(page);
+    // The box's row folded open, so its spacers' rows are there to press.
+    await layerRow(page, box)
+      .locator(`[data-nx-layer="${box}"]`)
+      .first()
+      .click();
+    await expect.poll(() => selection(page)).toEqual([box]);
+    await page.keyboard.press("ArrowRight");
+    await layerRow(page, last)
+      .locator(`[data-nx-layer="${last}"]`)
+      .first()
+      .click();
+    await expect.poll(() => selection(page)).toEqual([last]);
+    const rowId = await addColumns(page);
+    expect(
+      (await structure(page)).some(entry => entry === `${box}>${rowId}`)
+    ).toBe(true);
+
+    const tile = chooser(page).getByRole("button", { name: "2 equal" });
+    await expect(tile).toBeFocused();
+    await expect(tile).toBeInViewport();
   });
 });

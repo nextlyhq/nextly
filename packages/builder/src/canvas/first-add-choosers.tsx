@@ -83,6 +83,27 @@ function shownFor(
     : shownRectOf(layer, nodeId);
 }
 
+/**
+ * A block a scrolling box around it hides entirely (added below the box's
+ * view) has no part to draw a chooser over: it is scrolled into view once,
+ * then measured again.
+ */
+function unhide(
+  layer: HTMLElement | null,
+  nodeId: string | undefined,
+  unhiddenFor: { current: string | undefined }
+): ReturnType<typeof shownRectOf> {
+  if (layer === null || nodeId === undefined) return null;
+  if (unhiddenFor.current === nodeId) return null;
+  const root = overlaySpaceOf(layer, CANVAS_ROOT_CLASS)?.root;
+  const element = root === undefined ? null : nodeElement(root, nodeId);
+  if (element === null || layoutFragments(element) === 0) return null;
+  if (renderSkips(element)) return null;
+  unhiddenFor.current = nodeId;
+  revealNode(element.ownerDocument, nodeId, { instant: true });
+  return shownRectOf(layer, nodeId);
+}
+
 /** Two rectangles at the same place and size. */
 function sameRect(a: Rect | null, b: Rect | null): boolean {
   if (a === null || b === null) return a === b;
@@ -167,6 +188,8 @@ export function FirstAddChoosers({
   const reserved = React.useRef<Reserved | null>(null);
   // The block last brought into view, so it is brought there once.
   const revealedFor = React.useRef<string | undefined>(undefined);
+  // The block last scrolled out from under a box that hid it, likewise.
+  const unhiddenFor = React.useRef<string | undefined>(undefined);
   const [rect, setRect] = React.useState<Rect | null>(null);
   const firstAdd = hidden ? undefined : editor.firstAdd;
   const nodeId = firstAdd?.nodeId;
@@ -178,7 +201,7 @@ export function FirstAddChoosers({
   const measure = React.useCallback(() => {
     const element = layer.current;
     const id = latest.current;
-    const found = shownFor(element, id);
+    const found = shownFor(element, id) ?? unhide(element, id, unhiddenFor);
     if (element === null || id === undefined || found === null) {
       setRect(current => (current === null ? current : null));
       return;
