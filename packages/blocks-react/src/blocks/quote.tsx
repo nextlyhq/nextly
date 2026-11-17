@@ -27,6 +27,7 @@ import { quoteLooks } from "./looks";
 import {
   addressLinkFor,
   boundText,
+  canLink,
   LINK_PROPS,
   linkFor,
   linksToEntry,
@@ -45,15 +46,19 @@ export interface QuoteProps extends LinkProps {
   source?: string;
 }
 
-/** The mark the person's name carries, which the dash before it is drawn on. */
-const BY_ATTRIBUTE = "data-nx-quote-by";
+/**
+ * The mark of the empty element before the person's name the dash is drawn
+ * on. Its own element, hidden from screen readers, so the dash is never
+ * read out as part of the name either.
+ */
+const DASH_ATTRIBUTE = "data-nx-quote-dash";
 
 /**
  * The dash before the person's name: generated content, which no reader
  * copies with the words. Hoisted and deduped by React, one copy per page,
  * and carried by every attributed quote so none reaches a page without it.
  */
-const QUOTE_CSS = `[${BY_ATTRIBUTE}]::before{content:"\\2014\\00a0"}`;
+const QUOTE_CSS = `[${DASH_ATTRIBUTE}]::before{content:"\\2014\\00a0"}`;
 
 /** The key the quote's rule is hoisted under. */
 const QUOTE_STYLE_KEY = "nx-quote";
@@ -113,9 +118,8 @@ function drawQuote(
             <style href={QUOTE_STYLE_KEY} precedence="default">
               {QUOTE_CSS}
             </style>
-            <span {...{ [BY_ATTRIBUTE]: "" }}>
-              {boundText(attribution, bound?.attribution)}
-            </span>
+            <span {...{ [DASH_ATTRIBUTE]: "" }} aria-hidden="true" />
+            {boundText(attribution, bound?.attribution)}
           </>
         )}
         {attribution !== "" && source !== "" ? ", " : null}
@@ -322,5 +326,12 @@ export const quote: BlockDefinition<QuoteProps, PageContext> = defineBlock({
     effects: true,
     position: true,
   },
+  // Interactive content once its source's title draws a link, so a linked
+  // Box or Card cannot hold it and nest one link in another. A link with no
+  // title to draw it on is only the blockquote's `cite`, which is no link.
+  contentModel: props =>
+    canLink(props) && text(props.source) !== ""
+      ? { is: ["flow", "interactive"] }
+      : { is: ["flow"] },
   render: renderQuote,
 });

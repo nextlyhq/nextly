@@ -177,11 +177,14 @@ describe("a Quote's source", () => {
 
   it("draws the dash before the person's name in CSS, never in the words", async () => {
     const html = await markup(sourced({}));
-    // The words hold no dash: it is the mark's generated content.
-    expect(html).toContain('<span data-nx-quote-by="">Ada</span>');
+    // The words hold no dash: it is the generated content of an empty
+    // element before the name, hidden from screen readers.
+    expect(html).toContain(
+      '<span data-nx-quote-dash="" aria-hidden="true"></span>Ada'
+    );
     expect(html).not.toMatch(/[—–]\s*Ada/);
     expect(html).toContain(
-      '[data-nx-quote-by]::before{content:"\\2014\\00a0"}'
+      '[data-nx-quote-dash]::before{content:"\\2014\\00a0"}'
     );
   });
 
@@ -237,12 +240,19 @@ describe("a Quote's block styles", () => {
       const look = looks.find(each => each.id === `look:core/quote:${name}`);
       const canvas = await sheet(look, "styleContext");
       const published = await sheet(look, "siteStyles");
-      // The look's own rule reaches both, with the same declarations.
+      // This look's own rule, by its own class, reaches both, with the
+      // same declarations.
       const rule = (css: string) =>
-        /\.nx-l-quote-[a-z]+[^{]*\{([^}]*)\}/.exec(css)?.[1];
+        new RegExp(`\\.nx-l-quote-${name}[^{]*\\{([^}]*)\\}`).exec(css)?.[1];
       expect(rule(published)).toBeDefined();
       expect(rule(canvas)).toBe(rule(published));
       expect(rule(published)).toMatch(/border-style:\s*none/);
+      // Large's own declarations reach Large's rule, not Plain's.
+      if (name === "large") {
+        expect(rule(published)).toMatch(/font-size:\s*1\.5em/);
+      } else {
+        expect(rule(published)).not.toMatch(/font-size/);
+      }
     }
   );
 
