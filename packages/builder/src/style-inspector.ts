@@ -19,16 +19,16 @@
  * are the `supports` vocabulary block authors declare, so they decide WHICH
  * properties a block has; `inspector-sections.ts` decides where an author
  * finds each one — eight sections, Layout to Effects, every property placed
- * once. A property the table has not met yet still appears, behind "+ More"
- * in its group's section.
+ * once. A property the table has not met yet still appears, as one the author
+ * adds from "Add CSS property".
  *
  * **Every supported property is offered; the common ones show at once.** Each
  * property carries whether it has an effect on the block in hand (`applies`,
  * the engine's answer, judged by the block's own arrangement, its parent's and
  * what it renders) and whether it shows without being asked for (`common`):
- * its tier is common and it applies. The rest wait behind the section's
- * "+ More", which is the panel's to draw. A property holding a value here
- * always shows, whether or not it still has an effect.
+ * its tier is common and it applies. The rest are the author's to add from
+ * "Add CSS property", which is the panel's to draw. A property holding a value
+ * here always shows, whether or not it still has an effect.
  *
  * @module style-inspector
  */
@@ -59,7 +59,6 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import type { ParentArrangement } from "./plain-layout";
 import { liveBreakpointsFor } from "./breakpoints";
 import { fieldLabel, selectedNode } from "./inspector";
 import {
@@ -69,6 +68,7 @@ import {
   type InspectorSectionKey,
   type TierContext,
 } from "./inspector-sections";
+import type { ParentArrangement } from "./plain-layout";
 import {
   styleControlsFor,
   type StyleControl,
@@ -179,9 +179,20 @@ export interface InspectedStyleProperty {
    */
   readonly applies: boolean;
   /**
+   * Whether its tier shows it without being asked for while the block is
+   * edited this way, whether or not it applies. False makes it a property the
+   * author adds from "Add CSS property", drawn in "CSS properties" once added
+   * or holding a value.
+   */
+  readonly tierShows: boolean;
+  /**
+   * The engine's answer for each field of an object property that answers
+   * per field (`position`'s `zIndex`), where one does.
+   */
+  readonly fieldApplies?: Readonly<Record<string, boolean>>;
+  /**
    * Whether it shows without being asked for: its tier holds for this block
-   * and it applies, or it holds a value here. False puts it behind its
-   * section's "+ More".
+   * and it applies, or it holds a value here.
    */
   readonly common: boolean;
 }
@@ -311,12 +322,16 @@ export function inspectStyle(
       breakpoint,
     });
     const has = applies(property, context);
+    const shows = tierShows(placement.tier, tiers);
+    const fields = fieldAnswers(property, context);
     return {
       placement,
       row: {
         ...row,
         applies: has,
-        common: row.set || (has && tierShows(placement.tier, tiers)),
+        tierShows: shows,
+        ...(fields === undefined ? {} : { fieldApplies: fields }),
+        common: row.set || (has && shows),
       },
     };
   });
@@ -345,6 +360,21 @@ export function inspectStyle(
     ...(objectFit === undefined ? {} : { objectFit }),
     ...parentFields(parentLayout),
   };
+}
+
+/**
+ * The engine's answer for each field a catalog property answers for on its
+ * own, or `undefined` where it answers only as a whole.
+ */
+function fieldAnswers(
+  property: string,
+  context: AppliesContext
+): Readonly<Record<string, boolean>> | undefined {
+  const fields = getStyleProperty(property)?.fieldAppliesWhen;
+  if (fields === undefined) return undefined;
+  return Object.fromEntries(
+    Object.keys(fields).map(field => [field, applies(property, context, field)])
+  );
 }
 
 /** Where a property is read: the edited address, and how to read it. */
@@ -737,7 +767,10 @@ function inspectProperty(
     state: StyleState;
     breakpoint: BreakpointId;
   }
-): Omit<InspectedStyleProperty, "common" | "applies"> {
+): Omit<
+  InspectedStyleProperty,
+  "common" | "applies" | "tierShows" | "fieldApplies"
+> {
   // Present by construction: the name came out of `stylePropertiesForSupports`,
   // which reads the same catalog. Asked again rather than threaded through so
   // this function takes a name, which is what makes it callable from a test

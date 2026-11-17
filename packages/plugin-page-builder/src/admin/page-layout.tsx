@@ -738,8 +738,7 @@ function regionsOf(
       area: region.area,
       document: regionDocument([region]),
       definitions,
-      label: `${areaName(region.area)}, from header & footer set ${effective.title}`,
-      badge: `${areaName(region.area)} · from header & footer set`,
+      ...regionWords(effective, region, meta),
       ...editOf(effective, meta),
       ...noteOf(effective, region, meta),
     })
@@ -761,6 +760,42 @@ function regionsOf(
   );
   return { canvas, layers };
 }
+
+/**
+ * What a region is called on the canvas: where it comes from, or, while it
+ * shows the site's starter header or footer as seeded, that it is the
+ * starter, so an author knows it is theirs to edit or replace.
+ */
+function regionWords(
+  effective: EffectiveLayout,
+  region: EffectiveLayout["regions"][number],
+  meta: LayoutChoicesResponse["meta"]
+): Pick<CanvasRegion, "label" | "badge"> {
+  const from = `from header & footer set ${effective.title}`;
+  const starter = meta.regionComponents[region.componentId]?.untouchedStarter;
+  if (starter === region.area) {
+    return {
+      label: `${STARTER_NAMES[starter]}, ${from}`,
+      badge: STARTER_BADGES[starter],
+    };
+  }
+  return {
+    label: `${areaName(region.area)}, ${from}`,
+    badge: `${areaName(region.area)} · from header & footer set`,
+  };
+}
+
+/** The starter's names, as its region is called. */
+const STARTER_NAMES: Readonly<Record<RegionArea, string>> = {
+  header: "Starter header",
+  footer: "Starter footer",
+};
+
+/** The starter's short tags on the canvas. */
+const STARTER_BADGES: Readonly<Record<RegionArea, string>> = {
+  header: "Starter header · edit or replace",
+  footer: "Starter footer",
+};
 
 /** The way to edit the Layout, for an author who may: a new tab. */
 function editOf(

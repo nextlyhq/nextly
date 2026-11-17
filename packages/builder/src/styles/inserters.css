@@ -33,10 +33,10 @@
 
 /*
  * The button itself: transparent at rest, so it does not double up on the
- * dashed `[data-nx-slots]:empty` box already drawn under it, and picking up
- * colour only on hover and focus — where the two states share a treatment
- * because both are ways of saying "this is interactive", pointer and keyboard
- * alike.
+ * dashed outline `[data-nx-slots]:empty` already draws inside the box, and
+ * picking up colour only on hover and focus — where the two states share a
+ * treatment because both are ways of saying "this is interactive", pointer
+ * and keyboard alike.
  */
 .nx-empty-container-appenders__button {
   position: absolute;
@@ -58,8 +58,47 @@
 }
 
 /*
- * The controls that add a section to the page: a start card on an empty page,
- * and a "+" in each gap between two top-level sections. The layer spans the
+ * While an empty container is pointed at, on the canvas or at its control,
+ * or its control has keyboard focus: a solid outline in the selection colour
+ * and a light tint of it over the whole box. Drawn here, as chrome over the
+ * block, never as the block's own background, so the author's colour is
+ * untouched underneath. Takes no presses: the block under it stays
+ * selectable.
+ */
+.nx-empty-container-appenders__area {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.nx-empty-container-appenders__area[data-pointed],
+.nx-empty-container-appenders__area:has(
+  + .nx-empty-container-appenders__button:hover
+),
+.nx-empty-container-appenders__area:has(
+  + .nx-empty-container-appenders__button:focus-visible
+) {
+  outline: 1px solid var(--nx-builder-select);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--nx-builder-select) 8%, transparent);
+}
+
+@media (forced-colors: active) {
+  .nx-empty-container-appenders__area[data-pointed],
+  .nx-empty-container-appenders__area:has(
+    + .nx-empty-container-appenders__button:hover
+  ),
+  .nx-empty-container-appenders__area:has(
+    + .nx-empty-container-appenders__button:focus-visible
+  ) {
+    outline-color: Highlight;
+    background: transparent;
+  }
+}
+
+/*
+ * The controls that add a block to the page: a start card on an empty page,
+ * and a "+" in each gap between blocks. The layer spans the
  * canvas and takes no pointer events itself, so the page under it stays
  * clickable; each control opts back in. Editor chrome, in the admin's own
  * surface and the select colour, so it reads on any page.
@@ -71,44 +110,64 @@
   pointer-events: none;
 }
 
-/* Centred on the part of the canvas on screen, where the component puts it. */
-.nx-page-inserters__start {
+/*
+ * The start area of an empty page: in the builder's own surfaces, text,
+ * accent and focus ring, at the screen's size, its top centre where the
+ * component places it in the page's body. No colour of its own, and no
+ * decoration: a calm panel with three ways in.
+ */
+.nx-page-start {
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translateX(-50%);
   display: grid;
   justify-items: center;
-  gap: 0.25rem;
-  padding: 1.25rem 1.5rem;
-  border: 1px solid var(--nx-border);
+  gap: 0.75rem;
+  width: max-content;
+  max-width: min(28rem, calc(100% - 2rem));
+  padding: 1.5rem 2rem;
+  border: 1px solid var(--nx-builder-border);
   border-radius: var(--radius-md);
-  background: var(--nx-card);
-  color: var(--nx-card-foreground);
+  background: var(--nx-builder-panel);
+  color: var(--nx-builder-text);
   text-align: center;
   font-family: var(--font-sans, system-ui), sans-serif;
+  /* Only its buttons take the pointer: a block dragged in from the Add panel
+     passes over the rest to the page under it, where it drops. */
+  pointer-events: none;
 }
 
-.nx-page-inserters__title {
+/* While a block is dragged: drawn as where it drops, and nothing in it takes
+   the pointer, its buttons included. */
+.nx-page-start[data-drop-target] {
+  outline: 2px dashed var(--nx-builder-select);
+  outline-offset: 4px;
+}
+.nx-page-start[data-drop-target] * {
+  pointer-events: none;
+}
+
+.nx-page-start__title {
   margin: 0;
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--nx-builder-title-size, 0.9375rem);
+  font-weight: var(--nx-builder-title-weight, 600);
 }
 
-.nx-page-inserters__hint {
-  margin: 0 0 0.5rem;
-  font-size: 0.78125rem;
-  color: var(--nx-muted-foreground);
+.nx-page-start__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
-.nx-page-inserters__start-button {
+.nx-page-start__add,
+.nx-page-start__saved,
+.nx-page-start__tile {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  height: 2rem;
+  min-height: 2rem;
   padding: 0 0.75rem;
-  border: none;
   border-radius: var(--radius-sm);
-  background: var(--nx-builder-select);
-  color: var(--nx-builder-select-text);
   font:
     500 0.8125rem/1 var(--font-sans, system-ui),
     sans-serif;
@@ -116,13 +175,74 @@
   pointer-events: auto;
 }
 
-.nx-page-inserters__start-button:focus-visible,
+.nx-page-start__add {
+  border: 1px solid transparent;
+  background: var(--nx-builder-accent);
+  color: var(--nx-builder-accent-text);
+}
+
+.nx-page-start__saved,
+.nx-page-start__tile {
+  border: 1px solid var(--nx-builder-border);
+  background: transparent;
+  color: var(--nx-builder-text);
+}
+
+.nx-page-start__add:focus-visible,
+.nx-page-start__saved:focus-visible,
+.nx-page-start__tile:focus-visible,
 .nx-page-inserters__add:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 2px;
 }
 
-/* A gap: a zero-height row across the page, at the gap's middle. */
+.nx-page-start__line {
+  margin: 0;
+  font-size: 0.78125rem;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-page-start__starters {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.nx-page-start__tiles {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-page-start__tile {
+  flex-direction: column;
+  padding: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-page-start__add,
+  .nx-page-start__saved,
+  .nx-page-start__tile {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .nx-page-start__add {
+    border-color: ButtonText;
+  }
+  .nx-page-start[data-drop-target] {
+    outline-color: Highlight;
+  }
+}
+
+/*
+ * A gap: a zero-height row across a column of blocks, at the gap's middle,
+ * or a zero-width one down a row of them.
+ */
 .nx-page-inserters__gap {
   position: absolute;
   height: 0;
@@ -131,7 +251,11 @@
   justify-content: center;
 }
 
-/* The line across the gap, drawn while its "+" is pointed at or focused. */
+.nx-page-inserters__gap[data-line="down"] {
+  width: 0;
+}
+
+/* The line along the gap, drawn while its "+" is pointed at or focused. */
 .nx-page-inserters__line {
   position: absolute;
   inset-inline: 0;
@@ -139,6 +263,15 @@
   height: 2px;
   background: var(--nx-builder-select);
   opacity: 0;
+}
+
+.nx-page-inserters__gap[data-line="down"] .nx-page-inserters__line {
+  inset-inline: auto;
+  inset-block: 0;
+  left: -1px;
+  top: 0;
+  width: 2px;
+  height: auto;
 }
 
 /*
@@ -149,6 +282,8 @@
  */
 .nx-page-inserters__add {
   position: relative;
+  /* Its full size in a row's gap too, a flex line of no width. */
+  flex: none;
   display: grid;
   place-items: center;
   width: 1.5rem;
@@ -177,14 +312,21 @@
  * A touch screen has no pointer moving near a gap to reveal its "+", and a tap
  * is hit-tested before any movement, so there the "+" stays shown and
  * pressable: seen, it cannot take a tap meant for something else unawares.
+ * Only where both blocks beside it are at least as deep as the "+"
+ * (`data-roomy`), so it never covers a short block's middle.
  * `any-pointer`, not `pointer`: a touchscreen laptop's PRIMARY pointer is
  * its trackpad, and its screen still takes taps.
  */
 @media (any-pointer: coarse) {
-  .nx-page-inserters__add {
+  .nx-page-inserters__gap[data-roomy] .nx-page-inserters__add {
     pointer-events: auto;
     opacity: 1;
   }
+}
+
+/* Its offsets are read off the "+" itself, not the icon inside it. */
+.nx-page-inserters__add > svg {
+  pointer-events: none;
 }
 
 .nx-page-inserters__gap:has(.nx-page-inserters__add:hover)
@@ -197,6 +339,17 @@
 @media (prefers-reduced-motion: reduce) {
   .nx-page-inserters__add {
     transition: none;
+  }
+}
+
+/* In the system's colours where the system chooses them. */
+@media (forced-colors: active) {
+  .nx-page-inserters__add {
+    background: Highlight;
+    color: HighlightText;
+  }
+  .nx-page-inserters__line {
+    background: Highlight;
   }
 }
 
@@ -218,14 +371,15 @@
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text-muted);
 }
-.nx-empty-container-appenders__plate > svg {
-  flex: none;
-}
 .nx-empty-container-appenders__button:hover
   .nx-empty-container-appenders__plate,
 .nx-empty-container-appenders__button:focus-visible
   .nx-empty-container-appenders__plate {
   color: var(--nx-builder-text);
+}
+
+.nx-empty-container-appenders__plate > svg {
+  flex: none;
 }
 
 .nx-empty-container-appenders__words {
@@ -235,8 +389,9 @@
   white-space: nowrap;
 }
 
+/* No ground of its own on hover: the overlay over the whole box says it,
+   and a box behind the plate would sit on the site's colour. */
 .nx-empty-container-appenders__button:hover {
-  background: var(--nx-muted);
   color: var(--nx-foreground);
 }
 

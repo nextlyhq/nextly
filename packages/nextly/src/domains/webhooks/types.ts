@@ -180,6 +180,23 @@ export interface WebhookEvent {
   previous: Record<string, unknown> | null;
   /** Top-level keys whose value changed; drives changed-field filtering. */
   changedFields: string[];
+  /**
+   * Every language the change involved: the one `resource.locale` names for a
+   * write in one language, every language for a publish of every language or
+   * a delete. Absent on a site without languages, and on a resource kind
+   * other than an entry or a Single. Additive + optional.
+   *
+   * @experimental
+   */
+  locales?: string[];
+  /**
+   * Whether the change moved the shared part, the fields kept the same in
+   * every language. Absent where the write did not say, and where `locales`
+   * is absent. Additive + optional.
+   *
+   * @experimental
+   */
+  shared?: boolean;
   actor?: WebhookActor;
   /**
    * The status delta for a lifecycle event (`entry.published` /

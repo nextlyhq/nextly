@@ -102,6 +102,33 @@ function PaginationSummary({
 }
 
 /**
+ * The page count at the controls' end, shown only beside a summary that
+ * counts rows.
+ *
+ * Without a total the summary already says "Page X of Y", so saying it here
+ * as well printed the same line twice. The summary keeps it rather than this,
+ * because a narrow content column hides this one.
+ */
+function PageCount({
+  currentPage,
+  totalPages,
+  totalCapped,
+  totalItems,
+}: {
+  currentPage: number;
+  totalPages: number;
+  totalCapped: boolean;
+  totalItems: number | undefined;
+}): React.JSX.Element | null {
+  if (totalItems === undefined) return null;
+  return (
+    <div className={PAGER_COUNT}>
+      {pageCountText(currentPage, totalPages, totalCapped)}
+    </div>
+  );
+}
+
+/**
  * The window of page numbers around the current page, `maxVisiblePages` wide,
  * moved back from the end so it stays full near the last page.
  */
@@ -691,9 +718,12 @@ export const Pagination: React.ForwardRefExoticComponent<
           </PagerButtons>
 
           {/* Page Count (Far Right) */}
-          <div className={PAGER_COUNT}>
-            {pageCountText(currentPage, totalPages, totalCapped)}
-          </div>
+          <PageCount
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalCapped={totalCapped}
+            totalItems={totalItems}
+          />
         </div>
       </nav>
     );

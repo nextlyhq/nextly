@@ -32,7 +32,12 @@
  *
  * @module site-style-merge
  */
-import { isPlainRecord, isTokenRef } from "@nextlyhq/blocks-engine";
+import {
+  fluidValue,
+  isPlainRecord,
+  isTokenRef,
+  type FluidRangeWidths,
+} from "@nextlyhq/blocks-engine";
 
 import { faceIdentity } from "./site-style";
 import { storedVariableIdentity } from "./site-style-storage";
@@ -433,6 +438,9 @@ function familiesOf(list: readonly unknown[]): Set<string> {
   return out;
 }
 
+/** Section-wide token settings merged as one value, never field by field. */
+const WHOLE_SETTINGS: ReadonlySet<string> = new Set(["fluidRange"]);
+
 /** A token set's entries merged, and its section-wide settings beside them. */
 function mergedTokenSet(
   base: unknown,
@@ -446,13 +454,18 @@ function mergedTokenSet(
     if (key === "tokens") continue;
     let conflicted = false;
     const sides = { base: ownValueAt(base, key), mine: ownValueAt(mine, key) };
-    const value = mergedValue(sides.base, sides.mine, ownValueAt(theirs, key), {
+    const settle: MergeSettle = {
       prefer,
       keepUnchanged: true,
       conflict: () => {
         conflicted = true;
       },
-    });
+    };
+    // The fluid range is one value: merged width by width, a width one side
+    // left alone takes the other side's, and the pair is no range at all.
+    const value = WHOLE_SETTINGS.has(key)
+      ? mergedLeaf(sides.base, sides.mine, ownValueAt(theirs, key), settle)
+      : mergedValue(sides.base, sides.mine, ownValueAt(theirs, key), settle);
     if (conflicted) {
       conflicts.push({
         key,
@@ -473,7 +486,45 @@ function mergedTokenSet(
     prefer,
     conflicts
   );
-  return { ...ownRecordOf(settings), tokens };
+  const merged = ownRecordOf(settings);
+  // A size made with Fluid… is written from its two sizes and the range, and
+  // the merge keeps each of the three on its own: one author's range beside
+  // another's sizes. Written again from what was kept, the stored value is
+  // the one "Fluid…" shows.
+  // Only across a range the tier stores, which it does wherever it holds a
+  // fluid size: one it leaves to the code is not known here, and the default
+  // is no stand-in for it.
+  const range = fluidRangeIn(merged.fluidRange);
+  return range === undefined
+    ? { ...merged, tokens }
+    : { ...merged, tokens: tokens.map(token => withFluidValue(token, range)) };
+}
+
+/** A stored fluid range, or `undefined` where none, or none readable, is set. */
+function fluidRangeIn(value: unknown): FluidRangeWidths | undefined {
+  return isPlainRecord(value) &&
+    typeof value.min === "number" &&
+    typeof value.max === "number" &&
+    value.min < value.max
+    ? { min: value.min, max: value.max }
+    : undefined;
+}
+
+/** A token with its light value written from its two sizes, where it has them. */
+function withFluidValue(token: unknown, range: FluidRangeWidths): unknown {
+  if (!isPlainRecord(token) || !isPlainRecord(token.values)) return token;
+  const { fluid } = token;
+  if (
+    !isPlainRecord(fluid) ||
+    typeof fluid.small !== "number" ||
+    typeof fluid.large !== "number"
+  ) {
+    return token;
+  }
+  const light = fluidValue({ small: fluid.small, large: fluid.large }, range);
+  return token.values.light === light
+    ? token
+    : { ...token, values: { ...token.values, light } };
 }
 
 /**

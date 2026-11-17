@@ -3,6 +3,7 @@
  * holds for every Design manager without the lock permission, a lock moves and
  * a style leaves only through their own routes, usage counts gated content and
  * says when it is a floor, where-used names only what the caller may read,
+ * a removal's in-use refusal names only what the caller may read too,
  * removal reads the stored pages again rather than trusting an index zero,
  * and a page may not add a reference to a style the site does not define.
  */
@@ -491,6 +492,66 @@ describe.each(getConfiguredTestDialects())(
         "c-card",
         "c-hero",
       ]);
+    });
+
+    it("names where a used style is in its removal's refusal, only as far as the caller may read", async () => {
+      const { t, tick } = await boot();
+      for (const [title, slug] of [
+        ["Home", "home"],
+        ["About", "about"],
+      ]) {
+        await t.nextly.create({
+          collection: "pages",
+          data: { title, slug, content: gatedUse("c-hero") },
+          overrideAccess: true,
+        });
+      }
+      await t.nextly.create({
+        collection: "patterns",
+        data: {
+          title: "Banner",
+          slug: "banner",
+          granularity: "section",
+          content: {
+            ...pageOf([text("banner", { classes: ["c-hero"] })]),
+            kind: "pattern",
+          },
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+      await tick();
+      const refusalOf = async (cookie: string): Promise<string> => {
+        const answer = await call("POST", route("remove"), cookie, {
+          ids: ["c-hero"],
+        });
+        expect(answer.status).toBe(400);
+        const body = JSON.stringify(answer.body);
+        expect(body).toContain('"code":"IN_USE"');
+        return body;
+      };
+
+      // CONTROL: a Design manager who may open none of them is told how many.
+      const counted = await refusalOf(await holding(t, ...DESIGN));
+      expect(counted).toContain("hero is used on 3 documents.");
+
+      // One who may read pages but not saved sections: the pages by title,
+      // the section counted.
+      const pages = await refusalOf(await holding(t, ...DESIGN, "read-pages"));
+      expect(pages).toMatch(
+        /hero is used on 3 documents: (Home, About|About, Home) and 1 more\./
+      );
+      expect(pages).not.toContain("Banner");
+
+      // One who may read both: all three by title, the pages first, as the
+      // where-used list orders them by collection.
+      const both = await refusalOf(
+        await holding(t, ...DESIGN, "read-pages", "read-patterns")
+      );
+      expect(both).toMatch(
+        /hero is used on 3 documents: (Home, About|About, Home) and Banner\./
+      );
+      expect(await stored(t)).toHaveLength(3);
     });
 
     it("counts the pages now for a Design manager, with no scheduler, and refuses a reader", async () => {

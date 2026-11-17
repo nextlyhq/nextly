@@ -37,6 +37,11 @@ const RING_OUTSIDE = 4;
 test.describe.configure({ lock: [LOCK.homepage, LOCK.siteStyle] });
 
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const HEADING = "Canvas colours";
 const PARAGRAPH = "The canvas draws this page the way a visitor sees it.";
@@ -170,7 +175,10 @@ function canvasText(page: Page): Locator {
 async function openBuilder(page: Page, theme: Theme): Promise<void> {
   await seed(page);
   await gotoAdmin(page, "/singles/homepage", theme);
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   await expect(canvasText(page)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -714,7 +722,10 @@ test.describe("a page's own background", () => {
     });
     expect(stored.ok(), `seeding the page: ${stored.status()}`).toBe(true);
     await gotoAdmin(page, "/singles/homepage", "light");
-    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await page
+      .locator(PAGE_BUILDER_CARD)
+      .getByRole("link", { name: OPEN_BUILDER_ACTION })
+      .click();
     await expect(canvasText(page)).toBeVisible({ timeout: 30_000 });
     // The fallback is in play: the default site ground is opaque.
     await expect(canvasFrame(page).locator(".nx-canvas")).toHaveAttribute(

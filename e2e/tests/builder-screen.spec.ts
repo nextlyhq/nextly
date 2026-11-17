@@ -18,6 +18,11 @@ import { canvasFrame } from "./support/canvas-frame";
 test.describe.configure({ lock: [LOCK.homepage] });
 
 const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const BUILDER_URL = /\/admin\/singles\/homepage\/builder\?field=layout$/;
 const FORM_URL = /\/admin\/singles\/homepage$/;
@@ -44,7 +49,10 @@ function block(page: Page, id: string) {
 
 async function openBuilder(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+  await page
+    .locator(PAGE_BUILDER_CARD)
+    .getByRole("link", { name: OPEN_BUILDER_ACTION })
+    .click();
   await expect(page).toHaveURL(BUILDER_URL);
 }
 
@@ -71,7 +79,9 @@ test.describe("the Page Builder's own screen", () => {
 
     await expect(page).toHaveURL(/\/admin\/singles\/homepage$/);
     await expect(
-      page.getByRole("link", { name: OPEN_BUILDER_ACTION })
+      page
+        .locator(PAGE_BUILDER_CARD)
+        .getByRole("link", { name: OPEN_BUILDER_ACTION })
     ).toBeVisible();
   });
 
@@ -84,7 +94,10 @@ test.describe("the Page Builder's own screen", () => {
     await gotoAdmin(page, "/");
     await page.locator('a[href="/admin/singles/homepage"]').first().click();
     await expect(page).toHaveURL(FORM_URL);
-    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await page
+      .locator(PAGE_BUILDER_CARD)
+      .getByRole("link", { name: OPEN_BUILDER_ACTION })
+      .click();
     await expect(page).toHaveURL(BUILDER_URL);
     await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
     await block(page, "goes").click();
@@ -95,7 +108,9 @@ test.describe("the Page Builder's own screen", () => {
     await page.goBack({ waitUntil: "commit" });
     await expect(page).toHaveURL(FORM_URL);
     await expect(
-      page.getByRole("link", { name: OPEN_BUILDER_ACTION })
+      page
+        .locator(PAGE_BUILDER_CARD)
+        .getByRole("link", { name: OPEN_BUILDER_ACTION })
     ).toBeVisible();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
 

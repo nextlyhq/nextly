@@ -36,6 +36,7 @@ import {
   BASE_BREAKPOINT,
   findNode,
   type BlockDocument,
+  type BlockNode,
   STYLE_STATES,
   type BreakpointId,
   type BreakpointSet,
@@ -819,55 +820,81 @@ function blockMatch(
   document: BlockDocument,
   block: BlockInspection,
   filter: SettingsFilter,
-  at: {
-    state: StyleState | undefined;
-    breakpoint: BreakpointId | undefined;
-    breakpoints: BreakpointSet | undefined;
-    /** What the Style tab draws, while it is open, for its target. */
-    reported: ReportedStyle | undefined;
-    flow: PlainFlow;
-  }
+  at: MatchAt
 ): SettingsMatch {
   if (!filtering(filter)) return settingsMatch([], filter);
-  // The Style tab's own sections while it is open: the target it edits may
-  // be a shared style. Closed, it edits the block, read here the same way.
-  const inspected =
-    at.reported === undefined
-      ? inspectStyle(document, block.nodeId, {
-          state: at.state ?? "base",
-          breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-        })
-      : undefined;
-  const styleSections = at.reported?.sections ?? inspected?.sections ?? [];
-  // What "Inside its parent" offers: none for a shared style, worn wherever.
-  const parent =
-    at.reported === undefined
-      ? inspected?.parent
-      : at.reported.shared
-        ? undefined
-        : at.reported.parent;
+  const { sections, parent } = styleOfBlock(document, block, at);
   const node = findNode(document.nodes, block.nodeId);
   return settingsMatch(
     [
       ...contentEntries(block, node, at.breakpoints),
       ...styleEntries(
-        styleSections,
+        sections,
         block,
-        // A shared style draws no block shortcuts: only the block's own do.
-        at.reported?.shared === true
-          ? undefined
-          : {
-              node,
-              at: {
-                state: at.state ?? "base",
-                breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
-              },
-            },
+        shortcutsAt(node, at),
         parent,
-        at.flow
+        at.flow,
+        // Whether Arrange owns the space rows, as the open Style tab reads it.
+        at.reported?.arranges
       ),
       ...advancedEntries(block, node),
     ],
     filter
   );
+}
+
+/** Where the selected block is edited, for what the filter keeps of it. */
+interface MatchAt {
+  state: StyleState | undefined;
+  breakpoint: BreakpointId | undefined;
+  breakpoints: BreakpointSet | undefined;
+  /** What the Style tab draws, while it is open, for its target. */
+  reported: ReportedStyle | undefined;
+  flow: PlainFlow;
+}
+
+/**
+ * The Style tab's own sections while it is open: the target it edits may be
+ * a shared style. Closed, it edits the block, read here the same way. With
+ * them, what "Inside its parent" offers: none for a shared style, worn
+ * wherever.
+ */
+function styleOfBlock(
+  document: BlockDocument,
+  block: BlockInspection,
+  at: MatchAt
+): {
+  sections: ReportedStyle["sections"];
+  parent: ReportedStyle["parent"];
+} {
+  const { reported } = at;
+  if (reported !== undefined) {
+    return {
+      sections: reported.sections,
+      parent: reported.shared ? undefined : reported.parent,
+    };
+  }
+  const inspected = inspectStyle(document, block.nodeId, {
+    state: at.state ?? "base",
+    breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+  });
+  return { sections: inspected?.sections ?? [], parent: inspected?.parent };
+}
+
+/**
+ * The block's own shortcuts at the edited address, or none while a shared
+ * style is edited: only the block's own draw them.
+ */
+function shortcutsAt(
+  node: BlockNode | undefined,
+  at: MatchAt
+): Parameters<typeof styleEntries>[2] {
+  if (at.reported?.shared === true) return undefined;
+  return {
+    node,
+    at: {
+      state: at.state ?? "base",
+      breakpoint: at.breakpoint ?? BASE_BREAKPOINT,
+    },
+  };
 }

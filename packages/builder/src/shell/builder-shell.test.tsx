@@ -518,6 +518,20 @@ describe("leaving the editor", () => {
     fireEvent.click(exit);
     expect(onExit).toHaveBeenCalledTimes(1);
   });
+
+  it("names the exit where the host says it goes, and says nothing of 'Exit editor' then", () => {
+    // A host whose exit leaves for a list rather than the document names that
+    // place. Asserting the old name is gone too: a bar that kept "Exit editor"
+    // as the name and showed the new words only in a tooltip would tell a
+    // screen reader the arrow returns to the document.
+    const { onExit } = renderShell({ exitLabel: "Back to Pages" });
+
+    const exit = screen.getByRole("button", { name: "Back to Pages" });
+    expect(exit.getAttribute("title")).toBe("Back to Pages");
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+    fireEvent.click(exit);
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("panels the host cannot fill", () => {
@@ -1728,6 +1742,25 @@ describe("a viewport too narrow for the shell", () => {
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 
+  it("words the way out as the top bar's arrow does, where the host names it", () => {
+    // The notice's button and the arrow are the same way out; worded apart,
+    // one of them would promise a place the exit doesn't go.
+    stubContainerFits(false);
+    const onExit = vi.fn();
+    render(
+      <BuilderShell
+        onExit={onExit}
+        exitLabel="Back to Pages"
+        store={memoryStore()}
+      />
+    );
+
+    expect(
+      screen.getAllByRole("button", { name: "Back to Pages" }).length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+  });
+
   it("drops the escape sentence WITH the button when no host can be exited to", () => {
     // The copy and the control are one unit. Keeping the sentence while dropping
     // the button instructs the author to go somewhere and offers nothing to get
@@ -2545,6 +2578,39 @@ describe("hiding the side panels", () => {
 
     fireEvent.click(toggle(/^Left panel$/));
     expect(screen.getByText("layers panel")).toBeTruthy();
+  });
+
+  /** The shell over a stored record, asked by the editor itself to open Add. */
+  function askedForAdd(stored: Record<string, unknown>) {
+    stubContainerFits(true);
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, ...stored })
+    );
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        availablePanels={["add", "layers"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+        inspector={<p>inspector body</p>}
+        openPanelRequest={{ panel: "add", count: 1, unlessHidden: true }}
+      />
+    );
+    return store;
+  }
+
+  it("opens Add for the editor's own request, over the panel last open", () => {
+    // An empty page opens on Add, whichever left panel was last open.
+    askedForAdd({ leftPanel: "layers" });
+    expect(screen.getByText("add panel")).toBeTruthy();
+    expect(screen.queryByText("layers panel")).toBeNull();
+  });
+
+  it("leaves a left side the author hid hidden, for the editor's own request", () => {
+    const store = askedForAdd({ leftPanel: "layers", leftPanelHidden: true });
+    expect(screen.queryByText("add panel")).toBeNull();
+    expect(screen.queryByText("layers panel")).toBeNull();
+    expect(stored(store)).toMatchObject({ leftPanelHidden: true });
   });
 
   it("opens Add when the left panel is shown with none chosen", () => {

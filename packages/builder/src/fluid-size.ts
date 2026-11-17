@@ -11,6 +11,8 @@
  *
  * @module fluid-size
  */
+import type { FluidRangeWidths, FluidSizes } from "@nextlyhq/blocks-engine";
+
 /**
  * The CSS pixels a root-relative length is at the browser's default size.
  *
@@ -37,7 +39,6 @@ export function lengthInPx(value: string): number | undefined {
   if (unit === undefined) return amount === 0 ? 0 : undefined;
   return unit === "px" ? amount : amount * ROOT_PX;
 }
-
 
 /** The smallest and largest a fluid length comes to, in px. */
 export interface FluidRange {
@@ -95,45 +96,14 @@ export function fluidRange(value: string): FluidRange | undefined {
     : { minPx, maxPx };
 }
 
-/** The page widths a fluid size grows across, in px. */
-export interface FluidRangeWidths {
-  readonly min: number;
-  readonly max: number;
-}
-
-/** The site's fluid range until it sets its own: a phone to a laptop. */
-export const DEFAULT_FLUID_RANGE: FluidRangeWidths = { min: 360, max: 1280 };
-
-/** A fluid size's two sizes, in px: on small screens and on large ones. */
-export interface FluidSizes {
-  readonly small: number;
-  readonly large: number;
-}
-
-/** px as rem, to four places: a site's root size scales what it writes. */
-function rem(px: number): string {
-  return `${String(Math.round((px / 16) * 10000) / 10000)}rem`;
-}
-
-/**
- * The size that is `small` at the range's narrow end, `large` at its wide
- * end, grows evenly between them and stays at each end outside it: a
- * `clamp()` of the smaller and the larger around a line through the two
- * points. Written in rem so it follows the reader's text size.
- */
-export function fluidValue(
-  sizes: FluidSizes,
-  range: FluidRangeWidths
-): string {
-  const slope = (sizes.large - sizes.small) / (range.max - range.min);
-  const intercept = sizes.small - slope * range.min;
-  const vw = Math.round(slope * 100 * 10000) / 10000;
-  const preferred = `${rem(intercept)} + ${String(vw)}vw`;
-  const low = Math.min(sizes.small, sizes.large);
-  const high = Math.max(sizes.small, sizes.large);
-  return `clamp(${rem(low)}, ${preferred}, ${rem(high)})`;
-}
-
+// The value a size made with Fluid… takes is a rule of the stored data, so
+// it is the engine's; the editor reads it from there.
+export {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "@nextlyhq/blocks-engine";
 /**
  * The two sizes a written value comes to at the range's ends, rounded to
  * the px, to start "Fluid…" from on a value written by hand; `undefined`

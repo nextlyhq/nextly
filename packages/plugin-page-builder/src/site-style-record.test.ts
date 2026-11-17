@@ -987,3 +987,27 @@ describe("a fluid size's two sizes", () => {
     }
   });
 });
+
+describe("the site's fluid range", () => {
+  it("is kept by a save", () => {
+    const checked = checkStoredTokens({
+      tokens: [],
+      fluidRange: { min: 320, max: 1440 },
+    });
+    expect(checked.issues).toEqual([]);
+    expect(checked.value?.fluidRange).toEqual({ min: 320, max: 1440 });
+  });
+
+  it("is refused unless it is two positive widths, the smallest first", () => {
+    for (const bad of [
+      { min: 1440, max: 320 },
+      { min: 0, max: 1280 },
+      { min: 360 },
+      "360-1280",
+    ]) {
+      expect(
+        checkStoredTokens({ tokens: [], fluidRange: bad }).issues
+      ).not.toEqual([]);
+    }
+  });
+});
