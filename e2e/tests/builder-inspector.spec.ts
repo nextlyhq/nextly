@@ -410,7 +410,7 @@ test.describe("the inspector", () => {
     expect(await sectionLabels(page)).not.toContain("Advanced");
   });
 
-  test("keeps a stored CSS id and attributes on the Advanced tab, through a save and reload", async ({
+  test("keeps a stored anchor, CSS classes and attributes on the Advanced tab, through a save and reload", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -418,7 +418,7 @@ test.describe("the inspector", () => {
     await select(page, HEADING);
 
     await page.getByRole("tab", { name: "Advanced" }).click();
-    const cssId = page.getByRole("textbox", { name: "CSS id" });
+    const cssId = page.getByRole("textbox", { name: "Anchor (ID)" });
     await expect(cssId).toHaveValue("intro");
     await expect(
       page.getByRole("textbox", { name: "Name of attribute 1" })
@@ -428,6 +428,20 @@ test.describe("the inspector", () => {
 
     await cssId.fill("intro-two");
     await cssId.press("Enter");
+    // The valid name is kept; each other one is refused under the field.
+    const classes = page.getByRole("textbox", { name: "CSS classes" });
+    await classes.fill("promo 2col nx-box");
+    await classes.press("Enter");
+    const refused = page.getByRole("list", { name: "Names not added" });
+    await expect(refused.getByRole("listitem")).toHaveText([
+      '"2col" starts with a digit, which a class name can\'t.',
+      '"nx-box" starts with "nx-", which Nextly keeps for its own classes.',
+    ]);
+    await expect(
+      canvasFrame(page)
+        .locator(`.nx-canvas [data-nx-node="${HEADING}"].promo`)
+        .first()
+    ).toBeAttached();
     await value.fill("hero-two");
     await value.press("Tab");
 
@@ -437,9 +451,9 @@ test.describe("the inspector", () => {
         const heading = (await storedNodes(page.request, id)).find(
           node => node.id === HEADING
         );
-        return [heading?.cssId, heading?.attributes];
+        return [heading?.cssId, heading?.cssClasses, heading?.attributes];
       })
-      .toEqual(["intro-two", { "data-track": "hero-two" }]);
+      .toEqual(["intro-two", "promo", { "data-track": "hero-two" }]);
 
     await page.reload();
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
@@ -447,15 +461,18 @@ test.describe("the inspector", () => {
     });
     await select(page, HEADING);
     await page.getByRole("tab", { name: "Advanced" }).click();
-    await expect(page.getByRole("textbox", { name: "CSS id" })).toHaveValue(
-      "intro-two"
-    );
+    await expect(
+      page.getByRole("textbox", { name: "Anchor (ID)" })
+    ).toHaveValue("intro-two");
+    await expect(
+      page.getByRole("textbox", { name: "CSS classes" })
+    ).toHaveValue("promo");
     await expect(
       page.getByRole("textbox", { name: "Value of attribute 1" })
     ).toHaveValue("hero-two");
   });
 
-  test("marks a section never to be quoted after Show when, through a save and reload", async ({
+  test("keeps a section out of search previews after Show when, through a save and reload", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -466,16 +483,20 @@ test.describe("the inspector", () => {
     await page.getByRole("tab", { name: "Advanced" }).click();
     // The control: the Advanced tab is on screen, so the switch's absence
     // is the heading's, not a hidden tab's.
-    await expect(page.getByRole("textbox", { name: "CSS id" })).toBeVisible();
     await expect(
-      page.getByRole("switch", { name: "Never quote this" })
+      page.getByRole("textbox", { name: "Anchor (ID)" })
+    ).toBeVisible();
+    await expect(
+      page.getByRole("switch", { name: "Keep out of search previews" })
     ).toHaveCount(0);
 
     // The tab stays Advanced as the selection moves to the section.
     await select(page, SECTION);
-    const never = page.getByRole("switch", { name: "Never quote this" });
+    const never = page.getByRole("switch", {
+      name: "Keep out of search previews",
+    });
     await expect(never).toHaveAttribute("aria-checked", "false");
-    // After Visible on and Show when, before the CSS id: each is measured,
+    // After Visible on and Show when, before the anchor: each is measured,
     // so the switch drawn above Show when, or Show when missing, fails here.
     const order = await page
       .getByRole("tabpanel", { name: "Advanced" })
@@ -522,7 +543,7 @@ test.describe("the inspector", () => {
     await select(page, SECTION);
     await page.getByRole("tab", { name: "Advanced" }).click();
     await expect(
-      page.getByRole("switch", { name: "Never quote this" })
+      page.getByRole("switch", { name: "Keep out of search previews" })
     ).toHaveAttribute("aria-checked", "true");
   });
 

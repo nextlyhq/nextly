@@ -48,9 +48,9 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 
-import { gatedAsStored } from "./condition-gate";
-import { blockLabel, type SavedComponent } from "./inserter";
-import { storedComponentId } from "./placement-props";
+import { gatedAsStored } from "../../condition-gate";
+import { storedComponentId } from "../../placement-props";
+import { blockLabel, type SavedComponent } from "../add/inserter";
 
 /**
  * A component's title, by the id a placement stores.

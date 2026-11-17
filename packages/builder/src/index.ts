@@ -243,7 +243,7 @@ export {
   // after, so the host filling `components` never has to infer it.
   type SavedComponent,
   type SlotSource,
-} from "./inserter";
+} from "./panels/add/inserter";
 
 /**
  * @experimental When a drag is allowed to change the target it has committed
@@ -281,8 +281,8 @@ export {
   type ComponentTitleOf,
   type LayerNode,
   type LayerSearch,
-} from "./layers";
-export { blockLabel } from "./inserter";
+} from "./panels/layers/layers";
+export { blockLabel } from "./panels/add/inserter";
 
 /**
  * @experimental Bring one block into view by its id, inside the canvas root a

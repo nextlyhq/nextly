@@ -74,8 +74,8 @@ import {
 import type { EditorState } from "./editor-state";
 import { FocalFrame } from "./focal-frame";
 import { FontChoicesContext, type FontChoices } from "./font-family-field";
-import { layerLabel } from "./layers";
 import { PanelFoldsProvider } from "./panel-folds-context";
+import { layerLabel } from "./panels/layers/layers";
 import type { SideOrientation } from "./side-orientation";
 import {
   BLOCK_TARGET,

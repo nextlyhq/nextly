@@ -35,7 +35,7 @@ import * as React from "react";
 
 import type { CanvasRegion } from "../canvas/canvas-regions";
 import type { EditorState } from "../editor-state";
-import { blockNameOf, type ComponentTitleOf } from "../layers";
+import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
 import { BUILDER_TOKENS_CLASS } from "../shell-state";
 
 import {

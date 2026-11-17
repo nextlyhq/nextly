@@ -39,12 +39,12 @@ import {
   type ComponentDocument,
 } from "@nextlyhq/blocks-engine";
 
-import { NoticeSinkProvider } from "./shell/builder-notices";
+import { NoticeSinkProvider } from "../../shell/builder-notices";
 import { InsertPanel } from "./insert-panel";
 import { besidePanel } from "./insert-panel-summon";
-import type { EditorState } from "./editor-state";
-import { EMPTY_SELECTION } from "./selection";
-import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
+import type { EditorState } from "../../editor-state";
+import { EMPTY_SELECTION } from "../../selection";
+import { chromeStylesheetSource } from "../../styles/chrome-stylesheet";
 
 // The command primitives observe their list box to size it, and jsdom
 // implements no ResizeObserver. Without this every case dies at render with a

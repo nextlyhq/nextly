@@ -51,10 +51,10 @@
 import { findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { placementTypesOf } from "../inserter";
 import { layersLockFacts } from "../lock-refusal";
 import { lockBlockingMove } from "../locking";
 import type { OpPosition } from "../op-vocabulary";
+import { placementTypesOf } from "../panels/add/inserter";
 
 import {
   AUTOSCROLL_MAX_STEP_PX,

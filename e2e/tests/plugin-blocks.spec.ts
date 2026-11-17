@@ -151,7 +151,7 @@ test.describe("blocks a plugin contributes", () => {
     await expect(page.locator(PLACEHOLDER)).toHaveCount(0);
   });
 
-  test("a custom inspector edits its block, beside the CSS id, attributes and Style", async ({
+  test("a custom inspector edits its block, beside the anchor, attributes and Style", async ({
     page,
   }) => {
     const id = await createPage(page.request);
@@ -171,7 +171,7 @@ test.describe("blocks a plugin contributes", () => {
     await expect(fixture(page, "custom")).toHaveText("Edited headline");
 
     // What every block keeps beside its own inspector: the Advanced tab,
-    // where the CSS id and attributes live.
+    // where the anchor and attributes live.
     await page.getByRole("tab", { name: "Advanced" }).click();
     // HTML starts closed on a block whose HTML holds nothing.
     const html = page
@@ -180,7 +180,7 @@ test.describe("blocks a plugin contributes", () => {
     if ((await html.getAttribute("aria-expanded")) !== "true") {
       await html.click();
     }
-    const cssId = page.getByRole("textbox", { name: "CSS id" });
+    const cssId = page.getByRole("textbox", { name: "Anchor (ID)" });
     await cssId.fill("fixture-anchor");
     await cssId.press("Enter");
     await page.getByRole("button", { name: "Add attribute" }).click();

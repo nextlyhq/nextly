@@ -24,21 +24,21 @@ import * as React from "react";
 
 import { BlockIconMark } from "../block-icon";
 import type { EditorState } from "../editor-state";
+import { useBlockActionsContext } from "../keyboard-actions";
 import {
   InsertAnnouncement,
   placementWords,
   useInsertOffers,
   type InsertOffers,
   type InsertOffersInputs,
-} from "../insert-panel";
-import { blockLabel, filterEntries } from "../inserter";
-import { useBlockActionsContext } from "../keyboard-actions";
+} from "../panels/add/insert-panel";
+import { blockLabel, filterEntries } from "../panels/add/inserter";
 import {
   layersOf,
   UNNAMED_COMPONENT,
   type ComponentTitleOf,
   type LayerNode,
-} from "../layers";
+} from "../panels/layers/layers";
 import { useSelectionActions } from "../selection-actions";
 
 import { builderCommands } from "./builder-commands";

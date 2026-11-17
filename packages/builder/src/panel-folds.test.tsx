@@ -310,15 +310,15 @@ describe("the panel's sections inside the shell", () => {
     render(shellWith("button", memoryStore()));
     openTab("Advanced");
     // HTML starts closed on a Button, so its CSS id is hidden already.
-    expect(screen.queryByRole("textbox", { name: "CSS id" })).toBe(null);
+    expect(screen.queryByRole("textbox", { name: "Anchor (ID)" })).toBe(null);
     const options = screen.getByRole("button", { name: "Panel options" });
     fireEvent.keyDown(options, { key: "Enter" });
     fireEvent.click(screen.getByRole("menuitem", { name: "Expand all" }));
-    expect(screen.getByRole("textbox", { name: "CSS id" })).toBeDefined();
+    expect(screen.getByRole("textbox", { name: "Anchor (ID)" })).toBeDefined();
     fireEvent.keyDown(options, { key: "Enter" });
     fireEvent.click(screen.getByRole("menuitem", { name: "Collapse all" }));
     // Out of sight and out of the Tab order, though still in the page.
-    expect(screen.queryByRole("textbox", { name: "CSS id" })).toBe(null);
+    expect(screen.queryByRole("textbox", { name: "Anchor (ID)" })).toBe(null);
     const field = document.querySelector<HTMLInputElement>(
       '[data-section="html"] input'
     );

@@ -31,7 +31,7 @@ import {
   type RectSource,
 } from "./drop-targets";
 import type { Rect } from "../geometry";
-import type { SlotSource } from "../inserter";
+import type { SlotSource } from "../panels/add/inserter";
 
 /** Rectangles from a literal map, and a canvas that holds all of them. */
 function rectsOf(

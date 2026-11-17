@@ -39,7 +39,7 @@ import {
   vi,
 } from "vitest";
 
-import { useEditorState, type EditorState } from "./editor-state";
+import { useEditorState, type EditorState } from "../../editor-state";
 
 /*
  * The engine's `locateNode`, counted and passed through, so a test can see how
@@ -63,7 +63,10 @@ import {
   LAYERS_TOUCH_HOLD_MS,
   LAYERS_TOUCH_TOLERANCE_PX,
 } from "./layers-drag";
-import { HoveredBlockProvider, useHoveredBlock } from "./canvas/hovered-block";
+import {
+  HoveredBlockProvider,
+  useHoveredBlock,
+} from "../../canvas/hovered-block";
 import { LayersPanel } from "./layers-panel";
 
 const ROW = 28;

@@ -35,7 +35,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { layerLabel } from "../layers";
+import { layerLabel } from "../panels/layers/layers";
 
 import type { SpacingSide } from "./spacing-bands";
 

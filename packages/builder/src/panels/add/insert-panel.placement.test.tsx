@@ -17,9 +17,9 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../../editor-state";
 import { InsertPanel } from "./insert-panel";
-import { EMPTY_SELECTION } from "./selection";
+import { EMPTY_SELECTION } from "../../selection";
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {

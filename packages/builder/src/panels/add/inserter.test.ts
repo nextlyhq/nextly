@@ -55,7 +55,7 @@ import {
   type SavedComponent,
   type SavedPattern,
 } from "./inserter";
-import { applyOp, type BuilderOp } from "./ops";
+import { applyOp, type BuilderOp } from "../../ops";
 
 const base = {
   version: 1,

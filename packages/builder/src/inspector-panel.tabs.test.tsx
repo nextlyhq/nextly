@@ -147,16 +147,16 @@ describe("the tabs a selected block has", () => {
     expect(screen.queryByRole("tabpanel", { name: "Content" })).toBeNull();
   });
 
-  it("follow the Section's settings: Content holds the one it still places there", () => {
-    // The Section's HTML tag is placed in Content today, so it has a Content
-    // tab holding only that; its content width is drawn in Style › Layout.
-    // It loses the tab when the HTML tag is placed in Advanced.
+  it("are only Style and Advanced for a Section, which says nothing itself", () => {
+    // Its HTML tag is in Advanced › HTML and its content width in Style ›
+    // Layout, so Content would hold nothing.
     mount("section");
-    expect(tabNames()).toEqual(["Content", "Style", "Advanced"]);
-    const content = screen.getByRole("tabpanel", { name: "Content" });
-    expect(within(content).getByText("HTML tag")).toBeTruthy();
-    expect(within(content).queryByText("Content width")).toBeNull();
-    expect(within(content).queryByText("Constrain content width")).toBeNull();
+    expect(tabNames()).toEqual(["Style", "Advanced"]);
+    choose("Advanced");
+    openHtmlSection();
+    const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
+    const html = within(advanced).getByRole("region", { name: /^HTML/ });
+    expect(within(html).getByText("HTML tag")).toBeTruthy();
   });
 });
 
@@ -291,13 +291,13 @@ describe("the shared settings in Advanced", () => {
 
     expect(within(advanced).getByText("Visible on")).toBeTruthy();
     expect(within(advanced).getByText("Show when")).toBeTruthy();
-    expect(within(advanced).getByLabelText("CSS id")).toBeTruthy();
+    expect(within(advanced).getByLabelText("Anchor (ID)")).toBeTruthy();
     expect(
       within(advanced).getByRole("button", { name: /Add attribute/ })
     ).toBeTruthy();
   });
 
-  it("put Visibility before HTML, and the CSS id under HTML", () => {
+  it("put Visibility before HTML, and the anchor under HTML", () => {
     mount("button");
     choose("Advanced");
     openHtmlSection();
@@ -313,7 +313,7 @@ describe("the shared settings in Advanced", () => {
       ].map(label => label.firstChild?.textContent)
     ).toEqual(["Visibility", "HTML"]);
     const html = within(advanced).getByRole("region", { name: "HTML" });
-    expect(within(html).getByLabelText("CSS id")).toBeTruthy();
+    expect(within(html).getByLabelText("Anchor (ID)")).toBeTruthy();
     const visibility = within(advanced).getByRole("region", {
       name: "Visibility",
     });
@@ -321,11 +321,13 @@ describe("the shared settings in Advanced", () => {
     expect(within(visibility).getByText("Show when")).toBeTruthy();
   });
 
-  it("offer a Section's Never quote this in Advanced", () => {
+  it("offer a Section's Keep out of search previews in Advanced", () => {
     mount("section");
     choose("Advanced");
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
-    expect(within(advanced).getByText("Never quote this")).toBeTruthy();
+    expect(
+      within(advanced).getByText("Keep out of search previews")
+    ).toBeTruthy();
   });
 
   it("are no longer in Content, which has no folded Advanced section", () => {
@@ -337,6 +339,6 @@ describe("the shared settings in Advanced", () => {
     expect(content.querySelector("details")).toBeNull();
     expect(within(content).queryByText("Visible on")).toBeNull();
     expect(within(content).queryByText("Show when")).toBeNull();
-    expect(within(content).queryByLabelText("CSS id")).toBeNull();
+    expect(within(content).queryByLabelText("Anchor (ID)")).toBeNull();
   });
 });

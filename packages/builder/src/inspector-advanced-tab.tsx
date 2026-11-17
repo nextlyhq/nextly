@@ -3,8 +3,9 @@
 /**
  * The inspector's Advanced tab: where the block shows and how it is built
  * into the page. Visibility first (which devices, which entries, search
- * previews), then HTML (the block's own HTML settings, its CSS id and its
- * attributes), then any other Advanced section the block declares.
+ * previews), then HTML (the block's own HTML settings such as its tag, its
+ * anchor, its CSS classes and its attributes), then any other Advanced
+ * section the block declares.
  *
  * The builder draws the shared settings here for every block, whatever the
  * block declares, so no block can leave them out or draw them elsewhere; a
@@ -97,7 +98,7 @@ function DrawnAdvancedTab({
     lockViewOf(editor)
   );
   // The block's own Advanced settings, by section: those in HTML are drawn
-  // above the CSS id, the others in sections of their own after it.
+  // above the anchor, the others in sections of their own after it.
   const { htmlRows, visibilityRows, others } = advancedRowsBySection(
     block.sections.advanced
   );
@@ -152,7 +153,7 @@ function DrawnAdvancedTab({
         reasonId={reasonId}
       />
       {/* Whether search engines may quote the block's text. Drawn only on a
-          Section or a Box. */}
+          container. */}
       <NeverQuote
         editor={editor}
         nodeId={block.nodeId}

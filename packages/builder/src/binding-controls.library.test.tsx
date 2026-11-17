@@ -14,7 +14,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource } from "./binding-services";
@@ -115,11 +115,27 @@ describe("the core block library's bind buttons", () => {
       const groups = propGroupsOf(props);
       const grouped = new Set(groups.flatMap(group => [...group.drawn]));
       const binds = new Set(groups.flatMap(group => [...group.bindable]));
-      for (const prop of props) {
+      // An Advanced setting (a container's HTML tag) is bound in the Advanced
+      // tab, so it is looked for there, after every Content one.
+      const advanced = new Set(
+        (inspection?.sections.advanced ?? []).flatMap(section =>
+          section.rows.map(row => row.name)
+        )
+      );
+      const inTabOrder = [
+        ...props.filter(prop => !advanced.has(prop.name)),
+        ...props.filter(prop => advanced.has(prop.name)),
+      ];
+      let onAdvanced = false;
+      for (const prop of inTabOrder) {
         if (bindablePropKind(prop.schema) === undefined) continue;
         if (grouped.has(prop.name) && !binds.has(prop.name)) {
           unbound.push(`${block.name}.${prop.name}`);
           continue;
+        }
+        if (advanced.has(prop.name) && !onAdvanced) {
+          fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
+          onAdvanced = true;
         }
         const buttons = screen.queryAllByRole("button", {
           name: `Bind ${propLabel(prop.name, prop.schema)} to a field`,

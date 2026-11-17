@@ -40,8 +40,8 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
-import { factsOfBreak, type LockRefusalFacts } from "./lock-refusal";
-import type { BuilderOp, OpPosition } from "./op-vocabulary";
+import { factsOfBreak, type LockRefusalFacts } from "../../lock-refusal";
+import type { BuilderOp, OpPosition } from "../../op-vocabulary";
 
 /** What the lock rules are read from: the editor's own lock sources. */
 export interface InsertLockSources {
