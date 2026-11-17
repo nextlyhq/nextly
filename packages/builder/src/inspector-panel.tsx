@@ -67,6 +67,7 @@ import { ContentServicesContext } from "./content-controls";
 import { CssNamesProvider } from "./css-names-context";
 import type { EditorState } from "./editor-state";
 import { EDITOR_WORDS } from "./editor-words";
+import { HiddenStatus } from "./hide-on";
 import {
   inspectorTabsOf,
   inspectSelection,
@@ -100,6 +101,7 @@ import { LookInspector } from "./look-inspector";
 import { ManyBlocksPanel } from "./many-blocks-panel";
 import { PanelFoldsProvider } from "./panel-folds-context";
 import { PanelOptions } from "./panel-options";
+import type { PlainFlow } from "./plain-layout";
 import {
   advancedEntries,
   contentEntries,
@@ -126,9 +128,8 @@ import {
   type StoredStyles,
 } from "./settings-index";
 import { stateLabel } from "./state-switcher";
+import { inspectStyle } from "./style-inspector";
 import { breakpointLabel } from "./style-provenance-indicators";
-import type { PlainFlow } from "./plain-layout";
-import { inspectStyle, type StyleSection } from "./style-inspector";
 import { placedDefinition } from "./variant-picker";
 
 // What the panel takes, the style state it edits, the Content and Style tabs,
@@ -477,12 +478,15 @@ function ContentTabPanel({
   tabs,
   shown,
   onChoose,
+  status,
   ...content
 }: {
   tabs: readonly InspectorTab[];
   shown: string;
   /** Show another tab, from the filter's "2 in Advanced". */
   onChoose: (tab: string) => void;
+  /** Where the block is hidden, said at the top of the tab. */
+  status: React.ReactNode;
 } & Omit<
   React.ComponentProps<typeof ContentTab>,
   "onScreen"
@@ -490,6 +494,7 @@ function ContentTabPanel({
   if (!tabs.includes("content")) return null;
   return (
     <TabsContent value="content" forceMount hidden={shown !== "content"}>
+      {status}
       <FilterNote tab="content" onChoose={onChoose} />
       <ContentTab {...content} onScreen={shown === "content"} />
     </TabsContent>
@@ -620,6 +625,19 @@ function SelectionInspector({
     },
   });
 
+  // Where the block is hidden, at the top of every tab; "Change" goes to
+  // Hide on from the tabs it is not on.
+  const hiddenStatus = (
+    onChoose: ((tab: "advanced") => void) | undefined
+  ): React.JSX.Element => (
+    <HiddenStatus
+      editor={editor}
+      nodeId={block.nodeId}
+      breakpoints={styleOnly.breakpoints}
+      onChoose={onChoose}
+    />
+  );
+
   return (
     // The "/" shortcut is the panel's: from anywhere in it but a text field.
     <div className="nx-inspector" onKeyDown={find.onKeyDown}>
@@ -687,6 +705,7 @@ function SelectionInspector({
               tabs={tabs}
               shown={shown}
               onChoose={choose}
+              status={hiddenStatus(choose)}
               block={block}
               editor={editor}
               onCommit={commit}
@@ -702,6 +721,7 @@ function SelectionInspector({
             />
 
             <TabsContent value="style">
+              {hiddenStatus(choose)}
               <FilterNote tab="style" onChoose={choose} />
               <StyleChangedElsewhere
                 styles={
@@ -737,6 +757,8 @@ function SelectionInspector({
               forceMount
               hidden={shown !== "advanced"}
             >
+              {/* No "Change" here: Hide on is on this tab. */}
+              {hiddenStatus(undefined)}
               <FilterNote tab="advanced" onChoose={choose} />
               <AdvancedTab
                 block={block}

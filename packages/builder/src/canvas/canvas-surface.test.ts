@@ -206,13 +206,15 @@ describe("the canvas surface is the site's, not the admin's", () => {
      * exceptions are the admin's words on the page, which take the tokens the
      * frame hands them: a Layout region's badge and tag, a collection list's
      * note to its author and its "When empty" tag, and the danger hue of an
-     * Entry content block's failed note to its author.
+     * Entry content block's failed note to its author. A hidden block's
+     * stripe reads values the sheet itself sets on that block, never the
+     * admin's.
      */
     expect(CANVAS_FRAME_SHEET).toContain("var(--nx-canvas-site-ground");
     const naming = [
       ...CANVAS_FRAME_SHEET.matchAll(/([^{}]+)\{([^{}]*)\}/g),
     ].filter(([, , body]) =>
-      /var\(--nx-(?!canvas-site-|canvas-zoom)/.test(body ?? "")
+      /var\(--nx-(?!canvas-site-|canvas-zoom|canvas-hidden-)/.test(body ?? "")
     );
     // The control: the region's rules are found, so the scan reads rules.
     expect(naming.length).toBeGreaterThan(0);

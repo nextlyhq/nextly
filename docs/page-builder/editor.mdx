@@ -204,11 +204,11 @@ returns you to the entry with that row's **Open in builder** focused.
 
 The inspector edits the selected block in up to three tabs, in this order:
 
-| Tab      | What it holds                                                                                                                                                                                                                |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                                                                                      |
-| Style    | How the block looks.                                                                                                                                                                                                         |
-| Advanced | Where and when it shows (**Visible on**, **Show when**, and **Keep out of search previews** on every container), then its HTML: its **HTML tag** where it has a choice, **Anchor (ID)**, **CSS classes** and **Attributes**. |
+| Tab      | What it holds                                                                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Content  | What the block says, shows or links to, and its structure: a Button's label and link, a Heading's text.                                                                                                                   |
+| Style    | How the block looks.                                                                                                                                                                                                      |
+| Advanced | Where and when it shows (**Hide on**, **Show when**, and **Keep out of search previews** on every container), then its HTML: its **HTML tag** where it has a choice, **Anchor (ID)**, **CSS classes** and **Attributes**. |
 
 A tab with nothing in it for the selected block isn't shown: a Spacer or a Section,
 which say nothing themselves, have only Style and Advanced. The tab you choose stays
@@ -652,11 +652,19 @@ up**, **Move down**, **Move in** or **Move out**.
 - **Point at a row** and its block is outlined on the canvas. **Click a row** to select
   its block; the canvas scrolls to it.
 - **Hide a block on one device.** Point at a row and click its eye: the block is hidden
-  on the device you are editing, on the canvas and on the published page. Every other
-  device keeps showing it. A hidden row is dimmed and says **Hidden**. Select a hidden
-  block in Layers and the canvas shows it while it is selected, tagged "Hidden on" the
-  device. **Visible on**, in the Advanced tab, shows each device and hides or shows the
-  block on any one of them.
+  on the device you are editing, on the published page. Every other device keeps
+  showing it. A hidden row is dimmed and says **Hidden**, and a row hidden on another
+  device shows an eye with a slash through it, its tooltip naming the devices. On the
+  canvas, at a device it is hidden on, the block is still drawn, striped and tagged
+  "Hidden on Mobile · still here in the builder", so you can find and edit it; a
+  visitor on that device sees nothing of it, and Preview as visitor shows the page
+  without it.
+- **Hide on**, in the Advanced tab's Visibility section, has one toggle per device the
+  site defines, each with its icon and name. Press a device to hide the block there
+  alone: hiding it on Desktop leaves Tablet and Mobile showing. Hover a toggle to see
+  the CSS it writes, such as `display: none at 768–1023px`. While the block is hidden
+  anywhere, every tab says so at the top ("Hidden on Mobile. Visitors on that device
+  won't see it."), with **Change** to go to Hide on.
 - **Lock a block** with the padlock on its row. A locked block can't be moved, changed or
   deleted, nor can anything inside it, until it is unlocked.
 - **Rename a block** by double-clicking its row, pressing <kbd>F2</kbd>, or choosing

@@ -75,6 +75,8 @@ import {
   findNode,
   hiddenOnDevice,
   registryNestingSource,
+  walkNodes,
+  type BlockDocument,
   type BreakpointSet,
   type ComponentLookup,
   type NestingSource,
@@ -127,6 +129,8 @@ import {
 import {
   ROW_KEYS,
   rowKeyAction,
+  hiddenDeviceNames,
+  listedNames,
   toggleOnDeviceOp,
   type RowKeyAction,
 } from "./layer-row-actions";
@@ -254,16 +258,20 @@ function Badge({
   icon,
   text,
   lock,
+  tooltip = false,
 }: {
   icon: React.ReactNode;
   text: string;
   /** For a lock badge: the block's own lock, or one it is held by. */
   lock?: "own" | "inherited";
+  /** Whether a pointer resting on the icon is told the words too. */
+  tooltip?: boolean;
 }): React.JSX.Element {
   return (
     <span
       className="nx-layer-row__badge"
       {...(lock === undefined ? {} : { "data-lock": lock })}
+      {...(tooltip ? { title: text } : {})}
     >
       {/*
         The icon is decorative and the word is the fact. A title attribute would
@@ -327,6 +335,8 @@ interface RowView {
   readonly onAct: (id: string, action: RowKeyAction) => void;
   /** Each Entry content block's field, and whether it is gone, by id. */
   readonly entryContent: ReadonlyMap<string, EntryContentRowFacts>;
+  /** The devices each block hidden somewhere is hidden on, by id: "Tablet and Mobile". */
+  readonly hiddenOn: ReadonlyMap<string, string>;
 }
 
 /**
@@ -542,7 +552,7 @@ function LayerRow({
       )}
       <ComponentTag node={node} />
       <EntryContentRowFact facts={view.entryContent.get(node.id)} />
-      <RowFacts node={node} />
+      <RowFacts node={node} hiddenOn={view.hiddenOn.get(node.id)} />
       <NotQuotedFact node={node} />
       <RowActions node={node} view={view} />
     </span>
@@ -564,12 +574,27 @@ function NotQuotedFact({
 }
 
 /** What is true about a block, each in words a screen reader reads. */
-function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
+function RowFacts({
+  node,
+  hiddenOn,
+}: {
+  node: LayerNode;
+  /** The devices the block is hidden on, "Tablet and Mobile", if any. */
+  hiddenOn: string | undefined;
+}): React.JSX.Element {
   return (
     <>
       {node.hiddenHere === true ? (
-        // A word, on screen and read out: hidden on the device shown.
-        <span className="nx-layer-row__hidden">Hidden</span>
+        // A word, on screen and read out: hidden on the device shown. A
+        // pointer resting on it is told every device it is hidden on.
+        <span
+          className="nx-layer-row__hidden"
+          {...(hiddenOn === undefined
+            ? {}
+            : { title: `Hidden on ${hiddenOn}` })}
+        >
+          Hidden
+        </span>
       ) : node.hiddenWith === undefined ? null : (
         // Hidden because the block around it is, which is where it is shown
         // again: named, as an inherited lock names its block.
@@ -597,7 +622,17 @@ function RowFacts({ node }: { node: LayerNode }): React.JSX.Element {
       {node.breakpointHidden &&
       node.hiddenHere !== true &&
       node.hiddenWith === undefined ? (
-        <Badge icon={<EyeOff size={12} />} text="Hidden at some screen sizes" />
+        // The eye-slash, naming the devices: the same reading Hide on and the
+        // canvas's stripes take.
+        <Badge
+          icon={<EyeOff size={12} />}
+          text={
+            hiddenOn === undefined
+              ? "Hidden at some screen sizes"
+              : `Hidden on ${hiddenOn}`
+          }
+          tooltip
+        />
       ) : null}
       {node.conditional ? (
         <Badge
@@ -860,6 +895,23 @@ function useRevealChosen(
       if (root !== null && root !== undefined) revealNode(root, id);
     });
   }, []);
+}
+
+/**
+ * The devices each block hidden somewhere is hidden on, by id, as one
+ * phrase: "Tablet and Mobile". Read ONCE per document, not per row.
+ */
+function hiddenOnByBlock(
+  document: BlockDocument,
+  breakpoints: BreakpointSet | undefined
+): ReadonlyMap<string, string> {
+  const hidden = new Map<string, string>();
+  walkNodes(document.nodes, node => {
+    if (node.visibility?.devices === undefined) return;
+    const names = hiddenDeviceNames(node.visibility, breakpoints);
+    if (names.length > 0) hidden.set(node.id, listedNames(names));
+  });
+  return hidden;
 }
 
 /** The device the eye acts on, by the name the device buttons give it. */
@@ -1185,6 +1237,10 @@ export function LayersPanel({
 
   const icons = React.useMemo(iconsByType, []);
   const entryContent = useEntryContentRows(editor.document);
+  const hiddenOn = React.useMemo(
+    () => hiddenOnByBlock(editor.document, device?.breakpoints),
+    [editor.document, device?.breakpoints]
+  );
   const deviceName = deviceNameOf(device);
   const { renamingId, onRenamed, act } = rows;
   const nodes = React.useMemo(
@@ -1198,12 +1254,14 @@ export function LayersPanel({
           onRenamed,
           onAct: act,
           entryContent,
+          hiddenOn,
         })
       ),
     [
       search.roots,
       icons,
       entryContent,
+      hiddenOn,
       drag.draggingId,
       renamingId,
       deviceName,

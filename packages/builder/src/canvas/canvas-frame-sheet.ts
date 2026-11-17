@@ -37,6 +37,7 @@ import {
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
@@ -303,6 +304,51 @@ ${ROOT} .nx-condition-hidden > svg {
   background-color: ${siteToken("color.surface", "color-mix(in srgb, currentColor 6%, transparent)")};
   color: ${siteToken("color.muted", "color-mix(in srgb, currentColor 70%, transparent)")};
   line-height: 1.35;
+}
+
+/* A block the page hides on the device shown, drawn anyway so it can be found
+   and edited: striped over, edged, and tagged in its middle with where it is
+   hidden ("Hidden on Mobile · still here in the builder"). Only the editor's
+   canvas carries the mark; the site sheet never does. The stripes, the edge
+   and the tag are mixed from the page's own Canvas and CanvasText, so they
+   take the light or the dark values of the scheme the page is drawn in: the
+   tag's ink holds 4.5:1 on either band over any colour, and the edge 3:1
+   against the page's ground. The block's own position wins,
+   at no specificity, and any position holds the overlay. Pointers pass
+   through, so the block and what it holds are pressed as ever. */
+:where(${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}]) {
+  position: relative;
+}
+${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}] {
+  --nx-canvas-hidden-band: color-mix(in srgb, Canvas 72%, transparent);
+  --nx-canvas-hidden-band-alt: color-mix(
+    in srgb,
+    color-mix(in srgb, CanvasText 10%, Canvas) 85%,
+    transparent
+  );
+  --nx-canvas-hidden-edge: color-mix(in srgb, CanvasText 55%, Canvas);
+  --nx-canvas-hidden-ink: color-mix(in srgb, CanvasText 75%, Canvas);
+  outline: 1px dashed var(--nx-canvas-hidden-edge);
+  outline-offset: -1px;
+}
+${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}]::after {
+  content: attr(${DEVICE_HIDDEN_ATTRIBUTE});
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5em;
+  background: repeating-linear-gradient(
+    135deg,
+    var(--nx-canvas-hidden-band) 0 10px,
+    var(--nx-canvas-hidden-band-alt) 10px 20px
+  );
+  color: var(--nx-canvas-hidden-ink);
+  font: 600 max(12px, calc(11px / var(--nx-canvas-zoom, 1))) / 1.35 system-ui, sans-serif;
+  text-align: center;
+  pointer-events: none;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {

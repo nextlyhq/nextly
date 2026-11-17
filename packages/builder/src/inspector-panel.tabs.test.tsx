@@ -13,6 +13,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
@@ -427,7 +428,7 @@ describe("the shared settings in Advanced", () => {
     openHtmlSection();
     const advanced = screen.getByRole("tabpanel", { name: "Advanced" });
 
-    expect(within(advanced).getByText("Visible on")).toBeTruthy();
+    expect(within(advanced).getByText("Hide on")).toBeTruthy();
     expect(within(advanced).getByText("Show when")).toBeTruthy();
     expect(within(advanced).getByLabelText("Anchor (ID)")).toBeTruthy();
     expect(
@@ -455,7 +456,7 @@ describe("the shared settings in Advanced", () => {
     const visibility = within(advanced).getByRole("region", {
       name: "Visibility",
     });
-    expect(within(visibility).getByText("Visible on")).toBeTruthy();
+    expect(within(visibility).getByText("Hide on")).toBeTruthy();
     expect(within(visibility).getByText("Show when")).toBeTruthy();
   });
 
@@ -475,8 +476,88 @@ describe("the shared settings in Advanced", () => {
     expect(within(content).getByText("Label")).toBeTruthy();
     expect(within(content).queryByText("Advanced")).toBeNull();
     expect(content.querySelector("details")).toBeNull();
-    expect(within(content).queryByText("Visible on")).toBeNull();
+    expect(within(content).queryByText("Hide on")).toBeNull();
     expect(within(content).queryByText("Show when")).toBeNull();
     expect(within(content).queryByLabelText("Anchor (ID)")).toBeNull();
+  });
+});
+
+describe("where the block is hidden, at the top of every tab", () => {
+  const SITE = {
+    viewport: [
+      { id: "tablet", label: "Tablet", maxWidth: 1023 },
+      { id: "mobile", label: "Mobile", maxWidth: 767 },
+    ],
+    container: [],
+  };
+  const LINE = "Hidden on Mobile. Visitors on that device won't see it.";
+
+  function mountHidden(): void {
+    const page = {
+      ...PAGE,
+      nodes: [
+        {
+          ...nodeOf("button", "core/button", { label: "Get a quote" }),
+          visibility: { devices: { mobile: false } },
+        },
+      ],
+    } as BlockDocument;
+    render(
+      <InspectorPanel editor={editorFor("button", page)} breakpoints={SITE} />
+    );
+  }
+
+  const shownPanel = (name: string): HTMLElement =>
+    screen.getByRole("tabpanel", { name });
+
+  it("is said on Content, Style and Advanced alike", () => {
+    mountHidden();
+    for (const tab of ["Content", "Style", "Advanced"]) {
+      choose(tab);
+      const panel = shownPanel(tab);
+      expect(panel.textContent, tab).toContain(LINE);
+      // At the top of the tab, before any of its settings.
+      expect(panel.querySelector(".nx-hidden-status"), tab).toBe(
+        panel.firstElementChild
+      );
+    }
+  });
+
+  it("is not said for a block shown on every device", () => {
+    render(<InspectorPanel editor={editorFor("button")} breakpoints={SITE} />);
+    for (const tab of ["Content", "Style", "Advanced"]) {
+      choose(tab);
+      expect(
+        shownPanel(tab).querySelector(".nx-hidden-status"),
+        tab
+      ).toBeNull();
+    }
+  });
+
+  it.each(["Content", "Style"])(
+    'goes from %s to Hide on with "Change"',
+    async tab => {
+      mountHidden();
+      choose(tab);
+      fireEvent.click(
+        within(shownPanel(tab)).getByRole("button", { name: "Change" })
+      );
+      expect(shownTabName()).toBe("Advanced");
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(shownPanel("Advanced")).getByRole("button", {
+            name: "Hide on Desktop",
+          })
+        )
+      );
+    }
+  );
+
+  it('offers no "Change" on Advanced, where Hide on is', () => {
+    mountHidden();
+    choose("Advanced");
+    expect(
+      within(shownPanel("Advanced")).queryByRole("button", { name: "Change" })
+    ).toBeNull();
   });
 });

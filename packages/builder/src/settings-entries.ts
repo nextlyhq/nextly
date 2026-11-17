@@ -26,6 +26,25 @@ import {
 } from "./block-shortcuts-field";
 import { BUILT_IN_WRITES } from "./code-hints";
 import {
+  COLUMNS_LAYOUTS,
+  COLUMNS_ROW,
+  stackOf,
+  stackTiers,
+} from "./columns-layout";
+import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
+import {
+  builderContentSectionOf,
+  contentRowsOf,
+  type BlockInspection,
+  type EditableProp,
+} from "./inspector";
+import {
+  advancedRowsBySection,
+  HTML_SECTION,
+  VISIBILITY_SECTION,
+} from "./inspector-advanced-tab";
+import { offersNeverQuote } from "./never-quote";
+import {
   childAxisRows,
   LAYOUT_CSS_NAMES,
   offersChildAxis,
@@ -34,26 +53,6 @@ import {
   type PlainFlow,
 } from "./plain-layout";
 import { CHILD_SIZE_IDS } from "./plain-parent-controls";
-import { CONTENT_WIDTH_CHOICES } from "./content-width-control";
-import { keywordLabel } from "./style-keyword-labels";
-import {
-  COLUMNS_LAYOUTS,
-  COLUMNS_ROW,
-  stackOf,
-  stackTiers,
-} from "./columns-layout";
-import {
-  advancedRowsBySection,
-  HTML_SECTION,
-  VISIBILITY_SECTION,
-} from "./inspector-advanced-tab";
-import {
-  builderContentSectionOf,
-  contentRowsOf,
-  type BlockInspection,
-  type EditableProp,
-} from "./inspector";
-import { offersNeverQuote } from "./never-quote";
 import { propLabel } from "./prop-label";
 import {
   sectionEntries,
@@ -61,6 +60,7 @@ import {
   type SettingEntry,
 } from "./settings-index";
 import type { StyleSection } from "./style-inspector";
+import { keywordLabel } from "./style-keyword-labels";
 import { readStyleValue } from "./style-values";
 
 /** What a prop writes into the page, every spelling its schema gives. */
@@ -198,7 +198,7 @@ export function advancedEntries(
   );
   const conditions = node?.visibility?.conditions;
   const visibility: IndexedRow[] = [
-    { id: "visibleOn", label: "Visible on", set: hiddenSomewhere(node) },
+    { id: "hideOn", label: "Hide on", set: hiddenSomewhere(node) },
     {
       id: "showWhen",
       label: "Show when",
