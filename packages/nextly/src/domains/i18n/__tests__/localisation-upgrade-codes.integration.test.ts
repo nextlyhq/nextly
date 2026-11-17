@@ -195,8 +195,11 @@ describeEachDialect(
       expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
     });
 
-    it("refuses to start while rows are under the older code, and warns once they are not", async () => {
-      await legacyArticle();
+    /** A logger that keeps what the start warned. */
+    function warningsKept(): {
+      warnings: string[];
+      logger: Parameters<typeof bootSite>[3];
+    } {
       const warnings: string[] = [];
       const logger = {
         debug: () => undefined,
@@ -206,20 +209,28 @@ describeEachDialect(
         },
         error: () => undefined,
       } as unknown as Parameters<typeof bootSite>[3];
+      return { warnings, logger };
+    }
 
-      // Before the upgrade: the site would read Portuguese under `pt-BR` and find nothing.
+    it("refuses to start while rows are under the older code, naming the upgrade", async () => {
+      await legacyArticle();
+
+      // The site would read Portuguese under `pt-BR` and find nothing.
       await expect(
-        bootSite(database!, "legacy", UNDERSCORED, logger)
+        bootSite(database!, "legacy", UNDERSCORED, warningsKept().logger)
       ).rejects.toThrow(/pt_BR[\s\S]*nextly upgrade/);
+    });
 
+    it("starts once upgraded, saying which code the configuration should name", async () => {
+      await legacyArticle();
       await runUpgrade(
         { confirmBackedUp: true },
         { adapter: database!.adapter as never, config: UNDERSCORED }
       );
-      warnings.length = 0;
+      const { warnings, logger } = warningsKept();
+
       await bootSite(database!, "upgraded", UNDERSCORED, logger);
 
-      // Once upgraded it starts, and says which code the configuration should name.
       expect(warnings).toContainEqual(
         expect.stringMatching(/pt_BR[\s\S]*pt-BR/)
       );
