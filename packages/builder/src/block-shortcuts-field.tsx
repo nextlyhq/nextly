@@ -1,6 +1,6 @@
 /**
  * The Section and Button shortcuts, drawn at the top of the Size section: a
- * Section's Height, and a Button's Size and Full width. Each writes the Style
+ * Section's Height, a Button's Size and Full width, and an Icon's Size. Each writes the Style
  * value beneath it at the device being edited, which stays editable as itself.
  *
  * @module block-shortcuts-field
@@ -20,8 +20,12 @@ import {
   FULL_SCREEN,
   fullWidthOf,
   heightOf,
+  ICON_BLOCK,
+  ICON_SIZES,
+  iconSizeOf,
   planFullWidth,
   planHeight,
+  planIconSize,
   planSize,
   SECTION_BLOCK,
   SIZES,
@@ -35,6 +39,7 @@ import {
 import {
   FULL_WIDTH_WRITES,
   heightShortcutWrites,
+  iconSizeShortcutWrites,
   sizeShortcutWrites,
 } from "./code-hints";
 import { CssHint } from "./css-hint";
@@ -60,6 +65,9 @@ const HEIGHT_WRITES = heightShortcutWrites(FULL_SCREEN);
 
 /** What each Size choice writes. */
 const SIZE_WRITES = sizeShortcutWrites(SIZES);
+
+/** What each of an Icon's Size choices writes. */
+const ICON_SIZE_WRITES = iconSizeShortcutWrites(ICON_SIZES);
 
 export const SIZE_LABELS: Readonly<Record<SizeChoice, string>> = {
   small: "Small",
@@ -228,6 +236,30 @@ export function BlockShortcutsControl({
   const apply = (op: BuilderOp | null) => {
     if (op !== null) editor.apply(op);
   };
+  if (node.type === ICON_BLOCK) {
+    const iconSize = iconSizeOf(node, at, reaching);
+    return (
+      <div className="nx-block-shortcuts" data-control="icon-size">
+        <SettingSlot tab="style" ids={[SHORTCUT_IDS.size]}>
+          <ChoiceRow
+            label="Size"
+            options={["small", "medium", "large"] as const}
+            on={iconSize}
+            labels={SIZE_LABELS}
+            writes={ICON_SIZE_WRITES}
+            hint={
+              iconSize === undefined
+                ? "Custom: the font size below is set another way."
+                : "Sets the icon's font size, which its glyph is drawn at."
+            }
+            onChoose={choice =>
+              apply(planIconSize(node, choice, at, reaching))
+            }
+          />
+        </SettingSlot>
+      </div>
+    );
+  }
   if (node.type !== BUTTON_BLOCK) return null;
   const size = sizeOf(node, at, reaching);
   return (
