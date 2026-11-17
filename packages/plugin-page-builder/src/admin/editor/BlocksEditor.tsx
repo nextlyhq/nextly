@@ -25,8 +25,10 @@ import {
   BuilderShell,
   useConditionsUnchecked,
   CanvasFrameProvider,
+  InsertUsageContext,
   OnboardingChecklist,
   RecentColoursStore,
+  selectionAnchor,
   SelectionBreadcrumb,
   VisitorUnreadableProvider,
 } from "@nextlyhq/builder/shell";
@@ -62,10 +64,12 @@ import {
 } from "./editor-conditions";
 import { editorInspector } from "./editor-inspector";
 import {
+  EditorInsertPicker,
   editorPanelRenderer,
   useEditorPanels,
   type EditorPanels,
 } from "./editor-panels";
+import { insertCountsStoreFor } from "./editor-preference-stores";
 import { EditorSearch } from "./editor-search";
 import { editorSettings, usePageFacts } from "./editor-settings";
 import { editorTopBar } from "./editor-top-bar";
@@ -74,6 +78,7 @@ import {
   useMediaSearchReader,
   useMediaSummaryReader,
 } from "./media-summary-reader";
+import { usePageDataCount } from "./page-read-meter";
 import { recentColoursStore } from "./recent-colours-store";
 import { useReveal } from "./reveal-hidden";
 import { useSettingsPlace } from "./settings-place";
@@ -231,7 +236,9 @@ function useDrawnCanvasRender(
   document: BlockDocument,
   regions: Parameters<typeof useBoundCanvasRender>[1]["regions"],
   locale: string | undefined,
-  component: boolean
+  component: boolean,
+  /** The site's page data limit, which the bindings are read under. */
+  pageDataLimit: number | undefined
 ): ReturnType<typeof useBoundCanvasRender> {
   // Under the canvas's limits, the entry left the room its components need.
   const drawn = useDrawnTemplate(document, {
@@ -242,7 +249,8 @@ function useDrawnCanvasRender(
     render,
     { document: drawn, stored: document, regions },
     locale,
-    component
+    component,
+    pageDataLimit
   );
 }
 
@@ -261,6 +269,7 @@ function searchInsertSources(
       ? {}
       : { inside: panels.insertInside }),
     ...(panels.insertAfter === undefined ? {} : { after: panels.insertAfter }),
+    ...(panels.insertAt === undefined ? {} : { at: panels.insertAt }),
   };
 }
 
@@ -426,7 +435,8 @@ function EditorBody<TFieldValues extends FieldValues>({
     componentView.preview.document,
     panels.canvasRegions,
     mount.locale,
-    mount.initialDocument.kind === "component"
+    mount.initialDocument.kind === "component",
+    canvas.pageDataLimit
   );
   // The "Part of" toast offers the same Edit component the panel does.
   useOfferedEditComponent(
@@ -589,6 +599,17 @@ function EditorBody<TFieldValues extends FieldValues>({
     composedDocument: conditions.composed,
     conditionsShownLabel: `Shown for this ${conditions.noun}`,
   };
+  // The page's data, counted once for the top bar's meter and Page
+  // settings' line.
+  const pageData = usePageDataCount({
+    counts: mount.initialDocument.kind === "page",
+    editor,
+    drawnWith: view.canvasRender,
+    regions: view.canvasRegions,
+    componentTitle: view.componentLibrary.titleOf,
+    // The limit the canvas draws under, read once for both.
+    cap: view.pageDataLimit,
+  });
   useOpenAtSection({
     sectionId: openAt?.sectionId,
     blockId: openAt?.blockId,
@@ -649,6 +670,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             canvas: canvas.canvasElement,
             // "Preview as visitor", in Preview's menu.
             visitor: conditions.visitor,
+            pageData,
           })}
           // Pinned above the canvas: a template's entry it is drawn with, and
           // the visitor's view while it is on.
@@ -674,6 +696,7 @@ function EditorBody<TFieldValues extends FieldValues>({
           inspector={editorInspector(view, cardVerbs, sharedStyle.host, {
             control,
             page,
+            pageData,
           })}
           // Switched on the panel id rather than rendering the inserter for
           // whatever the rail reports open. The shell asks for the panel it
@@ -729,6 +752,9 @@ function EditorBody<TFieldValues extends FieldValues>({
             // components. Absent, no surface offers it.
             onEditComponent={componentView.onEditComponent}
             onShareVerbs={setCardVerbs}
+            // "/" opens the in-place picker beside the selected block, or at
+            // the end of the page, adding by the placement rule.
+            onAddBlockHere={addBlockHere(panels, editor, canvas.canvasElement)}
           >
             {/*
             Inside the verbs provider, which is what lets the palette run
@@ -749,6 +775,13 @@ function EditorBody<TFieldValues extends FieldValues>({
               componentTitle={componentLibrary.titleOf}
               open={panels.search.open}
               onOpenChange={panels.search.setOpen}
+            />
+            {/* Inside the shell, so it is drawn on the panel surface over the
+                canvas, and inside the verbs provider beside the search. */}
+            <EditorInsertPicker
+              panels={panels}
+              editor={editor}
+              onEditText={componentView.preview.onEditText}
             />
             {editorCanvasRegion(view)}
             {/*
@@ -790,6 +823,22 @@ function EditorBody<TFieldValues extends FieldValues>({
 }
 
 /**
+ * What "/" runs: the in-place picker opened beside the selected block, or at
+ * the end of the page, placing by the rule.
+ */
+function addBlockHere(
+  panels: EditorPanels,
+  editor: EditorMount["editor"],
+  canvas: HTMLElement | null
+): () => void {
+  return () =>
+    panels.insertPicker.open(
+      { kind: "rule" },
+      selectionAnchor(canvas, editor.document, editor.selectedId)
+    );
+}
+
+/**
  * The shell's exit arrow: withheld while the component banner offers its
  * Back, so the view has one way back rather than two arrows going to two
  * places. Leaving through search still commits, as the exit always did.
@@ -818,9 +867,14 @@ function EditorFrame({
   children: React.ReactNode;
 }): React.JSX.Element {
   const recentColours = useMemo(() => recentColoursStore(userId), [userId]);
+  // The author's insert counts, which the in-place picker's six are read from
+  // and every insert adds to.
+  const insertCounts = useMemo(() => insertCountsStoreFor(userId), [userId]);
   const body = (
     <RecentColoursStore.Provider value={recentColours}>
-      {children}
+      <InsertUsageContext.Provider value={insertCounts}>
+        {children}
+      </InsertUsageContext.Provider>
     </RecentColoursStore.Provider>
   );
   if (banner === null) {

@@ -137,6 +137,7 @@ export function useBlockKeyboardActions({
   components,
   sharedStyles,
   onEscapeWithoutSelection,
+  onAddBlockHere,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   // Read when the key lands, so a host's newest callback is the one called.
   const escapeWithoutSelection = React.useRef(onEscapeWithoutSelection);
@@ -609,7 +610,34 @@ export function useBlockKeyboardActions({
     [onEditText]
   );
 
-  useShortcuts([...bindings, ...editing, ...inlineEditing], {
+  /*
+   * "/" opens the host's in-place picker where the author is, the key Notion
+   * and Gutenberg taught for adding a block. Registered only when the host
+   * has a picker, so Help lists it only then.
+   *
+   * Not while typing: in a block's text or a field, "/" is a character. With
+   * or without a selection, since nothing selected adds at the end of the
+   * page. Read through a ref so the host's newest callback is the one run.
+   */
+  const addBlockHere = React.useRef(onAddBlockHere);
+  addBlockHere.current = onAddBlockHere;
+  const hasAddBlockHere = onAddBlockHere !== undefined;
+  const adding = React.useMemo(
+    () =>
+      hasAddBlockHere
+        ? [
+            {
+              keys: "/",
+              description: "Add a block here",
+              whenTyping: false,
+              run: () => addBlockHere.current?.(),
+            },
+          ]
+        : [],
+    [hasAddBlockHere]
+  );
+
+  useShortcuts([...bindings, ...editing, ...inlineEditing, ...adding], {
     name: "builder-block-actions",
     enabled,
   });

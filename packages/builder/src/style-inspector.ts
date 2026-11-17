@@ -594,6 +594,8 @@ const SHORT_LABELS: Readonly<Record<string, string>> = {
   gap: "Space between",
   rowGap: "Between rows",
   columnGap: "Between columns",
+  // What it is in an author's words: an entrance animation.
+  appear: "Animation when it appears",
 };
 
 /**

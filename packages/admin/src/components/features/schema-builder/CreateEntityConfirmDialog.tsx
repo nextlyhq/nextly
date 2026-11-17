@@ -26,6 +26,10 @@ import type { SettingChange } from "@admin/lib/builder/settings-changes";
 import type { SchemaPreviewChange } from "@admin/services/schemaApi";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
+import {
+  FieldGroupCreatesList,
+  type FieldGroupCreate,
+} from "./FieldGroupCreatesList";
 import { SettingChangesList } from "./SettingChangesList";
 
 interface CreateEntityConfirmDialogProps {
@@ -41,6 +45,8 @@ interface CreateEntityConfirmDialogProps {
   settingChanges?: readonly SettingChange[];
   onConfirm: () => void;
   isApplying: boolean;
+  /** The field groups not saved yet that this save creates first, listed before all else. */
+  fieldGroupCreates?: readonly FieldGroupCreate[];
 }
 
 export function CreateEntityConfirmDialog({
@@ -52,6 +58,7 @@ export function CreateEntityConfirmDialog({
   settingChanges = [],
   onConfirm,
   isApplying,
+  fieldGroupCreates = [],
 }: CreateEntityConfirmDialogProps): JSX.Element {
   const typeLabel = useFieldTypeLabel();
   const noun = BUILDER_KIND_NOUN[kind];
@@ -70,6 +77,8 @@ export function CreateEntityConfirmDialog({
             {hasFields ? " with these fields." : ", with no fields yet."}
           </AlertDialogDescription>
         </AlertDialogHeader>
+
+        <FieldGroupCreatesList groups={fieldGroupCreates} />
 
         {hasFields && (
           <div className="flex flex-col gap-2 py-2">

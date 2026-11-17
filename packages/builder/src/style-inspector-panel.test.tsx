@@ -780,6 +780,25 @@ describe("the shared style target", () => {
       expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
     });
 
+    it("leaves a hidden look out of the tiles", () => {
+      const hidden = { ...outline, hidden: true as const };
+      mountTarget({ library: [card, hidden, { ...outline, id: "look:acme/box:soft", slug: "box-soft", label: "Soft" }] });
+      expect(
+        within(looks())
+          .getAllByRole("radio")
+          .map(radio => radio.querySelector(".nx-look-tile__name")?.textContent)
+      ).toEqual(["Default", "Soft"]);
+    });
+
+    it("keeps a hidden look on the block already wearing it, saying Hidden", () => {
+      const hidden = { ...outline, hidden: true as const };
+      mountTarget({ classes: [hidden.id], library: [card, hidden] });
+      const worn = within(looks()).getByRole("radio", { checked: true });
+      expect(worn.querySelector(".nx-look-tile__name")?.textContent).toBe(
+        "OutlineHidden"
+      );
+    });
+
     it("wears the chosen look and keeps the block's shared style", () => {
       const { editor } = mountTarget({
         classes: ["c-card"],

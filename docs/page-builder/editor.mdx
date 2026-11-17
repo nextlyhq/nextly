@@ -20,6 +20,23 @@ its width, so the canvas doesn't move as you select and deselect.
 The search result is built from the page's title and address. Where the SEO plugin
 sets search and sharing for the page's type, the result is left to it.
 
+**Page data** says how much data the page loads each time someone opens it, against
+the site's limit: "Page data: 12 of 500". A list's entries, an image, a link to an
+entry and a related entry each count once. Past the limit, the blocks that need more
+come up empty on the live site. Choose the line to see what the page loads and, over
+the limit, which blocks come up empty; choose one of those to select it.
+
+The top bar shows the same count only once the page nears its limit, from 80% of it:
+"Page data: 430 of 500 · what's this?" in amber, and in red with "· over the limit"
+once the limit is used up or passed. If the count can't be made, it says "Page data:
+couldn't count · Retry", since a page whose count is hidden could be over its limit.
+
+The limit is 500 unless the site's code sets another with
+`pageBuilder({ maxQueries })`, a whole number up to 100,000. The page routes use it too, so the editor and the live
+page count against one number. A route given its own `maxQueries` uses that instead,
+and the editor doesn't know it. `Infinity` sets no limit, and the top bar then never
+shows the count.
+
 A component, a saved section and a collection template show their own settings in
 the same place: **Component settings**, **Saved section settings** and **Collection
 template settings**. A component's lists its fields and variants.
@@ -68,6 +85,28 @@ edited. One in a language other than the default has no link, since the editor e
 default language. A document's draft is checked as well, so a binding broken only in a
 draft is listed before that draft is published. Until the first check of every document
 finishes, the list says it hasn't checked yet rather than that every binding fits.
+
+### Where a Single's values are shown
+
+A Single's side panel has a **Shown on (from the builder)** section. It lists each page,
+header & footer set and component where the builder shows one of the Single's values,
+with the block it's in: **Home, Hero section**. Each row opens that document in the editor
+with the block selected. A block takes its name from Layers: the name you gave it, or its
+block's name.
+
+- A binding inside a component is listed once, on the component, not on every page that
+  places it.
+- Bindings in a draft count, so a binding you haven't published yet is listed.
+- You see only the places you're allowed to open. The rest are counted: **and 2 you can't
+  open**.
+- The section shows 10 rows. **and N more** opens the full list.
+- The list knows only documents made with the builder. Code that reads the Single
+  directly isn't listed, and the section says so.
+
+The list comes from an index of every builder document's bindings to Singles. It's kept
+by the same check as **Bindings to fix**, on every save and whenever a field or a block
+changes. After you upgrade and run `nextly migrate`, the section says **Still checking
+pages…** until the first check of every document finishes. That takes a jobs pass or two.
 
 ### Publishing a page whose parts aren't published
 
@@ -215,6 +254,19 @@ Inside its parent, Spacing, Size, Position, Text, Background, Border, Effects, I
 CSS properties, each shown only where the block offers it. Advanced lists Visibility, then
 HTML.
 
+**Animation when it appears**, in Effects, gives a block an entrance: **None** (the
+default), **Fade in**, **Rise**, **Slide in from the left**, **Slide in from the right** or
+**Zoom in**. **Duration** and **Delay** are in milliseconds (600 and 0 when you leave them
+empty), and **Start** is **When scrolled into view** (the default) or **When the page
+loads**. Like any style, it's set per device: a block can rise on desktop and stay still on
+mobile with **None** there. Scrolled into view, the block moves in as it enters the window,
+following the scroll, and a delay holds it back for part of that. The published page
+animates with CSS alone and adds no script, and only the block's opacity and position move,
+so nothing around it shifts. The canvas always shows blocks where they end, and so does the
+published page for a visitor whose device asks for reduced motion, for a printed page, and,
+for **When scrolled into view**, in a browser that can't run scroll-driven animation. A page
+using a slide clips what sticks out past its sides.
+
 ## Search
 
 **Search** in the top bar, or <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on a
@@ -281,6 +333,29 @@ it: "Adding inside Hero, at the end", "Adding after Heading, inside Hero" or "Ad
 the end of the page". Each tile tells a screen reader where it goes, and after an insert
 a screen reader hears what was added and where ("Heading added inside Hero, at the
 end"). The new block is selected, so the next one goes after it.
+
+## Adding a block where you are
+
+Press <kbd>/</kbd> on the canvas, with a block selected or nothing selected, and a small
+picker opens beside the block (or at the end of the page), so you can add a block
+without going to the Add panel. It holds:
+
+- **Search blocks**, with the cursor in it. Typing lists the blocks, saved sections and
+  components that can go there, from the same list and words as the Add panel.
+- **The six blocks you add most**, in a grid. Until you have added any they are Heading,
+  Text, Image, Button, Box and Columns. They are counted for you in this browser, and a
+  block that can't go there is skipped for the next one.
+- **Browse all blocks and sections →**, which opens the Add panel instead.
+
+A line at the top says where the block will go, by the same rule as the Add panel's
+(see [Where a clicked block lands](#where-a-clicked-block-lands)). Arrow keys move
+through the blocks, <kbd>Enter</kbd> adds the highlighted one, and <kbd>Tab</kbd> moves
+to **Browse all**. The new block is selected; a block with text, such as a Heading,
+opens for typing, and anything else leaves you on the canvas. <kbd>Escape</kbd> or a
+click outside closes the picker without adding anything and puts you back where you
+were.
+
+While you are typing in a block's text, <kbd>/</kbd> is just a character.
 
 ## Pages
 
@@ -766,6 +841,7 @@ On a Mac, <kbd>⌘</kbd> replaces <kbd>Ctrl</kbd>.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd>                                                                | Duplicate the selected block                                                                                                      |
 | <kbd>Delete</kbd> or <kbd>Backspace</kbd>                                                   | Delete the selected block                                                                                                         |
 | <kbd>Enter</kbd>                                                                            | Edit the selected block's text                                                                                                    |
+| <kbd>/</kbd>                                                                                | Add a block here: open the small picker beside the selected block, or at the end of the page                                      |
 | <kbd>Escape</kbd>                                                                           | Select the block holding this one, or clear the selection at the top of the page                                                  |
 | <kbd>Alt</kbd>+<kbd>↑</kbd> / <kbd>Alt</kbd>+<kbd>↓</kbd>                                   | Move the selected block up or down                                                                                                |
 | <kbd>Alt</kbd>+<kbd>→</kbd> / <kbd>Alt</kbd>+<kbd>←</kbd>                                   | Move the selected block into the container above it, or out of its container                                                      |

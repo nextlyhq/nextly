@@ -28,8 +28,6 @@ import { isFieldLocalized } from "../classify-fields";
 import { zonedDateColumns } from "../migration/companion-column-holds";
 import type { CompanionFieldLike } from "../migration/reconcile-companion";
 
-import { liveCompanionColumns } from "./companion-io";
-
 /** A registry reader that reports nothing of its own: this pass names what it finds itself. */
 const QUIET: Logger = {
   debug: () => undefined,
@@ -104,16 +102,37 @@ export interface ZonedDateColumn {
   type: string;
 }
 
-/** Every translated date column an earlier release made with a time zone, read only. */
+/**
+ * Every translated date column an earlier release made with a time zone, read only.
+ *
+ * Every translations table is read in one catalog query (`introspectLiveColumns`), after the three
+ * registry reads, so the statements this runs stay the same however many entities the registry
+ * holds: a production start runs it every time, with a fixed budget of statements and waits. A
+ * table not there yet is simply absent from what the query returns.
+ */
 export async function findZonedDateColumns(
   adapter: DrizzleAdapter
 ): Promise<ZonedDateColumn[]> {
   if (adapter.getCapabilities().dialect !== "postgresql") return [];
+  // Only an entity with a translatable field has a translations column to find.
+  const entities = (await translatedEntities(adapter)).filter(
+    entity => entity.fields.length > 0
+  );
+  if (entities.length === 0) return [];
+  const { introspectLiveColumns } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const { tables } = await introspectLiveColumns(
+    adapter.getDrizzle(),
+    "postgresql",
+    entities.map(entity => `${entity.tableName}_locales`)
+  );
+  const liveOf = new Map(tables.map(table => [table.name, table.columns]));
   const found: ZonedDateColumn[] = [];
-  for (const entity of await translatedEntities(adapter)) {
-    const live = await liveCompanionColumns(adapter, entity.tableName);
-    if (live.length === 0) continue;
+  for (const entity of entities) {
     const table = `${entity.tableName}_locales`;
+    const live = liveOf.get(table);
+    if (!live || live.length === 0) continue;
     for (const { column, type } of zonedDateColumns({
       fields: entity.fields,
       live,

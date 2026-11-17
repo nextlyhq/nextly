@@ -275,7 +275,11 @@ export interface BlocksPageConfig
   /**
    * How many reads one page render may perform, shared by the whole page.
    *
-   * Defaults to {@link DEFAULT_MAX_QUERIES}. A budget is not optional here the
+   * Defaults to the site's page data limit, `pageBuilder({ maxQueries })`,
+   * which the editor's page data meter counts against too, and without one
+   * to {@link DEFAULT_MAX_QUERIES}. A value set here is this route's alone:
+   * the editor's meter does not know it, so set the limit on `pageBuilder()`
+   * instead where the meter should agree. A budget is not optional here the
    * way it is on a hand-built context: depth in a document becomes
    * MULTIPLICATION in reads, so three nested `core/collection-loop` blocks over
    * a hundred entries each is a million reads from one page view — and a route
