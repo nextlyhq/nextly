@@ -655,6 +655,39 @@ describe("the regions the editor draws from the choice", () => {
       regionsFor({ layout: "landing", noHeaderFooter: true }).canvas
     ).toEqual([]);
   });
+  it("tags the site's untouched starter header and footer, and nothing else, as the starter", () => {
+    answering({
+      ...choices,
+      meta: {
+        ...choices.meta,
+        defaultLayout: "landing",
+        regionComponents: {
+          lh: { draftChangesNotLive: false, untouchedStarter: "header" },
+          lf: { draftChangesNotLive: false, untouchedStarter: "footer" },
+        },
+      },
+    });
+    const { canvas } = regionsFor({ layout: null, noHeaderFooter: false });
+    expect(canvas.map(region => [region.label, region.badge])).toEqual([
+      [
+        "Starter header, from header & footer set Landing",
+        "Starter header · edit or replace",
+      ],
+      ["Starter footer, from header & footer set Landing", "Starter footer"],
+    ]);
+  });
+
+  it("calls a starter someone has published a change to a header like any other", () => {
+    answering({
+      ...choices,
+      meta: {
+        ...choices.meta,
+        regionComponents: { h: { draftChangesNotLive: false } },
+      },
+    });
+    const { canvas } = regionsFor({ layout: null, noHeaderFooter: false });
+    expect(canvas[0]?.badge).toBe("Header · from header & footer set");
+  });
 });
 
 describe("a save refused for its Layout", () => {

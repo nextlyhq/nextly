@@ -291,6 +291,21 @@ describe("naming an entry", () => {
       entryLabel("classes", { ...prefix, setting: false, key: "c9" })
     ).toBe("c9");
   });
+
+  it("names the fluid range in words", () => {
+    const range: EntryConflict = {
+      key: "fluidRange",
+      setting: true,
+      kind: "changed",
+      kept: "mine",
+      base: undefined,
+      mine: { min: 320, max: 1440 },
+      theirs: { min: 360, max: 1600 },
+    };
+    expect(conflictWords("tokens", bySam(range))).toBe(
+      "Sam changed the fluid range while you were editing. Your value was kept. Undo puts theirs back."
+    );
+  });
 });
 
 describe("an entry renamed on either side", () => {

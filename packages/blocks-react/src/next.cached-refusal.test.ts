@@ -12,6 +12,12 @@
  * keeps each entry as Next keeps it (a copy, and no throw), marks what runs
  * inside it, and the clock is watched for reads outside every cached read.
  *
+ * The site's current year is the other read of the clock a published page
+ * makes: no setting stores it, so it is worked out from the clock, and the
+ * same rule holds. It is checked on a page binding the site's settings, for
+ * where the clock is read, for the site's time zone deciding the year on 31
+ * December, and for the editor's canvas being handed the same year.
+ *
  * Driven through the real route, the real reader and the real `cachedFind`,
  * with only the Direct API, the address store and the cache below them faked.
  */
@@ -22,7 +28,10 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "nextly/errors";
+import type { PublicSiteSettings } from "nextly/runtime";
 import { registerCachedRead, runRegisteredRead } from "nextly/runtime";
+import { createElement, type ReactElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import {
   afterEach,
   beforeAll,
@@ -52,7 +61,14 @@ vi.mock("nextly/runtime", async importOriginal => {
 
 import { throughBoundary } from "./__tests__/through-boundary";
 import { coreBlocks } from "./blocks";
-import { createPublicContentPage, type ContentPageConfig } from "./next";
+import { createQueryBudget } from "./context";
+import {
+  createPublicBlocksPage,
+  createPublicContentPage,
+  readBindingSources,
+  type ContentPageConfig,
+} from "./next";
+import { PageRenderer, type PageRendererProps } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 
 /** What Next.js's `notFound()` throws, for the App Router to answer 404. */
@@ -74,12 +90,20 @@ const TEMPLATE: BlockDocument = {
 /** Marks what runs inside a cached read. */
 const inCache = new AsyncLocalStorage<true>();
 
-/**
- * The app's `"use cache"` function, as Next.js runs it: a miss runs the read
- * and keeps a copy of its answer under the key, a throw keeps nothing, and a
- * hit hands back a copy without running anything.
- */
-function useCache() {
+/** A stand-in for the app's `"use cache"` function, and what it kept. */
+interface CacheStandIn {
+  readonly kept: Map<string, string>;
+  readonly cachedRead: (key: string) => Promise<unknown>;
+}
+
+/** What the clock watch saw while it was on. */
+interface ClockWatch {
+  on: boolean;
+  readonly outside: string[];
+  inside: number;
+}
+
+function useCache(): CacheStandIn {
   const kept = new Map<string, string>();
   const cachedRead = async (key: string): Promise<unknown> => {
     const hit = kept.get(key);
@@ -97,9 +121,9 @@ function useCache() {
  * `Date.now()`) while it is on, outside every cached read and inside one,
  * each outside one by where it was made.
  */
-function watchClock() {
+function watchClock(): ClockWatch {
   const RealDate = Date;
-  const clock = { on: false, outside: [] as string[], inside: 0 };
+  const clock: ClockWatch = { on: false, outside: [], inside: 0 };
   const note = () => {
     if (!clock.on) return;
     if (inCache.getStore() === true) {
@@ -240,5 +264,160 @@ describe("a public route over a read the public is refused", () => {
     expect(metadata).toMatchObject(NOT_FOUND);
     expect(site.refusedReads).toHaveBeenCalledTimes(1);
     expect(clock.outside).toEqual([]);
+  });
+});
+
+/** A page binding the site's name and its current year. */
+const PAGE: BlockDocument = {
+  formatVersion: DOCUMENT_FORMAT_VERSION,
+  kind: "page",
+  nodes: [
+    {
+      id: "name",
+      type: "core/text",
+      version: 1,
+      props: { text: "" },
+      bindings: { text: { $bind: "applicationName", source: "site" } },
+    },
+    {
+      id: "year",
+      type: "core/text",
+      version: 1,
+      props: { text: "" },
+      bindings: { text: { $bind: "currentYear", source: "site" } },
+    },
+  ],
+} as unknown as BlockDocument;
+
+/** A site in the time zone `timezone`, holding one page. */
+function siteIn(timezone: string | null) {
+  const site: PublicSiteSettings = {
+    applicationName: "Acme",
+    siteUrl: null,
+    logoUrl: null,
+    timezone,
+  };
+  return {
+    find: vi.fn(async (args: Record<string, unknown>) => ({
+      items:
+        args.collection === "pages"
+          ? [{ id: "p1", slug: "about", title: "About", content: PAGE }]
+          : [],
+      meta: { total: 1, hasNext: false },
+    })),
+    findByID: vi.fn(async () => null),
+    findSingle: vi.fn(async () => null),
+    publicSiteSettings: vi.fn(async () => site),
+    media: { findByID: vi.fn(async () => null) },
+    // Its plugins, as an instance carries them, none offering forms: the
+    // route reads the page's forms from them, not from the process's
+    // instance, which this process never starts.
+    plugins: {},
+  };
+}
+
+async function html(element: ReactElement): Promise<string> {
+  const stream = await renderToReadableStream(element, {
+    onError(error) {
+      throw error;
+    },
+  });
+  await stream.allReady;
+  return await new Response(stream).text();
+}
+
+/**
+ * A cache of its own for one site, as each deployment has: the settings are
+ * cached under one key, so two sites in one cache would share an answer.
+ */
+function freshCache(): void {
+  registerCachedRead(cache.cachedRead, false);
+  cache = useCache();
+  registerCachedRead(cache.cachedRead, true);
+}
+
+/** The year the published page shows, and the page's markup. */
+async function published(
+  nextly: ReturnType<typeof siteIn>
+): Promise<{ year: string | undefined; markup: string }> {
+  const route = createPublicBlocksPage({
+    collections: ["pages"],
+    field: "content",
+    blocks: createBlockResolver(coreBlocks),
+    nextly: nextly as never,
+    // Its own limit, so the route asks no registered instance for the site's.
+    maxQueries: 20,
+  });
+  const element = await throughBoundary<PageRendererProps>(
+    route.ContentPage({ params: { slug: ["about"] } })
+  );
+  const markup = await html(createElement(PageRenderer, element.props));
+  const texts = [...markup.matchAll(/<p[^>]*>([^<]*)<\/p>/g)].map(m => m[1]);
+  return { year: texts[1], markup };
+}
+
+/** The year the editor's canvas is handed, by the read its route makes. */
+async function onTheCanvas(
+  nextly: ReturnType<typeof siteIn>
+): Promise<unknown> {
+  const bindings = await readBindingSources({
+    documents: [PAGE],
+    entrySource: "collection",
+    slug: "pages",
+    entryId: "p1",
+    page: "about",
+    reader: { read: async () => null } as never,
+    budget: createQueryBudget(20),
+    siteSettings: nextly as never,
+  });
+  return (bindings?.site as Record<string, unknown> | undefined)?.currentYear;
+}
+
+describe("the site's current year", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is read from the clock only inside a cached read, so the page prerenders", async () => {
+    const nextly = siteIn("Europe/Paris");
+    const clock = watchClock();
+    clock.on = true;
+    const { year, markup } = await published(nextly);
+    clock.on = false;
+    expect(markup).toContain("Acme");
+    expect(year).toBe(String(new Date().getUTCFullYear()));
+    // The control: the year was worked out from the clock, inside the cache.
+    expect(clock.inside).toBeGreaterThan(0);
+    // This process has no Nextly instance started, so the structured-data
+    // step's start of one fails here, and its error takes the time; a site's
+    // started instance makes no such read. Every other read is the page's.
+    expect(
+      clock.outside.filter(stack => !stack.includes("startForProviders"))
+    ).toEqual([]);
+  });
+
+  it("is the year in the site's time zone, not the server's, on 31 December", async () => {
+    vi.useFakeTimers({
+      now: new Date("2026-12-31T20:00:00Z"),
+      toFake: ["Date"],
+    });
+    expect((await published(siteIn("Asia/Tokyo"))).year).toBe("2027");
+    freshCache();
+    expect((await published(siteIn("America/New_York"))).year).toBe("2026");
+    freshCache();
+    // A site with no zone is in UTC.
+    expect((await published(siteIn(null))).year).toBe("2026");
+  });
+
+  it("is the same on the editor's canvas as on the published page", async () => {
+    vi.useFakeTimers({
+      now: new Date("2026-12-31T20:00:00Z"),
+      toFake: ["Date"],
+    });
+    for (const zone of ["Asia/Tokyo", "America/New_York"]) {
+      freshCache();
+      const nextly = siteIn(zone);
+      expect(await onTheCanvas(nextly)).toBe((await published(nextly)).year);
+    }
   });
 });
