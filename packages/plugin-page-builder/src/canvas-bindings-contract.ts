@@ -149,9 +149,10 @@ export interface CanvasBindingsRequest {
   /**
    * The reads the page has left when its bindings are read, so they are read
    * under the allowance the published page reads them under; the default
-   * allowance when absent.
+   * allowance when absent, and no limit when `null`, for a site that sets
+   * none.
    */
-  readonly allowance?: number;
+  readonly allowance?: number | null;
 }
 
 /** What a page's conditions read, as JSON carries it. */

@@ -107,6 +107,21 @@ describe("the canvas's binding sources", () => {
     });
   });
 
+  it("asks under what the page has left, `null` where the site sets no limit", () => {
+    const ask = (allowance: number) =>
+      canvasBindingsRequest(
+        [page({ text: { $bind: "title" } })],
+        identity,
+        "en",
+        false,
+        undefined,
+        { allowance }
+      )?.allowance;
+    expect(ask(12.5)).toBe(12);
+    // JSON has no Infinity: it would arrive as a null the route refuses.
+    expect(ask(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
   it("names the collections the page's lists draw", () => {
     // A list item's binding is judged by its list's public field shapes, so
     // the canvas asks for them as the published route reads them.
