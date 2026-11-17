@@ -28,6 +28,7 @@ import {
   findNode,
   regionsOf,
   REGION_AREAS,
+  regionDocument,
   resolveComponentInstances,
   type BlockDocument,
   type BlockNode,
@@ -142,10 +143,23 @@ export async function publishedNode(
 ): Promise<BlockNode | null> {
   const nodes = await publishedNodes(api, stores, document, locale);
   if (nodes === null) return null;
-  return (
+  const found =
     findNode(nodes, nodeId) ??
-    (await composedNode(api, stores, nodes, nodeId, locale))
-  );
+    (await composedNode(api, stores, nodes, nodeId, locale));
+  if (found !== null || document.kind !== "component") return found;
+  // A component a Layout places in its header or footer is drawn through
+  // that region's placement, which gives its nodes ids of their own.
+  for (const area of REGION_AREAS) {
+    const placed = await composedNode(
+      api,
+      stores,
+      regionDocument([{ area, componentId: document.id }]).nodes,
+      nodeId,
+      locale
+    );
+    if (placed !== null) return placed;
+  }
+  return null;
 }
 
 /**

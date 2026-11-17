@@ -670,6 +670,7 @@ export function blocksRouteConfig(
         field,
         route: context,
         language: linkLanguageOf(config.locale, context.locale),
+        cacheScope: config.cacheScope,
         revalidate: await releaseBoundedRevalidate(listWindow),
       });
       const pageContext: PageContext = createStandaloneContext({

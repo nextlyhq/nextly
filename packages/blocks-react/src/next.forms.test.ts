@@ -51,12 +51,15 @@ const reader = {
 };
 
 /** The forms the route handed the page it drew. */
-async function formsOfPage(): Promise<PageForms | undefined> {
+async function formsOfPage(
+  config: { cacheScope?: string } = {}
+): Promise<PageForms | undefined> {
   const route = createBlocksPage({
     collections: ["pages"],
     field: "content",
     nextly: reader as never,
     blocks: createBlockResolver(coreBlocks as never),
+    ...config,
   });
   const element = (await throughBoundary(
     route.ContentPage({ params: { slug: ["contact"] } })
@@ -96,9 +99,9 @@ describe("a routed page's forms", () => {
     expect(rows).toEqual([{ collection: "pages", id: "p1", field: "content" }]);
   });
 
-  it("keep a picked form's description no longer than a short while", async () => {
+  it("keep a picked form's description no longer than a short while, under the route's own scope", async () => {
     offerForms();
-    const forms = await formsOfPage();
+    const forms = await formsOfPage({ cacheScope: "site-b" });
     cachedUnder.length = 0;
     await forms?.describe({ provider: "acme", ref: "contact" });
     // Nothing tells the page when a provider's form changes, so a kept
@@ -107,8 +110,11 @@ describe("a routed page's forms", () => {
     expect(typeof revalidate).toBe("number");
     expect(revalidate as number).toBeGreaterThan(0);
     expect(revalidate as number).toBeLessThanOrEqual(60);
+    // Under the route's cache scope, so two sites sharing a cache never
+    // draw each other's forms.
     expect(cachedUnder[0]?.keyParts).toEqual([
       "nextly-form-description",
+      "site-b",
       "acme",
       "contact",
       "",
@@ -180,6 +186,7 @@ describe("an entry's page drawn by its design", () => {
       },
       field: "__nextlyTemplateDocument",
       route: { collection: "posts", slug: "blog/hello" },
+      cacheScope: undefined,
       language: { fromSegment: false },
       revalidate: undefined,
     });

@@ -372,3 +372,43 @@ describe("a form in an entry's own blocks, drawn by its design", () => {
     }
   });
 });
+
+describe("a form in a Layout's header or footer", () => {
+  it("is found under the id its region draws it with", async () => {
+    const { regionDocument } = await import("@nextlyhq/blocks-engine");
+    const { coreBlocks } = await import("@nextlyhq/blocks-react/blocks");
+    const { createBlockResolver, prepareDocumentForRead } = await import(
+      "@nextlyhq/blocks-react"
+    );
+    const footer = {
+      formatVersion: 1,
+      kind: "component",
+      nodes: [form("signup")],
+    };
+    // The region as the page draws it: its component placed by the region.
+    const drawn = prepareDocumentForRead(
+      regionDocument([{ area: "footer", componentId: "c1" }]),
+      {
+        resolver: createBlockResolver(coreBlocks as never),
+        definitions: new Map([["c1", footer as never]]),
+      }
+    );
+    const drawnId = drawn?.nodes.find(node => node.type === "core/form")?.id;
+    // Must-be-found: the region draws the form under an id of its own.
+    expect(drawnId).toBeDefined();
+    expect(drawnId).not.toBe("signup");
+
+    const { api } = directApi({ components: [{ id: "c1", content: footer }] });
+    expect(
+      (
+        await publishedNode(
+          api,
+          STORES,
+          { kind: "component", id: "c1" },
+          drawnId ?? "",
+          undefined
+        )
+      )?.type
+    ).toBe("core/form");
+  });
+});

@@ -79,6 +79,8 @@ interface PageFormsInput {
     "collection" | "slug" | "page" | "listPagePath" | "locale"
   >;
   readonly language: RequestLanguage;
+  /** The route's cache scope, which every read it keeps is filed under. */
+  readonly cacheScope: string | undefined;
   /** The route's own revalidation window, which a description never outlives. */
   readonly revalidate: number | false | undefined;
 }
@@ -115,7 +117,9 @@ const DESCRIPTION_LIFETIME = 60;
 function cachedDescribe(
   service: SiteFormsService,
   locale: string | undefined,
-  revalidate: number | false | undefined
+  revalidate: number | false | undefined,
+  /** Filed under, so sites sharing a cache never draw each other's forms. */
+  scope: string | undefined
 ): PageForms["describe"] {
   return async (form: FormReference) =>
     await cachedFind<FormDrawing | FormUnavailableDrawing>(
@@ -124,6 +128,7 @@ function cachedDescribe(
         tags: [],
         keyParts: [
           "nextly-form-description",
+          scope ?? "",
           form.provider,
           form.ref,
           locale ?? "",
@@ -157,7 +162,8 @@ export async function routedFormsFor(
   const describe = cachedDescribe(
     offered,
     input.route.locale,
-    input.revalidate
+    input.revalidate,
+    input.cacheScope
   );
   const row = setRow(input.entry) ?? {
     collection: input.route.collection,
