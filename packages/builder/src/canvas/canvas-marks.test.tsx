@@ -30,6 +30,7 @@ import {
   ENTRY_CONTENT_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
 } from "./canvas";
+import { DROP_PARENT_ATTRIBUTE } from "./canvas-block-marks";
 import { CanvasMarks } from "./canvas-marks";
 import { conditionFieldsOfShapes } from "../conditions/condition-model";
 import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
@@ -1071,6 +1072,68 @@ describe("selection marks", () => {
     await waitFor(() => expect(reachIn()).toHaveLength(2));
     act(() => markLookReach(container, null));
     await waitFor(() => expect(reachIn()).toHaveLength(0));
+  });
+
+  it("keeps the drop and reach outlines on the page where a block meets its edge", async () => {
+    /*
+     * These outlines are drawn outside their block (a drop's 2px past a 2px
+     * gap, the reach's 2px past 3px). The page meets the canvas region's
+     * edges, which cut off anything past them, so at the page's edge each
+     * box is pulled in by as far as its outline reaches, and the whole
+     * outline stays on screen. Clear of the edges it stays on the block.
+     */
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function boxOf(this: Element) {
+        const id = this.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === "a") return new DOMRect(0, 0, 1000, 50);
+        if (id === "b") return new DOMRect(100, 100, 200, 50);
+        return new DOMRect(0, 0, 1000, 1000);
+      }
+    );
+    const { container } = render(
+      <Canvas
+        document={leaves}
+        siteStyles={{ breakpoints: { viewport: [], container: [] } }}
+        selectedId={null}
+        overlay={<CanvasMarks />}
+      />
+    );
+    await act(async () => undefined);
+    const node = (id: string) =>
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`);
+    act(() => {
+      node("a")?.setAttribute(DROP_PARENT_ATTRIBUTE, "");
+      node("b")?.setAttribute(DROP_PARENT_ATTRIBUTE, "");
+    });
+    const boxesOf = (kind: string) =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>(
+          `.nx-canvas-mark[data-mark="${kind}"]`
+        )
+      ).map(({ style: { left, top, width, height } }) => ({
+        left,
+        top,
+        width,
+        height,
+      }));
+    await waitFor(() =>
+      expect(boxesOf("drop-parent")).toEqual([
+        // In from the top, left and right by the 4px the outline reaches.
+        { left: "4px", top: "4px", width: "992px", height: "46px" },
+        { left: "100px", top: "100px", width: "200px", height: "50px" },
+      ])
+    );
+    act(() => {
+      node("a")?.removeAttribute(DROP_PARENT_ATTRIBUTE);
+      node("b")?.removeAttribute(DROP_PARENT_ATTRIBUTE);
+      markLookReach(container, new Set(["a"]));
+    });
+    // The reach's outline runs 5px past its box.
+    await waitFor(() =>
+      expect(boxesOf("look-reach")).toEqual([
+        { left: "5px", top: "5px", width: "990px", height: "45px" },
+      ])
+    );
   });
 
   it("marks a placement's exposed parts, but not one that is selected", async () => {

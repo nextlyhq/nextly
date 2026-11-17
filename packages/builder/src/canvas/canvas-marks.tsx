@@ -81,25 +81,58 @@ import { EDITING_ATTRIBUTE } from "./use-inline-text";
 /**
  * The marks that are the marked element's outline and nothing more, by the
  * attribute that asks for each: a block an edit to the look being edited
- * reaches, and a drop's parent and refused target.
+ * reaches, and a drop's parent and refused target. Each with how far its
+ * outline is drawn outside its box, the stylesheet's offset and width
+ * together (`canvas.css`), which it is kept that far inside the page by.
  */
 const OUTLINE_MARKS = [
-  [LOOK_REACH_ATTRIBUTE, "look-reach"],
-  [DROP_PARENT_ATTRIBUTE, "drop-parent"],
-  [DROP_REFUSED_ATTRIBUTE, "drop-refused"],
+  [LOOK_REACH_ATTRIBUTE, "look-reach", 5],
+  [DROP_PARENT_ATTRIBUTE, "drop-parent", 4],
+  [DROP_REFUSED_ATTRIBUTE, "drop-refused", 4],
 ] as const;
 
 /**
+ * `rect` pulled in from the page's edges by `reach` on each side where an
+ * outline that far outside it would run past them: the page meets the canvas
+ * region's edges, which cut off anything drawn past them.
+ */
+function pulledInFrom(page: Rect, rect: Rect, reach: number): Rect {
+  const kept = withinRect(
+    {
+      x: rect.x - reach,
+      y: rect.y - reach,
+      width: rect.width + 2 * reach,
+      height: rect.height + 2 * reach,
+    },
+    page
+  );
+  return {
+    x: kept.x + reach,
+    y: kept.y + reach,
+    width: Math.max(0, kept.width - 2 * reach),
+    height: Math.max(0, kept.height - 2 * reach),
+  };
+}
+
+/**
  * The marks drawn over an element's box alone that it asks for, drawn as
- * `box`: its outline-only marks, and the stripes and tag of a block the page
- * hides on the device shown. Those are drawn here, over the canvas, rather
+ * `box`: its outline-only marks, kept on the `page`, and the stripes and tag
+ * of a block the page hides on the device shown. Those are drawn here, over the canvas, rather
  * than by an overlay inside the block, which would need the block to hold it
  * and so move what its fixed or absolutely placed blocks are laid out against.
  */
-function outlineMarksOf(marked: Element, box: Omit<Mark, "kind">): Mark[] {
+function outlineMarksOf(
+  marked: Element,
+  box: Omit<Mark, "kind">,
+  page: Rect
+): Mark[] {
   const marks: Mark[] = OUTLINE_MARKS.filter(([attribute]) =>
     marked.hasAttribute(attribute)
-  ).map(([, kind]) => ({ ...box, kind }));
+  ).map(([, kind, reach]) => ({
+    ...box,
+    rect: pulledInFrom(page, box.rect, reach),
+    kind,
+  }));
   const deviceTag = marked.getAttribute(DEVICE_HIDDEN_ATTRIBUTE);
   if (deviceTag !== null) {
     marks.push({ ...box, kind: "device-hidden", deviceTag });
@@ -801,7 +834,7 @@ function marksOf(element: HTMLElement, inputs: MarkInputs): Measured {
         });
       }
       // The marks drawn as the element's outline alone, one per attribute.
-      found.push(...outlineMarksOf(marked, { ...outline, ...plain }));
+      found.push(...outlineMarksOf(marked, { ...outline, ...plain }, pageBox));
     });
   placements.forEach(({ placement, parts, ...look }) => {
     const ring = ringOf(placementOutline(parts), pageBox);
