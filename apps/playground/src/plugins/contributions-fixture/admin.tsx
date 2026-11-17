@@ -28,12 +28,17 @@ import {
   TAB,
 } from "./constants";
 
-registerComponents({
-  [BLOCK]: FixtureBlock,
-  [GATED_BLOCK]: FixtureGatedBlock,
-  [CELL]: FixtureCell,
-  [TAB]: FixtureTab,
-  [SECTION]: FixtureSection,
-  [ACTION_DIALOG]: FixtureActionDialog,
-  [REPLACEMENT]: FixtureReplacement,
-});
+// Only with the switch on, as the plugin itself is registered, so a plain run
+// registers nothing of the fixture's. `next.config.ts` passes the switch to
+// the browser bundle.
+if (process.env.NEXTLY_E2E_STYLE_FIXTURE === "1") {
+  registerComponents({
+    [BLOCK]: FixtureBlock,
+    [GATED_BLOCK]: FixtureGatedBlock,
+    [CELL]: FixtureCell,
+    [TAB]: FixtureTab,
+    [SECTION]: FixtureSection,
+    [ACTION_DIALOG]: FixtureActionDialog,
+    [REPLACEMENT]: FixtureReplacement,
+  });
+}

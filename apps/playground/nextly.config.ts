@@ -386,7 +386,10 @@ export default defineConfig({
     // dashboard and widget-kit specs: on the suite's own server only, so a
     // contributor's dashboard never offers them. The committed component map
     // is written with them off; `widget-kit-fixture/admin.tsx` registers
-    // their components from the admin route instead.
+    // their components from the admin route instead. To see these fixtures
+    // locally, start with `NEXTLY_E2E_STYLE_FIXTURE=1` and, as the suite does,
+    // `NEXTLY_GENERATED_FILES_WRITE=0`, or the dev server rewrites the
+    // committed map to import them.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [widgetKitFixturePlugin]
       : []),

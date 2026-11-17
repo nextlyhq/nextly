@@ -90,8 +90,9 @@ const nextConfig: NextConfig = {
     : {}),
 
   // The test-fixture switch the config reads, passed to the browser bundle
-  // too: the block fixture's admin module hands its blocks to the editor only
-  // with it on, since every block handed over is offered in the Add panel.
+  // too: the fixtures' admin modules register their components only with it
+  // on, and the block fixture's must, since the editor offers every block it
+  // is handed, declared or not.
   // Read as the config reads it, so anything but "1" is off. Fixed when the
   // build runs: a production build follows the switch as it was set then.
   env: {

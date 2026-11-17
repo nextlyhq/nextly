@@ -29,6 +29,9 @@ const FIXTURE_SWITCHES = [
   "NEXTLY_PLAYGROUND_PLUGINS",
 ];
 
+/** How every fixture label starts: "Test fixture: plain", "Fixture: excerpt". */
+const FIXTURE_LABEL = /^(Test fixture|Fixture)\b/;
+
 /** Loading the config loads every plugin it names, which takes a while cold. */
 const LOAD_TIMEOUT = 60_000;
 
@@ -63,9 +66,9 @@ describe("the playground's test fixtures", () => {
         expect(names).not.toContain(fixture);
       }
       // What a person would meet: nothing any plugin declares is labelled
-      // as a test fixture.
+      // as a fixture.
       expect(
-        stringsIn(plugins).filter(text => text.startsWith("Test fixture"))
+        stringsIn(plugins).filter(text => FIXTURE_LABEL.test(text))
       ).toEqual([]);
     },
     LOAD_TIMEOUT
@@ -89,11 +92,16 @@ describe("the playground's test fixtures", () => {
       expect(plugins.map(plugin => plugin.name)).toEqual(
         expect.arrayContaining(SWITCHED_FIXTURES)
       );
-      // The labels the plain run must not show are there to be found.
-      expect(stringsIn(plugins)).toEqual(
+      // The labels the plain run must not show are there to be found, one
+      // from each fixture.
+      const labels = stringsIn(plugins).filter(text =>
+        FIXTURE_LABEL.test(text)
+      );
+      expect(labels).toEqual(
         expect.arrayContaining([
           "Test fixture: plain",
           "Test fixture: widget kit",
+          "Fixture: excerpt",
         ])
       );
     },

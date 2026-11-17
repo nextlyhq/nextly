@@ -56,8 +56,13 @@ export function UnlabelledControlCard({
   );
 }
 
-registerComponents({
-  [KIT_CARD_COMPONENT]: KitCard,
-  [THROWING_CARD_COMPONENT]: ThrowingCard,
-  [UNLABELLED_CONTROL_COMPONENT]: UnlabelledControlCard,
-});
+// Only with the switch on, as the plugin itself is registered, so a plain run
+// registers nothing of the fixture's. `next.config.ts` passes the switch to
+// the browser bundle.
+if (process.env.NEXTLY_E2E_STYLE_FIXTURE === "1") {
+  registerComponents({
+    [KIT_CARD_COMPONENT]: KitCard,
+    [THROWING_CARD_COMPONENT]: ThrowingCard,
+    [UNLABELLED_CONTROL_COMPONENT]: UnlabelledControlCard,
+  });
+}
