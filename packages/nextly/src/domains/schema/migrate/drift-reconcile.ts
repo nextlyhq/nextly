@@ -14,7 +14,10 @@
  *                            stopped part-way: it ran outside a transaction,
  *                            or on MySQL (`assertNotPartiallyApplied`), and
  *                            the snapshot does not prove its whole effect
- *                            (`schemaOnly`).
+ *                            (`schemaOnly`); and, for an app file
+ *                            `nextly migrate` hands its proof
+ *                            (`snapshotProof`), unless its snapshot proves
+ *                            all of it (`refuseUnlessProven`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
  * Two snapshots are equivalent when the diff engine finds no difference.
@@ -42,6 +45,7 @@ import {
   partiallyAppliedAdvice,
   type MigrationUnit,
 } from "./migration-transaction";
+import { refuseUnlessProven, type SnapshotProof } from "./snapshot-proof";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
 
@@ -169,6 +173,12 @@ export interface ReconcileFileArgs {
    * record is written as any other is.
    */
   recordStopped?: (write: (db: unknown) => Promise<void>) => Promise<void>;
+  /**
+   * For an app file `nextly migrate` runs: what proves the file may be recorded applied without
+   * running when the database stands at its end and not its start (`refuseUnlessProven`). Absent
+   * (a plugin module, or a Schema Builder save), such a file is recorded as before.
+   */
+  snapshotProof?: () => Promise<SnapshotProof>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -448,13 +458,7 @@ export async function assertNotPartiallyApplied(
 ): Promise<void> {
   if (!failedAttemptMayBePartial(file, dialect)) return;
   const outsideTransaction = file.transaction === false;
-  // `findFileApplies` returns the unit's `file_apply` rows, so each is one.
-  const rows = (await repo.findFileApplies(file.filename)).map(row => ({
-    ...row,
-    eventType: "file_apply" as const,
-    filename: file.filename,
-  }));
-  const attempt = standingOf(file.filename, rows).unresolvedAttempt;
+  const attempt = await unresolvedAttemptOf(file.filename, repo);
   if (attempt === undefined) return;
   const unfinished =
     attempt.status === "failed"
@@ -470,6 +474,23 @@ export async function assertNotPartiallyApplied(
     publicMessage: `${why} ${PARTIAL_REFUSALS[refusing]} ${advice ?? partiallyAppliedAdvice(file.filename)}`,
     logContext: { source: file.filename, reason: "partially-applied" },
   });
+}
+
+/**
+ * A unit's unresolved attempt, if it has one (`standingOf`), read from its `file_apply` rows: the
+ * one reading every check of a unit's attempt asks.
+ */
+async function unresolvedAttemptOf(
+  filename: string,
+  repo: Pick<ReconcileRepo, "findFileApplies">
+) {
+  // `findFileApplies` returns the unit's `file_apply` rows, so each is one.
+  const rows = (await repo.findFileApplies(filename)).map(row => ({
+    ...row,
+    eventType: "file_apply" as const,
+    filename,
+  }));
+  return standingOf(filename, rows).unresolvedAttempt;
 }
 
 /** How one kind of operation reads as a drift item. */
@@ -734,6 +755,13 @@ export async function reconcileFile(
   if (equiv(live, target)) {
     if (file.schemaOnly !== true) {
       await assertNotPartiallyApplied(file, args.dialect, repo);
+    }
+    if (args.snapshotProof !== undefined) {
+      refuseUnlessProven({
+        file,
+        proof: await args.snapshotProof(),
+        attempt: await unresolvedAttemptOf(file.filename, repo),
+      });
     }
     await adoptFile(args);
     return { state: "already_applied" };

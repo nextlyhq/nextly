@@ -128,3 +128,27 @@ describe("ensureCoreTables and the field-group registry", () => {
     ).toBe(true);
   });
 });
+
+/**
+ * `nextly migrate` refuses a database holding `nextly_migrations`, the table an
+ * earlier release kept its migration records in, until `nextly upgrade` moves
+ * them. A sync that created that table again would put back what the upgrade
+ * removed, so the next `nextly migrate` refuses once more.
+ */
+describe("ensureCoreTables and the migration records", () => {
+  it("never creates the earlier release's nextly_migrations table", async () => {
+    const { adapter, drizzleAdapter } = await adapterFor();
+
+    // Both paths: the fresh bootstrap, then the reconcile of a database that
+    // has `users`, which repairs system tables.
+    await runEnsureCoreTables(adapter);
+    expect(await drizzleAdapter.tableExists("users")).toBe(true);
+    await runEnsureCoreTables(adapter);
+
+    expect(
+      await drizzleAdapter.tableExists("nextly_migrations"),
+      "a sync must not create the table `nextly migrate` refuses until " +
+        "`nextly upgrade` has moved it"
+    ).toBe(false);
+  });
+});

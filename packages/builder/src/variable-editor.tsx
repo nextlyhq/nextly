@@ -17,42 +17,41 @@
  *
  * @module variable-editor
  */
-import {
-  sameSiteToken,
-  type SiteToken,
-  type SiteTokenSet,
-  type TokenMode,
+import type {
+  SiteToken,
+  SiteTokenSet,
+  TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
 import * as React from "react";
 
-import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
   relabelToken,
-  removeToken,
   setTokenValue,
   variableLabelIssue,
   writeTokenValue,
   type VariableEntry,
 } from "./tokens-studio";
-import { swatchStyle } from "./variable-swatch";
 import {
-  combinedReach,
-  variableRemoval,
-  variableStatus,
-  type VariableReach,
-  type VariableRemoval,
-} from "./variable-usage";
+  partsOf,
+  removalPlan,
+  resetParts,
+  withoutParts,
+  type RemovalPlan,
+} from "./variable-removal";
+import { swatchStyle } from "./variable-swatch";
+import { variableStatus, type VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
 import {
   LineHeightHint,
   LineHeightInput,
   SizeInput,
   useDraft,
+  unwritableValue,
   valueFieldFor,
   variableCss,
 } from "./variable-value-controls";
@@ -75,6 +74,11 @@ export interface VariableEditorProps {
    * as it always has.
    */
   usage?: VariableUsageHere;
+  /**
+   * Opened by the row's Remove: the removal starts as the editor opens, so
+   * its confirm, or why it cannot go ahead, is what the author meets.
+   */
+  removing?: boolean;
 }
 
 export function VariableEditor({
@@ -85,6 +89,7 @@ export function VariableEditor({
   onChange,
   onRemoved,
   usage,
+  removing = false,
 }: VariableEditorProps): React.JSX.Element {
   const id = React.useId();
   const { row, lineHeight } = entry;
@@ -171,6 +176,7 @@ export function VariableEditor({
           onChange={onChange}
           onRemoved={onRemoved}
           usage={usage}
+          removing={removing}
         />
       )}
     </div>
@@ -230,6 +236,15 @@ function useValueWrites(
     const next = value.trim();
     if (tokens.tokens[at]?.values[mode] === next) {
       refuse(at, mode);
+      return;
+    }
+    // Refused where it is typed when the site's stylesheet would not write
+    // it, a value that would load a file among them, rather than at the save.
+    const token = tokens.tokens[at];
+    const unwritable =
+      token === undefined ? undefined : unwritableValue(tokens, token, next);
+    if (unwritable !== undefined) {
+      refuse(at, mode, unwritable);
       return;
     }
     const written = writeTokenValue(tokens, at, mode, next);
@@ -878,6 +893,7 @@ function Actions({
   onChange,
   onRemoved,
   usage,
+  removing,
 }: {
   entry: VariableEntry;
   token: SiteToken;
@@ -886,18 +902,20 @@ function Actions({
   onChange: (tokens: SiteTokenSet) => void;
   onRemoved: () => void;
   usage: VariableUsageHere | undefined;
+  removing: boolean;
 }): React.JSX.Element | null {
   const plan = removalPlan(
     entry,
     partsOf(entry, token, tokens, suppliedOf),
     usage
   );
-  const { step, setStep, remove } = useRemoveStep(plan);
+  const { step, setStep, remove } = useRemoveStep(plan, removing);
   const shown = shownStep(step, plan.removal);
   if (shown === "confirm" && plan.removable.length > 0) {
     return (
       <ConfirmRemove
         what={plan.what}
+        focused={removing}
         onKeep={() => setStep("idle")}
         onRemove={() => {
           onChange(withoutParts(tokens, plan.removable));
@@ -928,85 +946,6 @@ function Actions({
       ) : null}
     </>
   );
-}
-
-/** What Reset and Remove act on, and what Remove may do. */
-interface RemovalPlan {
-  /** The halves the site's code supplies that the author changed. */
-  readonly changed: readonly Part[];
-  /** The halves the site added, which Remove takes away. */
-  readonly removable: readonly Part[];
-  /** What the confirm names: the variable, or the half that goes. */
-  readonly what: string;
-  /**
-   * What the refusal names: the variable, or the half that goes, as its
-   * heading says it ("Body's line height").
-   */
-  readonly named: string;
-  /** What the places would lose, by what goes: "colour", "line height". */
-  readonly loss: string;
-  /** Remove's own words: "Remove", or "Remove line height". */
-  readonly label: string;
-  /** The usage that gates Remove, where the host reads it. */
-  readonly gate: VariableUsageHere | undefined;
-  /**
-   * How widely what Remove takes away is used, together: a type size and
-   * its line height when both go, so either one in use refuses.
-   */
-  readonly reach: VariableReach | undefined;
-  readonly removal: VariableRemoval;
-}
-
-/** The plan for an entry's halves, under the usage the host read. */
-function removalPlan(
-  entry: VariableEntry,
-  parts: readonly Part[],
-  usage: VariableUsageHere | undefined
-): RemovalPlan {
-  const changed = parts.filter(
-    part =>
-      part.from !== undefined &&
-      (part.held === undefined || !sameSiteToken(part.held, part.from))
-  );
-  const removable = parts.filter(part => part.from === undefined);
-  const gate = removable.length === 0 ? undefined : usage;
-  const reach =
-    gate === undefined
-      ? undefined
-      : combinedReach(removable.map(part => gate.reachOf(part.identity)));
-  // The whole variable when every half is the site's own; otherwise only the
-  // half that is, named, since the other stays.
-  const halves = removable.map(part => part.name).join(" and ");
-  const whole = removable.length === parts.length;
-  const [alone] = removable;
-  return {
-    changed,
-    removable,
-    what: whole ? entry.label : `${halves} of ${entry.label}`,
-    named: whole ? entry.label : `${entry.label}'s ${halves}`,
-    // A half going on its own loses what that half is; the whole, what the
-    // variable's kind is.
-    loss:
-      !whole && removable.length === 1 && alone !== undefined
-        ? alone.loss
-        : VARIABLE_LOSS_WORDS[entry.row.kind],
-    label: whole ? "Remove" : `Remove ${halves}`,
-    gate,
-    reach,
-    removal: variableRemoval(reach),
-  };
-}
-
-/** The set with each changed half put back to what the site's code supplies. */
-function resetParts(
-  tokens: SiteTokenSet,
-  changed: readonly Part[]
-): SiteTokenSet {
-  const next = [...tokens.tokens];
-  for (const part of changed) {
-    if (part.from !== undefined) next[part.at] = part.from;
-  }
-  return { ...tokens, tokens: next };
 }
 
 /** How widely it is used, then Reset and Remove, as the plan offers them. */
@@ -1069,7 +1008,10 @@ type RemoveStep = "idle" | "checking" | "confirm" | "refused";
  * confirm once nothing uses it. Nothing stale is shown while it reads; a
  * read that fails answers on the counts already kept.
  */
-function useRemoveStep(plan: RemovalPlan): {
+function useRemoveStep(
+  plan: RemovalPlan,
+  removing: boolean
+): {
   step: RemoveStep;
   setStep: (step: RemoveStep) => void;
   remove: () => void;
@@ -1086,6 +1028,13 @@ function useRemoveStep(plan: RemovalPlan): {
       setStep(current => (current === "checking" ? "refused" : current));
     gate.readAgain(removable.map(part => part.identity)).then(answer, answer);
   };
+  // Started once, as the editor opens for the row's Remove; the latest
+  // `remove` through a ref, so the start does not repeat with each render.
+  const start = React.useRef(remove);
+  start.current = remove;
+  React.useEffect(() => {
+    if (removing) start.current();
+  }, [removing]);
   return { step, setStep, remove };
 }
 
@@ -1105,13 +1054,20 @@ function shownStep(step: RemoveStep, removal: VariableRemoval): RemoveStep {
 /** Remove's confirm, naming what goes. */
 function ConfirmRemove({
   what,
+  focused,
   onKeep,
   onRemove,
 }: {
   what: string;
+  /** Takes focus, on Keep, as the row's Remove opened it. */
+  focused: boolean;
   onKeep: () => void;
   onRemove: () => void;
 }): React.JSX.Element {
+  const keep = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (focused) keep.current?.focus();
+  }, [focused]);
   return (
     <div
       className="nx-vars-editor__confirm"
@@ -1124,6 +1080,7 @@ function ConfirmRemove({
       </p>
       <div className="nx-vars-editor__actions">
         <Button
+          ref={keep}
           type="button"
           variant="ghost"
           size="sm"
@@ -1144,59 +1101,4 @@ function ConfirmRemove({
       </div>
     </div>
   );
-}
-
-/** One stored variable behind an entry, with what the site's code supplies. */
-interface Part {
-  name: string;
-  /** The variable's identity, which its usage is read by. */
-  identity: string;
-  /** What a place would lose with this part alone. */
-  loss: string;
-  at: number;
-  held: SiteToken | undefined;
-  from: SiteToken | undefined;
-}
-
-/**
- * The variables behind an entry: the row and, for a type size, its line
- * height, which has no row of its own and is acted on from here or nowhere.
- */
-function partsOf(
-  entry: VariableEntry,
-  token: SiteToken,
-  tokens: SiteTokenSet,
-  suppliedOf: (identity: string) => SiteToken | undefined
-): Part[] {
-  const own: Part = {
-    name: "size",
-    identity: entry.row.identity,
-    loss: VARIABLE_LOSS_WORDS[entry.row.kind],
-    at: entry.row.at,
-    held: token,
-    from: suppliedOf(entry.row.identity),
-  };
-  if (entry.lineHeight === undefined) return [own];
-  return [
-    own,
-    {
-      name: "line height",
-      identity: entry.lineHeight.identity,
-      loss: VARIABLE_LOSS_WORDS.lineHeight,
-      at: entry.lineHeight.at,
-      held: tokens.tokens[entry.lineHeight.at],
-      from: suppliedOf(entry.lineHeight.identity),
-    },
-  ];
-}
-
-/** The set without these variables, the later positions first. */
-function withoutParts(
-  tokens: SiteTokenSet,
-  parts: readonly Part[]
-): SiteTokenSet {
-  return parts
-    .map(part => part.at)
-    .sort((a, b) => b - a)
-    .reduce(removeToken, tokens);
 }

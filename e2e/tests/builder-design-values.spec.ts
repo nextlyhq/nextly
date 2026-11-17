@@ -9,6 +9,8 @@
  * - "Use 20px" under a line height of 20 saves 20px.
  * - A font variable is chosen from the picker, never typed, and a weight by
  *   name, each saved as the value the site's stylesheet reads.
+ * - A duration keeps its number when its unit changes, and a custom value
+ *   that would load a file is refused where it is typed.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -39,6 +41,8 @@ const TOKENS = [
     values: { light: "Georgia, serif" },
   },
   { name: "weight.strong", kind: "fontWeight", values: { light: "700" } },
+  { name: "duration.fast", kind: "duration", values: { light: "200ms" } },
+  { name: "custom.grid", kind: "custom", values: { light: "repeat(3, 1fr)" } },
 ];
 
 async function storedTokens(page: Page): Promise<unknown> {
@@ -83,7 +87,8 @@ async function openDesign(page: Page, tab: string): Promise<void> {
 test("a size is a number with a unit menu, saves a bare number as pixels, and its menu opens inside the window at the narrowest", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  // The first test of the file also waits for the editor's first compile.
+  test.setTimeout(300_000);
   const before = await storedTokens(page);
   try {
     await seed(page, { tokens: TOKENS });
@@ -116,7 +121,8 @@ test("a size is a number with a unit menu, saves a bare number as pixels, and it
     await expect
       .poll(async () => Math.round((await panel.boundingBox())?.width ?? 0))
       .toBeLessThanOrEqual(240);
-    const last = panel.locator(".nx-vars__row").last();
+    // The last size row: the tab's last row is an Other value with no unit.
+    const last = panel.locator('.nx-vars__row[data-kind="dimension"]').last();
     await last.scrollIntoViewIfNeeded();
     await last.click();
     await expect(editor).toBeVisible();
@@ -200,6 +206,41 @@ test("a font variable is picked from the site's and the system's fonts, and a we
     await editor.getByLabel("Light", { exact: true }).click();
     await page.getByRole("option", { name: /^Regular 400/ }).click();
     await expect.poll(() => storedValue(page, "weight.strong")).toBe("400");
+  } finally {
+    await seed(page, before);
+  }
+});
+
+test("a duration changes unit keeping its number, and a custom value that would load a file is refused in its field", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const before = await storedTokens(page);
+  try {
+    await seed(page, { tokens: TOKENS });
+    await openEditorWith(page, NODES, "values-text");
+    await openDesign(page, "Spacing");
+    const panel = page.getByRole("region", { name: "Design panel" });
+    const editor = page.locator(".nx-vars-editor");
+
+    await panel.getByRole("button", { name: /^Fast/ }).click();
+    await expect(editor.getByLabel("Light", { exact: true })).toHaveValue(
+      "200"
+    );
+    await editor.getByLabel("Unit for Light").click();
+    await page.getByRole("option", { name: "s", exact: true }).click();
+    await expect.poll(() => storedValue(page, "duration.fast")).toBe("200s");
+    await page.keyboard.press("Escape");
+    await expect(editor).toBeHidden();
+
+    await panel.getByRole("button", { name: /^Custom grid/ }).click();
+    const light = editor.getByLabel("Light", { exact: true });
+    await light.fill("url(https://elsewhere.example/a.png)");
+    await light.press("Enter");
+    await expect(light).toHaveAttribute("aria-invalid", "true");
+    await expect(editor.getByText(/would load a file/)).toBeVisible();
+    // Nothing reached the site style.
+    expect(await storedValue(page, "custom.grid")).toBe("repeat(3, 1fr)");
   } finally {
     await seed(page, before);
   }

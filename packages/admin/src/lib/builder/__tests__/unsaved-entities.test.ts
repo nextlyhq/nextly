@@ -12,6 +12,7 @@ import { renderHook } from "@admin/__tests__/utils";
 import {
   addUnsavedEntity,
   removeUnsavedEntity,
+  releaseUnsavedFieldGroupsOf,
   renameUnsavedEntity,
   subscribeUnsavedEntities,
   unsavedAddresses,
@@ -140,6 +141,50 @@ describe("an unsaved entity's new address", () => {
     expect(renameUnsavedEntity("collection", "products", "items")).toBe(false);
     expect(unsavedEntity("collection", "products")?.address).toBe("products");
     expect(unsavedEntity("collection", "items")?.address).toBe("items");
+  });
+
+  it("moves the field groups its picker made with it, and no other", () => {
+    addUnsavedEntity(products);
+    addUnsavedEntity({
+      ...seo,
+      ownedBy: { kind: "collection", address: "products" },
+    });
+    // Owned by a Single of the same address: a different host.
+    addUnsavedEntity({
+      ...seo,
+      address: "hero",
+      ownedBy: { kind: "single", address: "products" },
+    });
+    expect(renameUnsavedEntity("collection", "products", "items")).toBe(true);
+    expect(unsavedEntity("field-group", "seo")?.ownedBy).toEqual({
+      kind: "collection",
+      address: "items",
+    });
+    expect(unsavedEntity("field-group", "hero")?.ownedBy).toEqual({
+      kind: "single",
+      address: "products",
+    });
+    removeUnsavedEntity("field-group", "hero");
+  });
+
+  it("releases the field groups a host's picker made, leaving each one of its own", () => {
+    addUnsavedEntity({
+      ...seo,
+      ownedBy: { kind: "collection", address: "products" },
+    });
+    addUnsavedEntity({
+      ...seo,
+      address: "hero",
+      ownedBy: { kind: "single", address: "products" },
+    });
+    releaseUnsavedFieldGroupsOf({ kind: "collection", address: "products" });
+    expect(unsavedEntity("field-group", "seo")?.ownedBy).toBeUndefined();
+    expect(unsavedEntity("field-group", "seo")?.address).toBe("seo");
+    expect(unsavedEntity("field-group", "hero")?.ownedBy).toEqual({
+      kind: "single",
+      address: "products",
+    });
+    removeUnsavedEntity("field-group", "hero");
   });
 
   it("refuses a move of nothing", () => {

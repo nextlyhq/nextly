@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * The read meter's list of unread blocks, for a block the page's own
+ * The page data meter's list of blocks that come up empty, for a block the page's own
  * document does not hold: a header's or a footer's, drawn from the Layout.
  * Such a block is named with the Layout it comes from and offers that
  * Layout's editor, rather than reading as a block the page removed.
@@ -63,7 +63,7 @@ function openPanel(regions?: readonly CanvasRegion[]) {
       {...(regions === undefined ? {} : { regions })}
     />
   );
-  fireEvent.click(screen.getByRole("button", { name: /reads/i }));
+  fireEvent.click(screen.getByRole("button", { name: /^Page data/ }));
   return select;
 }
 
@@ -77,9 +77,9 @@ describe("a Layout region's unread block", () => {
     });
     expect(edit.getAttribute("href")).toBe("/admin/layouts/main");
     expect(screen.queryByText("A removed block")).toBeNull();
-    // The count's own default, said as the default limit is.
+    // How the count takes images, said as the site's limit is.
     expect(
-      screen.getByText(/Images are counted as the media library reads them/)
+      screen.getByText(/Images are counted as the media library loads them/)
     ).toBeTruthy();
   });
 
@@ -101,20 +101,17 @@ describe("a count that could not be made", () => {
       />
     );
     const meter = screen.getByRole("button", {
-      name: "Couldn't count page reads. Retry",
+      name: "Page data: couldn't count. Retry",
     });
     expect(meter.getAttribute("title")).toBe(
-      "Couldn't count page reads. Retry"
+      "Page data: couldn't count. Retry"
     );
     // Never "Counting": the count is not on its way.
     expect(meter.getAttribute("aria-busy")).toBeNull();
-    expect(meter.textContent).toContain("Couldn't count reads");
-    // Marked with an alert, never a circling arrow or the meter's gauge,
-    // which read as a count still on its way.
-    const mark = meter.querySelector("svg");
-    expect(mark?.getAttribute("class")).toMatch(
-      /lucide-(circle-alert|alert-circle)/
-    );
+    expect(meter.textContent).toBe("Page data: couldn't count · Retry");
+    // No circling arrow or spinner, which would read as a count still on
+    // its way.
+    expect(meter.querySelector("svg")).toBeNull();
     fireEvent.click(meter);
     expect(retry).toHaveBeenCalledTimes(1);
     // A press retries; it opens no panel, which would have nothing to say.
@@ -126,8 +123,8 @@ describe("a count that could not be made", () => {
     const { rerender } = render(
       <ReadBudgetMeter report={over} editor={editor} />
     );
-    fireEvent.click(screen.getByRole("button", { name: /reads/i }));
-    expect(screen.getByRole("dialog", { name: "Page reads" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Page data/ }));
+    expect(screen.getByRole("dialog", { name: "Page data" })).toBeTruthy();
     rerender(
       <ReadBudgetMeter
         report={undefined}
@@ -144,7 +141,7 @@ describe("a count that could not be made", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(
       screen
-        .getByRole("button", { name: /^Over the limit/ })
+        .getByRole("button", { name: /over the limit/ })
         .getAttribute("aria-expanded")
     ).toBe("false");
   });

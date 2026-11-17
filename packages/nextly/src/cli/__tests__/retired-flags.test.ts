@@ -70,6 +70,19 @@ vi.mock("../utils/config-loader", () => ({
   loadConfig: configRead,
 }));
 
+// The configurations here declare nothing a migration could record, so the comparison
+// `migrate:fresh` makes before anything is dropped finds nothing; it reads a project folder these
+// runs have none of.
+vi.mock("../../domains/schema/migrate/unwritten-changes", () => ({
+  unwrittenChangesOf: async () => ({
+    tables: [],
+    settings: [],
+    permissions: [],
+    noSnapshot: true,
+  }),
+  unwrittenChangesError: () => undefined,
+}));
+
 class Exited extends Error {
   constructor(readonly code: number | undefined) {
     super(`exit ${String(code)}`);
@@ -118,7 +131,11 @@ beforeEach(() => {
   connect.mockReset();
   connect.mockRejectedValue(new Error("connected"));
   configRead.mockReset();
-  configRead.mockResolvedValue({ config: { db: {} }, configPath: undefined });
+  // A loaded configuration always names its migrations folder (the default when unset).
+  configRead.mockResolvedValue({
+    config: { db: { migrationsDir: "./migrations" } },
+    configPath: undefined,
+  });
   const record = (...parts: unknown[]) => {
     output.push(parts.map(String).join(" "));
   };

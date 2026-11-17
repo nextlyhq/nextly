@@ -12,7 +12,13 @@
  * - Both at once: the Layers lock and the slot lock are said apart, and
  *   Unlock lifts only the Layers lock.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeAll,
@@ -364,11 +370,15 @@ describe("the bar that says what an edit changes", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
     const bar = screen.getByRole("region", { name: "What you're editing" });
-    expect(bar.querySelector("[data-edit-target]")?.textContent).toBe(
-      "This block"
-    );
+    expect(
+      within(bar).getByRole("button", { name: "Editing: This block" }).dataset
+        .editTarget
+    ).toBe("block");
     expect(bar.querySelector("[data-edit-state]")?.textContent).toBe("Normal");
-    const baseDevice = bar.querySelector("[data-edit-device]")?.textContent;
+    expect(bar.querySelector("[data-edit-device]")?.textContent).toBe(
+      "Desktop"
+    );
+    const baseReach = reachOf(bar);
 
     rerender(
       <InspectorPanel
@@ -380,10 +390,18 @@ describe("the bar that says what an edit changes", () => {
     );
     expect(bar.querySelector("[data-edit-state]")?.textContent).toBe("Hover");
     expect(bar.querySelector("[data-edit-device]")?.textContent).toBe("Tablet");
-    // Named for what the edit reaches: the unconditional tier is every device.
-    expect(baseDevice).toBe("All devices");
+    // Said with what the edit reaches: the unconditional tier is every device.
+    expect(baseReach).toBe("All devices");
+    // The narrowest tier this site has reaches only itself.
+    expect(reachOf(bar)).toBe("Tablet");
   });
 });
+
+/** What the device chip says an edit reaches, after its name. */
+function reachOf(root: ParentNode): string | undefined {
+  const words = root.querySelector(".nx-editing-bar__device")?.textContent;
+  return words?.match(/Changes here reach: (.+?)\. The device/)?.[1];
+}
 
 describe("the devices the bar says an edit reaches", () => {
   it("names a narrower tier and those below it, from the site's own list", () => {
@@ -403,8 +421,7 @@ describe("the devices the bar says an edit reaches", () => {
       />
     );
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const device = () => document.querySelector("[data-edit-device]");
-    expect(device()?.textContent).toBe("Tablet and smaller");
+    expect(reachOf(document)).toBe("Tablet and smaller");
     rerender(
       <InspectorPanel
         editor={editorFor(inside("acme/row"))}
@@ -414,7 +431,7 @@ describe("the devices the bar says an edit reaches", () => {
       />
     );
     // The narrowest reaches only itself.
-    expect(device()?.textContent).toBe("Phone");
+    expect(reachOf(document)).toBe("Phone");
   });
 
   it("says an edit to the unconditional tier reaches all devices", () => {
@@ -433,8 +450,11 @@ describe("the devices the bar says an edit reaches", () => {
       />
     );
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
-    const device = document.querySelector("[data-edit-device]");
-    expect(device?.textContent).toBe("All devices");
+    expect(reachOf(document)).toBe("All devices");
+    // The device itself is the top bar's: the unconditional tier is Desktop.
+    expect(document.querySelector("[data-edit-device]")?.textContent).toBe(
+      "Desktop"
+    );
   });
 });
 

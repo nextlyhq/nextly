@@ -1,18 +1,18 @@
 /*
- * The page reads meter in the top bar: a count and a short bar at the
- * editor's control height. Quiet within the limit; amber from 80% of it;
- * red over it. Each state also changes the mark and the words, so colour is
- * never the only sign.
+ * The page data meter: a pill in the top bar from 80% of the limit, amber
+ * near it and red once it is spent or passed, and a line in Page settings at
+ * every level. Each standing also changes the words, so colour is never the
+ * only sign. "what's this?" is drawn as a link inside the one button.
  */
 .nx-read-meter {
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 0.375rem;
-  height: var(--nx-builder-control-height, 1.75rem);
-  padding: 0 var(--nx-builder-control-padding-x, 0.5rem);
+  min-height: 1.5rem;
+  padding: 0 0.625rem;
   border: 1px solid var(--nx-builder-border);
-  border-radius: 0.375rem;
+  border-radius: 999px;
   background: var(--nx-builder-surface-raised);
   color: var(--nx-builder-text-muted);
   font-size: var(--nx-builder-font-size, 0.75rem);
@@ -28,7 +28,6 @@
 }
 
 .nx-read-meter[data-state="open"] {
-  background: var(--nx-muted);
   border-color: var(--nx-ring);
 }
 
@@ -37,78 +36,30 @@
   outline-offset: 1px;
 }
 
-.nx-read-meter__mark {
+/* A link's look inside the button, not a control of its own. */
+.nx-read-meter__link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.nx-read-meter:hover .nx-read-meter__link {
+  text-decoration-thickness: 2px;
+}
+
+.nx-read-meter__info {
   flex: none;
   width: 0.875rem;
   height: 0.875rem;
-}
-
-.nx-read-meter__count {
-  color: var(--nx-builder-text);
-}
-
-.nx-read-meter__of,
-.nx-read-meter__unit {
   color: var(--nx-builder-text-muted);
 }
 
-.nx-read-meter__track {
-  position: relative;
-  flex: none;
-  width: 2rem;
-  height: 0.25rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(
-    in oklch,
-    var(--nx-builder-text-muted) 22%,
-    transparent
-  );
-}
-
-/* The share of the allowance used, in the trigger's bar and the panel's. */
-.nx-read-meter__fill,
-.nx-read-panel__fill {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 0;
-  border-radius: inherit;
-  background: var(--nx-builder-text-muted);
-}
-
-.nx-read-meter[data-standing="counting"] .nx-read-meter__count {
-  color: var(--nx-builder-text-muted);
-}
-
-/* A count that could not be made: quiet, as counting is, its alert mark in
-   the editor's warning ink, and the way to count again in the text's own
-   colour. */
-.nx-read-meter[data-standing="failed"] .nx-read-meter__count {
-  color: var(--nx-builder-text-muted);
-}
-
-.nx-read-meter[data-standing="failed"] .nx-read-meter__mark {
-  color: var(--nx-builder-warning-text);
-}
-
-.nx-read-meter[data-standing="failed"] .nx-read-meter__retry {
-  color: var(--nx-builder-text);
-  font-weight: 500;
-}
-
-.nx-read-meter[data-standing="near"] {
+/* Near the limit, and a count that could not be made, which could be
+   hiding a page over it: the warning colours. */
+.nx-read-meter[data-standing="near"],
+.nx-read-meter[data-standing="failed"] {
   border-color: color-mix(in oklch, var(--nx-warning) 55%, transparent);
   background: var(--nx-builder-warning-ground);
   color: var(--nx-builder-warning-text);
-}
-
-/* The trigger's words (`nx-read-meter__words`) take the standing's colour. */
-.nx-read-meter[data-standing="near"] .nx-read-meter__words {
-  color: var(--nx-builder-warning-text);
-}
-
-.nx-read-meter[data-standing="near"] .nx-read-meter__fill {
-  background: var(--nx-warning);
 }
 
 .nx-read-meter[data-standing="over"] {
@@ -117,37 +68,47 @@
   color: var(--nx-builder-destructive-text);
 }
 
-.nx-read-meter[data-standing="over"] .nx-read-meter__words {
-  color: var(--nx-builder-destructive-text);
-}
-
-.nx-read-meter[data-standing="over"] .nx-read-meter__count {
+.nx-read-meter[data-standing="over"] .nx-read-meter__standing,
+.nx-read-meter[data-standing="failed"] .nx-read-meter__standing {
   font-weight: 600;
 }
 
-.nx-read-meter[data-standing="over"] .nx-read-meter__fill {
-  background: var(--nx-destructive);
+/* Page settings: a full-width line among the panel's rows, quiet while the
+   page is counted or within its limit. */
+.nx-read-meter[data-place="settings"] {
+  justify-content: space-between;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 0.375rem;
+  white-space: normal;
+  text-align: start;
+}
+
+.nx-read-meter[data-place="settings"][data-standing="within"] {
+  background: transparent;
+  color: var(--nx-builder-text);
+}
+
+.nx-read-meter[data-place="settings"][data-standing="within"]:hover,
+.nx-read-meter[data-place="settings"][data-standing="counting"]:hover {
+  background: var(--nx-muted);
+}
+
+.nx-read-meter[data-place="settings"][data-standing="counting"] {
+  background: transparent;
 }
 
 /*
  * Where the top bar is crowded (up to 1300px, so the editor's narrowest
- * width), the meter gives way before anything else in its column: to its
- * mark and its number. The document's own chips beside it stay whole, and
- * only then does the title shorten, which the bar's start column does by
- * letting the title alone shrink.
+ * width), the meter drops its "what's this?" first: the count and "over the
+ * limit" stay, and the button's name still says it explains. Only then does
+ * the title shorten, which the bar's start column does by letting the title
+ * alone shrink.
  */
-.nx-read-meter__short {
-  display: none;
-}
-
 @container topbar (max-width: 81.25rem) {
-  .nx-read-meter__full,
-  .nx-read-meter__track {
+  .nx-read-meter[data-place="bar"] .nx-read-meter__more {
     display: none;
-  }
-
-  .nx-read-meter__short {
-    display: inline;
   }
 }
 
@@ -234,6 +195,15 @@
     var(--nx-builder-text-muted) 20%,
     transparent
   );
+}
+
+/* The share of the limit used, in the panel's bar. */
+.nx-read-panel__fill {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  border-radius: inherit;
+  background: var(--nx-builder-text-muted);
 }
 
 .nx-read-panel__body[data-standing="near"] .nx-read-panel__fill {
