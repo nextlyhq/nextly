@@ -217,6 +217,20 @@ function InUse({
 }
 
 /**
+ * Where a variable is used, listed for its editor: the first few places,
+ * then every one on "Show all", as the reason Remove waits lists them.
+ */
+export function VariableUses({
+  identity,
+  usage,
+}: {
+  identity: string;
+  usage: VariableUsageHere;
+}): React.JSX.Element {
+  return <PartUses identity={identity} heading={undefined} usage={usage} />;
+}
+
+/**
  * The places one variable is used: the first few, then, on "Show all", every
  * page the route lists, read one after another with the progress said.
  */

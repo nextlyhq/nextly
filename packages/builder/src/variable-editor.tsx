@@ -17,10 +17,13 @@
  *
  * @module variable-editor
  */
-import type {
-  SiteToken,
-  SiteTokenSet,
-  TokenMode,
+import {
+  resolveTokenPrefix,
+  tokenCustomProperty,
+  tokenIdentity,
+  type SiteToken,
+  type SiteTokenSet,
+  type TokenMode,
 } from "@nextlyhq/blocks-engine";
 import { Button, ColorPicker, Input } from "@nextlyhq/ui";
 import { Undo2 } from "lucide-react";
@@ -30,12 +33,19 @@ import { useRecentColours } from "./recent-colours";
 import { colourHexOf } from "./style-colour";
 import {
   clearDarkValue,
+  labelNewVariable,
   relabelToken,
   setTokenValue,
   variableLabelIssue,
   writeTokenValue,
   type VariableEntry,
 } from "./tokens-studio";
+import {
+  CodeName,
+  ColourContrast,
+  ModeIcon,
+  UsageLine,
+} from "./variable-popup-parts";
 import {
   partsOf,
   removalPlan,
@@ -44,7 +54,7 @@ import {
   type RemovalPlan,
 } from "./variable-removal";
 import { swatchStyle } from "./variable-swatch";
-import { variableStatus, type VariableRemoval } from "./variable-usage";
+import { combinedReach, type VariableRemoval } from "./variable-usage";
 import { VariableRefusal, type VariableUsageHere } from "./variable-usage-view";
 import {
   LineHeightHint,
@@ -78,6 +88,11 @@ export interface VariableEditorProps {
    * its confirm, or why it cannot go ahead, is what the author meets.
    */
   removing?: boolean;
+  /**
+   * Never saved: just added or copied. Its code name follows its name as it
+   * is typed, until the editor closes and it is saved under one.
+   */
+  isNew?: boolean;
 }
 
 export function VariableEditor({
@@ -89,6 +104,7 @@ export function VariableEditor({
   onRemoved,
   usage,
   removing = false,
+  isNew = false,
 }: VariableEditorProps): React.JSX.Element {
   const id = React.useId();
   const { row, lineHeight } = entry;
@@ -146,9 +162,11 @@ export function VariableEditor({
             if (event.key === "Enter") commitName(event.currentTarget.value);
           }}
         />
-        <p className="nx-vars-editor__code" id={`${id}-code`}>
-          {row.name}
-        </p>
+        <CodeName
+          id={`${id}-code`}
+          property={codeNameOf(tokens, row.at, isNew ? name : undefined)}
+          isNew={isNew}
+        />
       </div>
       {token === undefined ? null : (
         <Values
@@ -161,6 +179,20 @@ export function VariableEditor({
           refused={refused}
         />
       )}
+      {usage === undefined ? null : (
+        <UsageLine
+          identity={row.identity}
+          reach={combinedReach(
+            [row.identity, ...(lineHeight === undefined ? [] : [lineHeight.identity])].map(
+              usage.reachOf
+            )
+          )}
+          usage={usage}
+        />
+      )}
+      {token?.kind === "color" ? (
+        <ColourContrast token={token} tokens={tokens} suppliedOf={suppliedOf} />
+      ) : null}
       {said.length > 0 ? (
         <p className="nx-vars-editor__issue" id={saidId} role="status">
           {said.join(" ")}
@@ -180,6 +212,24 @@ export function VariableEditor({
       )}
     </div>
   );
+}
+
+/**
+ * The custom property a variable is written under. For one never saved, the
+ * one its name as typed would give it, so it follows each keystroke; a
+ * saved variable's never changes.
+ */
+function codeNameOf(
+  tokens: SiteTokenSet,
+  at: number,
+  typed: string | undefined
+): string {
+  const named =
+    typed === undefined ? tokens : labelNewVariable(tokens, at, typed);
+  const token = named.tokens[at];
+  if (token === undefined) return "";
+  const { prefix } = resolveTokenPrefix(tokens.prefix);
+  return tokenCustomProperty(tokenIdentity(token), prefix);
 }
 
 /**
@@ -486,34 +536,10 @@ function TypePair({
               onChange(clearDarkValue(clearDarkValue(tokens, sizeAt), lineAt))
             }
           >
-            Use light values
+            Remove dark value
           </Button>
         )
-      ) : (
-        <div className="nx-vars-editor__same">
-          <span>Same as light</span>
-          {readOnly ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="nx-vars-editor__button"
-              onClick={() =>
-                onChange(
-                  setTokenValue(
-                    setTokenValue(tokens, sizeAt, "dark", size.values.light),
-                    lineAt,
-                    "dark",
-                    line.values.light
-                  )
-                )
-              }
-            >
-              Add dark values
-            </Button>
-          )}
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -605,6 +631,7 @@ function ColourValue({
   readOnly,
   refusedBy,
   onCommit,
+  mode = "light",
 }: {
   label: string;
   value: string;
@@ -612,6 +639,8 @@ function ColourValue({
   /** The id of the reason, while this field holds a value that was refused. */
   refusedBy?: string | undefined;
   onCommit: (value: string) => void;
+  /** Which mode's value this is, drawn ☀ or ☾ beside the label. */
+  mode?: TokenMode | undefined;
 }): React.JSX.Element {
   const id = React.useId();
   const [picking, setPicking] = React.useState(false);
@@ -666,6 +695,7 @@ function ColourValue({
   return (
     <div className="nx-vars-editor__field">
       <label className="nx-vars-editor__label" htmlFor={id}>
+        <ModeIcon mode={mode} />
         {label}
       </label>
       <div className="nx-vars-editor__colour">
@@ -795,6 +825,9 @@ function isCssColour(text: string): boolean {
 }
 
 /** The dark value: its field, or a line saying it follows light. */
+/** The kinds a dark value is offered on; one already held is kept on any. */
+const DARK_KINDS: ReadonlySet<string> = new Set(["color", "shadow"]);
+
 function DarkValue({
   token,
   cssOf,
@@ -814,9 +847,15 @@ function DarkValue({
 }): React.JSX.Element {
   const dark = token.values.dark;
   if (dark === undefined) {
+    // Offered on what reads differently in dark mode, colours and shadows;
+    // a size or a duration has no reason to change with the mode.
+    if (!DARK_KINDS.has(token.kind)) return null;
     return (
       <div className="nx-vars-editor__field">
-        <span className="nx-vars-editor__label">Dark</span>
+        <span className="nx-vars-editor__label">
+          <ModeIcon mode="dark" />
+          Dark
+        </span>
         <div className="nx-vars-editor__same">
           <span>Same as light</span>
           {readOnly ? null : (
@@ -855,7 +894,7 @@ function DarkValue({
           className="nx-vars-editor__button nx-vars-editor__inline-action"
           onClick={onClear}
         >
-          Use light value
+          Remove dark value
         </Button>
       )}
     </>
@@ -953,11 +992,11 @@ function ActionRow({
 }): React.JSX.Element {
   return (
     <div className="nx-vars-editor__actions">
-      {plan.gate === undefined ? null : (
-        <span className="nx-vars-editor__status" role="status">
-          {checking ? "Checking where it's used…" : variableStatus(plan.reach)}
-        </span>
-      )}
+      {/* How widely it is used is said above; here only that Remove is
+          reading it again. */}
+      <span className="nx-vars-editor__status" role="status">
+        {checking ? "Checking where it's used…" : ""}
+      </span>
       {plan.changed.length === 0 ? null : (
         <Button
           type="button"
