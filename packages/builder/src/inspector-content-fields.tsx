@@ -19,6 +19,7 @@ import * as React from "react";
 import { SettingSlot } from "./settings-filter";
 
 import { BindableField } from "./binding-controls";
+import { ListMarkerNote } from "./list-marker-note";
 import {
   PropExposeControl,
   type ComponentFieldsBinding,
@@ -329,6 +330,15 @@ export function ContentFields({
         </HeldByLock>
       ))
     );
+    // Under a List's "List as": whether a marker of its own overrides it.
+    const marker =
+      prop.name === "kind" ? (
+        <ListMarkerNote
+          node={findNode(document.nodes, inspection.nodeId)}
+          disabled={prop.readOnly}
+          onApply={onApply}
+        />
+      ) : null;
     if (fields === undefined) {
       // Always a fragment under one key, so a note appearing or going
       // never remounts the field above it and its uncommitted text.
@@ -336,6 +346,7 @@ export function ContentFields({
         <React.Fragment key={`${inspection.nodeId}:${prop.name}`}>
           {field}
           {note}
+          {marker}
         </React.Fragment>
       );
     }
@@ -349,6 +360,7 @@ export function ContentFields({
       >
         {field}
         {note}
+        {marker}
         <PropExposeControl
           binding={fields}
           nodeId={inspection.nodeId}
