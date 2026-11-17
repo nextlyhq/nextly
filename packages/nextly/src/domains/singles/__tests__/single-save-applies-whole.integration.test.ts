@@ -369,10 +369,8 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
     }
   );
 
-  // PostgreSQL only: a kept field whose column changes type is the push's, which judges each
-  // stored value and converts it with a cast; a plain `SET DATA TYPE` with no cast is refused
-  // there. The rule picking the road reads each kept field's column as the Single's row declares
-  // it (`columnOf`), so the change is seen as one. SQLite and MySQL convert "12" on either road.
+  // PostgreSQL only, where a column's type changes only through a cast: a Single's text holding a
+  // whole number becomes a number field through its settings save, and its value is converted.
   it.skipIf(dialect !== "postgresql")(
     "turns a Single's text holding a whole number into a number field, its value converted",
     async () => {
