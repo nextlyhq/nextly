@@ -67,7 +67,11 @@ const SITE: SiteTokenSet = {
     { name: "number.ratio", kind: "number", values: { light: "1.5" } },
     { name: "duration.fast", kind: "duration", values: { light: "200ms" } },
     { name: "duration.flow", kind: "duration", values: { light: "var(--x)" } },
-    { name: "custom.grid", kind: "custom", values: { light: "repeat(3, 1fr)" } },
+    {
+      name: "custom.grid",
+      kind: "custom",
+      values: { light: "repeat(3, 1fr)" },
+    },
   ],
 };
 

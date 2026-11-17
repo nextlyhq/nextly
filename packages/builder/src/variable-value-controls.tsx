@@ -13,6 +13,7 @@
  * @module variable-value-controls
  */
 import {
+  emitTokenBlocks,
   getStyleProperty,
   resolveTokenPrefix,
   tokenCustomProperty,
@@ -200,6 +201,48 @@ function sizeControl(): StyleControl | undefined {
 }
 
 /**
+ * The control every number is edited with: a flex grow's, a plain number,
+ * widened past its floor of zero, since a number variable may be read by any
+ * property that takes one. The block panel draws numbers with the same field.
+ */
+const NUMBER_CONTROL: StyleControl | undefined = numberControl();
+
+function numberControl(): StyleControl | undefined {
+  const grow = getStyleProperty("flexGrow");
+  if (grow === undefined) return undefined;
+  const control = styleControlsFor(grow).controls.find(
+    candidate => candidate.leaf.kind === "number"
+  );
+  if (control === undefined || control.leaf.kind !== "number") return undefined;
+  const leaf = { ...control.leaf };
+  delete leaf.min;
+  return { ...control, leaf };
+}
+
+/**
+ * Why a value cannot be written into the site's stylesheet, in the words the
+ * stylesheet's own writer uses, or nothing when it can. Asked of the writer
+ * itself, with the variable alone, so the field refuses exactly what the
+ * site's save would refuse: a value that would load a file, among others.
+ */
+export function unwritableValue(
+  tokens: SiteTokenSet,
+  token: SiteToken,
+  value: string
+): string | undefined {
+  const alone: SiteTokenSet = {
+    tokens: [{ ...token, values: { light: value } }],
+    ...(tokens.prefix === undefined ? {} : { prefix: tokens.prefix }),
+  };
+  const { emitted, issues } = emitTokenBlocks(alone, ":root");
+  if (emitted.length > 0) return undefined;
+  return (
+    issues.find(issue => issue.severity === "error")?.message ??
+    "This value cannot be used."
+  );
+}
+
+/**
  * Whether a field's text is the stored value again, as a field shows a value
  * it cannot split into a number and a unit (`clamp(…)`). The numeric field
  * writes nothing for that, since nothing changed, so a refusal standing over
@@ -220,8 +263,10 @@ function sizeCommit(
   onCommit: (value: string) => void
 ): (next: unknown) => CommitOutcome {
   return next => {
-    if (typeof next !== "string" || next.trim() === "") return "unchanged";
-    const typed = next.trim();
+    // A number field commits a number, which a variable stores as text.
+    const text = typeof next === "number" ? String(next) : next;
+    if (typeof text !== "string" || text.trim() === "") return "unchanged";
+    const typed = text.trim();
     if (typed === value && refusedBy === undefined) return "unchanged";
     onCommit(typed);
     return "applied";
@@ -279,16 +324,30 @@ export function SizeInput({
 }
 
 /** A size under its own label, as a variable's Light and Dark are laid out. */
-function SizeValue({
+function SizeValue(props: ValueFieldProps): React.JSX.Element {
+  return <NumericValue {...props} control={SIZE_CONTROL} />;
+}
+
+/** A number under its own label: the numeric field, with no unit to choose. */
+function NumberValue(props: ValueFieldProps): React.JSX.Element {
+  return <NumericValue {...props} control={NUMBER_CONTROL} />;
+}
+
+/**
+ * The block panel's numeric field under a label, over a variable's value.
+ * Read-only, or without a control to draw, the plain field.
+ */
+function NumericValue({
   label,
   value,
   readOnly,
   refusedBy,
   onCommit,
   css,
-}: ValueFieldProps): React.JSX.Element {
+  control,
+}: ValueFieldProps & { control: StyleControl | undefined }): React.JSX.Element {
   const id = React.useId();
-  if (readOnly || SIZE_CONTROL === undefined) {
+  if (readOnly || control === undefined) {
     return (
       <TextValue
         label={label}
@@ -311,9 +370,71 @@ function SizeValue({
         placeholder={undefined}
         refusedBy={refusedBy}
         onCommit={onCommit}
-        control={SIZE_CONTROL}
+        control={control}
         css={css}
       />
+    </div>
+  );
+}
+
+/** A duration as a number and its unit, `200ms` or `0.2s`. */
+const DURATION = /^\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))(ms|s)\s*$/i;
+
+/** The units a duration is offered in. */
+const DURATION_UNITS = ["ms", "s"] as const;
+
+/** A typed duration: a bare number takes the unit on screen. */
+function durationOf(typed: string, unit: string): string {
+  const text = typed.trim();
+  return CSS_NUMBER.test(text) ? `${text}${unit}` : text;
+}
+
+/**
+ * A duration: a number with a menu of ms and s. Changing the unit keeps the
+ * number, as a size's unit menu does. A value it cannot split into the two,
+ * such as `var(…)`, is edited whole as text, and so is a read-only one.
+ */
+function DurationValue(props: ValueFieldProps): React.JSX.Element {
+  const { label, value, readOnly, refusedBy, onCommit } = props;
+  const id = React.useId();
+  const parts = DURATION.exec(value);
+  if (readOnly || parts === null) return <TextValue {...props} />;
+  const number = parts[1] ?? "";
+  const unit = (parts[2] ?? "ms").toLowerCase();
+  return (
+    <div className="nx-vars-editor__field">
+      <label className="nx-vars-editor__label" htmlFor={id}>
+        {label}
+      </label>
+      <div className="nx-vars-editor__duration">
+        <CommitInput
+          id={id}
+          value={number}
+          readOnly={false}
+          refusedBy={refusedBy}
+          onCommit={typed => onCommit(durationOf(typed, unit))}
+        />
+        <Select
+          value={unit}
+          onValueChange={next => {
+            if (next !== unit) onCommit(`${number}${next}`);
+          }}
+        >
+          <SelectTrigger
+            className="nx-vars-editor__duration-unit"
+            aria-label={`Unit for ${label}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {DURATION_UNITS.map(choice => (
+              <SelectItem key={choice} value={choice}>
+                {choice}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 }
@@ -482,6 +603,8 @@ const KIND_FIELDS: Partial<
   Record<SiteToken["kind"], (props: ValueFieldProps) => React.JSX.Element>
 > = {
   dimension: SizeValue,
+  number: NumberValue,
+  duration: DurationValue,
   fontFamily: FontValue,
   fontWeight: WeightValue,
 };
