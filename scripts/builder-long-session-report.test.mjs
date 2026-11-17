@@ -13,6 +13,7 @@ import {
   GRACE_MS,
   LONG_TASK_LIMIT_MS,
   heapGrowth,
+  judgeLock,
   judgeLongTasks,
   mergeLongTasks,
   readingsAt,
@@ -118,5 +119,86 @@ describe("the heap readings", () => {
 
   it("has no growth to report from a single reading", () => {
     expect(heapGrowth([{ minute: 1, heapBytes: 30e6 }])).toBeNull();
+  });
+});
+
+describe("judgeLock", () => {
+  // Ten minutes at a 15-second heartbeat: 40 beats, so at least 20 renewals
+  // confirmed at half rate.
+  const from = 2_000_000;
+  const to = from + 10 * 60_000;
+  const window = { from, to, heartbeatMs: 15_000 };
+  const claim = { at: from - 5000, method: "POST", answer: "acquired" };
+  const renewals = count =>
+    Array.from({ length: count }, (_, i) => ({
+      at: from + (i + 1) * 15_000,
+      method: "PATCH",
+      answer: "renewed",
+    }));
+  const quiet = [{ minute: 5, lock: null }];
+
+  it("passes a claim granted and renewed on every beat, with no notice", () => {
+    const verdict = judgeLock([claim, ...renewals(40)], quiet, window);
+    expect(verdict).toMatchObject({
+      claimed: true,
+      renewals: 40,
+      expected: 40,
+      refusals: 0,
+      passed: true,
+    });
+  });
+
+  it("fails a session in which no lock ran, though no notice showed", () => {
+    // The banner's absence alone would read this as a lock held throughout.
+    const verdict = judgeLock([], quiet, window);
+    expect(verdict.passed).toBe(false);
+    expect(verdict.problems).toEqual([
+      "the editor was never granted its document lock",
+      "the lock was renewed 0 time(s) in the session, fewer than the 20 its heartbeat makes at half rate",
+    ]);
+  });
+
+  it("fails when renewals stop partway, below half the heartbeat's rate", () => {
+    expect(judgeLock([claim, ...renewals(19)], quiet, window).passed).toBe(
+      false
+    );
+    expect(judgeLock([claim, ...renewals(20)], quiet, window).passed).toBe(
+      true
+    );
+  });
+
+  it("fails a renewal the server refused, naming when", () => {
+    const answers = [
+      claim,
+      ...renewals(40),
+      { at: from + 300_000, method: "PATCH", answer: "lost" },
+    ];
+    expect(judgeLock(answers, quiet, window).problems).toEqual([
+      'the lock\'s renewal was refused ("lost") 300 s into the session',
+    ]);
+  });
+
+  it("fails a reading whose notice offers to take the document back", () => {
+    const samples = [
+      { minute: 4.2, lock: { text: "Your claim ended.", takeBack: true } },
+    ];
+    expect(
+      judgeLock([claim, ...renewals(40)], samples, window).problems
+    ).toEqual([
+      'the editor lost its document lock at 4.2 min: "Your claim ended."',
+    ]);
+  });
+
+  it("does not count answers from before or after the session", () => {
+    const outside = [
+      { at: from - 1000, method: "PATCH", answer: "lost" },
+      { at: to + 1000, method: "PATCH", answer: "renewed" },
+    ];
+    const verdict = judgeLock(
+      [claim, ...renewals(20), ...outside],
+      quiet,
+      window
+    );
+    expect(verdict).toMatchObject({ renewals: 20, refusals: 0, passed: true });
   });
 });

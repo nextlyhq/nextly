@@ -2281,6 +2281,32 @@ describe("useDocumentLock: a long task on the main thread", () => {
     await waitFor(() => expect(result.current.state.status).toBe("lost"));
   });
 
+  it("asks once per lapse when every beat runs late, then reports the claim lost", async () => {
+    // A hidden tab's timers can stay slowed, so every beat runs late, not
+    // only the first after a freeze. With nothing answering, a late beat
+    // must not keep the deadline open forever: one renewal is asked, and the
+    // beat after it, late or not, reports the claim lost.
+    const { result } = renderWatched();
+    await waitFor(() => expect(result.current.state.status).toBe("held-by-me"));
+
+    patch.mockReturnValue(new Promise(() => {}));
+    const slowedBeat = async () => {
+      longTask(3 * DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+      await beat();
+    };
+    const beats = Math.ceil(
+      DOCUMENT_LOCK_LOSS_AFTER_MS / (4 * DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS)
+    );
+    for (let i = 0; i < beats; i += 1) await slowedBeat();
+    // The deadline is behind it now: this beat asks once more.
+    expect(result.current.state.status).toBe("held-by-me");
+    const asked = patch.mock.calls.length;
+
+    await slowedBeat();
+    await waitFor(() => expect(result.current.state.status).toBe("lost"));
+    expect(patch).toHaveBeenCalledTimes(asked);
+  });
+
   it("still reports the claim lost at the deadline when the beats ran on time", async () => {
     // The other side of the rule: only a late beat earns the extra ask. A
     // connection that stalls while every beat runs keeps today's deadline.

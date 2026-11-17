@@ -30,9 +30,11 @@
  *   collections is the check's own, and is left out of the long tasks.
  * - **Selection time**, the median of 10 selections, at the start and at the
  *   end.
- * - **The document lock**: what the editor's lock notice says, if it shows
- *   one, on every reading. A notice offering to take the document back means
- *   the lock was lost.
+ * - **The document lock**: every answer the lock route gave the page, and
+ *   what the editor's lock notice says, if it shows one, on every reading.
+ *   The session fails unless the editor was granted its claim and its
+ *   renewals were confirmed through the session, none refused, and no
+ *   notice offered to take the document back (`judgeLock`).
  *
  * Results go to `--json` (`e2e/.playwright/builder-speed/long-session.json`).
  *
@@ -42,6 +44,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { chromium } from "@playwright/test";
+import { DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS } from "nextly/document-lock";
 
 import {
   canvasOf,
@@ -76,6 +79,7 @@ import {
 } from "./editing.mjs";
 import {
   heapGrowth,
+  judgeLock,
   judgeLongTasks,
   mergeLongTasks,
   readingsAt,
@@ -103,6 +107,32 @@ async function drainLongTasks(page) {
     lists.push(tasks);
   }
   return lists;
+}
+
+/**
+ * Every reply of the lock route to a claim (POST) or a renewal (PATCH), as
+ * the page received it, on Node's clock: what the lock was told.
+ */
+function watchLock(page) {
+  const answers = [];
+  page.on("response", response => {
+    const method = response.request().method();
+    if (method !== "POST" && method !== "PATCH") return;
+    if (new URL(response.url()).pathname !== "/admin/api/document-lock") return;
+    const at = Date.now();
+    void response
+      .json()
+      .catch(() => null)
+      .then(body => {
+        answers.push({
+          at,
+          method,
+          httpStatus: response.status(),
+          answer: body?.item?.status ?? null,
+        });
+      });
+  });
+  return answers;
 }
 
 /** What the editor's lock notice says, or null when it shows none. */
@@ -192,6 +222,7 @@ async function session() {
   try {
     const { page, cdp } = await measuredPage(browser);
     const watcher = watchRequests(page);
+    const lockAnswers = watchLock(page);
     await signIn(page);
     const ids = await fixtureIds(page);
 
@@ -237,6 +268,7 @@ async function session() {
     // which the speed check measures; the session starts here.
     await drainLongTasks(page);
     const startedAt = await pageNow(page);
+    const lockFrom = Date.now();
     const endsAt = startedAt + MINUTES * 60_000;
     await read(startedAt);
     let nextRead = startedAt + READ_EVERY_MS;
@@ -256,6 +288,7 @@ async function session() {
     );
     const last = await read(startedAt);
     const endedAt = await pageNow(page);
+    const lockTo = Date.now();
 
     const blocksAtEnd = await canvasOf(page)
       .locator(".nx-canvas [data-nx-node]")
@@ -274,6 +307,11 @@ async function session() {
       selectionAtStart,
       selectionAtEnd,
       lockAtEnd: last.lock,
+      lock: judgeLock(lockAnswers, samples, {
+        from: lockFrom,
+        to: lockTo,
+        heartbeatMs: DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS,
+      }),
     };
   } catch (error) {
     // What the page showed, beside the results, for whoever reads why.
@@ -298,7 +336,6 @@ async function main() {
     if (OWN_SERVER) server = await startOwnServer();
     const s = await session();
     const verdict = judgeLongTasks(s.tasks, s);
-    const lockLost = s.samples.find(sample => sample.lock?.takeBack);
     const out = {
       base: BASE,
       rate: RATE,
@@ -318,7 +355,7 @@ async function main() {
         at: readingsAt(s.samples, [1, 10, 20, 30]),
         samples: s.samples,
       },
-      lock: { lost: lockLost !== undefined, atEnd: s.lockAtEnd },
+      lock: { ...s.lock, noticeAtEnd: s.lockAtEnd },
     };
     const json = option("json") ?? path.join(OUT_DIR, "long-session.json");
     fs.writeFileSync(json, `${JSON.stringify(out, null, 2)}\n`);
@@ -327,6 +364,7 @@ async function main() {
         `- long tasks after the first minute: ${String(verdict.counted)}, the longest ${String(verdict.longestMs)} ms, ${String(verdict.over.length)} over 1000 ms\n` +
         `- selection: ${String(s.selectionAtStart)} ms at the start, ${String(s.selectionAtEnd)} ms at the end\n` +
         `- heap from the first minute to the end: ${String(out.heap.growthFromMinuteOnePercent)}%\n` +
+        `- the lock: ${s.lock.claimed ? "claimed" : "never claimed"}, renewed ${String(s.lock.renewals)} time(s) of about ${String(s.lock.expected)} beats, ${String(s.lock.refusals)} refusal(s)\n` +
         `- results written to ${path.relative(ROOT, json)}`
     );
     const problems = [
@@ -334,11 +372,7 @@ async function main() {
         task =>
           `a main-thread task of ${String(task.ms)} ms at ${String(task.atSecond)} s (limit 1000 ms after the first minute)`
       ),
-      ...(lockLost
-        ? [
-            `the editor lost its document lock at ${lockLost.minute.toFixed(1)} min: "${lockLost.lock.text}"`,
-          ]
-        : []),
+      ...s.lock.problems,
     ];
     if (problems.length > 0) {
       console.error(

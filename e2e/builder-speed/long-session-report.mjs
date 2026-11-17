@@ -98,3 +98,59 @@ export function heapGrowth(samples) {
     (((last.heapBytes - first.heapBytes) / first.heapBytes) * 100).toFixed(1)
   );
 }
+
+/**
+ * Whether the editor held its document lock through the session, judged
+ * from the lock's own answers rather than from the absence of a notice: a
+ * session in which no lock ran at all would show no notice either.
+ *
+ * `answers` are the lock route's replies the page received (`method`,
+ * `answer`, the reply's `status` field, and `at`); `samples` the readings,
+ * each with the lock notice it saw. The editor must have been granted a
+ * claim, renewals must have been confirmed through the session at no less
+ * than half the heartbeat's rate (a slowed browser stretches its beats), no
+ * renewal or claim in the session may have been refused, and no reading may
+ * show a notice offering to take the document back.
+ */
+export function judgeLock(answers, samples, { from, to, heartbeatMs }) {
+  const inSession = answers.filter(a => a.at >= from && a.at <= to);
+  const claimed = answers.some(
+    a => a.method === "POST" && a.answer === "acquired"
+  );
+  const renewals = inSession.filter(
+    a => a.method === "PATCH" && a.answer === "renewed"
+  ).length;
+  const expected = Math.floor((to - from) / heartbeatMs);
+  const wanted = Math.max(1, Math.ceil(expected / 2));
+  const refusals = inSession.filter(
+    a =>
+      (a.method === "PATCH" && a.answer === "lost") ||
+      (a.method === "POST" && a.answer === "held")
+  );
+  const notice = samples.find(s => s.lock?.takeBack);
+  const problems = [
+    ...(claimed ? [] : ["the editor was never granted its document lock"]),
+    ...(renewals >= wanted
+      ? []
+      : [
+          `the lock was renewed ${String(renewals)} time(s) in the session, fewer than the ${String(wanted)} its heartbeat makes at half rate`,
+        ]),
+    ...refusals.map(
+      a =>
+        `the lock's ${a.method === "PATCH" ? "renewal" : "claim"} was refused ("${a.answer}") ${String(Math.round((a.at - from) / 1000))} s into the session`
+    ),
+    ...(notice
+      ? [
+          `the editor lost its document lock at ${notice.minute.toFixed(1)} min: "${notice.lock.text}"`,
+        ]
+      : []),
+  ];
+  return {
+    claimed,
+    renewals,
+    expected,
+    refusals: refusals.length,
+    problems,
+    passed: problems.length === 0,
+  };
+}

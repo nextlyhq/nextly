@@ -99,8 +99,9 @@
  * the deadline behind it, sends its renewal anyway and lets the answer decide:
  * renewed keeps the claim, a colleague's claim surrenders it as any refusal
  * does, and a lease the server let go with nobody taking it is claimed again
- * with a plain claim, which displaces nobody. A renewal that does not answer
- * by the next beat, which runs on time, meets the deadline there as before.
+ * with a plain claim, which displaces nobody. It asks once per lapse: a
+ * renewal that does not answer by the next beat meets the deadline there as
+ * before, whether that beat runs on time or late again.
  *
  * ## The beat also says whether the document changed
  *
@@ -700,6 +701,10 @@ export function useDocumentLock({
 
     // When the last beat began, so the next one can tell it ran late.
     let lastBeatAt = Date.now();
+    // The confirmation a late beat last asked to recover from. One ask per
+    // lapse: a hidden tab's timers can stay slowed, so every beat after it may
+    // run late too, and without this none of them would ever surrender.
+    let recoveredFrom: number | null = null;
     const heartbeat = setInterval(() => {
       if (cancelled) return;
 
@@ -714,14 +719,16 @@ export function useDocumentLock({
       // 🔴 Judged before anything is sent, so a request that never settles
       // cannot hold the claim open past the lease it rests on. Unless the
       // deadline passed while no beat could run: then nothing has said the
-      // claim is gone, and this beat's renewal asks. Only the late beat asks;
-      // the next one runs on time and judges as before.
-      const recovering =
+      // claim is gone, and this beat's renewal asks, once for this lapse; the
+      // next beat judges as before.
+      const pastDeadline =
         token !== null && beganAt - confirmedAt >= DOCUMENT_LOCK_LOSS_AFTER_MS;
-      if (recovering && !late) {
+      const recovering = pastDeadline && late && recoveredFrom !== confirmedAt;
+      if (pastDeadline && !recovering) {
         surrender({ status: "lost" });
         return;
       }
+      if (recovering) recoveredFrom = confirmedAt;
 
       // A decision or a repair waiting on the slot is asked before anything
       // else, so neither is overtaken by the poll below and turned into a
