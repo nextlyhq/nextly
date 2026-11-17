@@ -923,6 +923,27 @@ describe("an entry's list split into pages", () => {
     });
   });
 
+  it("answers a public route's redirect beneath a boundary under Cache Components, so a browser without JavaScript follows it", async () => {
+    // Thrown above every boundary, Next.js answers a redirect on a path no
+    // build listed with an empty document only its script follows; beneath
+    // one, it writes a refresh a browser follows by itself.
+    vi.stubEnv("__NEXT_CACHE_COMPONENTS", "true");
+    try {
+      const route = createPublicContentPage(pagedConfig());
+      const answer = (await route.ContentPage({
+        params: { slug: ["blog", "hello", "page", "1"] },
+      })) as ReactElement;
+      expect(answer.type).toBe(Suspense);
+      await expect(
+        throughBoundary(Promise.resolve(answer))
+      ).rejects.toMatchObject({
+        digest: expect.stringContaining(";/blog/hello;308;"),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([
     ["a page past the list's last", ["blog", "hello", "page", "4"]],
     ["a page number written another way", ["blog", "hello", "page", "02"]],
