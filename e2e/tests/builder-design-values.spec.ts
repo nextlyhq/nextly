@@ -185,14 +185,14 @@ test("a font variable is picked from the site's and the system's fonts, and a we
     await expect(
       page.getByRole("button", { name: "Manage fonts…" })
     ).toBeVisible();
+    // Picked by name, and stored as that family exactly.
     await list
       .getByRole("group", { name: "System" })
-      .getByRole("option")
-      .first()
+      .getByRole("option", { name: /^Monospace/ })
       .click();
     await expect
       .poll(() => storedValue(page, "font.heading"))
-      .not.toBe("Georgia, serif");
+      .toBe("monospace");
     await page.keyboard.press("Escape");
     await expect(editor).toBeHidden();
 

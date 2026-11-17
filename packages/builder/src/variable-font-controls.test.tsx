@@ -152,7 +152,7 @@ describe("a font variable", () => {
     expect(document.activeElement).not.toBe(row);
   });
 
-  it("stores the family chosen", async () => {
+  it("stores the family chosen, by name, each time", async () => {
     const onChange = vi.fn();
     render(
       <Hosted
@@ -162,15 +162,18 @@ describe("a font variable", () => {
       />
     );
     const editor = await openEditor(/^Heading/);
-    fireEvent.click(within(editor).getByRole("button", { name: /^Font, / }));
-    const system = screen.getByRole("group", { name: "System", hidden: true });
-    fireEvent.click(
-      within(system).getAllByRole("option", { hidden: true })[0]!
-    );
-    expect(savedValue(onChange, "font.heading")).not.toBe(
-      '"Inter", sans-serif'
-    );
-    expect(savedValue(onChange, "font.heading")).toBeDefined();
+    const choose = (group: string, name: string): void => {
+      fireEvent.click(within(editor).getByRole("button", { name: /^Font, / }));
+      const list = screen.getByRole("group", { name: group, hidden: true });
+      fireEvent.click(
+        within(list).getByRole("option", { name: new RegExp(`^${name}`), hidden: true })
+      );
+    };
+    // Two different picks, so a field writing one fixed family fails.
+    choose("System", "Monospace");
+    expect(savedValue(onChange, "font.heading")).toBe("monospace");
+    choose("On this site", "Inter");
+    expect(savedValue(onChange, "font.heading")).toBe('"Inter", system-ui');
   });
 });
 
