@@ -110,9 +110,9 @@ async function named(
   const roles: string[] = [];
   for (const each of waiting) {
     if (each === null) continue;
-    if (each.kind === "user") users.push(each.id);
-    else if (each.kind === "role") roles.push(each.id);
-    else roles.push(...each.ids);
+    if ("ids" in each) roles.push(...each.ids);
+    else if (each.kind === "user") users.push(each.id);
+    else roles.push(each.id);
   }
   const names = await namesOf(adapter, { users, roles });
   const role = (id: string): WaitingRole => ({
@@ -121,6 +121,18 @@ async function named(
   });
   return waiting.map((each): PartWaitingFor | null => {
     if (each === null) return null;
+    if ("ids" in each) {
+      return {
+        kind: "roles",
+        roles: each.ids
+          .map(role)
+          .sort(
+            (a, b) =>
+              (a.name ?? "").localeCompare(b.name ?? "") ||
+              a.id.localeCompare(b.id)
+          ),
+      };
+    }
     if (each.kind === "user") {
       return {
         kind: "user",
@@ -128,16 +140,7 @@ async function named(
         name: names.users.get(each.id) ?? null,
       };
     }
-    if (each.kind === "role") return { kind: "roles", roles: [role(each.id)] };
-    return {
-      kind: "roles",
-      roles: each.ids
-        .map(role)
-        .sort(
-          (a, b) =>
-            (a.name ?? "").localeCompare(b.name ?? "") ||
-            a.id.localeCompare(b.id)
-        ),
-    };
+    // A role assigned: anyone holding it.
+    return { kind: "roles", roles: [role(each.id)] };
   });
 }
