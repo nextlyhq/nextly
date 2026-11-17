@@ -481,7 +481,7 @@
   gap: 0.375rem;
 }
 
-.nx-hide-on > button {
+.nx-hide-on__toggle {
   position: relative;
   display: inline-flex;
   flex-direction: column;
@@ -500,19 +500,19 @@
   cursor: pointer;
 }
 
-.nx-hide-on > button[aria-pressed="true"] {
+.nx-hide-on__toggle[aria-pressed="true"] {
   border-color: var(--nx-foreground);
   background: var(--nx-foreground);
   color: var(--nx-background);
   font-weight: 600;
 }
 
-.nx-hide-on > button:disabled {
+.nx-hide-on__toggle:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.nx-hide-on > button:focus-visible {
+.nx-hide-on__toggle:focus-visible {
   outline: 2px solid var(--nx-ring);
   outline-offset: 1px;
 }
@@ -530,7 +530,7 @@
 }
 
 /* The strike across a hidden device's icon. */
-.nx-hide-on > button[aria-pressed="true"]::after {
+.nx-hide-on__toggle[aria-pressed="true"]::after {
   content: "";
   position: absolute;
   top: calc(0.3125rem + 0.5rem);
@@ -542,7 +542,7 @@
 }
 
 /* The device being edited, marked with a dot at its top corner. */
-.nx-hide-on > button[data-editing]::before {
+.nx-hide-on__toggle[data-editing]::before {
   content: "";
   position: absolute;
   inset-block-start: 0.1875rem;

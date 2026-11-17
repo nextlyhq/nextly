@@ -113,6 +113,7 @@ export function HideOn({
             <CssHint key={device.id} writes={hideOnWrites(device.widths)}>
               <button
                 type="button"
+                className="nx-hide-on__toggle"
                 aria-pressed={device.hidden}
                 aria-label={`Hide on ${device.label}`}
                 disabled={held}

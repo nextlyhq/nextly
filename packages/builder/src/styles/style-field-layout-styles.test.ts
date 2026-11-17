@@ -210,7 +210,7 @@ describe("Hide on", () => {
   it("is separate toggles, a gap between them, each with its own edge", () => {
     // A joined strip reads as "pick one"; this is "pick any".
     expect(ruleBody(CHROME, ".nx-hide-on")).toContain("gap: 0.375rem");
-    const button = ruleBody(CHROME, ".nx-hide-on > button");
+    const button = ruleBody(CHROME, ".nx-hide-on__toggle");
     expect(button).toContain("border: 1px solid var(--nx-border)");
     expect(button).toContain("border-radius: var(--radius-md)");
   });
@@ -225,21 +225,18 @@ describe("Hide on", () => {
   });
 
   it("fills a device the block is hidden on, and strikes its icon through", () => {
-    const hidden = ruleBody(
-      CHROME,
-      '.nx-hide-on > button[aria-pressed="true"]'
-    );
+    const hidden = ruleBody(CHROME, '.nx-hide-on__toggle[aria-pressed="true"]');
     expect(hidden).toContain("background: var(--nx-foreground)");
     expect(hidden).toContain("color: var(--nx-background)");
     expect(
-      ruleBody(CHROME, '.nx-hide-on > button[aria-pressed="true"]::after')
+      ruleBody(CHROME, '.nx-hide-on__toggle[aria-pressed="true"]::after')
     ).toContain("rotate(-45deg)");
   });
 
   it("marks the device being edited with a dot, not a line", () => {
     const marker = ruleBody(
       CHROME,
-      ".nx-hide-on > button[data-editing]::before"
+      ".nx-hide-on__toggle[data-editing]::before"
     );
     expect(marker).toContain("border-radius: 50%");
     expect(marker).toContain("background: var(--nx-ring)");

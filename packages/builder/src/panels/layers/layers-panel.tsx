@@ -573,6 +573,66 @@ function NotQuotedFact({
   ) : null;
 }
 
+/**
+ * Whether the block is hidden on the device shown, or with the block around
+ * it, in words on screen and read out.
+ */
+function HiddenFact({
+  node,
+  hiddenOn,
+}: {
+  node: LayerNode;
+  hiddenOn: string | undefined;
+}): React.JSX.Element | null {
+  if (node.hiddenHere === true) {
+    // A word, on screen and read out: hidden on the device shown. A pointer
+    // resting on it is told every device it is hidden on.
+    return (
+      <span
+        className="nx-layer-row__hidden"
+        {...(hiddenOn === undefined ? {} : { title: `Hidden on ${hiddenOn}` })}
+      >
+        Hidden
+      </span>
+    );
+  }
+  if (node.hiddenWith === undefined) return null;
+  // Hidden because the block around it is, which is where it is shown again:
+  // named, as an inherited lock names its block.
+  return (
+    <span className="nx-layer-row__hidden" data-inherited="">
+      Hidden with {node.hiddenWith}
+    </span>
+  );
+}
+
+/**
+ * The eye-slash of a block hidden on a device other than the one shown,
+ * naming the devices: the same reading Hide on and the canvas's stripes take.
+ * None where the row already says it is hidden here or with its parent.
+ */
+function DeviceHiddenFact({
+  node,
+  hiddenOn,
+}: {
+  node: LayerNode;
+  hiddenOn: string | undefined;
+}): React.JSX.Element | null {
+  if (!node.breakpointHidden) return null;
+  if (node.hiddenHere === true || node.hiddenWith !== undefined) return null;
+  return (
+    <Badge
+      icon={<EyeOff size={12} />}
+      text={
+        hiddenOn === undefined
+          ? "Hidden at some screen sizes"
+          : `Hidden on ${hiddenOn}`
+      }
+      tooltip
+    />
+  );
+}
+
 /** What is true about a block, each in words a screen reader reads. */
 function RowFacts({
   node,
@@ -584,24 +644,7 @@ function RowFacts({
 }): React.JSX.Element {
   return (
     <>
-      {node.hiddenHere === true ? (
-        // A word, on screen and read out: hidden on the device shown. A
-        // pointer resting on it is told every device it is hidden on.
-        <span
-          className="nx-layer-row__hidden"
-          {...(hiddenOn === undefined
-            ? {}
-            : { title: `Hidden on ${hiddenOn}` })}
-        >
-          Hidden
-        </span>
-      ) : node.hiddenWith === undefined ? null : (
-        // Hidden because the block around it is, which is where it is shown
-        // again: named, as an inherited lock names its block.
-        <span className="nx-layer-row__hidden" data-inherited="">
-          Hidden with {node.hiddenWith}
-        </span>
-      )}
+      <HiddenFact node={node} hiddenOn={hiddenOn} />
       {/* Both locks in the row's own ink, so each reads against the row in
           every state it can be in. A lock held from a block around it is
           quieter by weight, a thinner stroke, never by a fainter colour; both
@@ -619,21 +662,7 @@ function RowFacts({
           lock="inherited"
         />
       )}
-      {node.breakpointHidden &&
-      node.hiddenHere !== true &&
-      node.hiddenWith === undefined ? (
-        // The eye-slash, naming the devices: the same reading Hide on and the
-        // canvas's stripes take.
-        <Badge
-          icon={<EyeOff size={12} />}
-          text={
-            hiddenOn === undefined
-              ? "Hidden at some screen sizes"
-              : `Hidden on ${hiddenOn}`
-          }
-          tooltip
-        />
-      ) : null}
+      <DeviceHiddenFact node={node} hiddenOn={hiddenOn} />
       {node.conditional ? (
         <Badge
           icon={<SlidersHorizontal size={12} />}
