@@ -29,6 +29,7 @@ import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { nodeElement } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
+import { returnFocusToCanvas } from "./canvas-escape";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import {
@@ -164,6 +165,7 @@ export function FirstAddChoosers({
   // Focus moves into the chooser once it is placed, and goes back afterwards.
   // Once per block: a chooser placed again (scrolled back into view, or
   // after a drag) does not take focus from where the author has since gone.
+  const { frame } = canvasFrame;
   const returnTo = React.useRef<Element | null>(null);
   const focusedFor = React.useRef<string | undefined>(undefined);
   const placed = rect !== null;
@@ -173,15 +175,32 @@ export function FirstAddChoosers({
     focusedFor.current = nodeId;
     const own = layer.current?.ownerDocument;
     returnTo.current = own?.activeElement ?? null;
-    body.current
-      ?.querySelector<HTMLElement>("[tabindex='0']")
-      ?.focus({ preventScroll: true });
-  }, [nodeId, placed]);
+    const tile = (): HTMLElement | null | undefined =>
+      body.current?.querySelector<HTMLElement>("[tabindex='0']");
+    tile()?.focus({ preventScroll: true });
+    // The surface the block was added from may hand focus on once it has
+    // closed (the block picker hands it to the canvas, a turn later). Taken
+    // back only from where nothing is being done: the canvas itself, or no
+    // element at all.
+    const later = setTimeout(() => {
+      const active = own?.activeElement ?? null;
+      const idle = active === null || active === own?.body || active === frame;
+      if (idle && !body.current?.contains(active)) {
+        tile()?.focus({ preventScroll: true });
+      }
+    }, 0);
+    return () => clearTimeout(later);
+  }, [nodeId, placed, frame]);
   const done = React.useCallback(() => {
     const back = returnTo.current;
     returnTo.current = null;
-    if (isHTMLElement(back) && back.isConnected) back.focus();
-  }, []);
+    if (isHTMLElement(back) && back.isConnected && back !== frame) {
+      back.focus({ preventScroll: true });
+      return;
+    }
+    // From a surface that has gone (the block picker), back to the canvas.
+    if (frame !== null) returnFocusToCanvas(frame);
+  }, [frame]);
 
   return (
     <div ref={layer} className="nx-first-add" {...{ [CHROME_ATTRIBUTE]: "" }}>
