@@ -408,8 +408,11 @@ export interface PageBuilderOptions {
    *   in the page builder, drawn around each page by a page route given the
    *   `layouts` option.
    * - `"code"`: the site's own code, around its page route. Set this on a
-   *   site whose layout already draws its header and footer, so the page
-   *   builder leaves them to it.
+   *   site whose layout already draws its header and footer.
+   *
+   * It says who draws them; the page route decides what visitors get. A
+   * route draws a set only when given the `layouts` option, so a site whose
+   * code draws its own leaves that option off the route too.
    *
    * Read once at boot. Any other value is refused then, naming the option.
    */
