@@ -84,6 +84,11 @@ export interface LanguagePanelProps {
    * language's, so the panel says so in whichever language is on screen.
    */
   sharedChangesPending?: boolean;
+  /**
+   * Each language's stage in the workflow that holds publishing, by language
+   * code. Absent, or empty, where no workflow is attached.
+   */
+  reviewStages?: Readonly<Record<string, string>>;
   className?: string;
 }
 
