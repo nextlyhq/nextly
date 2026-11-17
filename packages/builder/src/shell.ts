@@ -745,6 +745,9 @@ export {
 // and the way a host hands the tab its search.
 export { stylesTabMatches } from "./styles-tab-matches";
 export { SharedStylesHostSearch } from "./shared-styles-panel";
+// Where a block type's styles sit in the Styles tab, so a host sending the
+// author there ("Edit block styles") reveals the group the tab draws.
+export { blockStyleFoldId } from "./block-looks-group";
 // The site's fonts, for every Font control the host draws: the block panel's
 // and a font variable's in Design.
 export { FontChoicesContext } from "./font-family-field";
