@@ -137,7 +137,7 @@ function appliedInForce(applied: CascadeAt): (device: string) => LayoutValues {
  * block's defaults); a shared style reads its own values, which are what its
  * Arrange writes.
  */
-export function layoutTiers(
+function layoutTiers(
   surroundings: StyleFieldSurroundings,
   target: StyleTarget,
   applied: CascadeAt | undefined
@@ -168,7 +168,7 @@ export const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a block's Layout is drawn by Arrange: a container, not Columns. */
-export function arrangesLayout(blockType: string | undefined): boolean {
+function arrangesLayout(blockType: string | undefined): boolean {
   return blockType !== COLUMNS_ROW;
 }
 
@@ -263,18 +263,12 @@ const MODE_LABELS = { stack: "Stack", row: "Row", grid: "Grid" } as const;
 
 /** What a mode writes, small, as a developer reads it. */
 function modeLine(arrange: PlainArrange): string {
-  switch (arrange.mode) {
-    case "stack":
-      return arrange.flex
-        ? `display: flex · flex-direction: ${arrange.reverse ? "column-reverse" : "column"}`
-        : "display: block";
-    case "row":
-      return `display: flex · flex-direction: ${arrange.stacked ? (arrange.reverse ? "column-reverse" : "column") : arrange.reverse ? "row-reverse" : "row"}`;
-    case "grid":
-      return "display: grid";
-    case "custom":
-      return "Set in CSS: the rows below hold it.";
-  }
+  if (arrange.mode === "grid") return "display: grid";
+  if (arrange.mode === "custom") return "Set in CSS: the rows below hold it.";
+  if (arrange.mode === "stack" && !arrange.flex) return "display: block";
+  const column = arrange.mode === "stack" || arrange.stacked;
+  const direction = column ? "column" : "row";
+  return `display: flex · flex-direction: ${direction}${arrange.reverse ? "-reverse" : ""}`;
 }
 
 /** What Arrange reads at the edited device, shared by its rows and the section. */
@@ -983,6 +977,29 @@ function sharedColumnOnSpace(
 }
 
 /**
+ * The editor and target Space between writes through: in a Stack in block
+ * flow, ones that also write its flex column; elsewhere the panel's own.
+ */
+function spaceWriters(
+  surroundings: StyleFieldSurroundings,
+  reading: ArrangeReading,
+  target: StyleTarget
+): { editor: EditorState; written: StyleTarget } {
+  const { arrange } = reading;
+  if (arrange.mode !== "stack" || arrange.flex) {
+    return { editor: surroundings.editor, written: target };
+  }
+  const { state, breakpoint, nodeId, policy } = surroundings;
+  return {
+    editor: columnOnSpace(surroundings.editor, nodeId, state, breakpoint),
+    written:
+      target.kind === "shared"
+        ? sharedColumnOnSpace(target, state, breakpoint, policy)
+        : target,
+  };
+}
+
+/**
  * Space between: the section's own gap field, so a variable or a token works
  * as on any spacing field, named in plain words. A Grid can set rows and
  * columns apart, which writes `row-gap` and `column-gap`.
@@ -1003,16 +1020,7 @@ function SpaceBetween({
   const setApart = space.rowGap !== undefined || space.columnGap !== undefined;
   const [apartAsked, setApartAsked] = React.useState(false);
   const apart = apartOffered && (setApart || apartAsked);
-  const { arrange } = reading;
-  const flow = arrange.mode === "stack" && !arrange.flex;
-  const { state, breakpoint, nodeId, policy } = surroundings;
-  const editor = flow
-    ? columnOnSpace(surroundings.editor, nodeId, state, breakpoint)
-    : surroundings.editor;
-  const written =
-    flow && target.kind === "shared"
-      ? sharedColumnOnSpace(target, state, breakpoint, policy)
-      : target;
+  const { editor, written } = spaceWriters(surroundings, reading, target);
   const drawn = properties.filter(property =>
     apart ? property.property !== "gap" : property.property === "gap"
   );

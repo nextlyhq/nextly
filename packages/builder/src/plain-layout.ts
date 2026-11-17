@@ -133,24 +133,22 @@ function isColumn(values: LayoutValues): boolean {
   );
 }
 
+/** Each keyword's place on its axis: start, centre or end. */
+const AXIS_PLACES: Readonly<Record<string, 0 | 1 | 2>> = {
+  start: 0,
+  "flex-start": 0,
+  left: 0,
+  top: 0,
+  center: 1,
+  end: 2,
+  "flex-end": 2,
+  right: 2,
+  bottom: 2,
+};
+
 /** A keyword's place on its axis, or `undefined` for one with none. */
 function axisPlace(value: string | undefined): 0 | 1 | 2 | undefined {
-  switch (value) {
-    case "start":
-    case "flex-start":
-    case "left":
-    case "top":
-      return 0;
-    case "center":
-      return 1;
-    case "end":
-    case "flex-end":
-    case "right":
-    case "bottom":
-      return 2;
-    default:
-      return undefined;
-  }
+  return value === undefined ? undefined : AXIS_PLACES[value];
 }
 
 const X_POINTS: readonly AlignX[] = ["left", "center", "right"];
@@ -177,6 +175,20 @@ function alignAxes(kind: "row" | "column" | "grid"): {
 }
 
 /**
+ * One axis of a point read from its value: its place, the start where it
+ * holds none, a spread left to Spread (read as the start), or `"custom"`.
+ */
+function axisRead(
+  value: string | undefined,
+  spreadHere: boolean
+): 0 | 1 | 2 | "custom" {
+  if (value === undefined) return 0;
+  const place = axisPlace(value);
+  if (place !== undefined) return place;
+  return spreadHere && SPREADS.has(value) ? 0 : "custom";
+}
+
+/**
  * A 3×3 point read from the values in force, or `undefined` for none chosen
  * (the default stretch). A spread, not a place, leaves the main axis unread.
  */
@@ -188,15 +200,11 @@ function readAlign(
   const xValue = values[axes.x];
   const yValue = values[axes.y];
   if (xValue === undefined && yValue === undefined) return undefined;
-  const x = xValue === undefined ? 0 : axisPlace(xValue);
-  const y = yValue === undefined ? 0 : axisPlace(yValue);
   // A spread on the main axis is Spread's, not Align's.
-  const spreadX = kind === "row" && SPREADS.has(xValue ?? "");
-  const spreadY = kind === "column" && SPREADS.has(yValue ?? "");
-  if ((x === undefined && !spreadX) || (y === undefined && !spreadY)) {
-    return "custom";
-  }
-  return { x: X_POINTS[x ?? 0] ?? "left", y: Y_POINTS[y ?? 0] ?? "top" };
+  const x = axisRead(xValue, kind === "row");
+  const y = axisRead(yValue, kind === "column");
+  if (x === "custom" || y === "custom") return "custom";
+  return { x: X_POINTS[x] ?? "left", y: Y_POINTS[y] ?? "top" };
 }
 
 const SPREAD_OF: Readonly<Record<string, Spread>> = {
@@ -207,7 +215,7 @@ const SPREAD_OF: Readonly<Record<string, Spread>> = {
 const SPREADS: ReadonlySet<string> = new Set(Object.keys(SPREAD_OF));
 
 /** The keyword a Spread writes; Packed writes none. */
-export const SPREAD_KEYWORDS: Readonly<Record<Spread, string | null>> = {
+const SPREAD_KEYWORDS: Readonly<Record<Spread, string | null>> = {
   packed: null,
   between: "space-between",
   around: "space-around",
@@ -306,23 +314,15 @@ function readGrid(values: LayoutValues): PlainArrange {
   return { mode: "grid", columns, rows, align };
 }
 
-/** A label for each mode, as the panel says it. */
-export const ARRANGE_LABELS: Readonly<Record<PlainArrange["mode"], string>> = {
-  stack: "Stack",
-  row: "Row",
-  grid: "Grid",
-  custom: "Custom",
-};
-
 /** The template a Grid's columns write. */
-export function columnsTemplate(columns: GridColumns): string {
+function columnsTemplate(columns: GridColumns): string {
   return columns.kind === "count"
     ? `repeat(${String(columns.count)}, minmax(0, 1fr))`
     : `repeat(auto-fill, minmax(${columns.min}, 1fr))`;
 }
 
 /** The template a Grid's rows write, or `null` for Auto. */
-export function rowsTemplate(rows: number | undefined): string | null {
+function rowsTemplate(rows: number | undefined): string | null {
   return rows === undefined ? null : `repeat(${String(rows)}, auto)`;
 }
 
@@ -583,36 +583,6 @@ export function readSpace(tiers: LayoutTiers, editing: string): PlainSpace {
   };
 }
 
-/**
- * The writes Space between makes: `gap`, or `row-gap` and `column-gap` once
- * set apart, each cleared where it is not given. A Stack in block flow becomes
- * a flex column to space its blocks, as its Align does.
- */
-export function planSpace(
-  tiers: LayoutTiers,
-  editing: string,
-  space: PlainSpace
-): LayoutWrite[] {
-  const current = readArrange(tiers, editing);
-  const writes: LayoutWrite[] = [];
-  const anything =
-    space.gap !== undefined ||
-    space.rowGap !== undefined ||
-    space.columnGap !== undefined;
-  if (current.mode === "stack" && !current.flex && anything) {
-    writes.push(
-      { device: editing, property: "display", value: "flex" },
-      { device: editing, property: "flexDirection", value: "column" }
-    );
-  }
-  writes.push(
-    settled(tiers, editing, "gap", space.gap ?? null),
-    settled(tiers, editing, "rowGap", space.rowGap ?? null),
-    settled(tiers, editing, "columnGap", space.columnGap ?? null)
-  );
-  return writes;
-}
-
 /** The display a Custom arrangement's plain rewrite keeps. */
 const PLAIN_DISPLAY: Readonly<Record<string, "flex" | "grid">> = {
   flex: "flex",
@@ -620,6 +590,41 @@ const PLAIN_DISPLAY: Readonly<Record<string, "flex" | "grid">> = {
   grid: "grid",
   "inline-grid": "grid",
 };
+
+/** The alignment values a plain rewrite clears: those with no 3×3 point. */
+function unplainAlign(
+  values: LayoutValues,
+  kind: "row" | "column" | "grid"
+): LayoutProperty[] {
+  const axes = alignAxes(kind);
+  return [axes.x, axes.y].filter(property => {
+    const spreadHere = property === "justifyContent" && kind !== "grid";
+    return axisRead(values[property], spreadHere) === "custom";
+  });
+}
+
+/** The Grid templates a plain rewrite clears: those with no plain form. */
+function unplainTemplates(values: LayoutValues): LayoutProperty[] {
+  const cleared: LayoutProperty[] = [];
+  if (readColumns(values.gridTemplateColumns) === "custom") {
+    cleared.push("gridTemplateColumns");
+  }
+  if (readRows(values.gridTemplateRows) === "custom") {
+    cleared.push("gridTemplateRows");
+  }
+  return cleared;
+}
+
+/** The arrangement a plain rewrite's alignment is read by. */
+function plainKind(
+  display: "flex" | "grid" | undefined,
+  values: LayoutValues
+): "row" | "column" | "grid" {
+  if (display === "grid") return "grid";
+  return display === "flex" && isColumn({ ...values, display: "flex" })
+    ? "column"
+    : "row";
+}
 
 /**
  * "Use plain controls": the writes that turn a Custom arrangement into the
@@ -632,35 +637,13 @@ export function planPlain(tiers: LayoutTiers, editing: string): LayoutWrite[] {
   if (readArrange(tiers, editing).mode !== "custom") return [];
   const values = tiers.inForce(editing);
   const display = PLAIN_DISPLAY[values.display ?? ""];
-  const writes: LayoutWrite[] = [
-    settled(tiers, editing, "display", display ?? null),
+  const cleared: LayoutProperty[] = [
+    ...(display === undefined ? (["flexDirection"] as const) : []),
+    ...unplainAlign(values, plainKind(display, values)),
+    ...(display === "grid" ? unplainTemplates(values) : []),
   ];
-  if (display === undefined) {
-    writes.push(settled(tiers, editing, "flexDirection", null));
-  }
-  const kind =
-    display === "grid"
-      ? "grid"
-      : display === "flex" && isColumn({ ...values, display: "flex" })
-        ? "column"
-        : "row";
-  const axes = alignAxes(kind);
-  for (const property of [axes.x, axes.y]) {
-    const value = values[property];
-    if (value === undefined) continue;
-    const spread =
-      SPREADS.has(value) && property === "justifyContent" && kind !== "grid";
-    if (axisPlace(value) === undefined && !spread) {
-      writes.push(settled(tiers, editing, property, null));
-    }
-  }
-  if (display === "grid") {
-    if (readColumns(values.gridTemplateColumns) === "custom") {
-      writes.push(settled(tiers, editing, "gridTemplateColumns", null));
-    }
-    if (readRows(values.gridTemplateRows) === "custom") {
-      writes.push(settled(tiers, editing, "gridTemplateRows", null));
-    }
-  }
-  return writes;
+  return [
+    settled(tiers, editing, "display", display ?? null),
+    ...cleared.map(property => settled(tiers, editing, property, null)),
+  ];
 }
