@@ -642,6 +642,9 @@ export function compilePageCss(
       mayFetchUrl,
       routing,
       blockParts: ctx.blockParts,
+      flowGaps,
+      defaultsAnchor,
+      stateSelectors: stateSelectorsOfCompile,
     })
   );
   for (const position of writtenPositions) {
@@ -1000,6 +1003,10 @@ interface StarredLookCompile {
   readonly mayFetchUrl: StyleCompileContext["mayFetchUrl"];
   readonly routing: ReturnType<typeof partRouting>;
   readonly blockParts: StyleCompileContext["blockParts"];
+  /** The flow margins each container type in the document writes, by type. */
+  readonly flowGaps: ReadonlyMap<string, readonly Declaration[]>;
+  readonly defaultsAnchor: string;
+  readonly stateSelectors: Parameters<typeof layoutModeRules>[6];
 }
 
 /**
@@ -1021,11 +1028,15 @@ function starredLookRules(
     const typeLooks = written.filter(
       cls => isLook(cls) && !isDefaultLook(cls) && cls.blockType === type
     );
-    const parts = about.blockParts?.[type];
+    const selector = starredLookSelector(
+      type,
+      typeLooks,
+      about.blockParts?.[type]
+    );
     rules.push(
       ...envelopeRules(
         look.styles,
-        `${about.pageRoot} ${starredLookSelector(type, typeLooks, parts)}`,
+        `${about.pageRoot} ${selector}`,
         pointer("/classes", look.id),
         about.contexts,
         about.tokenPrefix,
@@ -1033,19 +1044,48 @@ function starredLookRules(
         newStyleIssueBudget(),
         about.warningAllowance,
         {
+          // Which looks leave a block out, so a reader of the trace answers
+          // which blocks this rule reaches as its selector does.
           origin: {
             kind: "class",
             id: look.id,
             slug: look.slug,
             blockType: type,
+            unlessWearing: typeLooks.map(cls => cls.id),
           },
           previewStates: about.previewStates,
           trace: about.trace,
           mayFetchUrl: about.mayFetchUrl,
           routing: about.routing,
         }
-      )
+      ),
+      ...starredLayoutRules(look, type, selector, about)
     );
   }
   return rules;
+}
+
+/**
+ * A ★ look that makes a container flex or grid swaps the flow margin for
+ * `gap` on the container type's blocks it reaches, as a worn look's class
+ * does on the containers wearing it: those blocks wear no class of its, so
+ * only the ★ selector can say which they are.
+ */
+function starredLayoutRules(
+  look: NamedClass,
+  type: string,
+  selector: string,
+  about: StarredLookCompile
+): CssRule[] {
+  const flow = about.flowGaps.get(type);
+  if (flow === undefined) return [];
+  return layoutModeRules(
+    look.styles,
+    `${selector}.${CHILD_GAP_CLASS}`,
+    flow,
+    about.contexts,
+    about.defaultsAnchor,
+    about.tokenPrefix,
+    about.stateSelectors
+  );
 }

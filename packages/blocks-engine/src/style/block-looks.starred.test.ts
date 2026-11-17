@@ -6,6 +6,8 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 import { starredLookSelector } from "./block-looks";
 import { compilePageCss } from "./compile-page";
 import { starredLooksOf, type NamedClass } from "./named-class";
+import { CHILD_GAP_CLASS, PAGE_ROOT_CLASS } from "./node-class";
+import { styleOrigin } from "./style-origin";
 
 /*
  * A block type's ★ look: the block style a block of its type has while it
@@ -145,5 +147,55 @@ describe("a block type's ★ look on the page", () => {
     ).toBe(
       ".nx-bt-core--image:where(:not(.nx-l-image-circle, .nx-bp-core--image--picture))"
     );
+  });
+});
+
+describe("a ★ look that lays out a container", () => {
+  const row: NamedClass = {
+    id: "look-row",
+    slug: "box-row",
+    orderIndex: 0,
+    blockType: "core/box",
+    starred: true,
+    styles: values({ display: "flex" }),
+  };
+
+  it("swaps the flow margin for gap on the containers it reaches", () => {
+    const { css } = compilePageCss(page([{ id: "box", type: "core/box" }]), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [row],
+      childGaps: { "core/box": { $token: "space.stack" } },
+    });
+    // Without it the box keeps its children's flow margins beside `gap`.
+    expect(css).toContain(
+      `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box:where(:not(.nx-l-box-row)).${CHILD_GAP_CLASS} > * + *) { margin-block-start: 0 }`
+    );
+  });
+});
+
+describe("where a ★ look's values come from, as the inspector asks", () => {
+  const traced = () =>
+    compilePageCss(twoButtons, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      namedClasses: [primary, secondary, { ...ghost, starred: true }],
+      trace: true,
+    }).trace ?? [];
+  const query = { property: "color", state: "base" as const, breakpoints: ["base"] };
+
+  it("names the ★ look on a block that picked no style", () => {
+    expect(
+      styleOrigin(traced(), { nodeId: "plain", blockType: "core/button", classIds: [] }, query)
+        ?.origin
+    ).toMatchObject({ kind: "class", id: ghost.id });
+  });
+
+  it("names the style a block picked, never the ★ look", () => {
+    expect(
+      styleOrigin(
+        traced(),
+        { nodeId: "worn", blockType: "core/button", classIds: [secondary.id] },
+        query
+      )?.origin
+    ).toMatchObject({ kind: "class", id: secondary.id });
   });
 });
