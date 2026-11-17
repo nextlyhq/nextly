@@ -157,18 +157,32 @@ function CommitInput({
 
 /**
  * The control every size is edited with: a padding side's, a length with no
- * keywords that takes every unit a size variable is written in, and refuses
- * a negative. One leaf for every size, so each one's menu is the same and
- * offers what the block panel offers for a length.
+ * keywords that takes every unit a size variable is written in, widened to a
+ * negative, which a size variable may hold for a margin or an offset. One
+ * leaf for every size, so each one's menu is the same and offers what the
+ * block panel offers for a length, and a negative keeps its unit like any
+ * other number.
  */
 const SIZE_CONTROL: StyleControl | undefined = sizeControl();
 
 function sizeControl(): StyleControl | undefined {
   const padding = getStyleProperty("padding");
   if (padding === undefined) return undefined;
-  return styleControlsFor(padding).controls.find(
+  const side = styleControlsFor(padding).controls.find(
     control => control.leaf.kind === "dimension"
   );
+  if (side === undefined || side.leaf.kind !== "dimension") return undefined;
+  return { ...side, leaf: { ...side.leaf, allowNegative: true } };
+}
+
+/**
+ * Whether a field's text is the stored value again, as a field shows a value
+ * it cannot split into a number and a unit (`clamp(…)`). The numeric field
+ * writes nothing for that, since nothing changed, so a refusal standing over
+ * the field is answered here instead.
+ */
+function restoresStored(text: string, value: string): boolean {
+  return text.trim() === value.trim();
 }
 
 /**
@@ -300,11 +314,24 @@ function SizeField({
   control: StyleControl;
   css: string | undefined;
 }): React.JSX.Element {
+  // Putting back what the field stored is how an author answers a refusal.
+  const restore = (event: React.SyntheticEvent): void => {
+    const field = event.target;
+    if (refusedBy === undefined || !(field instanceof HTMLInputElement)) return;
+    if (restoresStored(field.value, value)) onCommit(value);
+  };
   return (
     // The light value shows as the empty dark field's hint, as a value
     // reaching a block's field from elsewhere shows in the block panel.
     <InheritedValue.Provider value={placeholder}>
-      <div className="nx-vars-editor__size" title={css}>
+      <div
+        className="nx-vars-editor__size"
+        title={css}
+        onKeyDownCapture={event => {
+          if (event.key === "Enter") restore(event);
+        }}
+        onBlurCapture={restore}
+      >
         <NumericField
           id={id}
           control={control}
@@ -355,19 +382,34 @@ export function LineHeightInput({
 /**
  * The offer under a line height whose number reads as pixels: what it means
  * as it is, and the pixels it was probably meant as, in one press.
+ *
+ * A dark value takes the kind of its light one, so a dark line height cannot
+ * become pixels while the light one is a multiple: there the hint says what
+ * to change first rather than offering a press that would be refused.
  */
 export function LineHeightHint({
   value,
+  mode,
   readOnly,
   onCommit,
 }: {
   value: string;
+  mode: "light" | "dark";
   readOnly: boolean;
   onCommit: (value: string) => void;
 }): React.JSX.Element | null {
   const pixels = lineHeightAsPixels(value);
   if (pixels === undefined) return null;
   const number = value.trim();
+  if (mode === "dark") {
+    return (
+      <div className="nx-vars-editor__hint" role="note">
+        <span>
+          {`${number}× the text size. To use pixels, give the light line height pixels first.`}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="nx-vars-editor__hint" role="note">
       <span>{`${number}× the text size. Did you mean ${pixels}?`}</span>

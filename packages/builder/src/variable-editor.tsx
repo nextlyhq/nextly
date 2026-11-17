@@ -456,12 +456,14 @@ function TypePair({
       </div>
       <LineHeightHint
         value={line.values.light}
+        mode="light"
         readOnly={readOnly}
         onCommit={value => write(lineAt, "light", value)}
       />
       {line.values.dark === undefined ? null : (
         <LineHeightHint
           value={line.values.dark}
+          mode="dark"
           readOnly={readOnly}
           onCommit={value => write(lineAt, "dark", value)}
         />

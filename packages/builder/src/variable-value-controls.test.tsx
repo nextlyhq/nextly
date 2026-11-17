@@ -144,6 +144,48 @@ describe("a size", () => {
   });
 });
 
+describe("a size, answering a refusal and holding a negative", () => {
+  it.each([
+    ["a value the field shows whole", "clamp(1rem, 2vw, 2rem)", "clamp(1rem, 2vw, 2rem)"],
+    ["a number beside its unit", "1rem", "1"],
+  ])("clears a refusal when %s is typed back", async (_, stored, typed) => {
+    const held: SiteTokenSet = {
+      tokens: [
+        { name: "space.4", kind: "dimension", values: { light: stored } },
+      ],
+    };
+    render(<Hosted tokens={held} />);
+    const editor = await openEditor(/^Space 4/);
+    const light = within(editor).getByLabelText("Light");
+    enter(light, "red");
+    expect(light.getAttribute("aria-invalid")).toBe("true");
+    enter(light, typed);
+    expect(light.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("keeps the unit on screen for a negative number", async () => {
+    const onChange = vi.fn();
+    render(<Hosted tokens={SITE} onChange={onChange} />);
+    const editor = await openEditor(/^Space 4/);
+    enter(within(editor).getByLabelText("Light"), "-2");
+    expect(savedValue(onChange, "space.4")).toBe("-2rem");
+  });
+
+  it("changes the unit of a negative size", async () => {
+    const onChange = vi.fn();
+    const negative: SiteTokenSet = {
+      tokens: [
+        { name: "space.4", kind: "dimension", values: { light: "-1rem" } },
+      ],
+    };
+    render(<Hosted tokens={negative} onChange={onChange} />);
+    const editor = await openEditor(/^Space 4/);
+    fireEvent.click(within(editor).getByLabelText("Unit for Light"));
+    fireEvent.click(screen.getByRole("option", { name: "px", hidden: true }));
+    expect(savedValue(onChange, "space.4")).toBe("-1px");
+  });
+});
+
 describe("the CSS a size writes", () => {
   it("shows on hover over the number and its unit menu", async () => {
     render(<Hosted tokens={SITE} />);
@@ -184,5 +226,32 @@ describe("a line height", () => {
     ).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Use 20px" }));
     expect(savedValue(onChange, "line-height.body")).toBe("20px");
+  });
+
+  it("explains rather than offers pixels for a dark line height, which must be the same kind as its light", async () => {
+    const paired: SiteTokenSet = {
+      tokens: [
+        {
+          name: "font-size.body",
+          kind: "dimension",
+          values: { light: "16px", dark: "16px" },
+        },
+        {
+          name: "line-height.body",
+          kind: "number",
+          values: { light: "1.5", dark: "20" },
+        },
+      ],
+    };
+    render(<Hosted tokens={paired} />);
+    const editor = await openEditor(/^Body/);
+    expect(
+      within(editor).getByText(
+        "20× the text size. To use pixels, give the light line height pixels first."
+      )
+    ).toBeDefined();
+    expect(
+      within(editor).queryByRole("button", { name: "Use 20px" })
+    ).toBeNull();
   });
 });
