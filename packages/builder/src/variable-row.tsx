@@ -30,6 +30,7 @@ import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
 import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
+import { useColourRowDrag } from "./colour-group-ui";
 import { moveColour } from "./colour-groups";
 import { markOf } from "./design-group-toggle";
 import { fluidRange, pxAtWidth } from "./fluid-size";
@@ -117,8 +118,14 @@ export function VariableRow({
         }
       : {}),
   });
+  // A colour row can be dragged to another place in the colour order.
+  const drag = useColourRowDrag(entry.row.identity);
   return (
-    <li className="nx-vars__item" data-open={markOf(open)}>
+    <li
+      className="nx-vars__item"
+      data-open={markOf(open)}
+      {...(entry.row.kind === "color" ? drag : {})}
+    >
       <Popover open={open} onOpenChange={opened} modal>
         {/* The editor opens beside the whole row, the ⋯ with it. */}
         <PopoverAnchor asChild>

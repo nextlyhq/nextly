@@ -185,3 +185,117 @@ describe("moving a colour", () => {
     ).toBeNull();
   });
 });
+
+/** Opens a named group's ⋯ menu. */
+async function openGroupMenu(group: string): Promise<HTMLElement> {
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: `More actions for group ${group}` }),
+    { key: "Enter" }
+  );
+  return screen.findByRole("menu");
+}
+
+/** A drag's data, as jsdom has none of its own. */
+const dataTransfer = () => {
+  const data = new Map<string, string>();
+  return {
+    setData: (type: string, value: string) => void data.set(type, value),
+    getData: (type: string) => data.get(type) ?? "",
+    effectAllowed: "move",
+    dropEffect: "move",
+  };
+};
+
+describe("a group's ⋯ menu", () => {
+  it("renames a group in place", async () => {
+    render(<Host />);
+    fireEvent.click(
+      within(await openGroupMenu("Brand")).getByRole("menuitem", {
+        name: "Rename group",
+      })
+    );
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    fireEvent.change(field, { target: { value: "Accents" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(shape(saved)).toEqual([
+      "Accents: color.brand color.accent",
+      "Text and surfaces: color.text color.muted",
+    ]);
+  });
+
+  it("removes a group, its colours joining the group above", async () => {
+    render(<Host />);
+    fireEvent.click(
+      within(await openGroupMenu("Text and surfaces")).getByRole("menuitem", {
+        name: "Remove group",
+      })
+    );
+    expect(shape(saved)).toEqual([
+      "Brand: color.brand color.accent color.text color.muted",
+    ]);
+  });
+});
+
+describe("+ New group", () => {
+  it("adds a group to name, which a colour then moves into", async () => {
+    render(<Host />);
+    fireEvent.click(screen.getByRole("button", { name: "New group" }));
+    const field = await screen.findByRole("textbox", { name: "Group name" });
+    expect(document.activeElement).toBe(field);
+    fireEvent.change(field, { target: { value: "Accents" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(listed()).toEqual([
+      "Brand: Brand, Accent",
+      "Text and surfaces: Text, Muted",
+      "Accents: ",
+    ]);
+    const menu = await openMenu("Accent");
+    fireEvent.keyDown(
+      within(menu).getByRole("menuitem", { name: "Move to group…" }),
+      { key: "ArrowRight" }
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Accents" }));
+    expect(shape(saved)).toEqual([
+      "Brand: color.brand",
+      "Text and surfaces: color.text color.muted",
+      "Accents: color.accent",
+    ]);
+  });
+});
+
+describe("dragging a colour", () => {
+  const item = (name: string): HTMLElement => {
+    const row = screen.getByRole("button", { name: new RegExp(`^${name},`) });
+    const li = row.closest("li");
+    if (li === null) throw new Error(`no row for ${name}`);
+    return li;
+  };
+
+  it("drops before the row it is dropped on", () => {
+    render(<Host />);
+    const drag = dataTransfer();
+    fireEvent.dragStart(item("Muted"), { dataTransfer: drag });
+    fireEvent.dragOver(item("Accent"), { dataTransfer: drag });
+    fireEvent.drop(item("Accent"), { dataTransfer: drag });
+    expect(shape(saved)).toEqual([
+      "Brand: color.brand color.muted color.accent",
+      "Text and surfaces: color.text",
+    ]);
+  });
+
+  it("drops at the end of a group dropped on its heading", () => {
+    render(<Host />);
+    const drag = dataTransfer();
+    const heading = document.querySelector<HTMLElement>(
+      '[data-colour-group="Text and surfaces"] .nx-vars__group-head'
+    );
+    if (heading === null) throw new Error("no heading");
+    fireEvent.dragStart(item("Brand"), { dataTransfer: drag });
+    fireEvent.dragOver(heading, { dataTransfer: drag });
+    fireEvent.drop(heading, { dataTransfer: drag });
+    expect(shape(saved)).toEqual([
+      "Brand: color.accent",
+      "Text and surfaces: color.text color.muted color.brand",
+    ]);
+  });
+});

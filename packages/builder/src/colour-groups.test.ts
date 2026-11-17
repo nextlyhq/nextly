@@ -16,6 +16,7 @@ import {
   colourOrder,
   moveColour,
   moveColourToGroup,
+  placeColour,
   removeColourGroup,
   renameColourGroup,
 } from "./colour-groups";
@@ -124,6 +125,40 @@ describe("moving a colour", () => {
     expect(
       moved.tokens.find(token => token.name === "color.muted")?.group
     ).toBe("Text and surfaces");
+  });
+});
+
+describe("placing a colour, as a drag drops it", () => {
+  it("drops before another colour, in that colour's group", () => {
+    expect(
+      shape(placeColour(SET, "color.border", "Brand", "color.accent"))
+    ).toEqual([
+      "Brand: color.primary color.border color.accent",
+      "Text and surfaces: color.text color.muted",
+    ]);
+  });
+
+  it("drops at the end of a group where no colour is under the pointer", () => {
+    expect(shape(placeColour(SET, "color.text", "Brand", undefined))).toEqual([
+      "Brand: color.primary color.accent color.text",
+      "Text and surfaces: color.muted color.border",
+    ]);
+  });
+
+  it("drops into a group no colour is in yet", () => {
+    expect(shape(placeColour(SET, "color.text", "Accents", undefined))).toEqual(
+      [
+        "Brand: color.primary color.accent",
+        "Text and surfaces: color.muted color.border",
+        "Accents: color.text",
+      ]
+    );
+  });
+
+  it("leaves the set as it was where the colour is dropped on itself", () => {
+    expect(
+      placeColour(SET, "color.text", "Text and surfaces", "color.text")
+    ).toBe(SET);
   });
 });
 

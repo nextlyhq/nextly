@@ -41,6 +41,13 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 
 import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import {
+  ColourGroupHead,
+  ColourGroupHostContext,
+  NewGroupButton,
+  useColourGroupDrop,
+  useColourGroupHost,
+} from "./colour-group-ui";
 import { colourGroups } from "./colour-groups";
 import {
   GroupToggle,
@@ -509,13 +516,20 @@ function VariableGroups({
   onAdd: OnAdd;
   rows: RowsHost;
 }): React.JSX.Element {
+  const colours = useColourGroupHost(
+    rows.tokens,
+    rows.readOnly,
+    rows.commitFrom(COLOUR_GROUPS_KEY)
+  );
   if (shown.length === 0) {
     return <p className="nx-vars__note">No variables match this search.</p>;
   }
   return (
-    <>
+    <ColourGroupHostContext.Provider value={colours}>
       {shown
-        .flatMap(group => sectionsOf(group, rows.tokens, searching))
+        .flatMap(group =>
+          sectionsOf(group, rows.tokens, searching, colours.pending)
+        )
         .map(section => (
           <React.Fragment key={section.key}>
             <Group
@@ -554,9 +568,12 @@ function VariableGroups({
             </Group>
           </React.Fragment>
         ))}
-    </>
+    </ColourGroupHostContext.Provider>
   );
 }
+
+/** What the Colours tab's group changes commit under: no row's editor. */
+const COLOUR_GROUPS_KEY = "colour-groups";
 
 /** One section of the list: a group, or one named group of colours. */
 interface ListSection {
@@ -579,7 +596,9 @@ function sectionsOf(
     readonly entries: readonly VariableEntry[];
   },
   tokens: SiteTokenSet,
-  searching: boolean
+  searching: boolean,
+  /** Groups made with "+ New group" that hold no colour yet. */
+  pending: readonly string[] = []
 ): ListSection[] {
   const whole: ListSection = { ...group, key: group.group };
   if (group.group !== "colours" || group.entries.length === 0) return [whole];
@@ -594,7 +613,8 @@ function sectionsOf(
         return entry === undefined ? [] : [entry];
       }),
     }))
-    .filter(colourGroup => !searching || colourGroup.entries.length > 0);
+    .filter(colourGroup => !searching || colourGroup.entries.length > 0)
+    .concat(searching ? [] : pending.map(name => ({ name, entries: [] })));
   return named.map((colourGroup, at) => ({
     key: colourGroupFoldKey(colourGroup.name),
     group: group.group,
@@ -602,6 +622,21 @@ function sectionsOf(
     entries: colourGroup.entries,
     named: { name: colourGroup.name, last: at === named.length - 1 },
   }));
+}
+
+/** What a named group with no colour in it says. */
+const NEW_GROUP_EMPTY = "Drag a colour here, or use Move to group…";
+
+/** A named group's heading with its name field and ⋯; any other as it is. */
+function ColourGroupHeadIf({
+  name,
+  children,
+}: {
+  name: string | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (name === undefined) return <>{children}</>;
+  return <ColourGroupHead name={name}>{children}</ColourGroupHead>;
 }
 
 /** What a named group of colours keeps its fold under. */
@@ -1124,6 +1159,8 @@ function Group({
   // A search opens every group it matches in and folds none; the folds come
   // back as they were once it is cleared.
   const foldKey = named === undefined ? group : colourGroupFoldKey(named.name);
+  // A colour dropped on a named group's heading goes to its end.
+  const dropOnHead = useColourGroupDrop(named?.name ?? "");
   const folded = folds !== undefined && !searching && folds.folded.has(foldKey);
   return (
     <section
@@ -1134,22 +1171,27 @@ function Group({
       data-colour-group={named?.name}
       data-folded={folded ? "" : undefined}
     >
-      <div className="nx-vars__group-head">
-        <h3 className="nx-vars__group-name" id={id}>
-          <GroupHeading
-            group={foldKey}
-            heading={heading}
-            count={entries.length}
-            folds={folds}
-            folded={folded}
-            searching={searching}
-          />
-        </h3>
+      <div
+        className="nx-vars__group-head"
+        {...(named === undefined ? {} : dropOnHead)}
+      >
+        <ColourGroupHeadIf name={named?.name}>
+          <h3 className="nx-vars__group-name" id={id}>
+            <GroupHeading
+              group={foldKey}
+              heading={heading}
+              count={entries.length}
+              folds={folds}
+              folded={folded}
+              searching={searching}
+            />
+          </h3>
+        </ColourGroupHeadIf>
       </div>
       {folded ? null : (
         <GroupRows
           entries={entries}
-          empty={ADDS[group].empty}
+          empty={named === undefined ? ADDS[group].empty : NEW_GROUP_EMPTY}
           searching={searching}
           openKey={openKey}
         >
@@ -1168,6 +1210,7 @@ function Group({
           }}
         />
       )}
+      {named?.last === true ? <NewGroupButton /> : null}
     </section>
   );
 }

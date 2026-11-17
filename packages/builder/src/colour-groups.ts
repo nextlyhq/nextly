@@ -177,17 +177,34 @@ export function moveColourToGroup(
   identity: string,
   group: string
 ): SiteTokenSet {
+  return placeColour(tokens, identity, group, undefined);
+}
+
+/**
+ * The set with a colour put into a group: before another colour in it, as a
+ * drag drops it on that colour's row, or at its end where `before` is
+ * absent. A group no colour is in yet is made with this one in it.
+ */
+export function placeColour(
+  tokens: SiteTokenSet,
+  identity: string,
+  group: string,
+  before: string | undefined
+): SiteTokenSet {
   const groups = colourGroups(tokens);
-  if (placeOf(groups, identity) === undefined) return tokens;
+  if (before === identity || placeOf(groups, identity) === undefined) {
+    return tokens;
+  }
   const rest = without(groups, identity);
   const index = rest.findIndex(candidate => candidate.name === group);
-  // A group that holds no colour yet is made with this one in it.
   const target =
     index === -1 ? [...rest, { name: group, identities: [] }] : rest;
   const at = index === -1 ? target.length - 1 : index;
+  const members = target[at]?.identities ?? [];
+  const position = before === undefined ? -1 : members.indexOf(before);
   return laidOut(
     tokens,
-    inserted(target, identity, at, target[at]?.identities.length ?? 0)
+    inserted(target, identity, at, position === -1 ? members.length : position)
   );
 }
 

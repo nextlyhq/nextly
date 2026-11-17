@@ -17,6 +17,7 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useColourGroupNames } from "./colour-group-ui";
 import { colourGroups, moveColour, moveColourToGroup } from "./colour-groups";
 
 /** Where a colour sits: whether anything is above it, or below it. */
@@ -45,9 +46,13 @@ export function ColourMoveItems({
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
   const { first, last, group } = edgesOf(tokens, identity);
-  const others = colourGroups(tokens)
-    .map(candidate => candidate.name)
-    .filter(name => name !== group);
+  // The groups there are, and any new one no colour is in yet.
+  const named = useColourGroupNames();
+  const others = (
+    named.length > 0
+      ? named
+      : colourGroups(tokens).map(candidate => candidate.name)
+  ).filter(name => name !== group);
   return (
     <>
       <DropdownMenuSeparator />
