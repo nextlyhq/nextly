@@ -72,6 +72,14 @@ export type { DocumentLockGates } from "@nextlyhq/admin/kit/document";
 export type { DocumentViewProps } from "@nextlyhq/admin/kit/core";
 
 /**
+ * What a document view's create dialog receives (@experimental): the
+ * collection "+ New" was pressed on and `close(createdId?)`, which opens the
+ * new entry where its collection opens entries, or leaves the list as it was.
+ * Republished rather than restated, as the view's props are.
+ */
+export type { DocumentCreateDialogProps } from "@nextlyhq/admin/kit/core";
+
+/**
  * What the components a plugin puts on a collection's document screen
  * receive (@experimental), declared under `contributes.admin.views[slug]`
  * (see `PluginDocumentActionOverride` and `PluginPanelSection`):
@@ -302,6 +310,32 @@ export {
   type BeforeDocumentAction,
   type StoreReadiness,
   type SubmitRefusal,
+} from "@nextlyhq/admin/kit/document";
+
+/**
+ * Where the document being edited opens, and its list, for a document view
+ * that words its way out by them (@experimental).
+ *
+ * - `useDocumentOpensIn()` answers, for the collection entry being edited,
+ *   `opensIn`: `"form"` or the path of the view a click on one of the
+ *   collection's entries opens, by the same rule every list row and dashboard
+ *   row follows; and `list`, the collection's list, its label as the list's own
+ *   heading reads and its address. A view the document opens in has no form
+ *   to go back to, so its way out is the list ("Back to Pages"); any other
+ *   view's is the form. Null outside a collection entry's editor, on a new
+ *   entry, on a Single and while the collection is not known yet.
+ * - `PIN_TO_DASHBOARD_ACTION` is the id of the editor's own "Pin to
+ *   dashboard" / "Unpin from dashboard" among `useDocumentActions().actions`.
+ *   A view that replaces the header offers that action, its words and its
+ *   reason it can't run, and runs it with `run(id)`, so the pin, its toast and
+ *   its Undo are the editor's own.
+ *
+ * Experimental while the first view that uses them settles.
+ */
+export {
+  useDocumentOpensIn,
+  type DocumentOpensIn,
+  PIN_TO_DASHBOARD_ACTION,
 } from "@nextlyhq/admin/kit/document";
 
 /**

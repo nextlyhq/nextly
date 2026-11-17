@@ -50,7 +50,10 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { revsFor } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
-import { useDocumentAddress } from "@admin/lib/navigation/useDocumentAddress";
+import {
+  useDocumentAddress,
+  useRowWaysIn,
+} from "@admin/lib/navigation/useDocumentAddress";
 import {
   hasComponent,
   type InjectionPointProps,
@@ -99,6 +102,7 @@ import { useDeclaredBulkActions } from "./useDeclaredBulkActions";
 import { useDeclaredRowActions } from "./useDeclaredRowActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import type { EntryRow, EntryVersions } from "./useEntrySelection";
+import { useListCreateDialog } from "./useListCreateDialog";
 
 // ============================================================================
 // Types
@@ -579,6 +583,17 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       navigateTo(entryHref(entryId, locale)),
     [entryHref]
   );
+  // The other ways into a row's entry its menu offers, by the same rule and
+  // the same copy of the collection as the row's own link.
+  const waysInOf = useRowWaysIn();
+  const rowWaysIn = useCallback(
+    (entryId: string) =>
+      waysInOf(
+        { kind: "collection", slug: collectionSlug, id: entryId },
+        collection === undefined ? {} : { collection }
+      ),
+    [waysInOf, collectionSlug, collection]
+  );
 
   const handleDelete = useCallback((entryId: string) => {
     setSelectedForDelete([entryId]);
@@ -711,12 +726,20 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // The bulk actions offered here, which the table's checkboxes and bar
   // follow too, so the Delete shortcut opens nothing they would not.
   const offeredBulk = useEntryBulkActions(collectionForColumns);
+  // The dialog the view this collection's entries open in declares for
+  // "+ New", opened in place of the create form where there is one.
+  const createDialog = useListCreateDialog({
+    slug: collectionSlug,
+    collection,
+    labels,
+    entryHref,
+  });
   const handleCreateClick = useCallback(() => {
-    if (!createAllowed) return;
+    if (!createAllowed || createDialog.open()) return;
     navigateTo(
       buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: collectionSlug })
     );
-  }, [collectionSlug, createAllowed]);
+  }, [collectionSlug, createAllowed, createDialog]);
 
   const handleApiPlaygroundClick = useCallback(() => {
     navigateTo(
@@ -942,6 +965,7 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
                     onSearchChange={handleSearchChange}
                     onEdit={handleEdit}
                     entryHref={entryHref}
+                    rowWaysIn={rowWaysIn}
                     onDelete={handleDelete}
                     onBulkDelete={handleBulkDelete}
                     onBulkPublish={handleBulkPublish}
@@ -989,6 +1013,8 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         onConfirm={handleConfirmDelete}
         isLoading={bulkDelete.isPending}
       />
+
+      {createDialog.dialog}
 
       {/* A declared action that opens its plugin's component, with its rows */}
       <Dialog

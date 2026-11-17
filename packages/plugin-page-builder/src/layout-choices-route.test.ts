@@ -9,6 +9,10 @@ import {
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  starterFingerprint,
+  type StarterRecord,
+} from "./default-layout/starter-record";
 import { DEFAULT_COMPONENT_STORE, type ComponentStore } from "./library-route";
 
 import {
@@ -285,6 +289,39 @@ describe("readLayoutChoices", () => {
     const { meta } = await readLayoutChoices(context(), nextly, asked());
     expect(meta.regionComponents).toEqual({
       header: { draftChangesNotLive: true },
+    });
+  });
+
+  it("tells the region it shows the site's starter while its published content is as seeded", async () => {
+    const { nextly } = fake({ ...store, updatable: [] });
+    const { meta } = await readLayoutChoices(context(false), nextly, asked());
+    const published = meta.regionDefinitions.header;
+    const record = (fingerprint: string): StarterRecord => ({
+      header: { id: "header", fingerprint },
+      footer: { id: "gone", fingerprint: "0".repeat(32) },
+    });
+    const untouched = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        starter: async () => record(starterFingerprint(published)),
+      })
+    );
+    expect(untouched.meta.regionComponents.header).toEqual({
+      draftChangesNotLive: false,
+      untouchedStarter: "header",
+    });
+    // Published since with other content: an ordinary header.
+    const changed = await readLayoutChoices(
+      context(false),
+      nextly,
+      asked(null, DEFAULT_COMPONENT_STORE, {
+        starter: async () =>
+          record(starterFingerprint({ ...published, nodes: [] })),
+      })
+    );
+    expect(changed.meta.regionComponents.header).toEqual({
+      draftChangesNotLive: false,
     });
   });
 

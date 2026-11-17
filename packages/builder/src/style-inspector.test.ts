@@ -384,6 +384,7 @@ describe("the builder's sections, over the engine's groups", () => {
     const inspection = inspectStyle(documentOf(), "a");
     expect(inspection?.sections.map(section => section.label)).toEqual([
       "Layout",
+      "Inside its parent",
       "Spacing",
       "Size",
       "Position",
@@ -462,7 +463,9 @@ describe("the builder's sections, over the engine's groups", () => {
       inspectStyle(documentOf(), "a", {
         media,
         cascade: { trace: [], subject: { nodeId: "a", tag } },
-      })?.sections[0]?.properties.find(p => p.property === "objectFit")?.common;
+      })
+        ?.sections.find(section => section.key === "size")
+        ?.properties.find(p => p.property === "objectFit")?.common;
     expect(fitIsCommon(false, "div")).toBe(false);
     expect(fitIsCommon(true, "img")).toBe(true);
   });
@@ -713,5 +716,22 @@ describe("every label fits the Style tab's label column", () => {
     );
     expect(gradient?.label).toBe("Gradient");
     expect(gradient?.summary.startsWith("Background gradient: ")).toBe(true);
+  });
+});
+
+describe("how a block's parent lays it out", () => {
+  it("is not offered to a block with no size of its own to set", () => {
+    // It keeps a stored order, clear-only, but has no Width to choose.
+    register({ typography: true });
+    const inspection = inspectStyle(
+      documentOf({ base: { [BASE_BREAKPOINT]: { order: 2 } } } as NodeStyles),
+      "a"
+    );
+    expect(inspection?.parent).toBeUndefined();
+  });
+
+  it("is offered to a block with a size", () => {
+    register({ dimensions: true });
+    expect(inspectStyle(documentOf(), "a")?.parent).toBe("flow");
   });
 });

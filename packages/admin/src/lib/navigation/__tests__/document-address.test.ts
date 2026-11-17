@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { RegisteredDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 import {
+  collectionOpeningView,
   documentAddress,
   mainFieldOf,
   type OpenableCollection,
@@ -266,5 +267,49 @@ describe("mainFieldOf", () => {
         ],
       })?.path
     ).toBe("excerpt");
+  });
+});
+
+describe("collectionOpeningView", () => {
+  // The same reading the links act on, asked by a view about its own
+  // collection: each case pairs with the address a row would open.
+  it("is the view a page's main field opens in", () => {
+    const pages = { fields: [title, blocks("content")] };
+    expect(collectionOpeningView("pages", pages, views)).toBe(BUILDER);
+    expect(open(pages)).toBe(
+      "/admin/collections/pages/42/builder?field=content"
+    );
+  });
+
+  it("is none for a collection that says the form, whatever its main field", () => {
+    const pages = { fields: [title, blocks("content")], admin: { opensIn: "form" } };
+    expect(collectionOpeningView("pages", pages, views)).toBeUndefined();
+  });
+
+  it("is none for a post, whose main field is an excerpt", () => {
+    expect(
+      collectionOpeningView(
+        "posts",
+        { fields: [title, excerpt, blocks("sections")] },
+        views
+      )
+    ).toBeUndefined();
+  });
+
+  it("is the view a collection names, a view declared on it included", () => {
+    expect(
+      collectionOpeningView(
+        "posts",
+        { fields: [title, excerpt], admin: { opensIn: "review" } },
+        views
+      )
+    ).toBe(REVIEW);
+  });
+
+  it("is none while the view is not published (its plugin is off)", () => {
+    views = [];
+    expect(
+      collectionOpeningView("pages", { fields: [title, blocks("content")] }, views)
+    ).toBeUndefined();
   });
 });

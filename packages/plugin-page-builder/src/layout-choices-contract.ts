@@ -138,6 +138,13 @@ export interface LayoutChoice {
 export interface RegionComponentFacts {
   /** Whether the component holds edits a visitor does not see yet. */
   readonly draftChangesNotLive: boolean;
+  /**
+   * The area this component is the site's untouched starter for: the starter
+   * header or footer a fresh site was seeded with, its published content
+   * still as seeded. Absent for every other component, and for a starter
+   * someone has published a change to.
+   */
+  readonly untouchedStarter?: "header" | "footer";
 }
 
 /** The route's answer: the canonical list envelope. */

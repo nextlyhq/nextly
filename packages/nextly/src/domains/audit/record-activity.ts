@@ -17,6 +17,7 @@
 import type { RequestActor } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
+import { eventLanguage } from "../../hooks/hook-language";
 import { entryHeading } from "../../lib/entry-heading";
 import type {
   ActivityLogAction,
@@ -234,6 +235,25 @@ function updateMetadata(input: {
 }
 
 /**
+ * A row's metadata: what an update says about the write ({@link
+ * updateMetadata}), and, on a site with languages, every language the change
+ * involved and whether it moved the shared part, as its hooks and its outbox
+ * event are told (`eventLanguage`). `undefined` when there is nothing to say.
+ */
+function rowMetadata(
+  input: Parameters<typeof updateMetadata>[0]
+): Record<string, unknown> | undefined {
+  const update = updateMetadata(input);
+  const language = eventLanguage();
+  if (language === undefined) return update;
+  return {
+    ...update,
+    locales: [...language.locales],
+    ...(language.shared === undefined ? {} : { shared: language.shared }),
+  };
+}
+
+/**
  * What a row says about publishing: that the write published, and whether its
  * request also edited the document, which makes it a save too. `undefined`
  * for a write that published nothing.
@@ -277,7 +297,7 @@ export async function recordMutationActivity(
   const service = registeredActivityLogService();
   if (!service) return;
 
-  const metadata = updateMetadata(input);
+  const metadata = rowMetadata(input);
   // No name or email is passed: the write resolves both from the account under
   // the same lock that decides whether it still exists. The alternative — the
   // session's copy, carried down from the request — is a snapshot taken before
@@ -384,7 +404,7 @@ export async function recordSingleActivity(
   if (!actor) return;
   const service = registeredActivityLogService();
   if (!service) return;
-  const metadata = updateMetadata({
+  const metadata = rowMetadata({
     action: "update",
     data: input.data,
     previous: input.previous,

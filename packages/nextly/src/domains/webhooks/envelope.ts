@@ -139,6 +139,10 @@ export interface BuildEnvelopeInput {
   sensitiveFields?: readonly string[];
   /** Status delta for a lifecycle event; copied verbatim onto the envelope. */
   statusChange?: { from: string | null; to: string };
+  /** Every language the change involved; copied onto the envelope. */
+  locales?: readonly string[];
+  /** Whether the change moved the shared part; copied onto the envelope. */
+  shared?: boolean;
 }
 
 /**
@@ -173,6 +177,10 @@ export function buildEnvelope(input: BuildEnvelopeInput): WebhookEvent {
   if (input.statusChange !== undefined) {
     envelope.statusChange = input.statusChange;
   }
+  // The change's languages and shared part, only where the caller knows them,
+  // so an envelope on a site without languages keeps its earlier shape.
+  if (input.locales !== undefined) envelope.locales = [...input.locales];
+  if (input.shared !== undefined) envelope.shared = input.shared;
 
   return envelope;
 }

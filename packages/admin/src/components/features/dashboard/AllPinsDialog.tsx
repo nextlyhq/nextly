@@ -33,7 +33,7 @@ import { Link } from "@admin/components/ui/link";
 import {
   targetOfPin,
   useDashboardPins,
-  useRemovePins,
+  useRemoveUnreadablePins,
   type ShownPin,
 } from "@admin/hooks/queries/useDashboardPins";
 import { formatRelativeTime } from "@admin/lib/dashboard";
@@ -136,7 +136,7 @@ function UnreadablePins({
 /** What the dialog holds once the pins are read: the list, the unreadable ones, or that there are none. */
 function PinsBody(): JSX.Element {
   const pins = useDashboardPins();
-  const remove = useRemovePins();
+  const remove = useRemoveUnreadablePins();
   const pinItem = usePinRowItem();
   const addressOf = useDocumentAddress();
   const labelOf = useCollectionLabel();
@@ -157,14 +157,15 @@ function PinsBody(): JSX.Element {
       </div>
     );
   }
-  const { shown, unreadable } = pins.data;
+  const { shown, unreadableCount } = pins.data;
   return (
     <div className="flex min-h-0 flex-col gap-3">
-      {unreadable.length > 0 && (
+      {unreadableCount > 0 && (
         <UnreadablePins
-          count={unreadable.length}
+          count={unreadableCount}
           remove={() =>
-            remove.mutate(unreadable, {
+            // The server finds and removes them; the answer names none.
+            remove.mutate(undefined, {
               // The list is read again either way; this says why some stayed.
               onError: () =>
                 toast.error("Some pins could not be removed. Try again."),

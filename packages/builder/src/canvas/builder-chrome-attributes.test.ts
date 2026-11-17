@@ -144,6 +144,40 @@ describe("an empty container's area yields to what the block sets", () => {
   });
 });
 
+describe("an empty container's marker leaves the block as styled", () => {
+  /** The declarations of the empty-container rule, whitespace collapsed. */
+  function markerRule(): string {
+    const rule = new RegExp(
+      `${ruleFor(EMPTY_CONTAINER_SELECTOR).source}([^}]*)\\}`
+    ).exec(collapsed(SHEET))?.[1];
+    if (rule === undefined) throw new Error("no empty-container rule");
+    return rule;
+  }
+
+  it("is a dashed outline just inside the edges, taking no room", () => {
+    // An outline paints outside the box model, so it adds nothing to the
+    // block's size; the negative offset draws it inside the block's edges.
+    const rule = markerRule();
+    expect(rule).toMatch(/outline: 1px dashed /);
+    expect(rule).toMatch(/outline-offset: -1px;/);
+  });
+
+  it("sets none of the properties an author styles: border, corners, ground, padding", () => {
+    // The author's own background, border and radius show exactly as set,
+    // and no grey tint is laid over the background colour they chose.
+    const rule = markerRule();
+    for (const property of [
+      "border",
+      "background",
+      "radius",
+      "padding",
+      "margin",
+    ]) {
+      expect(rule).not.toContain(property);
+    }
+  });
+});
+
 describe("the canvas keeps the platform's own callout for text", () => {
   it("restores the touch callout the menu trigger suppresses", () => {
     /*
