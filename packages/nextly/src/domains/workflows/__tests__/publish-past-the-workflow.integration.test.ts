@@ -728,14 +728,14 @@ describe.each(getConfiguredTestDialects())(
         await boot(dialect);
         hookCalls.count = 0;
 
-        const created = (await app().nextly.create({
+        const { item: created } = (await app().nextly.create({
           collection: HOOKED as never,
           data: {
             title: "Straight out",
             status: "published",
             [WITHOUT_REVIEW_KEY]: { reason: "Nightly import" },
           },
-        } as never)) as Doc;
+        } as never)) as { item: Doc };
 
         expect(hookCalls.count).toBeGreaterThan(0);
         expect((await visitorRead(HOOKED, String(created.id)))?.title).toBe(
