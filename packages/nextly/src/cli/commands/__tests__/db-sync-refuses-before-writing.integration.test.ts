@@ -217,7 +217,10 @@ describe.each(LOCK_DIALECTS)(
         }
         writeFileSync(
           configFile(),
-          CONFIG_V2.replace(SUMMARY, `${SUMMARY}, { name: "body", type: "text" }`)
+          CONFIG_V2.replace(
+            SUMMARY,
+            `${SUMMARY}, { name: "body", type: "text" }`
+          )
         );
         holder = startHolder(world, {
           command: "nextly migrate",
