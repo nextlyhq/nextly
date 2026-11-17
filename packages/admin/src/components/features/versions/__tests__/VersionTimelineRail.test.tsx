@@ -282,7 +282,7 @@ describe("VersionTimelineRail — the two versions compared", () => {
    * find them in the history, and each says which side it is: the older side
    * of a comparison is often not the row just below the newer one.
    */
-  it("marks both versions being compared, and which side each is", () => {
+  it("marks both versions being compared, and which side each is, with one current row", () => {
     renderRail(
       [
         version({ id: "v5", versionNo: 5 }),
@@ -294,9 +294,12 @@ describe("VersionTimelineRail — the two versions compared", () => {
 
     const row = (n: number) =>
       screen.getByRole("button", { name: new RegExp(`Version ${n}`) });
+    // One current item in the list: the version compared to. The other side
+    // is said in its own row's name, which a screen reader reads with it.
     expect(row(5)).toHaveAttribute("aria-current", "true");
-    expect(row(3)).toHaveAttribute("aria-current", "true");
+    expect(row(3)).not.toHaveAttribute("aria-current");
     expect(row(4)).not.toHaveAttribute("aria-current");
+    expect(row(3)).toHaveAccessibleName(/Compared from/);
     expect(within(row(3)).getByText("Compared from")).toBeInTheDocument();
     expect(within(row(5)).getByText("Compared to")).toBeInTheDocument();
     expect(within(row(4)).queryByText(/^Compared/)).toBeNull();

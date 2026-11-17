@@ -201,10 +201,11 @@ function TimelineRow({
     <li>
       <button
         type="button"
-        // Both sides of the comparison are current, each saying which side
-        // it is below: the older side is often not the row just under the
-        // newer one, so marking only one left the other to be hunted for.
-        aria-current={side ? "true" : undefined}
+        // One current item in a list, as `aria-current` means: the version
+        // compared to. Both rows are highlighted and both say which side they
+        // are in their own text, which is part of the row's name, so the
+        // other side is announced without a second current item.
+        aria-current={side === "to" ? "true" : undefined}
         disabled={versionNo === null || unpairable !== null}
         onClick={() =>
           versionNo !== null && unpairable === null && onSelect(versionNo)
