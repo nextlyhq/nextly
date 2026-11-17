@@ -432,6 +432,55 @@ describe("the regions of a page's Layout on the canvas", () => {
     );
   });
 
+  it("counts the tag's inset when it judges whether the tag fits a short region", () => {
+    // A 20px header with an 18px tag set 4px in: it would reach 2px past the
+    // header's foot, over the page.
+    const box = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("nx-canvas")) {
+          return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
+        }
+        if (this.classList.contains("nx-canvas-region")) {
+          return DOMRect.fromRect({ x: 0, y: 0, width: 1280, height: 20 });
+        }
+        if (this.classList.contains("nx-canvas-region__tag")) {
+          return DOMRect.fromRect({ x: 8, y: 4, width: 120, height: 18 });
+        }
+        return DOMRect.fromRect();
+      });
+    try {
+      renderCanvas([regionOf("header", "Top")]);
+      expect(
+        document
+          .querySelector(".nx-canvas-region__tag")
+          ?.getAttribute("data-placement")
+      ).toBe("none");
+      cleanup();
+      // CONTROL: with room for the inset as well, the tag shows at the top.
+      box.mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("nx-canvas")) {
+          return DOMRect.fromRect({ width: 1280, height: window.innerHeight });
+        }
+        if (this.classList.contains("nx-canvas-region")) {
+          return DOMRect.fromRect({ x: 0, y: 0, width: 1280, height: 26 });
+        }
+        if (this.classList.contains("nx-canvas-region__tag")) {
+          return DOMRect.fromRect({ x: 8, y: 4, width: 120, height: 18 });
+        }
+        return DOMRect.fromRect();
+      });
+      renderCanvas([regionOf("header", "Top")]);
+      expect(
+        document
+          .querySelector(".nx-canvas-region__tag")
+          ?.getAttribute("data-placement")
+      ).toBe("top");
+    } finally {
+      box.mockRestore();
+    }
+  });
+
   it("places its tag at the top left inside, and at the bottom left where the top is off screen", () => {
     // A footer scrolled so its top edge is above the canvas.
     const box = vi
@@ -444,8 +493,9 @@ describe("the regions of a page's Layout on the canvas", () => {
         if (this.classList.contains("nx-canvas-region")) {
           return DOMRect.fromRect({ x: 0, y: -200, width: 1280, height: 400 });
         }
+        // Drawn at its top left, 4px in, before it is placed.
         if (this.classList.contains("nx-canvas-region__tag")) {
-          return DOMRect.fromRect({ x: 8, y: 0, width: 120, height: 24 });
+          return DOMRect.fromRect({ x: 8, y: -196, width: 120, height: 24 });
         }
         return DOMRect.fromRect();
       });
@@ -463,7 +513,7 @@ describe("the regions of a page's Layout on the canvas", () => {
           return DOMRect.fromRect({ x: 0, y: 200, width: 1280, height: 400 });
         }
         if (this.classList.contains("nx-canvas-region__tag")) {
-          return DOMRect.fromRect({ x: 8, y: 0, width: 120, height: 24 });
+          return DOMRect.fromRect({ x: 8, y: 204, width: 120, height: 24 });
         }
         return DOMRect.fromRect();
       });

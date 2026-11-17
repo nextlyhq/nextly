@@ -398,10 +398,17 @@ function markPlaceOf(
   const box = canvasContentRect(region, root);
   const size = canvasContentRect(mark, root);
   const band = onScreenBandOf(root, canvas.frame);
+  // The tag's inset from the edge it sits against, as drawn: it needs that
+  // room as well as its own height, or it reaches past the region's other
+  // edge over the page.
+  const inset =
+    mark.getAttribute("data-placement") === "bottom"
+      ? box.y + box.height - (size.y + size.height)
+      : size.y - box.y;
   return {
     placement: regionMarkPlacement({
       edge: { top: box.y - band.y, bottom: box.y + box.height - band.y },
-      height: size.height,
+      height: size.height + Math.max(inset, 0),
       viewport: band.height,
     }),
     left: regionMarkLeft({
