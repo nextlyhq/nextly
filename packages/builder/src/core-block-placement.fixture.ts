@@ -505,7 +505,7 @@ export const CORE_SETTING_PLACES: readonly SettingPlace[] = [
     setting: "afterSending",
     tab: "content",
     section: "After sending",
-    label: "After sending",
+    label: "Then",
   },
   {
     block: "core/form",

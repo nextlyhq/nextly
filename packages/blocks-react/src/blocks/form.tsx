@@ -451,7 +451,8 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
       },
     },
     afterSending: {
-      label: "After sending",
+      // Its own name, not the section's again right under the section title.
+      label: "Then",
       section: "After sending",
       type: "select",
       options: [...FORM_AFTER_SENDING],
